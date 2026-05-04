@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
-import { Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle, Loader2, KeyRound, Settings, FolderCog } from 'lucide-react'
+import { Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle, Loader2, KeyRound } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
   fetchTeamMembers, addTeamMember, removeTeamMember, setTeamMemberRole,
@@ -7,24 +7,21 @@ import {
 } from '../api/platform'
 
 const WorkspaceResources = lazy(() => import('./settings/WorkspaceResources'))
-const WorkspaceAdmin = lazy(() => import('./settings/WorkspaceAdmin'))
 
 interface TeamManagementProps {
   theme: 'dark' | 'light'
   user: { id: string; email: string; display_name: string; role: string }
   org: { id: string; name: string; slug: string }
   activeTeam: string | null
-  /** Active tab: 'members' | 'resources' | 'admin' */
+  /** Active tab: 'members' | 'resources' */
   activeTab?: string
-  /** Active section within the resources/admin tab */
+  /** Active section within the resources tab */
   activeTabSection?: string
   /** Callback when tab or section changes (for URL routing) */
   onTabChange?: (tab: string, section?: string) => void
-  onToolsRefresh?: () => void
-  onSettingsSaved?: () => void
 }
 
-type WorkspaceTab = 'members' | 'resources' | 'admin'
+type WorkspaceTab = 'members' | 'resources'
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const errMsg = (err: unknown, fallback: string) => err instanceof Error ? err.message : fallback
@@ -49,13 +46,11 @@ interface TabDef {
   id: WorkspaceTab
   label: string
   icon: any
-  adminOnly?: boolean
 }
 
 const TABS: TabDef[] = [
   { id: 'members', label: 'Members', icon: Users },
   { id: 'resources', label: 'Resources', icon: KeyRound },
-  { id: 'admin', label: 'Administration', icon: Settings, adminOnly: true },
 ]
 
 // ---------------------------------------------------------------------------
@@ -371,14 +366,9 @@ export default function TeamManagement({
   activeTab: externalTab,
   activeTabSection,
   onTabChange,
-  onToolsRefresh,
-  onSettingsSaved,
   theme = 'dark',
 }: TeamManagementProps) {
-  const isOrgAdmin = user.role === 'admin' || user.role === 'owner'
   const currentTab: WorkspaceTab = (externalTab as WorkspaceTab) || 'members'
-
-  const visibleTabs = TABS.filter(t => !t.adminOnly || isOrgAdmin)
 
   const handleTabClick = (tabId: WorkspaceTab) => {
     if (onTabChange) {
@@ -396,7 +386,7 @@ export default function TeamManagement({
     <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
       {/* Tab bar */}
       <div className="flex items-center gap-1 px-4 pt-3 pb-0 border-b" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-        {visibleTabs.map(tab => {
+        {TABS.map(tab => {
           const Icon = tab.icon
           const isActive = currentTab === tab.id
           return (
@@ -429,18 +419,6 @@ export default function TeamManagement({
             <WorkspaceResources
               activeSection={activeTabSection}
               onSectionChange={handleSectionChange}
-              theme={theme}
-            />
-          </Suspense>
-        )}
-
-        {currentTab === 'admin' && isOrgAdmin && (
-          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
-            <WorkspaceAdmin
-              activeSection={activeTabSection}
-              onSectionChange={handleSectionChange}
-              onToolsRefresh={onToolsRefresh}
-              onSettingsSaved={onSettingsSaved}
               theme={theme}
             />
           </Suspense>

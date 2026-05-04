@@ -19,6 +19,8 @@ interface SettingsPageProps {
   theme?: string
   /** Whether running in platform (multi-tenant) mode */
   isPlatformMode?: boolean
+  /** User role — used to show/hide Administration section in platform mode */
+  userRole?: string
 }
 
 interface MenuCategory {
@@ -37,11 +39,19 @@ export default function SettingsPage({
   appVersion = 'dev',
   theme = 'dark',
   isPlatformMode = false,
+  userRole = '',
 }: SettingsPageProps) {
-  // In platform mode: only show user preferences
+  const isAdmin = userRole === 'admin' || userRole === 'owner'
+
+  // In platform mode: show Preferences + (if admin) Administration
   // In personal mode: show all settings with category headers
   const categories: MenuCategory[] = isPlatformMode
-    ? [{ items: PREFERENCE_ITEMS }]
+    ? isAdmin
+      ? [
+          { label: 'Preferences', items: PREFERENCE_ITEMS },
+          { label: 'Administration', items: ADMIN_ITEMS },
+        ]
+      : [{ items: PREFERENCE_ITEMS }]
     : [
         { label: 'Preferences', items: PREFERENCE_ITEMS },
         { label: 'Resources', items: RESOURCE_ITEMS },

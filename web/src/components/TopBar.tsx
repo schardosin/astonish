@@ -65,7 +65,7 @@ const allCoreNavItems: NavItem[] = [...primaryNavItems, ...secondaryNavItems]
 
 function getPlatformNavItems(isOrgAdmin: boolean): NavItem[] {
   const items: NavItem[] = []
-  items.push({ view: 'team-mgmt', label: 'Workspace', Icon: Users, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
+  items.push({ view: 'team-mgmt', label: 'Team', Icon: Users, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
   if (isOrgAdmin) items.push({ view: 'users', label: 'Users', Icon: UserCog, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' })
   items.push({ view: 'knowledge', label: 'Knowledge', Icon: BookOpen, gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' })
   if (isOrgAdmin) items.push({ view: 'audit', label: 'Audit', Icon: FileText, gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' })

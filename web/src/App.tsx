@@ -1617,8 +1617,6 @@ layout:
               activeTab={workspaceTab}
               activeTabSection={workspaceTabSection}
               onTabChange={(tab, section) => replaceHash(buildPath('team-mgmt', { tab, tabSection: section }))}
-              onToolsRefresh={loadTools}
-              onSettingsSaved={loadSettings}
             />
             </Suspense>
           ) : view === 'users' && isPlatformMode && auth.user && auth.org && (auth.user.role === 'admin' || auth.user.role === 'owner') ? (
@@ -2000,6 +1998,7 @@ layout:
           onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
           appVersion={appVersion}
           isPlatformMode={isPlatformMode}
+          userRole={auth.user?.role}
         />
         </Suspense>
       )}

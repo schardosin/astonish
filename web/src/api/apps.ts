@@ -13,6 +13,7 @@ export interface AppListItem {
   description: string
   version: number
   updatedAt: string
+  scope?: string // "personal" or "team" (platform mode only)
 }
 
 export interface VisualApp {
@@ -60,11 +61,40 @@ export async function saveApp(
   return res.json()
 }
 
-export async function deleteApp(name: string): Promise<{ status: string }> {
-  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`, {
+export async function deleteApp(name: string, scope?: string): Promise<{ status: string }> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}${params}`, {
     method: 'DELETE',
   })
   if (!res.ok) throw new Error(`Failed to delete app: ${res.statusText}`)
+  return res.json()
+}
+
+/** Publish a personal app to the current team. */
+export async function publishAppToTeam(slug: string): Promise<{ slug: string }> {
+  const res = await teamFetch(`${API_BASE}/apps/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to publish app')
+  }
+  return res.json()
+}
+
+/** Fork a team app to personal. */
+export async function forkAppToPersonal(slug: string): Promise<{ slug: string }> {
+  const res = await teamFetch(`${API_BASE}/apps/fork`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slug, source: 'team' }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to fork app')
+  }
   return res.json()
 }
 

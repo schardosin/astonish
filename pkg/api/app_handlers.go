@@ -11,20 +11,49 @@ import (
 )
 
 // ListAppsHandler returns all saved visual apps.
+// In platform mode, merges personal + team apps with scope annotation.
 // GET /api/apps
 func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
-	// Use store abstraction if available, fall back to direct package calls.
-	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
-		items, err := svc.Apps.List()
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
+	// Platform mode: merge personal + team apps (private-first ownership).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalApps != nil || svc.Apps != nil) {
+		var merged []store.AppListItem
+
+		// Personal apps first (user's private apps)
+		if svc.PersonalApps != nil {
+			items, err := svc.PersonalApps.List()
+			if err != nil {
+				slog.Warn("failed to list personal apps", "error", err)
+			} else {
+				for i := range items {
+					items[i].Scope = "personal"
+				}
+				merged = append(merged, items...)
+			}
 		}
+
+		// Team apps (shared/published apps)
+		if svc.Apps != nil {
+			teamItems, err := svc.Apps.List()
+			if err != nil {
+				slog.Warn("failed to list team apps", "error", err)
+			} else {
+				for i := range teamItems {
+					teamItems[i].Scope = "team"
+				}
+				merged = append(merged, teamItems...)
+			}
+		}
+
+		if merged == nil {
+			merged = []store.AppListItem{}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"apps": items})
+		json.NewEncoder(w).Encode(map[string]any{"apps": merged})
 		return
 	}
 
+	// Personal mode fallback: filesystem.
 	items, err := apps.ListApps()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -35,12 +64,31 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetAppHandler returns a single app by name including code.
+// In platform mode, uses scope-aware resolution: personal-first, team fallback.
 // GET /api/apps/{name}
 func GetAppHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
+	scope := r.URL.Query().Get("scope") // optional: "personal" or "team"
 
-	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
-		app, err := svc.Apps.Load(name)
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalApps != nil || svc.Apps != nil) {
+		var app any
+		var err error
+
+		// Explicit scope requested
+		if scope == "team" && svc.Apps != nil {
+			app, err = svc.Apps.Load(name)
+		} else if scope == "personal" && svc.PersonalApps != nil {
+			app, err = svc.PersonalApps.Load(name)
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalApps != nil {
+				app, err = svc.PersonalApps.Load(name)
+			}
+			if err != nil && svc.Apps != nil {
+				app, err = svc.Apps.Load(name)
+			}
+		}
+
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -50,6 +98,7 @@ func GetAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Personal mode fallback: filesystem.
 	app, err := apps.LoadApp(name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -65,9 +114,11 @@ type saveAppRequest struct {
 	Code        string `json:"code"`
 	Version     int    `json:"version"`
 	SessionID   string `json:"sessionId"`
+	Scope       string `json:"scope,omitempty"` // "personal" (default) or "team"
 }
 
 // SaveAppHandler creates or updates an app.
+// In platform mode, saves to personal by default (team with explicit scope).
 // PUT /api/apps/{name}
 func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
@@ -83,9 +134,20 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
+	// Platform mode: scope-aware save (personal by default, team with explicit scope).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalApps != nil || svc.Apps != nil) {
+		// Choose target store
+		var targetStore store.AppStore
+		if req.Scope == "team" && svc.Apps != nil {
+			targetStore = svc.Apps
+		} else if svc.PersonalApps != nil {
+			targetStore = svc.PersonalApps
+		} else {
+			targetStore = svc.Apps
+		}
+
 		// Try to load existing to preserve creation time
-		existingAny, _ := svc.Apps.Load(name)
+		existingAny, _ := targetStore.Load(name)
 
 		app := &apps.VisualApp{
 			Name:        name,
@@ -98,7 +160,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 			app.CreatedAt = existing.CreatedAt
 		}
 
-		path, err := svc.Apps.Save(app)
+		path, err := targetStore.Save(app)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -113,7 +175,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: direct package calls
+	// Fallback: direct package calls (personal mode / filesystem)
 	existing, _ := apps.LoadApp(name)
 
 	app := &apps.VisualApp{
@@ -143,32 +205,49 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteAppHandler removes an app.
+// In platform mode, uses scope-aware resolution: personal-first, team fallback.
 // DELETE /api/apps/{name}
 func DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
+	scope := r.URL.Query().Get("scope") // optional: "personal" or "team"
 
-	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
-		if err := svc.Apps.Delete(name); err != nil {
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalApps != nil || svc.Apps != nil) {
+		var err error
+
+		// Explicit scope requested
+		if scope == "team" && svc.Apps != nil {
+			err = svc.Apps.Delete(name)
+		} else if scope == "personal" && svc.PersonalApps != nil {
+			err = svc.PersonalApps.Delete(name)
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalApps != nil {
+				err = svc.PersonalApps.Delete(name)
+			}
+			if err != nil && svc.Apps != nil {
+				err = svc.Apps.Delete(name)
+			}
+		}
+
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
+
 		// Drop the per-app PG schema if in platform mode
 		if svc.AppStateSQL != nil {
 			slug := apps.Slugify(name)
 			if err := svc.AppStateSQL.DropSchema(r.Context(), slug); err != nil {
 				slog.Debug("failed to drop app PG schema", "app", name, "error", err)
 			}
-		} else {
-			// Personal mode with store — clean up SQLite
-			if err := CloseAndDeleteAppDB(name); err != nil {
-				slog.Debug("failed to clean up app database", "app", name, "error", err)
-			}
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 		return
 	}
 
+	// Personal mode fallback: filesystem.
 	if err := apps.DeleteApp(name); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

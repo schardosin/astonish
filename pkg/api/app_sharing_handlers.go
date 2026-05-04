@@ -64,17 +64,22 @@ func AppPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load from personal store
-	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
-		return
+	// Load from personal store (prefer svc.PersonalApps, fall back to TenantRouter)
+	var personalApps store.AppStore
+	if svc.PersonalApps != nil {
+		personalApps = svc.PersonalApps
+	} else {
+		if svc.TenantRouter == nil {
+			http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+			return
+		}
+		orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+		if err != nil {
+			http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+			return
+		}
+		personalApps = orgStore.ForUser(pu.ID).Apps()
 	}
-	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
-	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
-		return
-	}
-	personalApps := orgStore.ForUser(pu.ID).Apps()
 	app, err := personalApps.Load(req.Slug)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("personal app not found: %v", err), http.StatusNotFound)
@@ -138,18 +143,10 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
-		return
-	}
-	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
-	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
-		return
-	}
-
 	// Load from source
 	var app any
+	var err error
+	var orgStore store.OrgDataStore
 	if req.Source == "team" {
 		if svc.Apps == nil {
 			http.Error(w, "team app store not available", http.StatusServiceUnavailable)
@@ -157,6 +154,15 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		app, err = svc.Apps.Load(req.Slug)
 	} else {
+		if svc.TenantRouter == nil {
+			http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+			return
+		}
+		orgStore, err = svc.TenantRouter.ForOrg(pu.OrgSlug)
+		if err != nil {
+			http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+			return
+		}
 		app, err = orgStore.OrgApps().Load(req.Slug)
 	}
 	if err != nil {
@@ -164,8 +170,24 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Save to personal store
-	personalApps := orgStore.ForUser(pu.ID).Apps()
+	// Save to personal store (prefer svc.PersonalApps, fall back to TenantRouter)
+	var personalApps store.AppStore
+	if svc.PersonalApps != nil {
+		personalApps = svc.PersonalApps
+	} else {
+		if orgStore == nil {
+			if svc.TenantRouter == nil {
+				http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+				return
+			}
+			orgStore, err = svc.TenantRouter.ForOrg(pu.OrgSlug)
+			if err != nil {
+				http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+				return
+			}
+		}
+		personalApps = orgStore.ForUser(pu.ID).Apps()
+	}
 	slug, err := personalApps.Save(app)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to fork app: %v", err), http.StatusInternalServerError)

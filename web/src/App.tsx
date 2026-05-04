@@ -23,6 +23,8 @@ import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer, publishFlowToTeam, forkFlowToPersonal } from './api/agents'
 import type { Agent, Tool, McpDependencyCheckResult } from './api/agents'
+import { publishAppToTeam, forkAppToPersonal } from './api/apps'
+import type { AppListItem } from './api/apps'
 import { fetchSandboxStatus } from './api/sandbox'
 import type { SandboxStatus } from './api/sandbox'
 import { snakeToTitleCase } from './utils/formatters'
@@ -57,7 +59,6 @@ const AppsView = lazy(() => import('./components/AppsView'))
 const TeamManagement = lazy(() => import('./components/TeamManagement'))
 const UserManagement = lazy(() => import('./components/UserManagement'))
 const KnowledgeBrowser = lazy(() => import('./components/KnowledgeBrowser'))
-const AppCatalog = lazy(() => import('./components/AppCatalog'))
 const AuditViewer = lazy(() => import('./components/AuditViewer'))
 
 function App() {
@@ -1357,6 +1358,26 @@ layout:
     }
   }, [showToast]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Publish a personal app to the team
+  const handlePublishApp = useCallback(async (app: AppListItem) => {
+    try {
+      await publishAppToTeam(app.name)
+      showToast(`App "${app.name}" published to team`, 'success')
+    } catch (err) {
+      showToast(`Failed to publish app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast])
+
+  // Fork a team app to personal
+  const handleForkApp = useCallback(async (app: AppListItem) => {
+    try {
+      await forkAppToPersonal(app.name)
+      showToast(`App "${app.name}" forked to personal`, 'success')
+    } catch (err) {
+      showToast(`Failed to fork app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast])
+
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent: AppAgent) => {
     try {
@@ -1570,12 +1591,15 @@ layout:
             <AppsView
               key={activeTeam || 'personal'}
               theme={theme}
+              isPlatformMode={isPlatformMode}
               appName={path.view === 'apps' ? path.params.appName : ''}
               onNavigate={(hashPath: string) => navigate(hashPath)}
               onImproveApp={(message: string, systemContext: string) => {
                 setPendingChatMessage({ message, systemContext })
                 navigate(buildPath('chat'))
               }}
+              onPublishApp={isPlatformMode ? handlePublishApp : undefined}
+              onForkApp={isPlatformMode ? handleForkApp : undefined}
             />
             </Suspense>
           ) : view === 'team-mgmt' && isPlatformMode && auth.user && auth.org ? (
@@ -1600,15 +1624,6 @@ layout:
           ) : view === 'knowledge' && isPlatformMode && auth.user ? (
             <Suspense fallback={null}>
             <KnowledgeBrowser
-              key={activeTeam || 'personal'}
-              theme={theme}
-              user={auth.user}
-              activeTeam={activeTeam}
-            />
-            </Suspense>
-          ) : view === 'app-catalog' && isPlatformMode && auth.user ? (
-            <Suspense fallback={null}>
-            <AppCatalog
               key={activeTeam || 'personal'}
               theme={theme}
               user={auth.user}

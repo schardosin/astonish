@@ -11,6 +11,7 @@ type AppListItem struct {
 	Description string    `json:"description"`
 	Version     int       `json:"version"`
 	UpdatedAt   time.Time `json:"updatedAt"`
+	Scope       string    `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 }
 
 // AppStore manages generative UI app definitions.

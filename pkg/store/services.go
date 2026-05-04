@@ -33,8 +33,13 @@ type Services struct {
 	// Credentials provides access to the encrypted credential store.
 	Credentials CredentialStore
 
-	// Apps provides access to generative UI app definitions.
+	// Apps provides access to team-shared generative UI app definitions.
+	// In platform mode, these are apps that have been published to the team.
 	Apps AppStore
+
+	// PersonalApps provides access to the user's private app definitions.
+	// Apps are created here by default and explicitly published to team when ready.
+	PersonalApps AppStore
 
 	// AppState provides access to per-app persistent state.
 	AppState AppStateStore

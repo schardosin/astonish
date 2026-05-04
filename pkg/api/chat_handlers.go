@@ -525,8 +525,10 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					SessionID:   req.SessionID,
 				}
 				var saveErr error
-				// Platform mode: use store abstraction; personal mode: write to disk
-				if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
+				// Platform mode: save to personal store first; personal mode: write to disk
+				if svc := store.FromRequest(r); svc != nil && svc.PersonalApps != nil {
+					savedPath, saveErr = svc.PersonalApps.Save(savedApp)
+				} else if svc != nil && svc.Apps != nil {
 					savedPath, saveErr = svc.Apps.Save(savedApp)
 				} else {
 					savedPath, saveErr = apps.SaveApp(savedApp)

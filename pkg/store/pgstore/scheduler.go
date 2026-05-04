@@ -22,11 +22,13 @@ func (s *pgSchedulerStore) tableName() string {
 	return pgx.Identifier{s.schema, "scheduled_jobs"}.Sanitize()
 }
 
+// selectColumns is the column list used by all SELECT queries.
+const schedulerSelectCols = `id, name, schedule, mode, payload, status, last_run_at, next_run_at, created_at, last_status, last_error, consecutive_failures`
+
 func (s *pgSchedulerStore) List() []*store.ScheduledJob {
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
-		`SELECT id, name, schedule, mode, payload, status, last_run_at, next_run_at, created_at
-		 FROM %s ORDER BY name`, s.tableName()),
+		`SELECT %s FROM %s ORDER BY name`, schedulerSelectCols, s.tableName()),
 	)
 	if err != nil {
 		return nil
@@ -47,8 +49,7 @@ func (s *pgSchedulerStore) List() []*store.ScheduledJob {
 func (s *pgSchedulerStore) Get(id string) *store.ScheduledJob {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT id, name, schedule, mode, payload, status, last_run_at, next_run_at, created_at
-		 FROM %s WHERE id = $1`, s.tableName()),
+		`SELECT %s FROM %s WHERE id = $1`, schedulerSelectCols, s.tableName()),
 		id,
 	)
 	job, err := scanScheduledJob(row)
@@ -61,8 +62,7 @@ func (s *pgSchedulerStore) Get(id string) *store.ScheduledJob {
 func (s *pgSchedulerStore) GetByName(name string) *store.ScheduledJob {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT id, name, schedule, mode, payload, status, last_run_at, next_run_at, created_at
-		 FROM %s WHERE name = $1`, s.tableName()),
+		`SELECT %s FROM %s WHERE name = $1`, schedulerSelectCols, s.tableName()),
 		name,
 	)
 	job, err := scanScheduledJob(row)
@@ -74,48 +74,33 @@ func (s *pgSchedulerStore) GetByName(name string) *store.ScheduledJob {
 
 func (s *pgSchedulerStore) Add(job *store.ScheduledJob) error {
 	ctx := context.Background()
-	schedJSON, _ := json.Marshal(job.Schedule)
-	payloadJSON, _ := json.Marshal(job.Payload)
-	deliveryJSON, _ := json.Marshal(job.Delivery)
-
-	// Combine payload + delivery into a single JSONB column
-	combined := map[string]any{
-		"schedule_def": json.RawMessage(schedJSON),
-		"payload":      json.RawMessage(payloadJSON),
-		"delivery":     json.RawMessage(deliveryJSON),
-	}
-	combinedJSON, _ := json.Marshal(combined)
+	combinedJSON := buildCombinedPayload(job)
 
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (id, name, schedule, mode, payload, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		`INSERT INTO %s (id, name, schedule, mode, payload, status, last_status, last_error, consecutive_failures, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
 		 ON CONFLICT (id) DO NOTHING`,
 		s.tableName()),
 		job.ID, job.Name, job.Schedule.Cron, job.Mode, combinedJSON,
-		statusStr(job.Enabled), job.CreatedAt,
+		enabledStatusStr(job.Enabled), job.LastStatus, job.LastError, job.ConsecutiveFailures,
+		job.CreatedAt,
 	)
 	return err
 }
 
 func (s *pgSchedulerStore) Update(job *store.ScheduledJob) error {
 	ctx := context.Background()
-	schedJSON, _ := json.Marshal(job.Schedule)
-	payloadJSON, _ := json.Marshal(job.Payload)
-	deliveryJSON, _ := json.Marshal(job.Delivery)
-
-	combined := map[string]any{
-		"schedule_def": json.RawMessage(schedJSON),
-		"payload":      json.RawMessage(payloadJSON),
-		"delivery":     json.RawMessage(deliveryJSON),
-	}
-	combinedJSON, _ := json.Marshal(combined)
+	combinedJSON := buildCombinedPayload(job)
 
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`UPDATE %s SET name = $2, schedule = $3, mode = $4, payload = $5,
-		 status = $6, last_run_at = $7, next_run_at = $8, updated_at = now()
+		 status = $6, last_run_at = $7, next_run_at = $8,
+		 last_status = $9, last_error = $10, consecutive_failures = $11,
+		 updated_at = now()
 		 WHERE id = $1`, s.tableName()),
 		job.ID, job.Name, job.Schedule.Cron, job.Mode, combinedJSON,
-		statusStr(job.Enabled), nilTimePtrField(job.LastRun), nilTimePtrField(job.NextRun),
+		enabledStatusStr(job.Enabled), nilTimePtrField(job.LastRun), nilTimePtrField(job.NextRun),
+		job.LastStatus, job.LastError, job.ConsecutiveFailures,
 	)
 	return err
 }
@@ -129,21 +114,25 @@ func (s *pgSchedulerStore) Remove(id string) error {
 	return err
 }
 
+// scanScheduledJob scans a row into a ScheduledJob.
+// Column order must match schedulerSelectCols.
 func scanScheduledJob(row scannable) (store.ScheduledJob, error) {
 	var job store.ScheduledJob
 	var schedule string
 	var payloadJSON []byte
-	var status string
+	var enabledStatus string
 
-	err := row.Scan(&job.ID, &job.Name, &schedule, &job.Mode,
-		&payloadJSON, &status, &job.LastRun, &job.NextRun, &job.CreatedAt)
+	err := row.Scan(
+		&job.ID, &job.Name, &schedule, &job.Mode,
+		&payloadJSON, &enabledStatus, &job.LastRun, &job.NextRun, &job.CreatedAt,
+		&job.LastStatus, &job.LastError, &job.ConsecutiveFailures,
+	)
 	if err != nil {
 		return job, fmt.Errorf("failed to scan scheduled job: %w", err)
 	}
 
 	job.Schedule.Cron = schedule
-	job.Enabled = status == "active"
-	job.LastStatus = status
+	job.Enabled = enabledStatus == "active"
 
 	// Try to decode the combined payload JSON
 	if len(payloadJSON) > 0 {
@@ -164,7 +153,24 @@ func scanScheduledJob(row scannable) (store.ScheduledJob, error) {
 	return job, nil
 }
 
-func statusStr(enabled bool) string {
+// buildCombinedPayload serializes schedule, payload, and delivery into a single JSONB value.
+func buildCombinedPayload(job *store.ScheduledJob) []byte {
+	schedJSON, _ := json.Marshal(job.Schedule)
+	payloadJSON, _ := json.Marshal(job.Payload)
+	deliveryJSON, _ := json.Marshal(job.Delivery)
+
+	combined := map[string]any{
+		"schedule_def": json.RawMessage(schedJSON),
+		"payload":      json.RawMessage(payloadJSON),
+		"delivery":     json.RawMessage(deliveryJSON),
+	}
+	combinedJSON, _ := json.Marshal(combined)
+	return combinedJSON
+}
+
+// enabledStatusStr maps the Enabled boolean to the DB status column.
+// This column tracks whether the job is active or paused.
+func enabledStatusStr(enabled bool) string {
 	if enabled {
 		return "active"
 	}

@@ -45,6 +45,11 @@ type SessionStore interface {
 	// Transcript access.
 	ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error)
 
+	// AppendFleetEvent persists a fleet message event to a session's transcript
+	// without requiring a full ADK session object. Used by fleet sessions which
+	// manage their own message loop outside the ADK runner.
+	AppendFleetEvent(sessionID string, event *adksession.Event) error
+
 	// Partial ID resolution.
 	ResolveSessionID(partial string) (string, error)
 

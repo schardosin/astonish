@@ -359,7 +359,7 @@ func (s *pgSessionStore) AppendEvent(ctx context.Context, curSession adksession.
 func (s *pgSessionStore) ListSessionMetas(appName, userID string) ([]store.SessionMeta, error) {
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
-		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, workspace_dir, created_at, updated_at
+		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE (parent_id IS NULL OR parent_id = '') ORDER BY updated_at DESC`, s.sessionsTable()),
 	)
 	if err != nil {
@@ -383,7 +383,7 @@ func (s *pgSessionStore) ListSessionMetas(appName, userID string) ([]store.Sessi
 func (s *pgSessionStore) GetSessionMeta(sessionID string) (*store.SessionMeta, error) {
 	ctx := context.Background()
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, workspace_dir, created_at, updated_at
+		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE id = $1`, s.sessionsTable()),
 		sessionID,
 	)
@@ -406,7 +406,7 @@ func (s *pgSessionStore) SetSessionTitle(sessionID, title string) error {
 func (s *pgSessionStore) ListChildren(parentID string) ([]store.SessionMeta, error) {
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
-		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, workspace_dir, created_at, updated_at
+		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE parent_id = $1 ORDER BY created_at`, s.sessionsTable()),
 		parentID,
 	)
@@ -428,18 +428,27 @@ func (s *pgSessionStore) ListChildren(parentID string) ([]store.SessionMeta, err
 
 func (s *pgSessionStore) AddSessionMeta(meta store.SessionMeta) error {
 	ctx := context.Background()
+
+	// user_id is UUID in PG; pass nil for empty/non-UUID values (system-initiated sessions).
+	var userIDParam interface{}
+	if meta.UserID != "" {
+		userIDParam = meta.UserID
+	}
+
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (id, user_id, title, message_count, parent_id, fleet_key, fleet_name, workspace_dir, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`INSERT INTO %s (id, user_id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		 ON CONFLICT (id) DO UPDATE SET
 		   title = EXCLUDED.title, message_count = EXCLUDED.message_count,
 		   parent_id = EXCLUDED.parent_id, fleet_key = EXCLUDED.fleet_key,
-		   fleet_name = EXCLUDED.fleet_name, workspace_dir = EXCLUDED.workspace_dir,
+		   fleet_name = EXCLUDED.fleet_name, issue_number = EXCLUDED.issue_number,
+		   repo = EXCLUDED.repo, workspace_dir = EXCLUDED.workspace_dir,
 		   updated_at = EXCLUDED.updated_at`,
 		s.sessionsTable()),
-		meta.ID, meta.UserID, meta.Title, meta.MessageCount,
+		meta.ID, userIDParam, meta.Title, meta.MessageCount,
 		nilIfEmpty(meta.ParentID), nilIfEmpty(meta.FleetKey),
-		nilIfEmpty(meta.FleetName), nilIfEmpty(meta.WorkspaceDir),
+		nilIfEmpty(meta.FleetName), meta.IssueNumber, meta.Repo,
+		nilIfEmpty(meta.WorkspaceDir),
 		meta.CreatedAt, meta.UpdatedAt,
 	)
 	return err
@@ -459,6 +468,23 @@ func (s *pgSessionStore) RemoveSessionMeta(sessionID string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE id = $1`, s.sessionsTable()),
 		sessionID,
+	)
+	return err
+}
+
+func (s *pgSessionStore) AppendFleetEvent(sessionID string, event *adksession.Event) error {
+	if event == nil {
+		return nil
+	}
+	ctx := context.Background()
+	eventData, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("failed to marshal fleet event: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (session_id, event_data, created_at) VALUES ($1, $2, now())`,
+		s.eventsTable()),
+		sessionID, eventData,
 	)
 	return err
 }
@@ -613,8 +639,8 @@ func (s *pgSessionStore) loadEvents(ctx context.Context, sessionID string) ([]*a
 
 func scanSessionMeta(row scannable) (store.SessionMeta, error) {
 	var m store.SessionMeta
-	var title, parentID, fleetKey, fleetName, wsDir *string
-	err := row.Scan(&m.ID, &title, &m.MessageCount, &parentID, &fleetKey, &fleetName, &wsDir, &m.CreatedAt, &m.UpdatedAt)
+	var title, parentID, fleetKey, fleetName, repo, wsDir *string
+	err := row.Scan(&m.ID, &title, &m.MessageCount, &parentID, &fleetKey, &fleetName, &m.IssueNumber, &repo, &wsDir, &m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		return m, err
 	}
@@ -629,6 +655,9 @@ func scanSessionMeta(row scannable) (store.SessionMeta, error) {
 	}
 	if fleetName != nil {
 		m.FleetName = *fleetName
+	}
+	if repo != nil {
+		m.Repo = *repo
 	}
 	if wsDir != nil {
 		m.WorkspaceDir = *wsDir

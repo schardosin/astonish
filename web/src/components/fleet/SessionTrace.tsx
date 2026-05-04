@@ -445,7 +445,11 @@ function TraceEntryRow({ entry, index, expanded, onToggle }: TraceEntryRowProps)
   const time = entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : ''
   const sessionLabel = entry.session || ''
   const agentRole = extractAgentRole(sessionLabel)
-  const roleColor = agentRole ? getAgentColor(agentRole) : getAgentColor('system')
+  // Fall back to entry.author (set on parent-level fleet events) when
+  // no child-session label is available. This ensures messages from agents
+  // like "po" or "architect" show the correct persona instead of "router".
+  const effectiveRole = agentRole || (entry.author && entry.author !== 'user' ? String(entry.author) : null)
+  const roleColor = effectiveRole ? getAgentColor(effectiveRole) : getAgentColor('system')
 
   if (entry.type === 'user' || entry.type === 'model' || entry.type === 'thinking') {
     const isUser = entry.type === 'user'
@@ -458,11 +462,11 @@ function TraceEntryRow({ entry, index, expanded, onToggle }: TraceEntryRowProps)
       roleLabel = 'customer'
       labelColor = getAgentColor('system')
     } else if (isThinking) {
-      roleLabel = agentRole ? `@${agentRole}` : 'thinking'
+      roleLabel = effectiveRole ? `@${effectiveRole}` : 'thinking'
       labelColor = { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
     } else {
-      roleLabel = agentRole ? `@${agentRole}` : 'router'
-      labelColor = agentRole ? roleColor : { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
+      roleLabel = effectiveRole ? `@${effectiveRole}` : 'router'
+      labelColor = effectiveRole ? roleColor : { text: '#9ca3af', bg: 'rgba(107, 114, 128, 0.1)' }
     }
 
     return (
@@ -503,7 +507,7 @@ function TraceEntryRow({ entry, index, expanded, onToggle }: TraceEntryRowProps)
   if (entry.type === 'tool_call') {
     const argsStr = entry.args ? JSON.stringify(entry.args) : ''
     const argsPreview = argsStr.length > 100 ? argsStr.slice(0, 100) + '...' : argsStr
-    const roleLabel = agentRole ? `@${agentRole}` : 'router'
+    const roleLabel = effectiveRole ? `@${effectiveRole}` : 'router'
 
     return (
       <div className="py-0.5">
@@ -541,7 +545,7 @@ function TraceEntryRow({ entry, index, expanded, onToggle }: TraceEntryRowProps)
     const durationStr = durationMs > 0 ? (durationMs < 1000 ? `${durationMs}ms` : `${(durationMs / 1000).toFixed(1)}s`) : ''
     const resultStr = entry.result ? JSON.stringify(entry.result) : ''
     const resultPreview = resultStr.length > 100 ? resultStr.slice(0, 100) + '...' : resultStr
-    const roleLabel = agentRole ? `@${agentRole}` : 'router'
+    const roleLabel = effectiveRole ? `@${effectiveRole}` : 'router'
 
     return (
       <div className="py-0.5">

@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS {{schema}}.sessions (
     parent_id       TEXT,
     fleet_key       TEXT NOT NULL DEFAULT '',
     fleet_name      TEXT NOT NULL DEFAULT '',
+    issue_number    INTEGER NOT NULL DEFAULT 0,
+    repo            TEXT NOT NULL DEFAULT '',
     workspace_dir   TEXT NOT NULL DEFAULT '',
     metadata        JSONB DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

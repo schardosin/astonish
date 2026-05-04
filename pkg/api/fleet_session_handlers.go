@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
@@ -109,7 +111,8 @@ type FleetSessionResult struct {
 // to add forwarding logic on top.
 // If initialMessage is non-empty, it is posted as the first customer message.
 // teamSlug scopes the session to a team (empty for personal mode).
-func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string) (*FleetSessionResult, error) {
+// sessionStore is the PG-backed session store for platform mode (nil for personal mode).
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore) (*FleetSessionResult, error) {
 	if fleetPlanRegistryVar == nil {
 		return nil, fmt.Errorf("fleet plan system not initialized")
 	}
@@ -184,8 +187,8 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string)
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, fleetCfg, userID, 0, "")
-	wireFleetTranscript(fleetSession, userID)
+	persistFleetSessionMeta(fleetSession, fleetCfg, userID, 0, "", sessionStore)
+	wireFleetTranscript(fleetSession, userID, sessionStore)
 
 	// Capture the transcript callback so we can compose additional callbacks on top.
 	transcriptCallback := fleetSession.OnMessagePosted
@@ -287,9 +290,17 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Resolve session store for platform mode.
+	// Fleet sessions are team-scoped (shared across team members), so we
+	// use the team Sessions store rather than PersonalSessions.
+	var handlerSessionStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		handlerSessionStore = svc.Sessions
+	}
+
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r))
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -329,8 +340,8 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, cfg, effectiveUserID(r), 0, "")
-	wireFleetTranscript(fleetSession, effectiveUserID(r))
+	persistFleetSessionMeta(fleetSession, cfg, effectiveUserID(r), 0, "", handlerSessionStore)
+	wireFleetTranscript(fleetSession, effectiveUserID(r), handlerSessionStore)
 
 	go func() {
 		defer func() {
@@ -365,13 +376,9 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 // persistFleetSessionMeta adds the fleet session to the persistent session index
 // so it appears in the sidebar alongside regular chat sessions.
-func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, userID string, issueNumber int, repo string) {
-	fileStore := getFleetFileStore()
-	if fileStore == nil {
-		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
-		return
-	}
-
+// If sessionStore is non-nil (platform mode), it writes to the PostgreSQL store.
+// Otherwise, it writes to the file-based session store.
+func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, userID string, issueNumber int, repo string, sessionStore store.SessionStore) {
 	// When sandbox is enabled, WorkspaceDir is a container-internal path
 	// (e.g., "/root/astonish"). Do NOT persist it — CleanupSessionWorkspace
 	// would run os.RemoveAll on that path ON THE HOST, potentially destroying
@@ -383,6 +390,35 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 	}
 
 	now := time.Now()
+
+	// Platform mode: write to the PG-backed SessionStore.
+	if sessionStore != nil {
+		meta := store.SessionMeta{
+			ID:           fs.ID,
+			AppName:      studioChatAppName,
+			UserID:       userID,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Title:        fmt.Sprintf("Fleet: %s", fleetCfg.Name),
+			FleetKey:     fs.FleetKey,
+			FleetName:    fleetCfg.Name,
+			IssueNumber:  issueNumber,
+			Repo:         repo,
+			WorkspaceDir: workspaceDir,
+		}
+		if err := sessionStore.AddSessionMeta(meta); err != nil {
+			slog.Warn("could not persist fleet session meta to store", "component", "fleet", "error", err)
+		}
+		return
+	}
+
+	// Personal mode: write to the file-based session store.
+	fileStore := getFleetFileStore()
+	if fileStore == nil {
+		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
+		return
+	}
+
 	meta := session.SessionMeta{
 		ID:           fs.ID,
 		AppName:      studioChatAppName,
@@ -403,7 +439,18 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 }
 
 // updateFleetSessionMeta updates the message count and timestamp for a fleet session in the index.
-func updateFleetSessionMeta(sessionID string, messageCount int) {
+// If sessionStore is non-nil (platform mode), it updates the PG store.
+func updateFleetSessionMeta(sessionID string, messageCount int, sessionStore store.SessionStore) {
+	if sessionStore != nil {
+		if err := sessionStore.UpdateSessionMeta(sessionID, func(meta *store.SessionMeta) {
+			meta.MessageCount = messageCount
+			meta.UpdatedAt = time.Now()
+		}); err != nil {
+			slog.Warn("failed to update fleet session metadata in store", "session_id", sessionID, "error", err)
+		}
+		return
+	}
+
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		return
@@ -420,7 +467,14 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 // wireFleetTranscript creates a JSONL transcript file for a fleet session
 // and wires up the OnMessagePosted callback to persist messages to it.
 // This makes fleet sessions visible via `astonish sessions show <id>`.
-func wireFleetTranscript(fs *fleet.FleetSession, userID string) {
+// If sessionStore is non-nil (platform mode), events are persisted to the PG
+// store instead of a JSONL file on disk.
+func wireFleetTranscript(fs *fleet.FleetSession, userID string, sessionStore store.SessionStore) {
+	if sessionStore != nil {
+		wireFleetTranscriptPG(fs, sessionStore)
+		return
+	}
+
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		slog.Warn("no file store available, cannot create transcript", "component", "fleet", "session_id", fs.ID)
@@ -444,6 +498,26 @@ func wireFleetTranscript(fs *fleet.FleetSession, userID string) {
 		if err := transcript.AppendEvent(event); err != nil {
 			slog.Warn("could not persist fleet message", "component", "fleet", "error", err)
 		}
+	}
+}
+
+// wireFleetTranscriptPG wires the OnMessagePosted callback to persist fleet
+// messages as session_events rows in PostgreSQL.
+func wireFleetTranscriptPG(fs *fleet.FleetSession, sessionStore store.SessionStore) {
+	var invocationCounter int
+	fs.OnMessagePosted = func(msg fleet.Message) {
+		invocationCounter++
+		event := fleetMessageToEvent(msg, invocationCounter)
+
+		// Persist the event via the store's AppendEvent method. This requires
+		// a session object that the store recognizes. For PG stores that need
+		// a *pgSession, we use the raw event insertion path instead.
+		if err := sessionStore.AppendFleetEvent(fs.ID, event); err != nil {
+			slog.Warn("could not persist fleet event to store", "component", "fleet", "session_id", fs.ID, "error", err)
+		}
+
+		// Also update the message count in the session metadata.
+		updateFleetSessionMeta(fs.ID, invocationCounter, sessionStore)
 	}
 }
 
@@ -554,7 +628,8 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // FleetSessionsListHandler handles GET /api/studio/fleet/sessions.
-// Lists all active fleet sessions. In platform mode, filters by team.
+// Returns active fleet sessions from the in-memory registry.
+// Used by StudioChat and SessionTrace to check if a session is currently running.
 func FleetSessionsListHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	teamSlug := effectiveTeamSlug(r)
@@ -564,6 +639,85 @@ func FleetSessionsListHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"sessions": sessions,
 	})
+}
+
+// FleetSessionsHistoryHandler handles GET /api/studio/fleet/sessions/history.
+// Returns persisted fleet sessions from the team Sessions store (platform mode)
+// or the file store (personal mode). This is the endpoint that FleetView uses
+// to display all fleet sessions (both active and completed).
+func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	userID := effectiveUserID(r)
+
+	// Platform mode: read persisted fleet sessions from the team Sessions store.
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		metas, err := svc.Sessions.ListSessionMetas(studioChatAppName, userID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
+			return
+		}
+
+		// Filter to fleet sessions only (those with a fleet key).
+		sessions := make([]StudioSessionResponse, 0, len(metas))
+		for _, m := range metas {
+			if m.FleetKey == "" {
+				continue
+			}
+			sessions = append(sessions, storeMetaToResponse(m))
+		}
+
+		// Sort by updated_at descending (most recent first).
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessions)
+		return
+	}
+
+	// Personal mode: read from file store.
+	cm := GetChatManager()
+	if err := cm.ensureReady(r.Context()); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("initializing chat manager: %v", err))
+		return
+	}
+	fs := cm.fileStore()
+	if fs == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]StudioSessionResponse{})
+		return
+	}
+
+	metas, err := fs.ListSessionMetas(studioChatAppName, userID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
+		return
+	}
+
+	sessions := make([]StudioSessionResponse, 0, len(metas))
+	for _, m := range metas {
+		if m.FleetKey == "" {
+			continue
+		}
+		sessions = append(sessions, StudioSessionResponse{
+			ID:           m.ID,
+			Title:        m.Title,
+			CreatedAt:    m.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
+			MessageCount: m.MessageCount,
+			FleetKey:     m.FleetKey,
+			FleetName:    m.FleetName,
+			IssueNumber:  m.IssueNumber,
+			Repo:         m.Repo,
+		})
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
 }
 
 // FleetSessionStopHandler handles POST /api/studio/fleet/sessions/{id}/stop.
@@ -599,6 +753,13 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	if fs == nil {
 		http.Error(w, "Fleet session not found", http.StatusNotFound)
 		return
+	}
+
+	// Resolve the session store for metadata updates (platform mode).
+	// Fleet sessions live in the team Sessions store.
+	var streamSessionStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		streamSessionStore = svc.Sessions
 	}
 
 	// Set up SSE headers
@@ -727,7 +888,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Update persistent meta (message count)
 			if thread, thErr := fs.Channel.GetThread(ctx); thErr == nil {
-				updateFleetSessionMeta(sessionID, len(thread))
+				updateFleetSessionMeta(sessionID, len(thread), streamSessionStore)
 			}
 		}
 	}
@@ -740,7 +901,12 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context())
+	var sessStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		sessStore = svc.Sessions
+	}
+
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -825,7 +991,12 @@ func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context())
+	var sessStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		sessStore = svc.Sessions
+	}
+
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -852,8 +1023,8 @@ func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 // getFleetMessages returns all fleet messages for a session. It first checks
 // the active session registry (in-memory), then falls back to reading the
 // JSONL transcript (completed sessions).
-func getFleetMessages(sessionID, userID string, ctx context.Context) ([]fleet.Message, error) {
-	// Try active session first
+func getFleetMessages(sessionID, userID string, ctx context.Context, sessionStore store.SessionStore) ([]fleet.Message, error) {
+	// Try active session first (in-memory registry)
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
 		thread, err := fs.Channel.GetThread(ctx)
@@ -863,7 +1034,20 @@ func getFleetMessages(sessionID, userID string, ctx context.Context) ([]fleet.Me
 		return thread, nil
 	}
 
-	// Fall back to JSONL transcript
+	// Platform mode: read from PG store.
+	if sessionStore != nil {
+		events, err := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
+		}
+		messages := eventsToFleetMessages(events)
+		if len(messages) == 0 {
+			return nil, fmt.Errorf("session %s has no messages", sessionID)
+		}
+		return messages, nil
+	}
+
+	// Personal mode: fall back to JSONL transcript.
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		return nil, fmt.Errorf("session %s not found (no active session, no file store)", sessionID)

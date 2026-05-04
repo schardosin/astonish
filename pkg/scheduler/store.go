@@ -87,12 +87,25 @@ type Job struct {
 	ConsecutiveFailures int        `json:"consecutive_failures"`
 }
 
+// JobStore is the interface that any scheduler job backend must implement.
+// The scheduler engine operates on this interface, allowing both file-based
+// (personal mode) and PostgreSQL-backed (platform mode) implementations.
+type JobStore interface {
+	List() []*Job
+	Get(id string) *Job
+	GetByName(name string) *Job
+	Add(job *Job) error
+	Update(job *Job) error
+	Remove(id string) error
+}
+
 // storeData is the JSON file root structure.
 type storeData struct {
 	Jobs []*Job `json:"jobs"`
 }
 
 // Store persists scheduled jobs to a JSON file with atomic writes.
+// It implements the JobStore interface.
 type Store struct {
 	path string
 	mu   sync.RWMutex
@@ -279,3 +292,6 @@ func equalFold(a, b string) bool {
 	}
 	return true
 }
+
+// Compile-time check that *Store implements JobStore.
+var _ JobStore = (*Store)(nil)

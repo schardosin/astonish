@@ -1157,6 +1157,7 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// Fleet Session endpoints (fleet v2: autonomous agent team)
 	router.HandleFunc("/api/studio/fleet/start", FleetStartHandler).Methods("POST")
 	router.HandleFunc("/api/studio/fleet/sessions", FleetSessionsListHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/history", FleetSessionsHistoryHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}", FleetSessionStatusHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/message", FleetMessageHandler).Methods("POST")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/stop", FleetSessionStopHandler).Methods("POST")

@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
@@ -28,7 +29,7 @@ import (
 //   - The transcript file is appended to (not overwritten)
 //   - The session index entry remains valid
 //   - The Studio UI shows a single continuous session
-func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) error {
+func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sessionStore store.SessionStore) error {
 	plan := cfg.Plan
 	if plan == nil {
 		return fmt.Errorf("plan is required for recovery")
@@ -41,7 +42,11 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	// Read the WorkspaceDir from session metadata if available, otherwise
 	// fall back to the legacy ResolveWorkspaceDir.
 	var workspaceDir string
-	if fileStore := getFleetFileStore(); fileStore != nil {
+	if sessionStore != nil {
+		if meta, metaErr := sessionStore.GetSessionMeta(cfg.SessionID); metaErr == nil && meta != nil && meta.WorkspaceDir != "" {
+			workspaceDir = meta.WorkspaceDir
+		}
+	} else if fileStore := getFleetFileStore(); fileStore != nil {
 		if meta, metaErr := fileStore.GetSessionMeta(cfg.SessionID); metaErr == nil && meta.WorkspaceDir != "" {
 			workspaceDir = meta.WorkspaceDir
 		}
@@ -66,25 +71,41 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 		return fmt.Errorf("sub-agent system not initialized")
 	}
 
-	// Read the JSONL transcript to recover the message history
-	fileStore := getFleetFileStore()
-	if fileStore == nil {
-		return fmt.Errorf("file store not available for session recovery")
-	}
+	// Read the JSONL transcript to recover the message history.
+	// In platform mode, read from PG store; in personal mode, from JSONL file.
+	var events []*adksession.Event
+	var transcriptPath string // only set in personal mode (for append later)
 
-	if strings.ContainsAny(cfg.SessionID, "/\\") || strings.Contains(cfg.SessionID, "..") {
-		return fmt.Errorf("invalid session ID")
-	}
-	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, studioChatUserID, cfg.SessionID+".jsonl")
-	transcript := session.NewTranscript(transcriptPath)
+	if sessionStore != nil {
+		// Platform mode: read events from PG store.
+		// userID is not needed for PG reads (keyed by sessionID only).
+		var readErr error
+		events, readErr = sessionStore.ReadTranscriptEvents(studioChatAppName, "", cfg.SessionID)
+		if readErr != nil {
+			return fmt.Errorf("reading transcript from store: %w", readErr)
+		}
+	} else {
+		// Personal mode: read from JSONL file.
+		fileStore := getFleetFileStore()
+		if fileStore == nil {
+			return fmt.Errorf("file store not available for session recovery")
+		}
 
-	if !transcript.Exists() {
-		return fmt.Errorf("transcript not found for session %s", cfg.SessionID)
-	}
+		if strings.ContainsAny(cfg.SessionID, "/\\") || strings.Contains(cfg.SessionID, "..") {
+			return fmt.Errorf("invalid session ID")
+		}
+		transcriptPath = filepath.Join(fileStore.BaseDir(), studioChatAppName, studioChatUserID, cfg.SessionID+".jsonl")
+		transcript := session.NewTranscript(transcriptPath)
 
-	events, err := transcript.ReadEvents()
-	if err != nil {
-		return fmt.Errorf("reading transcript: %w", err)
+		if !transcript.Exists() {
+			return fmt.Errorf("transcript not found for session %s", cfg.SessionID)
+		}
+
+		var readErr error
+		events, readErr = transcript.ReadEvents()
+		if readErr != nil {
+			return fmt.Errorf("reading transcript: %w", readErr)
+		}
 	}
 
 	if len(events) == 0 {
@@ -150,6 +171,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	fleetSession.Plan = plan
 	fleetSession.Headless = true
 	fleetSession.WorkspaceDir = workspaceDir
+	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for the recovered session (fails if sandbox is enabled but unavailable)
 	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken); err != nil {
@@ -249,8 +271,12 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig) erro
 	}
 
 	// Wire transcript in APPEND mode (do NOT write a new header).
-	// The existing transcript file already has the header and prior events.
-	wireFleetTranscriptAppend(fleetSession, transcriptPath, len(events))
+	// In platform mode, use PG store; in personal mode, append to existing JSONL.
+	if sessionStore != nil {
+		wireFleetTranscriptPG(fleetSession, sessionStore)
+	} else {
+		wireFleetTranscriptAppend(fleetSession, transcriptPath, len(events))
+	}
 
 	// Register in the in-memory session registry
 	registry := getFleetSessionRegistry()

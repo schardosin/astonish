@@ -129,6 +129,13 @@ func (w *SessionStoreWrapper) SetRedactFunc(fn func(string) string) {
 	w.inner.RedactFunc = fn
 }
 
+// AppendFleetEvent is a no-op for the file-based store since fleet transcripts
+// are managed via JSONL files in wireFleetTranscript. This method exists to
+// satisfy the SessionStore interface.
+func (w *SessionStoreWrapper) AppendFleetEvent(_ string, _ *adksession.Event) error {
+	return nil
+}
+
 // --- conversion helpers ---
 
 func convertSessionMeta(m session.SessionMeta) store.SessionMeta {

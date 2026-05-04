@@ -10,6 +10,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // planActivatorVar holds the PlanActivator instance, set by the daemon.
@@ -163,7 +164,15 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg); recoverErr != nil {
+	// Resolve the session store for platform mode. Fleet sessions started by the
+	// daemon are persisted in the team Sessions store (not PersonalSessions),
+	// so we use that for recovery too.
+	var retrySessionStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		retrySessionStore = svc.Sessions
+	}
+
+	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg, retrySessionStore); recoverErr != nil {
 		// Recovery failed; increment retry count
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("retry recovery failed: %v", recoverErr))
 		http.Error(w, fmt.Sprintf("Recovery failed: %v", recoverErr), http.StatusInternalServerError)

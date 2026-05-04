@@ -29,7 +29,7 @@ type DeliverFunc func(ctx context.Context, job *Job, result string, err error) e
 
 // Scheduler manages the lifecycle and execution of scheduled jobs.
 type Scheduler struct {
-	store   *Store
+	store   JobStore
 	execute ExecuteFunc
 	deliver DeliverFunc
 	logger  *log.Logger
@@ -44,7 +44,7 @@ type Scheduler struct {
 }
 
 // New creates a new Scheduler.
-func New(store *Store, execute ExecuteFunc, deliver DeliverFunc, logger *log.Logger) *Scheduler {
+func New(store JobStore, execute ExecuteFunc, deliver DeliverFunc, logger *log.Logger) *Scheduler {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -82,7 +82,7 @@ func (s *Scheduler) Stop() {
 }
 
 // Store returns the underlying job store (for tools/API access).
-func (s *Scheduler) Store() *Store {
+func (s *Scheduler) Store() JobStore {
 	return s.store
 }
 

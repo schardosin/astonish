@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS {{schema}}.sessions (
     parent_id       TEXT,
     fleet_key       TEXT DEFAULT '',
     fleet_name      TEXT DEFAULT '',
+    issue_number    INTEGER NOT NULL DEFAULT 0,
+    repo            TEXT NOT NULL DEFAULT '',
     workspace_dir   TEXT DEFAULT '',
     metadata        JSONB DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -113,6 +115,9 @@ CREATE TABLE IF NOT EXISTS {{schema}}.scheduled_jobs (
                     CHECK (status IN ('active', 'paused', 'completed', 'failed')),
     last_run_at     TIMESTAMPTZ,
     next_run_at     TIMESTAMPTZ,
+    last_status     TEXT NOT NULL DEFAULT 'pending',  -- execution result: pending, success, failed
+    last_error      TEXT NOT NULL DEFAULT '',
+    consecutive_failures INT NOT NULL DEFAULT 0,
     created_by      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()

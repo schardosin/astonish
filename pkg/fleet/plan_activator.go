@@ -19,6 +19,7 @@ type SchedulerAccess interface {
 	RemoveJob(id string) error
 	RemoveJobByName(name string) error
 	GetJob(id string) *SchedulerJob
+	GetJobByName(name string) *SchedulerJob
 	ValidateCron(expr string) error
 }
 
@@ -49,6 +50,8 @@ type HeadlessFleetConfig struct {
 	IssueTitle     string                             // GitHub issue title (for task slug derivation)
 	Repo           string                             // GitHub repo "owner/repo"
 	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
+	UserID         string                             // platform user ID (UUID) or empty for system-initiated
+	TeamSlug       string                             // team slug for session scoping (empty for personal mode)
 	CompletionFunc func(err error)                    // called when the session finishes (nil=success, non-nil=failed)
 	BallChangeFunc func(ball string, commentID int64) // called when ball moves between agents/human
 }
@@ -61,6 +64,8 @@ type RecoverFleetConfig struct {
 	IssueTitle      string // GitHub issue title (for task slug derivation)
 	Repo            string
 	GHToken         string                             // resolved GitHub token (injected as GH_TOKEN)
+	UserID          string                             // platform user ID (UUID) or empty for system-initiated
+	TeamSlug        string                             // team slug for session scoping (empty for personal mode)
 	CustomerMessage string                             // customer comment that triggered recovery (empty for restart recovery)
 	CompletionFunc  func(err error)                    // called when the recovered session finishes
 	BallChangeFunc  func(ball string, commentID int64) // called when ball moves between agents/human
@@ -292,40 +297,61 @@ func (a *PlanActivator) RestoreActivated() error {
 
 		// Verify the scheduler job still exists. If it was lost (e.g., manual
 		// deletion, corrupted jobs.json), re-create it so polling resumes.
+		// We check by ID first, then by name to avoid creating duplicates
+		// when the plan JSON's SchedulerJobID is stale.
 		if plan.Activation.SchedulerJobID != "" {
 			existing := a.scheduler.GetJob(plan.Activation.SchedulerJobID)
 			if existing == nil {
-				slog.Warn("scheduler job missing, re-creating", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "plan", summary.Key)
-
-				schedule := plan.Channel.GetSchedule()
-
-				job := &SchedulerJob{
-					Name:    fmt.Sprintf("fleet-plan:%s", summary.Key),
-					Mode:    "fleet_poll",
-					Cron:    schedule,
-					Flow:    summary.Key,
-					Enabled: true,
-				}
-
-				if err := a.scheduler.AddJob(job); err != nil {
-					slog.Error("failed to re-create scheduler job", "component", "plan-activator", "plan", summary.Key, "error", err)
-					// Clear activation state since we can't restore the job
-					plan.Activation = PlanActivationState{}
+				// Job not found by ID — check by name before creating a new one.
+				// This prevents duplicates when the plan JSON has a stale job ID
+				// but the job still exists in the store under a different UUID
+				// (e.g., after a store migration or manual cleanup).
+				jobName := fmt.Sprintf("fleet-plan:%s", summary.Key)
+				existingByName := a.scheduler.GetJobByName(jobName)
+				if existingByName != nil {
+					// Job exists by name — just fix the stale ID reference.
+					slog.Info("scheduler job found by name, updating stale ID reference",
+						"component", "plan-activator", "plan", summary.Key,
+						"old_id", plan.Activation.SchedulerJobID, "found_id", existingByName.ID)
+					plan.Activation.SchedulerJobID = existingByName.ID
 					plan.UpdatedAt = time.Now()
 					if err := a.registry().Save(plan); err != nil {
 						slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
 					}
-					continue
-				}
+				} else {
+					// Job truly missing — re-create it.
+					slog.Warn("scheduler job missing, re-creating", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "plan", summary.Key)
 
-				// Update the job ID in the plan
-				plan.Activation.SchedulerJobID = job.ID
-				plan.UpdatedAt = time.Now()
-				if err := a.registry().Save(plan); err != nil {
-					slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
-				}
+					schedule := plan.Channel.GetSchedule()
 
-				slog.Info("re-created scheduler job", "component", "plan-activator", "job_id", job.ID, "plan", summary.Key, "cron", schedule)
+					job := &SchedulerJob{
+						Name:    jobName,
+						Mode:    "fleet_poll",
+						Cron:    schedule,
+						Flow:    summary.Key,
+						Enabled: true,
+					}
+
+					if err := a.scheduler.AddJob(job); err != nil {
+						slog.Error("failed to re-create scheduler job", "component", "plan-activator", "plan", summary.Key, "error", err)
+						// Clear activation state since we can't restore the job
+						plan.Activation = PlanActivationState{}
+						plan.UpdatedAt = time.Now()
+						if err := a.registry().Save(plan); err != nil {
+							slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+						}
+						continue
+					}
+
+					// Update the job ID in the plan
+					plan.Activation.SchedulerJobID = job.ID
+					plan.UpdatedAt = time.Now()
+					if err := a.registry().Save(plan); err != nil {
+						slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+					}
+
+					slog.Info("re-created scheduler job", "component", "plan-activator", "job_id", job.ID, "plan", summary.Key, "cron", schedule)
+				}
 			}
 		}
 

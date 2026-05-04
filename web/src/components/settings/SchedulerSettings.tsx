@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Save, AlertCircle, Check, Play, Trash2, Clock, Loader2, CheckCircle, XCircle, Pause, ChevronRight, ChevronDown, X, AlertTriangle } from 'lucide-react'
 import { saveFullConfigSection, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 // --- Types ---
 
@@ -42,13 +43,13 @@ interface SchedulerSettingsProps {
 
 // API helpers
 const fetchJobs = async (): Promise<{ jobs?: SchedulerJob[] }> => {
-  const res = await fetch('/api/scheduler/jobs')
+  const res = await teamFetch('/api/scheduler/jobs')
   if (!res.ok) throw new Error('Failed to fetch jobs')
   return res.json()
 }
 
 const updateJob = async (id: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -61,7 +62,7 @@ const updateJob = async (id: string, data: Record<string, unknown>): Promise<Rec
 }
 
 const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'DELETE'
   })
   if (!res.ok) {
@@ -72,7 +73,7 @@ const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
 }
 
 const runJobNow = async (id: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}/run`, {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}/run`, {
     method: 'POST'
   })
   if (!res.ok) {

@@ -146,6 +146,27 @@ export async function fetchFleetPlans(): Promise<{ plans: FleetPlanSummary[] }> 
   return response.json()
 }
 
+/** Persisted fleet session metadata (same shape as ChatSession + fleet fields). */
+export interface FleetSessionMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  fleetKey?: string
+  fleetName?: string
+  issueNumber?: number
+  repo?: string
+}
+
+export async function fetchFleetSessionsHistory(): Promise<FleetSessionMeta[]> {
+  const response = await teamFetch(`${API_BASE}/sessions/history`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet sessions history: ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function fetchFleetSessions(): Promise<{ sessions: FleetSession[] }> {
   const response = await teamFetch(`${API_BASE}/sessions`)
   if (!response.ok) {

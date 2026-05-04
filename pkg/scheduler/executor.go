@@ -23,11 +23,20 @@ type RunHeadlessFunc func(ctx context.Context, cfg *HeadlessRunConfig) (string, 
 // The planKey identifies which fleet plan to poll. Returns a result summary.
 type FleetPollFunc func(ctx context.Context, planKey string) (string, error)
 
+// FlowResolverFunc resolves a flow name to its raw YAML content.
+// In platform mode this reads from the team/personal FlowStore (PostgreSQL).
+// Returns the YAML string and nil, or empty string and error if not found.
+type FlowResolverFunc func(name string) (string, error)
+
 // HeadlessRunConfig holds the parameters for a headless flow run.
 // This mirrors launcher.HeadlessConfig but lives in the scheduler package
 // to avoid the import cycle.
 type HeadlessRunConfig struct {
-	FlowPath     string
+	// FlowPath is the filesystem path to the flow YAML (personal mode).
+	FlowPath string
+	// FlowYAML is the raw YAML content of the flow (platform mode).
+	// When set, FlowPath is ignored and the YAML is parsed directly.
+	FlowYAML     string
 	AppConfig    *config.AppConfig
 	ProviderName string
 	ModelName    string
@@ -56,6 +65,10 @@ type Executor struct {
 	// FleetPoll is the function to call for fleet_poll mode execution.
 	// Injected by the daemon to avoid import cycles.
 	FleetPoll FleetPollFunc
+	// FlowResolver resolves a flow name to raw YAML from the platform store.
+	// When set (platform mode), routine jobs use this instead of filesystem resolution.
+	// When nil (personal mode), resolveFlowPath() is used as the fallback.
+	FlowResolver FlowResolverFunc
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -81,20 +94,32 @@ func (e *Executor) executeRoutine(ctx context.Context, job *Job) (string, error)
 		return "", fmt.Errorf("headless runner not configured")
 	}
 
-	// Resolve flow path
-	agentPath, err := resolveFlowPath(job.Payload.Flow)
-	if err != nil {
-		return "", fmt.Errorf("flow %q not found: %w", job.Payload.Flow, err)
-	}
-
-	return e.RunHeadless(ctx, &HeadlessRunConfig{
-		FlowPath:     agentPath,
+	cfg := &HeadlessRunConfig{
 		AppConfig:    e.AppConfig,
 		ProviderName: e.ProviderName,
 		ModelName:    e.ModelName,
 		Parameters:   job.Payload.Params,
 		DebugMode:    e.DebugMode,
-	})
+	}
+
+	// Platform mode: resolve flow YAML from the store (team FlowStore).
+	if e.FlowResolver != nil {
+		yamlContent, err := e.FlowResolver(job.Payload.Flow)
+		if err != nil {
+			return "", fmt.Errorf("flow %q not found in store: %w", job.Payload.Flow, err)
+		}
+		cfg.FlowYAML = yamlContent
+		return e.RunHeadless(ctx, cfg)
+	}
+
+	// Personal mode: resolve flow from the filesystem.
+	agentPath, err := resolveFlowPath(job.Payload.Flow)
+	if err != nil {
+		return "", fmt.Errorf("flow %q not found: %w", job.Payload.Flow, err)
+	}
+	cfg.FlowPath = agentPath
+
+	return e.RunHeadless(ctx, cfg)
 }
 
 // executeAdaptive sends stored instructions as a chat message through the ChatAgent.

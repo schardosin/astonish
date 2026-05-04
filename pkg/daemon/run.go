@@ -607,43 +607,85 @@ func Run(cfg RunConfig) error {
 	var sched *scheduler.Scheduler
 	var schedExec *scheduler.Executor
 
+	// fleetSessionStore holds the PG-backed session store used for fleet
+	// sessions in platform mode. In personal mode it remains nil, and
+	// fleet session metadata is written to the file-based store instead.
+	var fleetSessionStore store.SessionStore
+
 	if appCfg.Scheduler.IsSchedulerEnabled() {
-		storePath, storeErr := scheduler.DefaultStorePath()
-		if storeErr != nil {
-			logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
-		} else {
-			store, storeErr := scheduler.NewStore(storePath)
-			if storeErr != nil {
-				logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
+		var jobStore scheduler.JobStore
+		var flowResolver scheduler.FlowResolverFunc
+
+		if svc.Mode == store.ModePlatform && pgStore != nil {
+			// Platform mode: use PostgreSQL-backed team scheduler store.
+			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+			orgStore, orgErr := pgStore.ForOrg(orgSlug)
+			if orgErr != nil {
+				logger.Printf("Warning: Cannot resolve org %q for scheduler, falling back to file store: %v", orgSlug, orgErr)
 			} else {
-				filestore.SetSchedulerStore(svc, store)
+				teamStore := orgStore.ForTeam("general")
+				jobStore = newPGSchedulerAdapter(teamStore.ScheduledJobs())
+				logger.Printf("Scheduler store: PostgreSQL (org=%s, team=general)", orgSlug)
 
-				// Create executor with injected headless runner
-				schedExec = &scheduler.Executor{
-					AppConfig:    appCfg,
-					ProviderName: appCfg.General.DefaultProvider,
-					ModelName:    appCfg.General.DefaultModel,
-					DebugMode:    cfg.Debug,
-					RunHeadless:  makeHeadlessRunner(),
+				// Capture the team session store for fleet sessions.
+				// Headless fleet sessions (started by the scheduler) are
+				// persisted in the team schema so they appear in Fleet View
+				// regardless of which user triggered the plan.
+				fleetSessionStore = teamStore.Sessions()
+
+				// Build a flow resolver that reads from the team FlowStore.
+				// Scheduler jobs reference flows by name; this resolves them
+				// to raw YAML from PostgreSQL instead of the filesystem.
+				teamFlows := teamStore.Flows()
+				flowResolver = func(name string) (string, error) {
+					return teamFlows.GetFlow(name)
 				}
-				if factoryResult != nil {
-					schedExec.ChatAgent = factoryResult.ChatAgent
-					schedExec.SessionService = factoryResult.SessionService
-				}
-
-				// Create delivery function (only if channels are available)
-				var deliver scheduler.DeliverFunc
-				if channelMgr != nil {
-					deliver = scheduler.NewDeliverFunc(channelMgr)
-				}
-
-				sched = scheduler.New(store, schedExec.Execute, deliver, log.Default())
-				sched.Start(ctx)
-
-				// Make scheduler available to API handlers and LLM tools
-				api.SetScheduler(sched)
-				tools.SetSchedulerAccess(newSchedulerBridge(sched))
 			}
+		}
+
+		if jobStore == nil {
+			// Personal mode (or platform fallback): use file-based JSON store.
+			storePath, storeErr := scheduler.DefaultStorePath()
+			if storeErr != nil {
+				logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
+			} else {
+				fileStore, storeErr := scheduler.NewStore(storePath)
+				if storeErr != nil {
+					logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
+				} else {
+					filestore.SetSchedulerStore(svc, fileStore)
+					jobStore = fileStore
+				}
+			}
+		}
+
+		if jobStore != nil {
+			// Create executor with injected headless runner
+			schedExec = &scheduler.Executor{
+				AppConfig:    appCfg,
+				ProviderName: appCfg.General.DefaultProvider,
+				ModelName:    appCfg.General.DefaultModel,
+				DebugMode:    cfg.Debug,
+				RunHeadless:  makeHeadlessRunner(),
+				FlowResolver: flowResolver, // nil in personal mode → falls back to filesystem
+			}
+			if factoryResult != nil {
+				schedExec.ChatAgent = factoryResult.ChatAgent
+				schedExec.SessionService = factoryResult.SessionService
+			}
+
+			// Create delivery function (only if channels are available)
+			var deliver scheduler.DeliverFunc
+			if channelMgr != nil {
+				deliver = scheduler.NewDeliverFunc(channelMgr)
+			}
+
+			sched = scheduler.New(jobStore, schedExec.Execute, deliver, log.Default())
+			sched.Start(ctx)
+
+			// Make scheduler available to API handlers and LLM tools
+			api.SetScheduler(sched)
+			tools.SetSchedulerAccess(newSchedulerBridge(sched))
 		}
 	}
 
@@ -655,7 +697,7 @@ func Run(cfg RunConfig) error {
 		if planReg != nil {
 			fleetSchedBridge := newFleetSchedulerBridge(sched)
 			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
-				return api.StartHeadlessFleetSession(fCtx, fCfg)
+				return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore)
 			}
 			// Pass api.GetFleetPlanRegistry as a function so the activator
 			// always sees the current registry instance, even if the Studio
@@ -669,7 +711,7 @@ func Run(cfg RunConfig) error {
 
 			// Wire the recover function for session recovery after restart
 			activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
-				return api.RecoverFleetSession(rCtx, rCfg)
+				return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore)
 			})
 
 			// Wire credential-based GitHub token resolver for fleet plans.
@@ -732,7 +774,7 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "")
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil)
 				if err != nil {
 					return nil, err
 				}
@@ -872,9 +914,21 @@ func Run(cfg RunConfig) error {
 // (scheduler -> launcher -> api).
 func makeHeadlessRunner() scheduler.RunHeadlessFunc {
 	return func(ctx context.Context, cfg *scheduler.HeadlessRunConfig) (string, error) {
-		agentCfg, err := config.LoadAgent(cfg.FlowPath)
-		if err != nil {
-			return "", fmt.Errorf("failed to load flow %q: %w", cfg.FlowPath, err)
+		var agentCfg *config.AgentConfig
+		var err error
+
+		if cfg.FlowYAML != "" {
+			// Platform mode: flow YAML was resolved from the store.
+			agentCfg, err = config.LoadAgentFromBytes([]byte(cfg.FlowYAML))
+			if err != nil {
+				return "", fmt.Errorf("failed to parse flow YAML: %w", err)
+			}
+		} else {
+			// Personal mode: load from filesystem path.
+			agentCfg, err = config.LoadAgent(cfg.FlowPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to load flow %q: %w", cfg.FlowPath, err)
+			}
 		}
 
 		return launcher.RunHeadless(ctx, &launcher.HeadlessConfig{
@@ -1110,6 +1164,21 @@ func (b *fleetSchedulerBridge) RemoveJobByName(name string) error {
 
 func (b *fleetSchedulerBridge) GetJob(id string) *fleet.SchedulerJob {
 	sj := b.sched.Store().Get(id)
+	if sj == nil {
+		return nil
+	}
+	return &fleet.SchedulerJob{
+		ID:      sj.ID,
+		Name:    sj.Name,
+		Mode:    string(sj.Mode),
+		Cron:    sj.Schedule.Cron,
+		Flow:    sj.Payload.Flow,
+		Enabled: sj.Enabled,
+	}
+}
+
+func (b *fleetSchedulerBridge) GetJobByName(name string) *fleet.SchedulerJob {
+	sj := b.sched.Store().GetByName(name)
 	if sj == nil {
 		return nil
 	}

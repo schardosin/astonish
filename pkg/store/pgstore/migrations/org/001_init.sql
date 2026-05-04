@@ -107,6 +107,15 @@ CREATE TABLE IF NOT EXISTS org_audit_log (
 -- Audit log is append-only: the app role gets INSERT only (no UPDATE/DELETE).
 -- This is enforced at the GRANT level in provision.go.
 
+-- Encryption keys for envelope encryption of credentials.
+-- Each org has a data encryption key (DEK) encrypted by a master key from env.
+CREATE TABLE IF NOT EXISTS org_encryption_keys (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    key_name    TEXT NOT NULL UNIQUE,          -- e.g., 'credential_key'
+    key_data    BYTEA NOT NULL,                -- AES-256 DEK, encrypted by ASTONISH_MASTER_KEY
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_team_memberships_team ON team_memberships(team_id);
 CREATE INDEX IF NOT EXISTS idx_team_memberships_user ON team_memberships(user_id);

@@ -1,17 +1,26 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Trash2, Eye, EyeOff, Edit2, Shield, ShieldOff, Lock, AlertCircle, Check, Loader2, KeyRound, X, Copy } from 'lucide-react'
+import React, { useState, useEffect, useCallback } from 'react'
+import { Plus, Trash2, Eye, EyeOff, Edit2, Shield, ShieldOff, Lock, AlertCircle, Check, Loader2, KeyRound, X, Copy, Upload, Download } from 'lucide-react'
 import { inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 // --- Types ---
 
 interface CredentialSummary {
   name: string
   type: string
+  scope?: string    // "personal" | "team" (platform mode only)
+  shadowed?: boolean // true if personal overrides this team credential
   [key: string]: unknown
+}
+
+interface SecretListItem {
+  key: string
+  scope?: string // "personal" | "team" (platform mode only)
 }
 
 interface RevealedCredential {
   type: string
+  scope?: string
   header?: string
   value?: string
   token?: string
@@ -20,7 +29,7 @@ interface RevealedCredential {
   auth_url?: string
   client_id?: string
   client_secret?: string
-  scope?: string
+  oauth_scope?: string
   token_url?: string
   access_token?: string
   refresh_token?: string
@@ -30,7 +39,7 @@ interface RevealedCredential {
 
 interface CredentialsData {
   credentials: CredentialSummary[]
-  secrets: string[]
+  secrets: SecretListItem[] | string[]
   has_master_key: boolean
 }
 
@@ -56,64 +65,101 @@ interface SecretForm {
   value: string
 }
 
-// API helpers
+// API helpers — use teamFetch for platform-mode team header injection
 const fetchCredentials = async (): Promise<CredentialsData> => {
-  const res = await fetch('/api/credentials')
+  const res = await teamFetch('/api/credentials')
   if (!res.ok) throw new Error('Failed to fetch credentials')
   return res.json()
 }
 
-const revealCredential = async (name: string, masterKey: string | null): Promise<RevealedCredential> => {
+const revealCredential = async (name: string, masterKey: string | null, scope?: string): Promise<RevealedCredential> => {
   const headers: Record<string, string> = {}
   if (masterKey) headers['X-Master-Key'] = masterKey
-  const res = await fetch(`/api/credentials/${encodeURIComponent(name)}`, { headers })
+  const scopeParam = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(`/api/credentials/${encodeURIComponent(name)}${scopeParam}`, { headers })
   if (res.status === 403) {
     const data = await res.json().catch(() => ({}))
     if (data.error === 'master_key_required') throw new Error('master_key_required')
     if (data.error === 'invalid_master_key') throw new Error('invalid_master_key')
-    throw new Error('Access denied')
+    throw new Error(data.error || 'Access denied')
   }
   if (!res.ok) throw new Error('Failed to reveal credential')
   return res.json()
 }
 
-const revealSecret = async (key: string, masterKey: string | null): Promise<{ value: string }> => {
+const revealSecret = async (key: string, masterKey: string | null, scope?: string): Promise<{ value: string }> => {
   const headers: Record<string, string> = {}
   if (masterKey) headers['X-Master-Key'] = masterKey
-  const res = await fetch(`/api/secrets/${encodeURIComponent(key)}`, { headers })
+  const scopeParam = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(`/api/secrets/${encodeURIComponent(key)}${scopeParam}`, { headers })
   if (res.status === 403) {
     const data = await res.json().catch(() => ({}))
     if (data.error === 'master_key_required') throw new Error('master_key_required')
     if (data.error === 'invalid_master_key') throw new Error('invalid_master_key')
-    throw new Error('Access denied')
+    throw new Error(data.error || 'Access denied')
   }
   if (!res.ok) throw new Error('Failed to reveal secret')
   return res.json()
 }
 
-const saveCredential = async (name: string, credential: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const res = await fetch('/api/credentials', {
+const saveCredentialApi = async (name: string, credential: Record<string, unknown>, scope?: string): Promise<Record<string, unknown>> => {
+  const scopeParam = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(`/api/credentials${scopeParam}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, credential })
   })
-  if (!res.ok) throw new Error('Failed to save credential')
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to save credential')
+  }
   return res.json()
 }
 
-const deleteCredential = async (name: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/credentials/${encodeURIComponent(name)}`, { method: 'DELETE' })
-  if (!res.ok) throw new Error('Failed to delete')
+const deleteCredentialApi = async (name: string, scope?: string): Promise<Record<string, unknown>> => {
+  const scopeParam = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(`/api/credentials/${encodeURIComponent(name)}${scopeParam}`, { method: 'DELETE' })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to delete')
+  }
   return res.json()
 }
 
-const saveSecret = async (key: string, value: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/secrets/${encodeURIComponent(key)}`, {
+const saveSecretApi = async (key: string, value: string, scope?: string): Promise<Record<string, unknown>> => {
+  const scopeParam = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(`/api/secrets/${encodeURIComponent(key)}${scopeParam}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ value })
   })
   if (!res.ok) throw new Error('Failed to save secret')
+  return res.json()
+}
+
+const publishCredentialApi = async (name: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch('/api/credentials/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to publish credential')
+  }
+  return res.json()
+}
+
+const forkCredentialApi = async (name: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch('/api/credentials/fork', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name })
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    throw new Error(data.error || 'Failed to fork credential')
+  }
   return res.json()
 }
 
@@ -158,6 +204,11 @@ const TYPE_COLORS: Record<string, string> = {
   oauth_authorization_code: '#06b6d4'
 }
 
+const SCOPE_COLORS: Record<string, string> = {
+  personal: '#8b5cf6',
+  team: '#3b82f6',
+}
+
 // Type badge component
 function TypeBadge({ type }: { type: string }) {
   const color = TYPE_COLORS[type] || '#6b7280'
@@ -165,6 +216,17 @@ function TypeBadge({ type }: { type: string }) {
     <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
       style={{ background: color + '20', color, border: `1px solid ${color}40` }}>
       {TYPE_LABELS[type] || type}
+    </span>
+  )
+}
+
+// Scope badge component
+function ScopeBadge({ scope }: { scope: string }) {
+  const color = SCOPE_COLORS[scope] || '#6b7280'
+  return (
+    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide"
+      style={{ background: color + '15', color, border: `1px solid ${color}30` }}>
+      {scope}
     </span>
   )
 }
@@ -192,13 +254,23 @@ function CopyButton({ text }: { text: string | undefined }) {
   )
 }
 
+// Normalize secrets from API (can be string[] or SecretListItem[])
+function normalizeSecrets(secrets: SecretListItem[] | string[]): SecretListItem[] {
+  if (!secrets || secrets.length === 0) return []
+  if (typeof secrets[0] === 'string') {
+    return (secrets as string[]).map(key => ({ key }))
+  }
+  return secrets as SecretListItem[]
+}
+
 export default function CredentialsSettings() {
   const [data, setData] = useState<CredentialsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [isPlatform, setIsPlatform] = useState(false)
 
   // Master key state
-  const [masterKey, setMasterKey] = useState<string | null>(null) // cached in memory for session
+  const [masterKey, setMasterKey] = useState<string | null>(null)
   const [showMasterKeyPrompt, setShowMasterKeyPrompt] = useState(false)
   const [masterKeyInput, setMasterKeyInput] = useState('')
   const [masterKeyError, setMasterKeyError] = useState('')
@@ -218,26 +290,36 @@ export default function CredentialsSettings() {
 
   // Add/edit modal
   const [showCredModal, setShowCredModal] = useState(false)
-  const [editingCred, setEditingCred] = useState<string | null>(null) // null = add, string = edit name
+  const [editingCred, setEditingCred] = useState<string | null>(null)
   const [credForm, setCredForm] = useState<CredForm>({ name: '', type: 'api_key', header: 'Authorization', value: '', token: '', username: '', password: '', auth_url: '', client_id: '', client_secret: '', scope: '', token_url: '', access_token: '', refresh_token: '' })
   const [credFormSaving, setCredFormSaving] = useState(false)
   const [credFormError, setCredFormError] = useState('')
+  const [addScope, setAddScope] = useState<string | undefined>(undefined)
 
   // Add secret modal
   const [showSecretModal, setShowSecretModal] = useState(false)
   const [secretForm, setSecretForm] = useState<SecretForm>({ key: '', value: '' })
   const [secretFormSaving, setSecretFormSaving] = useState(false)
   const [secretFormError, setSecretFormError] = useState('')
+  const [addSecretScope, setAddSecretScope] = useState<string | undefined>(undefined)
 
   // Delete confirm
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<{ name: string; scope?: string } | null>(null)
   const [deleting, setDeleting] = useState(false)
+
+  // Publishing/forking
+  const [publishing, setPublishing] = useState<string | null>(null)
+  const [forking, setForking] = useState<string | null>(null)
 
   const loadData = useCallback(async () => {
     try {
       setLoading(true)
       const result = await fetchCredentials()
       setData(result)
+      // Detect platform mode by checking if any credential has a scope field
+      const hasScopedCred = result.credentials?.some(c => c.scope)
+      const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
+      setIsPlatform(hasScopedCred || hasScopedSecret)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -246,9 +328,28 @@ export default function CredentialsSettings() {
     }
   }, [])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      try {
+        const result = await fetchCredentials()
+        if (cancelled) return
+        setData(result)
+        const hasScopedCred = result.credentials?.some(c => c.scope)
+        const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
+        setIsPlatform(hasScopedCred || hasScopedSecret)
+        setError(null)
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Unknown error')
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
 
-  // Master key prompt flow: call this before any reveal action
+  // Master key prompt flow
   const withMasterKey = useCallback((callback: (mk: string | null) => void) => {
     if (!data?.has_master_key) {
       callback(null)
@@ -258,7 +359,6 @@ export default function CredentialsSettings() {
       callback(masterKey)
       return
     }
-    // Need to prompt
     setMasterKeyInput('')
     setMasterKeyError('')
     setMasterKeyCallback(() => callback)
@@ -285,22 +385,23 @@ export default function CredentialsSettings() {
   }
 
   // Reveal credential
-  const handleRevealCred = (name: string) => {
-    if (revealedCreds[name]) {
-      setRevealedCreds(prev => { const n = { ...prev }; delete n[name]; return n })
+  const handleRevealCred = (name: string, scope?: string) => {
+    const key = scope ? `${scope}:${name}` : name
+    if (revealedCreds[key]) {
+      setRevealedCreds(prev => { const n = { ...prev }; delete n[key]; return n })
       return
     }
     withMasterKey(async (mk) => {
       try {
-        setRevealingCred(name)
-        const detail = await revealCredential(name, mk)
-        setRevealedCreds(prev => ({ ...prev, [name]: detail }))
+        setRevealingCred(key)
+        const detail = await revealCredential(name, mk, scope)
+        setRevealedCreds(prev => ({ ...prev, [key]: detail }))
       } catch (err) {
         if (err instanceof Error && (err.message === 'master_key_required' || err.message === 'invalid_master_key')) {
           setMasterKey(null)
           setMasterKeyInput('')
           setMasterKeyError(err.message === 'invalid_master_key' ? 'Master key expired or invalid' : '')
-          setMasterKeyCallback(() => () => handleRevealCred(name))
+          setMasterKeyCallback(() => () => handleRevealCred(name, scope))
           setShowMasterKeyPrompt(true)
         } else {
           setError(err instanceof Error ? err.message : 'Unknown error')
@@ -312,22 +413,23 @@ export default function CredentialsSettings() {
   }
 
   // Reveal secret
-  const handleRevealSecret = (key: string) => {
-    if (revealedSecrets[key]) {
-      setRevealedSecrets(prev => { const n = { ...prev }; delete n[key]; return n })
+  const handleRevealSecret = (key: string, scope?: string) => {
+    const sKey = scope ? `${scope}:${key}` : key
+    if (revealedSecrets[sKey]) {
+      setRevealedSecrets(prev => { const n = { ...prev }; delete n[sKey]; return n })
       return
     }
     withMasterKey(async (mk) => {
       try {
-        setRevealingSecret(key)
-        const detail = await revealSecret(key, mk)
-        setRevealedSecrets(prev => ({ ...prev, [key]: detail.value }))
+        setRevealingSecret(sKey)
+        const detail = await revealSecret(key, mk, scope)
+        setRevealedSecrets(prev => ({ ...prev, [sKey]: detail.value }))
       } catch (err) {
         if (err instanceof Error && (err.message === 'master_key_required' || err.message === 'invalid_master_key')) {
           setMasterKey(null)
           setMasterKeyInput('')
           setMasterKeyError(err.message === 'invalid_master_key' ? 'Master key expired or invalid' : '')
-          setMasterKeyCallback(() => () => handleRevealSecret(key))
+          setMasterKeyCallback(() => () => handleRevealSecret(key, scope))
           setShowMasterKeyPrompt(true)
         } else {
           setError(err instanceof Error ? err.message : 'Unknown error')
@@ -339,18 +441,21 @@ export default function CredentialsSettings() {
   }
 
   // Add credential
-  const openAddCred = () => {
+  const openAddCred = (scope?: string) => {
     setEditingCred(null)
+    setAddScope(scope)
     setCredForm({ name: '', type: 'api_key', header: 'Authorization', value: '', token: '', username: '', password: '', auth_url: '', client_id: '', client_secret: '', scope: '', token_url: '', access_token: '', refresh_token: '' })
     setCredFormError('')
     setShowCredModal(true)
   }
 
-  // Edit credential (must reveal first)
-  const openEditCred = (name: string) => {
-    const revealed = revealedCreds[name]
+  // Edit credential
+  const openEditCred = (name: string, scope?: string) => {
+    const key = scope ? `${scope}:${name}` : name
+    const revealed = revealedCreds[key]
     if (!revealed) return
     setEditingCred(name)
+    setAddScope(scope)
     setCredForm({
       name,
       type: revealed.type || 'api_key',
@@ -362,7 +467,7 @@ export default function CredentialsSettings() {
       auth_url: revealed.auth_url || '',
       client_id: revealed.client_id || '',
       client_secret: revealed.client_secret || '',
-      scope: revealed.scope || '',
+      scope: revealed.oauth_scope || '',
       token_url: revealed.token_url || '',
       access_token: revealed.access_token || '',
       refresh_token: revealed.refresh_token || ''
@@ -384,9 +489,10 @@ export default function CredentialsSettings() {
         case 'oauth_client_credentials': cred.auth_url = credForm.auth_url; cred.client_id = credForm.client_id; cred.client_secret = credForm.client_secret; cred.scope = credForm.scope; break
         case 'oauth_authorization_code': cred.token_url = credForm.token_url; cred.client_id = credForm.client_id; cred.client_secret = credForm.client_secret; cred.access_token = credForm.access_token; cred.refresh_token = credForm.refresh_token; cred.scope = credForm.scope; break
       }
-      await saveCredential(credForm.name, cred)
+      await saveCredentialApi(credForm.name, cred, addScope)
       setShowCredModal(false)
-      setRevealedCreds(prev => { const n = { ...prev }; delete n[credForm.name]; return n })
+      const key = addScope ? `${addScope}:${credForm.name}` : credForm.name
+      setRevealedCreds(prev => { const n = { ...prev }; delete n[key]; return n })
       await loadData()
     } catch (err) {
       setCredFormError(err instanceof Error ? err.message : 'Unknown error')
@@ -396,9 +502,10 @@ export default function CredentialsSettings() {
   }
 
   // Add secret
-  const openAddSecret = () => {
+  const openAddSecret = (scope?: string) => {
     setSecretForm({ key: '', value: '' })
     setSecretFormError('')
+    setAddSecretScope(scope)
     setShowSecretModal(true)
   }
 
@@ -408,9 +515,10 @@ export default function CredentialsSettings() {
     setSecretFormSaving(true)
     setSecretFormError('')
     try {
-      await saveSecret(secretForm.key, secretForm.value)
+      await saveSecretApi(secretForm.key, secretForm.value, addSecretScope)
       setShowSecretModal(false)
-      setRevealedSecrets(prev => { const n = { ...prev }; delete n[secretForm.key]; return n })
+      const sKey = addSecretScope ? `${addSecretScope}:${secretForm.key}` : secretForm.key
+      setRevealedSecrets(prev => { const n = { ...prev }; delete n[sKey]; return n })
       await loadData()
     } catch (err) {
       setSecretFormError(err instanceof Error ? err.message : 'Unknown error')
@@ -424,15 +532,42 @@ export default function CredentialsSettings() {
     if (!deleteTarget) return
     setDeleting(true)
     try {
-      await deleteCredential(deleteTarget)
+      await deleteCredentialApi(deleteTarget.name, deleteTarget.scope)
+      const key = deleteTarget.scope ? `${deleteTarget.scope}:${deleteTarget.name}` : deleteTarget.name
       setDeleteTarget(null)
-      setRevealedCreds(prev => { const n = { ...prev }; delete n[deleteTarget]; return n })
-      setRevealedSecrets(prev => { const n = { ...prev }; delete n[deleteTarget]; return n })
+      setRevealedCreds(prev => { const n = { ...prev }; delete n[key]; return n })
+      setRevealedSecrets(prev => { const n = { ...prev }; delete n[key]; return n })
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
       setDeleting(false)
+    }
+  }
+
+  // Publish (personal -> team)
+  const handlePublish = async (name: string) => {
+    setPublishing(name)
+    try {
+      await publishCredentialApi(name)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to publish')
+    } finally {
+      setPublishing(null)
+    }
+  }
+
+  // Fork (team -> personal)
+  const handleFork = async (name: string) => {
+    setForking(name)
+    try {
+      await forkCredentialApi(name)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to fork')
+    } finally {
+      setForking(null)
     }
   }
 
@@ -451,7 +586,7 @@ export default function CredentialsSettings() {
     try {
       await apiSetMasterKey(mkSetupCurrent, mkSetupNew)
       setShowMasterKeySetup(false)
-      setMasterKey(null) // clear cached key
+      setMasterKey(null)
       setRevealedCreds({})
       setRevealedSecrets({})
       await loadData()
@@ -471,9 +606,226 @@ export default function CredentialsSettings() {
     )
   }
 
-  const credentials = data?.credentials || []
-  const secrets = data?.secrets || []
-  const hasMasterKey = data?.has_master_key || false
+  const allCredentials = data?.credentials || []
+  const allSecrets = normalizeSecrets(data?.secrets || [])
+  const hasMK = data?.has_master_key || false
+
+  // Split by scope for platform mode
+  const personalCreds = isPlatform ? allCredentials.filter(c => c.scope === 'personal') : allCredentials
+  const teamCreds = isPlatform ? allCredentials.filter(c => c.scope === 'team') : []
+  const personalSecrets = isPlatform ? allSecrets.filter(s => s.scope === 'personal') : allSecrets
+  const teamSecrets = isPlatform ? allSecrets.filter(s => s.scope === 'team') : []
+
+  const renderCredentialRow = (cred: CredentialSummary) => {
+    const credScope = cred.scope
+    const key = credScope ? `${credScope}:${cred.name}` : cred.name
+    const revealed = revealedCreds[key]
+    const isRevealing = revealingCred === key
+    const isTeam = credScope === 'team'
+    const isPublishing = publishing === cred.name
+    const isForking = forking === cred.name
+
+    return (
+      <div key={key} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{cred.name}</span>
+            <TypeBadge type={cred.type} />
+            {cred.shadowed && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#f59e0b', border: '1px solid rgba(245, 158, 11, 0.3)' }}>shadowed</span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            {/* Publish to team (personal only) */}
+            {isPlatform && credScope === 'personal' && (
+              <button
+                onClick={() => handlePublish(cred.name)}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors"
+                title="Publish to Team"
+                disabled={isPublishing}
+              >
+                {isPublishing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+                  <Upload size={14} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+            )}
+            {/* Fork to personal (team only) */}
+            {isPlatform && isTeam && (
+              <button
+                onClick={() => handleFork(cred.name)}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors"
+                title="Fork to Personal"
+                disabled={isForking}
+              >
+                {isForking ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+                  <Download size={14} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+            )}
+            <button
+              onClick={() => handleRevealCred(cred.name, credScope)}
+              className="p-1.5 rounded hover:bg-white/10 transition-colors"
+              title={revealed ? 'Hide' : 'Reveal'}
+              disabled={isRevealing}
+            >
+              {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+                revealed ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
+            </button>
+            {revealed && (
+              <button
+                onClick={() => openEditCred(cred.name, credScope)}
+                className="p-1.5 rounded hover:bg-white/10 transition-colors"
+                title="Edit"
+              >
+                <Edit2 size={14} style={{ color: 'var(--text-muted)' }} />
+              </button>
+            )}
+            <button
+              onClick={() => setDeleteTarget({ name: cred.name, scope: credScope })}
+              className="p-1.5 rounded hover:bg-white/10 transition-colors"
+              title="Delete"
+            >
+              <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
+            </button>
+          </div>
+        </div>
+        {/* Revealed fields */}
+        {revealed && (
+          <div className="mt-2 pt-2 border-t space-y-1.5" style={sectionBorderStyle}>
+            {revealed.type === 'api_key' && (
+              <>
+                <FieldRow label="Header" value={revealed.header} />
+                <FieldRow label="Value" value={revealed.value} secret />
+              </>
+            )}
+            {revealed.type === 'bearer' && <FieldRow label="Token" value={revealed.token} secret />}
+            {(revealed.type === 'basic' || revealed.type === 'password') && (
+              <>
+                <FieldRow label="Username" value={revealed.username} />
+                <FieldRow label="Password" value={revealed.password} secret />
+              </>
+            )}
+            {revealed.type === 'oauth_client_credentials' && (
+              <>
+                <FieldRow label="Auth URL" value={revealed.auth_url} />
+                <FieldRow label="Client ID" value={revealed.client_id} />
+                <FieldRow label="Client Secret" value={revealed.client_secret} secret />
+                {revealed.oauth_scope && <FieldRow label="Scope" value={revealed.oauth_scope} />}
+              </>
+            )}
+            {revealed.type === 'oauth_authorization_code' && (
+              <>
+                <FieldRow label="Token URL" value={revealed.token_url} />
+                <FieldRow label="Client ID" value={revealed.client_id} />
+                <FieldRow label="Client Secret" value={revealed.client_secret} secret />
+                <FieldRow label="Access Token" value={revealed.access_token} secret />
+                <FieldRow label="Refresh Token" value={revealed.refresh_token} secret />
+                {revealed.token_expiry && <FieldRow label="Token Expiry" value={revealed.token_expiry} />}
+                {revealed.oauth_scope && <FieldRow label="Scope" value={revealed.oauth_scope} />}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const renderSecretRow = (item: SecretListItem) => {
+    const sScope = item.scope
+    const sKey = sScope ? `${sScope}:${item.key}` : item.key
+    const revealed = revealedSecrets[sKey]
+    const isRevealing = revealingSecret === sKey
+    return (
+      <div key={sKey} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+        <div className="flex-1 min-w-0 mr-3">
+          <span className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{item.key}</span>
+          {revealed !== undefined && (
+            <div className="flex items-center gap-1 mt-0.5">
+              <MaskedValue value={revealed} revealed={true} />
+              <CopyButton text={revealed} />
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button
+            onClick={() => handleRevealSecret(item.key, sScope)}
+            className="p-1.5 rounded hover:bg-white/10 transition-colors"
+            title={revealed !== undefined ? 'Hide' : 'Reveal'}
+            disabled={isRevealing}
+          >
+            {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
+              revealed !== undefined ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
+          </button>
+          <button
+            onClick={() => setDeleteTarget({ name: item.key, scope: sScope })}
+            className="p-1.5 rounded hover:bg-white/10 transition-colors"
+            title="Delete"
+          >
+            <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  const renderCredentialSection = (title: string, creds: CredentialSummary[], secrets: SecretListItem[], scope?: string) => {
+    return (
+      <div>
+        {/* HTTP Credentials */}
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-sm font-medium flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+              {scope && <ScopeBadge scope={scope} />}
+              {title} ({creds.length})
+            </h3>
+            <button
+              onClick={() => openAddCred(scope)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:scale-[1.02]"
+              style={saveButtonStyle}
+            >
+              <Plus size={14} /> Add
+            </button>
+          </div>
+
+          {creds.length === 0 ? (
+            <div className="text-center py-6 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+              <Lock size={20} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+              <p className="text-sm" style={hintStyle}>No {scope ? `${scope} ` : ''}credentials stored.</p>
+              {!scope && <p className="text-xs mt-1" style={hintStyle}>Add credentials via the button above, CLI, or chat.</p>}
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {creds.map(renderCredentialRow)}
+            </div>
+          )}
+        </div>
+
+        {/* Flat Secrets */}
+        <div className="mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Secrets ({secrets.length})
+            </h3>
+            <button
+              onClick={() => openAddSecret(scope)}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-all hover:scale-[1.02]"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+            >
+              <Plus size={12} /> Add
+            </button>
+          </div>
+
+          {secrets.length === 0 ? (
+            <div className="text-center py-4 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+              <p className="text-xs" style={hintStyle}>No {scope ? `${scope} ` : ''}secrets stored.</p>
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {secrets.map(renderSecretRow)}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -485,210 +837,72 @@ export default function CredentialsSettings() {
         </div>
       )}
 
-      {/* Master Key Banner */}
-      <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-        <div className="flex items-center gap-3">
-          {hasMasterKey ? (
-            <>
-              <Shield size={18} style={{ color: '#10b981' }} />
-              <div>
-                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Master key enabled</div>
-                <div className="text-xs" style={hintStyle}>Credential values require the master key to view.</div>
-              </div>
-            </>
-          ) : (
-            <>
-              <ShieldOff size={18} style={{ color: 'var(--text-muted)' }} />
-              <div>
-                <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>No master key</div>
-                <div className="text-xs" style={hintStyle}>Credential values can be viewed freely. Set a master key for extra protection.</div>
-              </div>
-            </>
-          )}
-        </div>
-        <button
-          onClick={() => {
-            setMkSetupCurrent('')
-            setMkSetupNew('')
-            setMkSetupConfirm('')
-            setMkSetupError('')
-            setShowMasterKeySetup(true)
-          }}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
-          style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
-        >
-          <KeyRound size={14} />
-          {hasMasterKey ? 'Change' : 'Set Master Key'}
-        </button>
-      </div>
-
-      {/* HTTP Credentials */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            HTTP Credentials ({credentials.length})
-          </h3>
+      {/* Master Key Banner (personal mode only) */}
+      {!isPlatform && (
+        <div className="flex items-center justify-between p-3 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <div className="flex items-center gap-3">
+            {hasMK ? (
+              <>
+                <Shield size={18} style={{ color: '#10b981' }} />
+                <div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Master key enabled</div>
+                  <div className="text-xs" style={hintStyle}>Credential values require the master key to view.</div>
+                </div>
+              </>
+            ) : (
+              <>
+                <ShieldOff size={18} style={{ color: 'var(--text-muted)' }} />
+                <div>
+                  <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>No master key</div>
+                  <div className="text-xs" style={hintStyle}>Credential values can be viewed freely. Set a master key for extra protection.</div>
+                </div>
+              </>
+            )}
+          </div>
           <button
-            onClick={openAddCred}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:scale-[1.02]"
-            style={saveButtonStyle}
+            onClick={() => {
+              setMkSetupCurrent('')
+              setMkSetupNew('')
+              setMkSetupConfirm('')
+              setMkSetupError('')
+              setShowMasterKeySetup(true)
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02]"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
           >
-            <Plus size={14} /> Add
+            <KeyRound size={14} />
+            {hasMK ? 'Change' : 'Set Master Key'}
           </button>
         </div>
+      )}
 
-        {credentials.length === 0 ? (
-          <div className="text-center py-8 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <Lock size={24} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
-            <p className="text-sm" style={hintStyle}>No HTTP credentials stored.</p>
-            <p className="text-xs mt-1" style={hintStyle}>Add credentials via the button above, CLI, or chat.</p>
+      {/* Platform mode: two sections */}
+      {isPlatform ? (
+        <>
+          {/* Personal Credentials Section */}
+          <div className="rounded-xl p-4" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
+            <div className="mb-3">
+              <p className="text-xs" style={hintStyle}>
+                Your private credentials. Only you can see and use these. Credentials saved from chat go here by default.
+              </p>
+            </div>
+            {renderCredentialSection('Personal Credentials', personalCreds, personalSecrets, 'personal')}
           </div>
-        ) : (
-          <div className="space-y-2">
-            {credentials.map(cred => {
-              const revealed = revealedCreds[cred.name]
-              const isRevealing = revealingCred === cred.name
-              return (
-                <div key={cred.name} className="rounded-lg border p-3" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{cred.name}</span>
-                      <TypeBadge type={cred.type} />
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => handleRevealCred(cred.name)}
-                        className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                        title={revealed ? 'Hide' : 'Reveal'}
-                        disabled={isRevealing}
-                      >
-                        {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
-                          revealed ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
-                      </button>
-                      {revealed && (
-                        <button
-                          onClick={() => openEditCred(cred.name)}
-                          className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                          title="Edit"
-                        >
-                          <Edit2 size={14} style={{ color: 'var(--text-muted)' }} />
-                        </button>
-                      )}
-                      <button
-                        onClick={() => setDeleteTarget(cred.name)}
-                        className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                        title="Delete"
-                      >
-                        <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
-                      </button>
-                    </div>
-                  </div>
-                  {/* Revealed fields */}
-                  {revealed && (
-                    <div className="mt-2 pt-2 border-t space-y-1.5" style={sectionBorderStyle}>
-                      {revealed.type === 'api_key' && (
-                        <>
-                          <FieldRow label="Header" value={revealed.header} />
-                          <FieldRow label="Value" value={revealed.value} secret />
-                        </>
-                      )}
-                      {revealed.type === 'bearer' && <FieldRow label="Token" value={revealed.token} secret />}
-                      {(revealed.type === 'basic' || revealed.type === 'password') && (
-                        <>
-                          <FieldRow label="Username" value={revealed.username} />
-                          <FieldRow label="Password" value={revealed.password} secret />
-                        </>
-                      )}
-                      {revealed.type === 'oauth_client_credentials' && (
-                        <>
-                          <FieldRow label="Auth URL" value={revealed.auth_url} />
-                          <FieldRow label="Client ID" value={revealed.client_id} />
-                          <FieldRow label="Client Secret" value={revealed.client_secret} secret />
-                          {revealed.scope && <FieldRow label="Scope" value={revealed.scope} />}
-                        </>
-                      )}
-                      {revealed.type === 'oauth_authorization_code' && (
-                        <>
-                          <FieldRow label="Token URL" value={revealed.token_url} />
-                          <FieldRow label="Client ID" value={revealed.client_id} />
-                          <FieldRow label="Client Secret" value={revealed.client_secret} secret />
-                          <FieldRow label="Access Token" value={revealed.access_token} secret />
-                          <FieldRow label="Refresh Token" value={revealed.refresh_token} secret />
-                          {revealed.token_expiry && <FieldRow label="Token Expiry" value={revealed.token_expiry} />}
-                          {revealed.scope && <FieldRow label="Scope" value={revealed.scope} />}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
 
-      {/* Flat Secrets */}
-      <div className="pt-4 border-t" style={sectionBorderStyle}>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            Secrets ({secrets.length})
-          </h3>
-          <button
-            onClick={openAddSecret}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-all hover:scale-[1.02]"
-            style={saveButtonStyle}
-          >
-            <Plus size={14} /> Add
-          </button>
-        </div>
-        <p className="text-xs mb-3" style={hintStyle}>
-          Provider API keys, bot tokens, and other flat key-value secrets (migrated from config.yaml).
-        </p>
-
-        {secrets.length === 0 ? (
-          <div className="text-center py-6 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <p className="text-sm" style={hintStyle}>No secrets stored.</p>
+          {/* Team Credentials Section */}
+          <div className="rounded-xl p-4" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
+            <div className="mb-3">
+              <p className="text-xs" style={hintStyle}>
+                Shared team credentials for app-to-app integrations. All members can use these; only admins can view values or edit.
+              </p>
+            </div>
+            {renderCredentialSection('Team Credentials', teamCreds, teamSecrets, 'team')}
           </div>
-        ) : (
-          <div className="space-y-1">
-            {secrets.map(key => {
-              const revealed = revealedSecrets[key]
-              const isRevealing = revealingSecret === key
-              return (
-                <div key={key} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-                  <div className="flex-1 min-w-0 mr-3">
-                    <span className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{key}</span>
-                    {revealed !== undefined && (
-                      <div className="flex items-center gap-1 mt-0.5">
-                        <MaskedValue value={revealed} revealed={true} />
-                        <CopyButton text={revealed} />
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => handleRevealSecret(key)}
-                      className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                      title={revealed !== undefined ? 'Hide' : 'Reveal'}
-                      disabled={isRevealing}
-                    >
-                      {isRevealing ? <Loader2 size={14} className="animate-spin" style={{ color: 'var(--text-muted)' }} /> :
-                        revealed !== undefined ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
-                    </button>
-                    <button
-                      onClick={() => setDeleteTarget(key)}
-                      className="p-1.5 rounded hover:bg-white/10 transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 size={14} style={{ color: 'var(--text-muted)' }} />
-                    </button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
+        </>
+      ) : (
+        // Personal mode: single section (no scope labels)
+        renderCredentialSection('HTTP Credentials', personalCreds, personalSecrets)
+      )}
 
       {/* Master Key Prompt Modal */}
       {showMasterKeyPrompt && (
@@ -716,16 +930,16 @@ export default function CredentialsSettings() {
 
       {/* Master Key Setup Modal */}
       {showMasterKeySetup && (
-        <Modal onClose={() => setShowMasterKeySetup(false)} title={hasMasterKey ? 'Change Master Key' : 'Set Master Key'}>
+        <Modal onClose={() => setShowMasterKeySetup(false)} title={hasMK ? 'Change Master Key' : 'Set Master Key'}>
           <div className="space-y-4">
-            {hasMasterKey && (
+            {hasMK && (
               <div>
                 <label className="block text-sm font-medium mb-2" style={labelStyle}>Current Master Key</label>
                 <input type="password" value={mkSetupCurrent} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMkSetupCurrent(e.target.value)} className={inputClass} style={inputStyle} />
               </div>
             )}
             <div>
-              <label className="block text-sm font-medium mb-2" style={labelStyle}>New Master Key {hasMasterKey && <span className="font-normal" style={hintStyle}>(empty to remove)</span>}</label>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>New Master Key {hasMK && <span className="font-normal" style={hintStyle}>(empty to remove)</span>}</label>
               <input type="password" value={mkSetupNew} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setMkSetupNew(e.target.value)} className={inputClass} style={inputStyle} />
             </div>
             {mkSetupNew && (
@@ -747,7 +961,7 @@ export default function CredentialsSettings() {
 
       {/* Add/Edit Credential Modal */}
       {showCredModal && (
-        <Modal onClose={() => setShowCredModal(false)} title={editingCred ? `Edit "${editingCred}"` : 'Add Credential'}>
+        <Modal onClose={() => setShowCredModal(false)} title={editingCred ? `Edit "${editingCred}"` : `Add ${addScope ? addScope.charAt(0).toUpperCase() + addScope.slice(1) + ' ' : ''}Credential`}>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2" style={labelStyle}>Name</label>
@@ -871,7 +1085,7 @@ export default function CredentialsSettings() {
 
       {/* Add Secret Modal */}
       {showSecretModal && (
-        <Modal onClose={() => setShowSecretModal(false)} title="Add Secret">
+        <Modal onClose={() => setShowSecretModal(false)} title={`Add ${addSecretScope ? addSecretScope.charAt(0).toUpperCase() + addSecretScope.slice(1) + ' ' : ''}Secret`}>
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2" style={labelStyle}>Key</label>
@@ -898,7 +1112,8 @@ export default function CredentialsSettings() {
         <Modal onClose={() => setDeleteTarget(null)} title="Delete Credential">
           <div className="space-y-4">
             <p className="text-sm" style={{ color: 'var(--text-primary)' }}>
-              Are you sure you want to delete <span className="font-mono font-medium">{deleteTarget}</span>?
+              Are you sure you want to delete <span className="font-mono font-medium">{deleteTarget.name}</span>
+              {deleteTarget.scope && <> from <span className="font-medium">{deleteTarget.scope}</span> store</>}?
             </p>
             <p className="text-xs" style={hintStyle}>This action cannot be undone. Any tools or configurations referencing this credential will stop working.</p>
             <div className="flex justify-end gap-2">

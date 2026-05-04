@@ -87,6 +87,16 @@ CREATE TABLE IF NOT EXISTS {{schema}}.flows (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS {{schema}}.credentials (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL UNIQUE,
+    cred_type       TEXT NOT NULL,
+    encrypted       BYTEA NOT NULL,     -- AES-256-GCM encrypted credential data
+    created_by      UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_personal_session_events_session
     ON {{schema}}.session_events(session_id);

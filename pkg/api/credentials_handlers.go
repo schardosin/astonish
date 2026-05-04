@@ -8,46 +8,61 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // --- Credential API types ---
 
 // credentialListItem represents a single credential in the list response.
 type credentialListItem struct {
-	Name string             `json:"name"`
-	Type store.CredentialType `json:"type"`
+	Name     string              `json:"name"`
+	Type     store.CredentialType `json:"type"`
+	Scope    string              `json:"scope,omitempty"`    // "personal" or "team" (platform mode only)
+	Shadowed bool                `json:"shadowed,omitempty"` // true if personal overrides this team credential
 }
 
 // credentialListResponse is the response for GET /api/credentials.
 type credentialListResponse struct {
 	Credentials  []credentialListItem `json:"credentials"`
-	Secrets      []string             `json:"secrets"`
+	Secrets      []secretListItem     `json:"secrets"`
 	HasMasterKey bool                 `json:"has_master_key"`
+}
+
+// secretListItem represents a secret in the list response.
+type secretListItem struct {
+	Key   string `json:"key"`
+	Scope string `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 }
 
 // credentialDetailResponse returns full credential fields (for reveal).
 type credentialDetailResponse struct {
-	Name         string             `json:"name"`
+	Name         string               `json:"name"`
 	Type         store.CredentialType `json:"type"`
-	Header       string             `json:"header,omitempty"`
-	Value        string             `json:"value,omitempty"`
-	Token        string             `json:"token,omitempty"`
-	Username     string             `json:"username,omitempty"`
-	Password     string             `json:"password,omitempty"`
-	AuthURL      string             `json:"auth_url,omitempty"`
-	ClientID     string             `json:"client_id,omitempty"`
-	ClientSecret string             `json:"client_secret,omitempty"`
-	Scope        string             `json:"scope,omitempty"`
-	TokenURL     string             `json:"token_url,omitempty"`
-	AccessToken  string             `json:"access_token,omitempty"`
-	RefreshToken string             `json:"refresh_token,omitempty"`
-	TokenExpiry  string             `json:"token_expiry,omitempty"`
+	Scope        string               `json:"scope,omitempty"`
+	Header       string               `json:"header,omitempty"`
+	Value        string               `json:"value,omitempty"`
+	Token        string               `json:"token,omitempty"`
+	Username     string               `json:"username,omitempty"`
+	Password     string               `json:"password,omitempty"`
+	AuthURL      string               `json:"auth_url,omitempty"`
+	ClientID     string               `json:"client_id,omitempty"`
+	ClientSecret string               `json:"client_secret,omitempty"`
+	Scope_       string               `json:"oauth_scope,omitempty"` // renamed to avoid JSON clash with "scope"
+	TokenURL     string               `json:"token_url,omitempty"`
+	AccessToken  string               `json:"access_token,omitempty"`
+	RefreshToken string               `json:"refresh_token,omitempty"`
+	TokenExpiry  string               `json:"token_expiry,omitempty"`
 }
 
 // credentialSaveRequest is the body for POST /api/credentials.
 type credentialSaveRequest struct {
-	Name       string          `json:"name"`
+	Name       string           `json:"name"`
 	Credential store.Credential `json:"credential"`
+}
+
+// credentialPublishRequest is the body for POST /api/credentials/publish.
+type credentialPublishRequest struct {
+	Name string `json:"name"`
 }
 
 // secretSaveRequest is the body for PUT /api/secrets/{key}.
@@ -99,18 +114,73 @@ func hasMasterKey() bool {
 	return cs != nil && cs.HasMasterKey()
 }
 
+// requireTeamAdmin returns true if the user is a team or org admin.
+// Returns false and writes an HTTP 403 error if not.
+func requireTeamAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if !isPlatformMode(r) {
+		return true // personal mode — no admin check
+	}
+	user := GetPlatformUser(r)
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "Authentication required")
+		return false
+	}
+	// Org-level admin/owner can manage any team's credentials
+	if user.Role == "owner" || user.Role == "admin" {
+		return true
+	}
+	// Check team-level admin
+	tc := pgstore.TenantContextFrom(r.Context())
+	if tc == nil || tc.OrgSlug == "" {
+		respondError(w, http.StatusForbidden, "Team admin access required")
+		return false
+	}
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		respondError(w, http.StatusForbidden, "Team admin access required")
+		return false
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(tc.OrgSlug)
+	if err != nil {
+		respondError(w, http.StatusForbidden, "Team admin access required")
+		return false
+	}
+	teamBySlug, err := orgStore.Teams().GetTeamBySlug(r.Context(), tc.TeamSlug)
+	if err != nil || teamBySlug == nil {
+		respondError(w, http.StatusForbidden, "Team admin access required")
+		return false
+	}
+	role, err := orgStore.Teams().GetMemberRole(r.Context(), user.ID, teamBySlug.ID)
+	if err != nil || role != "admin" {
+		respondError(w, http.StatusForbidden, "Team admin access required to manage team credentials")
+		return false
+	}
+	return true
+}
+
 // --- Handlers ---
 
 // ListCredentialsHandler returns all credential names/types and secret keys.
-// GET /api/credentials
+// GET /api/credentials?scope=personal|team|<empty>
+//
+// In platform mode with no scope filter, returns merged results with scope labels.
+// With scope=personal, returns only personal credentials.
+// With scope=team, returns only team credentials.
 func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	if isPlatformMode(r) && scope == "" {
+		// Return merged list with scope labels
+		listCredentialsMerged(w, r)
+		return
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
 	}
 
-	// Reload to pick up cross-process changes
 	if err := cs.Reload(); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
@@ -121,23 +191,99 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 
 	items := make([]credentialListItem, 0, len(creds))
 	for name, credType := range creds {
-		items = append(items, credentialListItem{Name: name, Type: credType})
+		items = append(items, credentialListItem{Name: name, Type: credType, Scope: scope})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 
+	secretItems := make([]secretListItem, 0, len(secrets))
+	for _, k := range secrets {
+		secretItems = append(secretItems, secretListItem{Key: k, Scope: scope})
+	}
+
 	resp := credentialListResponse{
 		Credentials:  items,
-		Secrets:      secrets,
+		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
 }
 
+// listCredentialsMerged returns credentials from both personal and team stores
+// with scope labels and shadowing indicators.
+func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil {
+		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
+		return
+	}
+
+	var items []credentialListItem
+	var secretItems []secretListItem
+	personalCreds := make(map[string]bool)
+	personalSecrets := make(map[string]bool)
+
+	// Personal credentials
+	if svc.PersonalCredentials != nil {
+		_ = svc.PersonalCredentials.Reload()
+		for name, credType := range svc.PersonalCredentials.List() {
+			items = append(items, credentialListItem{Name: name, Type: credType, Scope: "personal"})
+			personalCreds[name] = true
+		}
+		for _, key := range svc.PersonalCredentials.ListSecrets() {
+			secretItems = append(secretItems, secretListItem{Key: key, Scope: "personal"})
+			personalSecrets[key] = true
+		}
+	}
+
+	// Team credentials
+	if svc.Credentials != nil {
+		_ = svc.Credentials.Reload()
+		for name, credType := range svc.Credentials.List() {
+			items = append(items, credentialListItem{
+				Name:     name,
+				Type:     credType,
+				Scope:    "team",
+				Shadowed: personalCreds[name],
+			})
+		}
+		for _, key := range svc.Credentials.ListSecrets() {
+			secretItems = append(secretItems, secretListItem{Key: key, Scope: "team"})
+		}
+	}
+
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Name == items[j].Name {
+			// Personal before team for same name
+			return items[i].Scope == "personal"
+		}
+		return items[i].Name < items[j].Name
+	})
+
+	resp := credentialListResponse{
+		Credentials:  items,
+		Secrets:      secretItems,
+		HasMasterKey: hasMasterKey(),
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
 // GetCredentialHandler reveals a credential's full values.
-// GET /api/credentials/{name}
+// GET /api/credentials/{name}?scope=personal|team
+//
+// For team credentials in platform mode, only admins can see values.
+// Regular members get a 403.
 func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	// Team credential values: admin-only
+	if scope == "team" && isPlatformMode(r) {
+		if !requireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
@@ -161,6 +307,7 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	resp := credentialDetailResponse{
 		Name:         name,
 		Type:         cred.Type,
+		Scope:        scope,
 		Header:       cred.Header,
 		Value:        cred.Value,
 		Token:        cred.Token,
@@ -169,7 +316,7 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		AuthURL:      cred.AuthURL,
 		ClientID:     cred.ClientID,
 		ClientSecret: cred.ClientSecret,
-		Scope:        cred.Scope,
+		Scope_:       cred.Scope,
 		TokenURL:     cred.TokenURL,
 		AccessToken:  cred.AccessToken,
 		RefreshToken: cred.RefreshToken,
@@ -180,9 +327,20 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // SaveCredentialHandler creates or updates a named credential.
-// POST /api/credentials
+// POST /api/credentials?scope=personal|team
+//
+// For team scope in platform mode, requires admin access.
 func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	// Team credential writes: admin-only
+	if scope == "team" && isPlatformMode(r) {
+		if !requireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
@@ -207,9 +365,20 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteCredentialHandler removes a credential or flat secret.
-// DELETE /api/credentials/{name}
+// DELETE /api/credentials/{name}?scope=personal|team
+//
+// For team scope in platform mode, requires admin access.
 func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	// Team credential deletes: admin-only
+	if scope == "team" && isPlatformMode(r) {
+		if !requireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
@@ -240,10 +409,102 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotFound, "Credential or secret not found")
 }
 
+// PublishCredentialHandler copies a personal credential to the team store.
+// POST /api/credentials/publish
+//
+// Requires team admin access. Copy semantics: both stores have their own copy afterward.
+func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
+	if !isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Publish is only available in platform mode")
+		return
+	}
+	if !requireTeamAdmin(w, r) {
+		return
+	}
+
+	var req credentialPublishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		respondError(w, http.StatusBadRequest, "Credential name is required")
+		return
+	}
+
+	personalStore := effectivePersonalCredentialStore(r)
+	teamStore := effectiveTeamCredentialStore(r)
+	if personalStore == nil || teamStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "Credential stores not available")
+		return
+	}
+
+	cred := personalStore.Get(req.Name)
+	if cred == nil {
+		respondError(w, http.StatusNotFound, "Personal credential not found")
+		return
+	}
+
+	if err := teamStore.Set(req.Name, cred); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to publish credential: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "published": req.Name})
+}
+
+// ForkCredentialHandler copies a team credential to the user's personal store.
+// POST /api/credentials/fork
+func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
+	if !isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Fork is only available in platform mode")
+		return
+	}
+
+	var req credentialPublishRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		respondError(w, http.StatusBadRequest, "Credential name is required")
+		return
+	}
+
+	teamStore := effectiveTeamCredentialStore(r)
+	personalStore := effectivePersonalCredentialStore(r)
+	if teamStore == nil || personalStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "Credential stores not available")
+		return
+	}
+
+	cred := teamStore.Get(req.Name)
+	if cred == nil {
+		respondError(w, http.StatusNotFound, "Team credential not found")
+		return
+	}
+
+	if err := personalStore.Set(req.Name, cred); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to fork credential: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "forked": req.Name})
+}
+
 // GetSecretHandler reveals a flat secret value.
-// GET /api/secrets/{key}
+// GET /api/secrets/{key}?scope=personal|team
 func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	// Team secrets: admin-only to reveal
+	if scope == "team" && isPlatformMode(r) {
+		if !requireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return
@@ -268,9 +529,18 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // SaveSecretHandler creates or updates a flat secret.
-// PUT /api/secrets/{key}
+// PUT /api/secrets/{key}?scope=personal|team
 func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
-	cs := effectiveCredentialStore(r)
+	scope := r.URL.Query().Get("scope")
+
+	// Team secrets: admin-only
+	if scope == "team" && isPlatformMode(r) {
+		if !requireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	cs := effectiveCredentialStoreScoped(r, scope)
 	if cs == nil {
 		respondError(w, http.StatusServiceUnavailable, "Credential store not available")
 		return

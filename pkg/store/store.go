@@ -86,6 +86,7 @@ type PersonalDataStore interface {
 	Sessions() SessionStore
 	AppState() AppStateStore
 	Flows() FlowStore
+	Credentials() CredentialStore
 }
 
 // --------------------------------------------------------------------------

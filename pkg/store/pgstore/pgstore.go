@@ -193,11 +193,22 @@ func (s *PGStore) ForOrg(orgSlug string) (store.OrgDataStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get pool for org %s: %w", orgSlug, err)
 	}
+
+	// Load or create the org's credential encryption key (envelope encryption).
+	// Returns nil if ASTONISH_MASTER_KEY is not set (encryption disabled).
+	keyMgr := NewOrgEncryptionKeyManager(pool)
+	credKey, err := keyMgr.GetOrCreateCredentialKey(context.Background())
+	if err != nil {
+		slog.Warn("failed to load org credential encryption key, encryption disabled", "org", orgSlug, "error", err)
+		credKey = nil
+	}
+
 	return &pgOrgDataStore{
 		pool:      pool,
 		orgSlug:   orgSlug,
 		poolMgr:   s.poolMgr,
 		embedFunc: s.embedFunc,
+		credKey:   credKey,
 	}, nil
 }
 
@@ -242,14 +253,15 @@ type pgOrgDataStore struct {
 	orgSlug   string
 	poolMgr   *PoolManager
 	embedFunc store.EmbedFunc
+	credKey   []byte // AES-256 credential encryption key (nil = no encryption)
 }
 
 func (o *pgOrgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
-	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug, embedFunc: o.embedFunc}
+	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug, embedFunc: o.embedFunc, credKey: o.credKey}
 }
 
 func (o *pgOrgDataStore) ForUser(userID string) store.PersonalDataStore {
-	return &pgPersonalDataStore{pool: o.pool, userID: userID, embedFunc: o.embedFunc}
+	return &pgPersonalDataStore{pool: o.pool, userID: userID, embedFunc: o.embedFunc, credKey: o.credKey}
 }
 
 func (o *pgOrgDataStore) OrgMemories() store.MemoryStore {
@@ -302,6 +314,7 @@ type pgTeamDataStore struct {
 	teamSlug  string
 	userID    string         // optional: used for per-user app state scoping
 	embedFunc store.EmbedFunc // optional: for memory store hybrid search
+	credKey   []byte          // AES-256 credential encryption key (nil = no encryption)
 }
 
 func (t *pgTeamDataStore) schema() string {
@@ -317,7 +330,7 @@ func (t *pgTeamDataStore) Memories() store.MemoryStore {
 }
 
 func (t *pgTeamDataStore) Credentials() store.CredentialStore {
-	return &pgCredentialStore{pool: t.pool, schema: t.schema()}
+	return &pgCredentialStore{pool: t.pool, schema: t.schema(), encKey: t.credKey, userID: t.userID}
 }
 
 func (t *pgTeamDataStore) Apps() store.AppStore {
@@ -358,6 +371,7 @@ type pgPersonalDataStore struct {
 	pool      *pgxpool.Pool
 	userID    string
 	embedFunc store.EmbedFunc
+	credKey   []byte // AES-256 credential encryption key (nil = no encryption)
 }
 
 func (p *pgPersonalDataStore) schema() string {
@@ -382,4 +396,8 @@ func (p *pgPersonalDataStore) AppState() store.AppStateStore {
 
 func (p *pgPersonalDataStore) Flows() store.FlowStore {
 	return &pgFlowStore{pool: p.pool, schema: p.schema()}
+}
+
+func (p *pgPersonalDataStore) Credentials() store.CredentialStore {
+	return &pgCredentialStore{pool: p.pool, schema: p.schema(), encKey: p.credKey, userID: p.userID}
 }

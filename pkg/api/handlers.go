@@ -1047,6 +1047,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/credentials", SaveCredentialHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/master-key", SetMasterKeyHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/verify-master-key", VerifyMasterKeyHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/publish", PublishCredentialHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/fork", ForkCredentialHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/{name}", GetCredentialHandler).Methods("GET")
 	router.HandleFunc("/api/credentials/{name}", DeleteCredentialHandler).Methods("DELETE")
 	router.HandleFunc("/api/secrets/{key:.+}", GetSecretHandler).Methods("GET")

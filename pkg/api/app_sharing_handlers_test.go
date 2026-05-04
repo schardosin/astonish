@@ -144,11 +144,12 @@ func newMockPersonalDataStore() *mockPersonalDataStore {
 	return &mockPersonalDataStore{apps: newMockAppStore()}
 }
 
-func (m *mockPersonalDataStore) Memories() store.MemoryStore    { return nil }
-func (m *mockPersonalDataStore) Apps() store.AppStore           { return m.apps }
-func (m *mockPersonalDataStore) Sessions() store.SessionStore   { return nil }
-func (m *mockPersonalDataStore) AppState() store.AppStateStore  { return m.appState }
-func (m *mockPersonalDataStore) Flows() store.FlowStore         { return nil }
+func (m *mockPersonalDataStore) Memories() store.MemoryStore       { return nil }
+func (m *mockPersonalDataStore) Apps() store.AppStore              { return m.apps }
+func (m *mockPersonalDataStore) Sessions() store.SessionStore      { return nil }
+func (m *mockPersonalDataStore) AppState() store.AppStateStore     { return m.appState }
+func (m *mockPersonalDataStore) Flows() store.FlowStore            { return nil }
+func (m *mockPersonalDataStore) Credentials() store.CredentialStore { return nil }
 
 // mockTenantRouter implements store.TenantRouter
 type mockTenantRouter struct {

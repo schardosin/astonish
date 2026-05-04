@@ -195,12 +195,15 @@ type ListCredentialsArgs struct {
 }
 
 type CredentialSummary struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Scope    string `json:"scope,omitempty"`    // "personal" or "team" — only set in platform mode
+	Shadowed bool   `json:"shadowed,omitempty"` // true if a personal credential overrides this team credential
 }
 
 type SecretSummary struct {
-	Key string `json:"key"`
+	Key   string `json:"key"`
+	Scope string `json:"scope,omitempty"` // "personal" or "team" — only set in platform mode
 }
 
 type ListCredentialsResult struct {
@@ -219,27 +222,99 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 	// Reload to pick up changes made outside this process
 	cs.Reload() //nolint:errcheck
 
-	// HTTP credentials
-	creds := cs.List()
-	credSummaries := make([]CredentialSummary, 0, len(creds))
-	for name, credType := range creds {
-		if args.Filter != "" && !strings.Contains(name, args.Filter) {
-			continue
-		}
-		credSummaries = append(credSummaries, CredentialSummary{
-			Name: name,
-			Type: string(credType),
-		})
-	}
+	// Check if we have a merged store for scope-aware listing
+	merged, isMerged := cs.(*store.MergedCredentialStore)
 
-	// Flat secrets (provider keys, channel tokens, MCP server keys)
-	secretKeys := cs.ListSecrets()
-	secretSummaries := make([]SecretSummary, 0, len(secretKeys))
-	for _, key := range secretKeys {
-		if args.Filter != "" && !strings.Contains(key, args.Filter) {
-			continue
+	var credSummaries []CredentialSummary
+	var secretSummaries []SecretSummary
+
+	if isMerged {
+		// Platform mode: list from both stores with scope labels
+		personalCreds := make(map[string]store.CredentialType)
+		teamCreds := make(map[string]store.CredentialType)
+		personalSecrets := make(map[string]bool)
+
+		if merged.Personal != nil {
+			personalCreds = merged.Personal.List()
+			for _, k := range merged.Personal.ListSecrets() {
+				personalSecrets[k] = true
+			}
 		}
-		secretSummaries = append(secretSummaries, SecretSummary{Key: key})
+		if merged.Team != nil {
+			teamCreds = merged.Team.List()
+		}
+
+		// Personal credentials first
+		for name, credType := range personalCreds {
+			if args.Filter != "" && !strings.Contains(name, args.Filter) {
+				continue
+			}
+			credSummaries = append(credSummaries, CredentialSummary{
+				Name:  name,
+				Type:  string(credType),
+				Scope: "personal",
+			})
+		}
+
+		// Team credentials (mark shadowed if personal has same name)
+		for name, credType := range teamCreds {
+			if args.Filter != "" && !strings.Contains(name, args.Filter) {
+				continue
+			}
+			_, shadowed := personalCreds[name]
+			credSummaries = append(credSummaries, CredentialSummary{
+				Name:     name,
+				Type:     string(credType),
+				Scope:    "team",
+				Shadowed: shadowed,
+			})
+		}
+
+		// Personal secrets
+		if merged.Personal != nil {
+			for _, key := range merged.Personal.ListSecrets() {
+				if args.Filter != "" && !strings.Contains(key, args.Filter) {
+					continue
+				}
+				secretSummaries = append(secretSummaries, SecretSummary{Key: key, Scope: "personal"})
+			}
+		}
+
+		// Team secrets
+		if merged.Team != nil {
+			for _, key := range merged.Team.ListSecrets() {
+				if args.Filter != "" && !strings.Contains(key, args.Filter) {
+					continue
+				}
+				if !personalSecrets[key] {
+					secretSummaries = append(secretSummaries, SecretSummary{Key: key, Scope: "team"})
+				} else {
+					secretSummaries = append(secretSummaries, SecretSummary{Key: key, Scope: "team (shadowed)"})
+				}
+			}
+		}
+	} else {
+		// Personal mode: single store, no scope labels
+		creds := cs.List()
+		credSummaries = make([]CredentialSummary, 0, len(creds))
+		for name, credType := range creds {
+			if args.Filter != "" && !strings.Contains(name, args.Filter) {
+				continue
+			}
+			credSummaries = append(credSummaries, CredentialSummary{
+				Name: name,
+				Type: string(credType),
+			})
+		}
+
+		secretKeys := cs.ListSecrets()
+		secretSummaries = make([]SecretSummary, 0, len(secretKeys))
+		for _, key := range secretKeys {
+			if args.Filter != "" && !strings.Contains(key, args.Filter) {
+				continue
+			}
+			secretSummaries = append(secretSummaries, SecretSummary{Key: key})
+		}
 	}
 
 	total := len(credSummaries) + len(secretSummaries)
@@ -450,7 +525,7 @@ func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCre
 func NewSaveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "save_credential",
-		Description: `Save a credential to the encrypted store. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential.`,
+		Description: `Save a credential to the encrypted store. Credentials saved here are PERSONAL (only you can see/use them). To share with the team, use the Settings UI 'Publish to Team'. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential.`,
 	}, saveCredential)
 }
 

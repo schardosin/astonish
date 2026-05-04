@@ -30,8 +30,14 @@ type Services struct {
 	// MemoryMgr provides higher-level memory operations (load/append MEMORY.md).
 	MemoryMgr MemoryManager
 
-	// Credentials provides access to the encrypted credential store.
+	// Credentials provides access to the team-scoped encrypted credential store.
+	// In platform mode, these are credentials shared across the team (app-to-app auth).
 	Credentials CredentialStore
+
+	// PersonalCredentials provides access to the user's private credential store.
+	// Credentials saved from chat go here by default (user identity credentials).
+	// Users can explicitly publish credentials to team when sharing is needed.
+	PersonalCredentials CredentialStore
 
 	// Apps provides access to team-shared generative UI app definitions.
 	// In platform mode, these are apps that have been published to the team.

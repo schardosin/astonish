@@ -38,6 +38,12 @@ func generateKey() ([]byte, error) {
 	return key, nil
 }
 
+// GenerateKey creates a cryptographically random 256-bit (32-byte) AES key.
+// This is the exported variant for use by the PG credential store's envelope encryption.
+func GenerateKey() ([]byte, error) {
+	return generateKey()
+}
+
 // encrypt encrypts plaintext using AES-256-GCM with a random nonce.
 // Output format: [12-byte nonce][ciphertext+GCM tag]
 func encrypt(plaintext, key []byte) ([]byte, error) {
@@ -58,6 +64,13 @@ func encrypt(plaintext, key []byte) ([]byte, error) {
 
 	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
 	return ciphertext, nil
+}
+
+// Encrypt encrypts plaintext using AES-256-GCM with a random nonce.
+// Output format: [12-byte nonce][ciphertext+GCM tag].
+// This is the exported variant for use by the PG credential store.
+func Encrypt(plaintext, key []byte) ([]byte, error) {
+	return encrypt(plaintext, key)
 }
 
 // decrypt decrypts data produced by encrypt.
@@ -84,6 +97,12 @@ func decrypt(ciphertext, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("decrypt: %w", err)
 	}
 	return plaintext, nil
+}
+
+// Decrypt decrypts data produced by Encrypt.
+// This is the exported variant for use by the PG credential store.
+func Decrypt(ciphertext, key []byte) ([]byte, error) {
+	return decrypt(ciphertext, key)
 }
 
 // loadOrCreateKey reads the encryption key from disk, or generates a new one.

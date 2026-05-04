@@ -50,8 +50,12 @@ func SetMemoryStores(svc *store.Services, ms *memory.Store, mm *memory.Manager) 
 
 // SetCredentialStore sets the credential store on a Services instance.
 // This is called when the credential store is opened during startup.
+// In personal mode, both Credentials and PersonalCredentials point to the
+// same store (there is no team/personal distinction without platform mode).
 func SetCredentialStore(svc *store.Services, cs *credentials.Store) {
-	svc.Credentials = NewCredentialStore(cs)
+	wrapper := NewCredentialStore(cs)
+	svc.Credentials = wrapper
+	svc.PersonalCredentials = wrapper
 }
 
 // SetSchedulerStore sets the scheduler store on a Services instance.

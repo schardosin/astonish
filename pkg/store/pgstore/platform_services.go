@@ -109,11 +109,13 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 			// Sessions: regular chat goes to personal; fleet sub-sessions stay in team.
 			// Flows: personal by default; publish-to-team for sharing.
 			// Apps: personal by default; publish-to-team for sharing.
+			// Credentials: saved from chat go to personal; team creds for shared infra.
 			if tc.UserID != "" {
 				personalStore := orgStore.ForUser(tc.UserID)
 				reqSvc.PersonalSessions = personalStore.Sessions()
 				reqSvc.PersonalFlows = personalStore.Flows()
 				reqSvc.PersonalApps = personalStore.Apps()
+				reqSvc.PersonalCredentials = personalStore.Credentials()
 			}
 
 				// Per-user app state: scope to the authenticated user

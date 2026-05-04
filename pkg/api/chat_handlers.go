@@ -634,8 +634,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// The BeforeToolCallback in chat_agent_run.go also checks this context value
 	// for credential placeholder substitution ({{CREDENTIAL:...}} tokens),
 	// falling back to the agent's file-based CredentialStore field.
-	if svc := store.FromRequest(r); svc != nil && svc.Credentials != nil {
-		runner.InjectCredentialStore(svc.Credentials)
+	//
+	// In platform mode, we inject a merged store (personal-first, team-fallback)
+	// so the LLM resolves the user's personal credentials first, then team creds.
+	// Writes from chat always go to the personal store.
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.PersonalCredentials != nil || svc.Credentials != nil {
+			merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+			runner.InjectCredentialStore(merged)
+		}
 	}
 
 	// Inject tenant-scoped memory stores into the runner context so that

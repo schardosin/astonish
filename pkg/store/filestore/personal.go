@@ -16,6 +16,11 @@ import (
 // (not all at once), since the existing startup sequence creates stores at
 // different points.
 //
+// In personal mode there is no team/personal distinction, so both the "team"
+// and "personal" fields point to the same store instance. This mirrors what
+// SetCredentialStore already does for credentials, and ensures that handlers
+// using the "try PersonalX first, fall back to X" pattern work correctly.
+//
 // After creation, callers should set individual fields as subsystems come online:
 //
 //	svc := filestore.NewPersonalServices()
@@ -23,18 +28,26 @@ import (
 //	svc.Credentials = filestore.NewCredentialStore(credStore)
 //	// ... etc
 func NewPersonalServices() *store.Services {
+	appStore := NewAppStore()
+	flowStore := NewFlowStore()
 	return &store.Services{
-		Mode:  store.ModePersonal,
-		Apps:  NewAppStore(),
-		Flows: NewFlowStore(),
-		Audit: NewNoopAuditStore(),
+		Mode:          store.ModePersonal,
+		Apps:          appStore,
+		PersonalApps:  appStore,
+		Flows:         flowStore,
+		PersonalFlows: flowStore,
+		Audit:         NewNoopAuditStore(),
 	}
 }
 
 // SetSessionStore sets the session store on a Services instance.
 // This is called when the session.FileStore is constructed during startup.
+// In personal mode, both Sessions and PersonalSessions point to the same store
+// (there is no team/personal distinction without platform mode).
 func SetSessionStore(svc *store.Services, fs *session.FileStore) {
-	svc.Sessions = NewSessionStore(fs)
+	wrapper := NewSessionStore(fs)
+	svc.Sessions = wrapper
+	svc.PersonalSessions = wrapper
 }
 
 // SetMemoryStores sets the memory store and manager on a Services instance.

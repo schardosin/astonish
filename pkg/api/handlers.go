@@ -206,7 +206,7 @@ func splitFirst(s, sep string) []string {
 // ListAgentsHandler handles GET /api/agents
 func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: merge personal + team flows (private-first ownership).
-	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		result := make([]AgentListItem, 0)
 
 		// Personal flows first (user's private flows)

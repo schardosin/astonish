@@ -15,7 +15,7 @@ import (
 // GET /api/apps
 func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: merge personal + team apps (private-first ownership).
-	if svc := store.FromRequest(r); svc != nil && (svc.PersonalApps != nil || svc.Apps != nil) {
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform && (svc.PersonalApps != nil || svc.Apps != nil) {
 		var merged []store.AppListItem
 
 		// Personal apps first (user's private apps)
@@ -53,7 +53,22 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode fallback: filesystem.
+	// Personal mode: single store (no scope distinction).
+	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
+		items, err := svc.Apps.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if items == nil {
+			items = []store.AppListItem{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"apps": items})
+		return
+	}
+
+	// Legacy fallback: filesystem.
 	items, err := apps.ListApps()
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

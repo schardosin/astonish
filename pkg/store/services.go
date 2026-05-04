@@ -14,9 +14,15 @@ type Services struct {
 	// Mode indicates the deployment mode.
 	Mode DeploymentMode
 
-	// Sessions provides access to the session store.
-	// This wraps the ADK session.Service and adds Astonish metadata operations.
+	// Sessions provides access to the team-scoped session store.
+	// In platform mode this holds fleet sub-sessions (team-shared).
+	// Regular chat sessions use PersonalSessions instead.
 	Sessions SessionStore
+
+	// PersonalSessions provides access to the user's private session store.
+	// Regular chat sessions are always created here. Fleet sub-sessions
+	// remain in the team-scoped Sessions store.
+	PersonalSessions SessionStore
 
 	// Memory provides access to the vector + BM25 memory search system.
 	Memory MemoryStore
@@ -37,8 +43,13 @@ type Services struct {
 	// Only populated in platform mode; nil in personal mode (SQLite used directly).
 	AppStateSQL AppStateSQLStore
 
-	// Flows provides access to flow/agent definitions and the tap registry.
+	// Flows provides access to team-shared flow/agent definitions.
+	// In platform mode, these are flows that have been published to the team.
 	Flows FlowStore
+
+	// PersonalFlows provides access to the user's private flow/agent definitions.
+	// Flows are created here by default and explicitly published to team when ready.
+	PersonalFlows FlowStore
 
 	// Scheduler provides access to scheduled job persistence.
 	Scheduler SchedulerStore

@@ -30,17 +30,37 @@ import (
 // Prevents path traversal and command injection via session ID parameters.
 var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 
+// resolveSessionStore returns the session store that contains the given session.
+// It checks the personal store first (private-first model), then falls back to
+// the team store (for fleet sub-sessions and pre-migration data).
+// Returns nil if the session is not found in any store.
+func resolveSessionStore(svc *store.Services, sessionID string) store.SessionStore {
+	if svc.PersonalSessions != nil {
+		if _, err := svc.PersonalSessions.GetSessionMeta(sessionID); err == nil {
+			return svc.PersonalSessions
+		}
+	}
+	if svc.Sessions != nil {
+		if _, err := svc.Sessions.GetSessionMeta(sessionID); err == nil {
+			return svc.Sessions
+		}
+	}
+	return nil
+}
+
 // StudioSessionsHandler handles GET /api/studio/sessions.
 func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	userID := effectiveUserID(r)
 
-	// Platform mode: use tenant-scoped session store from context.
-	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		metas, err := svc.Sessions.ListSessionMetas(studioChatAppName, userID)
+	// Platform mode: list from personal session store (private-first).
+	// Sessions are always private — they don't change when switching teams.
+	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
+		metas, err := svc.PersonalSessions.ListSessionMetas(studioChatAppName, userID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
 		sort.Slice(metas, func(i, j int) bool {
 			return metas[i].UpdatedAt.After(metas[j].UpdatedAt)
 		})
@@ -102,9 +122,18 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	userID := effectiveUserID(r)
 
-	// Platform mode: use tenant-scoped session store.
-	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		meta, err := svc.Sessions.GetSessionMeta(sessionID)
+	// Platform mode: try personal session store first, fall back to team
+	// (for fleet sub-sessions or pre-migration data).
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.PersonalSessions != nil || svc.Sessions != nil) {
+		// Resolve which store has this session: personal first, then team.
+		sessionStore := resolveSessionStore(svc, sessionID)
+		if sessionStore == nil {
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
+
+		meta, err := sessionStore.GetSessionMeta(sessionID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
 			return
@@ -112,7 +141,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Fleet sessions: read transcript events from store
 		if meta.FleetKey != "" {
-			events, readErr := svc.Sessions.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
+			events, readErr := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
 			var fleetMessages []FleetMessageSummary
 			if readErr == nil && len(events) > 0 {
 				fleetMessages = fleetEventsToMessages(events)
@@ -128,7 +157,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Regular session: get full session with events
-		getResp, err := svc.Sessions.Get(r.Context(), &session.GetRequest{
+		getResp, err := sessionStore.Get(r.Context(), &session.GetRequest{
 			AppName:   studioChatAppName,
 			UserID:    userID,
 			SessionID: sessionID,
@@ -262,16 +291,25 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		registry.Unregister(sessionID)
 	}
 
-	// Platform mode: use tenant-scoped session store.
-	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+	// Platform mode: try personal session store first, fall back to team.
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.PersonalSessions != nil || svc.Sessions != nil) {
+		// Resolve which store has this session: personal first, then team.
+		sessionStore := resolveSessionStore(svc, sessionID)
+		if sessionStore == nil {
+			// Session not found in any store — treat as already deleted.
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
 		// Clean up per-session workspace directory if one was recorded.
-		if meta, metaErr := svc.Sessions.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
+		if meta, metaErr := sessionStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
 			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
 				slog.Warn("could not clean up workspace", "component", "fleet", "workspace", meta.WorkspaceDir, "error", cleanErr)
 			}
 		}
 
-		err := svc.Sessions.Delete(r.Context(), &session.DeleteRequest{
+		err := sessionStore.Delete(r.Context(), &session.DeleteRequest{
 			AppName:   studioChatAppName,
 			UserID:    userID,
 			SessionID: sessionID,

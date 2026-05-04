@@ -179,6 +179,7 @@ func (s *PGStore) migrateOrgSchemas(ctx context.Context, orgSlug string) error {
 			slog.Error("schema migration failed",
 				"org", orgSlug, "schema", schema, "level", level, "error", err)
 		}
+
 		conn.Release()
 	}
 
@@ -377,4 +378,8 @@ func (p *pgPersonalDataStore) Sessions() store.SessionStore {
 
 func (p *pgPersonalDataStore) AppState() store.AppStateStore {
 	return &pgAppStateStore{pool: p.pool, schema: p.schema()}
+}
+
+func (p *pgPersonalDataStore) Flows() store.FlowStore {
+	return &pgFlowStore{pool: p.pool, schema: p.schema()}
 }

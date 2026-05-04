@@ -6,12 +6,13 @@ import "time"
 type FlowSummary struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
-	Type        string   `json:"type,omitempty"` // e.g., "drill_suite", "drill", "" for regular flows
+	Type        string   `json:"type,omitempty"`  // e.g., "drill_suite", "drill", "" for regular flows
 	Suite       string   `json:"suite,omitempty"` // parent suite name (for drills)
 	Tags        []string `json:"tags"`
 	TapName     string   `json:"tap_name"`
 	Installed   bool     `json:"installed"`
 	LocalPath   string   `json:"local_path"`
+	Scope       string   `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 }
 
 // FlowStore manages flow/agent YAML definitions and the tap registry.

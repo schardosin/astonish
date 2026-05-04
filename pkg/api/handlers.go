@@ -27,7 +27,8 @@ type AgentListItem struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
-	Source       string `json:"source"` // "system", "local", or "store"
+	Source       string `json:"source"`              // "system", "local", or "store"
+	Scope        string `json:"scope,omitempty"`     // "personal" or "team" (platform mode only)
 	HasError     bool   `json:"hasError,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	IsReadOnly   bool   `json:"isReadOnly,omitempty"` // True for store flows
@@ -43,6 +44,7 @@ type AgentListResponse struct {
 type AgentDetailResponse struct {
 	Name   string              `json:"name"`
 	Source string              `json:"source"`
+	Scope  string              `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 	YAML   string              `json:"yaml"`
 	Config *config.AgentConfig `json:"config,omitempty"`
 }
@@ -203,18 +205,46 @@ func splitFirst(s, sep string) []string {
 
 // ListAgentsHandler handles GET /api/agents
 func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
-	// Platform mode: database only — no filesystem mixing.
-	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		flows := svc.Flows.ListAllFlows()
-		result := make([]AgentListItem, 0, len(flows))
-		for _, f := range flows {
-			result = append(result, AgentListItem{
-				ID:          f.Name,
-				Name:        f.Name,
-				Description: f.Description,
-				Source:      "system",
-			})
+	// Platform mode: merge personal + team flows (private-first ownership).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		result := make([]AgentListItem, 0)
+
+		// Personal flows first (user's private flows)
+		if svc.PersonalFlows != nil {
+			for _, f := range svc.PersonalFlows.ListAllFlows() {
+				result = append(result, AgentListItem{
+					ID:          f.Name,
+					Name:        f.Name,
+					Description: f.Description,
+					Source:      "system",
+					Scope:       "personal",
+				})
+			}
 		}
+
+		// Team flows (shared/published flows)
+		if svc.Flows != nil {
+			personalNames := make(map[string]bool, len(result))
+			for _, item := range result {
+				personalNames[item.ID] = true
+			}
+			for _, f := range svc.Flows.ListAllFlows() {
+				// If the same name exists in both personal and team,
+				// include both — they are separate copies.
+				id := f.Name
+				if personalNames[id] {
+					id = "team:" + f.Name
+				}
+				result = append(result, AgentListItem{
+					ID:          id,
+					Name:        f.Name,
+					Description: f.Description,
+					Source:      "system",
+					Scope:       "team",
+				})
+			}
+		}
+
 		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 		respondJSON(w, http.StatusOK, AgentListResponse{Agents: result})
 		return
@@ -299,10 +329,33 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
+	scope := r.URL.Query().Get("scope") // optional: "personal" or "team"
 
-	// Platform mode: use the team-scoped flow store.
-	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		yamlContent, err := svc.Flows.GetFlow(name)
+	// Platform mode: use scope-aware flow resolution.
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		var yamlContent string
+		var resolvedScope string
+		var err error
+
+		// Explicit scope requested
+		if scope == "team" && svc.Flows != nil {
+			yamlContent, err = svc.Flows.GetFlow(name)
+			resolvedScope = "team"
+		} else if scope == "personal" && svc.PersonalFlows != nil {
+			yamlContent, err = svc.PersonalFlows.GetFlow(name)
+			resolvedScope = "personal"
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalFlows != nil {
+				yamlContent, err = svc.PersonalFlows.GetFlow(name)
+				resolvedScope = "personal"
+			}
+			if err != nil && svc.Flows != nil {
+				yamlContent, err = svc.Flows.GetFlow(name)
+				resolvedScope = "team"
+			}
+		}
+
 		if err != nil {
 			respondError(w, http.StatusNotFound, "Agent not found")
 			return
@@ -318,6 +371,7 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusOK, AgentDetailResponse{
 			Name:   name,
 			Source: "system",
+			Scope:  resolvedScope,
 			YAML:   yamlContent,
 			Config: cfg,
 		})
@@ -376,10 +430,27 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 		finalYAML = resolveAgentYAMLDependencies(request.YAML, agentConfig)
 	}
 
-	// Platform mode: use the team-scoped flow store.
-	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+	// Platform mode: scope-aware save (personal by default, team with explicit scope).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		scope := r.URL.Query().Get("scope")
+		if scope == "team" && svc.Flows != nil {
+			if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else if svc.PersonalFlows != nil {
+			if err := svc.PersonalFlows.SaveFlow(name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else if svc.Flows != nil {
+			// Fallback: no personal store, save to team
+			if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else {
+			respondError(w, http.StatusServiceUnavailable, "No flow store available")
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "yaml": finalYAML})
@@ -539,9 +610,24 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
-	// Platform mode: use the team-scoped flow store.
-	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		if err := svc.Flows.DeleteFlow(name); err != nil {
+	// Platform mode: scope-aware delete (try personal first, then team).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		scope := r.URL.Query().Get("scope")
+		var err error
+		if scope == "team" && svc.Flows != nil {
+			err = svc.Flows.DeleteFlow(name)
+		} else if scope == "personal" && svc.PersonalFlows != nil {
+			err = svc.PersonalFlows.DeleteFlow(name)
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalFlows != nil {
+				err = svc.PersonalFlows.DeleteFlow(name)
+			}
+			if err != nil && svc.Flows != nil {
+				err = svc.Flows.DeleteFlow(name)
+			}
+		}
+		if err != nil {
 			respondError(w, http.StatusNotFound, "Agent not found")
 			return
 		}
@@ -868,6 +954,9 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
+	// Flow sharing endpoints (must be before wildcard copy-to-local route)
+	router.HandleFunc("/api/agents/{name}/publish", FlowPublishToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/agents/{name}/fork", FlowForkToPersonalHandler).Methods("POST")
 	router.HandleFunc("/api/agents/{name:.*}/copy-to-local", CopyAgentToLocalHandler).Methods("POST")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/tools/web-capable", WebCapableToolsHandler).Methods("GET")

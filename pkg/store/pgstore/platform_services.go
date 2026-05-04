@@ -92,18 +92,27 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 				Skills:       orgStore.OrgSkills(),
 			}
 
-			// Populate team-scoped stores if team is known
-			if tc.TeamSlug != "" {
-				teamStore := orgStore.ForTeam(tc.TeamSlug)
-				reqSvc.Sessions = teamStore.Sessions()
-				reqSvc.Memory = teamStore.Memories()
-				reqSvc.Credentials = teamStore.Credentials()
-				reqSvc.Apps = teamStore.Apps()
-				reqSvc.Flows = teamStore.Flows()
-				reqSvc.Scheduler = teamStore.ScheduledJobs()
-				reqSvc.FleetTemplates = teamStore.FleetTemplates()
-				reqSvc.FleetPlans = teamStore.FleetPlans()
-				reqSvc.DrillReports = teamStore.DrillReports()
+		// Populate team-scoped stores if team is known
+		if tc.TeamSlug != "" {
+			teamStore := orgStore.ForTeam(tc.TeamSlug)
+			reqSvc.Sessions = teamStore.Sessions()
+			reqSvc.Memory = teamStore.Memories()
+			reqSvc.Credentials = teamStore.Credentials()
+			reqSvc.Apps = teamStore.Apps()
+			reqSvc.Flows = teamStore.Flows()
+			reqSvc.Scheduler = teamStore.ScheduledJobs()
+			reqSvc.FleetTemplates = teamStore.FleetTemplates()
+			reqSvc.FleetPlans = teamStore.FleetPlans()
+			reqSvc.DrillReports = teamStore.DrillReports()
+
+			// Wire personal stores for private-first ownership.
+			// Sessions: regular chat goes to personal; fleet sub-sessions stay in team.
+			// Flows: personal by default; publish-to-team for sharing.
+			if tc.UserID != "" {
+				personalStore := orgStore.ForUser(tc.UserID)
+				reqSvc.PersonalSessions = personalStore.Sessions()
+				reqSvc.PersonalFlows = personalStore.Flows()
+			}
 
 				// Per-user app state: scope to the authenticated user
 				// so each user gets their own state for shared team apps.

@@ -21,7 +21,7 @@ import { useHashRouter, buildPath } from './hooks/useHashRouter'
 import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
-import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
+import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer, publishFlowToTeam, forkFlowToPersonal } from './api/agents'
 import type { Agent, Tool, McpDependencyCheckResult } from './api/agents'
 import { fetchSandboxStatus } from './api/sandbox'
 import type { SandboxStatus } from './api/sandbox'
@@ -1335,6 +1335,28 @@ layout:
     setTimeout(() => setToast(null), 4000) // Auto-dismiss after 4 seconds
   }, [])
 
+  // Publish a personal flow to the team
+  const handlePublishFlow = useCallback(async (agent: Agent) => {
+    try {
+      await publishFlowToTeam(agent.name)
+      showToast(`Flow "${agent.name}" published to team`, 'success')
+      loadAgents()
+    } catch (err) {
+      showToast(`Failed to publish flow: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fork a team flow to personal
+  const handleForkFlow = useCallback(async (agent: Agent) => {
+    try {
+      await forkFlowToPersonal(agent.name)
+      showToast(`Flow "${agent.name}" forked to personal`, 'success')
+      loadAgents()
+    } catch (err) {
+      showToast(`Failed to fork flow: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent: AppAgent) => {
     try {
@@ -1484,6 +1506,8 @@ layout:
               onAgentSelect={(agent: any) => { handleAgentSelect(agent) }}
               onCreateNew={handleCreateNew}
               onDeleteAgent={(agent: any) => { handleDeleteAgent(agent) }}
+              onPublishFlow={(agent: any) => { handlePublishFlow(agent) }}
+              onForkFlow={(agent: any) => { handleForkFlow(agent) }}
               isLoading={isLoadingAgents}
             />
           )}

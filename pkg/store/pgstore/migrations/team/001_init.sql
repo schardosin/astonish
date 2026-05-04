@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS {{schema}}.memories (
     created_by      UUID,
     chunk_text      TEXT NOT NULL,
     embedding       vector(384),
+    tsv             tsvector,
     category        TEXT,
     source_path     TEXT,
     metadata        JSONB,
@@ -41,6 +42,22 @@ CREATE TABLE IF NOT EXISTS {{schema}}.memories (
 CREATE INDEX IF NOT EXISTS idx_memories_embedding
     ON {{schema}}.memories USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
+
+CREATE INDEX IF NOT EXISTS idx_team_memories_tsv
+    ON {{schema}}.memories USING GIN (tsv);
+
+-- Auto-update tsvector on INSERT/UPDATE
+CREATE OR REPLACE FUNCTION {{schema}}.memories_tsv_trigger() RETURNS trigger AS $$
+BEGIN
+    NEW.tsv := to_tsvector('english', NEW.chunk_text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_memories_tsv ON {{schema}}.memories;
+CREATE TRIGGER trg_memories_tsv
+    BEFORE INSERT OR UPDATE OF chunk_text ON {{schema}}.memories
+    FOR EACH ROW EXECUTE FUNCTION {{schema}}.memories_tsv_trigger();
 
 CREATE TABLE IF NOT EXISTS {{schema}}.credentials (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -78,6 +95,8 @@ CREATE TABLE IF NOT EXISTS {{schema}}.flows (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL UNIQUE,
     definition      JSONB NOT NULL,
+    yaml_content    TEXT,
+    type            TEXT NOT NULL DEFAULT '',
     created_by      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -114,6 +133,7 @@ CREATE TABLE IF NOT EXISTS {{schema}}.fleet_plans (
     key             TEXT NOT NULL UNIQUE,
     name            TEXT NOT NULL,
     definition      JSONB NOT NULL,
+    yaml_content    TEXT,
     active          BOOLEAN DEFAULT false,
     created_by      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -130,6 +150,19 @@ CREATE TABLE IF NOT EXISTS {{schema}}.team_audit_log (
     session_id      TEXT
 );
 
+CREATE TABLE IF NOT EXISTS {{schema}}.drill_reports (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    suite           TEXT NOT NULL,
+    status          TEXT NOT NULL,
+    summary         TEXT DEFAULT '',
+    duration_ms     BIGINT DEFAULT 0,
+    report_data     JSONB NOT NULL,      -- full SuiteReport JSON
+    started_at      TIMESTAMPTZ NOT NULL,
+    finished_at     TIMESTAMPTZ NOT NULL,
+    created_by      UUID,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_parent
     ON {{schema}}.sessions(parent_id) WHERE parent_id IS NOT NULL;
@@ -137,9 +170,15 @@ CREATE INDEX IF NOT EXISTS idx_sessions_fleet
     ON {{schema}}.sessions(fleet_key) WHERE fleet_key != '';
 CREATE INDEX IF NOT EXISTS idx_sessions_updated
     ON {{schema}}.sessions(updated_at);
+CREATE INDEX IF NOT EXISTS idx_flows_type
+    ON {{schema}}.flows(type) WHERE type != '';
 CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_status
     ON {{schema}}.scheduled_jobs(status);
 CREATE INDEX IF NOT EXISTS idx_scheduled_jobs_next_run
     ON {{schema}}.scheduled_jobs(next_run_at) WHERE status = 'active';
 CREATE INDEX IF NOT EXISTS idx_team_audit_log_timestamp
     ON {{schema}}.team_audit_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_drill_reports_suite
+    ON {{schema}}.drill_reports(suite);
+CREATE INDEX IF NOT EXISTS idx_drill_reports_created
+    ON {{schema}}.drill_reports(created_at DESC);

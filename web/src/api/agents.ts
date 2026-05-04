@@ -13,11 +13,13 @@ export interface Agent {
   name: string
   description: string
   source: string
+  scope?: string // "personal" | "team" (platform mode only)
 }
 
 export interface AgentDetail {
   name: string
   source: string
+  scope?: string // "personal" | "team" (platform mode only)
   yaml: string
   config: Record<string, unknown>
 }
@@ -95,6 +97,26 @@ export async function deleteAgent(name: string): Promise<{ status: string; delet
   })
   if (!response.ok) {
     throw new Error(`Failed to delete agent: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function publishFlowToTeam(name: string): Promise<{ published: boolean; name: string }> {
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/publish`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to publish flow: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function forkFlowToPersonal(name: string): Promise<{ forked: boolean; name: string }> {
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/fork`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fork flow: ${response.statusText}`)
   }
   return response.json()
 }

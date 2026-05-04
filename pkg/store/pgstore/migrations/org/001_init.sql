@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS org_memories (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chunk_text      TEXT NOT NULL,
     embedding       vector(384),
+    tsv             tsvector,
     category        TEXT,
     source_path     TEXT,
     metadata        JSONB,
@@ -52,6 +53,22 @@ CREATE TABLE IF NOT EXISTS org_memories (
 CREATE INDEX IF NOT EXISTS idx_org_memories_embedding
     ON org_memories USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
+
+CREATE INDEX IF NOT EXISTS idx_org_memories_tsv
+    ON org_memories USING GIN (tsv);
+
+-- Auto-update tsvector on INSERT/UPDATE
+CREATE OR REPLACE FUNCTION org_memories_tsv_trigger() RETURNS trigger AS $$
+BEGIN
+    NEW.tsv := to_tsvector('english', NEW.chunk_text);
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_org_memories_tsv ON org_memories;
+CREATE TRIGGER trg_org_memories_tsv
+    BEFORE INSERT OR UPDATE OF chunk_text ON org_memories
+    FOR EACH ROW EXECUTE FUNCTION org_memories_tsv_trigger();
 
 CREATE TABLE IF NOT EXISTS org_skills (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),

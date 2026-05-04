@@ -325,11 +325,16 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	chatAgent := comp.ChatAgent
 
 	// Resolve session service per-request:
-	// Platform mode uses the tenant-scoped PG session store from middleware.
+	// Platform mode: regular chat uses personal sessions (private-first);
+	// fleet sub-sessions use team sessions (shared).
 	// Personal mode falls back to the singleton file-based session service.
 	var sessionService session.Service
 	var titleSetter SessionTitleSetter
-	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
+		sessionService = svc.PersonalSessions
+		titleSetter = svc.PersonalSessions
+	} else if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		// Fallback: if personal sessions not wired (shouldn't happen), use team
 		sessionService = svc.Sessions
 		titleSetter = svc.Sessions
 	} else {

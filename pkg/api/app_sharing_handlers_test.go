@@ -148,6 +148,7 @@ func (m *mockPersonalDataStore) Memories() store.MemoryStore    { return nil }
 func (m *mockPersonalDataStore) Apps() store.AppStore           { return m.apps }
 func (m *mockPersonalDataStore) Sessions() store.SessionStore   { return nil }
 func (m *mockPersonalDataStore) AppState() store.AppStateStore  { return m.appState }
+func (m *mockPersonalDataStore) Flows() store.FlowStore         { return nil }
 
 // mockTenantRouter implements store.TenantRouter
 type mockTenantRouter struct {

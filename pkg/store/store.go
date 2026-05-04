@@ -85,6 +85,7 @@ type PersonalDataStore interface {
 	Apps() AppStore
 	Sessions() SessionStore
 	AppState() AppStateStore
+	Flows() FlowStore
 }
 
 // --------------------------------------------------------------------------

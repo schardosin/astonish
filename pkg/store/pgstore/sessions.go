@@ -360,7 +360,7 @@ func (s *pgSessionStore) ListSessionMetas(appName, userID string) ([]store.Sessi
 	ctx := context.Background()
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, workspace_dir, created_at, updated_at
-		 FROM %s WHERE parent_id IS NULL ORDER BY updated_at DESC`, s.sessionsTable()),
+		 FROM %s WHERE (parent_id IS NULL OR parent_id = '') ORDER BY updated_at DESC`, s.sessionsTable()),
 	)
 	if err != nil {
 		return nil, err

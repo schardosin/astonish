@@ -100,3 +100,29 @@ func FlowStoreFromContext(ctx context.Context) FlowStore {
 	fs, _ := ctx.Value(flowStoreKey).(FlowStore)
 	return fs
 }
+
+const skillStoresKey contextKey = "astonish_skill_stores"
+
+// SkillStores holds references to both org and team skill stores
+// for use in tool context injection.
+type SkillStores struct {
+	Org  SkillStore // org-level skill store (nil if not in platform mode)
+	Team SkillStore // team-level skill store (nil if not in platform mode)
+}
+
+// WithSkillStores returns a new context containing the SkillStores.
+// Used to propagate tenant-scoped skill stores into the ADK runner context
+// so that the skill_lookup tool can resolve skills dynamically per-request.
+func WithSkillStores(ctx context.Context, ss *SkillStores) context.Context {
+	return context.WithValue(ctx, skillStoresKey, ss)
+}
+
+// SkillStoresFromContext retrieves the SkillStores from a context.
+// Returns nil if no SkillStores is present (personal mode or tests).
+func SkillStoresFromContext(ctx context.Context) *SkillStores {
+	if ctx == nil {
+		return nil
+	}
+	ss, _ := ctx.Value(skillStoresKey).(*SkillStores)
+	return ss
+}

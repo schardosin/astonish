@@ -365,6 +365,10 @@ func (t *pgTeamDataStore) DrillReports() store.DrillReportStore {
 	return &pgDrillReportStore{pool: t.pool, schema: t.schema()}
 }
 
+func (t *pgTeamDataStore) Skills() store.SkillStore {
+	return &pgSkillStore{pool: t.pool, schema: t.schema(), table: "skills"}
+}
+
 // --- store.PersonalDataStore implementation ---
 
 type pgPersonalDataStore struct {

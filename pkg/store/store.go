@@ -72,6 +72,7 @@ type TeamDataStore interface {
 	Apps() AppStore
 	AppState() AppStateStore
 	Flows() FlowStore
+	Skills() SkillStore
 	ScheduledJobs() SchedulerStore
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore

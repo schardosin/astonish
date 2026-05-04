@@ -40,6 +40,9 @@ interface SettingsContentProps {
   onSectionChange?: (section: string) => void
   // Theme
   theme?: string
+  // Platform mode flags
+  isPlatformMode?: boolean
+  isOrgAdmin?: boolean
 }
 
 /**
@@ -60,6 +63,8 @@ export default function SettingsContent({
   onSettingsSaved,
   onSectionChange,
   theme = 'dark',
+  isPlatformMode = false,
+  isOrgAdmin = false,
 }: SettingsContentProps) {
   const [saving, setSaving] = useState(false)
   const [, setSaveSuccess] = useState(false)
@@ -215,7 +220,14 @@ export default function SettingsContent({
         <SubAgentsSettings config={fullConfig.sub_agents} onSaved={onSaved} />
       )}
       {activeSection === 'skills' && fullConfig && (
-        <SkillsSettings config={fullConfig.skills} onSaved={onSaved} theme={theme} />
+        <SkillsSettings
+          config={fullConfig.skills}
+          onSaved={onSaved}
+          theme={theme}
+          scope={isPlatformMode ? 'org' : undefined}
+          isPlatform={isPlatformMode}
+          canManage={isPlatformMode ? isOrgAdmin : true}
+        />
       )}
       {activeSection === 'scheduler' && fullConfig && (
         <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} />

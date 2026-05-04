@@ -328,6 +328,7 @@ func Run(cfg RunConfig) error {
 			DebugMode:     cfg.Debug,
 			AutoApprove:   true, // Channels/scheduler auto-approve all tools
 			IsDaemon:      true, // We ARE the daemon — always run indexing/watchers.
+			PlatformMode:  pgStore != nil,
 			SessionStore:  sharedFileStore,
 			DaemonIndexer: daemonIndexer,
 		})
@@ -554,6 +555,7 @@ func Run(cfg RunConfig) error {
 				ModelName:    freshCfg.General.DefaultModel,
 				DebugMode:    cfg.Debug,
 				AutoApprove:  true,
+				PlatformMode: pgStore != nil,
 				SessionStore: sharedFileStore,
 			})
 			if factoryErr != nil {

@@ -1,5 +1,6 @@
 // Shared API and UI utilities for settings components
 import type { CSSProperties } from 'react'
+import { teamFetch } from '../../api/teamContext'
 
 // --- Types ---
 
@@ -163,18 +164,18 @@ export const fetchWebCapableTools = async (): Promise<WebCapableTools> => {
 }
 
 // Taps API functions
-export const fetchTaps = async (): Promise<{ taps: TapEntry[] }> => {
-  const res = await fetch('/api/taps')
+export const fetchTaps = async (teamSlug?: string): Promise<{ taps: TapEntry[] }> => {
+  const res = await teamFetch('/api/taps', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch taps')
   return res.json()
 }
 
-export const addTap = async (url: string, alias: string = ''): Promise<unknown> => {
-  const res = await fetch('/api/taps', {
+export const addTap = async (url: string, alias: string = '', teamSlug?: string): Promise<unknown> => {
+  const res = await teamFetch('/api/taps', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, alias })
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to add tap')
@@ -182,10 +183,10 @@ export const addTap = async (url: string, alias: string = ''): Promise<unknown> 
   return res.json()
 }
 
-export const removeTap = async (name: string): Promise<unknown> => {
-  const res = await fetch(`/api/taps/${encodeURIComponent(name)}`, {
+export const removeTap = async (name: string, teamSlug?: string): Promise<unknown> => {
+  const res = await teamFetch(`/api/taps/${encodeURIComponent(name)}`, {
     method: 'DELETE'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to remove tap')

@@ -71,8 +71,13 @@ type Services struct {
 	// FleetPlans provides access to fleet plan definitions.
 	FleetPlans FleetPlanStore
 
-	// Skills provides access to operational knowledge skills.
+	// Skills provides access to org-level skill definitions.
+	// In platform mode, these are skills shared across all teams in the org.
 	Skills SkillStore
+
+	// TeamSkills provides access to team-scoped skill definitions.
+	// Team skills override org skills of the same name. Team admins manage these.
+	TeamSkills SkillStore
 
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore

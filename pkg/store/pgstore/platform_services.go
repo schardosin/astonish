@@ -104,6 +104,7 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 			reqSvc.FleetTemplates = teamStore.FleetTemplates()
 			reqSvc.FleetPlans = teamStore.FleetPlans()
 			reqSvc.DrillReports = teamStore.DrillReports()
+			reqSvc.TeamSkills = teamStore.Skills()
 
 			// Wire personal stores for private-first ownership.
 			// Sessions: regular chat goes to personal; fleet sub-sessions stay in team.

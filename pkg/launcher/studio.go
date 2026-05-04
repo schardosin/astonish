@@ -103,8 +103,9 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Wire Studio Chat initialization (lazy, runs on first chat request)
-	sharedStore := s.sessionStore    // capture for closure
-	sharedIndexer := s.daemonIndexer // capture for closure
+	sharedStore := s.sessionStore      // capture for closure
+	sharedIndexer := s.daemonIndexer   // capture for closure
+	isPlatform := s.platformAuth != nil // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
 		appCfg, err := config.LoadAppConfig()
 		if err != nil {
@@ -119,6 +120,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			AutoApprove:   false,
 			WorkspaceDir:  "",
 			IsDaemon:      false,
+			PlatformMode:  isPlatform,
 			SessionStore:  sharedStore,
 			DaemonIndexer: sharedIndexer,
 		})

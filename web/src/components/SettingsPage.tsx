@@ -4,6 +4,7 @@ import { PREFERENCE_ITEMS, RESOURCE_ITEMS, ADMIN_ITEMS } from './settings/settin
 import type { SettingsMenuItem } from './settings/settingsMenuItems'
 import { useSettingsData } from '../hooks/useSettingsData'
 import type { UpdateInfo } from './settings/settingsApi'
+import { Wand2 } from 'lucide-react'
 
 declare const __UI_VERSION__: string
 
@@ -43,13 +44,19 @@ export default function SettingsPage({
 }: SettingsPageProps) {
   const isAdmin = userRole === 'admin' || userRole === 'owner'
 
+  // In platform mode admin: add Org Skills to Administration section
+  const platformAdminItems: SettingsMenuItem[] = [
+    { id: 'skills', label: 'Org Skills', icon: Wand2 },
+    ...ADMIN_ITEMS,
+  ]
+
   // In platform mode: show Preferences + (if admin) Administration
   // In personal mode: show all settings with category headers
   const categories: MenuCategory[] = isPlatformMode
     ? isAdmin
       ? [
           { label: 'Preferences', items: PREFERENCE_ITEMS },
-          { label: 'Administration', items: ADMIN_ITEMS },
+          { label: 'Administration', items: platformAdminItems },
         ]
       : [{ items: PREFERENCE_ITEMS }]
     : [
@@ -179,6 +186,8 @@ export default function SettingsPage({
             onSettingsSaved={onSettingsSaved}
             onSectionChange={onSectionChange}
             theme={theme}
+            isPlatformMode={isPlatformMode}
+            isOrgAdmin={isAdmin}
           />
         </div>
       </div>

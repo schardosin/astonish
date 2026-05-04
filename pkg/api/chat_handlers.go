@@ -659,6 +659,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectFlowStore(svc.Flows)
 	}
 
+	// Inject tenant-scoped skill stores into the runner context so that
+	// the skill_lookup tool can resolve skills from org and team stores
+	// in addition to bundled skills.
+	if svc := store.FromRequest(r); svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		runner.InjectSkillStores(svc.Skills, svc.TeamSkills)
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

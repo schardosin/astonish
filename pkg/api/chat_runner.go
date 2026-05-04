@@ -109,6 +109,14 @@ func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
 	cr.ctx = store.WithFlowStore(cr.ctx, fs)
 }
 
+// InjectSkillStores adds tenant-scoped skill stores to the runner's context
+// so that the skill_lookup tool can resolve skills dynamically per-request
+// from the org and team stores (in addition to bundled skills).
+// Must be called before Run().
+func (cr *ChatRunner) InjectSkillStores(org, team store.SkillStore) {
+	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Org: org, Team: team})
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

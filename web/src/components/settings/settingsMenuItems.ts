@@ -19,7 +19,6 @@ export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
 // Note: Credentials has its own top-level view (not in settings/resources)
 export const RESOURCE_ITEMS: SettingsMenuItem[] = [
   { id: 'skills', label: 'Skills', icon: Wand2 },
-  { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'taps', label: 'Repositories', icon: GitBranch },
   { id: 'flows', label: 'Flow Store', icon: Store },
@@ -29,6 +28,7 @@ export const RESOURCE_ITEMS: SettingsMenuItem[] = [
 export const ADMIN_ITEMS: SettingsMenuItem[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'providers', label: 'Providers', icon: Key },
+  { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'channels', label: 'Channels', icon: Radio },
   { id: 'sessions', label: 'Sessions', icon: Database },

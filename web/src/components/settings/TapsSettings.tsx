@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2, Check, AlertCircle, Loader2, RefreshCw } from 'lucide-react'
 import { fetchTaps, addTap, removeTap } from './settingsApi'
 import type { TapEntry } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
-export default function TapsSettings() {
+export default function TapsSettings({ teamSlug }: { teamSlug?: string }) {
   const [taps, setTaps] = useState<TapEntry[]>([])
   const [tapsLoading, setTapsLoading] = useState(false)
   const [tapsSuccess, setTapsSuccess] = useState<string | null>(null)
@@ -13,11 +14,11 @@ export default function TapsSettings() {
 
   useEffect(() => {
     setTapsLoading(true)
-    fetchTaps()
+    fetchTaps(teamSlug)
       .then(data => setTaps(data.taps || []))
       .catch((err: any) => setTapsError(err.message))
       .finally(() => setTapsLoading(false))
-  }, [])
+  }, [teamSlug])
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -63,10 +64,10 @@ export default function TapsSettings() {
               setTapsError(null)
               setTapsLoading(true)
               try {
-                await addTap(newTapUrl, newTapAlias)
+                await addTap(newTapUrl, newTapAlias, teamSlug)
                 setNewTapUrl('')
                 setNewTapAlias('')
-                const data = await fetchTaps()
+                const data = await fetchTaps(teamSlug)
                 setTaps(data.taps || [])
               } catch (err: any) {
                 setTapsError(err.message)
@@ -102,9 +103,9 @@ export default function TapsSettings() {
                 setTapsSuccess(null)
                 try {
                   // First refresh manifests from remote
-                  await fetch('/api/taps/update', { method: 'POST' })
+                  await teamFetch('/api/taps/update', { method: 'POST' }, teamSlug)
                   // Then fetch updated taps list
-                  const data = await fetchTaps()
+                  const data = await fetchTaps(teamSlug)
                   setTaps(data.taps || [])
                   setTapsSuccess('Updated!')
                   setTimeout(() => setTapsSuccess(null), 3000)
@@ -149,8 +150,8 @@ export default function TapsSettings() {
                 <button
                   onClick={async () => {
                     try {
-                      await removeTap(tap.name)
-                      const data = await fetchTaps()
+                      await removeTap(tap.name, teamSlug)
+                      const data = await fetchTaps(teamSlug)
                       setTaps(data.taps || [])
                     } catch (err: any) {
                       setTapsError(err.message)

@@ -57,24 +57,32 @@ export function getActiveTeam(): string | null {
  * replacement. Falls through to plain fetch() when no team is active
  * (personal mode).
  *
+ * If `explicitTeam` is provided, it overrides the global active team for
+ * this single request. This is used when a component needs to target a
+ * specific team (e.g., Team Management viewing a different team than the
+ * one selected in the top-bar).
+ *
  * If the backend returns 403 due to team membership rejection, the active
  * team is cleared and the rejection callback is fired so the UI can react.
  */
-export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]): Promise<Response> {
-  if (!_activeTeam) {
+export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1], explicitTeam?: string | null): Promise<Response> {
+  const effectiveTeam = explicitTeam !== undefined ? explicitTeam : _activeTeam
+
+  if (!effectiveTeam) {
     return fetch(input, init)
   }
 
   const headers = new Headers(init?.headers)
   // Only set if not already explicitly provided by the caller
   if (!headers.has('X-Astonish-Team')) {
-    headers.set('X-Astonish-Team', _activeTeam)
+    headers.set('X-Astonish-Team', effectiveTeam)
   }
 
   const res = await fetch(input, { ...init, headers })
 
   // If the middleware rejected this team (not a member), clear it.
-  if (res.status === 403) {
+  // Only trigger rejection handling for the global active team, not explicit overrides.
+  if (res.status === 403 && explicitTeam === undefined) {
     try {
       const cloned = res.clone()
       const body = await cloned.json()

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle,
-  Loader2, Wand2, Brain, Clock, GitBranch, Store, UserCog, FileText
+  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText
 } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
@@ -13,7 +13,6 @@ import {
 const UserManagement = lazy(() => import('./UserManagement'))
 const AuditViewer = lazy(() => import('./AuditViewer'))
 const SkillsSettings = lazy(() => import('./settings/SkillsSettings'))
-const MemorySettings = lazy(() => import('./settings/MemorySettings'))
 const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
@@ -65,7 +64,6 @@ interface TeamTab {
 const TEAM_TABS: TeamTab[] = [
   { id: 'members', label: 'Members', icon: Users },
   { id: 'skills', label: 'Skills', icon: Wand2 },
-  { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'taps', label: 'Repositories', icon: GitBranch },
   { id: 'flows', label: 'Flow Store', icon: Store },
@@ -245,9 +243,11 @@ interface TeamResourceTabProps {
   fullConfig: any
   fullConfigLoading: boolean
   onSaved: () => void
+  canManage: boolean
+  teamSlug: string
 }
 
-function TeamResourceTab({ tabId, theme, fullConfig, fullConfigLoading, onSaved }: TeamResourceTabProps) {
+function TeamResourceTab({ tabId, theme, fullConfig, fullConfigLoading, onSaved, canManage, teamSlug }: TeamResourceTabProps) {
   if (fullConfigLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -260,11 +260,10 @@ function TeamResourceTab({ tabId, theme, fullConfig, fullConfigLoading, onSaved 
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
-        {tabId === 'skills' && fullConfig && <SkillsSettings config={fullConfig.skills} onSaved={onSaved} theme={theme} />}
-        {tabId === 'memory' && fullConfig && <MemorySettings config={fullConfig.memory} onSaved={onSaved} />}
-        {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} />}
-        {tabId === 'taps' && <TapsSettings />}
-        {tabId === 'flows' && <FlowStorePanel />}
+        {tabId === 'skills' && <SkillsSettings config={fullConfig?.skills || null} onSaved={onSaved} theme={theme} scope="team" isPlatform canManage={canManage} teamSlug={teamSlug} />}
+        {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} teamSlug={teamSlug} />}
+        {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
+        {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} />}
       </Suspense>
     </div>
   )
@@ -292,7 +291,7 @@ function TeamDetail({ user, team, callerRole, activeTab, onTabChange, onDeleteTe
   const [fullConfig, setFullConfig] = useState<any>(null)
   const [fullConfigLoading, setFullConfigLoading] = useState(false)
 
-  const needsFullConfig = ['skills', 'memory', 'scheduler'].includes(activeTab)
+  const needsFullConfig = ['skills', 'scheduler'].includes(activeTab)
 
   useEffect(() => {
     if (!needsFullConfig || fullConfig) return
@@ -355,7 +354,7 @@ function TeamDetail({ user, team, callerRole, activeTab, onTabChange, onDeleteTe
       </div>
 
       {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-hidden flex flex-col">
         {activeTab === 'members' && (
           <MembersPanel user={user} team={team} canManageTeam={canManageTeam} />
         )}
@@ -367,6 +366,8 @@ function TeamDetail({ user, team, callerRole, activeTab, onTabChange, onDeleteTe
             fullConfig={fullConfig}
             fullConfigLoading={fullConfigLoading}
             onSaved={handleSaved}
+            canManage={canManageTeam}
+            teamSlug={team.slug}
           />
         )}
       </div>

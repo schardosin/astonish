@@ -39,21 +39,23 @@ interface SchedulerConfig {
 interface SchedulerSettingsProps {
   config: SchedulerConfig | null
   onSaved?: () => void
+  /** Explicit team slug — overrides global active team for API calls */
+  teamSlug?: string
 }
 
 // API helpers
-const fetchJobs = async (): Promise<{ jobs?: SchedulerJob[] }> => {
-  const res = await teamFetch('/api/scheduler/jobs')
+const fetchJobs = async (teamSlug?: string): Promise<{ jobs?: SchedulerJob[] }> => {
+  const res = await teamFetch('/api/scheduler/jobs', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch jobs')
   return res.json()
 }
 
-const updateJob = async (id: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
+const updateJob = async (id: string, data: Record<string, unknown>, teamSlug?: string): Promise<Record<string, unknown>> => {
   const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to update job')
@@ -61,10 +63,10 @@ const updateJob = async (id: string, data: Record<string, unknown>): Promise<Rec
   return res.json()
 }
 
-const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
+const deleteJob = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
   const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'DELETE'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to delete job')
@@ -72,10 +74,10 @@ const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
   return res.json()
 }
 
-const runJobNow = async (id: string): Promise<Record<string, unknown>> => {
+const runJobNow = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
   const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}/run`, {
     method: 'POST'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to run job')
@@ -137,7 +139,7 @@ function ModeBadge({ mode }: { mode: string }) {
   )
 }
 
-export default function SchedulerSettings({ config, onSaved }: SchedulerSettingsProps) {
+export default function SchedulerSettings({ config, onSaved, teamSlug }: SchedulerSettingsProps) {
   const [enabled, setEnabled] = useState(true)
   const [jobs, setJobs] = useState<SchedulerJob[]>([])
   const [jobsLoading, setJobsLoading] = useState(false)
@@ -162,14 +164,14 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
     setJobsLoading(true)
     setJobsError(null)
     try {
-      const data = await fetchJobs()
+      const data = await fetchJobs(teamSlug)
       setJobs(data.jobs || [])
     } catch (err: any) {
       setJobsError(err.message)
     } finally {
       setJobsLoading(false)
     }
-  }, [])
+  }, [teamSlug])
 
   useEffect(() => {
     loadJobs()
@@ -194,7 +196,7 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
   const handleToggleJob = async (job: SchedulerJob) => {
     setActionError(null)
     try {
-      await updateJob(job.id, { ...job, enabled: !job.enabled })
+      await updateJob(job.id, { ...job, enabled: !job.enabled }, teamSlug)
       loadJobs()
     } catch (err: any) {
       setActionError(err.message)
@@ -205,7 +207,7 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
     setRunningJob(job.id)
     setActionError(null)
     try {
-      await runJobNow(job.id)
+      await runJobNow(job.id, teamSlug)
       // Reload after a brief delay to show updated status
       setTimeout(() => loadJobs(), 1000)
     } catch (err: any) {
@@ -218,7 +220,7 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
   const handleDeleteJob = async (id: string) => {
     setActionError(null)
     try {
-      await deleteJob(id)
+      await deleteJob(id, teamSlug)
       setDeleteConfirm(null)
       if (expandedJob === id) setExpandedJob(null)
       loadJobs()

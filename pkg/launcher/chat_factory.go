@@ -45,6 +45,11 @@ type ChatFactoryConfig struct {
 	WorkspaceDir string
 	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
 
+	// PlatformMode indicates multi-tenant platform mode. When true, skill loading
+	// is restricted to bundled skills only — org/team skills are resolved per-request
+	// from context-injected stores. The filesystem user skill directory is NOT read.
+	PlatformMode bool
+
 	// SessionStore is an optional pre-created FileStore for session persistence.
 	// When set, the factory reuses this store instead of creating a new one.
 	// This ensures a single FileStore instance across the daemon process,
@@ -490,33 +495,42 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var skillToolSlice []tool.Tool
 	var skillLookupTool tool.Tool // hoisted for SubAgentManager wiring
 	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
-		skillsCfg := &cfg.AppConfig.Skills
-		workDir := cfg.WorkspaceDir
-		if workDir == "" {
-			if wd, wdErr := os.Getwd(); wdErr != nil {
-				slog.Warn("failed to get working directory for deferred skills", "error", wdErr)
-			} else {
-				workDir = wd
+		var skillErr error
+
+		if cfg.PlatformMode {
+			// Platform mode: only bundled (embedded) skills in the static index.
+			// Org/team skills are resolved per-request from context-injected stores.
+			// The filesystem user skill directory is NOT read — no data leakage.
+			loadedSkills, skillErr = skills.LoadBundledSkills()
+		} else {
+			// Personal mode: load from filesystem (bundled + user dir + extra dirs + workspace)
+			skillsCfg := &cfg.AppConfig.Skills
+			workDir := cfg.WorkspaceDir
+			if workDir == "" {
+				if wd, wdErr := os.Getwd(); wdErr != nil {
+					slog.Warn("failed to get working directory for deferred skills", "error", wdErr)
+				} else {
+					workDir = wd
+				}
 			}
+			loadedSkills, skillErr = skills.LoadSkills(
+				skillsCfg.GetUserSkillsDir(),
+				skillsCfg.ExtraDirs,
+				workDir,
+				skillsCfg.Allowlist,
+			)
 		}
 
-		var skillErr error
-		loadedSkills, skillErr = skills.LoadSkills(
-			skillsCfg.GetUserSkillsDir(),
-			skillsCfg.ExtraDirs,
-			workDir,
-			skillsCfg.Allowlist,
-		)
 		if skillErr != nil {
 			if cfg.DebugMode {
 				slog.Warn("failed to load skills", "error", skillErr)
 			}
 		} else {
 			if len(loadedSkills) > 0 {
-				// Build lightweight index for system prompt (includes all skills)
+				// Build lightweight index for system prompt (includes bundled skills only in platform mode)
 				skillIndex = skills.BuildSkillIndex(loadedSkills)
 
-				// Create skill_lookup tool (serves all installed skills)
+				// Create skill_lookup tool (bundled index; platform mode also checks context stores at runtime)
 				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
 				if stErr != nil {
 					if cfg.DebugMode {
@@ -529,7 +543,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			if cfg.DebugMode {
 				eligible := skills.FilterEligible(loadedSkills)
-				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible))
+				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible), "platform", cfg.PlatformMode)
 			}
 		}
 	}

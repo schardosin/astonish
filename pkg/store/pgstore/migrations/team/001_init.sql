@@ -168,6 +168,16 @@ CREATE TABLE IF NOT EXISTS {{schema}}.drill_reports (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS {{schema}}.skills (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL UNIQUE,
+    content         TEXT NOT NULL,
+    frontmatter     JSONB,
+    created_by      UUID NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_parent
     ON {{schema}}.sessions(parent_id) WHERE parent_id IS NOT NULL;
@@ -187,3 +197,5 @@ CREATE INDEX IF NOT EXISTS idx_drill_reports_suite
     ON {{schema}}.drill_reports(suite);
 CREATE INDEX IF NOT EXISTS idx_drill_reports_created
     ON {{schema}}.drill_reports(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_skills_name
+    ON {{schema}}.skills(name);

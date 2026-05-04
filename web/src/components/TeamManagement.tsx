@@ -1,17 +1,30 @@
-import React, { useState, useEffect, useCallback } from 'react'
-import { Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle, Loader2 } from 'lucide-react'
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle, Loader2, KeyRound, Settings, FolderCog } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
   fetchTeamMembers, addTeamMember, removeTeamMember, setTeamMemberRole,
   type Team, type TeamMember,
 } from '../api/platform'
 
+const WorkspaceResources = lazy(() => import('./settings/WorkspaceResources'))
+const WorkspaceAdmin = lazy(() => import('./settings/WorkspaceAdmin'))
+
 interface TeamManagementProps {
   theme: 'dark' | 'light'
   user: { id: string; email: string; display_name: string; role: string }
   org: { id: string; name: string; slug: string }
   activeTeam: string | null
+  /** Active tab: 'members' | 'resources' | 'admin' */
+  activeTab?: string
+  /** Active section within the resources/admin tab */
+  activeTabSection?: string
+  /** Callback when tab or section changes (for URL routing) */
+  onTabChange?: (tab: string, section?: string) => void
+  onToolsRefresh?: () => void
+  onSettingsSaved?: () => void
 }
+
+type WorkspaceTab = 'members' | 'resources' | 'admin'
 
 const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
 const errMsg = (err: unknown, fallback: string) => err instanceof Error ? err.message : fallback
@@ -28,7 +41,33 @@ function InlineError({ msg }: { msg: string }) {
   )
 }
 
-export default function TeamManagement({ user, activeTeam }: TeamManagementProps) {
+// ---------------------------------------------------------------------------
+// Tab definitions
+// ---------------------------------------------------------------------------
+
+interface TabDef {
+  id: WorkspaceTab
+  label: string
+  icon: any
+  adminOnly?: boolean
+}
+
+const TABS: TabDef[] = [
+  { id: 'members', label: 'Members', icon: Users },
+  { id: 'resources', label: 'Resources', icon: KeyRound },
+  { id: 'admin', label: 'Administration', icon: Settings, adminOnly: true },
+]
+
+// ---------------------------------------------------------------------------
+// Members panel (extracted from original TeamManagement)
+// ---------------------------------------------------------------------------
+
+interface MembersPanelProps {
+  user: { id: string; email: string; display_name: string; role: string }
+  activeTeam: string | null
+}
+
+function MembersPanel({ user, activeTeam }: MembersPanelProps) {
   const [teams, setTeams] = useState<Team[]>([])
   const [selectedSlug, setSelectedSlug] = useState<string | null>(activeTeam)
   const [members, setMembers] = useState<TeamMember[]>([])
@@ -49,9 +88,7 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
 
-  // Org-level admin: can create/delete teams across the org
   const isOrgAdmin = user.role === 'admin' || user.role === 'owner'
-  // Team-level admin: can manage members within the selected team (includes org admins)
   const canManageTeam = isOrgAdmin || callerRole === 'admin' || callerRole === 'org_admin'
   const selectedTeam = teams.find(t => t.slug === selectedSlug) || null
 
@@ -76,10 +113,39 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
     finally { setMembersLoading(false) }
   }, [])
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch on mount/change
-  useEffect(() => { void loadTeams() }, [loadTeams])
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch on selection change
-  useEffect(() => { if (selectedSlug) void loadMembers(selectedSlug) }, [selectedSlug, loadMembers])
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setTeamsLoading(true); setTeamsError('')
+      try {
+        const data = await fetchTeams()
+        if (cancelled) return
+        setTeams(data)
+        if (!selectedSlug && data.length > 0) setSelectedSlug(activeTeam || data[0].slug)
+      } catch (err) { if (!cancelled) setTeamsError(errMsg(err, 'Failed to load teams')) }
+      finally { if (!cancelled) setTeamsLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [selectedSlug, activeTeam])
+
+  useEffect(() => {
+    if (!selectedSlug) return
+    let cancelled = false
+    const load = async () => {
+      setMembersLoading(true); setMembersError('')
+      try {
+        const resp = await fetchTeamMembers(selectedSlug)
+        if (cancelled) return
+        setMembers(resp.members)
+        setCallerRole(resp.callerRole)
+      }
+      catch (err) { if (!cancelled) setMembersError(errMsg(err, 'Failed to load members')) }
+      finally { if (!cancelled) setMembersLoading(false) }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [selectedSlug])
 
   const handleCreateTeam = async (e: React.FormEvent) => {
     e.preventDefault(); setCreating(true); setCreateError('')
@@ -291,6 +357,95 @@ export default function TeamManagement({ user, activeTeam }: TeamManagementProps
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main Workspace View (with tabs)
+// ---------------------------------------------------------------------------
+
+export default function TeamManagement({
+  user,
+  activeTeam,
+  activeTab: externalTab,
+  activeTabSection,
+  onTabChange,
+  onToolsRefresh,
+  onSettingsSaved,
+  theme = 'dark',
+}: TeamManagementProps) {
+  const isOrgAdmin = user.role === 'admin' || user.role === 'owner'
+  const currentTab: WorkspaceTab = (externalTab as WorkspaceTab) || 'members'
+
+  const visibleTabs = TABS.filter(t => !t.adminOnly || isOrgAdmin)
+
+  const handleTabClick = (tabId: WorkspaceTab) => {
+    if (onTabChange) {
+      onTabChange(tabId)
+    }
+  }
+
+  const handleSectionChange = (section: string) => {
+    if (onTabChange) {
+      onTabChange(currentTab, section)
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-full" style={{ background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 px-4 pt-3 pb-0 border-b" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+        {visibleTabs.map(tab => {
+          const Icon = tab.icon
+          const isActive = currentTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => handleTabClick(tab.id)}
+              className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors relative"
+              style={{
+                color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+                background: isActive ? 'var(--bg-primary)' : 'transparent',
+                borderBottom: isActive ? '2px solid var(--accent)' : '2px solid transparent',
+                marginBottom: '-1px',
+              }}
+            >
+              <Icon size={16} />
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Tab content */}
+      <div className="flex-1 overflow-hidden">
+        {currentTab === 'members' && (
+          <MembersPanel user={user} activeTeam={activeTeam} />
+        )}
+
+        {currentTab === 'resources' && (
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+            <WorkspaceResources
+              activeSection={activeTabSection}
+              onSectionChange={handleSectionChange}
+              theme={theme}
+            />
+          </Suspense>
+        )}
+
+        {currentTab === 'admin' && isOrgAdmin && (
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+            <WorkspaceAdmin
+              activeSection={activeTabSection}
+              onSectionChange={handleSectionChange}
+              onToolsRefresh={onToolsRefresh}
+              onSettingsSaved={onSettingsSaved}
+              theme={theme}
+            />
+          </Suspense>
+        )}
+      </div>
     </div>
   )
 }

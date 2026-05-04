@@ -196,6 +196,10 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
+  // Derive workspace (team-mgmt) tab and section from path
+  const workspaceTab = path.params.tab || 'members'
+  const workspaceTabSection = path.params.tabSection || ''
+
   // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
     const grouped: VariableGroup[] = []
@@ -1610,6 +1614,11 @@ layout:
               user={auth.user}
               org={auth.org}
               activeTeam={activeTeam}
+              activeTab={workspaceTab}
+              activeTabSection={workspaceTabSection}
+              onTabChange={(tab, section) => replaceHash(buildPath('team-mgmt', { tab, tabSection: section }))}
+              onToolsRefresh={loadTools}
+              onSettingsSaved={loadSettings}
             />
             </Suspense>
           ) : view === 'users' && isPlatformMode && auth.user && auth.org && (auth.user.role === 'admin' || auth.user.role === 'owner') ? (
@@ -1990,6 +1999,7 @@ layout:
           updateAvailable={updateAvailable as any}
           onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
           appVersion={appVersion}
+          isPlatformMode={isPlatformMode}
         />
         </Suspense>
       )}

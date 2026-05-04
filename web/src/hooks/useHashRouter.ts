@@ -20,6 +20,8 @@ export interface BuildPathParams {
   subView?: string
   subKey?: string
   subKey2?: string
+  tab?: string
+  tabSection?: string
 }
 
 // --- Hook ---
@@ -100,6 +102,12 @@ function parseHash(hash: string): RouterPath {
     return { view: 'chat', params: {} }
   }
 
+  if (view === 'team-mgmt') {
+    const tab = parts[1] || 'members'
+    const tabSection = parts[2] ? decodeURIComponent(parts[2]) : ''
+    return { view: 'team-mgmt', params: { tab, tabSection } }
+  }
+
   return { view, params: {} }
 }
 
@@ -135,6 +143,12 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
       }
       return '/apps'
     case 'team-mgmt':
+      if (params.tab && params.tabSection) {
+        return `/team-mgmt/${params.tab}/${encodeURIComponent(params.tabSection)}`
+      }
+      if (params.tab && params.tab !== 'members') {
+        return `/team-mgmt/${params.tab}`
+      }
       return '/team-mgmt'
     case 'users':
       return '/users'

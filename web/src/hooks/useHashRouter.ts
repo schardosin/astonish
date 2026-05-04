@@ -22,6 +22,12 @@ export interface BuildPathParams {
   subKey2?: string
   tab?: string
   tabSection?: string
+  /** Management view: sidebar section (teams/users/audit) */
+  mgmtSection?: string
+  /** Management view: selected team slug */
+  teamSlug?: string
+  /** Management view: active tab within team detail */
+  teamTab?: string
 }
 
 // --- Hook ---
@@ -102,10 +108,17 @@ function parseHash(hash: string): RouterPath {
     return { view: 'chat', params: {} }
   }
 
+  if (view === 'credentials') {
+    return { view: 'credentials', params: {} }
+  }
+
   if (view === 'team-mgmt') {
-    const tab = parts[1] || 'members'
-    const tabSection = parts[2] ? decodeURIComponent(parts[2]) : ''
-    return { view: 'team-mgmt', params: { tab, tabSection } }
+    // Routes: #/team-mgmt, #/team-mgmt/users, #/team-mgmt/audit,
+    //         #/team-mgmt/teams/:slug, #/team-mgmt/teams/:slug/:tab
+    const mgmtSection = parts[1] || 'teams'
+    const teamSlug = mgmtSection === 'teams' ? (parts[2] || '') : ''
+    const teamTab = mgmtSection === 'teams' && parts[2] ? (parts[3] || 'members') : 'members'
+    return { view: 'team-mgmt', params: { mgmtSection, teamSlug, teamTab } }
   }
 
   return { view, params: {} }
@@ -142,20 +155,24 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
         return `/apps/${encodeURIComponent(params.subKey)}`
       }
       return '/apps'
-    case 'team-mgmt':
-      if (params.tab && params.tabSection) {
-        return `/team-mgmt/${params.tab}/${encodeURIComponent(params.tabSection)}`
+    case 'team-mgmt': {
+      const sec = params.mgmtSection || 'teams'
+      if (sec === 'teams' && params.teamSlug) {
+        const tab = params.teamTab || 'members'
+        if (tab !== 'members') {
+          return `/team-mgmt/teams/${encodeURIComponent(params.teamSlug)}/${tab}`
+        }
+        return `/team-mgmt/teams/${encodeURIComponent(params.teamSlug)}`
       }
-      if (params.tab && params.tab !== 'members') {
-        return `/team-mgmt/${params.tab}`
+      if (sec !== 'teams') {
+        return `/team-mgmt/${sec}`
       }
       return '/team-mgmt'
-    case 'users':
-      return '/users'
+    }
+    case 'credentials':
+      return '/credentials'
     case 'knowledge':
       return '/knowledge'
-    case 'audit':
-      return '/audit'
     default:
       return '/chat'
   }

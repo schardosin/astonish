@@ -1,7 +1,7 @@
 import {
   Settings, Key, Server, MessageSquare, Globe, Radio, Database,
   Brain, GitFork, Terminal, Wand2, Clock, Shield, Box,
-  GitBranch, Store, KeyRound
+  GitBranch, Store
 } from 'lucide-react'
 
 export interface SettingsMenuItem {
@@ -15,9 +15,9 @@ export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
 ]
 
-// Team resources — shared within a team, accessible to all members
+// Team resources — shared within a team, managed from the Team detail view
+// Note: Credentials has its own top-level view (not in settings/resources)
 export const RESOURCE_ITEMS: SettingsMenuItem[] = [
-  { id: 'credentials', label: 'Credentials', icon: KeyRound },
   { id: 'skills', label: 'Skills', icon: Wand2 },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, Users, UserCog, BookOpen, FileText, ChevronDown, LogOut, MoreHorizontal, Menu, X } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, BookOpen, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, FolderCog } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -58,17 +58,16 @@ const secondaryNavItems: NavItem[] = [
   { view: 'fleet', label: 'Fleet', Icon: Rocket, gradient: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)' },
   { view: 'drill', label: 'Drill', Icon: Crosshair, gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' },
   { view: 'apps', label: 'Apps', Icon: AppWindow, gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' },
+  { view: 'credentials', label: 'Credentials', Icon: KeyRound, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' },
 ]
 
 // All core items combined (for mobile drawer)
 const allCoreNavItems: NavItem[] = [...primaryNavItems, ...secondaryNavItems]
 
-function getPlatformNavItems(isOrgAdmin: boolean): NavItem[] {
+function getPlatformNavItems(): NavItem[] {
   const items: NavItem[] = []
-  items.push({ view: 'team-mgmt', label: 'Team', Icon: Users, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
-  if (isOrgAdmin) items.push({ view: 'users', label: 'Users', Icon: UserCog, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' })
+  items.push({ view: 'team-mgmt', label: 'Management', Icon: FolderCog, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
   items.push({ view: 'knowledge', label: 'Knowledge', Icon: BookOpen, gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' })
-  if (isOrgAdmin) items.push({ view: 'audit', label: 'Audit', Icon: FileText, gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' })
   return items
 }
 
@@ -128,8 +127,7 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
   const nav = (view: string) => onNavigate && onNavigate(view)
   const activeTeamName = teams?.find(t => t.slug === activeTeam)?.name || activeTeam || 'No team'
   const initials = user?.display_name ? user.display_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'
-  const isOrgAdmin = user?.role === 'admin' || user?.role === 'owner'
-  const platformItems = isPlatformMode ? getPlatformNavItems(isOrgAdmin) : []
+  const platformItems = isPlatformMode ? getPlatformNavItems() : []
 
   // Build the "More" dropdown items based on current breakpoint tier:
   // - md (768–1024): secondary core items + platform items

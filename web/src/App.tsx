@@ -57,9 +57,8 @@ const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
 const TeamManagement = lazy(() => import('./components/TeamManagement'))
-const UserManagement = lazy(() => import('./components/UserManagement'))
 const KnowledgeBrowser = lazy(() => import('./components/KnowledgeBrowser'))
-const AuditViewer = lazy(() => import('./components/AuditViewer'))
+const CredentialsView = lazy(() => import('./components/CredentialsView'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -196,9 +195,10 @@ function App() {
   const showSettings = path.view === 'settings'
   const settingsSection = path.params.section || 'general'
 
-  // Derive workspace (team-mgmt) tab and section from path
-  const workspaceTab = path.params.tab || 'members'
-  const workspaceTabSection = path.params.tabSection || ''
+  // Derive workspace (team-mgmt) management params from path
+  const mgmtSection = path.params.mgmtSection || 'teams'
+  const mgmtTeamSlug = path.params.teamSlug || ''
+  const mgmtTeamTab = path.params.teamTab || 'members'
 
   // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
@@ -595,12 +595,10 @@ function App() {
       setView('apps')
     } else if (path.view === 'team-mgmt') {
       setView('team-mgmt')
-    } else if (path.view === 'users') {
-      setView('users')
+    } else if (path.view === 'credentials') {
+      setView('credentials')
     } else if (path.view === 'knowledge') {
       setView('knowledge')
-    } else if (path.view === 'audit') {
-      setView('audit')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1614,19 +1612,15 @@ layout:
               user={auth.user}
               org={auth.org}
               activeTeam={activeTeam}
-              activeTab={workspaceTab}
-              activeTabSection={workspaceTabSection}
-              onTabChange={(tab, section) => replaceHash(buildPath('team-mgmt', { tab, tabSection: section }))}
+              activeSection={mgmtSection}
+              activeTeamSlug={mgmtTeamSlug}
+              activeTeamTab={mgmtTeamTab}
+              onNavigate={(section, teamSlug, tab) => replaceHash(buildPath('team-mgmt', { mgmtSection: section, teamSlug, teamTab: tab }))}
             />
             </Suspense>
-          ) : view === 'users' && isPlatformMode && auth.user && auth.org && (auth.user.role === 'admin' || auth.user.role === 'owner') ? (
+          ) : view === 'credentials' ? (
             <Suspense fallback={null}>
-            <UserManagement
-              key="user-mgmt"
-              theme={theme}
-              user={auth.user}
-              org={auth.org}
-            />
+            <CredentialsView key={activeTeam || 'personal'} />
             </Suspense>
           ) : view === 'knowledge' && isPlatformMode && auth.user ? (
             <Suspense fallback={null}>
@@ -1635,13 +1629,6 @@ layout:
               theme={theme}
               user={auth.user}
               activeTeam={activeTeam}
-            />
-            </Suspense>
-          ) : view === 'audit' && isPlatformMode && (auth.user?.role === 'admin' || auth.user?.role === 'owner') ? (
-            <Suspense fallback={null}>
-            <AuditViewer
-              key={activeTeam || 'personal'}
-              theme={theme}
             />
             </Suspense>
           ) : !selectedAgent ? (

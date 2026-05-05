@@ -90,6 +90,11 @@ type Services struct {
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore
 
+	// Settings provides access to team-level configuration overrides.
+	// In platform mode, this reads/writes the teams.settings JSONB column.
+	// Nil in personal mode (host config is used directly).
+	Settings SettingsStore
+
 	// Audit provides audit logging.
 	Audit AuditStore
 

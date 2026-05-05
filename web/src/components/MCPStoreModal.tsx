@@ -31,7 +31,7 @@ interface MCPStoreModalProps {
 // API functions for MCP Store
 const fetchMCPStore = async (query = ''): Promise<{ servers: MCPServer[]; sources: string[] }> => {
   const url = query ? `/api/mcp-store?q=${encodeURIComponent(query)}` : '/api/mcp-store'
-  const res = await fetch(url)
+  const res = await teamFetch(url)
   if (!res.ok) throw new Error('Failed to fetch MCP store')
   return res.json()
 }
@@ -97,7 +97,7 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug }: 
       if (source && source !== 'all') params.set('source', source)
       const url = params.toString() ? `/api/mcp-store?${params}` : '/api/mcp-store'
       
-      const res = await fetch(url)
+      const res = await teamFetch(url)
       if (!res.ok) throw new Error('Failed to fetch MCP store')
       const data = await res.json()
       

@@ -93,13 +93,13 @@ export interface ProviderFieldDef {
 // --- API Functions ---
 
 export const fetchFullConfig = async (): Promise<FullConfig> => {
-  const res = await fetch('/api/settings/full')
+  const res = await teamFetch('/api/settings/full')
   if (!res.ok) throw new Error('Failed to fetch config')
   return res.json()
 }
 
 export const saveFullConfigSection = async (sectionKey: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const res = await fetch('/api/settings/full', {
+  const res = await teamFetch('/api/settings/full', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ [sectionKey]: data })
@@ -109,13 +109,13 @@ export const saveFullConfigSection = async (sectionKey: string, data: Record<str
 }
 
 export const fetchSettings = async (): Promise<SettingsData> => {
-  const res = await fetch('/api/settings/config')
+  const res = await teamFetch('/api/settings/config')
   if (!res.ok) throw new Error('Failed to fetch settings')
   return res.json()
 }
 
 export const saveSettings = async (data: Record<string, unknown>): Promise<unknown> => {
-  const res = await fetch('/api/settings/config', {
+  const res = await teamFetch('/api/settings/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -125,7 +125,7 @@ export const saveSettings = async (data: Record<string, unknown>): Promise<unkno
 }
 
 export const replaceAllProviders = async (providers: Record<string, unknown>[]): Promise<unknown> => {
-  const res = await fetch('/api/settings/config', {
+  const res = await teamFetch('/api/settings/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ providers: { '__replace_all__': { '__array__': JSON.stringify(providers) } } })
@@ -153,14 +153,14 @@ export const saveMCPConfig = async (data: Record<string, unknown>, teamSlug?: st
 }
 
 export const fetchProviderModels = async (providerId: string): Promise<{ models: string[] }> => {
-  const res = await fetch(`/api/providers/${providerId}/models`)
+  const res = await teamFetch(`/api/providers/${providerId}/models`)
   if (!res.ok) throw new Error('Failed to fetch models')
   return res.json()
 }
 
 // Fetch tools that have 'websearch' or 'webextract' in their name
 export const fetchWebCapableTools = async (): Promise<WebCapableTools> => {
-  const res = await fetch('/api/tools/web-capable')
+  const res = await teamFetch('/api/tools/web-capable')
   if (!res.ok) throw new Error('Failed to fetch web-capable tools')
   return res.json()
 }

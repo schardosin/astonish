@@ -213,10 +213,12 @@ func Run(cfg RunConfig) error {
 		logger.Printf("OpenCode config generated (%s, provider: %s, model: %s)", ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID)
 	}
 
-	// Initialize tools cache
+	// Initialize tools cache (personal mode only — platform mode reads from DB per-request)
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
-	api.InitToolsCache(ctx)
+	if svc.Mode != store.ModePlatform {
+		api.InitToolsCache(ctx)
+	}
 
 	// --- Initialize file store for session persistence ---
 	// A single shared FileStore is used for ALL session persistence in the daemon:
@@ -812,7 +814,7 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil)
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil)
 				if err != nil {
 					return nil, err
 				}

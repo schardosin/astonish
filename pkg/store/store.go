@@ -79,6 +79,7 @@ type TeamDataStore interface {
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore
 	DrillReports() DrillReportStore
+	Settings() SettingsStore
 	Audit() AuditStore
 }
 

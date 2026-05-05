@@ -377,6 +377,10 @@ func (t *pgTeamDataStore) MCPServers() store.MCPServerStore {
 	return &pgMCPServerStore{pool: t.pool, schema: t.schema(), table: "mcp_servers"}
 }
 
+func (t *pgTeamDataStore) Settings() store.SettingsStore {
+	return &pgSettingsStore{pool: t.pool, teamSlug: t.teamSlug}
+}
+
 // --- store.PersonalDataStore implementation ---
 
 type pgPersonalDataStore struct {

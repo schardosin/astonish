@@ -534,11 +534,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Determine Provider/Model
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		slog.Warn("failed to load app config", "error", err)
-		appCfg = &config.AppConfig{}
-	}
+	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
 
 	providerName := req.Provider

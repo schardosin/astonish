@@ -22,7 +22,7 @@ import (
 // - store: official MCP store (or custom tap in the store)
 // - tap: a tapped repository
 // - inline: user's locally configured server (fallback)
-func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server, existingDeps []config.MCPDependency) []config.MCPDependency {
+func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server, existingDeps []config.MCPDependency, mcpConfig *config.MCPConfig) []config.MCPDependency {
 	if len(toolsSelection) == 0 {
 		return nil
 	}
@@ -42,12 +42,6 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 				toolToServer[toolName] = dep.Server
 			}
 		}
-	}
-
-	// Load user's MCP config
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("failed to load MCP config", "error", err)
 	}
 
 	// Group tools by their server source

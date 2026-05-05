@@ -353,7 +353,7 @@ export default function MCPServersSettings({
                             <button
                               onClick={async () => {
                                 try {
-                                  const res = await fetch(`/api/standard-servers/${srv.id}`, { method: 'DELETE' })
+                                  const res = await teamFetch(`/api/standard-servers/${srv.id}`, { method: 'DELETE' }, teamSlug)
                                   if (!res.ok) throw new Error('Failed to remove server')
                                   await loadData()
                                   if (onToolsRefresh) onToolsRefresh()

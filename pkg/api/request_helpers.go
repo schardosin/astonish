@@ -1,9 +1,11 @@
 package api
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/filestore"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
@@ -141,5 +143,134 @@ func storeMetaToResponse(m store.SessionMeta) StudioSessionResponse {
 		FleetName:    m.FleetName,
 		IssueNumber:  m.IssueNumber,
 		Repo:         m.Repo,
+	}
+}
+
+// loadMCPConfigForRequest returns the merged MCP server config appropriate for
+// the request context. In platform mode it reads from the org+team DB stores;
+// in personal mode it reads from the filesystem.
+func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		merged := make(map[string]config.MCPServerConfig)
+		if svc.MCPServers != nil {
+			orgServers, err := svc.MCPServers.List()
+			if err == nil {
+				for _, s := range orgServers {
+					merged[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+		if svc.TeamMCPServers != nil {
+			teamServers, err := svc.TeamMCPServers.List()
+			if err == nil {
+				for _, s := range teamServers {
+					merged[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+		return &config.MCPConfig{MCPServers: merged}
+	}
+
+	// Personal mode
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		slog.Warn("failed to load MCP config for request", "error", err)
+		return &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+	}
+	return mcpCfg
+}
+
+// effectiveAppConfig returns the application configuration appropriate for the request.
+// In platform mode, it loads the host config and overlays team-level settings from the DB.
+// In personal mode, it simply returns config.LoadAppConfig().
+func effectiveAppConfig(r *http.Request) *config.AppConfig {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+		appCfg = &config.AppConfig{}
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform || svc.Settings == nil {
+		return appCfg
+	}
+
+	// Platform mode: overlay team settings from DB
+	teamSettings, err := svc.Settings.Get(r.Context())
+	if err != nil {
+		slog.Warn("failed to load team settings", "error", err)
+		return appCfg
+	}
+	if teamSettings == nil {
+		return appCfg
+	}
+
+	// Overlay team settings onto host config
+	applyTeamSettings(appCfg, teamSettings)
+	return appCfg
+}
+
+// applyTeamSettings overlays team-level settings from the DB onto the host AppConfig.
+// Only non-zero/non-empty team values override the host defaults.
+func applyTeamSettings(appCfg *config.AppConfig, ts *store.TeamSettings) {
+	if ts.DefaultProvider != "" {
+		appCfg.General.DefaultProvider = ts.DefaultProvider
+	}
+	if ts.DefaultModel != "" {
+		appCfg.General.DefaultModel = ts.DefaultModel
+	}
+	if ts.WebSearchTool != "" {
+		appCfg.General.WebSearchTool = ts.WebSearchTool
+	}
+	if ts.WebExtractTool != "" {
+		appCfg.General.WebExtractTool = ts.WebExtractTool
+	}
+	if ts.ContextLength > 0 {
+		appCfg.General.ContextLength = ts.ContextLength
+	}
+
+	// Overlay providers: team providers replace host providers entirely if set
+	if len(ts.Providers) > 0 {
+		if appCfg.Providers == nil {
+			appCfg.Providers = make(map[string]config.ProviderConfig)
+		}
+		for name, provCfg := range ts.Providers {
+			appCfg.Providers[name] = config.ProviderConfig(provCfg)
+		}
+	}
+
+	// Overlay web servers: team web server configs replace host configs
+	if len(ts.WebServers) > 0 {
+		if appCfg.WebServers == nil {
+			appCfg.WebServers = make(map[string]config.WebServerConfig)
+		}
+		for name, ws := range ts.WebServers {
+			appCfg.WebServers[name] = config.WebServerConfig{
+				APIKey:    ws["api_key"],
+				Installed: ws["installed"] == "true",
+			}
+		}
+	}
+
+	// Overlay memory settings
+	if ts.MemoryProvider != "" {
+		appCfg.Memory.Embedding.Provider = ts.MemoryProvider
+	}
+	if ts.MemoryModel != "" {
+		appCfg.Memory.Embedding.Model = ts.MemoryModel
 	}
 }

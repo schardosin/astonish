@@ -92,7 +92,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
-	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil); err != nil {
 		return "", fmt.Errorf("cannot start headless fleet session: %w", err)
 	}
 

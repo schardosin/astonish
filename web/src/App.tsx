@@ -18,7 +18,7 @@ import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
 import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
-import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected } from './api/teamContext'
+import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected, teamFetch } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer, publishFlowToTeam, forkFlowToPersonal } from './api/agents'
@@ -244,7 +244,7 @@ function App() {
   const checkSetupStatus = async () => {
     try {
       setIsCheckingSetup(true)
-      const res = await fetch('/api/settings/status')
+      const res = await teamFetch('/api/settings/status')
       if (res.ok) {
         const data = await res.json()
         setShowSetupWizard(data.setupRequired)
@@ -402,7 +402,7 @@ function App() {
 
   const loadSettings = async () => {
     try {
-      const res = await fetch('/api/settings/config')
+      const res = await teamFetch('/api/settings/config')
       if (res.ok) {
         const data = await res.json()
         // Use display name from API for proper formatting
@@ -743,7 +743,7 @@ layout:
       const controller = new AbortController()
       abortControllerRef.current = controller
 
-      const response = await fetch('/api/chat', {
+      const response = await teamFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -905,7 +905,7 @@ layout:
     }
     // Cleanup MCP on server side
     if (sessionId) {
-      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+      teamFetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
     }
     setSessionId(null) // Clear session to re-enable auto-approve toggle
   }, [isWaitingForInput, sessionId])
@@ -916,7 +916,7 @@ layout:
     }
     // Cleanup MCP on server side
     if (sessionId) {
-      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+      teamFetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
     }
     setIsRunning(false)
     setRunningNodeId(null)
@@ -930,7 +930,7 @@ layout:
     if (!sessionId || !isRunning) return
 
     const keepaliveInterval = setInterval(() => {
-      fetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
+      teamFetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
         .catch(err => console.warn('Keepalive ping failed:', err))
     }, 30000) // 30 seconds
 
@@ -1383,7 +1383,7 @@ layout:
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent: AppAgent) => {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(agent.name)}/copy-to-local`, {
+      const res = await teamFetch(`/api/agents/${encodeURIComponent(agent.name)}/copy-to-local`, {
         method: 'POST'
       })
       if (!res.ok) {
@@ -1409,7 +1409,7 @@ layout:
         const parts = deleteTarget.id.split(':')
         if (parts.length === 3) {
           const [, tapName, flowName] = parts
-          const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+          const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
             method: 'DELETE'
           })
           if (!res.ok) {

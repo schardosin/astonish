@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -567,7 +568,8 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 	}
 }
 
-// GetCachedTools returns the cached tools list
+// GetCachedTools returns the cached tools list (personal mode only).
+// For request-scoped tool lists that respect platform mode, use GetCachedToolsForRequest.
 func GetCachedTools() []ToolInfo {
 	globalToolsCache.mu.RLock()
 	defer globalToolsCache.mu.RUnlock()
@@ -579,6 +581,77 @@ func GetCachedTools() []ToolInfo {
 	// Return a copy to avoid race conditions
 	result := make([]ToolInfo, len(globalToolsCache.tools))
 	copy(result, globalToolsCache.tools)
+	return result
+}
+
+// GetCachedToolsForRequest returns the cached tools appropriate for the request context.
+// In platform mode, it reads from the org+team DB stores' CachedTools.
+// In personal mode, it returns from the global in-memory cache.
+func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return GetCachedTools()
+	}
+
+	// Platform mode: build merged tool list from DB stores (team overrides org by name)
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	// Collect servers: org first, team overrides
+	serverMap := make(map[string]json.RawMessage) // name -> cachedTools
+	if svc.MCPServers != nil {
+		orgServers, err := svc.MCPServers.List()
+		if err == nil {
+			for _, s := range orgServers {
+				if s.IsEnabled() && len(s.CachedTools) > 0 {
+					serverMap[s.Name] = s.CachedTools
+				}
+			}
+		}
+	}
+	if svc.TeamMCPServers != nil {
+		teamServers, err := svc.TeamMCPServers.List()
+		if err == nil {
+			for _, s := range teamServers {
+				if s.IsEnabled() && len(s.CachedTools) > 0 {
+					serverMap[s.Name] = s.CachedTools
+				} else {
+					// Team disabled server overrides org enabled
+					delete(serverMap, s.Name)
+				}
+			}
+		}
+	}
+
+	var result []ToolInfo
+	// Add internal tools
+	internalTools, err := tools.GetInternalTools()
+	if err == nil {
+		for _, t := range internalTools {
+			result = append(result, ToolInfo{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Source:      "internal",
+			})
+		}
+	}
+
+	// Parse each server's cached tools
+	for serverName, cachedData := range serverMap {
+		var entries []toolEntry
+		if json.Unmarshal(cachedData, &entries) == nil {
+			for _, e := range entries {
+				result = append(result, ToolInfo{
+					Name:        e.Name,
+					Description: e.Description,
+					Source:      serverName,
+				})
+			}
+		}
+	}
+
 	return result
 }
 

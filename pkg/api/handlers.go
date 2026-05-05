@@ -441,7 +441,9 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	finalYAML := request.YAML
 	var agentConfig config.AgentConfig
 	if err := yaml.Unmarshal([]byte(request.YAML), &agentConfig); err == nil {
-		finalYAML = resolveAgentYAMLDependencies(request.YAML, agentConfig)
+		mcpCfg := loadMCPConfigForRequest(r)
+		cachedTools := GetCachedToolsForRequest(r)
+		finalYAML = resolveAgentYAMLDependencies(request.YAML, agentConfig, mcpCfg, cachedTools)
 	}
 
 	// Platform mode: scope-aware save (personal by default, team with explicit scope).
@@ -505,14 +507,11 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 // resolveAgentYAMLDependencies analyzes tools used in an agent config and
 // resolves MCP dependencies, returning the final YAML with injected deps.
-func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig) string {
+func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig, mcpCfg *config.MCPConfig, cachedTools []ToolInfo) string {
 	// Collect all tools used in the flow
 	tools := CollectToolsFromNodes(agentConfig.Nodes)
 
 	if len(tools) > 0 {
-		// Get cached tools and store servers for resolution
-		cachedTools := GetCachedTools()
-
 		// Get MCP store servers (from all taps)
 		storeServers, storeErr := loadAllServersFromTaps()
 		if storeErr != nil {
@@ -520,7 +519,7 @@ func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig
 		}
 
 		// Resolve dependencies
-		deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)
+		deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies, mcpCfg)
 
 		// Check if mcp_dependencies section already exists
 		hasMcpDeps := len(agentConfig.MCPDependencies) > 0
@@ -832,6 +831,62 @@ type MCPServersListResponse struct {
 
 // GetMCPServersHandler handles GET /api/mcp/servers
 func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: read from DB stores (org + team merged, team overrides org)
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		serverMap := make(map[string]MCPServerInfo) // name -> info, team overrides org
+
+		// Org-level servers first
+		if svc.MCPServers != nil {
+			orgServers, err := svc.MCPServers.List()
+			if err == nil {
+				for _, s := range orgServers {
+					transport := s.Transport
+					if transport == "" {
+						transport = "stdio"
+					}
+					serverMap[s.Name] = MCPServerInfo{
+						Name:      s.Name,
+						Transport: transport,
+						Command:   s.Command,
+						URL:       s.URL,
+						Enabled:   s.IsEnabled(),
+					}
+				}
+			}
+		}
+
+		// Team-level servers override org
+		if svc.TeamMCPServers != nil {
+			teamServers, err := svc.TeamMCPServers.List()
+			if err == nil {
+				for _, s := range teamServers {
+					transport := s.Transport
+					if transport == "" {
+						transport = "stdio"
+					}
+					serverMap[s.Name] = MCPServerInfo{
+						Name:      s.Name,
+						Transport: transport,
+						Command:   s.Command,
+						URL:       s.URL,
+						Enabled:   s.IsEnabled(),
+					}
+				}
+			}
+		}
+
+		servers := make([]MCPServerInfo, 0, len(serverMap))
+		for _, info := range serverMap {
+			servers = append(servers, info)
+		}
+		sort.Slice(servers, func(i, j int) bool {
+			return servers[i].Name < servers[j].Name
+		})
+		respondJSON(w, http.StatusOK, MCPServersListResponse{Servers: servers})
+		return
+	}
+
+	// Personal mode: read from filesystem
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")

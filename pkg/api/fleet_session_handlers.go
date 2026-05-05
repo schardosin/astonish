@@ -112,7 +112,8 @@ type FleetSessionResult struct {
 // If initialMessage is non-empty, it is posted as the first customer message.
 // teamSlug scopes the session to a team (empty for personal mode).
 // sessionStore is the PG-backed session store for platform mode (nil for personal mode).
-func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore) (*FleetSessionResult, error) {
+// mcpStores provides platform MCP server stores for sandbox tool injection (nil for personal mode).
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores) (*FleetSessionResult, error) {
 	if fleetPlanRegistryVar == nil {
 		return nil, fmt.Errorf("fleet plan system not initialized")
 	}
@@ -180,7 +181,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 		}
 		ghToken = fleet.GitHubToken(resolved)
 	}
-	if err := wireFleetSandbox(fleetSession, plan, ghToken); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, ghToken, mcpStores); err != nil {
 		return nil, fmt.Errorf("cannot start fleet session: %w", err)
 	}
 
@@ -294,13 +295,22 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	// Fleet sessions are team-scoped (shared across team members), so we
 	// use the team Sessions store rather than PersonalSessions.
 	var handlerSessionStore store.SessionStore
-	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		handlerSessionStore = svc.Sessions
+	var handlerMCPStores *store.MCPServerStores
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.Sessions != nil {
+			handlerSessionStore = svc.Sessions
+		}
+		if svc.Mode == store.ModePlatform && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			handlerMCPStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
 	}
 
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore)
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1078,7 +1088,7 @@ func getFleetMessages(sessionID, userID string, ctx context.Context, sessionStor
 //   - fleetSession: the fleet session to wire sandbox into
 //   - plan: the fleet plan (for Template and Credentials fields)
 //   - ghToken: resolved GitHub token (may be empty)
-func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) error {
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string, mcpStores *store.MCPServerStores) error {
 	// Load config to check if sandbox is enabled
 	appCfg, err := config.LoadAppConfig()
 	if err != nil || appCfg == nil {
@@ -1171,7 +1181,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	// Each fleet session gets fresh LazyMCPToolset clones that route MCP server
 	// processes through the fleet's dedicated container (via ContainerMCPTransport).
 	// SSE transport servers are unaffected — they connect to remote URLs.
-	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode)
+	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode, mcpStores)
 	if len(sandboxToolsets) > 0 {
 		fleetSession.SandboxToolsets = sandboxToolsets
 	}
@@ -1199,22 +1209,77 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 // It loads the MCP config, creates fresh LazyMCPToolset instances from cached
 // metadata, and wires them with the fleet's LazyNodeClient so MCP server
 // processes run inside the fleet's container.
-func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient) []tool.Toolset {
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+// In platform mode, it reads from the DB stores; in personal mode, from the filesystem.
+func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
+	var mcpServers map[string]config.MCPServerConfig
+
+	if mcpStores != nil {
+		// Platform mode: build merged config from org + team stores
+		mcpServers = make(map[string]config.MCPServerConfig)
+		if mcpStores.Org != nil {
+			orgServers, err := mcpStores.Org.List()
+			if err == nil {
+				for _, s := range orgServers {
+					mcpServers[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+		if mcpStores.Team != nil {
+			teamServers, err := mcpStores.Team.List()
+			if err == nil {
+				for _, s := range teamServers {
+					mcpServers[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+	} else {
+		// Personal mode: read from filesystem
+		mcpCfg, err := config.LoadMCPConfig()
+		if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+			return nil
+		}
+		mcpServers = mcpCfg.MCPServers
+	}
+
+	if len(mcpServers) == 0 {
 		return nil
 	}
 
-	if _, loadErr := cache.LoadCache(); loadErr != nil {
-		return nil
+	// Load cached tools (personal mode only — platform uses DB CachedTools)
+	if mcpStores == nil {
+		if _, loadErr := cache.LoadCache(); loadErr != nil {
+			return nil
+		}
 	}
 
 	var toolsets []tool.Toolset
-	for name, serverCfg := range mcpCfg.MCPServers {
+	for name, serverCfg := range mcpServers {
 		if !serverCfg.IsEnabled() {
 			continue
 		}
-		cachedTools := cache.GetToolsForServer(name)
+
+		var cachedTools []cache.ToolEntry
+		if mcpStores != nil {
+			// Platform mode: get cached tools from DB
+			cachedTools = getPlatformCachedToolsFromStores(mcpStores, name)
+		} else {
+			// Personal mode: get from file cache
+			cachedTools = cache.GetToolsForServer(name)
+		}
 		if len(cachedTools) == 0 {
 			continue
 		}
@@ -1224,6 +1289,45 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 	}
 
 	return toolsets
+}
+
+// getPlatformCachedToolsFromStores reads cached tools for a server from the platform
+// MCP stores (team first, then org).
+func getPlatformCachedToolsFromStores(mcpStores *store.MCPServerStores, serverName string) []cache.ToolEntry {
+	if mcpStores.Team != nil {
+		srv, err := mcpStores.Team.Get(serverName)
+		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
+			return parsePlatformCachedTools(srv.CachedTools)
+		}
+	}
+	if mcpStores.Org != nil {
+		srv, err := mcpStores.Org.Get(serverName)
+		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
+			return parsePlatformCachedTools(srv.CachedTools)
+		}
+	}
+	return nil
+}
+
+// parsePlatformCachedTools parses CachedTools JSON into cache.ToolEntry slice.
+func parsePlatformCachedTools(data json.RawMessage) []cache.ToolEntry {
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	var entries []toolEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+	result := make([]cache.ToolEntry, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, cache.ToolEntry{
+			Name:        e.Name,
+			Description: e.Description,
+			Source:      "",
+		})
+	}
+	return result
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's

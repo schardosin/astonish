@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X, Search, Download, Check, AlertCircle, Loader2, Tag, Package, Plus, Trash2, RefreshCw, Store } from 'lucide-react'
+import { teamFetch } from '../api/teamContext'
 
 // --- Types ---
 
@@ -26,13 +27,13 @@ interface FlowStoreModalProps {
 
 // API functions for Flow Store
 const fetchFlowStore = async (): Promise<{ taps: Tap[]; flows: Flow[] }> => {
-  const res = await fetch('/api/flow-store')
+  const res = await teamFetch('/api/flow-store')
   if (!res.ok) throw new Error('Failed to fetch flow store')
   return res.json()
 }
 
 const addTap = async (url: string, alias: string = ''): Promise<Record<string, any>> => {
-  const res = await fetch('/api/flow-store/taps', {
+  const res = await teamFetch('/api/flow-store/taps', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, alias })
@@ -45,7 +46,7 @@ const addTap = async (url: string, alias: string = ''): Promise<Record<string, a
 }
 
 const removeTap = async (name: string): Promise<Record<string, any>> => {
-  const res = await fetch(`/api/flow-store/taps/${encodeURIComponent(name)}`, {
+  const res = await teamFetch(`/api/flow-store/taps/${encodeURIComponent(name)}`, {
     method: 'DELETE'
   })
   if (!res.ok) {
@@ -56,7 +57,7 @@ const removeTap = async (name: string): Promise<Record<string, any>> => {
 }
 
 const installFlow = async (tapName: string, flowName: string): Promise<Record<string, any>> => {
-  const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}/install`, {
+  const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}/install`, {
     method: 'POST'
   })
   if (!res.ok) {
@@ -67,7 +68,7 @@ const installFlow = async (tapName: string, flowName: string): Promise<Record<st
 }
 
 const uninstallFlow = async (tapName: string, flowName: string): Promise<Record<string, any>> => {
-  const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+  const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
     method: 'DELETE'
   })
   if (!res.ok) {
@@ -78,7 +79,7 @@ const uninstallFlow = async (tapName: string, flowName: string): Promise<Record<
 }
 
 const updateStore = async (): Promise<Record<string, any>> => {
-  const res = await fetch('/api/flow-store/update', { method: 'POST' })
+  const res = await teamFetch('/api/flow-store/update', { method: 'POST' })
   if (!res.ok) throw new Error('Failed to update store')
   return res.json()
 }

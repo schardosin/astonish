@@ -9,6 +9,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -322,11 +323,7 @@ type SandboxUpdateRequest struct {
 
 // GetFullConfigHandler handles GET /api/settings/full
 func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	cfg := effectiveAppConfig(r)
 
 	store := getAPICredentialStore()
 
@@ -416,6 +413,11 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var req FullConfigUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		respondError(w, http.StatusForbidden, "Full config updates are not supported in platform mode. Use team settings instead.")
 		return
 	}
 

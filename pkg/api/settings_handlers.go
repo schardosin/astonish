@@ -158,11 +158,7 @@ type UpdateAppSettingsRequest struct {
 
 // GetSettingsHandler handles GET /api/settings/config
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
 
 	// Build response with all provider instances
 	providers := []ProviderSettings{}
@@ -219,6 +215,13 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var req UpdateAppSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Platform mode: persist settings to team DB instead of filesystem
+	svc := store.FromRequest(r)
+	if svc != nil && svc.Mode == store.ModePlatform && svc.Settings != nil {
+		updateSettingsPlatform(w, r, svc, req)
 		return
 	}
 
@@ -327,10 +330,85 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Regenerate the managed OpenCode config since provider/model may have changed.
 	// Reload config from disk to get the clean version (secrets were scrubbed above).
-	if freshCfg, loadErr := config.LoadAppConfig(); loadErr == nil {
+	if freshCfg := effectiveAppConfig(r); freshCfg != nil {
 		regenerateOpenCodeConfig(freshCfg)
-	} else {
-		slog.Warn("failed to reload config for OpenCode regeneration", "error", loadErr)
+	}
+
+	// Reset the Studio chat agent so the next request picks up fresh config.
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// updateSettingsPlatform handles the PUT in platform mode, persisting settings
+// to the team's database record instead of the host filesystem.
+func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.Services, req UpdateAppSettingsRequest) {
+	settings, err := svc.Settings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load team settings: "+err.Error())
+		return
+	}
+	if settings == nil {
+		settings = &store.TeamSettings{}
+	}
+
+	// Update general settings if provided
+	if req.General != nil {
+		settings.DefaultProvider = req.General.DefaultProvider
+		settings.DefaultModel = req.General.DefaultModel
+		settings.WebSearchTool = req.General.WebSearchTool
+		settings.WebExtractTool = req.General.WebExtractTool
+		if req.General.ContextLength > 0 {
+			settings.ContextLength = req.General.ContextLength
+		}
+	}
+
+	// Update provider settings if provided
+	if req.Providers != nil {
+		if len(req.Providers) > 0 {
+			firstKey := ""
+			for k := range req.Providers {
+				firstKey = k
+				break
+			}
+			if firstKey == "__replace_all__" {
+				var newProviders []map[string]string
+				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
+					newProvidersMap := make(map[string]map[string]string)
+					for _, p := range newProviders {
+						name := p["name"]
+						if name != "" {
+							newProvidersMap[name] = make(map[string]string)
+							for k, v := range p {
+								if k != "name" {
+									newProvidersMap[name][k] = v
+								}
+							}
+						}
+					}
+					settings.Providers = newProvidersMap
+				}
+			} else {
+				if settings.Providers == nil {
+					settings.Providers = make(map[string]map[string]string)
+				}
+				for providerName, providerFields := range req.Providers {
+					if settings.Providers[providerName] == nil {
+						settings.Providers[providerName] = make(map[string]string)
+					}
+					for key, value := range providerFields {
+						if value != "" && !isMaskedValue(value) {
+							settings.Providers[providerName][key] = value
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if err := svc.Settings.Save(r.Context(), settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save team settings: "+err.Error())
+		return
 	}
 
 	// Reset the Studio chat agent so the next request picks up fresh config.
@@ -813,11 +891,8 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	providerID := vars["providerId"]
 
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Resolve secrets from credential store into the provider config so that
 	// ListModelsForProvider sees the actual API key (secrets are scrubbed from
@@ -857,17 +932,8 @@ type SetupStatusResponse struct {
 
 // GetSetupStatusHandler handles GET /api/settings/status
 func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		// If config doesn't exist, setup is definitely required
-		respondJSON(w, http.StatusOK, SetupStatusResponse{
-			SetupRequired:       true,
-			HasDefaultProvider:  false,
-			HasDefaultModel:     false,
-			ConfiguredProviders: []string{},
-		})
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Check for configured providers
 	// For multi-instance support, check all provider instances in config
@@ -910,11 +976,8 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	providerID := vars["providerId"]
 
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Resolve provider instance config and type. The providerID is the instance
 	// name (e.g. "SAP AI Core"), not necessarily the type slug ("sap_ai_core").

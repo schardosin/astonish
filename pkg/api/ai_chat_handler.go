@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -40,17 +39,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load app config
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		if streaming {
-			sendSSE(w, flusher, "error", map[string]string{"error": "Failed to load config: " + err.Error()})
-			return
-		}
-		json.NewEncoder(w).Encode(AIChatResponse{
-			Error: "Failed to load config: " + err.Error(),
-		})
-		return
-	}
+	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
 
 	// Get default provider and model
@@ -254,7 +243,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 					}
 
 					// Execute the tool
-					result, data, execErr = executeFlowCreationTool(ctx, fc.Name, args)
+					result, data, execErr = executeFlowCreationTool(ctx, fc.Name, args, appCfg)
 					if execErr != nil {
 						result = "Error executing tool: " + execErr.Error()
 						toolLogs.WriteString(fmt.Sprintf("> Error: %s\n\n", execErr.Error()))

@@ -169,3 +169,24 @@ func MCPServerStoresFromContext(ctx context.Context) *MCPServerStores {
 	ms, _ := ctx.Value(mcpServerStoresKey).(*MCPServerStores)
 	return ms
 }
+
+const sandboxTemplateKey contextKey = "astonish_sandbox_template"
+
+// WithSandboxTemplate returns a new context containing the team's sandbox
+// template name. Used to propagate the team's custom container template into
+// the ADK runner context so that NodeTool can create containers with the
+// correct template instead of always using @base.
+func WithSandboxTemplate(ctx context.Context, tpl string) context.Context {
+	return context.WithValue(ctx, sandboxTemplateKey, tpl)
+}
+
+// SandboxTemplateFromContext retrieves the sandbox template name from a context.
+// Returns "" if no template is present (personal mode, tests, or team has no
+// custom template — which causes the sandbox to fall back to @base).
+func SandboxTemplateFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	tpl, _ := ctx.Value(sandboxTemplateKey).(string)
+	return tpl
+}

@@ -174,7 +174,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for the recovered session (fails if sandbox is enabled but unavailable)
-	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil, ""); err != nil {
 		return fmt.Errorf("cannot recover fleet session: %w", err)
 	}
 

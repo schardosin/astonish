@@ -83,6 +83,11 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 		if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
 			teamSlug = headerTeam
 		}
+		// Allow team override via query parameter (for WebSocket connections
+		// which cannot set custom headers from the browser).
+		if qTeam := r.URL.Query().Get("team"); qTeam != "" && teamSlug == claims.DefaultTeamSlug {
+			teamSlug = qTeam
+		}
 
 		// Validate that non-admin users are members of the requested team.
 		// Admins/owners can access any team in the org for management.

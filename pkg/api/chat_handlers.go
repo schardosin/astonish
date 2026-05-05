@@ -678,6 +678,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectSchedulerStore(svc.Scheduler)
 	}
 
+	// Inject the team's custom sandbox template so that chat containers use
+	// the team's pre-configured image rather than always falling back to @base.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings.TemplateName != "" {
+			runner.InjectSandboxTemplate(settings.TemplateName)
+		}
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

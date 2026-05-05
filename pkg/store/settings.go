@@ -32,6 +32,11 @@ type TeamSettings struct {
 
 	// MemoryModel is the embedding model for memory indexing.
 	MemoryModel string `json:"memory_model,omitempty"`
+
+	// TemplateName is the sandbox container template name for this team.
+	// When set, all fleet sessions for this team use this template instead of @base.
+	// Format: "team-<slug>" (e.g., "team-general").
+	TemplateName string `json:"template_name,omitempty"`
 }
 
 // SettingsStore provides read/write access to team-level settings.

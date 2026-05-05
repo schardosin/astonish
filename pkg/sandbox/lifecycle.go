@@ -396,6 +396,13 @@ func ensureOverlayMounted(client *IncusClient, containerName, templateName strin
 	return setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir)
 }
 
+// EnsureOverlayMounted is the exported version of ensureOverlayMounted.
+// It re-mounts the overlay for a container if it's not currently mounted.
+// Used by the team template API to prepare a stopped container for starting.
+func EnsureOverlayMounted(client *IncusClient, containerName, templateName string, tplRegistry *TemplateRegistry) error {
+	return ensureOverlayMounted(client, containerName, templateName, tplRegistry)
+}
+
 // TryDestroySessionContainer is a best-effort helper that destroys the sandbox
 // container for a session. It connects to Incus, looks up the container, and
 // tears it down. Errors are silently ignored — this is designed to be called

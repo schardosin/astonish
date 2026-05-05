@@ -264,3 +264,76 @@ export async function pinContainer(containerId: string, pinned: boolean): Promis
   }
   return res.json()
 }
+
+// --- Team Template API ---
+
+export interface TeamTemplateStatus {
+  exists: boolean
+  running: boolean
+  templateName: string
+  saved: boolean
+}
+
+export async function fetchTeamTemplateStatus(teamSlug?: string): Promise<TeamTemplateStatus> {
+  const res = await teamFetch('/api/team/template/status', undefined, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+export async function createTeamTemplate(teamSlug?: string): Promise<{ status: string; templateName: string; created: boolean }> {
+  const res = await teamFetch('/api/team/template/create', { method: 'POST' }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+export async function saveTeamTemplate(teamSlug?: string): Promise<{ status: string; templateName: string }> {
+  const res = await teamFetch('/api/team/template/save', { method: 'POST' }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+export async function restoreTeamTemplate(teamSlug?: string): Promise<{ status: string; templateName: string; restored: boolean }> {
+  const res = await teamFetch('/api/team/template/restore', { method: 'POST' }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+export async function deleteTeamTemplate(teamSlug?: string): Promise<{ status: string; deleted: boolean }> {
+  const res = await teamFetch('/api/team/template', { method: 'DELETE' }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+export async function startTeamTemplate(teamSlug?: string): Promise<{ status: string; started?: boolean; alreadyRunning?: boolean }> {
+  const res = await teamFetch('/api/team/template/start', { method: 'POST' }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+  return res.json()
+}
+
+/**
+ * Returns the WebSocket URL for connecting to the team template terminal.
+ * The URL uses the same host as the current page.
+ * The team slug is passed as a query parameter since WebSocket doesn't support custom headers.
+ */
+export function getTeamTerminalWsUrl(teamSlug: string): string {
+  const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${window.location.host}/api/sandbox/terminal?team=${encodeURIComponent(teamSlug)}`
+}

@@ -113,7 +113,7 @@ type FleetSessionResult struct {
 // teamSlug scopes the session to a team (empty for personal mode).
 // sessionStore is the PG-backed session store for platform mode (nil for personal mode).
 // mcpStores provides platform MCP server stores for sandbox tool injection (nil for personal mode).
-func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores) (*FleetSessionResult, error) {
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string) (*FleetSessionResult, error) {
 	if fleetPlanRegistryVar == nil {
 		return nil, fmt.Errorf("fleet plan system not initialized")
 	}
@@ -181,7 +181,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 		}
 		ghToken = fleet.GitHubToken(resolved)
 	}
-	if err := wireFleetSandbox(fleetSession, plan, ghToken, mcpStores); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, ghToken, mcpStores, teamTemplate); err != nil {
 		return nil, fmt.Errorf("cannot start fleet session: %w", err)
 	}
 
@@ -310,7 +310,14 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores)
+		// Resolve team template from team settings (platform mode)
+		handlerTeamTemplate := ""
+		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+			if settings, err := svc.Settings.Get(r.Context()); err == nil && settings != nil {
+				handlerTeamTemplate = settings.TemplateName
+			}
+		}
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1088,7 +1095,7 @@ func getFleetMessages(sessionID, userID string, ctx context.Context, sessionStor
 //   - fleetSession: the fleet session to wire sandbox into
 //   - plan: the fleet plan (for Template and Credentials fields)
 //   - ghToken: resolved GitHub token (may be empty)
-func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string, mcpStores *store.MCPServerStores) error {
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string, mcpStores *store.MCPServerStores, teamTemplate string) error {
 	// Load config to check if sandbox is enabled
 	appCfg, err := config.LoadAppConfig()
 	if err != nil || appCfg == nil {
@@ -1115,10 +1122,12 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return fmt.Errorf("sandbox template registry failed: %w", tplErr)
 	}
 
-	// Determine which template to use: plan template or @base
+	// Determine which template to use: plan template > team template > @base
 	template := ""
-	if plan != nil {
+	if plan != nil && plan.Template != "" {
 		template = plan.Template
+	} else if teamTemplate != "" {
+		template = teamTemplate
 	}
 
 	// Create a lazy node client for this fleet session

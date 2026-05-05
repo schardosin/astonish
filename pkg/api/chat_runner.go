@@ -131,6 +131,14 @@ func (cr *ChatRunner) InjectMCPServerStores(org, team store.MCPServerStore) {
 	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{Org: org, Team: team})
 }
 
+// InjectSandboxTemplate adds the team's custom sandbox template name to the
+// runner's context. NodeTool reads this at container creation time so that chat
+// sessions use the team's pre-configured container image rather than @base.
+// Must be called before Run().
+func (cr *ChatRunner) InjectSandboxTemplate(tpl string) {
+	cr.ctx = store.WithSandboxTemplate(cr.ctx, tpl)
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

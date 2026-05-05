@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle,
-  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server
+  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server, Box
 } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
@@ -19,6 +19,7 @@ const MCPServersSettings = lazy(() => import('./settings/MCPServersSettings'))
 const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
+const TeamContainerTab = lazy(() => import('./TeamContainerTab'))
 
 interface TeamManagementProps {
   theme: 'dark' | 'light'
@@ -71,6 +72,7 @@ const TEAM_TABS: TeamTab[] = [
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'taps', label: 'Repositories', icon: GitBranch },
   { id: 'flows', label: 'Flow Store', icon: Store },
+  { id: 'container', label: 'Container', icon: Box },
 ]
 
 // ---------------------------------------------------------------------------
@@ -308,6 +310,17 @@ interface TeamResourceTabProps {
 }
 
 function TeamResourceTab({ tabId, theme, fullConfig, fullConfigLoading, onSaved, canManage, teamSlug }: TeamResourceTabProps) {
+  // Container tab has its own full-height layout (terminal needs flex space)
+  if (tabId === 'container') {
+    return (
+      <div className="flex-1 overflow-hidden p-6 flex flex-col">
+        <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+          <TeamContainerTab teamSlug={teamSlug} theme={theme as 'dark' | 'light'} canManage={canManage} />
+        </Suspense>
+      </div>
+    )
+  }
+
   if (fullConfigLoading) {
     return (
       <div className="flex items-center justify-center py-12">

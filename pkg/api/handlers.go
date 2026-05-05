@@ -1117,6 +1117,16 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateInfoHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateDeleteHandler).Methods("DELETE")
 	router.HandleFunc("/api/sandbox/refresh", SandboxRefreshHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/terminal", SandboxTerminalHandler).Methods("GET")
+
+	// Team template endpoints (platform mode — per-team container customization)
+	router.HandleFunc("/api/team/template/status", TeamTemplateStatusHandler).Methods("GET")
+	router.HandleFunc("/api/team/template/create", TeamTemplateCreateHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/save", TeamTemplateSaveHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/restore", TeamTemplateRestoreHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/start", TeamTemplateStartHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/packages", TeamTemplatePackagesHandler).Methods("POST")
+	router.HandleFunc("/api/team/template", TeamTemplateDeleteHandler).Methods("DELETE")
 
 	// Standard servers endpoints
 	router.HandleFunc("/api/standard-servers", ListStandardServersHandler).Methods("GET")

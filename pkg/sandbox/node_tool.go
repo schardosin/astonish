@@ -1,10 +1,12 @@
 package sandbox
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/schardosin/astonish/pkg/common"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
@@ -74,7 +76,7 @@ func (nt *NodeTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) erro
 	// Idempotent: only the first call per session triggers init.
 	if ctx != nil {
 		if sessionID := ctx.SessionID(); sessionID != "" {
-			client := nt.getClient(sessionID)
+			client := nt.getClientFromContext(ctx, sessionID)
 			if client != nil {
 				client.BindSession(sessionID)
 			}
@@ -138,7 +140,7 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		return nil, fmt.Errorf("tool %q: no session ID and no local fallback", nt.Name())
 	}
 
-	client := nt.getClient(sessionID)
+	client := nt.getClientFromContext(ctx, sessionID)
 	if client == nil {
 		return nil, fmt.Errorf("tool %q: no sandbox client available for session %s", nt.Name(), sessionID)
 	}
@@ -175,14 +177,19 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	return result, nil
 }
 
-// getClient returns the LazyNodeClient for the given session. If the NodeTool
-// was created with a pool (chat sessions), it gets or creates a client from
-// the pool. If created with a direct client (fleet sessions), returns that.
-func (nt *NodeTool) getClient(sessionID string) *LazyNodeClient {
+// getClientFromContext returns the LazyNodeClient for the given session. If the
+// NodeTool was created with a pool (chat sessions), it gets or creates a client
+// from the pool, using any sandbox template found in the context. If created
+// with a direct client (fleet sessions), returns that.
+func (nt *NodeTool) getClientFromContext(ctx context.Context, sessionID string) *LazyNodeClient {
 	if nt.lazyClient != nil {
 		return nt.lazyClient
 	}
 	if nt.pool != nil {
+		tpl := store.SandboxTemplateFromContext(ctx)
+		if tpl != "" {
+			return nt.pool.GetOrCreateWithTemplate(sessionID, tpl)
+		}
 		return nt.pool.GetOrCreate(sessionID)
 	}
 	return nil

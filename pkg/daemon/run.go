@@ -814,7 +814,7 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil)
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "")
 				if err != nil {
 					return nil, err
 				}

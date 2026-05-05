@@ -937,6 +937,14 @@ func (p *NodeClientPool) OrgSlug() string {
 // without this check, every subsequent Call() for that session would return
 // the same stale error forever.
 func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
+	return p.GetOrCreateWithTemplate(sessionID, "")
+}
+
+// GetOrCreateWithTemplate returns an existing client for the session, or
+// creates a new one using the given template override. If template is empty,
+// the pool's default template is used (which itself defaults to @base).
+// This allows per-request template injection (e.g., team containers in chat).
+func (p *NodeClientPool) GetOrCreateWithTemplate(sessionID, template string) *LazyNodeClient {
 	if sessionID == "" {
 		return nil
 	}
@@ -967,8 +975,14 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 		}
 	}
 
+	// Use override template if non-empty, otherwise fall back to pool default
+	tpl := p.template
+	if template != "" {
+		tpl = template
+	}
+
 	// Create a new LazyNodeClient for this session
-	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template, p.limits)
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, tpl, p.limits)
 	client.Env = p.env
 	client.OrgSlug = p.orgSlug
 	client.TeamSlug = p.teamSlug

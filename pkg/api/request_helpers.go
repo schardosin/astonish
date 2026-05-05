@@ -182,7 +182,11 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 				}
 			}
 		}
-		return &config.MCPConfig{MCPServers: merged}
+		cfg := &config.MCPConfig{MCPServers: merged}
+		// Merge standard servers (Tavily, Brave, etc.) so they appear alongside
+		// user-configured DB servers in platform mode.
+		config.MergeStandardServers(cfg)
+		return cfg
 	}
 
 	// Personal mode

@@ -151,6 +151,15 @@ func mergeStandardServers(cfg *MCPConfig) {
 	}
 }
 
+// MergeStandardServers is the exported version of mergeStandardServers.
+// It injects configured standard servers (Tavily, Brave, Firecrawl, etc.)
+// into the given MCPConfig. Call this after building an MCPConfig from
+// database stores in platform mode, so that standard/embedded servers
+// are visible alongside user-configured servers.
+func MergeStandardServers(cfg *MCPConfig) {
+	mergeStandardServers(cfg)
+}
+
 // SaveMCPConfig saves the MCP configuration to the config directory.
 // Standard web servers (from config.yaml) are stripped before writing
 // since they are managed separately and merged at load time.

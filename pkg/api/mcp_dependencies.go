@@ -223,6 +223,14 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Also include standard servers (Tavily, Brave, etc.) that are configured
+		// via config.yaml / credential store. These are never stored in the DB
+		// but are always available at runtime via mergeStandardServers().
+		stdCfg := &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+		config.MergeStandardServers(stdCfg)
+		for name := range stdCfg.MCPServers {
+			installedServers[name] = true
+		}
 	} else {
 		// Personal mode: check filesystem config
 		mcpConfig, err := config.LoadMCPConfig()

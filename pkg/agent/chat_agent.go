@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -501,6 +502,11 @@ func isMCPServerAccessible(ctx context.Context, serverName string) bool {
 	stores := store.MCPServerStoresFromContext(ctx)
 	if stores == nil {
 		return true // personal mode — no filtering
+	}
+	// Standard servers (Tavily, Brave, etc.) are always accessible when installed.
+	// They are never stored in the DB but are injected at runtime.
+	if config.IsStandardServerInstalled(serverName) {
+		return true
 	}
 	if stores.Org != nil {
 		if s, _ := stores.Org.Get(serverName); s != nil {

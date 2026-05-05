@@ -157,7 +157,7 @@ export async function getMcpStoreServer(storeId: string): Promise<Record<string,
 
 export async function installMcpServer(storeId: string, env: Record<string, string> = {}): Promise<McpInstallResult> {
   const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
-  const response = await teamFetch(`${API_BASE}/mcp-store/${encodedId}/install`, {
+  const response = await teamFetch(`${API_BASE}/mcp-store/${encodedId}/install?scope=team`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -175,7 +175,7 @@ export async function installInlineMcpServer(
   serverName: string,
   config: Record<string, unknown>
 ): Promise<{ status: string; serverName: string }> {
-  const response = await teamFetch(`${API_BASE}/mcp/install-inline`, {
+  const response = await teamFetch(`${API_BASE}/mcp/install-inline?scope=team`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -9,6 +9,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // ResolveMCPDependencies analyzes tools used in a flow and resolves them to MCP server dependencies.
@@ -197,7 +198,9 @@ type CheckMCPDependenciesResponse struct {
 }
 
 // CheckMCPDependenciesHandler handles POST /api/mcp-dependencies/check
-// Checks which MCP servers from the dependency list are installed
+// Checks which MCP servers from the dependency list are installed.
+// In platform mode, checks both org and team DB stores.
+// In personal mode, checks the filesystem config.
 func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 	var req CheckMCPDependenciesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -205,10 +208,35 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load user's MCP config to check installed servers
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		mcpConfig = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+	// Determine installed servers based on mode
+	installedServers := make(map[string]bool)
+
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		// Platform mode: check both org and team DB stores
+		if svc.MCPServers != nil {
+			orgServers, err := svc.MCPServers.List()
+			if err == nil {
+				for _, s := range orgServers {
+					installedServers[s.Name] = true
+				}
+			}
+		}
+		if svc.TeamMCPServers != nil {
+			teamServers, err := svc.TeamMCPServers.List()
+			if err == nil {
+				for _, s := range teamServers {
+					installedServers[s.Name] = true
+				}
+			}
+		}
+	} else {
+		// Personal mode: check filesystem config
+		mcpConfig, err := config.LoadMCPConfig()
+		if err == nil && mcpConfig != nil {
+			for name := range mcpConfig.MCPServers {
+				installedServers[name] = true
+			}
+		}
 	}
 
 	// Load store servers for resolving store_id if missing
@@ -242,9 +270,8 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check if server is installed
-		_, installed := mcpConfig.MCPServers[dep.Server]
-		status.Installed = installed
-		if !installed {
+		status.Installed = installedServers[dep.Server]
+		if !status.Installed {
 			missing++
 		}
 

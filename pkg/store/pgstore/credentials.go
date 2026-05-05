@@ -172,8 +172,31 @@ func (c *pgCredentialStore) Resolve(name string) (headerKey, headerValue string,
 	case store.CredBearer:
 		return "Authorization", "Bearer " + cred.Token, nil
 	case store.CredBasic:
-		// Basic auth handled elsewhere
-		return "", "", fmt.Errorf("basic auth requires special handling")
+		encoded := credentials.BasicAuthValue(cred.Username, cred.Password)
+		return "Authorization", "Basic " + encoded, nil
+	case store.CredOAuthClientCreds:
+		// Convert store.Credential to credentials.Credential for the OAuth flow
+		oauthCred := &credentials.Credential{
+			Type:         credentials.CredOAuthClientCreds,
+			AuthURL:      cred.AuthURL,
+			ClientID:     cred.ClientID,
+			ClientSecret: cred.ClientSecret,
+			Scope:        cred.Scope,
+		}
+		token, _, err := credentials.FetchOAuthToken(oauthCred)
+		if err != nil {
+			return "", "", fmt.Errorf("credential %q OAuth: %w", name, err)
+		}
+		return "Authorization", "Bearer " + token, nil
+	case store.CredOAuthAuthCode:
+		// For auth code flow, use the stored access token directly
+		// (refresh would need additional infrastructure)
+		if cred.AccessToken != "" {
+			return "Authorization", "Bearer " + cred.AccessToken, nil
+		}
+		return "", "", fmt.Errorf("credential %q: no access token available (OAuth authorization_code flow requires token refresh)", name)
+	case store.CredPassword:
+		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)
 	default:
 		return "", "", fmt.Errorf("unsupported credential type: %s", cred.Type)
 	}

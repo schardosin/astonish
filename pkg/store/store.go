@@ -105,6 +105,7 @@ type User struct {
 	PasswordHash string    `json:"-"`
 	OIDCSubject  string    `json:"oidc_subject,omitempty"`
 	OIDCIssuer   string    `json:"oidc_issuer,omitempty"`
+	PlatformRole string    `json:"platform_role,omitempty"` // "superadmin" or "" (regular user)
 	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastLoginAt  time.Time `json:"last_login_at,omitempty"`
@@ -145,6 +146,13 @@ type UserStore interface {
 
 	// ListByOrg returns all users who are members of the given org, with their role.
 	ListByOrg(ctx context.Context, orgID string) ([]*UserWithRole, error)
+
+	// SetPlatformRole sets or clears the platform-level role for a user.
+	// Pass "superadmin" to promote, or "" to demote.
+	SetPlatformRole(ctx context.Context, userID, role string) error
+
+	// CountByPlatformRole returns the number of users with the given platform role.
+	CountByPlatformRole(ctx context.Context, role string) (int, error)
 }
 
 // OrganizationStore manages organization records.

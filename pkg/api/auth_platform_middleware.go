@@ -45,7 +45,11 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 
 		// Allow platform setup endpoints — the frontend needs to check deployment
 		// mode and init status before any user has registered.
-		if strings.HasPrefix(path, "/api/platform/") {
+		// NOTE: Only allow specific setup paths, NOT /api/platform/admin/* which
+		// requires superadmin authentication.
+		if path == "/api/platform/mode" ||
+			path == "/api/platform/init" ||
+			path == "/api/platform/init/status" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -57,8 +61,37 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 			return
 		}
 
-		// Allow loopback addresses (CLI, local tools)
+		// Allow loopback addresses (CLI, local tools).
+		// If a JWT cookie is present, still extract user context (best-effort)
+		// so that platform admin handlers can verify superadmin status.
 		if isLoopbackRequest(r) {
+			cookie, cookieErr := r.Cookie(accessCookieName)
+			if cookieErr == nil && cookie.Value != "" {
+				if claims, jwtErr := pa.jwt.ValidateAccessToken(cookie.Value); jwtErr == nil {
+					teamSlug := claims.DefaultTeamSlug
+					if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
+						teamSlug = headerTeam
+					}
+					tc := &pgstore.TenantContext{
+						OrgSlug:  claims.OrgSlug,
+						TeamSlug: teamSlug,
+						UserID:   claims.UserID,
+					}
+					ctx := pgstore.WithTenantContext(r.Context(), tc)
+					ctx = WithPlatformUser(ctx, &PlatformUser{
+						ID:           claims.UserID,
+						Email:        claims.Email,
+						DisplayName:  claims.DisplayName,
+						OrgSlug:      claims.OrgSlug,
+						TeamSlug:     teamSlug,
+						Role:         claims.Role,
+						PlatformRole: claims.PlatformRole,
+					})
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+			// No valid cookie — pass through without user context (CLI tools, etc.)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -119,12 +152,13 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 		// Store tenant context and user info in request context
 		ctx := pgstore.WithTenantContext(r.Context(), tc)
 		ctx = WithPlatformUser(ctx, &PlatformUser{
-			ID:          claims.UserID,
-			Email:       claims.Email,
-			DisplayName: claims.DisplayName,
-			OrgSlug:     claims.OrgSlug,
-			TeamSlug:    teamSlug,
-			Role:        claims.Role,
+			ID:           claims.UserID,
+			Email:        claims.Email,
+			DisplayName:  claims.DisplayName,
+			OrgSlug:      claims.OrgSlug,
+			TeamSlug:     teamSlug,
+			Role:         claims.Role,
+			PlatformRole: claims.PlatformRole,
 		})
 
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -153,12 +187,13 @@ func isLoopbackRequest(r *http.Request) bool {
 
 // PlatformUser represents the authenticated user for the current request.
 type PlatformUser struct {
-	ID          string
-	Email       string
-	DisplayName string
-	OrgSlug     string
-	TeamSlug    string
-	Role        string
+	ID           string
+	Email        string
+	DisplayName  string
+	OrgSlug      string
+	TeamSlug     string
+	Role         string
+	PlatformRole string // "superadmin" or "" (regular user)
 }
 
 type platformUserKey struct{}

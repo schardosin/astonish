@@ -8,7 +8,7 @@ import (
 func TestJWTIssuer_AccessToken(t *testing.T) {
 	issuer := NewJWTIssuer("test-secret-key-for-jwt-testing", 15*time.Minute, 90*24*time.Hour)
 
-	tokenStr, err := issuer.IssueAccessToken("user-123", "alice@example.com", "Alice", "acme", "engineering", "admin")
+	tokenStr, err := issuer.IssueAccessToken("user-123", "alice@example.com", "Alice", "acme", "engineering", "admin", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestJWTIssuer_TokenExpiry(t *testing.T) {
 	// Issue a token with 1ms TTL
 	issuer := NewJWTIssuer("test-secret", time.Millisecond, time.Millisecond)
 
-	tokenStr, err := issuer.IssueAccessToken("user-123", "", "", "acme", "", "")
+	tokenStr, err := issuer.IssueAccessToken("user-123", "", "", "acme", "", "", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestJWTIssuer_WrongSecret(t *testing.T) {
 	issuer1 := NewJWTIssuer("secret-one", 15*time.Minute, 90*24*time.Hour)
 	issuer2 := NewJWTIssuer("secret-two", 15*time.Minute, 90*24*time.Hour)
 
-	tokenStr, err := issuer1.IssueAccessToken("user-123", "", "", "acme", "", "")
+	tokenStr, err := issuer1.IssueAccessToken("user-123", "", "", "acme", "", "", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestJWTIssuer_RandomSecretOnEmpty(t *testing.T) {
 	// When secret is empty, a random key should be generated
 	issuer := NewJWTIssuer("", 15*time.Minute, 90*24*time.Hour)
 
-	tokenStr, err := issuer.IssueAccessToken("user-123", "", "", "acme", "", "")
+	tokenStr, err := issuer.IssueAccessToken("user-123", "", "", "acme", "", "", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken: %v", err)
 	}
@@ -138,8 +138,8 @@ func TestJWTIssuer_RandomSecretOnEmpty(t *testing.T) {
 func TestJWTIssuer_TokenIDUniqueness(t *testing.T) {
 	issuer := NewJWTIssuer("test-secret", 15*time.Minute, 90*24*time.Hour)
 
-	token1, _ := issuer.IssueAccessToken("user-123", "", "", "", "", "")
-	token2, _ := issuer.IssueAccessToken("user-123", "", "", "", "", "")
+	token1, _ := issuer.IssueAccessToken("user-123", "", "", "", "", "", "")
+	token2, _ := issuer.IssueAccessToken("user-123", "", "", "", "", "", "")
 
 	claims1, _ := issuer.ValidateAccessToken(token1)
 	claims2, _ := issuer.ValidateAccessToken(token2)

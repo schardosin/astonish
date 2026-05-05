@@ -121,6 +121,12 @@ function parseHash(hash: string): RouterPath {
     return { view: 'team-mgmt', params: { mgmtSection, teamSlug, teamTab } }
   }
 
+  if (view === 'platform-admin') {
+    // Routes: #/platform-admin, #/platform-admin/orgs, #/platform-admin/users
+    const tab = parts[1] || 'orgs'
+    return { view: 'platform-admin', params: { tab } }
+  }
+
   return { view, params: {} }
 }
 
@@ -173,6 +179,13 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
       return '/credentials'
     case 'knowledge':
       return '/knowledge'
+    case 'platform-admin': {
+      const tab = params.tab || params.tabSection || 'orgs'
+      if (tab !== 'orgs') {
+        return `/platform-admin/${tab}`
+      }
+      return '/platform-admin'
+    }
     default:
       return '/chat'
   }

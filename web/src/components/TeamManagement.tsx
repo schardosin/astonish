@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle,
-  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server, Box
+  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server, Box, Crown
 } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
@@ -20,10 +20,11 @@ const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
 const TeamContainerTab = lazy(() => import('./TeamContainerTab'))
+const PlatformAdminPanel = lazy(() => import('./PlatformAdminPanel'))
 
 interface TeamManagementProps {
   theme: 'dark' | 'light'
-  user: { id: string; email: string; display_name: string; role: string }
+  user: { id: string; email: string; display_name: string; role: string; platform_role?: string }
   org: { id: string; name: string; slug: string }
   activeTeam: string | null
   /** Sidebar section: 'teams' | 'users' | 'audit' */
@@ -84,11 +85,13 @@ interface SidebarSection {
   label: string
   icon: any
   adminOnly?: boolean
+  superadminOnly?: boolean
 }
 
 const SIDEBAR_SECTIONS: SidebarSection[] = [
   { id: 'users', label: 'Users', icon: UserCog, adminOnly: true },
   { id: 'audit', label: 'Audit', icon: FileText, adminOnly: true },
+  { id: 'platform', label: 'Platform', icon: Crown, superadminOnly: true },
 ]
 
 // ---------------------------------------------------------------------------
@@ -486,7 +489,12 @@ export default function TeamManagement({
   const selectedTeam = teams.find(t => t.slug === selectedTeamSlug) || null
 
   // Sidebar sections visible to this user
-  const visibleSections = SIDEBAR_SECTIONS.filter(s => !s.adminOnly || isOrgAdmin)
+  const isSuperadmin = user.platform_role === 'superadmin'
+  const visibleSections = SIDEBAR_SECTIONS.filter(s => {
+    if (s.superadminOnly) return isSuperadmin
+    if (s.adminOnly) return isOrgAdmin
+    return true
+  })
 
   // Load teams
   const loadTeams = useCallback(async () => {
@@ -667,6 +675,16 @@ export default function TeamManagement({
         {section === 'audit' && isOrgAdmin && (
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
             <AuditViewer theme={theme} />
+          </Suspense>
+        )}
+
+        {section === 'platform' && isSuperadmin && (
+          <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+            <PlatformAdminPanel
+              theme={theme}
+              activeTab="orgs"
+              onTabChange={() => {}}
+            />
           </Suspense>
         )}
       </div>

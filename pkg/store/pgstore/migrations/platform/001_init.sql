@@ -20,6 +20,8 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash   TEXT,                -- bcrypt, NULL for OIDC-only users
     oidc_subject    TEXT,
     oidc_issuer     TEXT,
+    platform_role   TEXT DEFAULT NULL    -- NULL = regular user, 'superadmin' = platform administrator
+                    CHECK (platform_role IS NULL OR platform_role IN ('superadmin')),
     status          TEXT NOT NULL DEFAULT 'active'
                     CHECK (status IN ('active', 'suspended', 'deactivated')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),

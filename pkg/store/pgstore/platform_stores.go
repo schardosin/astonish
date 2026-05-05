@@ -18,10 +18,11 @@ func (s *pgUserStore) Create(ctx context.Context, user *store.User) error {
 		return err
 	}
 	_, err = pool.Exec(ctx,
-		`INSERT INTO users (id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		`INSERT INTO users (id, email, display_name, password_hash, oidc_subject, oidc_issuer, platform_role, status, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		user.ID, user.Email, user.DisplayName, user.PasswordHash,
 		nilIfEmpty(user.OIDCSubject), nilIfEmpty(user.OIDCIssuer),
+		nilIfEmpty(user.PlatformRole),
 		user.Status, user.CreatedAt,
 	)
 	return err
@@ -33,7 +34,7 @@ func (s *pgUserStore) GetByID(ctx context.Context, id string) (*store.User, erro
 		return nil, err
 	}
 	return scanUser(pool.QueryRow(ctx,
-		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at, last_login_at
+		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, platform_role, status, created_at, last_login_at
 		 FROM users WHERE id = $1`, id,
 	))
 }
@@ -44,7 +45,7 @@ func (s *pgUserStore) GetByEmail(ctx context.Context, email string) (*store.User
 		return nil, err
 	}
 	return scanUser(pool.QueryRow(ctx,
-		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at, last_login_at
+		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, platform_role, status, created_at, last_login_at
 		 FROM users WHERE email = $1`, email,
 	))
 }
@@ -55,7 +56,7 @@ func (s *pgUserStore) GetByOIDC(ctx context.Context, issuer, subject string) (*s
 		return nil, err
 	}
 	return scanUser(pool.QueryRow(ctx,
-		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at, last_login_at
+		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, platform_role, status, created_at, last_login_at
 		 FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2`, issuer, subject,
 	))
 }
@@ -67,10 +68,11 @@ func (s *pgUserStore) Update(ctx context.Context, user *store.User) error {
 	}
 	_, err = pool.Exec(ctx,
 		`UPDATE users SET email = $2, display_name = $3, password_hash = $4,
-		 oidc_subject = $5, oidc_issuer = $6, status = $7, last_login_at = $8
+		 oidc_subject = $5, oidc_issuer = $6, platform_role = $7, status = $8, last_login_at = $9
 		 WHERE id = $1`,
 		user.ID, user.Email, user.DisplayName, user.PasswordHash,
 		nilIfEmpty(user.OIDCSubject), nilIfEmpty(user.OIDCIssuer),
+		nilIfEmpty(user.PlatformRole),
 		user.Status, user.LastLoginAt,
 	)
 	return err
@@ -91,7 +93,7 @@ func (s *pgUserStore) List(ctx context.Context) ([]*store.User, error) {
 		return nil, err
 	}
 	rows, err := pool.Query(ctx,
-		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, status, created_at, last_login_at
+		`SELECT id, email, display_name, password_hash, oidc_subject, oidc_issuer, platform_role, status, created_at, last_login_at
 		 FROM users ORDER BY email`,
 	)
 	if err != nil {
@@ -117,7 +119,7 @@ func (s *pgUserStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Use
 	}
 	rows, err := pool.Query(ctx,
 		`SELECT u.id, u.email, u.display_name, u.password_hash, u.oidc_subject, u.oidc_issuer,
-		        u.status, u.created_at, u.last_login_at, om.role, om.joined_at
+		        u.platform_role, u.status, u.created_at, u.last_login_at, om.role, om.joined_at
 		 FROM users u
 		 JOIN org_memberships om ON om.user_id = u.id
 		 WHERE om.org_id = $1
@@ -131,11 +133,11 @@ func (s *pgUserStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Use
 	var users []*store.UserWithRole
 	for rows.Next() {
 		uw := &store.UserWithRole{}
-		var pwHash, oidcSub, oidcIss *string
+		var pwHash, oidcSub, oidcIss, platformRole *string
 		var lastLogin *interface{}
 		err := rows.Scan(
 			&uw.ID, &uw.Email, &uw.DisplayName, &pwHash, &oidcSub, &oidcIss,
-			&uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &uw.JoinedAt,
+			&platformRole, &uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &uw.JoinedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan user with role: %w", err)
@@ -149,9 +151,36 @@ func (s *pgUserStore) ListByOrg(ctx context.Context, orgID string) ([]*store.Use
 		if oidcIss != nil {
 			uw.OIDCIssuer = *oidcIss
 		}
+		if platformRole != nil {
+			uw.PlatformRole = *platformRole
+		}
 		users = append(users, uw)
 	}
 	return users, rows.Err()
+}
+
+func (s *pgUserStore) SetPlatformRole(ctx context.Context, userID, role string) error {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return err
+	}
+	_, err = pool.Exec(ctx,
+		`UPDATE users SET platform_role = $2 WHERE id = $1`,
+		userID, nilIfEmpty(role),
+	)
+	return err
+}
+
+func (s *pgUserStore) CountByPlatformRole(ctx context.Context, role string) (int, error) {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	err = pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM users WHERE platform_role = $1`, role,
+	).Scan(&count)
+	return count, err
 }
 
 // --- pgOrgStore implements store.OrganizationStore ---
@@ -428,9 +457,9 @@ type scannable interface {
 
 func scanUser(row scannable) (*store.User, error) {
 	u := &store.User{}
-	var pwHash, oidcSub, oidcIss *string
+	var pwHash, oidcSub, oidcIss, platformRole *string
 	var lastLogin *interface{}
-	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &pwHash, &oidcSub, &oidcIss, &u.Status, &u.CreatedAt, &lastLogin)
+	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &pwHash, &oidcSub, &oidcIss, &platformRole, &u.Status, &u.CreatedAt, &lastLogin)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan user: %w", err)
 	}
@@ -442,6 +471,9 @@ func scanUser(row scannable) (*store.User, error) {
 	}
 	if oidcIss != nil {
 		u.OIDCIssuer = *oidcIss
+	}
+	if platformRole != nil {
+		u.PlatformRole = *platformRole
 	}
 	return u, nil
 }

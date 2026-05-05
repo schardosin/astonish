@@ -43,6 +43,10 @@ type PlatformClaims struct {
 
 	// Role is the user's role in the org (e.g., "admin", "member").
 	Role string `json:"role,omitempty"`
+
+	// PlatformRole is the user's platform-wide role (e.g., "superadmin").
+	// Empty for regular users. Grants cross-org management capabilities.
+	PlatformRole string `json:"prole,omitempty"`
 }
 
 // JWTIssuer generates and validates JWT tokens for platform mode.
@@ -83,7 +87,7 @@ func NewJWTIssuer(secret string, accessTTL, refreshTTL time.Duration) *JWTIssuer
 }
 
 // IssueAccessToken creates a short-lived access token with full user context.
-func (j *JWTIssuer) IssueAccessToken(userID, email, displayName, orgSlug, teamSlug, role string) (string, error) {
+func (j *JWTIssuer) IssueAccessToken(userID, email, displayName, orgSlug, teamSlug, role, platformRole string) (string, error) {
 	now := time.Now()
 	claims := PlatformClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -100,6 +104,7 @@ func (j *JWTIssuer) IssueAccessToken(userID, email, displayName, orgSlug, teamSl
 		OrgSlug:         orgSlug,
 		DefaultTeamSlug: teamSlug,
 		Role:            role,
+		PlatformRole:    platformRole,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

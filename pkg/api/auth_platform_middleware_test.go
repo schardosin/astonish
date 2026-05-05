@@ -208,7 +208,7 @@ func TestPlatformAuthMiddleware_AllowsLoopback(t *testing.T) {
 func TestPlatformAuthMiddleware_ValidJWT(t *testing.T) {
 	pa := testPlatformAuth(t)
 
-	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test User", "my-org", "ops", "admin")
+	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test User", "my-org", "ops", "admin", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken() error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestPlatformAuthMiddleware_ValidJWT(t *testing.T) {
 func TestPlatformAuthMiddleware_TeamOverrideHeader(t *testing.T) {
 	pa := testPlatformAuth(t)
 
-	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test User", "my-org", "ops", "admin")
+	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test User", "my-org", "ops", "admin", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken() error: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestPlatformAuthMiddleware_ExpiredJWT(t *testing.T) {
 		jwt: NewJWTIssuer("test-secret", 1*time.Millisecond, 90*24*time.Hour),
 	}
 
-	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test", "org", "team", "member")
+	token, err := pa.jwt.IssueAccessToken("user-123", "test@example.com", "Test", "org", "team", "member", "")
 	if err != nil {
 		t.Fatalf("IssueAccessToken() error: %v", err)
 	}

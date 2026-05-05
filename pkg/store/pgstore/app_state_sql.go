@@ -47,7 +47,10 @@ func (s *pgAppStateSQLStore) Query(ctx context.Context, appSlug, sql string, par
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire connection: %w", err)
 	}
-	defer conn.Release()
+	defer func() {
+		_, _ = conn.Exec(ctx, `RESET search_path`)
+		conn.Release()
+	}()
 
 	// Set search_path so table names resolve within the app's schema
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path TO %s`, pgx.Identifier{schema}.Sanitize())); err != nil {
@@ -75,7 +78,10 @@ func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sql string, para
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to acquire connection: %w", err)
 	}
-	defer conn.Release()
+	defer func() {
+		_, _ = conn.Exec(ctx, `RESET search_path`)
+		conn.Release()
+	}()
 
 	// Set search_path so table names resolve within the app's schema
 	if _, err := conn.Exec(ctx, fmt.Sprintf(`SET search_path TO %s`, pgx.Identifier{schema}.Sanitize())); err != nil {

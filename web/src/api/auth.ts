@@ -12,6 +12,7 @@ export interface AuthUser {
   email: string
   display_name: string
   role: string
+  platform_role?: string
 }
 
 export interface AuthOrg {

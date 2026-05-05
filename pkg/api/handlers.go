@@ -1300,4 +1300,23 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 
 	// Audit log query (admin-only, platform mode)
 	router.HandleFunc("/api/audit", AuditQueryHandler).Methods("GET")
+
+	// Platform admin endpoints (superadmin only, platform mode)
+	// These are NOT in the auth bypass list — PlatformAuthMiddleware runs first,
+	// and each handler additionally verifies platform_role == "superadmin".
+	if pg != nil {
+		SetPlatformPGStore(pg)
+		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminListOrgsHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminCreateOrgHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminGetOrgHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminUpdateOrgHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminDeleteOrgHandler).Methods("DELETE")
+		router.HandleFunc("/api/platform/admin/users", PlatformAdminListUsersHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/users", PlatformAdminCreateUserHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminGetUserHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminUpdateUserHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminDeleteUserHandler).Methods("DELETE")
+		router.HandleFunc("/api/platform/admin/users/{id}/orgs", PlatformAdminAddUserToOrgHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/users/{id}/orgs/{slug}", PlatformAdminRemoveUserFromOrgHandler).Methods("DELETE")
+	}
 }

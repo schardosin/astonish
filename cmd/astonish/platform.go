@@ -652,6 +652,10 @@ func handlePlatformUserCommand(args []string) error {
 		return handlePlatformUserSetStatus(args[1:], "disabled")
 	case "enable":
 		return handlePlatformUserSetStatus(args[1:], "active")
+	case "promote":
+		return handlePlatformUserPromote(args[1:])
+	case "demote":
+		return handlePlatformUserDemote(args[1:])
 	default:
 		printPlatformUserUsage()
 		return fmt.Errorf("unknown platform user subcommand: %s", args[0])
@@ -737,12 +741,16 @@ func handlePlatformUserList(args []string) error {
 		return nil
 	}
 
-	fmt.Printf("%-36s  %-30s  %-25s  %-10s  %s\n", "ID", "EMAIL", "NAME", "STATUS", "CREATED")
-	fmt.Println(strings.Repeat("-", 130))
+	fmt.Printf("%-36s  %-30s  %-25s  %-12s  %-10s  %s\n", "ID", "EMAIL", "NAME", "PLATFORM", "STATUS", "CREATED")
+	fmt.Println(strings.Repeat("-", 155))
 	for _, u := range users {
-		fmt.Printf("%-36s  %-30s  %-25s  %-10s  %s\n",
+		prole := ""
+		if u.PlatformRole != "" {
+			prole = u.PlatformRole
+		}
+		fmt.Printf("%-36s  %-30s  %-25s  %-12s  %-10s  %s\n",
 			u.ID, truncateStr(u.Email, 30), truncateStr(u.DisplayName, 25),
-			u.Status, u.CreatedAt.Format("2006-01-02"))
+			prole, u.Status, u.CreatedAt.Format("2006-01-02"))
 	}
 
 	return nil
@@ -965,6 +973,113 @@ func handlePlatformUserSetStatus(args []string, status string) error {
 }
 
 // ---------------------------------------------------------------------------
+// platform user promote
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserPromote(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: astonish platform user promote <email>")
+		fmt.Println("")
+		fmt.Println("Promote a user to platform superadmin.")
+		fmt.Println("Superadmins have full access to manage all organizations and users.")
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	if user.PlatformRole == "superadmin" {
+		fmt.Printf("User '%s' is already a platform superadmin.\n", email)
+		return nil
+	}
+
+	if err := pgStore.Users().SetPlatformRole(ctx, user.ID, "superadmin"); err != nil {
+		return fmt.Errorf("failed to promote user: %w", err)
+	}
+
+	fmt.Printf("Promoted %s (%s) to platform superadmin.\n", user.Email, user.DisplayName)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// platform user demote
+// ---------------------------------------------------------------------------
+
+func handlePlatformUserDemote(args []string) error {
+	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
+		fmt.Println("usage: astonish platform user demote <email>")
+		fmt.Println("")
+		fmt.Println("Demote a platform superadmin to regular user.")
+		fmt.Println("Cannot demote the last superadmin.")
+		return nil
+	}
+
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if !appCfg.Storage.IsPostgres() {
+		return fmt.Errorf("platform user commands require storage.backend: postgres")
+	}
+
+	ctx := context.Background()
+
+	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	if err != nil {
+		return fmt.Errorf("failed to connect to platform DB: %w", err)
+	}
+	defer pgStore.Close()
+
+	user, err := pgStore.Users().GetByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("user '%s' not found: %w", email, err)
+	}
+
+	if user.PlatformRole != "superadmin" {
+		fmt.Printf("User '%s' is not a platform superadmin.\n", email)
+		return nil
+	}
+
+	// Safety: prevent demoting the last superadmin
+	count, countErr := pgStore.Users().CountByPlatformRole(ctx, "superadmin")
+	if countErr != nil {
+		return fmt.Errorf("failed to count superadmins: %w", countErr)
+	}
+	if count <= 1 {
+		return fmt.Errorf("cannot demote the last platform superadmin — promote another user first")
+	}
+
+	if err := pgStore.Users().SetPlatformRole(ctx, user.ID, ""); err != nil {
+		return fmt.Errorf("failed to demote user: %w", err)
+	}
+
+	fmt.Printf("Demoted %s (%s) from platform superadmin.\n", user.Email, user.DisplayName)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1065,6 +1180,8 @@ func printPlatformUserUsage() {
 	fmt.Println("  set-password      Set a user's password")
 	fmt.Println("  disable           Disable a user account")
 	fmt.Println("  enable            Enable a disabled user account")
+	fmt.Println("  promote           Promote a user to platform superadmin")
+	fmt.Println("  demote            Demote a platform superadmin to regular user")
 	fmt.Println("")
 	fmt.Println("examples:")
 	fmt.Println("  astonish platform user list")
@@ -1074,4 +1191,6 @@ func printPlatformUserUsage() {
 	fmt.Println("  astonish platform user disable alice@acme.com")
 	fmt.Println("  astonish platform user enable alice@acme.com")
 	fmt.Println("  astonish platform user delete alice@acme.com")
+	fmt.Println("  astonish platform user promote alice@acme.com")
+	fmt.Println("  astonish platform user demote alice@acme.com")
 }

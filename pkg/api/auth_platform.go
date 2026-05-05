@@ -81,10 +81,11 @@ type authResponse struct {
 }
 
 type authUserResponse struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	DisplayName  string `json:"display_name"`
+	Role         string `json:"role"`
+	PlatformRole string `json:"platform_role,omitempty"`
 }
 
 type authOrgResponse struct {
@@ -295,7 +296,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Issue new access token
 	accessToken, err := pa.jwt.IssueAccessToken(
 		user.ID, user.Email, user.DisplayName,
-		org.Slug, teamSlug, membership.Role,
+		org.Slug, teamSlug, membership.Role, user.PlatformRole,
 	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to issue token")
@@ -306,10 +307,11 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, authResponse{
 		User: authUserResponse{
-			ID:          user.ID,
-			Email:       user.Email,
-			DisplayName: user.DisplayName,
-			Role:        membership.Role,
+			ID:           user.ID,
+			Email:        user.Email,
+			DisplayName:  user.DisplayName,
+			Role:         membership.Role,
+			PlatformRole: user.PlatformRole,
 		},
 		Org: authOrgResponse{
 			ID:   org.ID,
@@ -345,10 +347,11 @@ func (pa *PlatformAuth) handleMe(w http.ResponseWriter, r *http.Request) {
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"user": authUserResponse{
-			ID:          claims.UserID,
-			Email:       claims.Email,
-			DisplayName: claims.DisplayName,
-			Role:        claims.Role,
+			ID:           claims.UserID,
+			Email:        claims.Email,
+			DisplayName:  claims.DisplayName,
+			Role:         claims.Role,
+			PlatformRole: claims.PlatformRole,
 		},
 		"org": authOrgResponse{
 			Name: "",
@@ -450,6 +453,13 @@ func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User)
 	role := "owner"
 	if err := pa.pgStore.Organizations().AddMember(ctx, user.ID, org.ID, role); err != nil {
 		return nil, "", fmt.Errorf("failed to add owner to org: %w", err)
+	}
+
+	// First user is automatically promoted to platform superadmin
+	if err := pa.pgStore.Users().SetPlatformRole(ctx, user.ID, "superadmin"); err != nil {
+		slog.Warn("failed to set platform superadmin role on first user", "error", err)
+	} else {
+		user.PlatformRole = "superadmin"
 	}
 
 	// Create default team within the org
@@ -561,7 +571,7 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 	// Issue access token
 	accessToken, err := pa.jwt.IssueAccessToken(
 		user.ID, user.Email, user.DisplayName,
-		org.Slug, teamSlug, role,
+		org.Slug, teamSlug, role, user.PlatformRole,
 	)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to issue access token")
@@ -597,10 +607,11 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 
 	respondJSON(w, http.StatusOK, authResponse{
 		User: authUserResponse{
-			ID:          user.ID,
-			Email:       user.Email,
-			DisplayName: user.DisplayName,
-			Role:        role,
+			ID:           user.ID,
+			Email:        user.Email,
+			DisplayName:  user.DisplayName,
+			Role:         role,
+			PlatformRole: user.PlatformRole,
 		},
 		Org: authOrgResponse{
 			ID:   org.ID,

@@ -53,7 +53,7 @@ func SearchTools(toolIndex *agent.ToolIndex, onResults func([]string)) func(ctx 
 
 		// Handle "list all" mode
 		if isListAllQuery(args.Query) {
-			result := listAllTools(toolIndex)
+			result := listAllTools(ctx, toolIndex)
 			// Notify injection system about all tools
 			if onResults != nil && len(result.Matches) > 0 {
 				names := make([]string, len(result.Matches))
@@ -82,6 +82,9 @@ func SearchTools(toolIndex *agent.ToolIndex, onResults func([]string)) func(ctx 
 		if err != nil {
 			return SearchToolsResult{}, fmt.Errorf("tool search failed: %w", err)
 		}
+
+		// Filter out MCP tools the user's team doesn't have access to
+		matches = agent.FilterAccessibleToolMatches(searchCtx, matches)
 
 		if len(matches) == 0 {
 			return SearchToolsResult{
@@ -125,7 +128,8 @@ func SearchTools(toolIndex *agent.ToolIndex, onResults func([]string)) func(ctx 
 }
 
 // listAllTools returns every tool in the index, grouped by group name.
-func listAllTools(toolIndex *agent.ToolIndex) SearchToolsResult {
+// MCP tools from servers the user doesn't have access to are excluded.
+func listAllTools(ctx context.Context, toolIndex *agent.ToolIndex) SearchToolsResult {
 	groups := toolIndex.ListAll()
 
 	var results []SearchToolsMatchResult
@@ -137,6 +141,11 @@ func listAllTools(toolIndex *agent.ToolIndex) SearchToolsResult {
 	sort.Strings(groupNames)
 
 	for _, gName := range groupNames {
+		// Filter out MCP groups the user's team doesn't have access to
+		if agent.IsMCPGroupInaccessible(ctx, gName) {
+			continue
+		}
+
 		for _, m := range groups[gName] {
 			access := "available (call directly)"
 			if m.IsMainTool {

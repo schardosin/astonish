@@ -83,14 +83,15 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Create a request-scoped clone with tenant-specific stores
-			reqSvc := &store.Services{
-				Mode:         store.ModePlatform,
-				Platform:     baseSvc.Platform,
-				TenantRouter: baseSvc.TenantRouter,
-				Audit:        orgStore.OrgAudit(),
-				Skills:       orgStore.OrgSkills(),
-			}
+		// Create a request-scoped clone with tenant-specific stores
+		reqSvc := &store.Services{
+			Mode:         store.ModePlatform,
+			Platform:     baseSvc.Platform,
+			TenantRouter: baseSvc.TenantRouter,
+			Audit:        orgStore.OrgAudit(),
+			Skills:       orgStore.OrgSkills(),
+			MCPServers:   orgStore.OrgMCPServers(),
+		}
 
 		// Populate team-scoped stores if team is known
 		if tc.TeamSlug != "" {
@@ -105,6 +106,7 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 			reqSvc.FleetPlans = teamStore.FleetPlans()
 			reqSvc.DrillReports = teamStore.DrillReports()
 			reqSvc.TeamSkills = teamStore.Skills()
+			reqSvc.TeamMCPServers = teamStore.MCPServers()
 
 			// Wire personal stores for private-first ownership.
 			// Sessions: regular chat goes to personal; fleet sub-sessions stay in team.

@@ -666,6 +666,18 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectSkillStores(svc.Skills, svc.TeamSkills)
 	}
 
+	// Inject tenant-scoped MCP server stores into the runner context so that
+	// the chat agent can resolve MCP server configs from org and team stores.
+	if svc := store.FromRequest(r); svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		runner.InjectMCPServerStores(svc.MCPServers, svc.TeamMCPServers)
+	}
+
+	// Inject tenant-scoped scheduler store into the runner context so that
+	// the schedule_job and list_scheduled_jobs tools operate on the correct team.
+	if svc := store.FromRequest(r); svc != nil && svc.Scheduler != nil {
+		runner.InjectSchedulerStore(svc.Scheduler)
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

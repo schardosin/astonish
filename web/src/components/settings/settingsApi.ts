@@ -134,18 +134,20 @@ export const replaceAllProviders = async (providers: Record<string, unknown>[]):
   return res.json()
 }
 
-export const fetchMCPConfig = async (): Promise<MCPConfigData> => {
-  const res = await fetch('/api/settings/mcp')
+export const fetchMCPConfig = async (teamSlug?: string): Promise<MCPConfigData> => {
+  const url = teamSlug ? '/api/settings/mcp?scope=team' : '/api/settings/mcp'
+  const res = await teamFetch(url, undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP config')
   return res.json()
 }
 
-export const saveMCPConfig = async (data: Record<string, unknown>): Promise<unknown> => {
-  const res = await fetch('/api/settings/mcp', {
+export const saveMCPConfig = async (data: Record<string, unknown>, teamSlug?: string): Promise<unknown> => {
+  const url = teamSlug ? '/api/settings/mcp?scope=team' : '/api/settings/mcp'
+  const res = await teamFetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  })
+  }, teamSlug)
   if (!res.ok) throw new Error('Failed to save MCP config')
   return res.json()
 }
@@ -195,27 +197,34 @@ export const removeTap = async (name: string, teamSlug?: string): Promise<unknow
 }
 
 // Fetch MCP server status
-export const fetchMCPStatus = async (): Promise<{ servers: MCPServerStatusEntry[] }> => {
-  const res = await fetch('/api/mcp/status')
+export const fetchMCPStatus = async (teamSlug?: string): Promise<{ servers: MCPServerStatusEntry[] }> => {
+  const url = teamSlug ? '/api/mcp/status?scope=team' : '/api/mcp/status'
+  const res = await teamFetch(url, undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP status')
   return res.json()
 }
 
 // Toggle MCP server enabled/disabled
-export const toggleMCPServer = async (name: string, enabled: boolean): Promise<unknown> => {
-  const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, {
+export const toggleMCPServer = async (name: string, enabled: boolean, teamSlug?: string): Promise<unknown> => {
+  const url = teamSlug
+    ? `/api/mcp/servers/${encodeURIComponent(name)}?scope=team`
+    : `/api/mcp/servers/${encodeURIComponent(name)}`
+  const res = await teamFetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled })
-  })
+  }, teamSlug)
   if (!res.ok) throw new Error('Failed to toggle server')
   return res.json()
 }
 
-export const refreshMCPServer = async (serverName: string): Promise<unknown> => {
-  const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/refresh`, {
+export const refreshMCPServer = async (serverName: string, teamSlug?: string): Promise<unknown> => {
+  const url = teamSlug
+    ? `/api/mcp/${encodeURIComponent(serverName)}/refresh?scope=team`
+    : `/api/mcp/${encodeURIComponent(serverName)}/refresh`
+  const res = await teamFetch(url, {
     method: 'POST'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to refresh server')

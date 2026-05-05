@@ -80,6 +80,21 @@ CREATE TABLE IF NOT EXISTS org_skills (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS org_mcp_servers (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL UNIQUE,
+    command     TEXT,
+    args        JSONB DEFAULT '[]'::jsonb,
+    env         JSONB DEFAULT '{}'::jsonb,
+    transport   TEXT NOT NULL DEFAULT 'stdio',
+    url         TEXT,
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    cached_tools JSONB,
+    created_by  UUID NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS org_apps (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     slug            TEXT NOT NULL UNIQUE,
@@ -122,3 +137,4 @@ CREATE INDEX IF NOT EXISTS idx_team_memberships_user ON team_memberships(user_id
 CREATE INDEX IF NOT EXISTS idx_org_audit_log_user ON org_audit_log(user_id);
 CREATE INDEX IF NOT EXISTS idx_org_audit_log_timestamp ON org_audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_org_audit_log_action ON org_audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_org_mcp_servers_name ON org_mcp_servers(name);

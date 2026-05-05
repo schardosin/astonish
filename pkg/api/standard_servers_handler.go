@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // StandardServerResponse represents a standard server in the API response.
@@ -86,6 +87,13 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Platform mode: save to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		installStandardServerPlatform(w, r, mcpStore, srv, req)
+		return
+	}
+
+	// Personal mode: save to filesystem
 	// Save API key to the shared credential store so that the in-memory
 	// cache is updated immediately (mergeStandardServers uses the same
 	// instance via getInstalledSecretGetter to resolve keys at load time).
@@ -205,6 +213,58 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		response["toolError"] = toolError
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+// installStandardServerPlatform handles standard server install in platform mode.
+func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, srv *config.StandardMCPServer, req InstallStandardServerRequest) {
+	userID := effectiveUserID(r)
+
+	// Build the server config from the standard server definition
+	newConfig := config.MCPServerConfig{
+		Command:   srv.Command,
+		Args:      srv.Args,
+		Transport: "stdio",
+		Env:       req.Env,
+	}
+
+	s := &store.MCPServer{
+		Name:      srv.ID,
+		Command:   newConfig.Command,
+		Args:      newConfig.Args,
+		Env:       newConfig.Env,
+		Transport: newConfig.Transport,
+		CreatedBy: userID,
+	}
+
+	if err := mcpStore.Save(s); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save standard server: "+err.Error())
+		return
+	}
+
+	// Discover tools in background
+	servers := map[string]config.MCPServerConfig{srv.ID: newConfig}
+	go func() {
+		bgCtx := context.Background()
+		discoveredTools := discoverMCPToolsForPlatform(bgCtx, srv.ID, servers)
+		if discoveredTools != nil {
+			if err := mcpStore.UpdateCachedTools(srv.ID, discoveredTools); err != nil {
+				slog.Warn("failed to update cached_tools for standard server", "server", srv.ID, "error", err)
+			}
+		}
+	}()
+
+	GetChatManager().Reset()
+
+	slog.Info("installed standard server (platform)", "server", srv.ID, "displayName", srv.DisplayName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":         "installed",
+		"serverName":     srv.ID,
+		"toolsLoaded":    0, // async discovery
+		"webSearchTool":  srv.WebSearchTool,
+		"webExtractTool": srv.WebExtractTool,
+	})
 }
 
 // UninstallStandardServerHandler handles DELETE /api/standard-servers/{id}

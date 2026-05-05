@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -48,14 +49,22 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	// secrets are typically already injected into AppConfig. But for safety
 	// (and if called from other contexts), initialize the credential store
 	// and inject secrets if they're missing.
-	configDir, configDirErr := config.GetConfigDir()
-	if configDirErr == nil {
-		if cs, csErr := credentials.Open(configDir); csErr == nil {
-			if tools.GetCredentialStore() == nil {
-				tools.SetCredentialStore(cs)
+	//
+	// In multi-tenant platform mode, the credential store is injected into
+	// the context by the multi-tenant scheduler. Tools will read it from
+	// context via store.CredentialStoreFromContext(). We skip the global
+	// file-based credential store initialization to avoid overwriting the
+	// tenant-scoped store.
+	if store.CredentialStoreFromContext(ctx) == nil {
+		configDir, configDirErr := config.GetConfigDir()
+		if configDirErr == nil {
+			if cs, csErr := credentials.Open(configDir); csErr == nil {
+				if tools.GetCredentialStore() == nil {
+					tools.SetCredentialStore(cs)
+				}
+				config.InjectProviderSecretsToConfig(cfg.AppConfig, cs.GetSecret)
+				config.SetupAllProviderEnvFromStore(cfg.AppConfig, cs.GetSecret)
 			}
-			config.InjectProviderSecretsToConfig(cfg.AppConfig, cs.GetSecret)
-			config.SetupAllProviderEnvFromStore(cfg.AppConfig, cs.GetSecret)
 		}
 	}
 

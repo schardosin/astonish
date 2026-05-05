@@ -99,6 +99,28 @@ func effectiveTeamSlug(r *http.Request) string {
 	return ""
 }
 
+// effectiveMCPStore returns the MCP server store for the current request based
+// on the "scope" query parameter.
+//
+// Scope values:
+//   - "team": returns the team-scoped MCP server store
+//   - "org" or "" (empty): returns the org-level MCP server store
+//
+// Returns nil if not in platform mode or if the requested store is not available.
+func effectiveMCPStore(r *http.Request) store.MCPServerStore {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return nil
+	}
+	scope := r.URL.Query().Get("scope")
+	switch scope {
+	case "team":
+		return svc.TeamMCPServers
+	default:
+		return svc.MCPServers
+	}
+}
+
 // DefaultUserID returns the default user ID used in personal mode and for
 // system-initiated operations (scheduled fleet sessions, recovery, etc.).
 // External packages that need the default user ID should call this instead of

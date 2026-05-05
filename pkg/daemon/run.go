@@ -607,6 +607,7 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize scheduler if enabled ---
 	var sched *scheduler.Scheduler
+	var mtSched *MultiTenantScheduler
 	var schedExec *scheduler.Executor
 
 	// fleetSessionStore holds the PG-backed session store used for fleet
@@ -616,52 +617,12 @@ func Run(cfg RunConfig) error {
 
 	if appCfg.Scheduler.IsSchedulerEnabled() {
 		var jobStore scheduler.JobStore
-		var flowResolver scheduler.FlowResolverFunc
 
 		if svc.Mode == store.ModePlatform && pgStore != nil {
-			// Platform mode: use PostgreSQL-backed team scheduler store.
-			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-			orgStore, orgErr := pgStore.ForOrg(orgSlug)
-			if orgErr != nil {
-				logger.Printf("Warning: Cannot resolve org %q for scheduler, falling back to file store: %v", orgSlug, orgErr)
-			} else {
-				teamStore := orgStore.ForTeam("general")
-				jobStore = newPGSchedulerAdapter(teamStore.ScheduledJobs())
-				logger.Printf("Scheduler store: PostgreSQL (org=%s, team=general)", orgSlug)
+			// Platform mode: use the multi-tenant scheduler that iterates
+			// all orgs → all teams on every tick. Individual job CRUD goes
+			// through the request-scoped store.SchedulerStore in API handlers.
 
-				// Capture the team session store for fleet sessions.
-				// Headless fleet sessions (started by the scheduler) are
-				// persisted in the team schema so they appear in Fleet View
-				// regardless of which user triggered the plan.
-				fleetSessionStore = teamStore.Sessions()
-
-				// Build a flow resolver that reads from the team FlowStore.
-				// Scheduler jobs reference flows by name; this resolves them
-				// to raw YAML from PostgreSQL instead of the filesystem.
-				teamFlows := teamStore.Flows()
-				flowResolver = func(name string) (string, error) {
-					return teamFlows.GetFlow(name)
-				}
-			}
-		}
-
-		if jobStore == nil {
-			// Personal mode (or platform fallback): use file-based JSON store.
-			storePath, storeErr := scheduler.DefaultStorePath()
-			if storeErr != nil {
-				logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
-			} else {
-				fileStore, storeErr := scheduler.NewStore(storePath)
-				if storeErr != nil {
-					logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
-				} else {
-					filestore.SetSchedulerStore(svc, fileStore)
-					jobStore = fileStore
-				}
-			}
-		}
-
-		if jobStore != nil {
 			// Create executor with injected headless runner
 			schedExec = &scheduler.Executor{
 				AppConfig:    appCfg,
@@ -669,7 +630,7 @@ func Run(cfg RunConfig) error {
 				ModelName:    appCfg.General.DefaultModel,
 				DebugMode:    cfg.Debug,
 				RunHeadless:  makeHeadlessRunner(),
-				FlowResolver: flowResolver, // nil in personal mode → falls back to filesystem
+				// FlowResolver is nil — multi-tenant path uses context-injected FlowStore
 			}
 			if factoryResult != nil {
 				schedExec.ChatAgent = factoryResult.ChatAgent
@@ -682,75 +643,150 @@ func Run(cfg RunConfig) error {
 				deliver = scheduler.NewDeliverFunc(channelMgr)
 			}
 
-			sched = scheduler.New(jobStore, schedExec.Execute, deliver, log.Default())
-			sched.Start(ctx)
+			// Create and start the multi-tenant scheduler
+			mtSched = NewMultiTenantScheduler(pgStore, schedExec, deliver, log.Default())
+			mtSched.Start(ctx)
 
-			// Make scheduler available to API handlers and LLM tools
-			api.SetScheduler(sched)
-			tools.SetSchedulerAccess(newSchedulerBridge(sched))
+			// Register executor for API RunNow handler
+			api.SetExecutor(schedExec)
+
+			// Resolve default org/team for fleet session store (backward compat)
+			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+			if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+				teamStore := orgStore.ForTeam("general")
+				fleetSessionStore = teamStore.Sessions()
+			}
+
+			logger.Printf("Scheduler: multi-tenant (all orgs/teams)")
+		}
+
+		if svc.Mode != store.ModePlatform || pgStore == nil {
+			// Personal mode: use file-based JSON store with single-instance scheduler.
+			storePath, storeErr := scheduler.DefaultStorePath()
+			if storeErr != nil {
+				logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
+			} else {
+				fileStore, storeErr := scheduler.NewStore(storePath)
+				if storeErr != nil {
+					logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
+				} else {
+					filestore.SetSchedulerStore(svc, fileStore)
+					jobStore = fileStore
+				}
+			}
+
+			if jobStore != nil {
+				// Create executor with injected headless runner
+				schedExec = &scheduler.Executor{
+					AppConfig:    appCfg,
+					ProviderName: appCfg.General.DefaultProvider,
+					ModelName:    appCfg.General.DefaultModel,
+					DebugMode:    cfg.Debug,
+					RunHeadless:  makeHeadlessRunner(),
+				}
+				if factoryResult != nil {
+					schedExec.ChatAgent = factoryResult.ChatAgent
+					schedExec.SessionService = factoryResult.SessionService
+				}
+
+				// Create delivery function (only if channels are available)
+				var deliver scheduler.DeliverFunc
+				if channelMgr != nil {
+					deliver = scheduler.NewDeliverFunc(channelMgr)
+				}
+
+				sched = scheduler.New(jobStore, schedExec.Execute, deliver, log.Default())
+				sched.Start(ctx)
+
+				// Make scheduler available to API handlers and LLM tools (personal mode)
+				api.SetScheduler(sched)
+				api.SetExecutor(schedExec)
+				tools.SetSchedulerAccess(newSchedulerBridge(sched))
+			}
 		}
 	}
 
 	// --- Initialize fleet plan activator ---
 	// This bridges fleet plans to the scheduler for automated polling.
 	// Requires both the scheduler and the plan registry to be initialized.
-	if sched != nil {
+	// In platform mode, fleet plans use the default org/team for now.
+	schedulerAvailable := sched != nil || mtSched != nil
+	if schedulerAvailable {
 		planReg := api.GetFleetPlanRegistry()
 		if planReg != nil {
-			fleetSchedBridge := newFleetSchedulerBridge(sched)
-			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
-				return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore)
+			// In platform mode without a personal-mode scheduler, create a
+			// temporary single-team scheduler bridge for fleet plan management.
+			// Fleet plans are org-level resources that get stored in the default team.
+			var fleetSchedBridge *fleetSchedulerBridge
+			if sched != nil {
+				fleetSchedBridge = newFleetSchedulerBridge(sched)
+			} else {
+				// Platform mode: create a scheduler backed by the default team's store
+				// for fleet plan job management.
+				orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+				if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+					teamStore := orgStore.ForTeam("general")
+					fleetJobStore := newPGSchedulerAdapter(teamStore.ScheduledJobs())
+					fleetSched := scheduler.New(fleetJobStore, schedExec.Execute, nil, log.Default())
+					fleetSchedBridge = newFleetSchedulerBridge(fleetSched)
+				}
 			}
-			// Pass api.GetFleetPlanRegistry as a function so the activator
-			// always sees the current registry instance, even if the Studio
-			// lazy chat init replaces it with a new one.
-			activator := fleet.NewPlanActivator(api.GetFleetPlanRegistry, fleetSchedBridge, fleetStarter)
 
-			// Wire the poll function into the scheduler executor
-			if schedExec != nil {
-				schedExec.FleetPoll = activator.Poll
-			}
+			if fleetSchedBridge != nil {
+				fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
+					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore)
+				}
+				// Pass api.GetFleetPlanRegistry as a function so the activator
+				// always sees the current registry instance, even if the Studio
+				// lazy chat init replaces it with a new one.
+				activator := fleet.NewPlanActivator(api.GetFleetPlanRegistry, fleetSchedBridge, fleetStarter)
 
-			// Wire the recover function for session recovery after restart
-			activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
-				return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore)
-			})
+				// Wire the poll function into the scheduler executor
+				if schedExec != nil {
+					schedExec.FleetPoll = activator.Poll
+				}
 
-			// Wire credential-based GitHub token resolver for fleet plans.
-			// When a plan has credentials: { github: "some-store-entry" }, this
-			// resolver extracts the token from the encrypted credential store so
-			// it can be injected as GH_TOKEN into gh CLI commands.
-			if credStore != nil {
-				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
-					resolved, err := fleet.ResolveCredentials(plan, credStore)
-					if err != nil {
-						slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
-					}
-					return fleet.GitHubToken(resolved)
+				// Wire the recover function for session recovery after restart
+				activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
+					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore)
 				})
+
+				// Wire credential-based GitHub token resolver for fleet plans.
+				// When a plan has credentials: { github: "some-store-entry" }, this
+				// resolver extracts the token from the encrypted credential store so
+				// it can be injected as GH_TOKEN into gh CLI commands.
+				if credStore != nil {
+					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+						resolved, err := fleet.ResolveCredentials(plan, credStore)
+						if err != nil {
+							slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
+						}
+						return fleet.GitHubToken(resolved)
+					})
+				}
+
+				// Make activator available to API handlers
+				api.SetPlanActivator(activator)
+
+				// Wire auto-activation into save_fleet_plan tool so non-chat
+				// plans start polling immediately after the wizard saves them.
+				tools.SetPlanActivatorFunc(activator.Activate)
+
+				// Wire the session registry so CheckForWork can detect active sessions
+				activator.SetSessionRegistry(api.GetFleetSessionRegistry())
+
+				// Wire OpenCode binary finder for project context generation.
+				// Fleet templates can define a project_context section that runs
+				// OpenCode /init to generate AGENTS.md before agents start.
+				fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
+
+				// Restore previously activated plans (re-create monitors)
+				if err := activator.RestoreActivated(); err != nil {
+					logger.Printf("Warning: Failed to restore activated plans: %v", err)
+				}
+
+				logger.Printf("Fleet plan activator initialized")
 			}
-
-			// Make activator available to API handlers
-			api.SetPlanActivator(activator)
-
-			// Wire auto-activation into save_fleet_plan tool so non-chat
-			// plans start polling immediately after the wizard saves them.
-			tools.SetPlanActivatorFunc(activator.Activate)
-
-			// Wire the session registry so CheckForWork can detect active sessions
-			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
-
-			// Wire OpenCode binary finder for project context generation.
-			// Fleet templates can define a project_context section that runs
-			// OpenCode /init to generate AGENTS.md before agents start.
-			fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
-
-			// Restore previously activated plans (re-create monitors)
-			if err := activator.RestoreActivated(); err != nil {
-				logger.Printf("Warning: Failed to restore activated plans: %v", err)
-			}
-
-			logger.Printf("Fleet plan activator initialized")
 		}
 	}
 
@@ -886,6 +922,10 @@ func Run(cfg RunConfig) error {
 	if sched != nil {
 		logger.Printf("Stopping scheduler...")
 		sched.Stop()
+	}
+	if mtSched != nil {
+		logger.Printf("Stopping multi-tenant scheduler...")
+		mtSched.Stop()
 	}
 
 	// Stop channels (drain in-flight messages)

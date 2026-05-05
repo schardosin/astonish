@@ -888,7 +888,40 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load config
+	// Platform mode: toggle in DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		server, err := mcpStore.Get(serverName)
+		if err != nil || server == nil {
+			respondError(w, http.StatusNotFound, "Server not found")
+			return
+		}
+		if req.Enabled != nil {
+			server.Enabled = req.Enabled
+			if err := mcpStore.Save(server); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save MCP server")
+				return
+			}
+			GetChatManager().Reset()
+		}
+		transport := server.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		response := UpdateMCPServerResponse{
+			Success: true,
+			Server: MCPServerInfo{
+				Name:      server.Name,
+				Transport: transport,
+				Command:   server.Command,
+				URL:       server.URL,
+				Enabled:   server.IsEnabled(),
+			},
+		}
+		respondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	// Personal mode: file-based
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
@@ -1041,6 +1074,15 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/skills/{name}/content", GetSkillContentHandler).Methods("GET")
 	router.HandleFunc("/api/skills/{name}/content", UpdateSkillContentHandler).Methods("PUT")
 	router.HandleFunc("/api/skills/{name}", DeleteSkillHandler).Methods("DELETE")
+
+	// MCP Platform endpoints (multi-tenant MCP server management)
+	router.HandleFunc("/api/mcp-platform/servers", ListMCPPlatformServersHandler).Methods("GET")
+	router.HandleFunc("/api/mcp-platform/servers", CreateMCPPlatformServerHandler).Methods("POST")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", GetMCPPlatformServerHandler).Methods("GET")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", UpdateMCPPlatformServerHandler).Methods("PUT")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", DeleteMCPPlatformServerHandler).Methods("DELETE")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", ToggleMCPPlatformServerHandler).Methods("PATCH")
+	router.HandleFunc("/api/mcp-platform/servers/{name}/refresh", RefreshMCPPlatformServerHandler).Methods("POST")
 
 	// Credentials endpoints (master-key routes before {name} to avoid mux conflict)
 	router.HandleFunc("/api/credentials", ListCredentialsHandler).Methods("GET")

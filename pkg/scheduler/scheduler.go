@@ -300,3 +300,26 @@ func ValidateCron(expr string) error {
 	}
 	return nil
 }
+
+// ComputeNextRun calculates the next run time for a cron expression and timezone.
+// This is a pure function usable without a Scheduler instance — used by API handlers
+// and the multi-tenant scheduler to compute NextRun after create/update operations.
+// Returns nil if the cron expression or timezone is invalid.
+func ComputeNextRun(cronExpr, timezone string) *time.Time {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(cronExpr)
+	if err != nil {
+		return nil
+	}
+
+	loc := time.Local
+	if timezone != "" {
+		if parsed, err := time.LoadLocation(timezone); err == nil {
+			loc = parsed
+		}
+	}
+
+	next := schedule.Next(time.Now().In(loc))
+	nextUTC := next.UTC()
+	return &nextUTC
+}

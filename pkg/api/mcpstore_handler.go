@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // MCPStoreListResponse is the response for GET /api/mcp-store
@@ -197,13 +199,6 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load current MCP config
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
 	// Determine server name
 	serverName := strings.ToLower(strings.ReplaceAll(server.Name, " ", "-"))
 	if installReq.ServerName != "" {
@@ -236,6 +231,20 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if server.Config.URL != "" {
 		newConfig.URL = server.Config.URL
+	}
+
+	// Platform mode: save to DB store, discover tools async
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		installMCPStoreServerPlatform(w, r, mcpStore, serverName, newConfig)
+		return
+	}
+
+	// Personal mode: save to filesystem
+	// Load current MCP config
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	// Initialize map if nil
@@ -352,6 +361,51 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		response["toolError"] = toolError
 	}
 	json.NewEncoder(w).Encode(response)
+}
+
+// installMCPStoreServerPlatform handles MCP Store server installation in platform mode.
+// Saves the server config to the DB store and discovers tools in the background.
+func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, serverName string, newConfig config.MCPServerConfig) {
+	userID := effectiveUserID(r)
+
+	s := &store.MCPServer{
+		Name:      serverName,
+		Command:   newConfig.Command,
+		Args:      newConfig.Args,
+		Env:       newConfig.Env,
+		Transport: newConfig.Transport,
+		URL:       newConfig.URL,
+		Enabled:   newConfig.Enabled,
+		CreatedBy: userID,
+	}
+
+	if err := mcpStore.Save(s); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+		return
+	}
+
+	// Discover tools in background
+	servers := map[string]config.MCPServerConfig{serverName: newConfig}
+	go func() {
+		bgCtx := context.Background()
+		discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+		if discoveredTools != nil {
+			if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+				slog.Warn("failed to update cached_tools after store install", "server", serverName, "error", err)
+			}
+		}
+	}()
+
+	// Reset the Studio chat agent so the next request picks up the new MCP server.
+	GetChatManager().Reset()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "ok",
+		"serverName":  serverName,
+		"message":     "Server installed successfully",
+		"toolsLoaded": 0, // tools discovered async
+	})
 }
 
 // GetMCPStoreTagsHandler handles GET /api/mcp-store/tags

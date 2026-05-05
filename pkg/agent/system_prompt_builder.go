@@ -59,6 +59,7 @@ type SystemPromptBuilder struct {
 	RelevantKnowledge     string         // Per-turn auto-retrieved knowledge from vector store (empty = none)
 	RelevantTools         string         // Per-turn auto-retrieved tool matches from tool index (empty = none)
 	Catalog               []*ToolGroup   // Tool groups available for delegation via delegate_tasks (nil = no delegation)
+	MCPAccessFilter       func(serverName string) bool // Per-turn filter for MCP groups in catalog (nil = allow all)
 }
 
 // Build constructs the full system prompt.
@@ -224,6 +225,13 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("**Available tool groups (for delegation):**\n")
 		ctx := &minimalReadonlyContext{Context: context.Background()}
 		for _, g := range b.Catalog {
+			// MCP tool access control: skip groups for inaccessible MCP servers
+			if serverName, isMCP := mcpServerNameFromGroup(g.Name); isMCP {
+				if b.MCPAccessFilter != nil && !b.MCPAccessFilter(serverName) {
+					continue
+				}
+			}
+
 			toolCount := len(g.Tools)
 			for _, ts := range g.Toolsets {
 				if mcpTools, err := ts.Tools(ctx); err == nil {

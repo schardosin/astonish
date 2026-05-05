@@ -9,6 +9,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -102,7 +103,20 @@ func (e *Executor) executeRoutine(ctx context.Context, job *Job) (string, error)
 		DebugMode:    e.DebugMode,
 	}
 
-	// Platform mode: resolve flow YAML from the store (team FlowStore).
+	// Multi-tenant platform path: FlowStore injected into context by the
+	// multi-tenant scheduler tick loop (per-team). This takes priority over
+	// the single-team FlowResolver closure.
+	if fs := store.FlowStoreFromContext(ctx); fs != nil {
+		yamlContent, err := fs.GetFlow(job.Payload.Flow)
+		if err != nil {
+			return "", fmt.Errorf("flow %q not found in team store: %w", job.Payload.Flow, err)
+		}
+		cfg.FlowYAML = yamlContent
+		return e.RunHeadless(ctx, cfg)
+	}
+
+	// Platform mode (legacy single-team path): resolve flow YAML from the
+	// closure captured at executor construction time.
 	if e.FlowResolver != nil {
 		yamlContent, err := e.FlowResolver(job.Payload.Flow)
 		if err != nil {

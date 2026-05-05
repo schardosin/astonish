@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -549,16 +550,19 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 3. Load MCP tools from cache (lazy) ---
-	mcpCfg, err := config.LoadMCPConfig()
+	mcpCfg, err := loadMCPConfig(ctx, cfg.PlatformMode)
 	if err != nil {
 		slog.Warn("failed to load MCP config", "error", err)
 	}
 	var lazyToolsets []*agent.LazyMCPToolset
 
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 {
-		if _, loadErr := cache.LoadCache(); loadErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load tools cache", "error", loadErr)
+		if !cfg.PlatformMode {
+			// Personal mode: use file-based cache
+			if _, loadErr := cache.LoadCache(); loadErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load tools cache", "error", loadErr)
+				}
 			}
 		}
 
@@ -566,7 +570,16 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if !serverCfg.IsEnabled() {
 				continue
 			}
-			cachedTools := cache.GetToolsForServer(name)
+
+			var cachedTools []cache.ToolEntry
+			if cfg.PlatformMode {
+				// Platform mode: tools are stored in the MCPConfig extensions
+				cachedTools = getPlatformCachedTools(ctx, name)
+			} else {
+				// Personal mode: tools from file-based cache
+				cachedTools = cache.GetToolsForServer(name)
+			}
+
 			if len(cachedTools) == 0 {
 				if cfg.DebugMode {
 					slog.Debug("MCP server has no cached tools", "component", "lazy-mcp", "server", name)
@@ -1992,4 +2005,142 @@ func isDaemonRunning() bool {
 		return false
 	}
 	return isProcessRunning(pid)
+}
+
+// loadMCPConfig loads MCP server configurations based on deployment mode.
+// In personal mode, reads from the local mcp_config.json file.
+// In platform mode, reads from the context's org+team MCP server stores
+// and builds a config.MCPConfig with the merged (team overrides org) view.
+func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, error) {
+	if !platformMode {
+		return config.LoadMCPConfig()
+	}
+
+	// Platform mode: build MCPConfig from context stores.
+	// First try the dedicated MCPServerStores context key (set by InjectMCPServerStores).
+	mcpStores := store.MCPServerStoresFromContext(ctx)
+
+	// If not set, extract from the Services in context (set by TenantMiddleware).
+	if mcpStores == nil {
+		svc := store.FromContext(ctx)
+		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			mcpStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
+	}
+
+	if mcpStores == nil {
+		// No stores available — return empty config
+		return &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}, nil
+	}
+
+	merged := make(map[string]config.MCPServerConfig)
+
+	// 1. Load org-level servers as base
+	if mcpStores.Org != nil {
+		orgServers, err := mcpStores.Org.List()
+		if err != nil {
+			slog.Warn("failed to load org MCP servers", "error", err)
+		} else {
+			for _, s := range orgServers {
+				merged[s.Name] = storeMCPServerToConfig(&s)
+			}
+		}
+	}
+
+	// 2. Team servers override org by name
+	if mcpStores.Team != nil {
+		teamServers, err := mcpStores.Team.List()
+		if err != nil {
+			slog.Warn("failed to load team MCP servers", "error", err)
+		} else {
+			for _, s := range teamServers {
+				merged[s.Name] = storeMCPServerToConfig(&s)
+			}
+		}
+	}
+
+	return &config.MCPConfig{MCPServers: merged}, nil
+}
+
+// storeMCPServerToConfig converts a store.MCPServer to config.MCPServerConfig.
+func storeMCPServerToConfig(s *store.MCPServer) config.MCPServerConfig {
+	return config.MCPServerConfig{
+		Command:   s.Command,
+		Args:      s.Args,
+		Env:       s.Env,
+		Transport: s.Transport,
+		URL:       s.URL,
+		Enabled:   s.Enabled,
+	}
+}
+
+// getPlatformCachedTools extracts cached tool declarations from the platform
+// MCP server stores in the context. It checks both team and org stores
+// (team takes priority by name, matching the override semantics).
+func getPlatformCachedTools(ctx context.Context, serverName string) []cache.ToolEntry {
+	mcpStores := store.MCPServerStoresFromContext(ctx)
+
+	// If not set via dedicated key, try Services from context
+	if mcpStores == nil {
+		svc := store.FromContext(ctx)
+		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			mcpStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
+	}
+
+	if mcpStores == nil {
+		return nil
+	}
+
+	// Try team first (since it overrides org)
+	if mcpStores.Team != nil {
+		srv, err := mcpStores.Team.Get(serverName)
+		if err == nil && len(srv.CachedTools) > 0 {
+			return parseCachedToolsJSON(srv.CachedTools)
+		}
+	}
+
+	// Fall back to org
+	if mcpStores.Org != nil {
+		srv, err := mcpStores.Org.Get(serverName)
+		if err == nil && len(srv.CachedTools) > 0 {
+			return parseCachedToolsJSON(srv.CachedTools)
+		}
+	}
+
+	return nil
+}
+
+// parseCachedToolsJSON parses the cached_tools JSONB column into cache.ToolEntry slice.
+func parseCachedToolsJSON(data []byte) []cache.ToolEntry {
+	// The cached_tools column stores an array of tool declarations
+	// compatible with the MCPDiscoveredTool struct from the API:
+	// [{"name": "...", "description": "...", "inputSchema": {...}}, ...]
+	type discoveredTool struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	}
+
+	var tools []discoveredTool
+	if err := json.Unmarshal(data, &tools); err != nil {
+		slog.Warn("failed to parse cached MCP tools", "error", err)
+		return nil
+	}
+
+	entries := make([]cache.ToolEntry, 0, len(tools))
+	for _, t := range tools {
+		entries = append(entries, cache.ToolEntry{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return entries
 }

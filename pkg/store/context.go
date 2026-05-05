@@ -102,6 +102,8 @@ func FlowStoreFromContext(ctx context.Context) FlowStore {
 }
 
 const skillStoresKey contextKey = "astonish_skill_stores"
+const schedulerStoreKey contextKey = "astonish_scheduler_store"
+const mcpServerStoresKey contextKey = "astonish_mcp_server_stores"
 
 // SkillStores holds references to both org and team skill stores
 // for use in tool context injection.
@@ -125,4 +127,45 @@ func SkillStoresFromContext(ctx context.Context) *SkillStores {
 	}
 	ss, _ := ctx.Value(skillStoresKey).(*SkillStores)
 	return ss
+}
+
+// WithSchedulerStore returns a new context containing a tenant-scoped SchedulerStore.
+// Used to propagate the team's scheduler store into the ADK runner context so that
+// the schedule_job and list_scheduled_jobs tools can operate on the correct team's jobs.
+func WithSchedulerStore(ctx context.Context, ss SchedulerStore) context.Context {
+	return context.WithValue(ctx, schedulerStoreKey, ss)
+}
+
+// SchedulerStoreFromContext retrieves the SchedulerStore from a context.
+// Returns nil if no SchedulerStore is present (personal mode or tests).
+func SchedulerStoreFromContext(ctx context.Context) SchedulerStore {
+	if ctx == nil {
+		return nil
+	}
+	ss, _ := ctx.Value(schedulerStoreKey).(SchedulerStore)
+	return ss
+}
+
+// MCPServerStores holds references to both org and team MCP server stores
+// for use in tool context injection.
+type MCPServerStores struct {
+	Org  MCPServerStore // org-level MCP server store (nil if not in platform mode)
+	Team MCPServerStore // team-level MCP server store (nil if not in platform mode)
+}
+
+// WithMCPServerStores returns a new context containing the MCPServerStores.
+// Used to propagate tenant-scoped MCP server stores into the ADK runner context
+// so that the agent can resolve MCP servers dynamically per-request.
+func WithMCPServerStores(ctx context.Context, ms *MCPServerStores) context.Context {
+	return context.WithValue(ctx, mcpServerStoresKey, ms)
+}
+
+// MCPServerStoresFromContext retrieves the MCPServerStores from a context.
+// Returns nil if no MCPServerStores is present (personal mode or tests).
+func MCPServerStoresFromContext(ctx context.Context) *MCPServerStores {
+	if ctx == nil {
+		return nil
+	}
+	ms, _ := ctx.Value(mcpServerStoresKey).(*MCPServerStores)
+	return ms
 }

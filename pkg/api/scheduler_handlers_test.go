@@ -3,30 +3,29 @@ package api
 import (
 	"bytes"
 	"encoding/json"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/scheduler"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/filestore"
 )
 
-// newTestScheduler creates a scheduler backed by a temp store for testing.
-func newTestScheduler(t *testing.T) *scheduler.Scheduler {
+// newTestSchedulerStore creates a store.SchedulerStore backed by a temp file for testing.
+func newTestSchedulerStore(t *testing.T) store.SchedulerStore {
 	t.Helper()
 	dir := t.TempDir()
-	store, err := scheduler.NewStore(filepath.Join(dir, "jobs.json"))
+	ss, err := scheduler.NewStore(filepath.Join(dir, "jobs.json"))
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	return scheduler.New(store, nil, nil, log.Default())
+	return filestore.NewSchedulerStore(ss)
 }
 
 func TestHandleCreateJob_FlatJSON(t *testing.T) {
-	sched := newTestScheduler(t)
-	SetScheduler(sched)
-	defer SetScheduler(nil)
+	ss := newTestSchedulerStore(t)
 
 	// This is the flat JSON format sent by SchedulerHTTPAccess.AddJob(),
 	// which serializes a tools.SchedulerJob directly.
@@ -43,14 +42,14 @@ func TestHandleCreateJob_FlatJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rr := httptest.NewRecorder()
 
-	handleCreateJob(rr, req, sched)
+	handleCreateJob(rr, req, ss)
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", rr.Code, rr.Body.String())
 	}
 
 	// Decode the response to get the created job
-	var created scheduler.Job
+	var created apiJob
 	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -65,7 +64,7 @@ func TestHandleCreateJob_FlatJSON(t *testing.T) {
 	if created.Name != "Test Report" {
 		t.Errorf("Name = %q, want %q", created.Name, "Test Report")
 	}
-	if string(created.Mode) != "adaptive" {
+	if created.Mode != "adaptive" {
 		t.Errorf("Mode = %q, want %q", created.Mode, "adaptive")
 	}
 	if created.Payload.Instructions != "Do the thing" {
@@ -76,7 +75,7 @@ func TestHandleCreateJob_FlatJSON(t *testing.T) {
 	}
 
 	// Verify the job was persisted in the store
-	stored := sched.Store().Get(created.ID)
+	stored := ss.Get(created.ID)
 	if stored == nil {
 		t.Fatal("job not found in store after creation")
 	}
@@ -89,9 +88,7 @@ func TestHandleCreateJob_FlatJSON(t *testing.T) {
 }
 
 func TestHandleCreateJob_RoutineMode(t *testing.T) {
-	sched := newTestScheduler(t)
-	SetScheduler(sched)
-	defer SetScheduler(nil)
+	ss := newTestSchedulerStore(t)
 
 	flatJSON := `{
 		"name": "Daily Flow",
@@ -107,13 +104,13 @@ func TestHandleCreateJob_RoutineMode(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/api/scheduler/jobs", bytes.NewBufferString(flatJSON))
 	rr := httptest.NewRecorder()
-	handleCreateJob(rr, req, sched)
+	handleCreateJob(rr, req, ss)
 
 	if rr.Code != http.StatusCreated {
 		t.Fatalf("expected status 201, got %d: %s", rr.Code, rr.Body.String())
 	}
 
-	var created scheduler.Job
+	var created apiJob
 	if err := json.NewDecoder(rr.Body).Decode(&created); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -146,11 +143,11 @@ func TestHandleCreateJob_NoScheduler(t *testing.T) {
 }
 
 func TestHandleCreateJob_InvalidJSON(t *testing.T) {
-	sched := newTestScheduler(t)
+	ss := newTestSchedulerStore(t)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/scheduler/jobs", bytes.NewBufferString("not json"))
 	rr := httptest.NewRecorder()
-	handleCreateJob(rr, req, sched)
+	handleCreateJob(rr, req, ss)
 
 	if rr.Code != http.StatusBadRequest {
 		t.Errorf("expected status 400, got %d", rr.Code)

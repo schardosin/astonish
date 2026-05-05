@@ -471,7 +471,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				toolFilter = discoveredGroups
 			}
 		}
-		childTools, childToolsets, resolveWarnings = m.resolveTools(toolFilter)
+		childTools, childToolsets, resolveWarnings = m.resolveTools(taskCtx, toolFilter)
 	}
 
 	// --- Dynamic tool injection for sub-agents ---
@@ -489,6 +489,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			context.Background(), task.Description, 8, 0.005,
 		)
 		if err == nil && len(matches) > 0 {
+			// Filter out MCP tools the user's team doesn't have access to
+			matches = FilterAccessibleToolMatches(taskCtx, matches)
 			childDynamicMatches = matches
 		}
 	}
@@ -531,7 +533,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if task.CustomPrompt && task.Instructions != "" {
 		childPrompt = task.Instructions
 	} else {
-		childPrompt = m.buildChildPrompt(task)
+		childPrompt = m.buildChildPrompt(taskCtx, task)
 	}
 
 	// Append dynamically discovered tools to the prompt so the LLM knows
@@ -599,7 +601,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// discoveries (childSearchToolsResults) are injected into every LLM call.
 	if m.ToolIndex != nil {
 		toolIndex := m.ToolIndex // capture for closure
-		beforeModelCallbacks = append(beforeModelCallbacks, func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+		beforeModelCallbacks = append(beforeModelCallbacks, func(cbCtx adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
 			toolsToInject := make(map[string]bool)
 
 			// Source 1: automatic hybrid search matches on task description
@@ -631,6 +633,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				entry := toolIndex.GetToolEntry(toolName)
 				if entry == nil || entry.Tool == nil {
 					continue
+				}
+				// MCP tool access control: skip tools from inaccessible servers
+				if serverName, isMCP := mcpServerNameFromGroup(entry.GroupName); isMCP {
+					if !isMCPServerAccessible(cbCtx, serverName) {
+						continue
+					}
 				}
 				packToolIntoRequest(req, entry.Tool)
 			}
@@ -903,7 +911,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 // If the request is empty, the sub-agent gets ZERO tools (callers must be explicit).
 // Excluded tools (delegate_tasks, memory_save, etc.) are always removed unless
 // the tool comes from FleetTools via explicit allow-list.
-func (m *SubAgentManager) resolveTools(request []string) ([]tool.Tool, []tool.Toolset, []string) {
+// In platform mode, MCP groups are filtered by the user's team/org access (via ctx).
+func (m *SubAgentManager) resolveTools(ctx context.Context, request []string) ([]tool.Tool, []tool.Toolset, []string) {
 	if len(request) == 0 {
 		return nil, nil, nil
 	}
@@ -926,6 +935,15 @@ func (m *SubAgentManager) resolveTools(request []string) ([]tool.Tool, []tool.To
 	var resultToolsets []tool.Toolset
 
 	for _, gName := range groupNames {
+		// MCP tool access control: skip groups for MCP servers the user
+		// doesn't have access to in platform mode.
+		if serverName, isMCP := mcpServerNameFromGroup(gName); isMCP {
+			if !isMCPServerAccessible(ctx, serverName) {
+				unknownGroups = append(unknownGroups, gName)
+				continue
+			}
+		}
+
 		g := m.ToolGroups[gName]
 		for _, t := range g.Tools {
 			name := t.Name()
@@ -1026,7 +1044,7 @@ func (m *SubAgentManager) AvailableGroups() []*ToolGroup {
 }
 
 // buildChildPrompt constructs the system prompt for a sub-agent.
-func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
+func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTask) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("You are %q, a focused sub-agent working on a specific task.\n\n", task.Name))
@@ -1051,7 +1069,7 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 	sb.WriteString("- If you encounter an error, report it clearly in your response.\n")
 
 	// Tool-specific operational guidance based on what tools the child actually has
-	resolvedTools, _, resolveWarnings := m.resolveTools(task.ToolFilter)
+	resolvedTools, _, resolveWarnings := m.resolveTools(ctx, task.ToolFilter)
 	if len(resolveWarnings) > 0 {
 		slog.Warn("failed to resolve tools for sub-agent", "tool_filter", task.ToolFilter, "warnings", resolveWarnings)
 	}

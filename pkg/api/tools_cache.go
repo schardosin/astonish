@@ -65,6 +65,40 @@ type MCPStatusResponse struct {
 
 // MCPStatusHandler handles GET /api/mcp/status
 func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: return status from DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		servers, err := mcpStore.List()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
+			return
+		}
+		statuses := make([]cache.ServerStatus, 0, len(servers))
+		for _, s := range servers {
+			status := "configured"
+			if !s.IsEnabled() {
+				status = "disabled"
+			}
+			toolCount := 0
+			if s.CachedTools != nil && len(s.CachedTools) > 2 { // not empty "[]" or "null"
+				// Count tools from cached_tools JSON array
+				var tools []json.RawMessage
+				if json.Unmarshal(s.CachedTools, &tools) == nil {
+					toolCount = len(tools)
+				}
+			}
+			statuses = append(statuses, cache.ServerStatus{
+				Name:      s.Name,
+				Status:    status,
+				ToolCount: toolCount,
+			})
+		}
+		response := MCPStatusResponse{Servers: statuses}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Personal mode: return from in-memory status cache
 	statuses := GetServerStatus()
 
 	response := MCPStatusResponse{
@@ -317,6 +351,41 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Platform mode: refresh by starting the MCP process and discovering tools
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		server, err := mcpStore.Get(serverName)
+		if err != nil || server == nil {
+			respondError(w, http.StatusNotFound, "Server not found")
+			return
+		}
+
+		// Build a config.MCPServerConfig and use the bridge to discover tools
+		serverCfg := config.MCPServerConfig{
+			Command:   server.Command,
+			Args:      server.Args,
+			Env:       server.Env,
+			Transport: server.Transport,
+			URL:       server.URL,
+			Enabled:   server.Enabled,
+		}
+
+		// Run tool discovery using the existing mechanism
+		servers := map[string]config.MCPServerConfig{serverName: serverCfg}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools in store", "server", serverName, "error", err)
+				}
+			}
+		}()
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+		return
+	}
+
+	// Personal mode: original logic
 	// Update status to loading
 	SetServerStatus(serverName, cache.ServerStatus{
 		Name:      serverName,
@@ -343,13 +412,61 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		response["success"] = true
-		// RefreshSingleServer updates status to healthy on success
-		// But let's verify if we need to do anything else.
-		// It updates cache status.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// discoverMCPToolsForPlatform starts an MCP server, discovers its tools, and
+// returns the tool declarations as JSON. Returns nil on error (logged).
+func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig) json.RawMessage {
+	cfg := &config.MCPConfig{MCPServers: servers}
+	mgr := mcp.NewManagerFromConfig(cfg)
+	defer mgr.Cleanup()
+
+	if err := mgr.InitializeToolsets(ctx); err != nil {
+		slog.Warn("platform MCP refresh: failed to initialize", "server", serverName, "error", err)
+		return nil
+	}
+
+	// Get the tool declarations from the named toolsets
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	var toolEntries []toolEntry
+
+	minimalCtx := &minimalReadonlyContext{Context: ctx}
+	for _, namedToolset := range mgr.GetNamedToolsets() {
+		if namedToolset.Name != serverName {
+			continue
+		}
+		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+		if err != nil {
+			slog.Warn("platform MCP refresh: failed to get tools", "server", serverName, "error", err)
+			return nil
+		}
+		for _, t := range mcpTools {
+			toolEntries = append(toolEntries, toolEntry{
+				Name:        t.Name(),
+				Description: t.Description(),
+			})
+		}
+	}
+
+	if toolEntries == nil {
+		toolEntries = []toolEntry{} // ensure valid JSON "[]"
+	}
+
+	data, err := json.Marshal(toolEntries)
+	if err != nil {
+		slog.Warn("platform MCP refresh: failed to marshal tools", "server", serverName, "error", err)
+		return nil
+	}
+
+	slog.Info("platform MCP refresh: discovered tools", "server", serverName, "count", len(toolEntries))
+	return data
 }
 
 // validateAndRefreshChangedServers compares the current MCP config checksums

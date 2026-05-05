@@ -177,6 +177,8 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						slog.Debug("tool index search failed", "component", "chat", "error", err)
 					}
 				} else {
+					// Filter out MCP tools the user's team doesn't have access to
+					matches = FilterAccessibleToolMatches(ctx, matches)
 					toolMatches = matches
 					if len(matches) > 0 {
 						relevantTools = FormatToolMatchesForPrompt(matches)
@@ -201,6 +203,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// remains cacheable by providers.
 		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
 		c.SystemPrompt.RelevantTools = relevantTools
+
+		// Per-turn MCP access filter: in platform mode, only show MCP groups
+		// the current user's team/org has access to in the delegation catalog.
+		mcpStores := store.MCPServerStoresFromContext(ctx)
+		if mcpStores != nil {
+			c.SystemPrompt.MCPAccessFilter = func(serverName string) bool {
+				return isMCPServerAccessible(ctx, serverName)
+			}
+		} else {
+			c.SystemPrompt.MCPAccessFilter = nil // personal mode — no filtering
+		}
+
 		instruction := c.SystemPrompt.Build()
 
 		// Capture session identity for use in AfterToolCallback closure.

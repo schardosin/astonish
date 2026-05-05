@@ -28,6 +28,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/version"
 )
 
@@ -345,6 +346,30 @@ func isMaskedValue(val string) bool {
 
 // GetMCPSettingsHandler handles GET /api/settings/mcp
 func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: read from DB store (org or team based on ?scope=)
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		servers, err := mcpStore.List()
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
+			return
+		}
+		// Convert store.MCPServer list to config.MCPConfig map format for frontend
+		cfg := config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig, len(servers))}
+		for _, s := range servers {
+			cfg.MCPServers[s.Name] = config.MCPServerConfig{
+				Command:   s.Command,
+				Args:      s.Args,
+				Env:       s.Env,
+				Transport: s.Transport,
+				URL:       s.URL,
+				Enabled:   s.Enabled,
+			}
+		}
+		respondJSON(w, http.StatusOK, cfg)
+		return
+	}
+
+	// Personal mode: read from filesystem
 	cfg, err := config.LoadMCPConfigRaw()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
@@ -362,6 +387,74 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Platform mode: write to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
+		return
+	}
+
+	// Personal mode: file-based (original logic)
+	updateMCPSettingsPersonal(w, r, newCfg)
+}
+
+// updateMCPSettingsPlatform handles the PUT in platform mode (DB store).
+func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, newCfg config.MCPConfig) {
+	userID := effectiveUserID(r)
+
+	// Set default transport to "stdio" if not specified
+	for name, server := range newCfg.MCPServers {
+		if server.Transport == "" {
+			server.Transport = "stdio"
+			newCfg.MCPServers[name] = server
+		}
+	}
+
+	// Load existing servers from store
+	existing, err := mcpStore.List()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load existing MCP servers: "+err.Error())
+		return
+	}
+	existingMap := make(map[string]*store.MCPServer, len(existing))
+	for i := range existing {
+		existingMap[existing[i].Name] = &existing[i]
+	}
+
+	// Delete removed servers
+	for name := range existingMap {
+		if _, exists := newCfg.MCPServers[name]; !exists {
+			if err := mcpStore.Delete(name); err != nil {
+				slog.Warn("failed to delete MCP server from store", "name", name, "error", err)
+			}
+		}
+	}
+
+	// Save new/changed servers
+	for name, serverCfg := range newCfg.MCPServers {
+		s := &store.MCPServer{
+			Name:      name,
+			Command:   serverCfg.Command,
+			Args:      serverCfg.Args,
+			Env:       serverCfg.Env,
+			Transport: serverCfg.Transport,
+			URL:       serverCfg.URL,
+			Enabled:   serverCfg.Enabled,
+			CreatedBy: userID,
+		}
+		if err := mcpStore.Save(s); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+			return
+		}
+	}
+
+	// Reset the Studio chat agent so the next request picks up fresh MCP config.
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// updateMCPSettingsPersonal handles the PUT in personal mode (filesystem).
+func updateMCPSettingsPersonal(w http.ResponseWriter, r *http.Request, newCfg config.MCPConfig) {
 	// Load existing config to detect added/removed servers
 	oldCfg, err := config.LoadMCPConfig()
 	if err != nil {
@@ -475,15 +568,61 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set default transport
+	if req.Config.Transport == "" {
+		req.Config.Transport = "stdio"
+	}
+
+	// Platform mode: save directly to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		userID := effectiveUserID(r)
+		s := &store.MCPServer{
+			Name:      req.ServerName,
+			Command:   req.Config.Command,
+			Args:      req.Config.Args,
+			Env:       req.Config.Env,
+			Transport: req.Config.Transport,
+			URL:       req.Config.URL,
+			Enabled:   req.Config.Enabled,
+			CreatedBy: userID,
+		}
+		if err := mcpStore.Save(s); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+			return
+		}
+
+		// Discover tools in background
+		servers := map[string]config.MCPServerConfig{req.ServerName: req.Config}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, req.ServerName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(req.ServerName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools after install", "server", req.ServerName, "error", err)
+				}
+			}
+		}()
+
+		GetChatManager().Reset()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "installed",
+			"serverName": req.ServerName,
+		})
+		return
+	}
+
+	// Personal mode: file-based install
+	installInlineMCPServerPersonal(w, r, req)
+}
+
+// installInlineMCPServerPersonal handles the install in personal mode (filesystem).
+func installInlineMCPServerPersonal(w http.ResponseWriter, r *http.Request, req InstallInlineMCPServerRequest) {
 	// Load current MCP config
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
 		mcpCfg = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
-	}
-
-	// Set default transport
-	if req.Config.Transport == "" {
-		req.Config.Transport = "stdio"
 	}
 
 	// Initialize map if nil

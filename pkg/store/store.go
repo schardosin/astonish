@@ -53,6 +53,7 @@ type OrgDataStore interface {
 	// Org-wide shared stores (public schema in PG, shared directory in file mode).
 	OrgMemories() MemoryStore
 	OrgSkills() SkillStore
+	OrgMCPServers() MCPServerStore
 	OrgApps() AppStore
 	OrgAudit() AuditStore
 	Teams() TeamManagementStore
@@ -73,6 +74,7 @@ type TeamDataStore interface {
 	AppState() AppStateStore
 	Flows() FlowStore
 	Skills() SkillStore
+	MCPServers() MCPServerStore
 	ScheduledJobs() SchedulerStore
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore

@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
@@ -920,6 +921,61 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		serverName = "internet-mcp-server"
 	}
 
+	// Platform mode: save to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		// Check if server already exists
+		existing, _ := mcpStore.Get(serverName)
+		if existing != nil {
+			serverName = serverName + "-2"
+		}
+
+		newConfig := config.MCPServerConfig{
+			Command:   req.Command,
+			Args:      req.Args,
+			Env:       req.Env,
+			Transport: "stdio",
+		}
+
+		s := &store.MCPServer{
+			Name:      serverName,
+			Command:   newConfig.Command,
+			Args:      newConfig.Args,
+			Env:       newConfig.Env,
+			Transport: newConfig.Transport,
+			CreatedBy: effectiveUserID(r),
+		}
+
+		if err := mcpStore.Save(s); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+				Status: "error",
+				Error:  fmt.Sprintf("Failed to save MCP server: %v", err),
+			})
+			return
+		}
+
+		// Discover tools in background
+		servers := map[string]config.MCPServerConfig{serverName: newConfig}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools after internet install", "server", serverName, "error", err)
+				}
+			}
+		}()
+
+		GetChatManager().Reset()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+			Status: "ok",
+		})
+		return
+	}
+
+	// Personal mode: file-based
 	// Load current MCP config
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {

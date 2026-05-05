@@ -1,18 +1,21 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle,
-  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText
+  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server
 } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
   fetchTeamMembers, addTeamMember, removeTeamMember, setTeamMemberRole,
   type Team, type TeamMember,
 } from '../api/platform'
+import { fetchMCPConfig } from './settings/settingsApi'
+import type { MCPServerConfig } from './settings/settingsApi'
 
 // Lazy-loaded sub-views and settings components
 const UserManagement = lazy(() => import('./UserManagement'))
 const AuditViewer = lazy(() => import('./AuditViewer'))
 const SkillsSettings = lazy(() => import('./settings/SkillsSettings'))
+const MCPServersSettings = lazy(() => import('./settings/MCPServersSettings'))
 const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
@@ -64,6 +67,7 @@ interface TeamTab {
 const TEAM_TABS: TeamTab[] = [
   { id: 'members', label: 'Members', icon: Users },
   { id: 'skills', label: 'Skills', icon: Wand2 },
+  { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'taps', label: 'Repositories', icon: GitBranch },
   { id: 'flows', label: 'Flow Store', icon: Store },
@@ -234,6 +238,62 @@ function MembersPanel({ user, team, canManageTeam }: MembersPanelProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Team MCP Servers wrapper — manages local state and renders MCPServersSettings
+// ---------------------------------------------------------------------------
+
+function TeamMCPServersTab({ teamSlug, theme }: { teamSlug: string; theme: string }) {
+  const [mcpServers, setMcpServers] = useState<Record<string, MCPServerConfig>>({})
+  const [mcpServerNames, setMcpServerNames] = useState<Record<string, string>>({})
+  const [mcpServerArgs, setMcpServerArgs] = useState<Record<string, string>>({})
+  const [, setMcpHasChanges] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [, setSaveSuccess] = useState(false)
+  const [, setError] = useState<string | null>(null)
+
+  const loadData = useCallback(async () => {
+    try {
+      const data = await fetchMCPConfig(teamSlug)
+      const servers = data.mcpServers || {}
+      setMcpServers(servers)
+      const names: Record<string, string> = {}
+      const args: Record<string, string> = {}
+      Object.entries(servers).forEach(([name, server]) => {
+        names[name] = name
+        args[name] = (server.args || []).join(', ')
+      })
+      setMcpServerNames(names)
+      setMcpServerArgs(args)
+    } catch (err) {
+      console.error('Failed to load team MCP config:', err)
+    }
+  }, [teamSlug])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  return (
+    <MCPServersSettings
+      mcpServers={mcpServers}
+      setMcpServers={setMcpServers}
+      mcpServerNames={mcpServerNames}
+      setMcpServerNames={setMcpServerNames}
+      mcpServerArgs={mcpServerArgs}
+      setMcpServerArgs={setMcpServerArgs}
+      setMcpHasChanges={setMcpHasChanges}
+      standardServers={[]}
+      saving={saving}
+      setSaving={setSaving}
+      setSaveSuccess={setSaveSuccess}
+      setError={setError}
+      onToolsRefresh={loadData}
+      loadData={loadData}
+      setGeneralForm={() => {}}
+      theme={theme}
+      teamSlug={teamSlug}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Team resource tab content — renders settings component based on tab
 // ---------------------------------------------------------------------------
 
@@ -261,6 +321,7 @@ function TeamResourceTab({ tabId, theme, fullConfig, fullConfigLoading, onSaved,
     <div className="flex-1 overflow-y-auto p-6">
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
         {tabId === 'skills' && <SkillsSettings config={fullConfig?.skills || null} onSaved={onSaved} theme={theme} scope="team" isPlatform canManage={canManage} teamSlug={teamSlug} />}
+        {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
         {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} teamSlug={teamSlug} />}
         {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
         {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} />}

@@ -93,7 +93,7 @@ func TestEffectiveCredentialStore_NoStore(t *testing.T) {
 }
 
 func TestEffectiveCredentialStore_FromServices(t *testing.T) {
-	r := httptest.NewRequest("GET", "/api/test", nil)
+	r := httptest.NewRequest("GET", "/api/test?scope=team", nil)
 	mockCreds := &mockCredentialStore{}
 	svc := &store.Services{
 		Mode:        store.ModePlatform,

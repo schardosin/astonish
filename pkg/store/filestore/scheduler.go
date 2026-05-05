@@ -48,7 +48,13 @@ func (w *SchedulerStoreWrapper) GetByName(name string) *store.ScheduledJob {
 }
 
 func (w *SchedulerStoreWrapper) Add(job *store.ScheduledJob) error {
-	return w.inner.Add(convertToInternalJob(job))
+	internal := convertToInternalJob(job)
+	if err := w.inner.Add(internal); err != nil {
+		return err
+	}
+	// Propagate the generated ID back to the caller.
+	job.ID = internal.ID
+	return nil
 }
 
 func (w *SchedulerStoreWrapper) Update(job *store.ScheduledJob) error {

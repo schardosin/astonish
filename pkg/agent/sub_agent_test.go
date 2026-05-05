@@ -63,7 +63,7 @@ func TestSubAgentManager_ResolveTools(t *testing.T) {
 	}
 
 	// Resolve with a group name — excluded tools are removed
-	tools, toolsets, warnings := mgr.resolveTools([]string{"core"})
+	tools, toolsets, warnings := mgr.resolveTools(context.Background(), []string{"core"})
 	if len(tools) != 4 {
 		t.Errorf("resolveTools([core]) returned %d tools, want 4 (excluding 5 excluded tools)", len(tools))
 	}
@@ -82,31 +82,31 @@ func TestSubAgentManager_ResolveTools(t *testing.T) {
 	}
 
 	// Resolve with individual tool names
-	tools, _, _ = mgr.resolveTools([]string{"read_file", "grep_search"})
+	tools, _, _ = mgr.resolveTools(context.Background(), []string{"read_file", "grep_search"})
 	if len(tools) != 2 {
 		t.Errorf("resolveTools([read_file, grep_search]) returned %d tools, want 2", len(tools))
 	}
 
 	// Individual tool name that is excluded — should not be returned
-	tools, _, _ = mgr.resolveTools([]string{"read_file", "memory_save"})
+	tools, _, _ = mgr.resolveTools(context.Background(), []string{"read_file", "memory_save"})
 	if len(tools) != 1 {
 		t.Errorf("resolveTools([read_file, memory_save]) returned %d tools, want 1", len(tools))
 	}
 
 	// Resolve multiple groups
-	tools, _, _ = mgr.resolveTools([]string{"core", "browser"})
+	tools, _, _ = mgr.resolveTools(context.Background(), []string{"core", "browser"})
 	if len(tools) != 6 { // 4 non-excluded from core + 2 from browser
 		t.Errorf("resolveTools([core, browser]) returned %d tools, want 6", len(tools))
 	}
 
 	// Mixed: group name + individual tool name
-	tools, _, _ = mgr.resolveTools([]string{"browser", "grep_search"})
+	tools, _, _ = mgr.resolveTools(context.Background(), []string{"browser", "grep_search"})
 	if len(tools) != 3 { // 2 browser + 1 grep_search
 		t.Errorf("resolveTools([browser, grep_search]) returned %d tools, want 3", len(tools))
 	}
 
 	// Unknown group name — should produce a warning
-	tools, _, warnings = mgr.resolveTools([]string{"drills"})
+	tools, _, warnings = mgr.resolveTools(context.Background(), []string{"drills"})
 	if len(tools) != 0 {
 		t.Errorf("resolveTools([drills]) returned %d tools, want 0", len(tools))
 	}
@@ -117,7 +117,7 @@ func TestSubAgentManager_ResolveTools(t *testing.T) {
 	}
 
 	// Mixed known group + unknown name — should resolve known group and warn about unknown
-	tools, _, warnings = mgr.resolveTools([]string{"browser", "nonexistent"})
+	tools, _, warnings = mgr.resolveTools(context.Background(), []string{"browser", "nonexistent"})
 	if len(tools) != 2 {
 		t.Errorf("resolveTools([browser, nonexistent]) returned %d tools, want 2", len(tools))
 	}
@@ -136,7 +136,7 @@ func TestSubAgentManager_ResolveToolsEmpty(t *testing.T) {
 	}
 
 	// Empty request → zero tools
-	tools, toolsets, warnings := mgr.resolveTools(nil)
+	tools, toolsets, warnings := mgr.resolveTools(context.Background(), nil)
 	if len(tools) != 0 {
 		t.Errorf("resolveTools(nil) returned %d tools, want 0", len(tools))
 	}
@@ -147,7 +147,7 @@ func TestSubAgentManager_ResolveToolsEmpty(t *testing.T) {
 		t.Errorf("resolveTools(nil) returned warnings: %v", warnings)
 	}
 
-	tools, _, _ = mgr.resolveTools([]string{})
+	tools, _, _ = mgr.resolveTools(context.Background(), []string{})
 	if len(tools) != 0 {
 		t.Errorf("resolveTools([]) returned %d tools, want 0", len(tools))
 	}
@@ -162,7 +162,7 @@ func TestSubAgentManager_BuildChildPrompt(t *testing.T) {
 		Instructions: "Check only .go files",
 	}
 
-	prompt := mgr.buildChildPrompt(task)
+	prompt := mgr.buildChildPrompt(context.Background(), task)
 
 	// Check key sections are present
 	if !contains(prompt, "researcher") {
@@ -187,7 +187,7 @@ func TestSubAgentManager_BuildChildPromptNoInstructions(t *testing.T) {
 		Description: "Do something",
 	}
 
-	prompt := mgr.buildChildPrompt(task)
+	prompt := mgr.buildChildPrompt(context.Background(), task)
 
 	if contains(prompt, "## Instructions") {
 		t.Error("prompt should NOT contain Instructions section when no instructions provided")
@@ -209,7 +209,7 @@ func TestSubAgentManager_BuildChildPromptWithHTTPTools(t *testing.T) {
 		ToolFilter:  []string{"core"},
 	}
 
-	prompt := mgr.buildChildPrompt(task)
+	prompt := mgr.buildChildPrompt(context.Background(), task)
 
 	if !contains(prompt, "## HTTP Requests") {
 		t.Error("prompt missing HTTP Requests section when http_request tool is available")
@@ -237,7 +237,7 @@ func TestSubAgentManager_BuildChildPromptWithoutHTTPTools(t *testing.T) {
 		ToolFilter:  []string{"core"},
 	}
 
-	prompt := mgr.buildChildPrompt(task)
+	prompt := mgr.buildChildPrompt(context.Background(), task)
 
 	if contains(prompt, "## HTTP Requests") {
 		t.Error("prompt should NOT contain HTTP Requests section when http_request tool is not available")

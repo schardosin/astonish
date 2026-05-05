@@ -178,6 +178,21 @@ CREATE TABLE IF NOT EXISTS {{schema}}.skills (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS {{schema}}.mcp_servers (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            TEXT NOT NULL UNIQUE,
+    command         TEXT,
+    args            JSONB DEFAULT '[]'::jsonb,
+    env             JSONB DEFAULT '{}'::jsonb,
+    transport       TEXT NOT NULL DEFAULT 'stdio',
+    url             TEXT,
+    enabled         BOOLEAN NOT NULL DEFAULT true,
+    cached_tools    JSONB,
+    created_by      UUID NOT NULL,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_sessions_parent
     ON {{schema}}.sessions(parent_id) WHERE parent_id IS NOT NULL;
@@ -199,3 +214,5 @@ CREATE INDEX IF NOT EXISTS idx_drill_reports_created
     ON {{schema}}.drill_reports(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_skills_name
     ON {{schema}}.skills(name);
+CREATE INDEX IF NOT EXISTS idx_mcp_servers_name
+    ON {{schema}}.mcp_servers(name);

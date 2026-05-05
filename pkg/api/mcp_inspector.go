@@ -10,10 +10,30 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/common"
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )
+
+// mcpManagerForRequest creates an MCP Manager from the DB store (platform mode)
+// or from the filesystem config (personal mode). This ensures the inspector
+// can find servers regardless of where they were saved.
+func mcpManagerForRequest(r *http.Request, serverName string) (*mcp.Manager, error) {
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		srv, err := mcpStore.Get(serverName)
+		if err != nil || srv == nil {
+			return nil, fmt.Errorf("server '%s' not found in config", serverName)
+		}
+		cfg := &config.MCPConfig{
+			MCPServers: map[string]config.MCPServerConfig{
+				serverName: mcpServerToConfig(srv),
+			},
+		}
+		return mcp.NewManagerFromConfig(cfg), nil
+	}
+	return mcp.NewManager()
+}
 
 // ToolSchema represents a tool's parameter schema
 type ToolSchema struct {
@@ -50,10 +70,13 @@ func ListServerToolsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Create a new manager and initialize just this server
-	mcpManager, err := mcp.NewManager()
+	// Create a manager (platform-aware: DB store or filesystem)
+	mcpManager, err := mcpManagerForRequest(r, serverName)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create MCP manager: %v", err), http.StatusInternalServerError)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(ListServerToolsResponse{
+			Error: fmt.Sprintf("Failed to load tools, %v", err),
+		})
 		return
 	}
 	defer mcpManager.Cleanup()
@@ -137,13 +160,13 @@ func RunServerToolHandler(w http.ResponseWriter, r *http.Request) {
 
 	startTime := time.Now()
 
-	// Create a new manager and initialize just this server
-	mcpManager, err := mcp.NewManager()
+	// Create a manager (platform-aware: DB store or filesystem)
+	mcpManager, err := mcpManagerForRequest(r, serverName)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(ToolRunResponse{
 			Success:   false,
-			Error:     fmt.Sprintf("Failed to create MCP manager: %v", err),
+			Error:     fmt.Sprintf("Failed to load tools, %v", err),
 			TimeTaken: time.Since(startTime).String(),
 		})
 		return

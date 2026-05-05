@@ -272,6 +272,10 @@ func (o *pgOrgDataStore) OrgSkills() store.SkillStore {
 	return &pgSkillStore{pool: o.pool, schema: "public", table: "org_skills"}
 }
 
+func (o *pgOrgDataStore) OrgMCPServers() store.MCPServerStore {
+	return &pgMCPServerStore{pool: o.pool, schema: "public", table: "org_mcp_servers"}
+}
+
 func (o *pgOrgDataStore) OrgApps() store.AppStore {
 	return &pgOrgAppStore{pool: o.pool, schema: "public"}
 }
@@ -367,6 +371,10 @@ func (t *pgTeamDataStore) DrillReports() store.DrillReportStore {
 
 func (t *pgTeamDataStore) Skills() store.SkillStore {
 	return &pgSkillStore{pool: t.pool, schema: t.schema(), table: "skills"}
+}
+
+func (t *pgTeamDataStore) MCPServers() store.MCPServerStore {
+	return &pgMCPServerStore{pool: t.pool, schema: t.schema(), table: "mcp_servers"}
 }
 
 // --- store.PersonalDataStore implementation ---

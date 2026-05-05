@@ -8,6 +8,7 @@ import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/sea
 import { keymap, EditorView } from '@codemirror/view'
 import { saveMCPConfig, refreshMCPServer, toggleMCPServer, fetchMCPStatus } from './settingsApi'
 import type { MCPServerConfig, MCPServerStatusEntry, StandardServer } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 interface MCPServersSettingsProps {
   mcpServers: Record<string, MCPServerConfig>
@@ -26,6 +27,7 @@ interface MCPServersSettingsProps {
   loadData: () => void
   setGeneralForm: (fn: (prev: any) => any) => void
   theme?: string
+  teamSlug?: string
 }
 
 export default function MCPServersSettings({
@@ -44,7 +46,8 @@ export default function MCPServersSettings({
   onToolsRefresh,
   loadData,
   setGeneralForm,
-  theme = 'dark'
+  theme = 'dark',
+  teamSlug
 }: MCPServersSettingsProps) {
   const [mcpViewMode, setMcpViewMode] = useState<'editor' | 'source'>('editor')
   const [mcpSourceText, setMcpSourceText] = useState('')
@@ -63,7 +66,7 @@ export default function MCPServersSettings({
 
   const loadMcpServerStatus = async () => {
     try {
-      const data = await fetchMCPStatus()
+      const data = await fetchMCPStatus(teamSlug)
       const statusMap: Record<string, MCPServerStatusEntry> = {}
       for (const server of (data.servers || [])) {
         statusMap[server.name] = server
@@ -97,7 +100,7 @@ export default function MCPServersSettings({
     }))
     
     try {
-      await refreshMCPServer(serverName)
+      await refreshMCPServer(serverName, teamSlug)
       loadMcpServerStatus()
       if (onToolsRefresh) onToolsRefresh()
     } catch (err: any) {
@@ -118,7 +121,7 @@ export default function MCPServersSettings({
     })
     
     try {
-      await toggleMCPServer(serverName, newEnabled)
+      await toggleMCPServer(serverName, newEnabled, teamSlug)
       if (onToolsRefresh) onToolsRefresh()
       loadMcpServerStatus()
     } catch (err: any) {
@@ -153,7 +156,7 @@ export default function MCPServersSettings({
           args: argsString.split(',').map(s => s.trim()).filter(Boolean)
         }
       })
-      await saveMCPConfig({ mcpServers: finalServers })
+      await saveMCPConfig({ mcpServers: finalServers }, teamSlug)
       if (onToolsRefresh) onToolsRefresh()
     } catch (err: any) {
       setError(err.message)
@@ -172,7 +175,7 @@ export default function MCPServersSettings({
           args: argsString.split(',').map(s => s.trim()).filter(Boolean)
         }
       })
-      await saveMCPConfig({ mcpServers: finalServers })
+      await saveMCPConfig({ mcpServers: finalServers }, teamSlug)
       setMcpHasChanges(false)
       if (onToolsRefresh) onToolsRefresh()
       loadMcpServerStatus()
@@ -290,11 +293,14 @@ export default function MCPServersSettings({
                                 setSetupLoading(true)
                                 setSetupError(null)
                                 try {
-                                  const res = await fetch(`/api/standard-servers/${srv.id}/install`, {
+                                  const url = teamSlug
+                                    ? `/api/standard-servers/${srv.id}/install?scope=team`
+                                    : `/api/standard-servers/${srv.id}/install`
+                                  const res = await teamFetch(url, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ env: setupEnv })
-                                  })
+                                  }, teamSlug)
                                   if (!res.ok) {
                                     const text = await res.text()
                                     throw new Error(text)
@@ -841,7 +847,7 @@ export default function MCPServersSettings({
                     const parsed = JSON.parse(mcpSourceText)
                     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
                       setSaving(true)
-                      await saveMCPConfig({ mcpServers: parsed.mcpServers })
+                      await saveMCPConfig({ mcpServers: parsed.mcpServers }, teamSlug)
                       setMcpServers(parsed.mcpServers)
                       const names: Record<string, string> = {}
                       const args: Record<string, string> = {}
@@ -887,12 +893,14 @@ export default function MCPServersSettings({
           loadMcpServerStatus()
           if (onToolsRefresh) onToolsRefresh()
         }}
+        teamSlug={teamSlug}
       />
 
       {/* MCP Inspector Modal */}
       {inspectServer && (
         <MCPInspector
           serverName={inspectServer}
+          teamSlug={teamSlug}
           onClose={() => setInspectServer(null)}
         />
       )}

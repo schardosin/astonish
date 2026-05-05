@@ -117,6 +117,20 @@ func (cr *ChatRunner) InjectSkillStores(org, team store.SkillStore) {
 	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Org: org, Team: team})
 }
 
+// InjectSchedulerStore adds a tenant-scoped scheduler store to the runner's context
+// so that the schedule_job and list_scheduled_jobs tools can operate on the
+// correct team's jobs in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectSchedulerStore(ss store.SchedulerStore) {
+	cr.ctx = store.WithSchedulerStore(cr.ctx, ss)
+}
+
+// InjectMCPServerStores adds tenant-scoped MCP server stores to the runner's context
+// so that the chat agent can resolve MCP server configurations from the database
+// in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectMCPServerStores(org, team store.MCPServerStore) {
+	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{Org: org, Team: team})
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

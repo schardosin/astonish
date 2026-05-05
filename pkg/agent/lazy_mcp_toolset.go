@@ -494,6 +494,16 @@ func (p *lazyProxyTool) ProcessRequest(_ tool.Context, req *model.LLMRequest) er
 // The session ID is extracted from the tool.Context and passed through to
 // ensureServerStarted, which uses it to get the correct container when sandbox is enabled.
 func (p *lazyProxyTool) Run(ctx tool.Context, args any) (map[string]any, error) {
+	// Defense-in-depth: verify MCP server access before connecting/executing.
+	// Even if a tool was injected into the LLM request (e.g., via a stale
+	// ToolIndex match), block execution if the user's team doesn't have
+	// access to this MCP server.
+	if !isMCPServerAccessible(ctx, p.toolset.serverName) {
+		return map[string]any{
+			"error": fmt.Sprintf("access denied: MCP server '%s' is not available for your team", p.toolset.serverName),
+		}, nil
+	}
+
 	sessionID := ctx.SessionID()
 	liveTool, err := p.toolset.getLiveTool(ctx, p.entry.Name, sessionID)
 	if err != nil {

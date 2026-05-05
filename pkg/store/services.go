@@ -79,6 +79,14 @@ type Services struct {
 	// Team skills override org skills of the same name. Team admins manage these.
 	TeamSkills SkillStore
 
+	// MCPServers provides access to org-level MCP server configurations.
+	// In platform mode, these are MCP servers shared across all teams in the org.
+	MCPServers MCPServerStore
+
+	// TeamMCPServers provides access to team-scoped MCP server configurations.
+	// Team MCP servers override org MCP servers of the same name. Team admins manage these.
+	TeamMCPServers MCPServerStore
+
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore
 

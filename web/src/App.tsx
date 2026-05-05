@@ -57,7 +57,6 @@ const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
 const TeamManagement = lazy(() => import('./components/TeamManagement'))
-const KnowledgeBrowser = lazy(() => import('./components/KnowledgeBrowser'))
 const CredentialsView = lazy(() => import('./components/CredentialsView'))
 
 function App() {
@@ -103,7 +102,14 @@ function App() {
     // Fetch team list
     import('./api/platform').then(mod => {
       mod.fetchTeams().then(teams => {
-        setPlatformTeams(teams.map(t => ({ slug: t.slug, name: t.name })))
+        const mapped = teams.map((t: any) => ({ slug: t.slug, name: t.name }))
+        setPlatformTeams(mapped)
+        // If no team is active yet (e.g. first login, or auth.team was null),
+        // default to the first available team.
+        if (!activeTeam && !auth.team && mapped.length > 0) {
+          setActiveTeam(mapped[0].slug)
+          setActiveTeamContext(mapped[0].slug)
+        }
       }).catch(() => {})
     })
   }, [isPlatformMode, auth.isAuthenticated, auth.team])
@@ -121,6 +127,35 @@ function App() {
       navigate(buildPath('canvas'))
     }
   }, [path.view, navigate])
+
+  // Switch to a different organization — tokens are re-issued, teams reload.
+  const handleOrgSwitch = useCallback(async (orgSlug: string) => {
+    try {
+      await auth.switchOrg(orgSlug)
+      // Reset team state — new org has different teams
+      setActiveTeam(null)
+      setActiveTeamContext(null)
+      setPlatformTeams(null)
+      setSelectedAgent(null)
+      setYamlContent(defaultYaml)
+      // Reload teams for the new org
+      import('./api/platform').then(mod => {
+        mod.fetchTeams().then(teams => {
+          const mapped = teams.map((t: any) => ({ slug: t.slug, name: t.name }))
+          setPlatformTeams(mapped)
+          // Auto-select first team (or use the JWT default which auth.switchOrg resets to null)
+          if (mapped.length > 0) {
+            setActiveTeam(mapped[0].slug)
+            setActiveTeamContext(mapped[0].slug)
+          }
+        }).catch(() => {})
+      })
+      // Navigate to chat view to avoid stale content from previous org
+      navigate(buildPath('chat'))
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to switch organization', type: 'error' })
+    }
+  }, [auth, navigate])
 
   // Handle middleware team rejection (user removed from a team while active).
   useEffect(() => {
@@ -597,8 +632,6 @@ function App() {
       setView('team-mgmt')
     } else if (path.view === 'credentials') {
       setView('credentials')
-    } else if (path.view === 'knowledge') {
-      setView('knowledge')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1513,6 +1546,8 @@ layout:
           isPlatformMode={isPlatformMode}
           user={auth.user}
           org={auth.org}
+          orgs={auth.orgs}
+          onOrgSwitch={handleOrgSwitch}
           activeTeam={activeTeam}
           teams={platformTeams}
           onTeamChange={handleTeamChange}
@@ -1621,15 +1656,6 @@ layout:
           ) : view === 'credentials' ? (
             <Suspense fallback={null}>
             <CredentialsView key={activeTeam || 'personal'} />
-            </Suspense>
-          ) : view === 'knowledge' && isPlatformMode && auth.user ? (
-            <Suspense fallback={null}>
-            <KnowledgeBrowser
-              key={activeTeam || 'personal'}
-              theme={theme}
-              user={auth.user}
-              activeTeam={activeTeam}
-            />
             </Suspense>
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

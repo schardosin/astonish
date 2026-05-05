@@ -96,6 +96,39 @@ export async function getMe(): Promise<MeResponse> {
   return res.json()
 }
 
+// --- Organization switching ---
+
+export interface UserOrg {
+  id: string
+  name: string
+  slug: string
+  role: string
+}
+
+export interface UserOrgsResponse {
+  orgs: UserOrg[]
+  active_org: string
+}
+
+export async function getUserOrgs(): Promise<UserOrgsResponse> {
+  const res = await fetch('/api/orgs')
+  if (!res.ok) throw new Error('Failed to fetch organizations')
+  return res.json()
+}
+
+export async function switchOrg(orgSlug: string): Promise<AuthResponse> {
+  const res = await fetch('/api/orgs/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ org_slug: orgSlug }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to switch organization')
+  }
+  return res.json()
+}
+
 /**
  * Check if the current session is authenticated.
  * Tries /me first (fast, uses access token cookie).

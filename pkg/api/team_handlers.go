@@ -23,6 +23,10 @@ func RegisterTeamRoutes(router *mux.Router, pa *PlatformAuth) {
 	router.HandleFunc("/api/teams/{slug}", pa.handleGetTeam).Methods("GET")
 	router.HandleFunc("/api/teams/{slug}", pa.handleDeleteTeam).Methods("DELETE")
 
+	// Organization switching (authenticated, multi-org support)
+	router.HandleFunc("/api/orgs", pa.handleListUserOrgs).Methods("GET")
+	router.HandleFunc("/api/orgs/switch", pa.handleSwitchOrg).Methods("POST")
+
 	// Team membership
 	router.HandleFunc("/api/teams/{slug}/members", pa.handleListTeamMembers).Methods("GET")
 	router.HandleFunc("/api/teams/{slug}/members", pa.handleAddTeamMember).Methods("POST")
@@ -485,4 +489,106 @@ func slugify(name string) string {
 		s = s[:50]
 	}
 	return s
+}
+
+// --- Handler: GET /api/orgs ---
+// Returns all organizations the authenticated user belongs to.
+
+func (pa *PlatformAuth) handleListUserOrgs(w http.ResponseWriter, r *http.Request) {
+	user := GetPlatformUser(r)
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	orgs, err := pa.pgStore.Organizations().GetUserOrgs(r.Context(), user.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list organizations")
+		return
+	}
+
+	type orgEntry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+		Role string `json:"role"`
+	}
+
+	result := make([]orgEntry, 0, len(orgs))
+	for _, m := range orgs {
+		result = append(result, orgEntry{
+			ID:   m.OrgID,
+			Name: m.OrgName,
+			Slug: m.OrgSlug,
+			Role: m.Role,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"orgs":       result,
+		"active_org": user.OrgSlug,
+	})
+}
+
+// --- Handler: POST /api/orgs/switch ---
+// Switches the authenticated user to a different organization.
+// Re-issues JWT tokens scoped to the target org.
+
+func (pa *PlatformAuth) handleSwitchOrg(w http.ResponseWriter, r *http.Request) {
+	user := GetPlatformUser(r)
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		OrgSlug string `json:"org_slug"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.OrgSlug == "" {
+		respondError(w, http.StatusBadRequest, "org_slug is required")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify the user is a member of the target org
+	orgs, err := pa.pgStore.Organizations().GetUserOrgs(ctx, user.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to verify membership")
+		return
+	}
+
+	var membership *store.OrgMembership
+	for _, m := range orgs {
+		if m.OrgSlug == req.OrgSlug {
+			membership = m
+			break
+		}
+	}
+	if membership == nil {
+		respondError(w, http.StatusForbidden, "you are not a member of this organization")
+		return
+	}
+
+	// Load the target org
+	org, err := pa.pgStore.Organizations().GetByID(ctx, membership.OrgID)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to load organization")
+		return
+	}
+
+	if org.Status != "active" {
+		respondError(w, http.StatusForbidden, "organization is suspended")
+		return
+	}
+
+	// Load full user for token issuance (we need PlatformRole etc.)
+	fullUser, err := pa.pgStore.Users().GetByID(ctx, user.ID)
+	if err != nil || fullUser == nil {
+		respondError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	// Issue new tokens scoped to the target org
+	pa.issueTokensAndRespond(w, r, fullUser, org, membership.Role)
 }

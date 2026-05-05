@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, BookOpen, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, FolderCog } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, FolderCog } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -20,6 +20,8 @@ interface TopBarProps {
   isPlatformMode?: boolean
   user?: { id: string, email: string, display_name: string, role: string } | null
   org?: { id: string, name: string, slug: string } | null
+  orgs?: { id: string, name: string, slug: string, role: string }[] | null
+  onOrgSwitch?: (orgSlug: string) => void
   activeTeam?: string | null
   teams?: { slug: string, name: string }[] | null
   onTeamChange?: (teamSlug: string) => void
@@ -67,7 +69,6 @@ const allCoreNavItems: NavItem[] = [...primaryNavItems, ...secondaryNavItems]
 function getPlatformNavItems(): NavItem[] {
   const items: NavItem[] = []
   items.push({ view: 'team-mgmt', label: 'Management', Icon: FolderCog, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
-  items.push({ view: 'knowledge', label: 'Knowledge', Icon: BookOpen, gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' })
   return items
 }
 
@@ -106,7 +107,7 @@ function useBreakpointTier(): 'sm' | 'md' | 'lg' | 'xl' {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, activeTeam, teams, onTeamChange, onLogout }: TopBarProps) {
+export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, orgs, onOrgSwitch, activeTeam, teams, onTeamChange, onLogout }: TopBarProps) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
   const navBorder = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'var(--border-color)'
   const inactiveBg = theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'
@@ -281,7 +282,7 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
         {/* ---- Right: Team selector, action buttons, user avatar ---- */}
         <div className="flex items-center gap-2 shrink-0">
           {/* Team selector — hidden below md (available in mobile drawer instead) */}
-          {isPlatformMode && teams && teams.length > 0 && (
+          {isPlatformMode && teams && teams.length > 1 && (
             <div ref={teamRef} className="relative hidden md:block">
               <button
                 onClick={() => setTeamOpen(!teamOpen)}
@@ -353,20 +354,45 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
                 >
                   {initials}
                 </div>
-                {org && <span className="text-xs hidden lg:inline" style={{ color: 'var(--text-muted)' }}>{org.name}</span>}
               </button>
               {userOpen && (
                 <div className="absolute right-0 top-full mt-1 min-w-[220px] rounded-xl py-2 z-[60]" style={dropdownStyle}>
                   <div className="px-3 py-2 border-b" style={{ borderColor: 'var(--border-color)' }}>
                     <div className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{user.display_name}</div>
                     <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>{user.email}</div>
-                    <span
-                      className="inline-block mt-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase"
-                      style={{ background: 'var(--accent)', color: '#fff' }}
-                    >
-                      {user.role}
-                    </span>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span
+                        className="inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase"
+                        style={{ background: 'var(--accent)', color: '#fff' }}
+                      >
+                        {user.role}
+                      </span>
+                      {org && (
+                        <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
+                          {org.name || org.slug}
+                        </span>
+                      )}
+                    </div>
                   </div>
+                  {/* Org switcher — only when user belongs to multiple orgs */}
+                  {orgs && orgs.length > 1 && (
+                    <div className="border-b py-1" style={{ borderColor: 'var(--border-color)' }}>
+                      <div className="px-3 py-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: 'var(--text-muted)' }}>Organization</div>
+                      {orgs.map(o => (
+                        <button
+                          key={o.slug}
+                          onClick={() => { onOrgSwitch && onOrgSwitch(o.slug); setUserOpen(false) }}
+                          className="w-full text-left px-3 py-1.5 text-xs transition-colors hover:opacity-80"
+                          style={{ background: o.slug === org?.slug ? 'var(--bg-tertiary)' : 'transparent', color: 'var(--text-primary)' }}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className={o.slug === org?.slug ? 'font-semibold' : 'font-medium'}>{o.name}</span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>{o.role}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <button
                     onClick={() => { onLogout && onLogout(); setUserOpen(false) }}
                     className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left transition-colors hover:opacity-80"
@@ -433,7 +459,7 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
             {/* Drawer footer: team selector, theme, settings, user */}
             <div className="shrink-0 border-t px-3 py-3 space-y-3" style={{ borderColor: 'var(--border-color)' }}>
               {/* Team selector */}
-              {isPlatformMode && teams && teams.length > 0 && (
+              {isPlatformMode && teams && teams.length > 1 && (
                 <div>
                   <div className="px-1 mb-1.5">
                     <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Team</span>
@@ -445,6 +471,23 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
                     style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
                   >
                     {teams.map(t => <option key={t.slug} value={t.slug}>{t.name}</option>)}
+                  </select>
+                </div>
+              )}
+
+              {/* Org selector (mobile) */}
+              {isPlatformMode && orgs && orgs.length > 1 && (
+                <div>
+                  <div className="px-1 mb-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Organization</span>
+                  </div>
+                  <select
+                    value={org?.slug || ''}
+                    onChange={e => { onOrgSwitch && onOrgSwitch(e.target.value); setMobileOpen(false) }}
+                    className="w-full px-3 py-2 rounded-xl text-xs outline-none"
+                    style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+                  >
+                    {orgs.map(o => <option key={o.slug} value={o.slug}>{o.name}</option>)}
                   </select>
                 </div>
               )}

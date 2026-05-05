@@ -100,14 +100,14 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     setLoading(true)
     setError(null)
     try {
-      if (t === 'team') setTeamEntries(await listTeamMemories())
-      else setOrgEntries(await listOrgMemories())
+      if (t === 'team') setTeamEntries(await listTeamMemories(activeTeam || undefined))
+      else setOrgEntries(await listOrgMemories(activeTeam || undefined))
     } catch (err: any) {
       setError(err.message)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [activeTeam])
 
   // Load initial data on mount
   const mountedRef = useRef<boolean | null>(null)
@@ -131,7 +131,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
       setLoading(true)
       setError(null)
       try {
-        setSearchResults(await searchMemories(query, 20))
+        setSearchResults(await searchMemories(query, 20, activeTeam || undefined))
       } catch (err: any) {
         setError(err.message)
       } finally {
@@ -139,13 +139,13 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
       }
     }, 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
-  }, [query])
+  }, [query, activeTeam])
 
   const handleDelete = useCallback(async (id: string, scope: string) => {
     setError(null)
     try {
-      if (scope === 'team') await deleteTeamMemory(id)
-      else if (scope === 'org') await deleteOrgMemory(id)
+      if (scope === 'team') await deleteTeamMemory(id, activeTeam || undefined)
+      else if (scope === 'org') await deleteOrgMemory(id, activeTeam || undefined)
       // Refresh the current view
       if (searchResults) {
         setSearchResults(prev => prev ? prev.filter(e => e.id !== id) : null)
@@ -154,17 +154,17 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     } catch (err: any) {
       setError(err.message)
     }
-  }, [searchResults, tab, loadTab])
+  }, [searchResults, tab, loadTab, activeTeam])
 
   const handlePromote = useCallback(async (id: string) => {
     setError(null)
     try {
-      await promoteMemoryToOrg(id)
+      await promoteMemoryToOrg(id, activeTeam || undefined)
       loadTab(tab)
     } catch (err: any) {
       setError(err.message)
     }
-  }, [tab, loadTab])
+  }, [tab, loadTab, activeTeam])
 
   const handleSave = useCallback(async () => {
     if (!snippet.trim()) return
@@ -172,8 +172,8 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     setError(null)
     try {
       const cat = category.trim() || 'general'
-      if (saveScope === 'team') await saveTeamMemory(snippet, cat)
-      else await savePersonalMemory(snippet, cat)
+      if (saveScope === 'team') await saveTeamMemory(snippet, cat, activeTeam || undefined)
+      else await savePersonalMemory(snippet, cat, activeTeam || undefined)
       setSnippet('')
       setCategory('')
       switchTab('team')
@@ -182,7 +182,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     } finally {
       setSaving(false)
     }
-  }, [snippet, category, saveScope, switchTab])
+  }, [snippet, category, saveScope, switchTab, activeTeam])
 
   const entries = tab === 'team' ? teamEntries : orgEntries
   const displayList = searchResults ?? entries

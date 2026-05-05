@@ -190,23 +190,23 @@ export interface MemoryEntry {
   created_at?: string
 }
 
-export async function searchMemories(query: string, limit?: number): Promise<MemoryEntry[]> {
+export async function searchMemories(query: string, limit?: number, teamSlug?: string): Promise<MemoryEntry[]> {
   const res = await teamFetch('/api/memories/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, max_results: limit || 20 }),
-  })
+  }, teamSlug)
   if (!res.ok) throw new Error('Failed to search memories')
   const data = await res.json()
   return data.results || []
 }
 
-export async function saveTeamMemory(snippet: string, category?: string): Promise<{ id: string }> {
+export async function saveTeamMemory(snippet: string, category?: string, teamSlug?: string): Promise<{ id: string }> {
   const res = await teamFetch('/api/memories/team', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ snippet, category: category || 'general' }),
-  })
+  }, teamSlug)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to save team memory')
@@ -214,12 +214,12 @@ export async function saveTeamMemory(snippet: string, category?: string): Promis
   return res.json()
 }
 
-export async function savePersonalMemory(snippet: string, category?: string): Promise<{ id: string }> {
+export async function savePersonalMemory(snippet: string, category?: string, teamSlug?: string): Promise<{ id: string }> {
   const res = await teamFetch('/api/memories/personal', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ snippet, category: category || 'general' }),
-  })
+  }, teamSlug)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to save personal memory')
@@ -227,36 +227,36 @@ export async function savePersonalMemory(snippet: string, category?: string): Pr
   return res.json()
 }
 
-export async function listTeamMemories(): Promise<MemoryEntry[]> {
-  const res = await teamFetch('/api/memories/team')
+export async function listTeamMemories(teamSlug?: string): Promise<MemoryEntry[]> {
+  const res = await teamFetch('/api/memories/team', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to list team memories')
   const data = await res.json()
   return data.results || []
 }
 
-export async function listOrgMemories(): Promise<MemoryEntry[]> {
-  const res = await teamFetch('/api/memories/org')
+export async function listOrgMemories(teamSlug?: string): Promise<MemoryEntry[]> {
+  const res = await teamFetch('/api/memories/org', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to list org memories')
   const data = await res.json()
   return data.results || []
 }
 
-export async function deleteTeamMemory(id: string): Promise<void> {
-  const res = await teamFetch(`/api/memories/team/${id}`, { method: 'DELETE' })
+export async function deleteTeamMemory(id: string, teamSlug?: string): Promise<void> {
+  const res = await teamFetch(`/api/memories/team/${id}`, { method: 'DELETE' }, teamSlug)
   if (!res.ok) throw new Error('Failed to delete team memory')
 }
 
-export async function deleteOrgMemory(id: string): Promise<void> {
-  const res = await teamFetch(`/api/memories/org/${id}`, { method: 'DELETE' })
+export async function deleteOrgMemory(id: string, teamSlug?: string): Promise<void> {
+  const res = await teamFetch(`/api/memories/org/${id}`, { method: 'DELETE' }, teamSlug)
   if (!res.ok) throw new Error('Failed to delete org memory')
 }
 
-export async function promoteMemoryToOrg(id: string): Promise<void> {
+export async function promoteMemoryToOrg(id: string, teamSlug?: string): Promise<void> {
   const res = await teamFetch('/api/memories/promote', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ id }),
-  })
+  }, teamSlug)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to promote memory')

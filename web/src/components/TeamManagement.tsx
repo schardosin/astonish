@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Users, Plus, Trash2, Shield, UserPlus, ChevronRight, AlertCircle,
-  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server, Box, Crown
+  Loader2, Wand2, Clock, GitBranch, Store, UserCog, FileText, Server, Box, Crown, BookOpen
 } from 'lucide-react'
 import {
   fetchTeams, createTeam, deleteTeam,
@@ -21,6 +21,7 @@ const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
 const TeamContainerTab = lazy(() => import('./TeamContainerTab'))
 const PlatformAdminPanel = lazy(() => import('./PlatformAdminPanel'))
+const KnowledgeBrowser = lazy(() => import('./KnowledgeBrowser'))
 
 interface TeamManagementProps {
   theme: 'dark' | 'light'
@@ -68,6 +69,7 @@ interface TeamTab {
 
 const TEAM_TABS: TeamTab[] = [
   { id: 'members', label: 'Members', icon: Users },
+  { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   { id: 'skills', label: 'Skills', icon: Wand2 },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'scheduler', label: 'Scheduler', icon: Clock },
@@ -436,7 +438,15 @@ function TeamDetail({ user, team, callerRole, activeTab, onTabChange, onDeleteTe
           <MembersPanel user={user} team={team} canManageTeam={canManageTeam} />
         )}
 
-        {activeTab !== 'members' && (
+        {activeTab === 'knowledge' && (
+          <div className="flex-1 overflow-hidden p-6 flex flex-col">
+            <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <KnowledgeBrowser theme={theme as 'dark' | 'light'} user={user} activeTeam={team.slug} />
+            </Suspense>
+          </div>
+        )}
+
+        {activeTab !== 'members' && activeTab !== 'knowledge' && (
           <TeamResourceTab
             tabId={activeTab}
             theme={theme}

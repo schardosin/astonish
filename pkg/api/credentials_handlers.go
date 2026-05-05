@@ -153,7 +153,7 @@ func requireTeamAdmin(w http.ResponseWriter, r *http.Request) bool {
 	}
 	role, err := orgStore.Teams().GetMemberRole(r.Context(), user.ID, teamBySlug.ID)
 	if err != nil || role != "admin" {
-		respondError(w, http.StatusForbidden, "Team admin access required to manage team credentials")
+		respondError(w, http.StatusForbidden, "Team admin access required")
 		return false
 	}
 	return true

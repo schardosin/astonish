@@ -526,12 +526,11 @@ func handleSessionsListRemote(c *client.Client) error {
 		if len(title) > 50 {
 			title = title[:47] + "..."
 		}
-		id := s.ID
-		if len(id) > 12 {
-			id = id[:12]
+		updated := s.UpdatedAt
+		if t, err := time.Parse(time.RFC3339, s.UpdatedAt); err == nil {
+			updated = t.Format("2006-01-02 15:04")
 		}
-		updated := s.UpdatedAt.Format("2006-01-02 15:04")
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", id, title, s.MessageCount, updated)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", s.ID, title, s.MessageCount, updated)
 	}
 	w.Flush()
 	return nil

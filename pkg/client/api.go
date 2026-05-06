@@ -3,21 +3,20 @@ package client
 import (
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // --- Session API ---
 
 // SessionMeta represents a chat session summary.
 type SessionMeta struct {
-	ID           string    `json:"id"`
-	Title        string    `json:"title"`
-	MessageCount int       `json:"message_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	ParentID     string    `json:"parent_id,omitempty"`
-	FleetKey     string    `json:"fleet_key,omitempty"`
-	FleetName    string    `json:"fleet_name,omitempty"`
+	ID           string `json:"id"`
+	Title        string `json:"title"`
+	MessageCount int    `json:"messageCount"`
+	CreatedAt    string `json:"createdAt"`
+	UpdatedAt    string `json:"updatedAt"`
+	ParentID     string `json:"parentId,omitempty"`
+	FleetKey     string `json:"fleetKey,omitempty"`
+	FleetName    string `json:"fleetName,omitempty"`
 }
 
 // ListSessions returns all chat sessions.

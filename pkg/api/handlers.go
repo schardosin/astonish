@@ -785,8 +785,8 @@ type ToolsListResponse struct {
 
 // ListToolsHandler handles GET /api/tools
 func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
-	// Use cached tools (initialized at startup)
-	allTools := GetCachedTools()
+	// Use request-scoped tools (platform-aware: reads from DB stores in platform mode)
+	allTools := GetCachedToolsForRequest(r)
 
 	// If cache not ready, return empty list
 	if allTools == nil {

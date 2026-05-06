@@ -14,6 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
@@ -379,6 +380,12 @@ func buildMCPConfigFromStore(mcpStore store.MCPServerStore, requiredServers []st
 		cfg.MCPServers[srv.Name] = serverCfg
 	}
 
+	// Merge installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// This injects their full config (command, args, env with API key) from
+	// the filesystem credential store, so they can be launched even if they
+	// are not in the team DB store.
+	config.MergeStandardServers(cfg)
+
 	return cfg
 }
 
@@ -509,6 +516,46 @@ func getRequiredMCPServersFromStore(mcpStore store.MCPServerStore, toolsNeeded m
 		// (some flows reference server names directly)
 		if toolsNeeded[srv.Name] {
 			serversNeeded[srv.Name] = true
+		}
+	}
+
+	// Also check installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// that are NOT already in the DB stores. These are configured via the
+	// filesystem credential store and may not have been explicitly installed
+	// into the team DB.
+	for _, srv := range config.GetStandardServers() {
+		if serversNeeded[srv.ID] {
+			continue // Already found in DB stores
+		}
+		if !config.IsStandardServerInstalled(srv.ID) {
+			continue // Not installed
+		}
+		// Check if this standard server provides any needed tools
+		// First try the persistent file-based cache
+		cachedEntries := cache.GetToolsForServer(srv.ID)
+		if len(cachedEntries) > 0 {
+			for _, e := range cachedEntries {
+				if toolsNeeded[e.Name] {
+					serversNeeded[srv.ID] = true
+					break
+				}
+			}
+		} else {
+			// Fallback: check the known web tool names from the definition
+			if srv.WebSearchTool != "" {
+				if parts := strings.SplitN(srv.WebSearchTool, ":", 2); len(parts) == 2 {
+					if toolsNeeded[parts[1]] {
+						serversNeeded[srv.ID] = true
+					}
+				}
+			}
+			if srv.WebExtractTool != "" && !serversNeeded[srv.ID] {
+				if parts := strings.SplitN(srv.WebExtractTool, ":", 2); len(parts) == 2 {
+					if toolsNeeded[parts[1]] {
+						serversNeeded[srv.ID] = true
+					}
+				}
+			}
 		}
 	}
 

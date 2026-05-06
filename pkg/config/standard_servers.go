@@ -41,8 +41,8 @@ var standardServers = []StandardMCPServer{
 		EnvVars: []StandardEnvVar{
 			{Name: "TAVILY_API_KEY", Required: true, Description: "Your Tavily API key (get one at tavily.com)"},
 		},
-		WebSearchTool:  "tavily:tavily-search",
-		WebExtractTool: "tavily:tavily-extract",
+		WebSearchTool:  "tavily:tavily_search",
+		WebExtractTool: "tavily:tavily_extract",
 		IsDefault:      true,
 	},
 	{

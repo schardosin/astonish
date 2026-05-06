@@ -187,6 +187,12 @@ func GetServerForTool(toolName string) string {
 // GetToolsForServer returns all tools from a specific server
 func GetToolsForServer(serverName string) []ToolEntry {
 	cacheMu.RLock()
+	if memoryCache == nil {
+		cacheMu.RUnlock()
+		// Lazy-load: persistent cache not yet loaded (e.g. platform mode)
+		LoadCache() //nolint:errcheck
+		cacheMu.RLock()
+	}
 	defer cacheMu.RUnlock()
 
 	if memoryCache == nil {

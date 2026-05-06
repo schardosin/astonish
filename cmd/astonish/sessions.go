@@ -813,18 +813,21 @@ func renderRemoteTrace(trace map[string]any, opts TraceOpts) {
 		}
 
 		switch evType {
-		case "text":
+		case "user":
 			if !opts.ToolsOnly && text != "" {
-				author, _ := ev["author"].(string)
 				display := text
 				if textMax > 0 && len(display) > textMax {
 					display = display[:textMax-3] + "..."
 				}
-				if author == "user" {
-					fmt.Printf("%s[user] %s\n\n", indent, display)
-				} else {
-					fmt.Printf("%s[model] %s\n\n", indent, display)
+				fmt.Printf("%s[user] %s\n\n", indent, display)
+			}
+		case "model":
+			if !opts.ToolsOnly && text != "" {
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
 				}
+				fmt.Printf("%s[model] %s\n\n", indent, display)
 			}
 		case "tool_call":
 			argsRaw, _ := ev["args"].(map[string]any)
@@ -851,7 +854,18 @@ func renderRemoteTrace(trace map[string]any, opts TraceOpts) {
 				}
 			}
 
-			if errStr != "" {
+			// Check success field
+			success := true
+			if s, ok := ev["success"].(*bool); ok && s != nil {
+				success = *s
+			} else if s, ok := ev["success"].(bool); ok {
+				success = s
+			}
+
+			if !success || errStr != "" {
+				if errStr == "" {
+					errStr = "unknown error"
+				}
 				if argsMax > 0 && len(errStr) > argsMax {
 					errStr = errStr[:argsMax-3] + "..."
 				}

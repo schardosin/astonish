@@ -306,7 +306,7 @@ func (sm *SessionManager) TouchSession(sessionID string) {
 }
 
 // GetOrCreateMCPManager returns the MCP manager for a session, creating if needed
-func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID string, requiredServers []string, mcpStore store.MCPServerStore) (*mcp.Manager, []tool.Toolset) {
+func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID string, requiredServers []string, mcpStores ...store.MCPServerStore) (*mcp.Manager, []tool.Toolset) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -325,9 +325,15 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 
 	var mgr *mcp.Manager
 
-	// Platform mode: build config from DB store
-	if mcpStore != nil {
-		mcpCfg := buildMCPConfigFromStore(mcpStore, requiredServers)
+	// Platform mode: build config from DB stores
+	var validStores []store.MCPServerStore
+	for _, s := range mcpStores {
+		if s != nil {
+			validStores = append(validStores, s)
+		}
+	}
+	if len(validStores) > 0 {
+		mcpCfg := buildMCPConfigFromStores(validStores, requiredServers)
 		mgr = mcp.NewManagerFromConfig(mcpCfg)
 	} else {
 		// Personal mode: load from filesystem
@@ -348,9 +354,10 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 	return mgr, mgr.GetToolsets()
 }
 
-// buildMCPConfigFromStore creates an MCPConfig from the platform DB store
-// for the specified server names.
-func buildMCPConfigFromStore(mcpStore store.MCPServerStore, requiredServers []string) *config.MCPConfig {
+// buildMCPConfigFromStores creates an MCPConfig from multiple platform DB stores
+// (typically team + org) for the specified server names. Team store is queried first
+// so that team-level server configs override org-level ones of the same name.
+func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers []string) *config.MCPConfig {
 	cfg := &config.MCPConfig{
 		MCPServers: make(map[string]config.MCPServerConfig),
 	}
@@ -360,25 +367,33 @@ func buildMCPConfigFromStore(mcpStore store.MCPServerStore, requiredServers []st
 		needed[name] = true
 	}
 
-	allServers, err := mcpStore.List()
-	if err != nil {
-		slog.Warn("failed to list MCP servers from store for config build", "error", err)
-		return cfg
-	}
-
-	for _, srv := range allServers {
-		if !needed[srv.Name] {
+	// Query each store in order (team first, org second).
+	// First match wins — team servers override org servers of the same name.
+	for _, mcpStore := range mcpStores {
+		allServers, err := mcpStore.List()
+		if err != nil {
+			slog.Warn("failed to list MCP servers from store for config build", "error", err)
 			continue
 		}
-		serverCfg := config.MCPServerConfig{
-			Command:   srv.Command,
-			Args:      srv.Args,
-			Env:       srv.Env,
-			Transport: srv.Transport,
-			URL:       srv.URL,
-			Enabled:   srv.Enabled,
+
+		for _, srv := range allServers {
+			if !needed[srv.Name] {
+				continue
+			}
+			// Skip if already found in a higher-priority store
+			if _, exists := cfg.MCPServers[srv.Name]; exists {
+				continue
+			}
+			serverCfg := config.MCPServerConfig{
+				Command:   srv.Command,
+				Args:      srv.Args,
+				Env:       srv.Env,
+				Transport: srv.Transport,
+				URL:       srv.URL,
+				Enabled:   srv.Enabled,
+			}
+			cfg.MCPServers[srv.Name] = serverCfg
 		}
-		cfg.MCPServers[srv.Name] = serverCfg
 	}
 
 	// Merge installed standard servers (Tavily, Brave, Firecrawl, etc.)
@@ -450,7 +465,7 @@ func HandleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
 
 // getRequiredMCPServers extracts the list of MCP server names needed for this flow
 // It maps tool names from nodes' ToolsSelection to their source MCP server names
-func getRequiredMCPServers(cfg *config.AgentConfig, mcpStore store.MCPServerStore) []string {
+func getRequiredMCPServers(cfg *config.AgentConfig, mcpStores ...store.MCPServerStore) []string {
 	// Collect all required tools from the flow
 	toolsNeeded := make(map[string]bool)
 	for _, node := range cfg.Nodes {
@@ -463,9 +478,16 @@ func getRequiredMCPServers(cfg *config.AgentConfig, mcpStore store.MCPServerStor
 		return nil
 	}
 
-	// Platform mode: query the DB store for tool→server mappings
-	if mcpStore != nil {
-		return getRequiredMCPServersFromStore(mcpStore, toolsNeeded)
+	// Platform mode: query the DB stores for tool→server mappings
+	// Filter out nil stores
+	var validStores []store.MCPServerStore
+	for _, s := range mcpStores {
+		if s != nil {
+			validStores = append(validStores, s)
+		}
+	}
+	if len(validStores) > 0 {
+		return getRequiredMCPServersFromStore(validStores, toolsNeeded)
 	}
 
 	// Personal mode: use file-based cache
@@ -485,38 +507,42 @@ func getRequiredMCPServers(cfg *config.AgentConfig, mcpStore store.MCPServerStor
 	return servers
 }
 
-// getRequiredMCPServersFromStore queries the platform MCP store's cached_tools
-// to find which servers provide the needed tools.
-func getRequiredMCPServersFromStore(mcpStore store.MCPServerStore, toolsNeeded map[string]bool) []string {
-	allServers, err := mcpStore.List()
-	if err != nil {
-		slog.Warn("failed to list MCP servers from store", "error", err)
-		return nil
-	}
-
+// getRequiredMCPServersFromStore queries multiple platform MCP stores' cached_tools
+// to find which servers provide the needed tools. Stores are queried in order
+// (typically team first, then org) so that team-level servers take precedence.
+func getRequiredMCPServersFromStore(mcpStores []store.MCPServerStore, toolsNeeded map[string]bool) []string {
 	serversNeeded := make(map[string]bool)
-	for _, srv := range allServers {
-		if !srv.IsEnabled() {
+
+	for _, mcpStore := range mcpStores {
+		allServers, err := mcpStore.List()
+		if err != nil {
+			slog.Warn("failed to list MCP servers from store", "error", err)
 			continue
 		}
-		// Check cached_tools to see if this server provides any needed tools
-		if len(srv.CachedTools) > 0 {
-			var tools []struct {
-				Name string `json:"name"`
+
+		for _, srv := range allServers {
+			if !srv.IsEnabled() {
+				continue
 			}
-			if err := json.Unmarshal(srv.CachedTools, &tools); err == nil {
-				for _, t := range tools {
-					if toolsNeeded[t.Name] {
-						serversNeeded[srv.Name] = true
-						break
+			// Check cached_tools to see if this server provides any needed tools
+			if len(srv.CachedTools) > 0 {
+				var tools []struct {
+					Name string `json:"name"`
+				}
+				if err := json.Unmarshal(srv.CachedTools, &tools); err == nil {
+					for _, t := range tools {
+						if toolsNeeded[t.Name] {
+							serversNeeded[srv.Name] = true
+							break
+						}
 					}
 				}
 			}
-		}
-		// Also check if the server name itself is in the tool list
-		// (some flows reference server names directly)
-		if toolsNeeded[srv.Name] {
-			serversNeeded[srv.Name] = true
+			// Also check if the server name itself is in the tool list
+			// (some flows reference server names directly)
+			if toolsNeeded[srv.Name] {
+				serversNeeded[srv.Name] = true
+			}
 		}
 	}
 
@@ -752,13 +778,14 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Initialize MCP - per-session, only servers needed for this flow
-	// In platform mode, use the team MCP store (with org fallback) for server configs
-	var flowMCPStore store.MCPServerStore
+	// In platform mode, query both team and org MCP stores for server configs
+	var teamMCPStore, orgMCPStore store.MCPServerStore
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
-		flowMCPStore = svc.TeamMCPServers
+		teamMCPStore = svc.TeamMCPServers
+		orgMCPStore = svc.MCPServers
 	}
-	requiredServers := getRequiredMCPServers(cfg, flowMCPStore)
-	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers, flowMCPStore)
+	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore)
+	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers, teamMCPStore, orgMCPStore)
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)

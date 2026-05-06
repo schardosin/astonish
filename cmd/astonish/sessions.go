@@ -657,42 +657,92 @@ func renderRemoteSessionDetail(detail map[string]any, verbose bool) {
 		if !ok {
 			continue
 		}
-		role, _ := msg["role"].(string)
-		text, _ := msg["text"].(string)
+		msgType, _ := msg["type"].(string)
+		content, _ := msg["content"].(string)
+		toolName, _ := msg["toolName"].(string)
 
-		switch role {
+		switch msgType {
 		case "user":
-			if text != "" {
-				display := text
+			if content != "" {
+				display := content
 				if textMax > 0 && len(display) > textMax {
 					display = display[:textMax-3] + "..."
 				}
 				fmt.Printf("[user] %s\n\n", display)
 			}
-		case "model":
-			if text != "" {
-				display := text
+		case "agent":
+			if content != "" {
+				display := content
 				if textMax > 0 && len(display) > textMax {
 					display = display[:textMax-3] + "..."
 				}
 				fmt.Printf("[model] %s\n\n", display)
 			}
 		case "tool_call":
-			toolName, _ := msg["toolName"].(string)
 			if toolName != "" {
-				fmt.Printf("[tool] %s\n", toolName)
+				argsStr := ""
+				if args, ok := msg["toolArgs"].(map[string]any); ok && verbose {
+					argsJSON, _ := json.Marshal(args)
+					argsStr = " " + string(argsJSON)
+				}
+				fmt.Printf("[tool] %s%s\n", toolName, argsStr)
 			}
 		case "tool_result":
-			toolName, _ := msg["toolName"].(string)
-			success := true
-			if s, ok := msg["success"].(bool); ok {
-				success = s
+			if toolName != "" {
+				resultStr := "OK"
+				if result, ok := msg["toolResult"].(map[string]any); ok {
+					if errMsg, ok := result["error"].(string); ok && errMsg != "" {
+						resultStr = "ERROR: " + errMsg
+						if textMax > 0 && len(resultStr) > textMax {
+							resultStr = resultStr[:textMax-3] + "..."
+						}
+					} else if verbose {
+						rJSON, _ := json.Marshal(result)
+						resultStr = string(rJSON)
+					}
+				}
+				fmt.Printf("   -> %s %s\n\n", toolName, resultStr)
 			}
-			if success {
-				fmt.Printf("   -> %s OK\n\n", toolName)
-			} else {
-				errMsg, _ := msg["error"].(string)
-				fmt.Printf("   -> %s ERROR: %s\n\n", toolName, errMsg)
+		case "subtask_execution":
+			tasks, _ := msg["tasks"].([]any)
+			status, _ := msg["status"].(string)
+			if len(tasks) > 0 {
+				fmt.Printf("[subtasks] %d tasks", len(tasks))
+				if status != "" {
+					fmt.Printf(" (%s)", status)
+				}
+				fmt.Println()
+				for _, t := range tasks {
+					if task, ok := t.(map[string]any); ok {
+						name, _ := task["name"].(string)
+						fmt.Printf("   • %s\n", name)
+					}
+				}
+				fmt.Println()
+			}
+		case "plan":
+			goal, _ := msg["goal"].(string)
+			steps, _ := msg["steps"].([]any)
+			if goal != "" {
+				fmt.Printf("[plan] %s\n", goal)
+				for _, s := range steps {
+					if step, ok := s.(map[string]any); ok {
+						name, _ := step["name"].(string)
+						stepStatus, _ := step["status"].(string)
+						marker := "○"
+						if stepStatus == "complete" {
+							marker = "✓"
+						} else if stepStatus == "in_progress" {
+							marker = "▶"
+						}
+						fmt.Printf("   %s %s\n", marker, name)
+					}
+				}
+				fmt.Println()
+			}
+		case "system":
+			if content != "" {
+				fmt.Printf("[system] %s\n\n", content)
 			}
 		}
 	}

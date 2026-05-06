@@ -1,7 +1,6 @@
 package astonish
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -13,6 +12,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
@@ -1128,9 +1128,48 @@ func handleFlowsRunRemote(args []string) error {
 
 	// Track current node for param injection
 	var currentNode string
-	reader := bufio.NewReader(os.Stdin)
 
-	fmt.Printf("%sRunning flow: %s%s\n\n", launcher.ColorCyan, flowName, launcher.ColorReset)
+	// Spinner management (same pattern as chat_remote.go)
+	var spinnerProgram *tea.Program
+	var spinnerDone chan struct{}
+	lineHasContent := false
+
+	stopSpinner := func(markDone bool, success bool) {
+		if spinnerProgram != nil {
+			spinnerProgram.Quit()
+			if spinnerDone != nil {
+				<-spinnerDone
+			}
+			spinnerProgram = nil
+			spinnerDone = nil
+			if markDone {
+				if success {
+					fmt.Println(ui.RenderStatusBadge("Done", true))
+				} else {
+					fmt.Println(ui.RenderStatusBadge("Failed", false))
+				}
+			}
+		}
+	}
+
+	startSpinner := func(text string) {
+		stopSpinner(false, false)
+		if lineHasContent {
+			fmt.Print("\n")
+			lineHasContent = false
+		}
+		spinnerDone = make(chan struct{})
+		spinnerModel := ui.NewSpinner(text)
+		spinnerProgram = tea.NewProgram(spinnerModel, tea.WithInput(nil))
+		go func() {
+			spinnerProgram.Run() //nolint:errcheck
+			close(spinnerDone)
+		}()
+	}
+
+	defer stopSpinner(false, false)
+
+	startSpinner(fmt.Sprintf("Starting flow: %s...", flowName))
 
 	// Multi-turn loop
 	message := "" // First turn starts with empty message
@@ -1140,10 +1179,12 @@ func handleFlowsRunRemote(args []string) error {
 			SessionID:   sessionID,
 			Message:     message,
 			AutoApprove: autoApprove,
+			CLIMode:     true, // Get ANSI-rendered output (tool boxes, etc.)
 		}
 
 		stream, err := c.SendFlowMessage(req)
 		if err != nil {
+			stopSpinner(false, false)
 			return fmt.Errorf("flow execution: %w", err)
 		}
 
@@ -1151,7 +1192,9 @@ func handleFlowsRunRemote(args []string) error {
 		needsInput := false
 		needsApproval := false
 		flowDone := false
-		var approvalOptions []string
+		agentPrefixPrinted := false
+		inToolBox := false
+		var inputPromptText strings.Builder // Capture text before input_request for prompt
 
 		for {
 			event, err := stream.Next()
@@ -1169,10 +1212,13 @@ func handleFlowsRunRemote(args []string) error {
 				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
 					currentNode = payload.Node
 					if currentNode == "END" {
+						stopSpinner(true, true)
 						flowDone = true
-					}
-					if !payload.Silent && payload.Node != "END" {
-						fmt.Printf("%s[%s]%s ", launcher.ColorGray, payload.Node, launcher.ColorReset)
+					} else if payload.Type == "input" {
+						// Input node — stop spinner, wait for prompt text
+						stopSpinner(false, false)
+					} else if !payload.Silent {
+						startSpinner(fmt.Sprintf("Processing %s...", payload.Node))
 					}
 				}
 
@@ -1181,15 +1227,35 @@ func handleFlowsRunRemote(args []string) error {
 					Text string `json:"text"`
 				}
 				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-					fmt.Print(payload.Text)
-				}
+					text := payload.Text
 
-			case "tool_call":
-				var payload struct {
-					Name string `json:"name"`
-				}
-				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-					fmt.Printf("%s  → %s%s\n", launcher.ColorGray, payload.Name, launcher.ColorReset)
+					// Detect tool box boundaries (ANSI-rendered from cliMode)
+					if strings.Contains(text, "╭") {
+						inToolBox = true
+					}
+					if inToolBox {
+						stopSpinner(false, false)
+						if !agentPrefixPrinted {
+							fmt.Printf("\n%sAgent:%s\n", launcher.ColorGreen, launcher.ColorReset)
+							agentPrefixPrinted = true
+						}
+						fmt.Print(text)
+						lineHasContent = !strings.HasSuffix(text, "\n")
+						if strings.Contains(text, "╰") {
+							inToolBox = false
+						}
+					} else {
+						// Regular text output
+						stopSpinner(false, false)
+						if !agentPrefixPrinted {
+							fmt.Printf("\n%sAgent:%s\n", launcher.ColorGreen, launcher.ColorReset)
+							agentPrefixPrinted = true
+						}
+						fmt.Print(text)
+						lineHasContent = !strings.HasSuffix(text, "\n")
+						// Also capture for input prompt
+						inputPromptText.WriteString(text)
+					}
 				}
 
 			case "input_request":
@@ -1198,27 +1264,28 @@ func handleFlowsRunRemote(args []string) error {
 				}
 				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
 					needsInput = true
-				}
-
-			case "approval":
-				var payload struct {
-					Tool    string   `json:"tool"`
-					Options []string `json:"options"`
-				}
-				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-					needsApproval = true
-					approvalOptions = payload.Options
-				}
-
-			case "auto_approved":
-				var payload struct {
-					Tool string `json:"tool"`
-				}
-				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-					fmt.Printf("%s  ✓ Auto-approved: %s%s\n", launcher.ColorGreen, payload.Tool, launcher.ColorReset)
+					// If we have options, check if this is actually a tool approval
+					// (approval_options vs input_options both come as input_request)
+					if len(payload.Options) > 0 {
+						// Check if options look like approval (Yes/No pattern)
+						firstOpt := ""
+						if s, ok := payload.Options[0].(string); ok {
+							firstOpt = s
+						}
+						if firstOpt == "Yes" || firstOpt == "No" {
+							needsInput = false
+							needsApproval = true
+							for _, opt := range payload.Options {
+								if s, ok := opt.(string); ok {
+									_ = s // approvalOptions tracked below
+								}
+							}
+						}
+					}
 				}
 
 			case "error", "error_info":
+				stopSpinner(false, false)
 				var payload struct {
 					Error  string `json:"error"`
 					Title  string `json:"title"`
@@ -1234,6 +1301,7 @@ func handleFlowsRunRemote(args []string) error {
 					}
 					if msg != "" {
 						fmt.Fprintf(os.Stderr, "\n%sError:%s %s\n", launcher.ColorRed, launcher.ColorReset, msg)
+						lineHasContent = false
 					}
 				}
 
@@ -1243,9 +1311,14 @@ func handleFlowsRunRemote(args []string) error {
 		}
 		stream.Close()
 
+		// Ensure newline after content
+		if lineHasContent {
+			fmt.Println()
+			lineHasContent = false
+		}
+
 		// Flow reached END
 		if flowDone {
-			fmt.Println()
 			return nil
 		}
 
@@ -1253,41 +1326,55 @@ func handleFlowsRunRemote(args []string) error {
 		if needsInput {
 			// Check if we have a pre-provided param for this node
 			if val, ok := params[currentNode]; ok {
-				fmt.Printf("%s  [auto-filled: %s=%s]%s\n", launcher.ColorGray, currentNode, val, launcher.ColorReset)
+				fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("Auto-filled %s = %s", currentNode, val), true))
 				message = val
 				continue
 			}
 
-			// Prompt user interactively
-			fmt.Printf("\n%sInput (%s):%s ", launcher.ColorCyan, currentNode, launcher.ColorReset)
-			input, readErr := reader.ReadString('\n')
+			// Extract prompt title/description from captured text
+			promptText := strings.TrimSpace(inputPromptText.String())
+			title := currentNode
+			description := ""
+			if promptText != "" {
+				lines := strings.SplitN(promptText, "\n", 2)
+				title = strings.TrimSpace(lines[0])
+				if len(lines) > 1 {
+					description = strings.TrimSpace(lines[1])
+				}
+			}
+
+			// Use huh input widget (same as local mode)
+			input, readErr := ui.ReadInput(title, description)
 			if readErr != nil {
 				return fmt.Errorf("reading input: %w", readErr)
 			}
-			message = strings.TrimSpace(input)
+			fmt.Println(ui.RenderStatusBadge(fmt.Sprintf("Input: %s", input), true))
+			message = input
 			continue
 		}
 
 		// Handle approval request
 		if needsApproval {
 			if autoApprove {
+				fmt.Println(ui.RenderStatusBadge("Auto Approved", true))
 				message = "Yes"
 				continue
 			}
 			opts := []string{"Yes", "No"}
-			if len(approvalOptions) > 0 {
-				opts = approvalOptions
-			}
-			selection, selErr := ui.ReadSelection(opts, "Approve tool execution?", "")
+			selection, selErr := ui.ReadSelection(opts, "Approval Required", "")
 			if selErr != nil {
 				return selErr
+			}
+			if selection == "Yes" {
+				fmt.Println(ui.RenderStatusBadge("Command approved", true))
+			} else {
+				fmt.Println(ui.RenderStatusBadge("Command rejected", false))
 			}
 			message = selection
 			continue
 		}
 
 		// No input/approval needed and flow didn't end — we're done
-		fmt.Println()
 		return nil
 	}
 }

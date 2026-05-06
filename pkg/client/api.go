@@ -127,6 +127,7 @@ type FlowChatRequest struct {
 	Provider    string `json:"provider,omitempty"`
 	Model       string `json:"model,omitempty"`
 	AutoApprove bool   `json:"autoApprove,omitempty"`
+	CLIMode     bool   `json:"cliMode,omitempty"`
 }
 
 // SendFlowMessage sends a message to a flow execution session and returns an SSE stream.

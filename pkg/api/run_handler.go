@@ -37,6 +37,7 @@ type ChatRequest struct {
 	Provider    string `json:"provider,omitempty"`
 	Model       string `json:"model,omitempty"`
 	AutoApprove bool   `json:"autoApprove,omitempty"` // Global auto-approve flag
+	CLIMode     bool   `json:"cliMode,omitempty"`     // When true, renders ANSI output (tool boxes etc.)
 }
 
 // SessionManager manages active sessions
@@ -761,8 +762,8 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
-	astonishAgent.DebugMode = false // Disable verbose debug output
-	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
+	astonishAgent.DebugMode = false     // Disable verbose debug output
+	astonishAgent.IsWebMode = !req.CLIMode // CLI mode renders ANSI tool boxes; web mode uses markdown
 	astonishAgent.SessionService = sm.service
 	astonishAgent.AutoApprove = req.AutoApprove
 

@@ -1085,13 +1085,13 @@ func handleFlowsListRemote() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tDESCRIPTION")
+	fmt.Fprintln(w, "NAME\tSOURCE\tDESCRIPTION")
 	for _, f := range flows {
 		desc := f.Description
 		if len(desc) > 60 {
 			desc = desc[:57] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\n", f.Name, desc)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", f.Name, f.Source, desc)
 	}
 	w.Flush()
 	return nil

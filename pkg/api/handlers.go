@@ -1061,6 +1061,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
+	// Flow execution endpoint (headless with params, SSE streaming)
+	router.HandleFunc("/api/agents/{name}/run", FlowRunHandler).Methods("POST")
 	// Flow sharing endpoints (must be before wildcard copy-to-local route)
 	router.HandleFunc("/api/agents/{name}/publish", FlowPublishToTeamHandler).Methods("POST")
 	router.HandleFunc("/api/agents/{name}/fork", FlowForkToPersonalHandler).Methods("POST")

@@ -89,31 +89,32 @@ func (c *Client) DeleteSession(id string) error {
 
 // --- Flow API ---
 
-// FlowMeta represents a flow summary.
+// FlowMeta represents a flow/agent summary.
 type FlowMeta struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
-	Path        string `json:"path,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Scope       string `json:"scope,omitempty"`
 }
 
-// ListFlows returns all available flows.
+// ListFlows returns all available flows/agents.
 func (c *Client) ListFlows() ([]FlowMeta, error) {
-	var flows []FlowMeta
-	if err := c.DoJSON("GET", "/api/flows", nil, &flows); err != nil {
+	var resp struct {
+		Agents []FlowMeta `json:"agents"`
+	}
+	if err := c.DoJSON("GET", "/api/agents", nil, &resp); err != nil {
 		return nil, err
 	}
-	return flows, nil
+	return resp.Agents, nil
 }
 
-// RunFlow starts a flow execution and returns an SSE stream.
+// RunFlow starts a headless flow execution and returns an SSE stream.
 func (c *Client) RunFlow(flowName string, params map[string]string) (*SSEStream, error) {
-	body := map[string]any{
-		"flow": flowName,
-	}
+	body := map[string]any{}
 	if len(params) > 0 {
 		body["params"] = params
 	}
-	return c.SSE("POST", "/api/run", body)
+	return c.SSE("POST", fmt.Sprintf("/api/agents/%s/run", flowName), body)
 }
 
 // --- Chat API ---

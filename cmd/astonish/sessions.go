@@ -491,7 +491,7 @@ func handleSessionsRemote(args []string) error {
 		if len(args) < 2 {
 			return fmt.Errorf("session ID required")
 		}
-		return handleSessionsShowRemote(c, args[1])
+		return handleSessionsShowRemote(c, args[1], args[2:])
 	case "delete", "rm":
 		if len(args) < 2 {
 			return fmt.Errorf("session ID required")
@@ -536,16 +536,315 @@ func handleSessionsListRemote(c *client.Client) error {
 	return nil
 }
 
-func handleSessionsShowRemote(c *client.Client, id string) error {
+func handleSessionsShowRemote(c *client.Client, id string, flags []string) error {
+	// Parse flags (same as local mode)
+	opts := TraceOpts{}
+	for i := 0; i < len(flags); i++ {
+		switch flags[i] {
+		case "--json":
+			opts.JSONOutput = true
+		case "--tools-only", "-t":
+			opts.ToolsOnly = true
+		case "--verbose", "-v":
+			opts.Verbose = true
+		case "--recursive", "-r":
+			opts.Recursive = true
+		case "--last", "-n":
+			if i+1 < len(flags) {
+				i++
+				n, err := strconv.Atoi(flags[i])
+				if err != nil {
+					return fmt.Errorf("invalid value for --last: %s", flags[i])
+				}
+				opts.LastN = n
+			} else {
+				return fmt.Errorf("--last requires a number")
+			}
+		default:
+			if strings.HasPrefix(flags[i], "-n") && len(flags[i]) > 2 {
+				n, err := strconv.Atoi(flags[i][2:])
+				if err == nil {
+					opts.LastN = n
+					continue
+				}
+			}
+			return fmt.Errorf("unknown flag: %s", flags[i])
+		}
+	}
+
+	// If any trace-related flags are set, or --json is requested, use the trace endpoint
+	useTrace := opts.JSONOutput || opts.Recursive || opts.ToolsOnly || opts.LastN > 0
+
+	if useTrace {
+		traceOpts := client.TraceOpts{
+			Recursive: opts.Recursive,
+			ToolsOnly: opts.ToolsOnly,
+			Verbose:   opts.Verbose,
+			LastN:     opts.LastN,
+		}
+
+		trace, err := c.GetSessionTrace(id, traceOpts)
+		if err != nil {
+			return fmt.Errorf("get session trace: %w", err)
+		}
+
+		if opts.JSONOutput {
+			out, _ := json.MarshalIndent(trace, "", "  ")
+			fmt.Println(string(out))
+			return nil
+		}
+
+		// Render the trace entries in human-readable form
+		renderRemoteTrace(trace, opts)
+		return nil
+	}
+
+	// Default: get session detail and pretty-print as conversation
 	detail, err := c.GetSession(id)
 	if err != nil {
 		return fmt.Errorf("get session: %w", err)
 	}
 
-	// Pretty-print the JSON
-	out, _ := json.MarshalIndent(detail, "", "  ")
-	fmt.Println(string(out))
+	renderRemoteSessionDetail(detail, opts.Verbose)
 	return nil
+}
+
+// renderRemoteSessionDetail pretty-prints a session detail response as a readable conversation.
+func renderRemoteSessionDetail(detail map[string]any, verbose bool) {
+	// Print metadata header
+	id, _ := detail["id"].(string)
+	title, _ := detail["title"].(string)
+	createdAt, _ := detail["createdAt"].(string)
+	updatedAt, _ := detail["updatedAt"].(string)
+
+	fmt.Printf("Session: %s\n", id)
+	if title != "" {
+		fmt.Printf("Title:   %s\n", title)
+	}
+	if createdAt != "" {
+		fmt.Printf("Created: %s\n", createdAt)
+	}
+	if updatedAt != "" {
+		fmt.Printf("Updated: %s\n", updatedAt)
+	}
+
+	// Usage summary
+	if usage, ok := detail["totalUsage"].(map[string]any); ok {
+		input, _ := usage["inputTokens"].(float64)
+		output, _ := usage["outputTokens"].(float64)
+		if input > 0 || output > 0 {
+			fmt.Printf("Tokens:  %d input, %d output\n", int(input), int(output))
+		}
+	}
+
+	// Messages
+	messages, _ := detail["messages"].([]any)
+	if len(messages) == 0 {
+		fmt.Println("\nNo messages recorded.")
+		return
+	}
+
+	fmt.Printf("Messages: %d\n", len(messages))
+	fmt.Println()
+
+	textMax := 500
+	if verbose {
+		textMax = 0
+	}
+
+	for _, msgRaw := range messages {
+		msg, ok := msgRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := msg["role"].(string)
+		text, _ := msg["text"].(string)
+
+		switch role {
+		case "user":
+			if text != "" {
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
+				}
+				fmt.Printf("[user] %s\n\n", display)
+			}
+		case "model":
+			if text != "" {
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
+				}
+				fmt.Printf("[model] %s\n\n", display)
+			}
+		case "tool_call":
+			toolName, _ := msg["toolName"].(string)
+			if toolName != "" {
+				fmt.Printf("[tool] %s\n", toolName)
+			}
+		case "tool_result":
+			toolName, _ := msg["toolName"].(string)
+			success := true
+			if s, ok := msg["success"].(bool); ok {
+				success = s
+			}
+			if success {
+				fmt.Printf("   -> %s OK\n\n", toolName)
+			} else {
+				errMsg, _ := msg["error"].(string)
+				fmt.Printf("   -> %s ERROR: %s\n\n", toolName, errMsg)
+			}
+		}
+	}
+}
+
+// renderRemoteTrace renders trace entries from the server in human-readable format.
+func renderRemoteTrace(trace map[string]any, opts TraceOpts) {
+	// Print header
+	sessionID, _ := trace["session_id"].(string)
+	app, _ := trace["app"].(string)
+	user, _ := trace["user"].(string)
+
+	fmt.Printf("Session: %s\n", sessionID)
+	if app != "" {
+		fmt.Printf("App:     %s\n", app)
+	}
+	if user != "" {
+		fmt.Printf("User:    %s\n", user)
+	}
+	fmt.Println()
+
+	events, _ := trace["events"].([]any)
+	if len(events) == 0 {
+		fmt.Println("No events recorded.")
+		return
+	}
+
+	argsMax := 200
+	textMax := 500
+	if opts.Verbose {
+		argsMax = 0
+		textMax = 0
+	}
+
+	lastSession := ""
+
+	for _, evRaw := range events {
+		ev, ok := evRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		evType, _ := ev["type"].(string)
+		timestamp, _ := ev["timestamp"].(string)
+		session, _ := ev["session"].(string)
+		text, _ := ev["text"].(string)
+		toolName, _ := ev["tool_name"].(string)
+		errStr, _ := ev["error"].(string)
+		durationMs, _ := ev["duration_ms"].(float64)
+
+		// Show sub-session header when session label changes
+		if session != "" && session != lastSession {
+			fmt.Printf("\n  === Sub-agent: %s ===\n", session)
+			lastSession = session
+		}
+
+		indent := ""
+		if session != "" {
+			indent = "  "
+		}
+
+		// Format timestamp to HH:MM:SS
+		ts := timestamp
+		if t, parseErr := time.Parse(time.RFC3339Nano, timestamp); parseErr == nil {
+			ts = t.Format("15:04:05")
+		} else if t, parseErr := time.Parse(time.RFC3339, timestamp); parseErr == nil {
+			ts = t.Format("15:04:05")
+		}
+
+		switch evType {
+		case "text":
+			if !opts.ToolsOnly && text != "" {
+				author, _ := ev["author"].(string)
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
+				}
+				if author == "user" {
+					fmt.Printf("%s[user] %s\n\n", indent, display)
+				} else {
+					fmt.Printf("%s[model] %s\n\n", indent, display)
+				}
+			}
+		case "tool_call":
+			argsRaw, _ := ev["args"].(map[string]any)
+			argsStr := ""
+			if argsRaw != nil {
+				argsJSON, _ := json.Marshal(argsRaw)
+				argsStr = string(argsJSON)
+				if argsMax > 0 && len(argsStr) > argsMax {
+					argsStr = argsStr[:argsMax-3] + "..."
+				}
+			}
+			if opts.ToolsOnly {
+				fmt.Printf("%s%s  %s %s\n", indent, ts, toolName, argsStr)
+			} else {
+				fmt.Printf("%s[tool] %s %s\n", indent, toolName, argsStr)
+			}
+		case "tool_result":
+			durationStr := ""
+			if durationMs > 0 {
+				if durationMs < 1000 {
+					durationStr = fmt.Sprintf("%dms", int(durationMs))
+				} else {
+					durationStr = fmt.Sprintf("%.1fs", durationMs/1000)
+				}
+			}
+
+			if errStr != "" {
+				if argsMax > 0 && len(errStr) > argsMax {
+					errStr = errStr[:argsMax-3] + "..."
+				}
+				if opts.ToolsOnly {
+					fmt.Printf("%s         -> ERROR: %s  (%s)\n", indent, errStr, durationStr)
+				} else {
+					fmt.Printf("%s   -> ERROR: %s  (%s)\n\n", indent, errStr, durationStr)
+				}
+			} else {
+				resultRaw, _ := ev["result"].(map[string]any)
+				resultStr := "OK"
+				if resultRaw != nil {
+					rJSON, _ := json.Marshal(resultRaw)
+					resultStr = string(rJSON)
+					if argsMax > 0 && len(resultStr) > argsMax {
+						resultStr = resultStr[:argsMax-3] + "..."
+					}
+				}
+				if opts.ToolsOnly {
+					fmt.Printf("%s         -> %s  (%s)\n", indent, resultStr, durationStr)
+				} else {
+					fmt.Printf("%s   -> %s  (%s)\n\n", indent, resultStr, durationStr)
+				}
+			}
+		}
+	}
+
+	// Summary
+	if summary, ok := trace["summary"].(map[string]any); ok {
+		fmt.Println()
+		totalEvents, _ := summary["total_events"].(float64)
+		toolCalls, _ := summary["tool_calls"].(float64)
+		errors, _ := summary["errors"].(float64)
+
+		parts := []string{fmt.Sprintf("%d events", int(totalEvents))}
+		if toolCalls > 0 {
+			parts = append(parts, fmt.Sprintf("%d tool calls", int(toolCalls)))
+		}
+		if errors > 0 {
+			parts = append(parts, fmt.Sprintf("%d errors", int(errors)))
+		}
+		fmt.Printf("--- %s ---\n", strings.Join(parts, " | "))
+	}
 }
 
 func handleSessionsDeleteRemote(c *client.Client, id string) error {

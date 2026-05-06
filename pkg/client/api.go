@@ -37,6 +37,43 @@ func (c *Client) GetSession(id string) (map[string]any, error) {
 	return detail, nil
 }
 
+// TraceOpts holds query parameters for the session trace endpoint.
+type TraceOpts struct {
+	Recursive bool
+	ToolsOnly bool
+	Verbose   bool
+	LastN     int
+}
+
+// GetSessionTrace returns the chronological trace of a session.
+func (c *Client) GetSessionTrace(id string, opts TraceOpts) (map[string]any, error) {
+	path := fmt.Sprintf("/api/studio/sessions/%s/trace?", id)
+	params := ""
+	if opts.Recursive {
+		params += "recursive=true&"
+	}
+	if opts.ToolsOnly {
+		params += "tools_only=true&"
+	}
+	if opts.Verbose {
+		params += "verbose=true&"
+	}
+	if opts.LastN > 0 {
+		params += fmt.Sprintf("last_n=%d&", opts.LastN)
+	}
+	// Trim trailing & or ?
+	url := path + params
+	if url[len(url)-1] == '&' || url[len(url)-1] == '?' {
+		url = url[:len(url)-1]
+	}
+
+	var trace map[string]any
+	if err := c.DoJSON("GET", url, nil, &trace); err != nil {
+		return nil, err
+	}
+	return trace, nil
+}
+
 // DeleteSession deletes a chat session.
 func (c *Client) DeleteSession(id string) error {
 	resp, err := c.Do("DELETE", fmt.Sprintf("/api/studio/sessions/%s", id), nil)

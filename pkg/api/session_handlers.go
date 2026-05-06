@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -272,6 +273,142 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// StudioSessionTraceHandler handles GET /api/studio/sessions/{id}/trace.
+// Returns a merged chronological trace of the session including all
+// sub-agent tool calls and text events when recursive=true.
+//
+// Query params:
+//
+//	recursive=true   - include child sub-session events
+//	tools_only=true  - only include tool_call and tool_result events
+//	last_n=50        - only include the last N events
+//	verbose=true     - include full args/results (no truncation)
+func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+
+	// Parse query parameters
+	opts := persistentsession.TraceOpts{}
+	if r.URL.Query().Get("tools_only") == "true" {
+		opts.ToolsOnly = true
+	}
+	if r.URL.Query().Get("verbose") == "true" {
+		opts.Verbose = true
+	}
+	if lastN := r.URL.Query().Get("last_n"); lastN != "" {
+		if n, parseErr := strconv.Atoi(lastN); parseErr == nil && n > 0 {
+			opts.LastN = n
+		}
+	}
+	recursive := r.URL.Query().Get("recursive") == "true"
+
+	// Platform mode: read from session store (PG).
+	if svc := store.FromRequest(r); svc != nil {
+		sessionStore := resolveSessionStore(svc, sessionID)
+		if sessionStore == nil {
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
+
+		meta, err := sessionStore.GetSessionMeta(sessionID)
+		if err != nil || meta == nil {
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
+
+		events, err := sessionStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
+		if err != nil {
+			http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		entries, toolCalls, toolErrors := persistentsession.CollectTraceEntries(events, "", opts)
+
+		if recursive {
+			childEntries, childTC, childTE := collectChildEntriesFromStore(sessionStore, sessionID, opts, nil)
+			entries = append(entries, childEntries...)
+			toolCalls += childTC
+			toolErrors += childTE
+		}
+
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Timestamp < entries[j].Timestamp
+		})
+
+		if opts.LastN > 0 && len(entries) > opts.LastN {
+			entries = entries[len(entries)-opts.LastN:]
+		}
+
+		output := persistentsession.TraceJSON{
+			SessionID: meta.ID,
+			App:       meta.AppName,
+			User:      meta.UserID,
+			Events:    entries,
+			Summary: persistentsession.TraceSummary{
+				TotalEvents: len(events),
+				ToolCalls:   toolCalls,
+				Errors:      toolErrors,
+			},
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(output)
+		return
+	}
+
+	// Personal mode: read from file store.
+	fileStore := getFleetFileStore()
+	if fileStore == nil {
+		http.Error(w, "Session storage not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	meta, err := fileStore.GetSessionMeta(sessionID)
+	if err != nil || meta == nil {
+		http.Error(w, "Session not found", http.StatusNotFound)
+		return
+	}
+
+	events, err := fileStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
+	if err != nil {
+		http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	entries, toolCalls, toolErrors := persistentsession.CollectTraceEntries(events, "", opts)
+
+	if recursive {
+		sessDir := fileStore.BaseDir()
+		index := fileStore.Index()
+		childEntries, childTC, childTE := persistentsession.CollectChildSessionEntries(sessDir, sessionID, index, opts)
+		entries = append(entries, childEntries...)
+		toolCalls += childTC
+		toolErrors += childTE
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Timestamp < entries[j].Timestamp
+	})
+
+	if opts.LastN > 0 && len(entries) > opts.LastN {
+		entries = entries[len(entries)-opts.LastN:]
+	}
+
+	output := persistentsession.TraceJSON{
+		SessionID: meta.ID,
+		App:       meta.AppName,
+		User:      meta.UserID,
+		Events:    entries,
+		Summary: persistentsession.TraceSummary{
+			TotalEvents: len(events),
+			ToolCalls:   toolCalls,
+			Errors:      toolErrors,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(output)
 }
 
 // StudioDeleteSessionHandler handles DELETE /api/studio/sessions/{id}.

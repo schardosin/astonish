@@ -62,12 +62,20 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 		}
 
 		// Allow loopback addresses (CLI, local tools).
-		// If a JWT cookie is present, still extract user context (best-effort)
-		// so that platform admin handlers can verify superadmin status.
+		// If a JWT is present (cookie or Bearer header), still extract user context
+		// (best-effort) so that platform admin handlers can verify superadmin status.
 		if isLoopbackRequest(r) {
-			cookie, cookieErr := r.Cookie(accessCookieName)
-			if cookieErr == nil && cookie.Value != "" {
-				if claims, jwtErr := pa.jwt.ValidateAccessToken(cookie.Value); jwtErr == nil {
+			var loopbackToken string
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				loopbackToken = strings.TrimPrefix(authHeader, "Bearer ")
+			} else {
+				cookie, cookieErr := r.Cookie(accessCookieName)
+				if cookieErr == nil && cookie.Value != "" {
+					loopbackToken = cookie.Value
+				}
+			}
+			if loopbackToken != "" {
+				if claims, jwtErr := pa.jwt.ValidateAccessToken(loopbackToken); jwtErr == nil {
 					teamSlug := claims.DefaultTeamSlug
 					if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
 						teamSlug = headerTeam
@@ -91,20 +99,28 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 					return
 				}
 			}
-			// No valid cookie — pass through without user context (CLI tools, etc.)
+			// No valid token — pass through without user context (CLI tools, etc.)
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Check for access token in cookie
-		cookie, err := r.Cookie(accessCookieName)
-		if err != nil || cookie.Value == "" {
+		// Extract access token from Authorization header (CLI clients) or cookie (browser).
+		var tokenStr string
+		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+		} else {
+			cookie, err := r.Cookie(accessCookieName)
+			if err == nil && cookie.Value != "" {
+				tokenStr = cookie.Value
+			}
+		}
+		if tokenStr == "" {
 			handleUnauthenticated(w, r)
 			return
 		}
 
 		// Validate the JWT
-		claims, err := pa.jwt.ValidateAccessToken(cookie.Value)
+		claims, err := pa.jwt.ValidateAccessToken(tokenStr)
 		if err != nil {
 			handleUnauthenticated(w, r)
 			return

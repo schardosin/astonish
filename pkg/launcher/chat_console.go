@@ -155,14 +155,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		sess = resp.Session
 	}
 
-	// --- 9. ANSI colors ---
-	const (
-		ColorReset  = "\033[0m"
-		ColorGreen  = "\033[32m"
-		ColorCyan   = "\033[36m"
-		ColorYellow = "\033[33m"
-	)
-
 	// --- 10. Welcome message ---
 	shortID := persistentsession.SafeShortID(sess.ID(), 16)
 

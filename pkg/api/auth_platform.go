@@ -77,6 +77,7 @@ type authResponse struct {
 	User         authUserResponse `json:"user"`
 	Org          authOrgResponse  `json:"org"`
 	AccessToken  string           `json:"access_token,omitempty"`
+	RefreshToken string           `json:"refresh_token,omitempty"`
 	ExpiresIn    int              `json:"expires_in"`
 }
 
@@ -167,8 +168,9 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 // --- Handler: POST /api/auth/login ---
 
 type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+	ClientType string `json:"client_type,omitempty"` // "cli" to receive tokens in response body
 }
 
 func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -228,21 +230,38 @@ func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pa.issueTokensAndRespond(w, r, user, org, membership.Role)
+	pa.issueTokensAndRespond(w, r, user, org, membership.Role, req.ClientType)
 }
 
 // --- Handler: POST /api/auth/refresh ---
 
 func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
-	// Read refresh token from cookie
-	cookie, err := r.Cookie("astonish_refresh")
-	if err != nil {
-		respondError(w, http.StatusUnauthorized, "no refresh token")
-		return
+	// Read refresh token from cookie or request body (CLI clients).
+	var refreshTokenStr string
+	var isCLI bool
+
+	// Try request body first (for CLI clients that can't use cookies)
+	type refreshRequest struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	var bodyReq refreshRequest
+	if err := json.NewDecoder(r.Body).Decode(&bodyReq); err == nil && bodyReq.RefreshToken != "" {
+		refreshTokenStr = bodyReq.RefreshToken
+		isCLI = true
+	}
+
+	// Fall back to cookie (browser clients)
+	if refreshTokenStr == "" {
+		cookie, err := r.Cookie("astonish_refresh")
+		if err != nil {
+			respondError(w, http.StatusUnauthorized, "no refresh token")
+			return
+		}
+		refreshTokenStr = cookie.Value
 	}
 
 	// Validate the refresh token
-	claims, err := pa.jwt.ValidateRefreshToken(cookie.Value)
+	claims, err := pa.jwt.ValidateRefreshToken(refreshTokenStr)
 	if err != nil {
 		if errors.Is(err, ErrTokenExpired) {
 			// Clear the expired cookie
@@ -303,9 +322,31 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Issue new refresh token (rotation) for CLI clients
+	var newRefreshToken string
+	if isCLI {
+		newRefreshToken, err = pa.jwt.IssueRefreshToken(user.ID, org.Slug)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to issue refresh token")
+			return
+		}
+		// Store new refresh token hash for revocation support
+		tokenHash := hashRefreshToken(newRefreshToken)
+		loginSession := &store.LoginSession{
+			TokenHash: tokenHash,
+			UserID:    user.ID,
+			OrgID:     org.ID,
+			CreatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(pa.jwt.RefreshTokenTTL()),
+			UserAgent: r.UserAgent(),
+			IPAddress: clientIP(r),
+		}
+		_ = pa.pgStore.LoginSessions().Create(ctx, loginSession)
+	}
+
 	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
 
-	respondJSON(w, http.StatusOK, authResponse{
+	resp := authResponse{
 		User: authUserResponse{
 			ID:           user.ID,
 			Email:        user.Email,
@@ -319,7 +360,15 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			Slug: org.Slug,
 		},
 		ExpiresIn: int(pa.jwt.AccessTokenTTL().Seconds()),
-	})
+	}
+
+	// Include tokens in body for CLI clients
+	if isCLI {
+		resp.AccessToken = accessToken
+		resp.RefreshToken = newRefreshToken
+	}
+
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // --- Handler: POST /api/auth/logout ---
@@ -332,14 +381,20 @@ func (pa *PlatformAuth) handleLogout(w http.ResponseWriter, r *http.Request) {
 // --- Handler: GET /api/auth/me ---
 
 func (pa *PlatformAuth) handleMe(w http.ResponseWriter, r *http.Request) {
-	// Read access token from cookie
-	cookie, err := r.Cookie("astonish_access")
-	if err != nil {
-		respondError(w, http.StatusUnauthorized, "not authenticated")
-		return
+	// Read access token from Authorization header (CLI) or cookie (browser)
+	var tokenStr string
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+	} else {
+		cookie, err := r.Cookie("astonish_access")
+		if err != nil {
+			respondError(w, http.StatusUnauthorized, "not authenticated")
+			return
+		}
+		tokenStr = cookie.Value
 	}
 
-	claims, err := pa.jwt.ValidateAccessToken(cookie.Value)
+	claims, err := pa.jwt.ValidateAccessToken(tokenStr)
 	if err != nil {
 		respondError(w, http.StatusUnauthorized, "invalid or expired token")
 		return
@@ -564,7 +619,9 @@ func (pa *PlatformAuth) resolveDefaultTeam(ctx context.Context, userID string, o
 }
 
 // issueTokensAndRespond creates JWT tokens, sets cookies, and sends the auth response.
-func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Request, user *store.User, org *store.Organization, role string) {
+// When clientType is "cli", tokens are included in the response body (for CLI clients
+// that cannot use cookies).
+func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Request, user *store.User, org *store.Organization, role string, clientType ...string) {
 	ctx := r.Context()
 	teamSlug := pa.resolveDefaultTeam(ctx, user.ID, org)
 
@@ -605,7 +662,7 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
 	setRefreshTokenCookie(w, refreshToken, pa.jwt.RefreshTokenTTL())
 
-	respondJSON(w, http.StatusOK, authResponse{
+	resp := authResponse{
 		User: authUserResponse{
 			ID:           user.ID,
 			Email:        user.Email,
@@ -619,7 +676,16 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 			Slug: org.Slug,
 		},
 		ExpiresIn: int(pa.jwt.AccessTokenTTL().Seconds()),
-	})
+	}
+
+	// Include tokens in body for CLI clients (they can't use cookies)
+	isCLI := len(clientType) > 0 && clientType[0] == "cli"
+	if isCLI {
+		resp.AccessToken = accessToken
+		resp.RefreshToken = refreshToken
+	}
+
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // --- Cookie helpers ---

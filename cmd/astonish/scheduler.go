@@ -9,6 +9,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 )
 
@@ -151,11 +152,10 @@ func handleSchedulerToggle(idOrName string, enable bool) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, err := http.NewRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
+	req, err := newAPIRequest(http.MethodPut, baseURL+"/api/scheduler/jobs/"+job.ID, strings.NewReader(string(data)))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
@@ -181,7 +181,7 @@ func handleSchedulerRemove(idOrName string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
+	req, err := newAPIRequest(http.MethodDelete, baseURL+"/api/scheduler/jobs/"+job.ID, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -208,7 +208,11 @@ func handleSchedulerRun(idOrName string) error {
 	baseURL := getDaemonBaseURL()
 	fmt.Printf("Running job %q...\n", job.Name)
 
-	resp, err := http.Post(baseURL+"/api/scheduler/jobs/"+job.ID+"/run", "application/json", nil)
+	req, err := newAPIRequest(http.MethodPost, baseURL+"/api/scheduler/jobs/"+job.ID+"/run", nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
 	}
@@ -263,7 +267,11 @@ func handleSchedulerStatus() error {
 // fetchSchedulerJobs fetches jobs from the daemon API.
 func fetchSchedulerJobs() ([]schedulerJobAPI, error) {
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Get(baseURL + "/api/scheduler/jobs")
+	req, err := newAPIRequest(http.MethodGet, baseURL+"/api/scheduler/jobs", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to contact daemon (is it running?): %w", err)
 	}
@@ -326,7 +334,14 @@ func findJobByIDOrName(idOrName string) (*schedulerJobAPI, error) {
 }
 
 // getDaemonBaseURL returns the daemon HTTP base URL.
+// In remote mode, returns the remote server URL instead.
 func getDaemonBaseURL() string {
+	if client.IsRemoteMode() {
+		cfg, err := client.LoadRemoteConfig()
+		if err == nil && cfg != nil && cfg.URL != "" {
+			return cfg.URL
+		}
+	}
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return "http://localhost:9393"

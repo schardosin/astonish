@@ -2,14 +2,17 @@ package astonish
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/flowstore"
@@ -23,6 +26,11 @@ func handleFlowsCommand(args []string) error {
 	if len(args) < 1 || args[0] == "--help" || args[0] == "-h" {
 		printFlowsUsage()
 		return nil
+	}
+
+	// Remote mode: delegate list and run to API
+	if client.IsRemoteMode() {
+		return handleFlowsRemote(args)
 	}
 
 	switch args[0] {
@@ -1040,4 +1048,112 @@ func parseTapAddArgs(args []string) (urlArg, alias string) {
 	}
 
 	return urlArg, alias
+}
+
+// --- Remote mode flow handlers ---
+
+func handleFlowsRemote(args []string) error {
+	switch args[0] {
+	case "list":
+		return handleFlowsListRemote()
+	case "run":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: astonish flows run <name>")
+		}
+		return handleFlowsRunRemote(args[1:])
+	case "show", "edit", "import", "remove", "store":
+		return fmt.Errorf("'flows %s' is not available in remote mode (use Studio UI)", args[0])
+	default:
+		return fmt.Errorf("unknown flows command: %s", args[0])
+	}
+}
+
+func handleFlowsListRemote() error {
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+
+	flows, err := c.ListFlows()
+	if err != nil {
+		return fmt.Errorf("list flows: %w", err)
+	}
+
+	if len(flows) == 0 {
+		fmt.Println("No flows found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tDESCRIPTION")
+	for _, f := range flows {
+		desc := f.Description
+		if len(desc) > 60 {
+			desc = desc[:57] + "..."
+		}
+		fmt.Fprintf(w, "%s\t%s\n", f.Name, desc)
+	}
+	w.Flush()
+	return nil
+}
+
+func handleFlowsRunRemote(args []string) error {
+	flowName := args[0]
+
+	// Parse params from remaining args (e.g., -p key=value)
+	params := make(map[string]string)
+	for i := 1; i < len(args); i++ {
+		if (args[i] == "-p" || args[i] == "--param") && i+1 < len(args) {
+			kv := args[i+1]
+			parts := strings.SplitN(kv, "=", 2)
+			if len(parts) == 2 {
+				params[parts[0]] = parts[1]
+			}
+			i++
+		}
+	}
+
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+
+	stream, err := c.RunFlow(flowName, params)
+	if err != nil {
+		return fmt.Errorf("run flow: %w", err)
+	}
+	defer stream.Close()
+
+	// Stream SSE events and print output
+	for {
+		event, err := stream.Next()
+		if err != nil {
+			break
+		}
+		switch event.Type {
+		case "text":
+			// Extract text from JSON payload
+			var payload struct {
+				Text string `json:"text"`
+			}
+			if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+				fmt.Print(payload.Text)
+			}
+		case "error":
+			var payload struct {
+				Error string `json:"error"`
+			}
+			if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+				fmt.Fprintf(os.Stderr, "\nError: %s\n", payload.Error)
+			}
+		case "done":
+			fmt.Println()
+			return nil
+		}
+	}
+	return nil
+}
+
+func parseJSON(data string, dst any) error {
+	return json.Unmarshal([]byte(data), dst)
 }

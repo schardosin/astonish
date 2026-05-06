@@ -5,12 +5,24 @@ import (
 	"flag"
 	"fmt"
 
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 func handleChatCommand(args []string) error {
+	// Handle --help early
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		printChatUsage()
+		return nil
+	}
+
+	// Remote mode: run against the remote server
+	if client.IsRemoteMode() {
+		return handleChatRemote(args)
+	}
+
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		fmt.Printf("Warning: Failed to load config: %v\n", err)
@@ -36,12 +48,6 @@ func handleChatCommand(args []string) error {
 	chatCmd.StringVar(modelName, "m", "", "Model name (short)")
 	chatCmd.StringVar(workspaceDir, "w", "", "Working directory (short)")
 	chatCmd.StringVar(resumeSession, "r", "", "Resume session (short)")
-
-	// Handle --help
-	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
-		printChatUsage()
-		return nil
-	}
 
 	if err := chatCmd.Parse(args); err != nil {
 		return err
@@ -75,6 +81,24 @@ func handleChatCommand(args []string) error {
 	}
 
 	return launcher.RunChatConsole(context.Background(), cfg)
+}
+
+func handleChatRemote(args []string) error {
+	chatCmd := flag.NewFlagSet("chat", flag.ExitOnError)
+	autoApprove := chatCmd.Bool("auto-approve", false, "Auto-approve all tool executions")
+	resumeSession := chatCmd.String("resume", "", "Resume an existing session by ID")
+	chatCmd.StringVar(resumeSession, "r", "", "Resume session (short)")
+
+	if err := chatCmd.Parse(args); err != nil {
+		return err
+	}
+
+	cfg := &launcher.RemoteChatConfig{
+		AutoApprove: *autoApprove,
+		SessionID:   *resumeSession,
+	}
+
+	return launcher.RunRemoteChatConsole(context.Background(), cfg)
 }
 
 func printChatUsage() {

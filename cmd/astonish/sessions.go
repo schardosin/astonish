@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -20,6 +21,11 @@ func handleSessionsCommand(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" {
 		printSessionsUsage()
 		return nil
+	}
+
+	// Remote mode: delegate to API
+	if client.IsRemoteMode() {
+		return handleSessionsRemote(args)
 	}
 
 	subcommand := args[0]
@@ -467,4 +473,86 @@ func printSessionsUsage() {
 	fmt.Println("  astonish sessions show abc123 --json")
 	fmt.Println("  astonish sessions delete abc123")
 	fmt.Println("  astonish sessions clear")
+}
+
+// --- Remote mode session handlers ---
+
+func handleSessionsRemote(args []string) error {
+	c, err := client.New()
+	if err != nil {
+		return err
+	}
+
+	subcommand := args[0]
+	switch subcommand {
+	case "list", "ls":
+		return handleSessionsListRemote(c)
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("session ID required")
+		}
+		return handleSessionsShowRemote(c, args[1])
+	case "delete", "rm":
+		if len(args) < 2 {
+			return fmt.Errorf("session ID required")
+		}
+		return handleSessionsDeleteRemote(c, args[1])
+	case "clear":
+		return fmt.Errorf("'sessions clear' is not supported in remote mode (use Studio UI)")
+	default:
+		return fmt.Errorf("unknown subcommand: %s", subcommand)
+	}
+}
+
+func handleSessionsListRemote(c *client.Client) error {
+	sessions, err := c.ListSessions()
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
+	}
+
+	if len(sessions) == 0 {
+		fmt.Println("No sessions found.")
+		return nil
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tTITLE\tMESSAGES\tUPDATED")
+
+	for _, s := range sessions {
+		title := s.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		if len(title) > 50 {
+			title = title[:47] + "..."
+		}
+		id := s.ID
+		if len(id) > 12 {
+			id = id[:12]
+		}
+		updated := s.UpdatedAt.Format("2006-01-02 15:04")
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", id, title, s.MessageCount, updated)
+	}
+	w.Flush()
+	return nil
+}
+
+func handleSessionsShowRemote(c *client.Client, id string) error {
+	detail, err := c.GetSession(id)
+	if err != nil {
+		return fmt.Errorf("get session: %w", err)
+	}
+
+	// Pretty-print the JSON
+	out, _ := json.MarshalIndent(detail, "", "  ")
+	fmt.Println(string(out))
+	return nil
+}
+
+func handleSessionsDeleteRemote(c *client.Client, id string) error {
+	if err := c.DeleteSession(id); err != nil {
+		return fmt.Errorf("delete session: %w", err)
+	}
+	fmt.Printf("Session %s deleted.\n", id)
+	return nil
 }

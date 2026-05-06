@@ -201,7 +201,11 @@ func handleFleetShow(keyOrPrefix string) error {
 
 	// Fetch the full plan detail
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Get(baseURL + "/api/fleet-plans/" + key)
+	showReq, err := newAPIRequest(http.MethodGet, baseURL+"/api/fleet-plans/"+key, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(showReq)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
 	}
@@ -358,7 +362,11 @@ func handleFleetActivate(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Post(baseURL+"/api/fleet-plans/"+plan.Key+"/activate", "application/json", nil)
+	actReq, actErr := newAPIRequest(http.MethodPost, baseURL+"/api/fleet-plans/"+plan.Key+"/activate", nil)
+	if actErr != nil {
+		return fmt.Errorf("failed to create request: %w", actErr)
+	}
+	resp, err := http.DefaultClient.Do(actReq)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
 	}
@@ -385,7 +393,11 @@ func handleFleetDeactivate(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Post(baseURL+"/api/fleet-plans/"+plan.Key+"/deactivate", "application/json", nil)
+	deactReq, deactErr := newAPIRequest(http.MethodPost, baseURL+"/api/fleet-plans/"+plan.Key+"/deactivate", nil)
+	if deactErr != nil {
+		return fmt.Errorf("failed to create request: %w", deactErr)
+	}
+	resp, err := http.DefaultClient.Do(deactReq)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
 	}
@@ -415,7 +427,11 @@ func handleFleetStatus(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Get(baseURL + "/api/fleet-plans/" + plan.Key + "/status")
+	statusReq, statusErr := newAPIRequest(http.MethodGet, baseURL+"/api/fleet-plans/"+plan.Key+"/status", nil)
+	if statusErr != nil {
+		return fmt.Errorf("failed to create request: %w", statusErr)
+	}
+	resp, err := http.DefaultClient.Do(statusReq)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon: %w", err)
 	}
@@ -486,7 +502,7 @@ func handleFleetDelete(keyOrPrefix string) error {
 	}
 
 	baseURL := getDaemonBaseURL()
-	req, err := http.NewRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
+	req, err := newAPIRequest(http.MethodDelete, baseURL+"/api/fleet-plans/"+plan.Key, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
@@ -510,7 +526,11 @@ func handleFleetDelete(keyOrPrefix string) error {
 
 func handleFleetTemplates() error {
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Get(baseURL + "/api/fleets")
+	tplReq, tplErr := newAPIRequest(http.MethodGet, baseURL+"/api/fleets", nil)
+	if tplErr != nil {
+		return fmt.Errorf("failed to create request: %w", tplErr)
+	}
+	resp, err := http.DefaultClient.Do(tplReq)
 	if err != nil {
 		return fmt.Errorf("failed to contact daemon (is it running?): %w", err)
 	}
@@ -552,7 +572,11 @@ func handleFleetTemplates() error {
 // fetchFleetPlans fetches fleet plans from the daemon API.
 func fetchFleetPlans() ([]fleetPlanListItemAPI, error) {
 	baseURL := getDaemonBaseURL()
-	resp, err := http.Get(baseURL + "/api/fleet-plans")
+	listReq, listErr := newAPIRequest(http.MethodGet, baseURL+"/api/fleet-plans", nil)
+	if listErr != nil {
+		return nil, fmt.Errorf("failed to create request: %w", listErr)
+	}
+	resp, err := http.DefaultClient.Do(listReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to contact daemon (is it running?): %w", err)
 	}

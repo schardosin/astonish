@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/version"
 )
 
@@ -37,6 +38,16 @@ func Execute() error {
 
 	command := os.Args[1]
 	switch command {
+	case "login":
+		return handleLoginCommand(os.Args[2:])
+	case "logout":
+		return handleLogoutCommand(os.Args[2:])
+	case "status":
+		return handleStatusCommand(os.Args[2:])
+	case "org":
+		return handleOrgCommand(os.Args[2:])
+	case "team":
+		return handleTeamCommand(os.Args[2:])
 	case "chat":
 		return handleChatCommand(os.Args[2:])
 	case "sessions":
@@ -44,40 +55,51 @@ func Execute() error {
 	case "flows", "agents": // "agents" is a hidden alias for backwards compatibility
 		return handleFlowsCommand(os.Args[2:])
 	case "tap":
+		mustNotBeRemote("tap")
 		return handleTapCommand(os.Args[2:])
 	case "studio":
+		mustNotBeRemote("studio")
 		return handleStudioCommand(os.Args[2:])
 	case "setup":
+		mustNotBeRemote("setup")
 		return handleSetupCommand()
 	case "config":
 		return handleConfigCommand(os.Args[2:])
 	case "tools":
 		return handleToolsCommand(os.Args[2:])
 	case "memory":
+		mustNotBeRemote("memory")
 		return handleMemoryCommand(os.Args[2:])
 	case "daemon":
+		mustNotBeRemote("daemon")
 		return handleDaemonCommand(os.Args[2:])
 	case "channels":
+		mustNotBeRemote("channels")
 		return handleChannelsCommand(os.Args[2:])
 	case "scheduler":
 		return handleSchedulerCommand(os.Args[2:])
 	case "fleet":
 		return handleFleetCommand(os.Args[2:])
 	case "credential", "credentials":
+		mustNotBeRemote("credential")
 		return handleCredentialCommand(os.Args[2:])
 	case "skills":
+		mustNotBeRemote("skills")
 		return handleSkillsCommand(os.Args[2:])
 	case "drill", "test":
 		return handleDrillCommand(os.Args[2:])
 	case "sandbox":
+		mustNotBeRemote("sandbox")
 		return handleSandboxCommand(os.Args[2:])
 	case "node":
 		return handleNodeCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
 	case "migrate":
+		mustNotBeRemote("migrate")
 		return handleMigrateCommand(os.Args[2:])
 	case "platform":
+		mustNotBeRemote("platform")
 		return handlePlatformCommand(os.Args[2:])
 	default:
 		printUsage()
@@ -86,11 +108,16 @@ func Execute() error {
 }
 
 func printUsage() {
-	fmt.Println("usage: astonish [-h] [-v] {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,migrate,platform} ...")
+	fmt.Println("usage: astonish [-h] [-v] {login,logout,status,org,team,chat,sessions,flows,...} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
 	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,migrate,platform}")
 	fmt.Println("                        Astonish CLI commands")
+	fmt.Println("    login               Connect to a remote Astonish server")
+	fmt.Println("    logout              Disconnect from the remote server")
+	fmt.Println("    status              Show connection mode and status")
+	fmt.Println("    org                 Manage organizations (remote mode)")
+	fmt.Println("    team                Manage teams (remote mode)")
 	fmt.Println("    chat                Start an interactive chat session")
 	fmt.Println("    sessions            Manage persistent sessions")
 	fmt.Println("    flows               Design and run AI flows")
@@ -114,6 +141,26 @@ func printUsage() {
 	fmt.Println("options:")
 	fmt.Println("  -h, --help            show this help message and exit")
 	fmt.Println("  -v, --version         show version information and exit")
+}
+
+// mustNotBeRemote exits with an error if the CLI is in remote mode.
+// Some commands (daemon, studio, sandbox, etc.) only make sense locally.
+func mustNotBeRemote(cmd string) {
+	if !client.IsRemoteMode() {
+		return
+	}
+	cfg, _ := client.LoadRemoteConfig()
+	url := "a remote server"
+	if cfg != nil {
+		url = cfg.URL
+	}
+	fmt.Fprintf(os.Stderr, "Error: '%s' is not available in remote mode.\n", cmd)
+	fmt.Fprintf(os.Stderr, "You are connected to %s.\n", url)
+	if cmd == "studio" {
+		fmt.Fprintf(os.Stderr, "Open %s in your browser instead.\n", url)
+	}
+	fmt.Fprintf(os.Stderr, "Use 'astonish logout' to disconnect and return to personal mode.\n")
+	os.Exit(1)
 }
 
 type updateCheckData struct {

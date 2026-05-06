@@ -239,6 +239,9 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 	if svc.Flows != nil {
 		execCtx = store.WithFlowStore(execCtx, svc.Flows)
 	}
+	if svc.DrillReports != nil {
+		execCtx = store.WithDrillReportStore(execCtx, svc.DrillReports)
+	}
 	if svc.Skills != nil || svc.TeamSkills != nil {
 		execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
 			Org:  svc.Skills,

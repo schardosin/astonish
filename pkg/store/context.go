@@ -12,6 +12,7 @@ const credStoreKey contextKey = "astonish_credential_store"
 const memoryStoreKey contextKey = "astonish_memory_store"
 const memorySearcherKey contextKey = "astonish_memory_searcher"
 const flowStoreKey contextKey = "astonish_flow_store"
+const drillReportStoreKey contextKey = "astonish_drill_report_store"
 
 // WithServices returns a new context containing the Services instance.
 func WithServices(ctx context.Context, svc *Services) context.Context {
@@ -99,6 +100,20 @@ func WithFlowStore(ctx context.Context, fs FlowStore) context.Context {
 func FlowStoreFromContext(ctx context.Context) FlowStore {
 	fs, _ := ctx.Value(flowStoreKey).(FlowStore)
 	return fs
+}
+
+// WithDrillReportStore returns a new context containing a tenant-scoped DrillReportStore.
+// Used to propagate the PG drill report store into the ADK runner context so that
+// the run_drill tool can persist execution results to the database in platform mode.
+func WithDrillReportStore(ctx context.Context, rs DrillReportStore) context.Context {
+	return context.WithValue(ctx, drillReportStoreKey, rs)
+}
+
+// DrillReportStoreFromContext retrieves the DrillReportStore from a context.
+// Returns nil if no DrillReportStore is present (personal mode or tests).
+func DrillReportStoreFromContext(ctx context.Context) DrillReportStore {
+	rs, _ := ctx.Value(drillReportStoreKey).(DrillReportStore)
+	return rs
 }
 
 const skillStoresKey contextKey = "astonish_skill_stores"

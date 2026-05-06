@@ -195,6 +195,7 @@ func (mts *MultiTenantScheduler) executeJob(
 	execCtx := ctx
 	execCtx = store.WithCredentialStore(execCtx, teamStore.Credentials())
 	execCtx = store.WithFlowStore(execCtx, teamStore.Flows())
+	execCtx = store.WithDrillReportStore(execCtx, teamStore.DrillReports())
 	execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
 		Team: teamStore.Skills(),
 	})
@@ -306,6 +307,7 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 	execCtx := ctx
 	execCtx = store.WithCredentialStore(execCtx, teamStore.Credentials())
 	execCtx = store.WithFlowStore(execCtx, teamStore.Flows())
+	execCtx = store.WithDrillReportStore(execCtx, teamStore.DrillReports())
 	execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
 		Team: teamStore.Skills(),
 	})

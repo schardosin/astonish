@@ -28,6 +28,15 @@ func getEffectiveFlowStore(ctx context.Context) store.FlowStore {
 	return nil
 }
 
+// getDrillReportStore returns the team-scoped DrillReportStore from context
+// (platform mode), or nil if not available (personal mode).
+func getDrillReportStore(ctx context.Context) store.DrillReportStore {
+	if ctx != nil {
+		return store.DrillReportStoreFromContext(ctx)
+	}
+	return nil
+}
+
 // SaveDrillArgs are the arguments for the save_drill tool.
 type SaveDrillArgs struct {
 	SuiteName string         `json:"suite_name" jsonschema:"Filename for the suite (without .yaml extension, e.g., 'myapp'). This name is what drills reference in their 'suite' field."`

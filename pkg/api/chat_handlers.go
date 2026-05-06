@@ -659,6 +659,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectFlowStore(svc.Flows)
 	}
 
+	// Inject tenant-scoped drill report store into the runner context so that
+	// the run_drill tool can persist execution results to the database.
+	if svc := store.FromRequest(r); svc != nil && svc.DrillReports != nil {
+		runner.InjectDrillReportStore(svc.DrillReports)
+	}
+
 	// Inject tenant-scoped skill stores into the runner context so that
 	// the skill_lookup tool can resolve skills from org and team stores
 	// in addition to bundled skills.

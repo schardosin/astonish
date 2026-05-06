@@ -251,6 +251,24 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		buf.WriteString(fmt.Sprintf("\nReport saved: %s\n", reportPath))
 	}
 
+	// Platform mode: persist to the team-scoped drill report store (PostgreSQL)
+	if rptStore := getDrillReportStore(ctx); rptStore != nil {
+		reportJSON, jsonErr := json.Marshal(report)
+		if jsonErr == nil {
+			if storeErr := rptStore.SaveReport(&store.DrillReport{
+				Suite:      suiteName,
+				Status:     report.Status,
+				Summary:    report.Summary,
+				DurationMs: report.Duration,
+				ReportData: reportJSON,
+				StartedAt:  report.StartedAt,
+				FinishedAt: report.FinishedAt,
+			}); storeErr != nil {
+				slog.Warn("failed to save drill report to store", "suite", suiteName, "error", storeErr)
+			}
+		}
+	}
+
 	return RunDrillResult{
 		Status:  report.Status,
 		Summary: report.Summary,

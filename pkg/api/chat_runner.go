@@ -124,6 +124,13 @@ func (cr *ChatRunner) InjectSchedulerStore(ss store.SchedulerStore) {
 	cr.ctx = store.WithSchedulerStore(cr.ctx, ss)
 }
 
+// InjectDrillReportStore adds a tenant-scoped drill report store to the runner's
+// context so that the run_drill tool can persist execution results to the database
+// in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectDrillReportStore(rs store.DrillReportStore) {
+	cr.ctx = store.WithDrillReportStore(cr.ctx, rs)
+}
+
 // InjectMCPServerStores adds tenant-scoped MCP server stores to the runner's context
 // so that the chat agent can resolve MCP server configurations from the database
 // in platform mode. Must be called before Run().

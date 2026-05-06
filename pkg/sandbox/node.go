@@ -1115,8 +1115,13 @@ func (p *NodeClientPool) RestartNode(sessionID string) error {
 // be left pointing at the destroyed client while only the sub-agent gets the
 // new one (resulting in "lazy node client is closed" errors on the parent).
 func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
-	// Remove existing client and find all aliases sharing the same pointer.
 	p.mu.Lock()
+
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("pool is closed")
+	}
+
 	existing, hadExisting := p.clients[sessionID]
 
 	// Collect ALL session IDs that point to the same LazyNodeClient.
@@ -1126,29 +1131,18 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 		for id, client := range p.clients {
 			if client == existing {
 				aliasedIDs = append(aliasedIDs, id)
-				delete(p.clients, id)
 			}
 		}
-	} else {
-		delete(p.clients, sessionID)
-	}
-	p.mu.Unlock()
-
-	// Tear down existing client — waits for init, destroys container + registry entry
-	if hadExisting && existing != nil {
-		existing.Cleanup()
 	}
 
-	// Create new client with the specified template
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.closed {
-		return fmt.Errorf("pool is closed")
-	}
-
+	// Create new client with the specified template and register it
+	// BEFORE releasing the lock. This eliminates the race window where
+	// concurrent GetOrCreate calls could find no client and create a
+	// default (@base) one.
 	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, template, p.limits)
 	client.Env = p.env
+	client.OrgSlug = p.orgSlug
+	client.TeamSlug = p.teamSlug
 
 	// Point ALL previously-aliased session IDs to the new client.
 	// This ensures both the sub-agent AND the parent get the new container.
@@ -1158,6 +1152,15 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 			p.clients[id] = client
 		}
 	}
+
+	p.mu.Unlock()
+
+	// Tear down existing client AFTER the new one is visible in the pool.
+	// This waits for init, destroys the old container + registry entry.
+	if hadExisting && existing != nil {
+		existing.Cleanup()
+	}
+
 	return nil
 }
 

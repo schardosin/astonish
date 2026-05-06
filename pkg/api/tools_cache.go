@@ -113,21 +113,16 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 // loadToolsInternal does the actual work of loading tools (must NOT hold the lock)
 func loadToolsInternal(ctx context.Context) []ToolInfo {
 	slog.Info("starting to load tools")
-	var allTools []ToolInfo
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Get internal tools
-	internalTools, err := tools.GetInternalTools()
-	if err != nil {
-		slog.Warn("failed to get internal tools", "error", err)
-	} else {
-		for _, t := range internalTools {
-			allTools = append(allTools, ToolInfo{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      "internal",
-			})
-		}
+	// Start with all built-in tools (internal + all category tools)
+	var allTools []ToolInfo
+	for _, decl := range tools.GetAllFlowToolDeclarations() {
+		allTools = append(allTools, ToolInfo{
+			Name:        decl.Name,
+			Description: decl.Description,
+			Source:      decl.Category,
+		})
 	}
 
 	// Get MCP tools
@@ -226,49 +221,29 @@ func InitToolsCache(ctx context.Context) {
 	if err == nil && len(persistentCache.Tools) > 0 {
 		slog.Info("loading tools from persistent cache", "count", len(persistentCache.Tools))
 
-		// Convert cache.ToolEntry to api.ToolInfo
+		// Start with all built-in tool declarations (always authoritative)
+		builtinDecls := tools.GetAllFlowToolDeclarations()
+		builtinNames := make(map[string]bool, len(builtinDecls))
 		var allTools []ToolInfo
-		hasInternalTools := false
+		for _, decl := range builtinDecls {
+			allTools = append(allTools, ToolInfo{
+				Name:        decl.Name,
+				Description: decl.Description,
+				Source:      decl.Category,
+			})
+			builtinNames[decl.Name] = true
+		}
+
+		// Add MCP tools from persistent cache (skip built-in tools already added)
 		for _, t := range persistentCache.Tools {
-			if t.Source == "internal" {
-				hasInternalTools = true
+			if builtinNames[t.Name] {
+				continue
 			}
 			allTools = append(allTools, ToolInfo{
 				Name:        t.Name,
 				Description: t.Description,
 				Source:      t.Source,
 			})
-		}
-
-		// If persistent cache doesn't have internal tools (old cache format),
-		// add them now and update the cache
-		if !hasInternalTools {
-			slog.Info("adding internal tools to cache")
-			internalTools, err := tools.GetInternalTools()
-			if err == nil {
-				for _, t := range internalTools {
-					allTools = append(allTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      "internal",
-					})
-				}
-				// Update persistent cache with internal tools
-				go func() {
-					internalEntries := make([]cache.ToolEntry, 0, len(internalTools))
-					for _, t := range internalTools {
-						internalEntries = append(internalEntries, cache.ToolEntry{
-							Name:        t.Name(),
-							Description: t.Description(),
-							Source:      "internal",
-							InputSchema: common.ExtractToolInputSchema(t),
-						})
-					}
-					cache.AddServerTools("internal", internalEntries, "internal-tools-v1")
-					cache.SaveCache()
-					slog.Info("added internal tools to persistent cache", "component", "cache", "count", len(internalEntries))
-				}()
-			}
 		}
 
 		globalToolsCache.mu.Lock()
@@ -626,16 +601,13 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 	}
 
 	var result []ToolInfo
-	// Add internal tools
-	internalTools, err := tools.GetInternalTools()
-	if err == nil {
-		for _, t := range internalTools {
-			result = append(result, ToolInfo{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      "internal",
-			})
-		}
+	// Add all built-in tools (internal + all category tools)
+	for _, decl := range tools.GetAllFlowToolDeclarations() {
+		result = append(result, ToolInfo{
+			Name:        decl.Name,
+			Description: decl.Description,
+			Source:      decl.Category,
+		})
 	}
 
 	// Parse each server's cached tools

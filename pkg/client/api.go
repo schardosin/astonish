@@ -117,6 +117,24 @@ func (c *Client) RunFlow(flowName string, params map[string]string) (*SSEStream,
 	return c.SSE("POST", fmt.Sprintf("/api/agents/%s/run", flowName), body)
 }
 
+// --- Flow Interactive API ---
+
+// FlowChatRequest represents a message to send to a specific flow agent via /api/chat.
+type FlowChatRequest struct {
+	AgentID     string `json:"agentId"`
+	SessionID   string `json:"sessionId,omitempty"`
+	Message     string `json:"message"`
+	Provider    string `json:"provider,omitempty"`
+	Model       string `json:"model,omitempty"`
+	AutoApprove bool   `json:"autoApprove,omitempty"`
+}
+
+// SendFlowMessage sends a message to a flow execution session and returns an SSE stream.
+// This is used for interactive multi-turn flow execution via POST /api/chat.
+func (c *Client) SendFlowMessage(req *FlowChatRequest) (*SSEStream, error) {
+	return c.SSE("POST", "/api/chat", req)
+}
+
 // --- Chat API ---
 
 // ChatRequest represents a message to send to the chat.

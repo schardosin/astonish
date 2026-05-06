@@ -1,6 +1,7 @@
 package astonish
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/schardosin/astonish/pkg/client"
@@ -1100,8 +1102,9 @@ func handleFlowsListRemote() error {
 func handleFlowsRunRemote(args []string) error {
 	flowName := args[0]
 
-	// Parse params from remaining args (e.g., -p key=value)
+	// Parse flags from remaining args
 	params := make(map[string]string)
+	autoApprove := false
 	for i := 1; i < len(args); i++ {
 		if (args[i] == "-p" || args[i] == "--param") && i+1 < len(args) {
 			kv := args[i+1]
@@ -1110,6 +1113,8 @@ func handleFlowsRunRemote(args []string) error {
 				params[parts[0]] = parts[1]
 			}
 			i++
+		} else if args[i] == "--auto-approve" {
+			autoApprove = true
 		}
 	}
 
@@ -1118,40 +1123,177 @@ func handleFlowsRunRemote(args []string) error {
 		return err
 	}
 
-	stream, err := c.RunFlow(flowName, params)
-	if err != nil {
-		return fmt.Errorf("run flow: %w", err)
-	}
-	defer stream.Close()
+	// Generate a session ID for multi-turn interaction
+	sessionID := fmt.Sprintf("flow-cli-%d", nowUnix())
 
-	// Stream SSE events and print output
+	// Track current node for param injection
+	var currentNode string
+	reader := bufio.NewReader(os.Stdin)
+
+	fmt.Printf("%sRunning flow: %s%s\n\n", launcher.ColorCyan, flowName, launcher.ColorReset)
+
+	// Multi-turn loop
+	message := "" // First turn starts with empty message
 	for {
-		event, err := stream.Next()
-		if err != nil {
-			break
+		req := &client.FlowChatRequest{
+			AgentID:     flowName,
+			SessionID:   sessionID,
+			Message:     message,
+			AutoApprove: autoApprove,
 		}
-		switch event.Type {
-		case "text":
-			// Extract text from JSON payload
-			var payload struct {
-				Text string `json:"text"`
+
+		stream, err := c.SendFlowMessage(req)
+		if err != nil {
+			return fmt.Errorf("flow execution: %w", err)
+		}
+
+		// Process SSE events for this turn
+		needsInput := false
+		needsApproval := false
+		flowDone := false
+		var approvalOptions []string
+
+		for {
+			event, err := stream.Next()
+			if err != nil {
+				break
 			}
-			if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-				fmt.Print(payload.Text)
+
+			switch event.Type {
+			case "node":
+				var payload struct {
+					Node   string `json:"node"`
+					Type   string `json:"type"`
+					Silent bool   `json:"silent"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					currentNode = payload.Node
+					if currentNode == "END" {
+						flowDone = true
+					}
+					if !payload.Silent && payload.Node != "END" {
+						fmt.Printf("%s[%s]%s ", launcher.ColorGray, payload.Node, launcher.ColorReset)
+					}
+				}
+
+			case "text":
+				var payload struct {
+					Text string `json:"text"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					fmt.Print(payload.Text)
+				}
+
+			case "tool_call":
+				var payload struct {
+					Name string `json:"name"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					fmt.Printf("%s  → %s%s\n", launcher.ColorGray, payload.Name, launcher.ColorReset)
+				}
+
+			case "input_request":
+				var payload struct {
+					Options []interface{} `json:"options"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					needsInput = true
+				}
+
+			case "approval":
+				var payload struct {
+					Tool    string   `json:"tool"`
+					Options []string `json:"options"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					needsApproval = true
+					approvalOptions = payload.Options
+				}
+
+			case "auto_approved":
+				var payload struct {
+					Tool string `json:"tool"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					fmt.Printf("%s  ✓ Auto-approved: %s%s\n", launcher.ColorGreen, payload.Tool, launcher.ColorReset)
+				}
+
+			case "error", "error_info":
+				var payload struct {
+					Error  string `json:"error"`
+					Title  string `json:"title"`
+					Reason string `json:"reason"`
+				}
+				if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
+					msg := payload.Error
+					if msg == "" {
+						msg = payload.Reason
+					}
+					if payload.Title != "" {
+						msg = payload.Title + ": " + msg
+					}
+					if msg != "" {
+						fmt.Fprintf(os.Stderr, "\n%sError:%s %s\n", launcher.ColorRed, launcher.ColorReset, msg)
+					}
+				}
+
+			case "done":
+				// Turn complete
 			}
-		case "error":
-			var payload struct {
-				Error string `json:"error"`
-			}
-			if jsonErr := parseJSON(event.Data, &payload); jsonErr == nil {
-				fmt.Fprintf(os.Stderr, "\nError: %s\n", payload.Error)
-			}
-		case "done":
+		}
+		stream.Close()
+
+		// Flow reached END
+		if flowDone {
 			fmt.Println()
 			return nil
 		}
+
+		// Handle input request
+		if needsInput {
+			// Check if we have a pre-provided param for this node
+			if val, ok := params[currentNode]; ok {
+				fmt.Printf("%s  [auto-filled: %s=%s]%s\n", launcher.ColorGray, currentNode, val, launcher.ColorReset)
+				message = val
+				continue
+			}
+
+			// Prompt user interactively
+			fmt.Printf("\n%sInput (%s):%s ", launcher.ColorCyan, currentNode, launcher.ColorReset)
+			input, readErr := reader.ReadString('\n')
+			if readErr != nil {
+				return fmt.Errorf("reading input: %w", readErr)
+			}
+			message = strings.TrimSpace(input)
+			continue
+		}
+
+		// Handle approval request
+		if needsApproval {
+			if autoApprove {
+				message = "Yes"
+				continue
+			}
+			opts := []string{"Yes", "No"}
+			if len(approvalOptions) > 0 {
+				opts = approvalOptions
+			}
+			selection, selErr := ui.ReadSelection(opts, "Approve tool execution?", "")
+			if selErr != nil {
+				return selErr
+			}
+			message = selection
+			continue
+		}
+
+		// No input/approval needed and flow didn't end — we're done
+		fmt.Println()
+		return nil
 	}
-	return nil
+}
+
+func nowUnix() int64 {
+	return time.Now().UnixNano()
 }
 
 func parseJSON(data string, dst any) error {

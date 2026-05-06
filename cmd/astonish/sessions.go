@@ -572,7 +572,11 @@ func handleSessionsShowRemote(c *client.Client, id string, flags []string) error
 		}
 	}
 
-	// If any trace-related flags are set, or --json is requested, use the trace endpoint
+	// Determine which endpoint and rendering mode to use:
+	// - --json: trace endpoint + raw JSON dump
+	// - -t (tools-only): trace endpoint + compact tools rendering
+	// - -r, -n: trace endpoint + pretty conversation rendering
+	// - default: detail endpoint + pretty conversation rendering
 	useTrace := opts.JSONOutput || opts.Recursive || opts.ToolsOnly || opts.LastN > 0
 
 	if useTrace {
@@ -594,8 +598,14 @@ func handleSessionsShowRemote(c *client.Client, id string, flags []string) error
 			return nil
 		}
 
-		// Render the trace entries in human-readable form
-		renderRemoteTrace(trace, opts)
+		if opts.ToolsOnly {
+			// Compact tools-only rendering
+			renderRemoteTrace(trace, opts)
+			return nil
+		}
+
+		// Pretty conversation rendering from trace events (for -r, -n)
+		renderRemoteTracePretty(trace, opts)
 		return nil
 	}
 
@@ -748,7 +758,164 @@ func renderRemoteSessionDetail(detail map[string]any, verbose bool) {
 	}
 }
 
-// renderRemoteTrace renders trace entries from the server in human-readable format.
+// renderRemoteTracePretty renders trace events in pretty conversation style,
+// similar to renderRemoteSessionDetail but working from trace data.
+// This is used for -r (recursive) and -n (last N) where we need the trace
+// endpoint data but want conversation-style output.
+func renderRemoteTracePretty(trace map[string]any, opts TraceOpts) {
+	// Print header
+	sessionID, _ := trace["session_id"].(string)
+	fmt.Printf("Session: %s\n", sessionID)
+	fmt.Println()
+
+	events, _ := trace["events"].([]any)
+	if len(events) == 0 {
+		fmt.Println("No events recorded.")
+		return
+	}
+
+	textMax := 500
+	argsMax := 200
+	if opts.Verbose {
+		textMax = 0
+		argsMax = 0
+	}
+
+	lastSession := ""
+
+	for _, evRaw := range events {
+		ev, ok := evRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		evType, _ := ev["type"].(string)
+		session, _ := ev["session"].(string)
+		text, _ := ev["text"].(string)
+		toolName, _ := ev["tool_name"].(string)
+		durationMs, _ := ev["duration_ms"].(float64)
+
+		// Show sub-session header when session label changes
+		if session != "" && session != lastSession {
+			fmt.Printf("\n  === Sub-agent: %s ===\n\n", session)
+			lastSession = session
+		} else if session == "" && lastSession != "" {
+			// Returning from sub-session to main
+			fmt.Println()
+			lastSession = ""
+		}
+
+		indent := ""
+		if session != "" {
+			indent = "  "
+		}
+
+		switch evType {
+		case "user":
+			if text != "" {
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
+				}
+				fmt.Printf("%s[user] %s\n\n", indent, display)
+			}
+		case "model":
+			if text != "" {
+				display := text
+				if textMax > 0 && len(display) > textMax {
+					display = display[:textMax-3] + "..."
+				}
+				fmt.Printf("%s[model] %s\n\n", indent, display)
+			}
+		case "tool_call":
+			if toolName != "" {
+				if opts.Verbose {
+					argsRaw, _ := ev["args"].(map[string]any)
+					argsStr := ""
+					if argsRaw != nil {
+						argsJSON, _ := json.Marshal(argsRaw)
+						argsStr = " " + string(argsJSON)
+					}
+					fmt.Printf("%s[tool] %s%s\n", indent, toolName, argsStr)
+				} else {
+					// Show just tool name with brief args hint
+					argsRaw, _ := ev["args"].(map[string]any)
+					hint := ""
+					if argsRaw != nil {
+						argsJSON, _ := json.Marshal(argsRaw)
+						s := string(argsJSON)
+						if len(s) > argsMax {
+							s = s[:argsMax-3] + "..."
+						}
+						hint = " " + s
+					}
+					fmt.Printf("%s[tool] %s%s\n", indent, toolName, hint)
+				}
+			}
+		case "tool_result":
+			if toolName != "" {
+				// Check success
+				success := true
+				if s, ok := ev["success"].(bool); ok {
+					success = s
+				}
+				errStr, _ := ev["error"].(string)
+
+				durationStr := ""
+				if durationMs > 0 {
+					if durationMs < 1000 {
+						durationStr = fmt.Sprintf(" (%dms)", int(durationMs))
+					} else {
+						durationStr = fmt.Sprintf(" (%.1fs)", durationMs/1000)
+					}
+				}
+
+				if !success || errStr != "" {
+					if errStr == "" {
+						errStr = "error"
+					}
+					if textMax > 0 && len(errStr) > textMax {
+						errStr = errStr[:textMax-3] + "..."
+					}
+					fmt.Printf("%s   -> %s ERROR: %s%s\n\n", indent, toolName, errStr, durationStr)
+				} else {
+					resultRaw, _ := ev["result"].(map[string]any)
+					resultStr := "OK"
+					if resultRaw != nil && opts.Verbose {
+						rJSON, _ := json.Marshal(resultRaw)
+						resultStr = string(rJSON)
+					} else if resultRaw != nil {
+						// Brief summary
+						rJSON, _ := json.Marshal(resultRaw)
+						resultStr = string(rJSON)
+						if argsMax > 0 && len(resultStr) > argsMax {
+							resultStr = resultStr[:argsMax-3] + "..."
+						}
+					}
+					fmt.Printf("%s   -> %s %s%s\n\n", indent, toolName, resultStr, durationStr)
+				}
+			}
+		}
+	}
+
+	// Summary
+	if summary, ok := trace["summary"].(map[string]any); ok {
+		totalEvents, _ := summary["total_events"].(float64)
+		toolCalls, _ := summary["tool_calls"].(float64)
+		errors, _ := summary["errors"].(float64)
+
+		parts := []string{fmt.Sprintf("%d events", int(totalEvents))}
+		if toolCalls > 0 {
+			parts = append(parts, fmt.Sprintf("%d tool calls", int(toolCalls)))
+		}
+		if errors > 0 {
+			parts = append(parts, fmt.Sprintf("%d errors", int(errors)))
+		}
+		fmt.Printf("--- %s ---\n", strings.Join(parts, " | "))
+	}
+}
+
+// renderRemoteTrace renders trace entries in compact tools-only format.
 func renderRemoteTrace(trace map[string]any, opts TraceOpts) {
 	// Print header
 	sessionID, _ := trace["session_id"].(string)

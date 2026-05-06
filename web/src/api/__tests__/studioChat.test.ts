@@ -30,7 +30,7 @@ describe('studioChat API', () => {
 
       const result = await fetchSessions()
       expect(result).toEqual(sessions)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions', undefined)
     })
 
     it('throws on error', async () => {
@@ -46,7 +46,7 @@ describe('studioChat API', () => {
 
       const result = await fetchSessionHistory('abc')
       expect(result).toEqual(history)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc', undefined)
     })
   })
 

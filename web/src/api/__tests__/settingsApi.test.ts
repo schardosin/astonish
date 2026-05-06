@@ -22,7 +22,7 @@ describe('settingsApi', () => {
 
       const result = await fetchFullConfig()
       expect(result).toEqual(config)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full', undefined)
     })
 
     it('throws on error', async () => {

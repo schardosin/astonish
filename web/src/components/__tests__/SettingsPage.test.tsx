@@ -77,7 +77,6 @@ describe('SettingsPage', () => {
     // Verify the sidebar menu contains expected items
     expect(screen.getByText('Providers')).toBeInTheDocument()
     expect(screen.getByText('MCP Servers')).toBeInTheDocument()
-    expect(screen.getByText('Credentials')).toBeInTheDocument()
   })
 
   it('calls onClose when close button is clicked', async () => {

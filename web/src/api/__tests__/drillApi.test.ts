@@ -36,7 +36,7 @@ describe('drillApi', () => {
 
       const result = await fetchDrillSuites()
       expect(result).toEqual(suites)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills', undefined)
     })
 
     it('throws on error', async () => {
@@ -49,7 +49,7 @@ describe('drillApi', () => {
     it('calls GET /api/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ name: 's', drills: [] })
       await fetchDrillSuite('my-suite')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my-suite')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my-suite', undefined)
     })
   })
 
@@ -57,13 +57,13 @@ describe('drillApi', () => {
     it('calls GET /api/drills/:suite/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ name: 'd', suite: 's' })
       await fetchDrill('suite1', 'drill1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1/drills/drill1')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1/drills/drill1', undefined)
     })
 
     it('encodes special characters', async () => {
       globalThis.fetch = mockFetchJson({})
       await fetchDrill('my suite', 'my drill')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my%20suite/drills/my%20drill')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my%20suite/drills/my%20drill', undefined)
     })
   })
 
@@ -87,7 +87,7 @@ describe('drillApi', () => {
     it('calls GET /api/drill-reports', async () => {
       globalThis.fetch = mockFetchJson([])
       await fetchDrillReports()
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports', undefined)
     })
   })
 
@@ -95,7 +95,7 @@ describe('drillApi', () => {
     it('calls GET /api/drill-reports/:suite', async () => {
       globalThis.fetch = mockFetchJson({ suite: 's' })
       await fetchDrillReport('suite1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports/suite1')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports/suite1', undefined)
     })
   })
 
@@ -107,7 +107,7 @@ describe('drillApi', () => {
       })
       const result = await fetchDrillYaml('s', 'd')
       expect(result).toBe('name: test')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml', undefined)
     })
   })
 

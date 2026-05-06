@@ -26,7 +26,7 @@ describe('agents API', () => {
 
       const result = await fetchAgents()
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents', undefined)
     })
 
     it('throws on non-ok response', async () => {
@@ -42,13 +42,13 @@ describe('agents API', () => {
 
       const result = await fetchAgent('test')
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', undefined)
     })
 
     it('encodes agent name', async () => {
       globalThis.fetch = mockFetch({})
       await fetchAgent('my agent')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/my%20agent')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/my%20agent', undefined)
     })
   })
 
@@ -85,7 +85,7 @@ describe('agents API', () => {
 
       const result = await fetchTools()
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/tools')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/tools', undefined)
     })
   })
 
@@ -109,7 +109,7 @@ describe('agents API', () => {
     it('preserves forward slashes in store ID', async () => {
       globalThis.fetch = mockFetch({})
       await getMcpStoreServer('org/repo')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo', undefined)
     })
   })
 
@@ -120,7 +120,7 @@ describe('agents API', () => {
 
       const result = await installMcpServer('org/repo', { KEY: 'val' })
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo/install', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo/install?scope=team', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ env: { KEY: 'val' } }),
@@ -143,7 +143,7 @@ describe('agents API', () => {
       globalThis.fetch = mockFetch(expected)
 
       await installInlineMcpServer('my-server', { cmd: 'echo' })
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/install-inline', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/install-inline?scope=team', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ serverName: 'my-server', config: { cmd: 'echo' } }),

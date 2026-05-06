@@ -53,7 +53,7 @@ func (pm *PoolManager) PlatformPool(ctx context.Context) (*pgxpool.Pool, error) 
 // OrgPool returns (or lazily creates) a connection pool for the given
 // organization's database.
 func (pm *PoolManager) OrgPool(ctx context.Context, orgSlug string) (*pgxpool.Pool, error) {
-	orgDSN, err := ReplaceDSNDatabase(pm.platformDSN, OrgDBName(orgSlug))
+	orgDSN, err := ReplaceDSNDatabase(pm.platformDSN, OrgDBName(pm.pgCfg.InstanceSuffix, orgSlug))
 	if err != nil {
 		return nil, fmt.Errorf("failed to derive org DSN for %s: %w", orgSlug, err)
 	}

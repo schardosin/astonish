@@ -138,7 +138,7 @@ func Run(cfg RunConfig) error {
 			// config was saved (e.g. by the setup wizard) but the user didn't
 			// run `astonish platform init` separately.
 			logger.Printf("Platform store init failed, attempting auto-bootstrap: %v", pgErr)
-			if bootstrapErr := pgstore.BootstrapPlatform(context.Background(), appCfg.Storage.Postgres.PlatformDSN); bootstrapErr != nil {
+			if bootstrapErr := pgstore.BootstrapPlatform(context.Background(), appCfg.Storage.Postgres.PlatformDSN, appCfg.Storage.Postgres.InstanceSuffix); bootstrapErr != nil {
 				return fmt.Errorf("failed to initialize platform storage: %w (auto-bootstrap also failed: %v)", pgErr, bootstrapErr)
 			}
 			logger.Printf("Auto-bootstrap succeeded, retrying platform store init")

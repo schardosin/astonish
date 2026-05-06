@@ -135,7 +135,7 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 		ID:        uuid.New().String(),
 		Name:      req.Name,
 		Slug:      req.Slug,
-		DBName:    pgstore.OrgDBName(req.Slug),
+		DBName:    pgstore.OrgDBName(pgStore.InstanceSuffix(), req.Slug),
 		Status:    "active",
 		CreatedAt: time.Now(),
 	}

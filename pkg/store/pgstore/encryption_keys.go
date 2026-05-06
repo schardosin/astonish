@@ -5,37 +5,55 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 )
 
 // OrgEncryptionKeyManager manages per-org data encryption keys (DEKs).
 //
 // Envelope encryption scheme:
-//   - Master key: ASTONISH_MASTER_KEY environment variable (hex-encoded 256-bit key)
+//   - Master key (KEK): loaded from ASTONISH_MASTER_KEY env var or .store_key file
 //   - DEK: per-org 256-bit AES key stored in org_encryption_keys table, encrypted by master key
 //   - Credential data: encrypted by DEK at the application level (pgCredentialStore)
 //
-// If ASTONISH_MASTER_KEY is not set, encryption is disabled (backward compat).
+// If no master key is available from either source, encryption is disabled.
 type OrgEncryptionKeyManager struct {
 	pool      *pgxpool.Pool
 	masterKey []byte // nil if env var not set (encryption disabled)
 }
 
 // NewOrgEncryptionKeyManager creates a key manager for the given org pool.
-// It reads the master key from the ASTONISH_MASTER_KEY environment variable.
-// If the env var is not set, encryption is disabled and all methods return nil keys.
+// It reads the master key from (in priority order):
+//  1. ASTONISH_MASTER_KEY environment variable (for production/k8s deployments)
+//  2. The .store_key file in the config directory (auto-generated, zero-config)
+//
+// If neither source provides a valid key, encryption is disabled.
 func NewOrgEncryptionKeyManager(pool *pgxpool.Pool) *OrgEncryptionKeyManager {
 	mgr := &OrgEncryptionKeyManager{pool: pool}
 
+	// Priority 1: environment variable (production deployments, external secret injection)
 	masterKeyHex := os.Getenv("ASTONISH_MASTER_KEY")
+
+	// Priority 2: .store_key file (auto-generated on first daemon start)
+	if masterKeyHex == "" {
+		if configDir, err := config.GetConfigDir(); err == nil {
+			keyPath := filepath.Join(configDir, ".store_key")
+			if data, err := os.ReadFile(keyPath); err == nil {
+				masterKeyHex = strings.TrimSpace(string(data))
+			}
+		}
+	}
+
 	if masterKeyHex != "" {
 		key, err := hex.DecodeString(masterKeyHex)
 		if err != nil || len(key) != 32 {
 			// Invalid master key — log warning and disable encryption
-			fmt.Fprintf(os.Stderr, "WARNING: ASTONISH_MASTER_KEY is invalid (expected 64 hex chars for 256-bit key), credential encryption disabled\n")
+			fmt.Fprintf(os.Stderr, "WARNING: master key is invalid (expected 64 hex chars for 256-bit key), credential encryption disabled\n")
 			return mgr
 		}
 		mgr.masterKey = key

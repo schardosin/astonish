@@ -428,7 +428,7 @@ func (pa *PlatformAuth) ensureOrgForUser(ctx context.Context, user *store.User) 
 func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User) (*store.Organization, string, error) {
 	orgSlug := pa.authCfg.GetDefaultOrgSlug()
 	orgName := pa.authCfg.GetDefaultOrgName()
-	dbName := pgstore.OrgDBName(orgSlug)
+	dbName := pgstore.OrgDBName(pa.pgStore.InstanceSuffix(), orgSlug)
 
 	org := &store.Organization{
 		ID:        uuid.New().String(),

@@ -245,7 +245,7 @@ export default function SettingsContent({
         <OpenCodeSettings config={fullConfig.open_code} onSaved={onSaved} />
       )}
 
-      {activeSection === 'credentials' && <CredentialsSettings />}
+      {activeSection === 'credentials' && <CredentialsSettings isPlatform={isPlatformMode} />}
     </>
   )
 }

@@ -44,6 +44,11 @@ func (s *PGStore) PoolManager() *PoolManager {
 	return s.poolMgr
 }
 
+// InstanceSuffix returns the instance suffix used for database naming.
+func (s *PGStore) InstanceSuffix() string {
+	return s.pgCfg.InstanceSuffix
+}
+
 // SetEmbedFunc configures the embedding function used by memory stores for
 // vector search. When set, Search() uses hybrid vector+keyword RRF fusion
 // and Add() auto-generates embeddings for new memories. When nil (default),
@@ -219,7 +224,7 @@ func (s *PGStore) ProvisionOrg(ctx context.Context, orgID, slug string) error {
 	}
 	defer conn.Close(ctx)
 
-	_, err = ProvisionOrgDB(ctx, conn, slug, s.platformDSN)
+	_, err = ProvisionOrgDB(ctx, conn, slug, s.platformDSN, s.pgCfg.InstanceSuffix)
 	return err
 }
 
@@ -234,7 +239,7 @@ func (s *PGStore) DecommissionOrg(ctx context.Context, orgSlug string) error {
 	}
 	defer conn.Close(ctx)
 
-	dbName := OrgDBName(orgSlug)
+	dbName := OrgDBName(s.pgCfg.InstanceSuffix, orgSlug)
 	// Force disconnect all sessions before dropping
 	_, _ = conn.Exec(ctx, fmt.Sprintf(
 		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s'`,

@@ -7,7 +7,7 @@ const CredentialsSettings = lazy(() => import('./settings/CredentialsSettings'))
  * Top-level Credentials view — rendered at #/credentials.
  * Provides centered layout with header, wrapping the CredentialsSettings panel.
  */
-export default function CredentialsView() {
+export default function CredentialsView({ isPlatform }: { isPlatform?: boolean }) {
   return (
     <div className="flex-1 overflow-auto p-6" style={{ background: 'var(--bg-primary)' }}>
       <div className="max-w-4xl mx-auto">
@@ -23,7 +23,7 @@ export default function CredentialsView() {
             <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
           </div>
         }>
-          <CredentialsSettings />
+          <CredentialsSettings isPlatform={isPlatform} />
         </Suspense>
       </div>
     </div>

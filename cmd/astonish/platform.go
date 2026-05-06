@@ -78,7 +78,7 @@ func handlePlatformInit(args []string) error {
 
 	// Bootstrap: create database, roles, and run migrations.
 	fmt.Print("Initializing platform database... ")
-	if err := pgstore.BootstrapPlatform(ctx, dsn); err != nil {
+	if err := pgstore.BootstrapPlatform(ctx, dsn, appCfg.Storage.Postgres.InstanceSuffix); err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
@@ -307,7 +307,7 @@ func handlePlatformOrgCreate(args []string) error {
 		ID:        uuid.New().String(),
 		Name:      name,
 		Slug:      slug,
-		DBName:    pgstore.OrgDBName(slug),
+		DBName:    pgstore.OrgDBName(appCfg.Storage.Postgres.InstanceSuffix, slug),
 		Status:    "active",
 		CreatedAt: time.Now(),
 	}

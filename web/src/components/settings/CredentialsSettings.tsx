@@ -264,11 +264,16 @@ function normalizeSecrets(secrets: SecretListItem[] | string[]): SecretListItem[
   return secrets as SecretListItem[]
 }
 
-export default function CredentialsSettings() {
+export default function CredentialsSettings({ isPlatform: isPlatformProp }: { isPlatform?: boolean } = {}) {
   const [data, setData] = useState<CredentialsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [isPlatform, setIsPlatform] = useState(false)
+  const [isPlatform, setIsPlatform] = useState(isPlatformProp ?? false)
+
+  // Sync with prop when it changes (e.g., on mount the prop may arrive after initial render)
+  useEffect(() => {
+    if (isPlatformProp !== undefined) setIsPlatform(isPlatformProp)
+  }, [isPlatformProp])
 
   // Master key state
   const [masterKey, setMasterKey] = useState<string | null>(null)
@@ -317,17 +322,19 @@ export default function CredentialsSettings() {
       setLoading(true)
       const result = await fetchCredentials()
       setData(result)
-      // Detect platform mode by checking if any credential has a scope field
-      const hasScopedCred = result.credentials?.some(c => c.scope)
-      const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
-      setIsPlatform(hasScopedCred || hasScopedSecret)
+      // Use prop if provided; otherwise detect platform mode from data
+      if (!isPlatformProp) {
+        const hasScopedCred = result.credentials?.some(c => c.scope)
+        const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
+        setIsPlatform(hasScopedCred || hasScopedSecret)
+      }
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [isPlatformProp])
 
   useEffect(() => {
     let cancelled = false
@@ -336,9 +343,12 @@ export default function CredentialsSettings() {
         const result = await fetchCredentials()
         if (cancelled) return
         setData(result)
-        const hasScopedCred = result.credentials?.some(c => c.scope)
-        const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
-        setIsPlatform(hasScopedCred || hasScopedSecret)
+        // Use prop if provided; otherwise detect platform mode from data
+        if (!isPlatformProp) {
+          const hasScopedCred = result.credentials?.some(c => c.scope)
+          const hasScopedSecret = Array.isArray(result.secrets) && result.secrets.length > 0 && typeof result.secrets[0] === 'object' && 'scope' in (result.secrets[0] as unknown as Record<string, unknown>)
+          setIsPlatform(hasScopedCred || hasScopedSecret)
+        }
         setError(null)
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Unknown error')
@@ -348,7 +358,7 @@ export default function CredentialsSettings() {
     }
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [isPlatformProp])
 
   // Master key prompt flow
   const withMasterKey = useCallback((callback: (mk: string | null) => void) => {
@@ -472,6 +482,30 @@ export default function CredentialsSettings() {
       token_url: revealed.token_url || '',
       access_token: revealed.access_token || '',
       refresh_token: revealed.refresh_token || ''
+    })
+    setCredFormError('')
+    setShowCredModal(true)
+  }
+
+  // Blind edit for platform mode (overwrite without revealing current value)
+  const openBlindEditCred = (name: string, type: string, scope?: string) => {
+    setEditingCred(name)
+    setAddScope(scope)
+    setCredForm({
+      name,
+      type: type || 'api_key',
+      header: 'Authorization',
+      value: '',
+      token: '',
+      username: '',
+      password: '',
+      auth_url: '',
+      client_id: '',
+      client_secret: '',
+      scope: '',
+      token_url: '',
+      access_token: '',
+      refresh_token: ''
     })
     setCredFormError('')
     setShowCredModal(true)
@@ -662,8 +696,8 @@ export default function CredentialsSettings() {
                   <Download size={14} style={{ color: 'var(--text-muted)' }} />}
               </button>
             )}
-            {/* Reveal/Hide (admin only for team credentials) */}
-            {(!isTeam || isAdmin) && (
+            {/* Reveal/Hide (admin only for team credentials, disabled in platform mode) */}
+            {!isPlatform && (!isTeam || isAdmin) && (
               <button
                 onClick={() => handleRevealCred(cred.name, credScope)}
                 className="p-1.5 rounded hover:bg-white/10 transition-colors"
@@ -674,9 +708,10 @@ export default function CredentialsSettings() {
                   revealed ? <EyeOff size={14} style={{ color: 'var(--accent)' }} /> : <Eye size={14} style={{ color: 'var(--text-muted)' }} />}
               </button>
             )}
-            {revealed && (
+            {/* Edit: in platform mode always show (blind overwrite); in personal mode only when revealed */}
+            {(isPlatform ? (!isTeam || isAdmin) : !!revealed) && (
               <button
-                onClick={() => openEditCred(cred.name, credScope)}
+                onClick={() => isPlatform ? openBlindEditCred(cred.name, cred.type, credScope) : openEditCred(cred.name, credScope)}
                 className="p-1.5 rounded hover:bg-white/10 transition-colors"
                 title="Edit"
               >
@@ -695,8 +730,8 @@ export default function CredentialsSettings() {
             )}
           </div>
         </div>
-        {/* Revealed fields */}
-        {revealed && (
+        {/* Revealed fields (personal mode only) */}
+        {!isPlatform && revealed && (
           <div className="mt-2 pt-2 border-t space-y-1.5" style={sectionBorderStyle}>
             {revealed.type === 'api_key' && (
               <>
@@ -747,7 +782,7 @@ export default function CredentialsSettings() {
       <div key={sKey} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
         <div className="flex-1 min-w-0 mr-3">
           <span className="font-mono text-xs" style={{ color: 'var(--text-primary)' }}>{item.key}</span>
-          {revealed !== undefined && (
+          {!isPlatform && revealed !== undefined && (
             <div className="flex items-center gap-1 mt-0.5">
               <MaskedValue value={revealed} revealed={true} />
               <CopyButton text={revealed} />
@@ -755,8 +790,8 @@ export default function CredentialsSettings() {
           )}
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          {/* Reveal/Hide (admin only for team secrets) */}
-          {(!isTeamSecret || isAdmin) && (
+          {/* Reveal/Hide (admin only for team secrets, disabled in platform mode) */}
+          {!isPlatform && (!isTeamSecret || isAdmin) && (
             <button
               onClick={() => handleRevealSecret(item.key, sScope)}
               className="p-1.5 rounded hover:bg-white/10 transition-colors"

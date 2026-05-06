@@ -1560,16 +1560,35 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 		}
 	}
 
-	// Build DSN
-	platformDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, "astonish_platform", pgSSLMode)
+	// Generate a unique instance suffix for this deployment.
+	suffix := config.GenerateInstanceSuffix()
+
+	// Build a temporary DSN to check for collisions.
+	tempDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
+
+	// Check for suffix collision (extremely unlikely).
+	ctx := context.Background()
+	for attempts := 0; attempts < 5; attempts++ {
+		exists, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		if checkErr != nil {
+			return fmt.Errorf("failed to check database existence: %w", checkErr)
+		}
+		if !exists {
+			break
+		}
+		suffix = config.GenerateInstanceSuffix()
+	}
+
+	// Build DSN with the actual platform DB name.
+	platformDBName := config.PlatformDBName(suffix)
+	platformDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, platformDBName, pgSSLMode)
 
 	clearScreen()
 	fmt.Println()
 	fmt.Printf("  Connecting to PostgreSQL at %s:%d...\n", pgHost, port)
 
 	// Bootstrap the platform database.
-	ctx := context.Background()
-	if err := pgstore.BootstrapPlatform(ctx, platformDSN); err != nil {
+	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
 		fmt.Println()
 		fmt.Printf("  ✗ Failed: %v\n", err)
 		fmt.Println()
@@ -1603,6 +1622,7 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 
 	cfg.Storage.Backend = "postgres"
 	cfg.Storage.Postgres.PlatformDSN = platformDSN
+	cfg.Storage.Postgres.InstanceSuffix = suffix
 	cfg.Storage.Auth.Mode = "builtin"
 	cfg.Storage.Auth.JWTSecret = jwtSecret
 	cfg.Storage.Auth.DefaultOrgName = orgName

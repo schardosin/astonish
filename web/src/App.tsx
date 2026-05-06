@@ -1655,7 +1655,7 @@ layout:
             </Suspense>
           ) : view === 'credentials' ? (
             <Suspense fallback={null}>
-            <CredentialsView key={activeTeam || 'personal'} />
+            <CredentialsView isPlatform={isPlatformMode} key={activeTeam || 'personal'} />
             </Suspense>
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

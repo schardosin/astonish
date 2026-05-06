@@ -3,9 +3,11 @@ package config
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"math/big"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -88,15 +90,25 @@ type StorageConfig struct {
 
 // PostgresConfig holds PostgreSQL connection parameters for platform mode.
 type PostgresConfig struct {
-	// PlatformDSN is the connection string for the platform database
-	// (astonish_platform). This database stores cross-org data: users,
-	// organizations, OIDC providers, and login sessions.
+	// PlatformDSN is the connection string for the platform database.
+	// This database stores cross-org data: users, organizations, OIDC
+	// providers, and login sessions.
 	//
 	// The user in this DSN must have CREATEDB privilege to provision
 	// per-org databases, or org databases must be pre-created.
 	//
-	// Format: "postgres://user:pass@host:port/astonish_platform?sslmode=require"
+	// Format: "postgres://user:pass@host:port/astonish_{suffix}_platform?sslmode=require"
 	PlatformDSN string `yaml:"platform_dsn,omitempty" json:"platform_dsn,omitempty"`
+
+	// InstanceSuffix is a unique 6-character alphanumeric identifier for this
+	// Astonish instance. It namespaces all databases on the PostgreSQL host:
+	//   - Platform DB: astonish_{suffix}_platform
+	//   - Org DBs:     astonish_{suffix}_{org_slug}
+	//
+	// Generated automatically on first setup. Multiple Astonish instances can
+	// share the same PostgreSQL host by having different suffixes.
+	// Empty string means legacy naming (astonish_platform, astonish_org_{slug}).
+	InstanceSuffix string `yaml:"instance_suffix,omitempty" json:"instance_suffix,omitempty"`
 
 	// MaxOpenConns is the maximum number of open connections per org pool.
 	// Default: 25. Set to 0 for unlimited (not recommended).
@@ -143,6 +155,53 @@ func (c *PostgresConfig) GetConnMaxLifetime() time.Duration {
 		return 30 * time.Minute
 	}
 	return time.Duration(c.ConnMaxLifetimeMinutes) * time.Minute
+}
+
+// GenerateInstanceSuffix creates a random 6-character lowercase alphanumeric
+// suffix used to namespace all databases for this Astonish instance.
+func GenerateInstanceSuffix() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
+	}
+	return string(b)
+}
+
+// PlatformDBName returns the database name for the platform database.
+// If suffix is empty (legacy), returns "astonish_platform".
+// Otherwise returns "astonish_{suffix}_platform".
+func PlatformDBName(suffix string) string {
+	if suffix == "" {
+		return "astonish_platform"
+	}
+	return "astonish_" + suffix + "_platform"
+}
+
+// OrgDBName returns the database name for an organization.
+// If suffix is empty (legacy), returns "astonish_org_{slug}".
+// Otherwise returns "astonish_{suffix}_{slug}".
+func OrgDBName(suffix, orgSlug string) string {
+	slug := sanitizeDBSlug(orgSlug)
+	if suffix == "" {
+		return "astonish_org_" + slug
+	}
+	return "astonish_" + suffix + "_" + slug
+}
+
+// sanitizeDBSlug removes any characters that aren't lowercase alphanumeric or underscore.
+func sanitizeDBSlug(s string) string {
+	// Convert hyphens to underscores, strip everything else
+	var b strings.Builder
+	for _, r := range s {
+		if r == '-' {
+			b.WriteRune('_')
+		} else if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // PlatformAuthConfig controls authentication in platform (multi-tenant) mode.

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // BuildDSN constructs a PostgreSQL connection string from individual components.
@@ -29,17 +30,18 @@ func BuildDSN(host string, port int, user, password, dbname, sslmode string) str
 	return u.String()
 }
 
-// BootstrapPlatform creates the astonish_platform database (if it does not
-// already exist), ensures the required PostgreSQL roles, and runs platform-level
+// BootstrapPlatform creates the platform database (if it does not already
+// exist), ensures the required PostgreSQL roles, and runs platform-level
 // migrations. This is the single entry point used by:
 //   - The CLI setup wizard (`astonish setup`)
 //   - The CLI command (`astonish platform init`)
 //   - The UI setup API (`POST /api/platform/init`)
 //   - The daemon auto-init on first startup
 //
-// The platformDSN should point to the astonish_platform database (or any
-// database on the target server). The user must have CREATEDB privilege.
-func BootstrapPlatform(ctx context.Context, platformDSN string) error {
+// The platformDSN should point to any database on the target server (the actual
+// platform DB name is derived from the suffix). The user must have CREATEDB privilege.
+// The suffix parameter namespaces the instance; empty string means legacy naming.
+func BootstrapPlatform(ctx context.Context, platformDSN, suffix string) error {
 	// Step 1: Connect to the default "postgres" database to run CREATE DATABASE.
 	// CREATE DATABASE cannot be run inside a transaction or on the target DB itself.
 	adminDSN, err := ReplaceDSNDatabase(platformDSN, "postgres")
@@ -53,7 +55,7 @@ func BootstrapPlatform(ctx context.Context, platformDSN string) error {
 	}
 
 	// Step 2: Create the platform database if it doesn't exist.
-	dbName := "astonish_platform"
+	dbName := config.PlatformDBName(suffix)
 	createSQL := fmt.Sprintf(`CREATE DATABASE %s`, pgx.Identifier{dbName}.Sanitize())
 	if _, execErr := adminConn.Exec(ctx, createSQL); execErr != nil {
 		if !strings.Contains(execErr.Error(), "already exists") {
@@ -87,4 +89,27 @@ func BootstrapPlatform(ctx context.Context, platformDSN string) error {
 	}
 
 	return nil
+}
+
+// PlatformDBExists checks whether a platform database with the given suffix
+// already exists on the PostgreSQL host. Used for collision detection when
+// generating a new instance suffix.
+func PlatformDBExists(ctx context.Context, anyDSN, suffix string) (bool, error) {
+	adminDSN, err := ReplaceDSNDatabase(anyDSN, "postgres")
+	if err != nil {
+		return false, err
+	}
+	conn, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		return false, err
+	}
+	defer conn.Close(ctx)
+
+	dbName := config.PlatformDBName(suffix)
+	var exists bool
+	err = conn.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`,
+		dbName,
+	).Scan(&exists)
+	return exists, err
 }

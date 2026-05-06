@@ -98,14 +98,37 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build the platform DSN.
-	platformDSN := pgstore.BuildDSN(req.Host, req.Port, req.User, req.Password, "astonish_platform", req.SSLMode)
+	// Generate a unique instance suffix for this deployment.
+	// This namespaces all databases so multiple Astonish instances can share a PG host.
+	suffix := config.GenerateInstanceSuffix()
 
-	// Bootstrap: create DB, roles, and run migrations.
+	// Build a temporary DSN (pointing to any DB on the host — we'll create the real one).
+	tempDSN := pgstore.BuildDSN(req.Host, req.Port, req.User, req.Password, "postgres", req.SSLMode)
+
+	// Check for suffix collision (extremely unlikely, but handle it)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	if err := pgstore.BootstrapPlatform(ctx, platformDSN); err != nil {
+	for attempts := 0; attempts < 5; attempts++ {
+		exists, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		if checkErr != nil {
+			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+				Error: "Failed to check database existence: " + cleanPGError(checkErr.Error()),
+			})
+			return
+		}
+		if !exists {
+			break
+		}
+		suffix = config.GenerateInstanceSuffix()
+	}
+
+	// Build the platform DSN with the actual platform DB name.
+	platformDBName := config.PlatformDBName(suffix)
+	platformDSN := pgstore.BuildDSN(req.Host, req.Port, req.User, req.Password, platformDBName, req.SSLMode)
+
+	// Bootstrap: create DB, roles, and run migrations.
+	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to initialize platform database: " + cleanPGError(err.Error()),
 		})
@@ -117,6 +140,7 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	cfg.Storage.Backend = "postgres"
 	cfg.Storage.Postgres.PlatformDSN = platformDSN
+	cfg.Storage.Postgres.InstanceSuffix = suffix
 	cfg.Storage.Auth.Mode = "builtin"
 	cfg.Storage.Auth.JWTSecret = jwtSecret
 	cfg.Storage.Auth.DefaultOrgName = req.OrgName

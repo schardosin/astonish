@@ -118,7 +118,7 @@ func handleMigrateRun() error {
 	// Provision org + team
 	orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 	orgName := appCfg.Storage.Auth.GetDefaultOrgName()
-	dbName := pgstore.OrgDBName(orgSlug)
+	dbName := pgstore.OrgDBName(appCfg.Storage.Postgres.InstanceSuffix, orgSlug)
 	teamSlug := "general"
 
 	org := &store.Organization{

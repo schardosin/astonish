@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // PostgreSQL roles used by the platform.
@@ -89,8 +90,8 @@ func ProvisionPlatformDB(ctx context.Context, conn *pgx.Conn) error {
 //  4. Sets up grants for the app role
 //
 // Returns the DSN for the new org database.
-func ProvisionOrgDB(ctx context.Context, adminConn *pgx.Conn, orgSlug, platformDSN string) (string, error) {
-	dbName := OrgDBName(orgSlug)
+func ProvisionOrgDB(ctx context.Context, adminConn *pgx.Conn, orgSlug, platformDSN, suffix string) (string, error) {
+	dbName := OrgDBName(suffix, orgSlug)
 
 	// CREATE DATABASE cannot run inside a transaction
 	createSQL := fmt.Sprintf(`CREATE DATABASE %s`, pgx.Identifier{dbName}.Sanitize())
@@ -254,8 +255,15 @@ func ProvisionPersonalSchema(ctx context.Context, conn *pgx.Conn, userID string)
 // --- Naming helpers ---
 
 // OrgDBName returns the database name for an organization.
-func OrgDBName(orgSlug string) string {
-	return "astonish_org_" + sanitizeSlug(orgSlug)
+// Delegates to config.OrgDBName for the naming convention.
+func OrgDBName(suffix, orgSlug string) string {
+	return config.OrgDBName(suffix, orgSlug)
+}
+
+// PlatformDBName returns the database name for the platform database.
+// Delegates to config.PlatformDBName for the naming convention.
+func PlatformDBName(suffix string) string {
+	return config.PlatformDBName(suffix)
 }
 
 // TeamSchemaName returns the schema name for a team.

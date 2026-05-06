@@ -156,7 +156,7 @@ func (mm *MigrationManager) handleStart(w http.ResponseWriter, r *http.Request) 
 	// Step 2: Provision org + team (reuse the same logic as first-registration)
 	orgSlug := mm.authCfg.GetDefaultOrgSlug()
 	orgName := mm.authCfg.GetDefaultOrgName()
-	dbName := pgstore.OrgDBName(orgSlug)
+	dbName := pgstore.OrgDBName(mm.pgStore.InstanceSuffix(), orgSlug)
 	teamSlug := "general"
 
 	org := &store.Organization{

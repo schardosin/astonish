@@ -178,20 +178,25 @@ type TeamInfo struct {
 
 // ListOrgs returns the organizations the user belongs to.
 func (c *Client) ListOrgs() ([]OrgInfo, error) {
-	var orgs []OrgInfo
-	if err := c.DoJSON("GET", "/api/platform/admin/orgs", nil, &orgs); err != nil {
+	var resp struct {
+		Orgs      []OrgInfo `json:"orgs"`
+		ActiveOrg string    `json:"active_org"`
+	}
+	if err := c.DoJSON("GET", "/api/orgs", nil, &resp); err != nil {
 		return nil, err
 	}
-	return orgs, nil
+	return resp.Orgs, nil
 }
 
 // ListTeams returns the teams in the current org.
 func (c *Client) ListTeams() ([]TeamInfo, error) {
-	var teams []TeamInfo
-	if err := c.DoJSON("GET", "/api/teams", nil, &teams); err != nil {
+	var resp struct {
+		Teams []TeamInfo `json:"teams"`
+	}
+	if err := c.DoJSON("GET", "/api/teams", nil, &resp); err != nil {
 		return nil, err
 	}
-	return teams, nil
+	return resp.Teams, nil
 }
 
 // SwitchOrg changes the active org by re-authenticating.

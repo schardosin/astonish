@@ -610,7 +610,7 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 		})
 	}
 
-	// Parse each server's cached tools
+	// Parse each server's cached tools from DB
 	for serverName, cachedData := range serverMap {
 		var entries []toolEntry
 		if json.Unmarshal(cachedData, &entries) == nil {
@@ -620,6 +620,50 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 					Description: e.Description,
 					Source:      serverName,
 				})
+			}
+		}
+	}
+
+	// Include installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// that are NOT already in the DB stores. These are configured via the
+	// filesystem credential store + config.yaml and may not have been
+	// explicitly installed into the team DB.
+	for _, srv := range config.GetStandardServers() {
+		if serverMap[srv.ID] != nil {
+			continue // Already in DB stores — skip
+		}
+		if !config.IsStandardServerInstalled(srv.ID) {
+			continue // Not installed — skip
+		}
+		// Try to get tool info from the persistent file-based cache
+		cachedEntries := cache.GetToolsForServer(srv.ID)
+		if len(cachedEntries) > 0 {
+			for _, e := range cachedEntries {
+				result = append(result, ToolInfo{
+					Name:        e.Name,
+					Description: e.Description,
+					Source:      srv.ID,
+				})
+			}
+		} else {
+			// Fallback: use the known web tool names from the standard server definition
+			if srv.WebSearchTool != "" {
+				if parts := strings.SplitN(srv.WebSearchTool, ":", 2); len(parts) == 2 {
+					result = append(result, ToolInfo{
+						Name:        parts[1],
+						Description: srv.DisplayName + " web search",
+						Source:      srv.ID,
+					})
+				}
+			}
+			if srv.WebExtractTool != "" {
+				if parts := strings.SplitN(srv.WebExtractTool, ":", 2); len(parts) == 2 {
+					result = append(result, ToolInfo{
+						Name:        parts[1],
+						Description: srv.DisplayName + " content extraction",
+						Source:      srv.ID,
+					})
+				}
 			}
 		}
 	}

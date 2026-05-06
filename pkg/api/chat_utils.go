@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -875,6 +876,53 @@ func readArtifactContentFromSession(fs *persistentsession.FileStore, userID, ses
 	// Scan from the end to find the most recent write to this path
 	for i := events.Len() - 1; i >= 0; i-- {
 		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall == nil {
+				continue
+			}
+			if part.FunctionCall.Name != "write_file" {
+				continue
+			}
+			args := part.FunctionCall.Args
+			if args == nil {
+				continue
+			}
+			p, _ := args["file_path"].(string)
+			if filepath.Clean(p) != cleanTarget {
+				continue
+			}
+			content, _ := args["content"].(string)
+			if content != "" {
+				return content, true
+			}
+		}
+	}
+	return "", false
+}
+
+// readArtifactContentFromSessionStore is the platform-mode equivalent of
+// readArtifactContentFromSession. It accepts a store.SessionStore (which may
+// be backed by PostgreSQL) and uses ReadTranscriptEvents to load events, then
+// scans them for a write_file FunctionCall whose file_path matches the
+// requested path.
+func readArtifactContentFromSessionStore(ss store.SessionStore, appName, userID, sessionID, filePath string) (string, bool) {
+	if ss == nil {
+		return "", false
+	}
+
+	events, err := ss.ReadTranscriptEvents(appName, userID, sessionID)
+	if err != nil {
+		return "", false
+	}
+
+	cleanTarget := filepath.Clean(filePath)
+
+	// Scan from the end to find the most recent write to this path
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
 		if event.LLMResponse.Content == nil {
 			continue
 		}

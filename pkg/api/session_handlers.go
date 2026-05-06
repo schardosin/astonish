@@ -434,13 +434,24 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Tier 3: Fall back to reading from persisted session JSONL
+	// Tier 3: Fall back to reading from persisted session events
 	if sessionID != "" {
+		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				serveArtifactDownload(w, fileName, []byte(content))
 				return
+			}
+		}
+
+		// 3b: Platform mode — read from PG session store
+		if svc := store.FromRequest(r); svc != nil {
+			if ss := resolveSessionStore(svc, sessionID); ss != nil {
+				if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
+					serveArtifactDownload(w, fileName, []byte(content))
+					return
+				}
 			}
 		}
 	}
@@ -499,14 +510,26 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Tier 3: Fall back to reading content from persisted session JSONL
+	// Tier 3: Fall back to reading content from persisted session events
 	if sessionID != "" {
+		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 				fmt.Fprint(w, content)
 				return
+			}
+		}
+
+		// 3b: Platform mode — read from PG session store
+		if svc := store.FromRequest(r); svc != nil {
+			if ss := resolveSessionStore(svc, sessionID); ss != nil {
+				if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
+					w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+					fmt.Fprint(w, content)
+					return
+				}
 			}
 		}
 	}
@@ -592,12 +615,24 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Tier 3: Fall back to reading from persisted session JSONL
+	// Tier 3: Fall back to reading from persisted session events
 	if mdContent == nil && sessionID != "" {
+		// 3a: File-based session store (personal mode)
 		cm := GetChatManager()
 		if fs := cm.fileStore(); fs != nil {
 			if content, ok := readArtifactContentFromSession(fs, effectiveUserID(r), sessionID, cleanPath); ok {
 				mdContent = []byte(content)
+			}
+		}
+
+		// 3b: Platform mode — read from PG session store
+		if mdContent == nil {
+			if svc := store.FromRequest(r); svc != nil {
+				if ss := resolveSessionStore(svc, sessionID); ss != nil {
+					if content, ok := readArtifactContentFromSessionStore(ss, studioChatAppName, effectiveUserID(r), sessionID, cleanPath); ok {
+						mdContent = []byte(content)
+					}
+				}
 			}
 		}
 	}

@@ -523,6 +523,13 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 			return
 		}
+
+		// Trigger async tool discovery for new or changed servers
+		// (skip if the server already has cached_tools and config hasn't changed)
+		existing := existingMap[name]
+		if existing == nil || !mcpServerConfigUnchanged(existing, s) {
+			go refreshMCPPlatformServer(mcpStore, s)
+		}
 	}
 
 	// Reset the Studio chat agent so the next request picks up fresh MCP config.

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -157,6 +158,9 @@ func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Trigger async tool discovery to populate cached_tools
+	go refreshMCPPlatformServer(targetStore, server)
+
 	respondJSON(w, http.StatusCreated, map[string]string{"status": "ok", "name": req.Name})
 }
 
@@ -213,6 +217,9 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, "Failed to update MCP server: "+err.Error())
 		return
 	}
+
+	// Trigger async tool discovery to refresh cached_tools when config changes
+	go refreshMCPPlatformServer(targetStore, server)
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": serverName})
 }
@@ -477,19 +484,31 @@ func sortMCPServerItems(items []MCPServerListItem) {
 // refreshMCPPlatformServer performs async tool discovery for a platform MCP server.
 // It starts the MCP server process, discovers its tools, then stores them in the DB.
 func refreshMCPPlatformServer(mcpStore store.MCPServerStore, server *store.MCPServer) {
-	// Import the MCP manager to perform tool discovery
+	slog.Info("starting MCP tool discovery for platform server", "server", server.Name)
+
 	tools, err := discoverMCPServerTools(server)
 	if err != nil {
-		// Log the error but don't fail — cached_tools remains as-is
+		slog.Warn("MCP tool discovery failed for platform server", "server", server.Name, "error", err)
+		return
+	}
+
+	if len(tools) == 0 {
+		slog.Warn("MCP tool discovery returned no tools", "server", server.Name)
 		return
 	}
 
 	toolsJSON, err := json.Marshal(tools)
 	if err != nil {
+		slog.Warn("failed to marshal discovered tools", "server", server.Name, "error", err)
 		return
 	}
 
-	_ = mcpStore.UpdateCachedTools(server.Name, toolsJSON)
+	if err := mcpStore.UpdateCachedTools(server.Name, toolsJSON); err != nil {
+		slog.Warn("failed to update cached_tools in DB", "server", server.Name, "error", err)
+		return
+	}
+
+	slog.Info("MCP tool discovery completed", "server", server.Name, "tool_count", len(tools))
 }
 
 // discoverMCPServerTools starts an MCP server, lists its tools, and returns them.
@@ -513,4 +532,31 @@ type MCPDiscoveredTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+}
+
+// mcpServerConfigUnchanged returns true if the executable config of two MCP servers
+// is the same (command, args, transport, url). Used to skip redundant tool discovery.
+func mcpServerConfigUnchanged(existing, updated *store.MCPServer) bool {
+	if existing.Command != updated.Command {
+		return false
+	}
+	if existing.Transport != updated.Transport {
+		return false
+	}
+	if existing.URL != updated.URL {
+		return false
+	}
+	if len(existing.Args) != len(updated.Args) {
+		return false
+	}
+	for i := range existing.Args {
+		if existing.Args[i] != updated.Args[i] {
+			return false
+		}
+	}
+	// If existing has no cached tools, treat as changed so discovery runs
+	if len(existing.CachedTools) == 0 {
+		return false
+	}
+	return true
 }

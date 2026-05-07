@@ -74,11 +74,27 @@ type registerRequest struct {
 }
 
 type authResponse struct {
-	User         authUserResponse `json:"user"`
-	Org          authOrgResponse  `json:"org"`
-	AccessToken  string           `json:"access_token,omitempty"`
-	RefreshToken string           `json:"refresh_token,omitempty"`
-	ExpiresIn    int              `json:"expires_in"`
+	User           authUserResponse  `json:"user"`
+	Org            authOrgResponse   `json:"org"`
+	AccessToken    string            `json:"access_token,omitempty"`
+	RefreshToken   string            `json:"refresh_token,omitempty"`
+	ExpiresIn      int               `json:"expires_in"`
+	TeamSlug       string            `json:"team,omitempty"`
+	AvailableOrgs  []authOrgOption   `json:"available_orgs,omitempty"`
+	AvailableTeams []authTeamOption  `json:"available_teams,omitempty"`
+}
+
+type authOrgOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Role string `json:"role"`
+}
+
+type authTeamOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 type authUserResponse struct {
@@ -171,6 +187,8 @@ type loginRequest struct {
 	Email      string `json:"email"`
 	Password   string `json:"password"`
 	ClientType string `json:"client_type,omitempty"` // "cli" to receive tokens in response body
+	Org        string `json:"org,omitempty"`         // Optional: org slug to scope token to
+	Team       string `json:"team,omitempty"`        // Optional: team slug to scope token to
 }
 
 func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -215,22 +233,75 @@ func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	user.LastLoginAt = time.Now()
 	_ = pa.pgStore.Users().Update(ctx, user)
 
-	// Get user's org
+	// Get user's org memberships
 	orgs, err := pa.pgStore.Organizations().GetUserOrgs(ctx, user.ID)
 	if err != nil || len(orgs) == 0 {
 		respondError(w, http.StatusInternalServerError, "user has no organization membership")
 		return
 	}
 
-	// Use first org (multi-org selection could be added later)
-	membership := orgs[0]
+	// Resolve which org to use
+	var membership *store.OrgMembership
+	if req.Org != "" {
+		// User specified an org — find it in their memberships
+		for _, m := range orgs {
+			if m.OrgSlug == req.Org {
+				membership = m
+				break
+			}
+		}
+		if membership == nil {
+			respondError(w, http.StatusForbidden, fmt.Sprintf("you are not a member of organization %q", req.Org))
+			return
+		}
+	} else {
+		// Default to first org
+		membership = orgs[0]
+	}
+
 	org, err := pa.pgStore.Organizations().GetByID(ctx, membership.OrgID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to load organization")
 		return
 	}
 
-	pa.issueTokensAndRespond(w, r, user, org, membership.Role, req.ClientType)
+	// Resolve team
+	teamSlug := ""
+	if req.Team != "" {
+		// User specified a team — validate membership
+		teamSlug = req.Team
+		if !pa.validateTeamMembership(ctx, user.ID, org, teamSlug) {
+			respondError(w, http.StatusForbidden, fmt.Sprintf("you are not a member of team %q", req.Team))
+			return
+		}
+	} else {
+		teamSlug = pa.resolveDefaultTeam(ctx, user.ID, org)
+	}
+
+	// Build available orgs list for CLI selection
+	var availableOrgs []authOrgOption
+	if req.ClientType == "cli" {
+		for _, m := range orgs {
+			o, oErr := pa.pgStore.Organizations().GetByID(ctx, m.OrgID)
+			if oErr != nil {
+				continue
+			}
+			availableOrgs = append(availableOrgs, authOrgOption{
+				ID:   o.ID,
+				Name: o.Name,
+				Slug: o.Slug,
+				Role: m.Role,
+			})
+		}
+	}
+
+	// Build available teams list for CLI selection
+	var availableTeams []authTeamOption
+	if req.ClientType == "cli" {
+		availableTeams = pa.listUserTeams(ctx, user.ID, org)
+	}
+
+	pa.issueTokensAndRespondWithContext(w, r, user, org, membership.Role, teamSlug, availableOrgs, availableTeams, req.ClientType)
 }
 
 // --- Handler: POST /api/auth/refresh ---
@@ -309,8 +380,11 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user's default team
-	teamSlug := pa.resolveDefaultTeam(ctx, user.ID, org)
+	// Get user's team — preserve from refresh token if set, otherwise resolve from DB
+	teamSlug := claims.DefaultTeamSlug
+	if teamSlug == "" {
+		teamSlug = pa.resolveDefaultTeam(ctx, user.ID, org)
+	}
 
 	// Issue new access token
 	accessToken, err := pa.jwt.IssueAccessToken(
@@ -325,7 +399,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Issue new refresh token (rotation) for CLI clients
 	var newRefreshToken string
 	if isCLI {
-		newRefreshToken, err = pa.jwt.IssueRefreshToken(user.ID, org.Slug)
+		newRefreshToken, err = pa.jwt.IssueRefreshToken(user.ID, org.Slug, teamSlug)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to issue refresh token")
 			return
@@ -618,6 +692,126 @@ func (pa *PlatformAuth) resolveDefaultTeam(ctx context.Context, userID string, o
 	return team.Slug
 }
 
+// validateTeamMembership checks if the user is a member of the specified team in the org.
+func (pa *PlatformAuth) validateTeamMembership(ctx context.Context, userID string, org *store.Organization, teamSlug string) bool {
+	orgDataStore, err := pa.pgStore.ForOrg(org.Slug)
+	if err != nil {
+		return false
+	}
+
+	memberships, err := orgDataStore.Teams().GetUserTeams(ctx, userID)
+	if err != nil {
+		return false
+	}
+
+	for _, m := range memberships {
+		team, err := orgDataStore.Teams().GetTeam(ctx, m.TeamID)
+		if err != nil || team == nil {
+			continue
+		}
+		if team.Slug == teamSlug {
+			return true
+		}
+	}
+	return false
+}
+
+// listUserTeams returns the teams the user belongs to in the given org.
+func (pa *PlatformAuth) listUserTeams(ctx context.Context, userID string, org *store.Organization) []authTeamOption {
+	orgDataStore, err := pa.pgStore.ForOrg(org.Slug)
+	if err != nil {
+		return nil
+	}
+
+	memberships, err := orgDataStore.Teams().GetUserTeams(ctx, userID)
+	if err != nil || len(memberships) == 0 {
+		return nil
+	}
+
+	var teams []authTeamOption
+	for _, m := range memberships {
+		team, err := orgDataStore.Teams().GetTeam(ctx, m.TeamID)
+		if err != nil || team == nil {
+			continue
+		}
+		teams = append(teams, authTeamOption{
+			ID:   team.ID,
+			Name: team.Name,
+			Slug: team.Slug,
+		})
+	}
+	return teams
+}
+
+// issueTokensAndRespondWithContext creates JWT tokens scoped to a specific team,
+// includes available orgs/teams in the response for CLI clients.
+func (pa *PlatformAuth) issueTokensAndRespondWithContext(w http.ResponseWriter, r *http.Request, user *store.User, org *store.Organization, role, teamSlug string, availableOrgs []authOrgOption, availableTeams []authTeamOption, clientType string) {
+	ctx := r.Context()
+
+	// Issue access token
+	accessToken, err := pa.jwt.IssueAccessToken(
+		user.ID, user.Email, user.DisplayName,
+		org.Slug, teamSlug, role, user.PlatformRole,
+	)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to issue access token")
+		return
+	}
+
+	// Issue refresh token
+	refreshToken, err := pa.jwt.IssueRefreshToken(user.ID, org.Slug, teamSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to issue refresh token")
+		return
+	}
+
+	// Store refresh token hash in login_sessions for revocation support
+	tokenHash := hashRefreshToken(refreshToken)
+	loginSession := &store.LoginSession{
+		TokenHash: tokenHash,
+		UserID:    user.ID,
+		OrgID:     org.ID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(pa.jwt.RefreshTokenTTL()),
+		UserAgent: r.UserAgent(),
+		IPAddress: clientIP(r),
+	}
+	if err := pa.pgStore.LoginSessions().Create(ctx, loginSession); err != nil {
+		slog.Warn("failed to persist login session", "error", err)
+	}
+
+	// Set cookies
+	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
+	setRefreshTokenCookie(w, refreshToken, pa.jwt.RefreshTokenTTL())
+
+	resp := authResponse{
+		User: authUserResponse{
+			ID:           user.ID,
+			Email:        user.Email,
+			DisplayName:  user.DisplayName,
+			Role:         role,
+			PlatformRole: user.PlatformRole,
+		},
+		Org: authOrgResponse{
+			ID:   org.ID,
+			Name: org.Name,
+			Slug: org.Slug,
+		},
+		TeamSlug:       teamSlug,
+		ExpiresIn:      int(pa.jwt.AccessTokenTTL().Seconds()),
+		AvailableOrgs:  availableOrgs,
+		AvailableTeams: availableTeams,
+	}
+
+	// Include tokens in body for CLI clients (they can't use cookies)
+	if clientType == "cli" {
+		resp.AccessToken = accessToken
+		resp.RefreshToken = refreshToken
+	}
+
+	respondJSON(w, http.StatusOK, resp)
+}
+
 // issueTokensAndRespond creates JWT tokens, sets cookies, and sends the auth response.
 // When clientType is "cli", tokens are included in the response body (for CLI clients
 // that cannot use cookies).
@@ -636,7 +830,7 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 	}
 
 	// Issue refresh token
-	refreshToken, err := pa.jwt.IssueRefreshToken(user.ID, org.Slug)
+	refreshToken, err := pa.jwt.IssueRefreshToken(user.ID, org.Slug, teamSlug)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to issue refresh token")
 		return

@@ -55,7 +55,7 @@ func TestJWTIssuer_AccessToken(t *testing.T) {
 func TestJWTIssuer_RefreshToken(t *testing.T) {
 	issuer := NewJWTIssuer("test-secret-key-for-jwt-testing", 15*time.Minute, 90*24*time.Hour)
 
-	tokenStr, err := issuer.IssueRefreshToken("user-123", "acme")
+	tokenStr, err := issuer.IssueRefreshToken("user-123", "acme", "general")
 	if err != nil {
 		t.Fatalf("IssueRefreshToken: %v", err)
 	}

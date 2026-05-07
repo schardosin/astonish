@@ -202,9 +202,6 @@ func (c *Client) buildRequest(method, path string, body any) (*http.Request, err
 	if c.cached != nil && c.cached.AccessToken != "" {
 		req.Header.Set("Authorization", "Bearer "+c.cached.AccessToken)
 	}
-	if c.team != "" {
-		req.Header.Set("X-Astonish-Team", c.team)
-	}
 	c.mu.Unlock()
 
 	return req, nil

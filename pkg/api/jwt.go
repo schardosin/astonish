@@ -112,7 +112,7 @@ func (j *JWTIssuer) IssueAccessToken(userID, email, displayName, orgSlug, teamSl
 }
 
 // IssueRefreshToken creates a long-lived refresh token with minimal claims.
-func (j *JWTIssuer) IssueRefreshToken(userID, orgSlug string) (string, error) {
+func (j *JWTIssuer) IssueRefreshToken(userID, orgSlug, teamSlug string) (string, error) {
 	now := time.Now()
 	claims := PlatformClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
@@ -122,9 +122,10 @@ func (j *JWTIssuer) IssueRefreshToken(userID, orgSlug string) (string, error) {
 			ExpiresAt: jwt.NewNumericDate(now.Add(j.refreshTokenTTL)),
 			ID:        generateTokenID(),
 		},
-		TokenType: TokenTypeRefresh,
-		UserID:    userID,
-		OrgSlug:   orgSlug,
+		TokenType:       TokenTypeRefresh,
+		UserID:          userID,
+		OrgSlug:         orgSlug,
+		DefaultTeamSlug: teamSlug,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

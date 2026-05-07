@@ -13,23 +13,48 @@ import (
 
 // LoginResult contains the information returned after a successful login.
 type LoginResult struct {
-	UserEmail   string
-	DisplayName string
-	OrgSlug     string
-	OrgName     string
-	TeamSlug    string
-	Role        string
+	UserEmail      string
+	DisplayName    string
+	OrgSlug        string
+	OrgName        string
+	TeamSlug       string
+	Role           string
+	AvailableOrgs  []LoginOrgOption
+	AvailableTeams []LoginTeamOption
+}
+
+// LoginOrgOption represents an available org choice during login.
+type LoginOrgOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Role string `json:"role"`
+}
+
+// LoginTeamOption represents an available team choice during login.
+type LoginTeamOption struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
 }
 
 // LoginWithPassword authenticates with email and password against the remote server.
+// If org/team are empty, the server picks defaults and returns available options.
+// If org/team are specified, the token is scoped to those values.
 // It stores the tokens and remote config on success.
-func LoginWithPassword(serverURL, email, password string) (*LoginResult, error) {
+func LoginWithPassword(serverURL, email, password, org, team string) (*LoginResult, error) {
 	c := NewWithConfig(serverURL)
 
 	reqBody := map[string]string{
 		"email":       email,
 		"password":    password,
 		"client_type": "cli",
+	}
+	if org != "" {
+		reqBody["org"] = org
+	}
+	if team != "" {
+		reqBody["team"] = team
 	}
 
 	resp, err := c.doOnce("POST", "/api/auth/login", reqBody)
@@ -55,9 +80,12 @@ func LoginWithPassword(serverURL, email, password string) (*LoginResult, error) 
 			Name string `json:"name"`
 			Slug string `json:"slug"`
 		} `json:"org"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
+		AccessToken    string            `json:"access_token"`
+		RefreshToken   string            `json:"refresh_token"`
+		ExpiresIn      int               `json:"expires_in"`
+		TeamSlug       string            `json:"team"`
+		AvailableOrgs  []LoginOrgOption  `json:"available_orgs"`
+		AvailableTeams []LoginTeamOption `json:"available_teams"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
 		return nil, fmt.Errorf("decode login response: %w", err)
@@ -67,9 +95,12 @@ func LoginWithPassword(serverURL, email, password string) (*LoginResult, error) 
 		return nil, fmt.Errorf("server did not return tokens (ensure server version supports CLI login)")
 	}
 
-	// Determine default team from the access token claims (we'd need to decode JWT,
-	// but we can just call /api/auth/me with the new token to get the team)
-	teamSlug := getTeamFromMe(c, authResp.AccessToken)
+	// Use team from response (server determined it)
+	teamSlug := authResp.TeamSlug
+	if teamSlug == "" {
+		// Fallback: get from /api/auth/me (older servers)
+		teamSlug = getTeamFromMe(c, authResp.AccessToken)
+	}
 
 	// Store tokens
 	ts, err := NewTokenStore()
@@ -99,12 +130,14 @@ func LoginWithPassword(serverURL, email, password string) (*LoginResult, error) 
 	}
 
 	return &LoginResult{
-		UserEmail:   authResp.User.Email,
-		DisplayName: authResp.User.DisplayName,
-		OrgSlug:     authResp.Org.Slug,
-		OrgName:     authResp.Org.Name,
-		TeamSlug:    teamSlug,
-		Role:        authResp.User.Role,
+		UserEmail:      authResp.User.Email,
+		DisplayName:    authResp.User.DisplayName,
+		OrgSlug:        authResp.Org.Slug,
+		OrgName:        authResp.Org.Name,
+		TeamSlug:       teamSlug,
+		Role:           authResp.User.Role,
+		AvailableOrgs:  authResp.AvailableOrgs,
+		AvailableTeams: authResp.AvailableTeams,
 	}, nil
 }
 

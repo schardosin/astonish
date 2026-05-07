@@ -12,7 +12,8 @@ func handleTeamCommand(args []string) error {
 		fmt.Println("")
 		fmt.Println("Subcommands:")
 		fmt.Println("  list          List available teams")
-		fmt.Println("  use <slug>    Switch active team")
+		fmt.Println("")
+		fmt.Println("To switch teams, run 'astonish logout' then 'astonish login'")
 		return nil
 	}
 
@@ -23,11 +24,6 @@ func handleTeamCommand(args []string) error {
 	switch args[0] {
 	case "list", "ls":
 		return handleTeamList()
-	case "use":
-		if len(args) < 2 {
-			return fmt.Errorf("usage: astonish team use <slug>")
-		}
-		return handleTeamUse(args[1])
 	default:
 		return fmt.Errorf("unknown subcommand: %s", args[0])
 	}
@@ -63,20 +59,5 @@ func handleTeamList() error {
 		fmt.Printf("%s%s (%s)\n", marker, team.Name, team.Slug)
 	}
 
-	return nil
-}
-
-func handleTeamUse(slug string) error {
-	cfg, err := client.LoadRemoteConfig()
-	if err != nil || cfg == nil {
-		return fmt.Errorf("failed to load remote config")
-	}
-
-	cfg.Team = slug
-	if err := client.SaveRemoteConfig(cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-
-	fmt.Printf("Switched to team: %s\n", slug)
 	return nil
 }

@@ -1,17 +1,17 @@
 -- user_channels: Links platform users to external messaging channels.
 -- A user can have multiple channel links (e.g., Telegram + Email).
 -- The daemon uses this table to:
---   1. Build the dynamic allowlist for Telegram (replacing static config)
---   2. Route inbound messages to the correct user/team context
+--   1. Build the dynamic allowlist for Telegram/Email
+--   2. Route inbound messages to the correct user context
 --   3. Resolve delivery targets for scheduler job results
+-- Routing (which org/team) is determined dynamically per-message,
+-- not statically per-link. See /org, /team commands and email +addressing.
 CREATE TABLE IF NOT EXISTS user_channels (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     channel_type VARCHAR(32) NOT NULL,        -- 'telegram', 'email'
     external_id VARCHAR(255) NOT NULL,        -- TG user ID (numeric string), or email address
     display_name VARCHAR(255) DEFAULT '',     -- @username or email label
-    default_org_slug VARCHAR(100) DEFAULT '', -- preferred org for inbound routing
-    default_team_slug VARCHAR(100) DEFAULT '',-- preferred team for inbound routing
     enabled BOOLEAN DEFAULT true,
     verified BOOLEAN DEFAULT false,           -- true after verification handshake
     verified_at TIMESTAMPTZ,

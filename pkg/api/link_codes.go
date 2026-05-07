@@ -21,9 +21,7 @@ type PendingLink struct {
 	Code      string
 	UserID    string // platform user ID
 	Email     string // for the bot reply
-	OrgSlug   string
-	TeamSlug  string
-	Channel   string // "telegram", "email"
+	Channel   string // "telegram", "email:<address>"
 	CreatedAt time.Time
 	ExpiresAt time.Time
 }
@@ -46,7 +44,7 @@ func NewLinkCodeStore() *LinkCodeStore {
 
 // Generate creates a new link code for the given user/channel.
 // Returns the 6-character alphanumeric code.
-func (s *LinkCodeStore) Generate(userID, email, orgSlug, teamSlug, channel string) string {
+func (s *LinkCodeStore) Generate(userID, email, channel string) string {
 	code := generateCode()
 
 	s.mu.Lock()
@@ -63,8 +61,6 @@ func (s *LinkCodeStore) Generate(userID, email, orgSlug, teamSlug, channel strin
 		Code:      code,
 		UserID:    userID,
 		Email:     email,
-		OrgSlug:   orgSlug,
-		TeamSlug:  teamSlug,
 		Channel:   channel,
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(5 * time.Minute),

@@ -351,19 +351,24 @@ func (e *EmailChannel) checkNewEmails(ctx context.Context) {
 		// Determine the session routing via thread-based routing
 		threadSessionKey := e.resolveThreadSession(senderAddr, fullMsg)
 
+		// Parse plus-addressing from To field for per-message routing hint.
+		// Format: botlocalpart+org@domain or botlocalpart+org+team@domain
+		routingHint := e.parsePlusAddressing(fullMsg.To)
+
 		// Build normalized inbound message
 		inbound := channels.InboundMessage{
-			ID:         summary.ID,
-			MessageID:  fullMsg.Headers["Message-ID"],
-			ChannelID:  "email",
-			SenderID:   senderAddr,
-			SenderName: extractName(summary.From),
-			ChatID:     senderAddr, // Delivery address (for sending replies)
-			ChatType:   channels.ChatTypeDirect,
-			ThreadID:   threadSessionKey, // Thread-specific session key (overrides Router)
-			Text:       fullMsg.Body,
-			Timestamp:  summary.Date,
-			Raw:        fullMsg,
+			ID:          summary.ID,
+			MessageID:   fullMsg.Headers["Message-ID"],
+			ChannelID:   "email",
+			SenderID:    senderAddr,
+			SenderName:  extractName(summary.From),
+			ChatID:      senderAddr, // Delivery address (for sending replies)
+			ChatType:    channels.ChatTypeDirect,
+			ThreadID:    threadSessionKey, // Thread-specific session key (overrides Router)
+			Text:        fullMsg.Body,
+			Timestamp:   summary.Date,
+			Raw:         fullMsg,
+			RoutingHint: routingHint,
 		}
 
 		// Mark as read if configured
@@ -597,4 +602,73 @@ func markdownToEmailHTML(text string) string {
 ` + result.String() + `
 </body>
 </html>`
+}
+
+// parsePlusAddressing extracts a routing hint from email plus-addressing.
+// It looks for the bot's address with a "+" suffix in the To addresses.
+//
+// Supported formats:
+//   - botlocalpart+org@domain       → RoutingHint{OrgSlug: "org"}
+//   - botlocalpart+org+team@domain  → RoutingHint{OrgSlug: "org", TeamSlug: "team"}
+//
+// Returns nil if no plus-addressing is detected.
+func (e *EmailChannel) parsePlusAddressing(toAddrs []string) *channels.RoutingHint {
+	// Extract the bot's local part and domain from config
+	botAddr := strings.ToLower(e.config.Address)
+	atIdx := strings.LastIndex(botAddr, "@")
+	if atIdx < 0 {
+		return nil
+	}
+	botLocal := botAddr[:atIdx]
+	botDomain := botAddr[atIdx+1:]
+
+	for _, addr := range toAddrs {
+		// Normalize the To address
+		parsed := strings.ToLower(strings.TrimSpace(addr))
+		// Handle RFC 5322 format: "Name <email@example.com>"
+		if lt := strings.Index(parsed, "<"); lt >= 0 {
+			gt := strings.Index(parsed, ">")
+			if gt > lt {
+				parsed = parsed[lt+1 : gt]
+			}
+		}
+
+		// Check if this is our bot address with plus-addressing
+		addrAt := strings.LastIndex(parsed, "@")
+		if addrAt < 0 {
+			continue
+		}
+		addrLocal := parsed[:addrAt]
+		addrDomain := parsed[addrAt+1:]
+
+		// Domain must match
+		if addrDomain != botDomain {
+			continue
+		}
+
+		// Local part must start with bot's local part followed by "+"
+		if !strings.HasPrefix(addrLocal, botLocal+"+") {
+			continue
+		}
+
+		// Extract the plus-addressing suffix
+		suffix := addrLocal[len(botLocal)+1:] // e.g., "my-org" or "my-org+general"
+		if suffix == "" {
+			continue
+		}
+
+		// Split by "+" to get org and optional team
+		parts := strings.SplitN(suffix, "+", 2)
+		hint := &channels.RoutingHint{
+			OrgSlug: parts[0],
+		}
+		if len(parts) > 1 && parts[1] != "" {
+			hint.TeamSlug = parts[1]
+		}
+
+		e.logger.Printf("[email] Plus-addressing detected: org=%s team=%s", hint.OrgSlug, hint.TeamSlug)
+		return hint
+	}
+
+	return nil
 }

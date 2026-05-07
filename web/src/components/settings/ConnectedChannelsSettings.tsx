@@ -8,8 +8,6 @@ interface UserChannel {
   channel_type: string
   external_id: string
   display_name: string
-  default_org_slug: string
-  default_team_slug: string
   enabled: boolean
   verified: boolean
   verified_at?: string
@@ -79,8 +77,6 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   // Edit form state
   const [editForm, setEditForm] = useState({
     display_name: '',
-    default_org_slug: '',
-    default_team_slug: '',
     enabled: true,
   })
 
@@ -336,8 +332,6 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
     setEditingChannel(ch)
     setEditForm({
       display_name: ch.display_name,
-      default_org_slug: ch.default_org_slug,
-      default_team_slug: ch.default_team_slug,
       enabled: ch.enabled,
     })
   }
@@ -513,8 +507,6 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                 </div>
                 <div className="text-xs font-mono mt-0.5" style={hintStyle}>
                   ID: {ch.external_id}
-                  {ch.default_org_slug && <span className="ml-2">Org: {ch.default_org_slug}</span>}
-                  {ch.default_team_slug && <span className="ml-2">Team: {ch.default_team_slug}</span>}
                 </div>
               </div>
 
@@ -818,36 +810,6 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                   className={inputClass}
                   style={inputStyle}
                 />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>Default Org</label>
-                <input
-                  type="text"
-                  value={editForm.default_org_slug}
-                  onChange={(e) => setEditForm({ ...editForm, default_org_slug: e.target.value })}
-                  placeholder="org-slug"
-                  className={inputClass + ' font-mono'}
-                  style={inputStyle}
-                />
-                <p className="text-xs mt-1" style={hintStyle}>
-                  Messages from this channel will be routed to this org.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>Default Team</label>
-                <input
-                  type="text"
-                  value={editForm.default_team_slug}
-                  onChange={(e) => setEditForm({ ...editForm, default_team_slug: e.target.value })}
-                  placeholder="team-slug"
-                  className={inputClass + ' font-mono'}
-                  style={inputStyle}
-                />
-                <p className="text-xs mt-1" style={hintStyle}>
-                  Messages from this channel will use this team's context (credentials, flows, etc).
-                </p>
               </div>
 
               <div className="flex items-center justify-between">

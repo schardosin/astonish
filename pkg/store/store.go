@@ -245,17 +245,15 @@ type OIDCProviderStore interface {
 // UserChannel represents a link between a platform user and an external
 // messaging channel (e.g., Telegram user ID, email address).
 type UserChannel struct {
-	ID              string     `json:"id"`
-	UserID          string     `json:"user_id"`
-	ChannelType     string     `json:"channel_type"`      // "telegram", "email"
-	ExternalID      string     `json:"external_id"`       // TG user ID or email address
-	DisplayName     string     `json:"display_name"`      // @username or label
-	DefaultOrgSlug  string     `json:"default_org_slug"`  // preferred org for routing
-	DefaultTeamSlug string     `json:"default_team_slug"` // preferred team for routing
-	Enabled         bool       `json:"enabled"`
-	Verified        bool       `json:"verified"`
-	VerifiedAt      *time.Time `json:"verified_at,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"user_id"`
+	ChannelType string     `json:"channel_type"` // "telegram", "email"
+	ExternalID  string     `json:"external_id"`  // TG user ID or email address
+	DisplayName string     `json:"display_name"` // @username or label
+	Enabled     bool       `json:"enabled"`
+	Verified    bool       `json:"verified"`
+	VerifiedAt  *time.Time `json:"verified_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
 }
 
 // UserChannelStore manages user-channel links in the platform database.
@@ -284,7 +282,7 @@ type UserChannelStore interface {
 	// Used for delivery resolution (find all Telegram targets for a list of team members).
 	ListByUsers(ctx context.Context, userIDs []string, channelType string) ([]*UserChannel, error)
 
-	// Update updates mutable fields (display_name, default_org_slug, default_team_slug, enabled).
+	// Update updates mutable fields (display_name, enabled).
 	Update(ctx context.Context, ch *UserChannel) error
 
 	// Verify marks a channel link as verified.

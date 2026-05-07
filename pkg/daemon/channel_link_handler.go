@@ -58,17 +58,15 @@ func buildTelegramLinkHandler(
 		}
 
 		ch := &store.UserChannel{
-			ID:              uuid.New().String(),
-			UserID:          pending.UserID,
-			ChannelType:     "telegram",
-			ExternalID:      senderID,
-			DisplayName:     displayName,
-			DefaultOrgSlug:  pending.OrgSlug,
-			DefaultTeamSlug: pending.TeamSlug,
-			Enabled:         true,
-			Verified:        true,
-			VerifiedAt:      timePtr(time.Now()),
-			CreatedAt:       time.Now(),
+			ID:          uuid.New().String(),
+			UserID:      pending.UserID,
+			ChannelType: "telegram",
+			ExternalID:  senderID,
+			DisplayName: displayName,
+			Enabled:     true,
+			Verified:    true,
+			VerifiedAt:  timePtr(time.Now()),
+			CreatedAt:   time.Now(),
 		}
 		if err := ucStore.Link(ctx, ch); err != nil {
 			return false, "Failed to link account. Please try again or contact support."

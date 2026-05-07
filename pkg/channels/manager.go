@@ -91,6 +91,37 @@ type PlatformResolver interface {
 	// - the display name
 	// - an error if the user is not linked/provisioned
 	ResolveChannelUser(ctx context.Context, channelType, externalID string) (enrichedCtx context.Context, userID, displayName string, err error)
+
+	// ResolveChannelUserWithHint is like ResolveChannelUser but accepts an
+	// optional per-message routing hint (from email plus-addressing, etc.).
+	// If hint is nil, behaves identically to ResolveChannelUser.
+	ResolveChannelUserWithHint(ctx context.Context, channelType, externalID string, hint *RoutingHint) (enrichedCtx context.Context, userID, displayName string, err error)
+
+	// SetRoutingPref stores a persistent routing preference for a channel identity.
+	// Used by /org and /team commands to change the user's default routing.
+	SetRoutingPref(channelType, externalID, orgSlug, teamSlug string)
+
+	// GetRoutingPref returns the current routing preference for a channel identity,
+	// or nil if no preference has been set.
+	GetRoutingPref(channelType, externalID string) *RoutingPref
+
+	// ListUserRoutes returns the available orgs and teams for a channel identity.
+	// Used by /context to show what the user can route to.
+	ListUserRoutes(ctx context.Context, channelType, externalID string) ([]RouteOption, error)
+}
+
+// RoutingPref stores a user's persistent org/team routing preference for a channel.
+type RoutingPref struct {
+	OrgSlug  string
+	TeamSlug string
+}
+
+// RouteOption describes an available org/team combination for routing.
+type RouteOption struct {
+	OrgSlug  string
+	OrgName  string
+	TeamSlug string
+	TeamName string
 }
 
 // FleetDeps holds fleet-related dependencies injected into the ChannelManager.
@@ -256,6 +287,12 @@ func (m *ChannelManager) SetFleetDeps(deps *FleetDeps) {
 // the sender's linked channel identity.
 func (m *ChannelManager) SetPlatformResolver(resolver PlatformResolver) {
 	m.platformResolver = resolver
+}
+
+// GetPlatformResolver returns the platform resolver, or nil if not set.
+// Used by routing commands (/org, /team, /context) to set routing preferences.
+func (m *ChannelManager) GetPlatformResolver() PlatformResolver {
+	return m.platformResolver
 }
 
 // BotUsernameProvider is implemented by channel adapters that expose a bot username.
@@ -494,7 +531,7 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// team-scoped stores into the context. This gives the agent access to the
 	// user's team credentials, flows, skills, and MCP servers.
 	if m.platformResolver != nil {
-		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUser(ctx, msg.ChannelID, msg.SenderID)
+		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUserWithHint(ctx, msg.ChannelID, msg.SenderID, msg.RoutingHint)
 		if resolveErr != nil {
 			m.logger.Printf("[channels] Platform resolver failed for %s/%s: %v", msg.ChannelID, msg.SenderID, resolveErr)
 			// Continue with unenriched context — agent will run without team stores

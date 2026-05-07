@@ -72,18 +72,27 @@ type MessageHandler func(ctx context.Context, msg InboundMessage) error
 
 // InboundMessage is a platform-normalized inbound message.
 type InboundMessage struct {
-	ID         string    // Platform message ID
-	MessageID  string    // RFC 2822 Message-ID header (email only, for thread tracking)
-	ChannelID  string    // Channel adapter ID (e.g., "telegram")
-	SenderID   string    // Normalized sender identifier
-	SenderName string    // Human-readable sender name
-	ChatID     string    // Normalized chat/conversation ID
-	ChatType   ChatType  // "direct", "group", "channel"
-	Text       string    // Message text content
-	ReplyTo    string    // ID of message being replied to (empty if not a reply)
-	ThreadID   string    // Thread/topic ID (empty if not threaded)
-	Timestamp  time.Time // When the message was sent
-	Raw        any       // Platform-specific raw message (for advanced use)
+	ID          string       // Platform message ID
+	MessageID   string       // RFC 2822 Message-ID header (email only, for thread tracking)
+	ChannelID   string       // Channel adapter ID (e.g., "telegram")
+	SenderID    string       // Normalized sender identifier
+	SenderName  string       // Human-readable sender name
+	ChatID      string       // Normalized chat/conversation ID
+	ChatType    ChatType     // "direct", "group", "channel"
+	Text        string       // Message text content
+	ReplyTo     string       // ID of message being replied to (empty if not a reply)
+	ThreadID    string       // Thread/topic ID (empty if not threaded)
+	Timestamp   time.Time    // When the message was sent
+	Raw         any          // Platform-specific raw message (for advanced use)
+	RoutingHint *RoutingHint // Optional per-message org/team routing override (email +addressing)
+}
+
+// RoutingHint provides a per-message org/team routing override.
+// Used by email plus-addressing (e.g., bot+org+team@gmail.com) and
+// potentially other per-message routing mechanisms.
+type RoutingHint struct {
+	OrgSlug  string // Target org slug (required)
+	TeamSlug string // Target team slug (optional — defaults to first team)
 }
 
 // OutboundMessage is the response to be delivered back to a channel.

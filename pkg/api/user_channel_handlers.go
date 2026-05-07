@@ -87,11 +87,9 @@ func handleLinkUserChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		ChannelType     string `json:"channel_type"`
-		ExternalID      string `json:"external_id"`
-		DisplayName     string `json:"display_name"`
-		DefaultOrgSlug  string `json:"default_org_slug"`
-		DefaultTeamSlug string `json:"default_team_slug"`
+		ChannelType string `json:"channel_type"`
+		ExternalID  string `json:"external_id"`
+		DisplayName string `json:"display_name"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -122,26 +120,14 @@ func handleLinkUserChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use caller's org/team as defaults if not specified
-	orgSlug := req.DefaultOrgSlug
-	if orgSlug == "" {
-		orgSlug = user.OrgSlug
-	}
-	teamSlug := req.DefaultTeamSlug
-	if teamSlug == "" {
-		teamSlug = user.TeamSlug
-	}
-
 	ch := &store.UserChannel{
-		ID:              uuid.New().String(),
-		UserID:          user.ID,
-		ChannelType:     req.ChannelType,
-		ExternalID:      req.ExternalID,
-		DisplayName:     req.DisplayName,
-		DefaultOrgSlug:  orgSlug,
-		DefaultTeamSlug: teamSlug,
-		Enabled:         true,
-		Verified:        false,
+		ID:          uuid.New().String(),
+		UserID:      user.ID,
+		ChannelType: req.ChannelType,
+		ExternalID:  req.ExternalID,
+		DisplayName: req.DisplayName,
+		Enabled:     true,
+		Verified:    false,
 		CreatedAt:       time.Now(),
 	}
 
@@ -185,10 +171,8 @@ func handleUpdateUserChannel(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		DisplayName     *string `json:"display_name"`
-		DefaultOrgSlug  *string `json:"default_org_slug"`
-		DefaultTeamSlug *string `json:"default_team_slug"`
-		Enabled         *bool   `json:"enabled"`
+		DisplayName *string `json:"display_name"`
+		Enabled     *bool   `json:"enabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
@@ -197,12 +181,6 @@ func handleUpdateUserChannel(w http.ResponseWriter, r *http.Request) {
 
 	if req.DisplayName != nil {
 		ch.DisplayName = *req.DisplayName
-	}
-	if req.DefaultOrgSlug != nil {
-		ch.DefaultOrgSlug = *req.DefaultOrgSlug
-	}
-	if req.DefaultTeamSlug != nil {
-		ch.DefaultTeamSlug = *req.DefaultTeamSlug
 	}
 	if req.Enabled != nil {
 		ch.Enabled = *req.Enabled
@@ -331,7 +309,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 	switch req.ChannelType {
 	case "telegram":
 		// Generate the code
-		code := store.Generate(user.ID, user.Email, user.OrgSlug, user.TeamSlug, "telegram")
+		code := store.Generate(user.ID, user.Email, "telegram")
 
 		// Get bot username from channel manager
 		botUsername := ""
@@ -360,7 +338,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Generate the code
-		code := store.Generate(user.ID, user.Email, user.OrgSlug, user.TeamSlug, "email:"+emailAddr)
+		code := store.Generate(user.ID, user.Email, "email:"+emailAddr)
 
 		// Send verification email
 		if err := sendEmailVerificationCode(r.Context(), emailAddr, code); err != nil {
@@ -464,17 +442,15 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 
 	// Create new verified user_channel
 	ch := &store.UserChannel{
-		ID:              uuid.New().String(),
-		UserID:          user.ID,
-		ChannelType:     "email",
-		ExternalID:      emailAddr,
-		DisplayName:     emailAddr,
-		DefaultOrgSlug:  pending.OrgSlug,
-		DefaultTeamSlug: pending.TeamSlug,
-		Enabled:         true,
-		Verified:        true,
-		VerifiedAt:      timePtr(time.Now()),
-		CreatedAt:       time.Now(),
+		ID:          uuid.New().String(),
+		UserID:      user.ID,
+		ChannelType: "email",
+		ExternalID:  emailAddr,
+		DisplayName: emailAddr,
+		Enabled:     true,
+		Verified:    true,
+		VerifiedAt:  timePtr(time.Now()),
+		CreatedAt:   time.Now(),
 	}
 	if err := ucStore.Link(r.Context(), ch); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to link email: "+err.Error())

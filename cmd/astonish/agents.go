@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -1086,16 +1085,63 @@ func handleFlowsListRemote() error {
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSOURCE\tDESCRIPTION")
+	// Group flows by scope
+	var personalFlows []client.FlowMeta
+	var teamFlows []client.FlowMeta
+
 	for _, f := range flows {
-		desc := f.Description
-		if len(desc) > 60 {
-			desc = desc[:57] + "..."
+		switch f.Scope {
+		case "personal":
+			personalFlows = append(personalFlows, f)
+		case "team":
+			teamFlows = append(teamFlows, f)
+		default:
+			// Fallback: treat as team if scope unknown
+			teamFlows = append(teamFlows, f)
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\n", f.Name, f.Source, desc)
 	}
-	w.Flush()
+
+	// Styles (same as local handleListCommand)
+	sectionStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("63")).
+		Bold(true)
+
+	nameStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205")).
+		Bold(true)
+
+	descStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("252"))
+
+	teamStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("39")).
+		Bold(true)
+
+	printSection := func(title string, agents []client.FlowMeta, style lipgloss.Style) {
+		if len(agents) == 0 {
+			return
+		}
+
+		sort.Slice(agents, func(i, j int) bool {
+			return agents[i].Name < agents[j].Name
+		})
+
+		fmt.Println(style.Render(fmt.Sprintf("\n%s (%d)", title, len(agents))))
+
+		for _, a := range agents {
+			fmt.Printf("  %s\n", nameStyle.Render(a.Name))
+			if a.Description != "" {
+				fmt.Printf("    %s\n", descStyle.Render(a.Description))
+			}
+		}
+	}
+
+	fmt.Println(lipgloss.NewStyle().Bold(true).Render("AVAILABLE FLOWS"))
+
+	printSection("📁 PERSONAL", personalFlows, sectionStyle)
+	printSection("👥 TEAM", teamFlows, teamStyle)
+
+	fmt.Println()
 	return nil
 }
 

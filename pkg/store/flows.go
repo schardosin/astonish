@@ -68,6 +68,7 @@ type ScheduledJob struct {
 	Delivery            JobDelivery  `json:"delivery"`
 	Enabled             bool         `json:"enabled"`
 	CreatedAt           time.Time    `json:"created_at"`
+	OwnerID             string       `json:"owner_id,omitempty"` // platform user ID who created the job
 	LastRun             *time.Time   `json:"last_run,omitempty"`
 	LastStatus          string       `json:"last_status"`
 	LastError           string       `json:"last_error,omitempty"`
@@ -90,8 +91,10 @@ type JobPayload struct {
 
 // JobDelivery defines where job results are delivered.
 type JobDelivery struct {
-	Channel string `json:"channel"`
-	Target  string `json:"target"`
+	Channel   string   `json:"channel"`
+	Target    string   `json:"target"`
+	Mode      string   `json:"mode,omitempty"`       // owner, team, members, target
+	MemberIDs []string `json:"member_ids,omitempty"` // for "members" mode
 }
 
 // SchedulerStore manages scheduled job persistence.

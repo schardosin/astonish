@@ -20,7 +20,10 @@ interface SchedulerJob {
   delivery?: {
     channel?: string
     target?: string
+    mode?: string
+    member_ids?: string[]
   }
+  owner_id?: string
   consecutive_failures?: number
   payload?: {
     instructions?: string
@@ -139,6 +142,33 @@ function ModeBadge({ mode }: { mode: string }) {
   )
 }
 
+const deliveryModeLabels: Record<string, string> = {
+  owner: 'Owner Only',
+  team: 'All Team Members',
+  members: 'Specific Members',
+  target: 'Direct Target',
+}
+
+const deliveryModeColors: Record<string, string> = {
+  owner: '#8b5cf6',
+  team: '#3b82f6',
+  members: '#f59e0b',
+  target: '#6b7280',
+}
+
+function DeliveryModeBadge({ mode }: { mode: string }) {
+  const label = deliveryModeLabels[mode] || mode
+  const color = deliveryModeColors[mode] || 'var(--text-muted)'
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1" style={{
+      background: `${color}20`,
+      color: color,
+    }}>
+      {label}
+    </span>
+  )
+}
+
 export default function SchedulerSettings({ config, onSaved, teamSlug }: SchedulerSettingsProps) {
   const [enabled, setEnabled] = useState(true)
   const [jobs, setJobs] = useState<SchedulerJob[]>([])
@@ -223,6 +253,17 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
       await deleteJob(id, teamSlug)
       setDeleteConfirm(null)
       if (expandedJob === id) setExpandedJob(null)
+      loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    }
+  }
+
+  const handleChangeDeliveryMode = async (job: SchedulerJob, newMode: string) => {
+    setActionError(null)
+    try {
+      const updatedDelivery = { ...(job.delivery || {}), mode: newMode }
+      await updateJob(job.id, { ...job, delivery: updatedDelivery }, teamSlug)
       loadJobs()
     } catch (err: any) {
       setActionError(err.message)
@@ -449,6 +490,22 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                           </div>
                         </div>
                       )}
+                      {job.delivery?.mode && (
+                        <div>
+                          <div className="font-medium mb-1" style={hintStyle}>Delivery Mode</div>
+                          <div style={{ color: 'var(--text-primary)' }}>
+                            <DeliveryModeBadge mode={job.delivery.mode} />
+                          </div>
+                        </div>
+                      )}
+                      {job.owner_id && (
+                        <div>
+                          <div className="font-medium mb-1" style={hintStyle}>Owner</div>
+                          <div className="font-mono text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                            {job.owner_id}
+                          </div>
+                        </div>
+                      )}
                       {(job.consecutive_failures ?? 0) > 0 && (
                         <div>
                           <div className="font-medium mb-1" style={hintStyle}>Failures</div>
@@ -489,6 +546,36 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                         </div>
                       </div>
                     )}
+
+                    {/* Delivery Mode Selector */}
+                    <div className="border-t pt-3" style={sectionBorderStyle}>
+                      <div className="text-xs font-medium mb-2" style={hintStyle}>Delivery Mode</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {['owner', 'team', 'members', 'target'].map(mode => (
+                          <button
+                            key={mode}
+                            onClick={() => handleChangeDeliveryMode(job, mode)}
+                            className="text-xs px-2.5 py-1 rounded-lg transition-all"
+                            style={{
+                              background: (job.delivery?.mode || '') === mode
+                                ? `${deliveryModeColors[mode]}30`
+                                : 'var(--bg-tertiary)',
+                              color: (job.delivery?.mode || '') === mode
+                                ? deliveryModeColors[mode]
+                                : 'var(--text-muted)',
+                              border: `1px solid ${(job.delivery?.mode || '') === mode
+                                ? deliveryModeColors[mode]
+                                : 'var(--border-color)'}`,
+                            }}
+                          >
+                            {deliveryModeLabels[mode]}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-xs mt-1.5" style={hintStyle}>
+                        Controls who receives the job results: owner only, all team members, specific members, or a direct channel target.
+                      </p>
+                    </div>
 
                     <div className="text-xs font-mono pt-1" style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
                       ID: {job.id}

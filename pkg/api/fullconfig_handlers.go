@@ -416,9 +416,22 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In platform mode, only org admins/owners or superadmins can modify daemon config.
+	// System-level settings (channels, browser, daemon, sandbox, etc.) live in config.yaml
+	// and are shared across all teams — they require admin privileges.
+	// Loopback requests (CLI) are allowed without auth (backward compatibility).
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
-		respondError(w, http.StatusForbidden, "Full config updates are not supported in platform mode. Use team settings instead.")
-		return
+		if !isLoopbackRequest(r) {
+			user := GetPlatformUser(r)
+			if user == nil {
+				respondError(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			if user.Role != "admin" && user.Role != "owner" && user.PlatformRole != "superadmin" {
+				respondError(w, http.StatusForbidden, "Only org admins can modify system settings in platform mode.")
+				return
+			}
+		}
 	}
 
 	cfg, err := config.LoadAppConfig()

@@ -4,6 +4,7 @@ import type { FullConfig, SettingsData, MCPConfigData, MCPServerConfig, WebCapab
 import { FULL_CONFIG_SECTIONS } from './settingsMenuItems'
 import FlowStorePanel from '../FlowStorePanel'
 import ChatSettings from './ChatSettings'
+import ConnectedChannelsSettings from './ConnectedChannelsSettings'
 import BrowserSettings from './BrowserSettings'
 import ChannelsSettings from './ChannelsSettings'
 import SessionsSettings from './SessionsSettings'
@@ -204,11 +205,13 @@ export default function SettingsContent({
       {activeSection === 'chat' && fullConfig && (
         <ChatSettings config={fullConfig.chat} onSaved={onSaved} />
       )}
+      {activeSection === 'channels' && (
+        isPlatformMode
+          ? <ConnectedChannelsSettings isAdmin={isOrgAdmin} />
+          : fullConfig && <ChannelsSettings config={fullConfig.channels} onSaved={onSaved} />
+      )}
       {activeSection === 'browser' && fullConfig && (
         <BrowserSettings config={fullConfig.browser} onSaved={onSaved} />
-      )}
-      {activeSection === 'channels' && fullConfig && (
-        <ChannelsSettings config={fullConfig.channels} onSaved={onSaved} />
       )}
       {activeSection === 'sessions' && fullConfig && (
         <SessionsSettings config={fullConfig.sessions} onSaved={onSaved} />

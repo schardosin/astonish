@@ -158,6 +158,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		api.RegisterPlatformAuthRoutes(router, s.platformAuth)
 		api.RegisterTeamRoutes(router, s.platformAuth)
 		api.RegisterUserRoutes(router, s.platformAuth)
+
+		// SSO/OIDC endpoints (device flow for CLI, browser redirect for Studio)
+		ssoHandler := api.NewSSOHandler(s.platformAuth)
+		api.SetPlatformSSOHandler(ssoHandler)
+		api.RegisterSSORoutes(router, ssoHandler)
 	} else if s.Auth != nil {
 		// Personal mode: device authorization flow
 		api.RegisterAuthRoutes(router, s.Auth)

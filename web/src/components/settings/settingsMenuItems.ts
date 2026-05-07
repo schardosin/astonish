@@ -13,6 +13,7 @@ export interface SettingsMenuItem {
 // User preferences — personal to each user
 export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
   { id: 'chat', label: 'Chat', icon: MessageSquare },
+  { id: 'channels', label: 'Channels', icon: Radio },
 ]
 
 // Team resources — shared within a team, managed from the Team detail view
@@ -30,7 +31,6 @@ export const ADMIN_ITEMS: SettingsMenuItem[] = [
   { id: 'providers', label: 'Providers', icon: Key },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'MCP Servers', icon: Server },
-  { id: 'channels', label: 'Channels', icon: Radio },
   { id: 'sessions', label: 'Sessions', icon: Database },
   { id: 'sub_agents', label: 'Sub-Agents', icon: GitFork },
   { id: 'open_code', label: 'OpenCode', icon: Terminal },

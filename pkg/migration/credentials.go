@@ -87,9 +87,12 @@ func (m *Migrator) migrateCredentials(ctx context.Context, teamDS store.TeamData
 	// Get the credential store from the team data store
 	credStore := teamDS.Credentials()
 
+	// Get platform secret store for instance-wide secrets
+	platformSecrets := m.pgStore.PlatformSecrets()
+
 	count := 0
 
-	// Migrate credentials
+	// Migrate credentials (these are team-scoped: provider API keys, etc.)
 	for name, fc := range data.Credentials {
 		if ctx.Err() != nil {
 			return count, ctx.Err()
@@ -119,14 +122,23 @@ func (m *Migrator) migrateCredentials(ctx context.Context, teamDS store.TeamData
 		m.emitProgress(CatCredentials, count, total, "migrating", "")
 	}
 
-	// Migrate secrets
+	// Migrate secrets — route platform-level secrets to platform_secrets table,
+	// everything else to the team credential store.
 	for key, value := range data.Secrets {
 		if ctx.Err() != nil {
 			return count, ctx.Err()
 		}
 
-		if err := credStore.SetSecret(key, value); err != nil {
-			return count, fmt.Errorf("failed to migrate secret %q: %w", key, err)
+		if isPlatformSecret(key) {
+			// Instance-wide secret → platform_secrets table
+			if err := platformSecrets.SetSecret(key, value); err != nil {
+				return count, fmt.Errorf("failed to migrate platform secret %q: %w", key, err)
+			}
+		} else {
+			// Team-scoped secret → team credential store
+			if err := credStore.SetSecret(key, value); err != nil {
+				return count, fmt.Errorf("failed to migrate secret %q: %w", key, err)
+			}
 		}
 		count++
 		m.emitProgress(CatCredentials, count, total, "migrating", "")
@@ -134,6 +146,23 @@ func (m *Migrator) migrateCredentials(ctx context.Context, teamDS store.TeamData
 
 	m.emitProgress(CatCredentials, count, total, "done", "")
 	return count, nil
+}
+
+// isPlatformSecret returns true if the secret key is an instance-wide platform
+// secret (not scoped to any org/team). These are stored in the platform_secrets
+// table rather than the team credential store.
+func isPlatformSecret(key string) bool {
+	platformPrefixes := []string{
+		"channels.",       // channels.telegram.bot_token, channels.email.password
+		"web_servers.",    // web_servers.tavily.api_key, etc.
+		"memory.embedding.", // memory.embedding.api_key
+	}
+	for _, prefix := range platformPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseStoreKey reads the store key from file content.

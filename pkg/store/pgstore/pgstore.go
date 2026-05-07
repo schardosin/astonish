@@ -44,6 +44,12 @@ func (s *PGStore) PoolManager() *PoolManager {
 	return s.poolMgr
 }
 
+// PlatformSecrets returns the platform-level secret store for instance-wide
+// secrets (bot tokens, API keys, etc.) that are not org/team-scoped.
+func (s *PGStore) PlatformSecrets() *PlatformSecretStore {
+	return NewPlatformSecretStore(s.poolMgr)
+}
+
 // InstanceSuffix returns the instance suffix used for database naming.
 func (s *PGStore) InstanceSuffix() string {
 	return s.pgCfg.InstanceSuffix
@@ -73,6 +79,14 @@ func (s *PGStore) Organizations() store.OrganizationStore {
 
 func (s *PGStore) LoginSessions() store.LoginSessionStore {
 	return &pgLoginSessionStore{poolMgr: s.poolMgr}
+}
+
+func (s *PGStore) OIDCProviders() store.OIDCProviderStore {
+	return &pgOIDCProviderStore{poolMgr: s.poolMgr}
+}
+
+func (s *PGStore) UserChannels() store.UserChannelStore {
+	return &pgUserChannelStore{poolMgr: s.poolMgr}
 }
 
 func (s *PGStore) Close() error {

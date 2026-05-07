@@ -19,6 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/daemon"
 	emailPkg "github.com/schardosin/astonish/pkg/email"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -178,48 +179,61 @@ func handleTelegramSetup() error {
 		break
 	}
 
-	// Step 3: Access control — require at least one allowed user.
-	// The bot has full tool access with auto-approve, so open access is never safe.
-	fmt.Println()
-	fmt.Println("  Now let's register who can talk to your bot.")
-	fmt.Println("  Open this link in Telegram and send /start to your bot:")
-	fmt.Println()
-	fmt.Printf("    \033[4;36mhttps://t.me/%s\033[0m\n", botUsername)
-	fmt.Println()
+	// Determine if we're in platform mode
+	isPlatform := cfg.Storage.Backend == "postgres" && cfg.Storage.Postgres.PlatformDSN != ""
 
 	var allowFrom []string
 
-	for {
-		allowFrom, err = detectTelegramUsers(botToken)
-		if err != nil {
-			return err
-		}
-
-		if len(allowFrom) > 0 {
-			break
-		}
-
-		fmt.Println("  \033[31mAt least one allowed user is required.\033[0m")
-		fmt.Println("  The bot has full tool access — it cannot be left open to everyone.")
+	if isPlatform {
+		// Platform mode: access control is managed via user channel linking.
+		// No static allowlist needed — users link their accounts via /link <code>.
+		fmt.Println()
+		fmt.Println("  \033[36mPlatform mode detected.\033[0m")
+		fmt.Println("  Access control is managed through user account linking.")
+		fmt.Println("  Users link their Telegram via Settings → Connected Channels.")
+		fmt.Println()
+	} else {
+		// Personal mode: require at least one allowed user (static allowlist).
+		// The bot has full tool access with auto-approve, so open access is never safe.
+		fmt.Println()
+		fmt.Println("  Now let's register who can talk to your bot.")
+		fmt.Println("  Open this link in Telegram and send /start to your bot:")
+		fmt.Println()
+		fmt.Printf("    \033[4;36mhttps://t.me/%s\033[0m\n", botUsername)
 		fmt.Println()
 
-		var retry bool
-		retryErr := huh.NewForm(
-			huh.NewGroup(
-				huh.NewConfirm().
-					Title("Try detecting users again?").
-					Affirmative("Yes, try again").
-					Negative("Cancel setup").
-					Value(&retry),
-			),
-		).Run()
-		if retryErr != nil || !retry {
-			fmt.Println("  Setup cancelled.")
-			return nil
+		for {
+			allowFrom, err = detectTelegramUsers(botToken)
+			if err != nil {
+				return err
+			}
+
+			if len(allowFrom) > 0 {
+				break
+			}
+
+			fmt.Println("  \033[31mAt least one allowed user is required.\033[0m")
+			fmt.Println("  The bot has full tool access — it cannot be left open to everyone.")
+			fmt.Println()
+
+			var retry bool
+			retryErr := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Try detecting users again?").
+						Affirmative("Yes, try again").
+						Negative("Cancel setup").
+						Value(&retry),
+				),
+			).Run()
+			if retryErr != nil || !retry {
+				fmt.Println("  Setup cancelled.")
+				return nil
+			}
+			fmt.Println()
+			fmt.Println("  Send /start to your bot in Telegram, then press Ctrl+C when done:")
+			fmt.Println()
 		}
-		fmt.Println()
-		fmt.Println("  Send /start to your bot in Telegram, then press Ctrl+C when done:")
-		fmt.Println()
 	}
 
 	// Step 4: Save configuration
@@ -228,19 +242,35 @@ func handleTelegramSetup() error {
 	cfg.Channels.Telegram.Enabled = &enabled
 	cfg.Channels.Telegram.AllowFrom = allowFrom
 
-	// Save bot token to encrypted credential store (keep config.yaml clean)
-	cfg.Channels.Telegram.BotToken = botToken // fallback: stays in config if store fails
-	configDir, err := config.GetConfigDir()
-	if err != nil {
-		slog.Warn("failed to get config directory", "error", err)
-	}
-	if configDir != "" {
-		if store, storeErr := credentials.Open(configDir); storeErr == nil {
-			if setErr := store.SetSecret("channels.telegram.bot_token", botToken); setErr == nil {
-				cfg.Channels.Telegram.BotToken = "" // scrub from config.yaml
+	// Save bot token to the appropriate store based on mode
+	if isPlatform {
+		// Platform mode: store in platform_secrets table (DB)
+		_, pgStore, pgErr := pgstore.NewPlatformServices(context.Background(), cfg.Storage.Postgres)
+		if pgErr != nil {
+			return fmt.Errorf("failed to connect to platform database: %w", pgErr)
+		}
+		if setErr := pgStore.PlatformSecrets().SetSecret("channels.telegram.bot_token", botToken); setErr != nil {
+			return fmt.Errorf("failed to store bot token in platform database: %w", setErr)
+		}
+		fmt.Println("  Bot token stored in platform database.")
+	} else {
+		// Personal mode: store in file-based encrypted credential store
+		cfg.Channels.Telegram.BotToken = botToken // fallback: stays in config if store fails
+		configDir, configDirErr := config.GetConfigDir()
+		if configDirErr != nil {
+			slog.Warn("failed to get config directory", "error", configDirErr)
+		}
+		if configDir != "" {
+			if store, storeErr := credentials.Open(configDir); storeErr == nil {
+				if setErr := store.SetSecret("channels.telegram.bot_token", botToken); setErr == nil {
+					cfg.Channels.Telegram.BotToken = "" // scrub from config.yaml
+				}
 			}
 		}
 	}
+
+	// Always scrub token from config.yaml (never store plaintext)
+	cfg.Channels.Telegram.BotToken = ""
 
 	if err := config.SaveAppConfig(cfg); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
@@ -251,8 +281,15 @@ func handleTelegramSetup() error {
 	channelsPrintSuccess(summary)
 
 	fmt.Println()
-	fmt.Printf("  Allowed users: %s\n", strings.Join(allowFrom, ", "))
-	fmt.Printf("  Deep link:     https://t.me/%s\n", botUsername)
+	if isPlatform {
+		fmt.Printf("  Bot:       @%s\n", botUsername)
+		fmt.Printf("  Deep link: https://t.me/%s\n", botUsername)
+		fmt.Println()
+		fmt.Println("  Users can link their accounts via the web UI.")
+	} else {
+		fmt.Printf("  Allowed users: %s\n", strings.Join(allowFrom, ", "))
+		fmt.Printf("  Deep link:     https://t.me/%s\n", botUsername)
+	}
 	fmt.Println()
 
 	// Activate the new config in the running daemon (if any).
@@ -715,8 +752,14 @@ func handleChannelsStatus() error {
 
 	resp, err := http.Get(url)
 	if err != nil {
-		// Daemon is not running — show config-based status instead
-		return handleChannelsStatusFromConfig(appCfg)
+		// Daemon is not running — channels require the daemon
+		fmt.Println()
+		fmt.Println("  Daemon is not running. Channels require the daemon to operate.")
+		fmt.Println()
+		fmt.Println("  Start the daemon:")
+		fmt.Println("    astonish daemon start")
+		fmt.Println()
+		return nil
 	}
 	defer resp.Body.Close()
 
@@ -740,7 +783,13 @@ func handleChannelsStatus() error {
 	}
 
 	if len(result.Channels) == 0 {
-		return handleChannelsStatusFromConfig(appCfg)
+		fmt.Println()
+		fmt.Println("  No channels configured.")
+		fmt.Println()
+		fmt.Println("  Set up a channel:")
+		fmt.Println("    astonish channels setup telegram")
+		fmt.Println()
+		return nil
 	}
 
 	fmt.Println()
@@ -760,41 +809,11 @@ func handleChannelsStatus() error {
 		if ch.Error != "" {
 			fmt.Printf("  \033[31m(%s)\033[0m", ch.Error)
 		}
-		fmt.Printf("  — %d messages", ch.MessageCount)
+		if ch.Connected {
+			fmt.Printf("  — %d messages", ch.MessageCount)
+		}
 		fmt.Println()
 	}
-	fmt.Println()
-
-	return nil
-}
-
-// handleChannelsStatusFromConfig shows channel configuration when daemon is not running.
-func handleChannelsStatusFromConfig(cfg *config.AppConfig) error {
-	fmt.Println()
-
-	if !cfg.Channels.IsChannelsEnabled() {
-		fmt.Println("  No channels configured.")
-		fmt.Println()
-		fmt.Println("  Set up a channel:")
-		fmt.Println("    astonish channels setup telegram")
-		fmt.Println()
-		return nil
-	}
-
-	fmt.Println("  Channel Configuration:")
-	fmt.Println()
-
-	if cfg.Channels.Telegram.IsTelegramEnabled() {
-		fmt.Printf("    telegram     \033[33mconfigured\033[0m (daemon not running)")
-		fmt.Println()
-	} else if cfg.Channels.Telegram.BotToken != "" {
-		fmt.Printf("    telegram     \033[90mdisabled\033[0m")
-		fmt.Println()
-	}
-
-	fmt.Println()
-	fmt.Println("  Start the daemon to activate channels:")
-	fmt.Println("    astonish daemon start")
 	fmt.Println()
 
 	return nil

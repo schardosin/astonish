@@ -147,13 +147,16 @@ func scanScheduledJob(row scannable) (store.ScheduledJob, error) {
 			if s, ok := combined["schedule_def"]; ok {
 				_ = json.Unmarshal(s, &job.Schedule)
 			}
+			if o, ok := combined["owner_id"]; ok {
+				_ = json.Unmarshal(o, &job.OwnerID)
+			}
 		}
 	}
 
 	return job, nil
 }
 
-// buildCombinedPayload serializes schedule, payload, and delivery into a single JSONB value.
+// buildCombinedPayload serializes schedule, payload, delivery, and owner into a single JSONB value.
 func buildCombinedPayload(job *store.ScheduledJob) []byte {
 	schedJSON, _ := json.Marshal(job.Schedule)
 	payloadJSON, _ := json.Marshal(job.Payload)
@@ -163,6 +166,9 @@ func buildCombinedPayload(job *store.ScheduledJob) []byte {
 		"schedule_def": json.RawMessage(schedJSON),
 		"payload":      json.RawMessage(payloadJSON),
 		"delivery":     json.RawMessage(deliveryJSON),
+	}
+	if job.OwnerID != "" {
+		combined["owner_id"] = job.OwnerID
 	}
 	combinedJSON, _ := json.Marshal(combined)
 	return combinedJSON

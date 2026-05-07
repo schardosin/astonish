@@ -73,6 +73,24 @@ type ChannelManager struct {
 	// These allow fleet commands to access the fleet registries and session management
 	// without the channels package importing pkg/api.
 	fleetDeps *FleetDeps
+
+	// PlatformResolver resolves an external channel identity to a platform user
+	// context. In platform mode, this is used to inject team-scoped stores into
+	// the execution context for inbound channel messages. When nil, the channel
+	// operates in personal mode (no team context injection).
+	platformResolver PlatformResolver
+}
+
+// PlatformResolver resolves an external channel identity (e.g., Telegram user ID)
+// to a platform user and their preferred team context. The returned context should
+// have team-scoped stores injected (credentials, flows, skills, MCP, memories).
+type PlatformResolver interface {
+	// ResolveChannelUser looks up a channel identity and returns:
+	// - ctx with team-scoped stores injected
+	// - the platform user ID (for session scoping)
+	// - the display name
+	// - an error if the user is not linked/provisioned
+	ResolveChannelUser(ctx context.Context, channelType, externalID string) (enrichedCtx context.Context, userID, displayName string, err error)
 }
 
 // FleetDeps holds fleet-related dependencies injected into the ChannelManager.
@@ -231,6 +249,70 @@ func (m *ChannelManager) SetFleetDeps(deps *FleetDeps) {
 	// Re-register bot commands with channels that support it (e.g., Telegram)
 	// so the new fleet commands appear in the "/" autocomplete menu.
 	m.refreshChannelCommands()
+}
+
+// SetPlatformResolver sets the platform resolver for inbound channel messages.
+// When set, inbound messages will have team-scoped context injected based on
+// the sender's linked channel identity.
+func (m *ChannelManager) SetPlatformResolver(resolver PlatformResolver) {
+	m.platformResolver = resolver
+}
+
+// BotUsernameProvider is implemented by channel adapters that expose a bot username.
+type BotUsernameProvider interface {
+	BotUsername() string
+}
+
+// LinkHandlerSetter is implemented by channel adapters that support code-based linking.
+type LinkHandlerSetter interface {
+	SetLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string))
+}
+
+// GetTelegramBotUsername returns the connected Telegram bot's username, or empty
+// string if Telegram is not configured or not connected.
+func (m *ChannelManager) GetTelegramBotUsername() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["telegram"]
+	if !ok {
+		return ""
+	}
+	if provider, ok := ch.(BotUsernameProvider); ok {
+		return provider.BotUsername()
+	}
+	return ""
+}
+
+// GetEmailAddress returns the connected email channel's address, or empty
+// string if email is not configured or not connected.
+func (m *ChannelManager) GetEmailAddress() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["email"]
+	if !ok {
+		return ""
+	}
+	// The email channel's AccountID from Status() contains the address
+	status := ch.Status()
+	return status.AccountID
+}
+
+// SetTelegramLinkHandler sets the link handler on the Telegram channel adapter.
+// The handler is called when a user sends /link <code> to the bot.
+func (m *ChannelManager) SetTelegramLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["telegram"]
+	if !ok {
+		return
+	}
+	// Type-assert to the concrete TelegramChannel which has LinkHandler field
+	type linkHandlerChannel interface {
+		SetLinkHandler(func(ctx context.Context, senderID, senderUsername, code string) (bool, string))
+	}
+	if lh, ok := ch.(linkHandlerChannel); ok {
+		lh.SetLinkHandler(fn)
+	}
 }
 
 // refreshChannelCommands tells all running channels to re-register their
@@ -407,6 +489,20 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Get or create persistent session
 	userID := fmt.Sprintf("channel_%s_%s", msg.ChannelID, msg.SenderID)
 	appName := "astonish"
+
+	// Platform mode: resolve the channel sender to a platform user and inject
+	// team-scoped stores into the context. This gives the agent access to the
+	// user's team credentials, flows, skills, and MCP servers.
+	if m.platformResolver != nil {
+		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUser(ctx, msg.ChannelID, msg.SenderID)
+		if resolveErr != nil {
+			m.logger.Printf("[channels] Platform resolver failed for %s/%s: %v", msg.ChannelID, msg.SenderID, resolveErr)
+			// Continue with unenriched context — agent will run without team stores
+		} else {
+			ctx = enrichedCtx
+			userID = platformUserID
+		}
+	}
 
 	sess, err := m.getOrCreateSession(ctx, appName, userID, route.SessionKey)
 	if err != nil {

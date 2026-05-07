@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS org_memberships (
 CREATE TABLE IF NOT EXISTS oidc_providers (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     org_id          UUID REFERENCES organizations(id) ON DELETE CASCADE,  -- NULL = platform-wide
+    name            TEXT NOT NULL DEFAULT '',    -- Human-readable display name (e.g. "SAP IAS", "Azure AD")
     issuer_url      TEXT NOT NULL,
     client_id       TEXT NOT NULL,
     client_secret   TEXT NOT NULL,    -- encrypted at rest via application-level encryption

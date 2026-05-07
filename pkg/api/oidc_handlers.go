@@ -1,0 +1,759 @@
+package api
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/gorilla/mux"
+	"golang.org/x/oauth2"
+
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// --------------------------------------------------------------------------
+// Device session management (in-memory, TTL-based)
+// --------------------------------------------------------------------------
+
+// deviceSessionStatus represents the state of an SSO device flow.
+type deviceSessionStatus string
+
+const (
+	deviceStatusPending  deviceSessionStatus = "pending"
+	deviceStatusComplete deviceSessionStatus = "complete"
+	deviceStatusFailed   deviceSessionStatus = "failed"
+)
+
+// deviceSession holds state for a single CLI SSO login attempt.
+type deviceSession struct {
+	DeviceCode string
+	State      string // OIDC state parameter (binds browser flow to this session)
+	Nonce      string // OIDC nonce for ID token validation
+	ProviderID string // Which OIDC provider to use
+
+	Status       deviceSessionStatus
+	ErrorMessage string
+
+	// Set on successful completion
+	AccessToken    string
+	RefreshToken   string
+	ExpiresIn      int
+	User           authUserResponse
+	Org            authOrgResponse
+	TeamSlug       string
+	AvailableOrgs  []authOrgOption
+	AvailableTeams []authTeamOption
+
+	CreatedAt time.Time
+}
+
+// deviceSessionStore is a thread-safe in-memory store for device sessions.
+// Sessions expire after 10 minutes.
+type deviceSessionStore struct {
+	mu       sync.RWMutex
+	sessions map[string]*deviceSession // keyed by device_code
+	byState  map[string]string         // state -> device_code mapping
+}
+
+const deviceSessionTTL = 10 * time.Minute
+
+func newDeviceSessionStore() *deviceSessionStore {
+	s := &deviceSessionStore{
+		sessions: make(map[string]*deviceSession),
+		byState:  make(map[string]string),
+	}
+	// Start background cleanup
+	go s.cleanup()
+	return s
+}
+
+func (s *deviceSessionStore) Create(sess *deviceSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[sess.DeviceCode] = sess
+	s.byState[sess.State] = sess.DeviceCode
+}
+
+func (s *deviceSessionStore) GetByCode(code string) *deviceSession {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess := s.sessions[code]
+	if sess != nil && time.Since(sess.CreatedAt) > deviceSessionTTL {
+		return nil
+	}
+	return sess
+}
+
+func (s *deviceSessionStore) GetByState(state string) *deviceSession {
+	s.mu.RLock()
+	code, ok := s.byState[state]
+	s.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+	return s.GetByCode(code)
+}
+
+func (s *deviceSessionStore) Complete(code string, sess *deviceSession) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[code] = sess
+}
+
+func (s *deviceSessionStore) cleanup() {
+	ticker := time.NewTicker(2 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		s.mu.Lock()
+		now := time.Now()
+		for code, sess := range s.sessions {
+			if now.Sub(sess.CreatedAt) > deviceSessionTTL {
+				delete(s.byState, sess.State)
+				delete(s.sessions, code)
+			}
+		}
+		s.mu.Unlock()
+	}
+}
+
+// --------------------------------------------------------------------------
+// SSOHandler manages OIDC SSO authentication flows
+// --------------------------------------------------------------------------
+
+// SSOHandler manages the SSO/OIDC endpoints.
+type SSOHandler struct {
+	pa             *PlatformAuth
+	deviceSessions *deviceSessionStore
+}
+
+// NewSSOHandler creates a new SSO handler.
+func NewSSOHandler(pa *PlatformAuth) *SSOHandler {
+	return &SSOHandler{
+		pa:             pa,
+		deviceSessions: newDeviceSessionStore(),
+	}
+}
+
+// RegisterSSORoutes registers the SSO-related endpoints.
+// These are under /api/auth/sso/* and are bypassed by PlatformAuthMiddleware.
+func RegisterSSORoutes(router *mux.Router, sso *SSOHandler) {
+	// Device flow endpoints (CLI)
+	router.HandleFunc("/api/auth/sso/init", sso.handleInit).Methods("POST")
+	router.HandleFunc("/api/auth/sso/poll", sso.handlePoll).Methods("POST")
+
+	// Browser flow endpoints (redirect chain)
+	router.HandleFunc("/api/auth/sso/verify/{device_code}", sso.handleVerify).Methods("GET")
+	router.HandleFunc("/api/auth/sso/callback", sso.handleCallback).Methods("GET")
+
+	// Discovery endpoint: lists available SSO providers (for login UI)
+	router.HandleFunc("/api/auth/sso/providers", sso.handleListProviders).Methods("GET")
+}
+
+// --------------------------------------------------------------------------
+// POST /api/auth/sso/init — CLI initiates device flow
+// --------------------------------------------------------------------------
+
+type ssoInitRequest struct {
+	ProviderID string `json:"provider_id,omitempty"` // Optional: specific provider. If empty, use the first enabled one.
+}
+
+type ssoInitResponse struct {
+	DeviceCode string `json:"device_code"`
+	VerifyURL  string `json:"verify_url"`
+	ExpiresIn  int    `json:"expires_in"`
+	Interval   int    `json:"interval"` // polling interval in seconds
+}
+
+func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
+	var req ssoInitRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		respondError(w, http.StatusInternalServerError, "platform store not available")
+		return
+	}
+
+	// Find the OIDC provider
+	ctx := r.Context()
+	var provider *store.OIDCProvider
+
+	if req.ProviderID != "" {
+		var err error
+		provider, err = pgStore.OIDCProviders().GetByID(ctx, req.ProviderID)
+		if err != nil || !provider.Enabled {
+			respondError(w, http.StatusBadRequest, "OIDC provider not found or disabled")
+			return
+		}
+	} else {
+		// Use first enabled provider
+		providers, err := pgStore.OIDCProviders().ListEnabled(ctx, "")
+		if err != nil || len(providers) == 0 {
+			respondError(w, http.StatusNotFound, "no OIDC providers configured")
+			return
+		}
+		provider = providers[0]
+	}
+
+	// Generate device code and OIDC state/nonce
+	deviceCode := generateSecureToken(32)
+	state := generateSecureToken(24)
+	nonce := generateSecureToken(24)
+
+	// Create device session
+	sess := &deviceSession{
+		DeviceCode: deviceCode,
+		State:      state,
+		Nonce:      nonce,
+		ProviderID: provider.ID,
+		Status:     deviceStatusPending,
+		CreatedAt:  time.Now(),
+	}
+	h.deviceSessions.Create(sess)
+
+	// Build the verify URL (the URL the user opens in their browser)
+	scheme := "https"
+	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
+		scheme = "http"
+	}
+	// Check X-Forwarded-Proto header for reverse proxy setups
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	verifyURL := fmt.Sprintf("%s://%s/api/auth/sso/verify/%s", scheme, r.Host, deviceCode)
+
+	respondJSON(w, http.StatusOK, ssoInitResponse{
+		DeviceCode: deviceCode,
+		VerifyURL:  verifyURL,
+		ExpiresIn:  int(deviceSessionTTL.Seconds()),
+		Interval:   2,
+	})
+}
+
+// --------------------------------------------------------------------------
+// GET /api/auth/sso/verify/{device_code} — Browser visits, redirects to IdP
+// --------------------------------------------------------------------------
+
+func (h *SSOHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
+	deviceCode := mux.Vars(r)["device_code"]
+
+	sess := h.deviceSessions.GetByCode(deviceCode)
+	if sess == nil {
+		http.Error(w, "Invalid or expired device code. Please restart the login process.", http.StatusBadRequest)
+		return
+	}
+	if sess.Status != deviceStatusPending {
+		http.Error(w, "This login session has already been used.", http.StatusBadRequest)
+		return
+	}
+
+	// Load the OIDC provider
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		http.Error(w, "Platform store not available", http.StatusInternalServerError)
+		return
+	}
+
+	provider, err := pgStore.OIDCProviders().GetByID(r.Context(), sess.ProviderID)
+	if err != nil || !provider.Enabled {
+		http.Error(w, "OIDC provider not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Build the OIDC authorization URL
+	oauth2Cfg := h.buildOAuth2Config(r, provider)
+	authURL := oauth2Cfg.AuthCodeURL(
+		sess.State,
+		oauth2.SetAuthURLParam("nonce", sess.Nonce),
+		oauth2.S256ChallengeOption(sess.DeviceCode), // Use device code as PKCE code verifier
+	)
+
+	http.Redirect(w, r, authURL, http.StatusFound)
+}
+
+// --------------------------------------------------------------------------
+// GET /api/auth/sso/callback — IdP redirects here after authentication
+// --------------------------------------------------------------------------
+
+func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Extract state and code from IdP response
+	state := r.URL.Query().Get("state")
+	code := r.URL.Query().Get("code")
+	idpError := r.URL.Query().Get("error")
+
+	if idpError != "" {
+		desc := r.URL.Query().Get("error_description")
+		h.renderCallbackError(w, fmt.Sprintf("Identity provider error: %s — %s", idpError, desc))
+		return
+	}
+
+	if state == "" || code == "" {
+		h.renderCallbackError(w, "Missing state or code parameter from identity provider")
+		return
+	}
+
+	// Look up device session by state
+	sess := h.deviceSessions.GetByState(state)
+	if sess == nil {
+		h.renderCallbackError(w, "Invalid or expired login session. Please restart the login process.")
+		return
+	}
+
+	// Load OIDC provider
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		h.failDeviceSession(sess, "platform store not available")
+		h.renderCallbackError(w, "Internal server error")
+		return
+	}
+
+	provider, err := pgStore.OIDCProviders().GetByID(ctx, sess.ProviderID)
+	if err != nil {
+		h.failDeviceSession(sess, "OIDC provider not found")
+		h.renderCallbackError(w, "OIDC provider configuration error")
+		return
+	}
+
+	// Exchange authorization code for tokens
+	oauth2Cfg := h.buildOAuth2Config(r, provider)
+	token, err := oauth2Cfg.Exchange(ctx, code,
+		oauth2.VerifierOption(sess.DeviceCode), // PKCE verifier
+	)
+	if err != nil {
+		slog.Error("OIDC token exchange failed", "error", err)
+		h.failDeviceSession(sess, "token exchange failed")
+		h.renderCallbackError(w, "Failed to exchange authorization code. Please try again.")
+		return
+	}
+
+	// Extract and verify the ID token
+	rawIDToken, ok := token.Extra("id_token").(string)
+	if !ok {
+		h.failDeviceSession(sess, "no id_token in response")
+		h.renderCallbackError(w, "Identity provider did not return an ID token")
+		return
+	}
+
+	// Create OIDC verifier
+	oidcProvider, err := oidc.NewProvider(ctx, provider.IssuerURL)
+	if err != nil {
+		slog.Error("failed to create OIDC provider", "issuer", provider.IssuerURL, "error", err)
+		h.failDeviceSession(sess, "OIDC discovery failed")
+		h.renderCallbackError(w, "Failed to verify identity provider. Please contact your administrator.")
+		return
+	}
+
+	verifier := oidcProvider.Verifier(&oidc.Config{
+		ClientID: provider.ClientID,
+	})
+
+	idToken, err := verifier.Verify(ctx, rawIDToken)
+	if err != nil {
+		slog.Error("ID token verification failed", "error", err)
+		h.failDeviceSession(sess, "ID token verification failed")
+		h.renderCallbackError(w, "Identity verification failed. Please try again.")
+		return
+	}
+
+	// Verify nonce
+	if idToken.Nonce != sess.Nonce {
+		h.failDeviceSession(sess, "nonce mismatch")
+		h.renderCallbackError(w, "Security verification failed (nonce mismatch). Please try again.")
+		return
+	}
+
+	// Extract claims from ID token
+	var claims struct {
+		Subject       string `json:"sub"`
+		Email         string `json:"email"`
+		EmailVerified bool   `json:"email_verified"`
+		Name          string `json:"name"`
+		GivenName     string `json:"given_name"`
+		FamilyName    string `json:"family_name"`
+	}
+	if err := idToken.Claims(&claims); err != nil {
+		slog.Error("failed to parse ID token claims", "error", err)
+		h.failDeviceSession(sess, "failed to parse claims")
+		h.renderCallbackError(w, "Failed to read identity information")
+		return
+	}
+
+	// --- User Linking (Phase 4 logic, implemented inline) ---
+	issuer := provider.IssuerURL
+	subject := claims.Subject
+	email := strings.ToLower(strings.TrimSpace(claims.Email))
+
+	if subject == "" {
+		h.failDeviceSession(sess, "ID token has no subject claim")
+		h.renderCallbackError(w, "Identity provider returned no user identifier")
+		return
+	}
+
+	// Step 1: Try to find user by OIDC subject
+	user, err := pgStore.Users().GetByOIDC(ctx, issuer, subject)
+	if err != nil && email != "" {
+		// Step 2: Fall back to email match and auto-link
+		user, err = pgStore.Users().GetByEmail(ctx, email)
+		if err == nil && user != nil {
+			// Auto-link: set OIDC subject/issuer on the user
+			slog.Info("auto-linking OIDC identity to existing user",
+				"user_id", user.ID,
+				"email", email,
+				"issuer", issuer,
+				"subject", subject,
+			)
+			user.OIDCSubject = subject
+			user.OIDCIssuer = issuer
+			if updateErr := pgStore.Users().Update(ctx, user); updateErr != nil {
+				slog.Error("failed to auto-link OIDC identity", "error", updateErr)
+				// Non-fatal: continue with the user we found
+			}
+		}
+	}
+
+	// Step 3: If still no user found, reject
+	if user == nil {
+		h.failDeviceSession(sess, "user not provisioned")
+		h.renderCallbackError(w, fmt.Sprintf(
+			"No account found for %s. Please contact your administrator to provision your account.",
+			email,
+		))
+		return
+	}
+
+	// Check account status
+	if user.Status != "active" {
+		h.failDeviceSession(sess, "account suspended")
+		h.renderCallbackError(w, "Your account is suspended. Please contact your administrator.")
+		return
+	}
+
+	// Update display name from IdP if we don't have one
+	if user.DisplayName == "" || user.DisplayName == strings.Split(user.Email, "@")[0] {
+		if claims.Name != "" {
+			user.DisplayName = claims.Name
+		} else if claims.GivenName != "" || claims.FamilyName != "" {
+			user.DisplayName = strings.TrimSpace(claims.GivenName + " " + claims.FamilyName)
+		}
+	}
+
+	// Update last login
+	user.LastLoginAt = time.Now()
+	_ = pgStore.Users().Update(ctx, user)
+
+	// --- Resolve org and team (same logic as password login) ---
+	orgs, err := pgStore.Organizations().GetUserOrgs(ctx, user.ID)
+	if err != nil || len(orgs) == 0 {
+		h.failDeviceSession(sess, "no organization membership")
+		h.renderCallbackError(w, "Your account has no organization membership. Please contact your administrator.")
+		return
+	}
+
+	// Use first org (CLI will prompt if multiple)
+	membership := orgs[0]
+	org, err := pgStore.Organizations().GetByID(ctx, membership.OrgID)
+	if err != nil {
+		h.failDeviceSession(sess, "failed to load organization")
+		h.renderCallbackError(w, "Failed to load your organization")
+		return
+	}
+
+	// Resolve team
+	teamSlug := h.pa.resolveDefaultTeam(ctx, user.ID, org)
+
+	// Validate team membership (critical: no user without a team can log in)
+	if !h.pa.validateTeamMembership(ctx, user.ID, org, teamSlug) {
+		h.failDeviceSession(sess, "no team membership")
+		h.renderCallbackError(w, "Your account has no team assignment. Please contact your administrator.")
+		return
+	}
+
+	// --- Issue Astonish tokens ---
+	accessToken, err := h.pa.jwt.IssueAccessToken(
+		user.ID, user.Email, user.DisplayName,
+		org.Slug, teamSlug, membership.Role, user.PlatformRole,
+	)
+	if err != nil {
+		h.failDeviceSession(sess, "failed to issue access token")
+		h.renderCallbackError(w, "Internal error issuing tokens")
+		return
+	}
+
+	refreshToken, err := h.pa.jwt.IssueRefreshToken(user.ID, org.Slug, teamSlug)
+	if err != nil {
+		h.failDeviceSession(sess, "failed to issue refresh token")
+		h.renderCallbackError(w, "Internal error issuing tokens")
+		return
+	}
+
+	// Store refresh token hash for revocation
+	tokenHash := hashRefreshToken(refreshToken)
+	loginSession := &store.LoginSession{
+		TokenHash: tokenHash,
+		UserID:    user.ID,
+		OrgID:     org.ID,
+		CreatedAt: time.Now(),
+		ExpiresAt: time.Now().Add(h.pa.jwt.RefreshTokenTTL()),
+		UserAgent: r.UserAgent(),
+		IPAddress: clientIP(r),
+	}
+	_ = pgStore.LoginSessions().Create(ctx, loginSession)
+
+	// Build available orgs/teams for CLI selection
+	var availableOrgs []authOrgOption
+	for _, m := range orgs {
+		o, oErr := pgStore.Organizations().GetByID(ctx, m.OrgID)
+		if oErr != nil {
+			continue
+		}
+		availableOrgs = append(availableOrgs, authOrgOption{
+			ID:   o.ID,
+			Name: o.Name,
+			Slug: o.Slug,
+			Role: m.Role,
+		})
+	}
+	availableTeams := h.pa.listUserTeams(ctx, user.ID, org)
+
+	// Mark device session as complete
+	sess.Status = deviceStatusComplete
+	sess.AccessToken = accessToken
+	sess.RefreshToken = refreshToken
+	sess.ExpiresIn = int(h.pa.jwt.AccessTokenTTL().Seconds())
+	sess.User = authUserResponse{
+		ID:           user.ID,
+		Email:        user.Email,
+		DisplayName:  user.DisplayName,
+		Role:         membership.Role,
+		PlatformRole: user.PlatformRole,
+	}
+	sess.Org = authOrgResponse{
+		ID:   org.ID,
+		Name: org.Name,
+		Slug: org.Slug,
+	}
+	sess.TeamSlug = teamSlug
+	sess.AvailableOrgs = availableOrgs
+	sess.AvailableTeams = availableTeams
+	h.deviceSessions.Complete(sess.DeviceCode, sess)
+
+	// Render success page to the browser
+	h.renderCallbackSuccess(w, user.DisplayName, org.Name)
+}
+
+// --------------------------------------------------------------------------
+// POST /api/auth/sso/poll — CLI polls for completion
+// --------------------------------------------------------------------------
+
+type ssoPollRequest struct {
+	DeviceCode string `json:"device_code"`
+}
+
+func (h *SSOHandler) handlePoll(w http.ResponseWriter, r *http.Request) {
+	var req ssoPollRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.DeviceCode == "" {
+		respondError(w, http.StatusBadRequest, "device_code is required")
+		return
+	}
+
+	sess := h.deviceSessions.GetByCode(req.DeviceCode)
+	if sess == nil {
+		respondError(w, http.StatusGone, "device session expired or not found")
+		return
+	}
+
+	switch sess.Status {
+	case deviceStatusPending:
+		respondJSON(w, http.StatusAccepted, map[string]any{
+			"status": "pending",
+		})
+
+	case deviceStatusFailed:
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status": "failed",
+			"error":  sess.ErrorMessage,
+		})
+
+	case deviceStatusComplete:
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":          "complete",
+			"access_token":    sess.AccessToken,
+			"refresh_token":   sess.RefreshToken,
+			"expires_in":      sess.ExpiresIn,
+			"user":            sess.User,
+			"org":             sess.Org,
+			"team":            sess.TeamSlug,
+			"available_orgs":  sess.AvailableOrgs,
+			"available_teams": sess.AvailableTeams,
+		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// GET /api/auth/sso/providers — Lists available SSO providers for UI
+// --------------------------------------------------------------------------
+
+func (h *SSOHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		respondJSON(w, http.StatusOK, map[string]any{"providers": []any{}})
+		return
+	}
+
+	providers, err := pgStore.OIDCProviders().ListEnabled(r.Context(), "")
+	if err != nil || len(providers) == 0 {
+		respondJSON(w, http.StatusOK, map[string]any{"providers": []any{}})
+		return
+	}
+
+	type providerInfo struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	var result []providerInfo
+	for _, p := range providers {
+		name := p.Name
+		if name == "" {
+			name = p.IssuerURL
+		}
+		result = append(result, providerInfo{ID: p.ID, Name: name})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"providers": result})
+}
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+// buildOAuth2Config builds an OAuth2 config for the given OIDC provider.
+func (h *SSOHandler) buildOAuth2Config(r *http.Request, provider *store.OIDCProvider) *oauth2.Config {
+	// Build callback URL
+	scheme := "https"
+	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
+		scheme = "http"
+	}
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		scheme = proto
+	}
+	redirectURL := fmt.Sprintf("%s://%s/api/auth/sso/callback", scheme, r.Host)
+
+	// Discover OIDC endpoints
+	ctx := context.Background()
+	oidcProvider, err := oidc.NewProvider(ctx, provider.IssuerURL)
+
+	var endpoint oauth2.Endpoint
+	if err != nil {
+		// Fallback: construct manually (shouldn't happen in production)
+		slog.Warn("OIDC discovery failed, using manual endpoint construction", "issuer", provider.IssuerURL, "error", err)
+		endpoint = oauth2.Endpoint{
+			AuthURL:  provider.IssuerURL + "/oauth2/authorize",
+			TokenURL: provider.IssuerURL + "/oauth2/token",
+		}
+	} else {
+		endpoint = oidcProvider.Endpoint()
+	}
+
+	return &oauth2.Config{
+		ClientID:     provider.ClientID,
+		ClientSecret: provider.ClientSecret,
+		RedirectURL:  redirectURL,
+		Endpoint:     endpoint,
+		Scopes:       provider.Scopes,
+	}
+}
+
+// failDeviceSession marks a device session as failed.
+func (h *SSOHandler) failDeviceSession(sess *deviceSession, msg string) {
+	sess.Status = deviceStatusFailed
+	sess.ErrorMessage = msg
+	h.deviceSessions.Complete(sess.DeviceCode, sess)
+}
+
+// renderCallbackSuccess renders an HTML page shown to the user after successful SSO login.
+func (h *SSOHandler) renderCallbackSuccess(w http.ResponseWriter, displayName, orgName string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Astonish - Login Successful</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0; }
+.card { background: #16213e; border-radius: 12px; padding: 48px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.3); max-width: 400px; }
+h1 { color: #4ecca3; margin-bottom: 16px; font-size: 24px; }
+p { color: #a0a0b0; line-height: 1.6; }
+.name { color: #e0e0e0; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Login Successful</h1>
+<p>Welcome, <span class="name">%s</span>!</p>
+<p>Organization: <span class="name">%s</span></p>
+<p>You can close this browser tab and return to your terminal.</p>
+</div>
+</body>
+</html>`, displayName, orgName)
+}
+
+// renderCallbackError renders an HTML error page shown to the user on SSO failure.
+func (h *SSOHandler) renderCallbackError(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusBadRequest)
+	fmt.Fprintf(w, `<!DOCTYPE html>
+<html>
+<head><title>Astonish - Login Failed</title>
+<style>
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0; }
+.card { background: #16213e; border-radius: 12px; padding: 48px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.3); max-width: 400px; }
+h1 { color: #e74c3c; margin-bottom: 16px; font-size: 24px; }
+p { color: #a0a0b0; line-height: 1.6; }
+.error { color: #e0e0e0; background: #2d1b1b; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Login Failed</h1>
+<div class="error">%s</div>
+<p style="margin-top:24px">Please close this tab and try again, or contact your administrator.</p>
+</div>
+</body>
+</html>`, message)
+}
+
+// generateSecureToken generates a cryptographically secure random hex string.
+func generateSecureToken(bytes int) string {
+	b := make([]byte, bytes)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback (should never happen)
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b)
+}
+
+// --------------------------------------------------------------------------
+// Registration of SSO routes (called from launcher)
+// --------------------------------------------------------------------------
+
+// platformSSOHandler is the singleton SSO handler for the platform.
+var platformSSOHandler *SSOHandler
+
+// SetPlatformSSOHandler stores the SSO handler singleton.
+func SetPlatformSSOHandler(h *SSOHandler) {
+	platformSSOHandler = h
+}
+
+// GetPlatformSSOHandler returns the SSO handler singleton.
+func GetPlatformSSOHandler() *SSOHandler {
+	return platformSSOHandler
+}

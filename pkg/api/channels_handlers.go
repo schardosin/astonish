@@ -15,6 +15,34 @@ var (
 	channelManager   *channels.ChannelManager
 )
 
+// ChannelConfigStatus records the status of a channel from configuration:
+// enabled but possibly not started (e.g., missing bot token).
+type ChannelConfigStatus struct {
+	Enabled bool   // Channel is enabled in config
+	Error   string // Why it didn't start (empty = it started fine or isn't enabled)
+}
+
+var (
+	channelConfigMu       sync.RWMutex
+	channelConfigStatuses map[string]ChannelConfigStatus
+)
+
+// SetChannelConfigStatuses records which channels are enabled in config and
+// any errors that prevented them from starting. Called by the daemon after
+// initChannels runs.
+func SetChannelConfigStatuses(statuses map[string]ChannelConfigStatus) {
+	channelConfigMu.Lock()
+	defer channelConfigMu.Unlock()
+	channelConfigStatuses = statuses
+}
+
+// getChannelConfigStatuses returns the registered config statuses.
+func getChannelConfigStatuses() map[string]ChannelConfigStatus {
+	channelConfigMu.RLock()
+	defer channelConfigMu.RUnlock()
+	return channelConfigStatuses
+}
+
 // channelReloadFn holds a callback that reloads channel configuration.
 // Set by the daemon run loop via SetChannelReloadFunc.
 var (
@@ -53,6 +81,7 @@ func GetChannelManager() *channels.ChannelManager {
 }
 
 // ChannelsStatusHandler returns the status of all registered channels.
+// Also reports channels that are enabled in config but failed to start.
 //
 // GET /api/channels/status
 //
@@ -68,22 +97,22 @@ func ChannelsStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	type channelStatusResponse struct {
 		Connected    bool   `json:"connected"`
+		Enabled      bool   `json:"enabled"`
 		AccountID    string `json:"account_id,omitempty"`
 		ConnectedAt  string `json:"connected_at,omitempty"`
 		Error        string `json:"error,omitempty"`
 		MessageCount int64  `json:"message_count"`
 	}
 
-	response := map[string]any{
-		"channels": map[string]any{},
-	}
+	channelMap := make(map[string]channelStatusResponse)
 
+	// First: add live channel statuses from the ChannelManager
 	if cm != nil {
 		statuses := cm.Status()
-		channelMap := make(map[string]channelStatusResponse, len(statuses))
 		for id, status := range statuses {
 			csr := channelStatusResponse{
 				Connected:    status.Connected,
+				Enabled:      true,
 				AccountID:    status.AccountID,
 				Error:        status.Error,
 				MessageCount: status.MessageCount,
@@ -93,7 +122,27 @@ func ChannelsStatusHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			channelMap[id] = csr
 		}
-		response["channels"] = channelMap
+	}
+
+	// Second: add channels that are enabled in config but not running
+	if cfgStatuses := getChannelConfigStatuses(); cfgStatuses != nil {
+		for id, cs := range cfgStatuses {
+			if !cs.Enabled {
+				continue
+			}
+			// Only add if not already in the map (i.e., not running)
+			if _, exists := channelMap[id]; !exists {
+				channelMap[id] = channelStatusResponse{
+					Connected: false,
+					Enabled:   true,
+					Error:     cs.Error,
+				}
+			}
+		}
+	}
+
+	response := map[string]any{
+		"channels": channelMap,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

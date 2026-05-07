@@ -161,10 +161,7 @@ func Run(cfg RunConfig) error {
 		// Uses the same HugotEmbedder (all-MiniLM-L6-v2, 384-dim) as personal mode.
 		// Non-fatal: if embedding fails, PG stores fall back to keyword-only search.
 		{
-			var embGetSecret config.SecretGetter
-			if credStore != nil {
-				embGetSecret = credStore.GetSecret
-			}
+			embGetSecret := daemonSecretGetter(pgStore, appCfg, credStore)
 			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
 			if embErr != nil {
 				logger.Printf("Warning: PG memory embedding unavailable (keyword-only search): %v", embErr)
@@ -198,10 +195,7 @@ func Run(cfg RunConfig) error {
 	// This creates ~/.config/astonish/opencode.json from the current provider
 	// settings so that OpenCode (used as a delegate tool in fleet sessions)
 	// does not need independent configuration.
-	var getSecret config.SecretGetter
-	if credStore != nil {
-		getSecret = credStore.GetSecret
-	}
+	getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
 	if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
 		logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
 	} else {
@@ -282,10 +276,7 @@ func Run(cfg RunConfig) error {
 	// is running, trusting the daemon to keep the index up to date.
 	var daemonIndexer *memory.DaemonIndexerResult
 	{
-		var embGetSecret config.SecretGetter
-		if credStore != nil {
-			embGetSecret = credStore.GetSecret
-		}
+		embGetSecret := daemonSecretGetter(pgStore, appCfg, credStore)
 		di, diErr := memory.StartDaemonIndexer(ctx, appCfg, cfg.Debug, embGetSecret)
 		if diErr != nil {
 			logger.Printf("Warning: Memory indexer failed to start: %v", diErr)
@@ -406,12 +397,14 @@ func Run(cfg RunConfig) error {
 		defer pdfBrowserMgr.Cleanup()
 
 		// Register Telegram if enabled
+		var tgConfigError string
 		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
 			botToken := freshCfg.Channels.Telegram.BotToken
-			if botToken == "" && factoryResult.CredentialStore != nil {
-				botToken = factoryResult.CredentialStore.GetSecret("channels.telegram.bot_token")
+			if botToken == "" {
+				botToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.telegram.bot_token")
 			}
 			if botToken == "" {
+				tgConfigError = "bot token not configured"
 				logger.Printf("Warning: Telegram enabled but no bot token found")
 			} else {
 				tg := telegram.New(&telegram.Config{
@@ -425,14 +418,17 @@ func Run(cfg RunConfig) error {
 		}
 
 		// Register Email channel (inbound polling) only if explicitly enabled
+		var emailConfigError string
 		if freshCfg.Channels.Email.IsEmailEnabled() {
 			emailPassword := freshCfg.Channels.Email.Password
-			if emailPassword == "" && factoryResult.CredentialStore != nil {
-				emailPassword = factoryResult.CredentialStore.GetSecret("channels.email.password")
+			if emailPassword == "" {
+				emailPassword = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.email.password")
 			}
 			if emailPassword == "" {
+				emailConfigError = "password not configured"
 				logger.Printf("Warning: Email channel enabled but no password found")
 			} else if freshCfg.Channels.Email.IMAPServer == "" || freshCfg.Channels.Email.SMTPServer == "" {
+				emailConfigError = "IMAP/SMTP servers not configured"
 				logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
 			} else {
 				pollInterval := time.Duration(freshCfg.Channels.Email.GetPollInterval()) * time.Second
@@ -465,6 +461,18 @@ func Run(cfg RunConfig) error {
 			return mgr, fmt.Errorf("failed to start channels: %w", err)
 		}
 		logger.Printf("Channels started")
+
+		// Report channel config statuses to the API layer so that
+		// GET /api/channels/status includes enabled-but-not-started channels.
+		cfgStatuses := map[string]api.ChannelConfigStatus{}
+		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
+			cfgStatuses["telegram"] = api.ChannelConfigStatus{Enabled: true, Error: tgConfigError}
+		}
+		if freshCfg.Channels.Email.IsEmailEnabled() {
+			cfgStatuses["email"] = api.ChannelConfigStatus{Enabled: true, Error: emailConfigError}
+		}
+		api.SetChannelConfigStatuses(cfgStatuses)
+
 		return mgr, nil
 	}
 
@@ -483,8 +491,8 @@ func Run(cfg RunConfig) error {
 			return
 		}
 		emailPassword := cfg.Channels.Email.Password
-		if emailPassword == "" && factoryResult.CredentialStore != nil {
-			emailPassword = factoryResult.CredentialStore.GetSecret("channels.email.password")
+		if emailPassword == "" {
+			emailPassword = resolveDaemonSecret(pgStore, cfg, factoryResult.CredentialStore, "channels.email.password")
 		}
 		if emailPassword == "" || cfg.Channels.Email.IMAPServer == "" ||
 			cfg.Channels.Email.SMTPServer == "" || cfg.Channels.Email.Address == "" {
@@ -516,6 +524,79 @@ func Run(cfg RunConfig) error {
 		channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
 	}
 	api.SetChannelManager(channelMgr)
+
+	// --- Dynamic allowlist from user_channels (platform mode) ---
+	// In platform mode, the Telegram allowlist is built from the user_channels
+	// table instead of the static config.yaml. A background goroutine refreshes
+	// the allowlist every 60 seconds. This replaces AllowFrom in config.
+	var refreshAllowlistStop context.CancelFunc
+	if pgStore != nil && channelMgr != nil {
+		refreshAllowlist := func() {
+			bgCtx := context.Background()
+			links, err := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			if err != nil {
+				logger.Printf("[channels] Failed to refresh Telegram allowlist from DB: %v", err)
+				return
+			}
+			ids := make([]string, 0, len(links))
+			for _, link := range links {
+				ids = append(ids, link.ExternalID)
+			}
+			// Merge with static config allowlist (for backward compat / admin access)
+			for _, staticID := range appCfg.Channels.Telegram.AllowFrom {
+				found := false
+				for _, id := range ids {
+					if id == staticID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					ids = append(ids, staticID)
+				}
+			}
+			if len(ids) > 0 {
+				channelMgr.UpdateAllowlists(map[string][]string{"telegram": ids})
+			}
+		}
+
+		// Initial refresh
+		refreshAllowlist()
+
+		// Periodic refresh every 60s
+		refreshCtx, refreshCancel := context.WithCancel(ctx)
+		refreshAllowlistStop = refreshCancel
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-refreshCtx.Done():
+					return
+				case <-ticker.C:
+					refreshAllowlist()
+				}
+			}
+		}()
+	}
+	_ = refreshAllowlistStop // used at shutdown
+
+	// Set platform resolver for inbound channel messages (platform mode only).
+	// This enables team-scoped context injection when users message via Telegram.
+	if pgStore != nil && channelMgr != nil {
+		channelMgr.SetPlatformResolver(&channelPlatformResolver{pgStore: pgStore})
+	}
+
+	// --- Link code store for code-based channel linking (platform mode) ---
+	// Allows users to link their Telegram by sending /link <code> to the bot.
+	if pgStore != nil && channelMgr != nil {
+		linkStore := api.NewLinkCodeStore()
+		api.SetLinkCodeStore(linkStore)
+
+		// Set the link handler on the Telegram channel — bridges /link commands
+		// to the link code store and user_channels DB.
+		channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
+	}
 
 	// reloadChannels re-reads config, stops existing channels, and starts new
 	// ones. Called by the POST /api/channels/reload endpoint so that CLI
@@ -584,6 +665,46 @@ func Run(cfg RunConfig) error {
 		}
 		api.SetChannelManager(channelMgr)
 
+		// Refresh dynamic allowlist after channel reload (platform mode)
+		if pgStore != nil && channelMgr != nil {
+			bgCtx := context.Background()
+			links, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			if linkErr == nil {
+				ids := make([]string, 0, len(links))
+				for _, link := range links {
+					ids = append(ids, link.ExternalID)
+				}
+				for _, staticID := range freshCfg.Channels.Telegram.AllowFrom {
+					found := false
+					for _, id := range ids {
+						if id == staticID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ids = append(ids, staticID)
+					}
+				}
+				if len(ids) > 0 {
+					channelMgr.UpdateAllowlists(map[string][]string{"telegram": ids})
+				}
+			}
+		}
+
+		// Re-attach platform resolver after reload
+		if pgStore != nil && channelMgr != nil {
+			channelMgr.SetPlatformResolver(&channelPlatformResolver{pgStore: pgStore})
+		}
+
+		// Re-attach link handler after reload
+		if pgStore != nil && channelMgr != nil {
+			linkStore := api.GetLinkCodeStore()
+			if linkStore != nil {
+				channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
+			}
+		}
+
 		logger.Printf("Channel reload complete")
 		return nil
 	}
@@ -639,11 +760,12 @@ func Run(cfg RunConfig) error {
 				schedExec.SessionService = factoryResult.SessionService
 			}
 
-			// Create delivery function (only if channels are available)
-			var deliver scheduler.DeliverFunc
-			if channelMgr != nil {
-				deliver = scheduler.NewDeliverFunc(channelMgr)
-			}
+		// Create delivery function — uses a getter to always resolve the
+		// current channelMgr, surviving channel reloads without stale closures.
+		// In platform mode, use the full delivery resolver for owner/team/members modes.
+		deliver := scheduler.NewPlatformDeliverFunc(func() *channels.ChannelManager {
+			return channelMgr
+		}, &pgDeliveryResolver{pgStore: pgStore}, log.Default())
 
 			// Create and start the multi-tenant scheduler
 			mtSched = NewMultiTenantScheduler(pgStore, schedExec, deliver, log.Default())
@@ -691,11 +813,11 @@ func Run(cfg RunConfig) error {
 					schedExec.SessionService = factoryResult.SessionService
 				}
 
-				// Create delivery function (only if channels are available)
-				var deliver scheduler.DeliverFunc
-				if channelMgr != nil {
-					deliver = scheduler.NewDeliverFunc(channelMgr)
-				}
+			// Create delivery function — uses a getter to always resolve the
+			// current channelMgr, surviving channel reloads without stale closures.
+			deliver := scheduler.NewDeliverFunc(func() *channels.ChannelManager {
+				return channelMgr
+			})
 
 				sched = scheduler.New(jobStore, schedExec.Execute, deliver, log.Default())
 				sched.Start(ctx)
@@ -1159,6 +1281,7 @@ func setupEmailTools(cfg *emailToolConfig) {
 		return
 	}
 	tools.SetEmailClient(client)
+	api.SetEmailClient(client)
 }
 
 // fleetSchedulerBridge adapts scheduler.Scheduler to fleet.SchedulerAccess,

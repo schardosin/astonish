@@ -1309,6 +1309,19 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// and each handler additionally verifies platform_role == "superadmin".
 	if pg != nil {
 		SetPlatformPGStore(pg)
+
+		// User channel management (any authenticated user manages their own)
+		router.HandleFunc("/api/user/channels", handleListUserChannels).Methods("GET")
+		router.HandleFunc("/api/user/channels", handleLinkUserChannel).Methods("POST")
+		router.HandleFunc("/api/user/channels/link-code", handleGenerateLinkCode).Methods("POST")
+		router.HandleFunc("/api/user/channels/verify-email-code", handleVerifyEmailCode).Methods("POST")
+		router.HandleFunc("/api/user/channels/{id}", handleUpdateUserChannel).Methods("PATCH")
+		router.HandleFunc("/api/user/channels/{id}", handleUnlinkUserChannel).Methods("DELETE")
+		router.HandleFunc("/api/user/channels/{id}/verify", handleVerifyUserChannel).Methods("POST")
+
+		// Channel info (any authenticated user can see bot info)
+		router.HandleFunc("/api/channels/info", handleGetChannelInfo).Methods("GET")
+
 		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminListOrgsHandler).Methods("GET")
 		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminCreateOrgHandler).Methods("POST")
 		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminGetOrgHandler).Methods("GET")
@@ -1321,5 +1334,12 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminDeleteUserHandler).Methods("DELETE")
 		router.HandleFunc("/api/platform/admin/users/{id}/orgs", PlatformAdminAddUserToOrgHandler).Methods("POST")
 		router.HandleFunc("/api/platform/admin/users/{id}/orgs/{slug}", PlatformAdminRemoveUserFromOrgHandler).Methods("DELETE")
+
+		// OIDC provider management (superadmin only)
+		router.HandleFunc("/api/platform/admin/oidc-providers", PlatformAdminListOIDCProvidersHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/oidc-providers", PlatformAdminCreateOIDCProviderHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminGetOIDCProviderHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminUpdateOIDCProviderHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminDeleteOIDCProviderHandler).Methods("DELETE")
 	}
 }

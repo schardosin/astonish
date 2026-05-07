@@ -168,7 +168,7 @@ func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, o
 
 		// Dispatch execution in a goroutine
 		mts.wg.Add(1)
-		go func(sj *store.ScheduledJob, key string, os store.OrgDataStore, ts store.TeamDataStore, ss store.SchedulerStore) {
+		go func(sj *store.ScheduledJob, key, org, team string, os store.OrgDataStore, ts store.TeamDataStore, ss store.SchedulerStore) {
 			defer mts.wg.Done()
 			defer func() {
 				mts.runMu.Lock()
@@ -176,8 +176,8 @@ func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, o
 				mts.runMu.Unlock()
 			}()
 
-			mts.executeJob(ctx, sj, os, ts, ss)
-		}(job, runKey, orgStore, teamStore, schedulerStore)
+			mts.executeJob(ctx, sj, org, team, os, ts, ss)
+		}(job, runKey, orgSlug, teamSlug, orgStore, teamStore, schedulerStore)
 	}
 }
 
@@ -185,6 +185,7 @@ func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, o
 func (mts *MultiTenantScheduler) executeJob(
 	ctx context.Context,
 	storeJob *store.ScheduledJob,
+	orgSlug, teamSlug string,
 	orgStore store.OrgDataStore,
 	teamStore store.TeamDataStore,
 	schedulerStore store.SchedulerStore,
@@ -242,7 +243,12 @@ func (mts *MultiTenantScheduler) executeJob(
 
 	// Deliver results (skip fleet_poll — those handle their own delivery)
 	if mts.deliver != nil && storeJob.Mode != "fleet_poll" {
-		if deliverErr := mts.deliver(ctx, job, result, execErr); deliverErr != nil {
+		// Inject delivery context so the resolver knows which org/team this job belongs to
+		deliverCtx := scheduler.WithDeliveryContext(ctx, &scheduler.DeliveryContext{
+			OrgSlug:  orgSlug,
+			TeamSlug: teamSlug,
+		})
+		if deliverErr := mts.deliver(deliverCtx, job, result, execErr); deliverErr != nil {
 			mts.logger.Printf("[scheduler] Delivery failed for job %q: %v", storeJob.Name, deliverErr)
 		}
 	}

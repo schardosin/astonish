@@ -54,10 +54,35 @@ type JobPayload struct {
 // JobDelivery defines where to send job results.
 type JobDelivery struct {
 	// Channel is the channel adapter ID (e.g., "telegram").
+	// Used in "target" mode for direct delivery to a specific chat.
 	Channel string `json:"channel"`
 	// Target is the chat/conversation ID to deliver to.
+	// Used in "target" mode for direct delivery to a specific chat.
 	Target string `json:"target"`
+	// Mode controls how delivery targets are resolved:
+	//   - "owner"   : deliver only to the job owner's linked channels
+	//   - "team"    : deliver to all team members' linked channels
+	//   - "members" : deliver to specific members listed in MemberIDs
+	//   - "target"  : deliver to Channel+Target directly (legacy)
+	//   - ""        : fallback — uses Channel+Target if set, otherwise broadcasts
+	Mode DeliveryMode `json:"mode,omitempty"`
+	// MemberIDs is the list of platform user IDs for "members" mode delivery.
+	MemberIDs []string `json:"member_ids,omitempty"`
 }
+
+// DeliveryMode defines how a job's output is routed to recipients.
+type DeliveryMode string
+
+const (
+	// DeliveryModeOwner delivers only to the job owner's linked channels.
+	DeliveryModeOwner DeliveryMode = "owner"
+	// DeliveryModeTeam delivers to all members of the job's team.
+	DeliveryModeTeam DeliveryMode = "team"
+	// DeliveryModeMembers delivers to an explicit list of user IDs.
+	DeliveryModeMembers DeliveryMode = "members"
+	// DeliveryModeTarget delivers to a specific channel+target (legacy direct routing).
+	DeliveryModeTarget DeliveryMode = "target"
+)
 
 // JobStatus represents the outcome of the last execution.
 type JobStatus string
@@ -78,6 +103,11 @@ type Job struct {
 	Delivery  JobDelivery `json:"delivery"`
 	Enabled   bool        `json:"enabled"`
 	CreatedAt time.Time   `json:"created_at"`
+
+	// OwnerID is the platform user ID who created this job.
+	// In personal mode this is empty. In platform mode it controls
+	// "owner" delivery mode routing and job visibility.
+	OwnerID string `json:"owner_id,omitempty"`
 
 	// Runtime state (updated by the scheduler after each run)
 	LastRun             *time.Time `json:"last_run,omitempty"`

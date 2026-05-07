@@ -66,13 +66,7 @@ func handleLoginCommand(args []string) error {
 	}
 
 	if useSSO {
-		fmt.Println("Opening browser for SSO login...")
-		result, err := client.LoginWithSSO(serverURL)
-		if err != nil {
-			return fmt.Errorf("login failed: %w", err)
-		}
-		printLoginSuccess(result)
-		return nil
+		return handleSSOLogin(serverURL, flagOrg, flagTeam)
 	}
 
 	// Interactive email/password prompt
@@ -203,4 +197,106 @@ func printLoginSuccess(result *client.LoginResult) {
 	if result.TeamSlug != "" {
 		fmt.Printf("Team: %s\n", result.TeamSlug)
 	}
+}
+
+// handleSSOLogin performs the SSO login flow with device-code polling.
+func handleSSOLogin(serverURL, flagOrg, flagTeam string) error {
+	// Check for available SSO providers
+	providers, err := client.ListSSOProviders(serverURL)
+	if err != nil || len(providers) == 0 {
+		return fmt.Errorf("no SSO providers configured on this server")
+	}
+
+	// If multiple providers, let the user choose
+	providerID := ""
+	if len(providers) == 1 {
+		providerID = providers[0].ID
+		fmt.Printf("Using SSO provider: %s\n", providers[0].Name)
+	} else {
+		options := make([]huh.Option[string], 0, len(providers))
+		for _, p := range providers {
+			options = append(options, huh.NewOption(p.Name, p.ID))
+		}
+
+		form := huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select SSO provider").
+					Options(options...).
+					Value(&providerID),
+			),
+		)
+		if err := form.Run(); err != nil {
+			return fmt.Errorf("provider selection: %w", err)
+		}
+	}
+
+	// Perform the SSO login with status feedback
+	fmt.Println("Initiating SSO login...")
+	result, err := client.LoginWithSSO(serverURL, providerID, func(status string) {
+		switch status {
+		case "opening_browser":
+			fmt.Println("Opening browser for authentication...")
+			fmt.Println("If the browser doesn't open, check the URL above.")
+		case "browser_failed":
+			fmt.Println("Could not open browser automatically.")
+			fmt.Println("Please open the URL printed above in your browser.")
+		case "polling":
+			fmt.Println("Waiting for authentication to complete...")
+			fmt.Println("(Complete the login in your browser)")
+		}
+	})
+	if err != nil {
+		return fmt.Errorf("SSO login failed: %w", err)
+	}
+
+	// Phase 2: Interactive org selection (if multiple orgs and no flag provided)
+	if flagOrg == "" && len(result.AvailableOrgs) > 1 {
+		selectedOrg, err := promptOrgSelection(result.AvailableOrgs, result.OrgSlug)
+		if err != nil {
+			return fmt.Errorf("org selection: %w", err)
+		}
+
+		if selectedOrg != result.OrgSlug {
+			// For SSO, we can't re-login with the IdP again easily.
+			// Instead, update the remote config to the selected org.
+			// The next refresh will pick up the correct org.
+			result.OrgSlug = selectedOrg
+			for _, o := range result.AvailableOrgs {
+				if o.Slug == selectedOrg {
+					result.OrgName = o.Name
+					break
+				}
+			}
+			cfg := &client.RemoteConfig{
+				URL:       serverURL,
+				Org:       selectedOrg,
+				Team:      result.TeamSlug,
+				UserEmail: result.UserEmail,
+			}
+			_ = client.SaveRemoteConfig(cfg)
+		}
+	}
+
+	// Phase 3: Interactive team selection (if multiple teams and no flag provided)
+	if flagTeam == "" && len(result.AvailableTeams) > 1 {
+		selectedTeam, err := promptTeamSelection(result.AvailableTeams, result.TeamSlug)
+		if err != nil {
+			return fmt.Errorf("team selection: %w", err)
+		}
+
+		if selectedTeam != result.TeamSlug {
+			result.TeamSlug = selectedTeam
+			cfg := &client.RemoteConfig{
+				URL:       serverURL,
+				Org:       result.OrgSlug,
+				Team:      selectedTeam,
+				UserEmail: result.UserEmail,
+			}
+			_ = client.SaveRemoteConfig(cfg)
+		}
+	}
+
+	printLoginSuccess(result)
+	return nil
 }

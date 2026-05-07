@@ -692,8 +692,6 @@ export default function TeamManagement({
           <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
             <PlatformAdminPanel
               theme={theme}
-              activeTab="orgs"
-              onTabChange={() => {}}
             />
           </Suspense>
         )}

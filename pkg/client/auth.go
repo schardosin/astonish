@@ -1,10 +1,8 @@
 package client
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -141,122 +139,190 @@ func LoginWithPassword(serverURL, email, password, org, team string) (*LoginResu
 	}, nil
 }
 
-// LoginWithSSO initiates an SSO/OIDC login flow by opening the browser and
-// listening for a callback on a local port.
-func LoginWithSSO(serverURL string) (*LoginResult, error) {
-	// Find a free port for the callback
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+// LoginWithSSO initiates an SSO/OIDC login flow using device-code polling.
+// It calls the server's /api/auth/sso/init endpoint, opens the browser to the
+// verify URL, and polls /api/auth/sso/poll until the flow completes.
+// The onStatus callback is called with status updates for UI display.
+func LoginWithSSO(serverURL string, providerID string, onStatus func(status string)) (*LoginResult, error) {
+	c := NewWithConfig(serverURL)
+
+	// Step 1: Initialize the device flow
+	initBody := map[string]string{}
+	if providerID != "" {
+		initBody["provider_id"] = providerID
+	}
+
+	resp, err := c.doOnce("POST", "/api/auth/sso/init", initBody)
 	if err != nil {
-		return nil, fmt.Errorf("find free port: %w", err)
+		return nil, fmt.Errorf("SSO init request: %w", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	callbackURL := fmt.Sprintf("http://localhost:%d/callback", port)
+	defer resp.Body.Close()
 
-	// Channel to receive the tokens
-	type callbackResult struct {
-		accessToken  string
-		refreshToken string
-		expiresIn    int
-		err          error
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseErrorResponse(resp)
 	}
-	resultCh := make(chan callbackResult, 1)
 
-	// Set up HTTP server for the callback
-	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		accessToken := r.URL.Query().Get("access_token")
-		refreshToken := r.URL.Query().Get("refresh_token")
-		if accessToken == "" {
-			errMsg := r.URL.Query().Get("error")
-			if errMsg == "" {
-				errMsg = "no access token in callback"
+	var initResp struct {
+		DeviceCode string `json:"device_code"`
+		VerifyURL  string `json:"verify_url"`
+		ExpiresIn  int    `json:"expires_in"`
+		Interval   int    `json:"interval"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&initResp); err != nil {
+		return nil, fmt.Errorf("decode SSO init response: %w", err)
+	}
+
+	// Step 2: Open the verify URL in the browser
+	if onStatus != nil {
+		onStatus("opening_browser")
+	}
+	if err := openBrowser(initResp.VerifyURL); err != nil {
+		// Don't fail — user can open manually
+		if onStatus != nil {
+			onStatus("browser_failed")
+		}
+	}
+
+	// Step 3: Poll for completion
+	interval := time.Duration(initResp.Interval) * time.Second
+	if interval < 1*time.Second {
+		interval = 2 * time.Second
+	}
+	timeout := time.Duration(initResp.ExpiresIn) * time.Second
+	if timeout <= 0 {
+		timeout = 10 * time.Minute
+	}
+
+	deadline := time.Now().Add(timeout)
+
+	if onStatus != nil {
+		onStatus("polling")
+	}
+
+	for time.Now().Before(deadline) {
+		time.Sleep(interval)
+
+		pollResp, pollErr := c.doOnce("POST", "/api/auth/sso/poll", map[string]string{
+			"device_code": initResp.DeviceCode,
+		})
+		if pollErr != nil {
+			continue // Retry on network errors
+		}
+
+		var pollResult struct {
+			Status         string            `json:"status"`
+			Error          string            `json:"error,omitempty"`
+			AccessToken    string            `json:"access_token,omitempty"`
+			RefreshToken   string            `json:"refresh_token,omitempty"`
+			ExpiresIn      int               `json:"expires_in,omitempty"`
+			User           json.RawMessage   `json:"user,omitempty"`
+			Org            json.RawMessage   `json:"org,omitempty"`
+			TeamSlug       string            `json:"team,omitempty"`
+			AvailableOrgs  []LoginOrgOption  `json:"available_orgs,omitempty"`
+			AvailableTeams []LoginTeamOption `json:"available_teams,omitempty"`
+		}
+		decErr := json.NewDecoder(pollResp.Body).Decode(&pollResult)
+		pollResp.Body.Close()
+		if decErr != nil {
+			continue
+		}
+
+		switch pollResult.Status {
+		case "pending":
+			// Keep polling
+			continue
+
+		case "failed":
+			return nil, fmt.Errorf("SSO login failed: %s", pollResult.Error)
+
+		case "complete":
+			// Parse user and org from response
+			var user struct {
+				ID           string `json:"id"`
+				Email        string `json:"email"`
+				DisplayName  string `json:"display_name"`
+				Role         string `json:"role"`
+				PlatformRole string `json:"platform_role"`
 			}
-			resultCh <- callbackResult{err: fmt.Errorf("SSO callback error: %s", errMsg)}
-			fmt.Fprintf(w, "<html><body><h2>Login Failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", errMsg)
-			return
-		}
-		resultCh <- callbackResult{
-			accessToken:  accessToken,
-			refreshToken: refreshToken,
-			expiresIn:    900, // default 15 min if not specified
-		}
-		fmt.Fprint(w, "<html><body><h2>Login Successful</h2><p>You can close this tab and return to the terminal.</p></body></html>")
-	})
+			var org struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+				Slug string `json:"slug"`
+			}
+			_ = json.Unmarshal(pollResult.User, &user)
+			_ = json.Unmarshal(pollResult.Org, &org)
 
-	server := &http.Server{Handler: mux}
-	go func() {
-		_ = server.Serve(listener)
-	}()
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = server.Shutdown(ctx)
-	}()
+			teamSlug := pollResult.TeamSlug
 
-	// Open browser to the SSO authorize endpoint
-	authorizeURL := fmt.Sprintf("%s/api/auth/oidc/authorize?redirect_uri=%s&cli=true", serverURL, callbackURL)
-	if err := openBrowser(authorizeURL); err != nil {
-		return nil, fmt.Errorf("failed to open browser: %w\nPlease open this URL manually:\n%s", err, authorizeURL)
+			// Store tokens
+			ts, tsErr := NewTokenStore()
+			if tsErr != nil {
+				return nil, fmt.Errorf("init token store: %w", tsErr)
+			}
+			tokens := &Tokens{
+				AccessToken:      pollResult.AccessToken,
+				RefreshToken:     pollResult.RefreshToken,
+				AccessExpiresAt:  time.Now().Add(time.Duration(pollResult.ExpiresIn) * time.Second),
+				RefreshExpiresAt: time.Now().Add(90 * 24 * time.Hour),
+			}
+			if saveErr := ts.Save(tokens); saveErr != nil {
+				return nil, fmt.Errorf("save tokens: %w", saveErr)
+			}
+
+			// Save remote config
+			cfg := &RemoteConfig{
+				URL:       serverURL,
+				Org:       org.Slug,
+				Team:      teamSlug,
+				UserEmail: user.Email,
+			}
+			if saveErr := SaveRemoteConfig(cfg); saveErr != nil {
+				return nil, fmt.Errorf("save remote config: %w", saveErr)
+			}
+
+			return &LoginResult{
+				UserEmail:      user.Email,
+				DisplayName:    user.DisplayName,
+				OrgSlug:        org.Slug,
+				OrgName:        org.Name,
+				TeamSlug:       teamSlug,
+				Role:           user.Role,
+				AvailableOrgs:  pollResult.AvailableOrgs,
+				AvailableTeams: pollResult.AvailableTeams,
+			}, nil
+		}
 	}
 
-	// Wait for callback (with timeout)
-	select {
-	case result := <-resultCh:
-		if result.err != nil {
-			return nil, result.err
-		}
+	return nil, fmt.Errorf("SSO login timed out. Please try again")
+}
 
-		// Get user info from the token
-		c := NewWithConfig(serverURL)
-		meResp := getMeWithToken(c, result.accessToken)
+// SSOProviderInfo represents an available SSO provider.
+type SSOProviderInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
 
-		// Determine team
-		teamSlug := ""
-		if meResp != nil {
-			teamSlug = meResp.Team
-		}
+// ListSSOProviders returns the available SSO providers from the server.
+func ListSSOProviders(serverURL string) ([]SSOProviderInfo, error) {
+	c := NewWithConfig(serverURL)
 
-		// Store tokens
-		ts, err := NewTokenStore()
-		if err != nil {
-			return nil, fmt.Errorf("init token store: %w", err)
-		}
-		tokens := &Tokens{
-			AccessToken:      result.accessToken,
-			RefreshToken:     result.refreshToken,
-			AccessExpiresAt:  time.Now().Add(time.Duration(result.expiresIn) * time.Second),
-			RefreshExpiresAt: time.Now().Add(90 * 24 * time.Hour),
-		}
-		if err := ts.Save(tokens); err != nil {
-			return nil, fmt.Errorf("save tokens: %w", err)
-		}
-
-		// Build result
-		loginResult := &LoginResult{}
-		if meResp != nil {
-			loginResult.UserEmail = meResp.Email
-			loginResult.DisplayName = meResp.DisplayName
-			loginResult.OrgSlug = meResp.OrgSlug
-			loginResult.TeamSlug = teamSlug
-			loginResult.Role = meResp.Role
-		}
-
-		// Save remote config
-		cfg := &RemoteConfig{
-			URL:       serverURL,
-			Org:       loginResult.OrgSlug,
-			Team:      teamSlug,
-			UserEmail: loginResult.UserEmail,
-		}
-		if err := SaveRemoteConfig(cfg); err != nil {
-			return nil, fmt.Errorf("save remote config: %w", err)
-		}
-
-		return loginResult, nil
-
-	case <-time.After(5 * time.Minute):
-		return nil, fmt.Errorf("SSO login timed out (5 minutes). Please try again")
+	resp, err := c.doOnce("GET", "/api/auth/sso/providers", nil)
+	if err != nil {
+		return nil, fmt.Errorf("list SSO providers: %w", err)
 	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil // Not an error — just no providers
+	}
+
+	var result struct {
+		Providers []SSOProviderInfo `json:"providers"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, nil
+	}
+	return result.Providers, nil
 }
 
 // Logout clears stored tokens and remote config.

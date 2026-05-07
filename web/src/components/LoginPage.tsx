@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { LogIn, UserPlus, Loader2, AlertCircle, Eye, EyeOff } from 'lucide-react'
+import { LogIn, UserPlus, Loader2, AlertCircle, Eye, EyeOff, ExternalLink } from 'lucide-react'
 import { getSetupStatus, type SetupStatus } from '../api/auth'
 
 interface LoginPageProps {
@@ -16,6 +16,7 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
   const [loading, setLoading] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
   const [setupStatus, setSetupStatus] = useState<SetupStatus | null>(null)
+  const [ssoProviders, setSsoProviders] = useState<Array<{id: string, name: string}>>([])
 
   useEffect(() => {
     getSetupStatus().then(status => {
@@ -27,6 +28,16 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
     }).catch(() => {
       // Failed to check — show login by default
     })
+
+    // Fetch available SSO providers
+    fetch('/api/auth/sso/providers')
+      .then(r => r.json())
+      .then(data => {
+        if (data.providers && data.providers.length > 0) {
+          setSsoProviders(data.providers)
+        }
+      })
+      .catch(() => {})
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -238,25 +249,49 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
         )}
 
         {/* OIDC / SSO login */}
-        {setupStatus?.auth_mode === 'oidc' && !isFirstSetup && (
+        {ssoProviders.length > 0 && !isFirstSetup && (
           <div className="mt-4">
             <div className="flex items-center gap-3 mb-4">
               <div className="flex-1 h-px" style={{ background: 'var(--border-color)' }} />
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>or</span>
               <div className="flex-1 h-px" style={{ background: 'var(--border-color)' }} />
             </div>
-            <button
-              onClick={() => { window.location.href = '/api/auth/oidc/login' }}
-              className="w-full py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-all hover:opacity-90"
-              style={{
-                background: 'var(--bg-tertiary)',
-                color: 'var(--text-primary)',
-                border: '1px solid var(--border-color)',
-              }}
-            >
-              <LogIn size={18} />
-              Sign in with SSO
-            </button>
+            {ssoProviders.map(provider => (
+              <button
+                key={provider.id}
+                onClick={async () => {
+                  setLoading(true)
+                  setError('')
+                  try {
+                    const resp = await fetch('/api/auth/sso/init', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ provider_id: provider.id }),
+                    })
+                    const data = await resp.json()
+                    if (data.verify_url) {
+                      window.location.href = data.verify_url
+                    } else {
+                      setError(data.error || 'Failed to initiate SSO')
+                      setLoading(false)
+                    }
+                  } catch {
+                    setError('Failed to initiate SSO login')
+                    setLoading(false)
+                  }
+                }}
+                disabled={loading}
+                className="w-full py-3 rounded-xl font-medium text-sm flex items-center justify-center gap-2 transition-all hover:opacity-90 mb-2"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  color: 'var(--text-primary)',
+                  border: '1px solid var(--border-color)',
+                }}
+              >
+                <ExternalLink size={16} />
+                Sign in with {provider.name}
+              </button>
+            ))}
           </div>
         )}
 

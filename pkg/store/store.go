@@ -21,6 +21,8 @@ type PlatformStore interface {
 	Users() UserStore
 	Organizations() OrganizationStore
 	LoginSessions() LoginSessionStore
+	OIDCProviders() OIDCProviderStore
+	UserChannels() UserChannelStore
 	Close() error
 }
 
@@ -200,8 +202,94 @@ type LoginSessionStore interface {
 }
 
 // --------------------------------------------------------------------------
-// Team management store (within an org)
+// OIDC Provider store (platform-level)
 // --------------------------------------------------------------------------
+
+// OIDCProvider represents a configured OIDC identity provider.
+type OIDCProvider struct {
+	ID           string    `json:"id"`
+	OrgID        string    `json:"org_id,omitempty"` // Empty = platform-wide
+	Name         string    `json:"name"`
+	IssuerURL    string    `json:"issuer_url"`
+	ClientID     string    `json:"client_id"`
+	ClientSecret string    `json:"client_secret,omitempty"` // Omitted in list responses
+	Scopes       []string  `json:"scopes"`
+	TeamClaim    string    `json:"team_claim,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+// OIDCProviderStore manages OIDC provider configuration records.
+type OIDCProviderStore interface {
+	Create(ctx context.Context, provider *OIDCProvider) error
+	GetByID(ctx context.Context, id string) (*OIDCProvider, error)
+	Update(ctx context.Context, provider *OIDCProvider) error
+	Delete(ctx context.Context, id string) error
+
+	// List returns all OIDC providers, optionally filtered by org.
+	// Pass empty orgID to list platform-wide providers only.
+	// Pass "*" to list all providers across all orgs.
+	List(ctx context.Context, orgID string) ([]*OIDCProvider, error)
+
+	// ListEnabled returns all enabled providers (platform-wide + for a specific org).
+	ListEnabled(ctx context.Context, orgID string) ([]*OIDCProvider, error)
+
+	// GetByIssuer returns the provider matching the given issuer URL (enabled only).
+	GetByIssuer(ctx context.Context, issuerURL string) (*OIDCProvider, error)
+}
+
+// --------------------------------------------------------------------------
+// User channel linking (external messaging accounts)
+// --------------------------------------------------------------------------
+
+// UserChannel represents a link between a platform user and an external
+// messaging channel (e.g., Telegram user ID, email address).
+type UserChannel struct {
+	ID              string     `json:"id"`
+	UserID          string     `json:"user_id"`
+	ChannelType     string     `json:"channel_type"`      // "telegram", "email"
+	ExternalID      string     `json:"external_id"`       // TG user ID or email address
+	DisplayName     string     `json:"display_name"`      // @username or label
+	DefaultOrgSlug  string     `json:"default_org_slug"`  // preferred org for routing
+	DefaultTeamSlug string     `json:"default_team_slug"` // preferred team for routing
+	Enabled         bool       `json:"enabled"`
+	Verified        bool       `json:"verified"`
+	VerifiedAt      *time.Time `json:"verified_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// UserChannelStore manages user-channel links in the platform database.
+type UserChannelStore interface {
+	// Link creates a new channel link for a user.
+	Link(ctx context.Context, ch *UserChannel) error
+
+	// Unlink removes a channel link by ID.
+	Unlink(ctx context.Context, id string) error
+
+	// GetByID returns a specific channel link.
+	GetByID(ctx context.Context, id string) (*UserChannel, error)
+
+	// GetByExternalID looks up a channel link by its external identifier.
+	// Returns nil, nil if not found.
+	GetByExternalID(ctx context.Context, channelType, externalID string) (*UserChannel, error)
+
+	// ListByUser returns all channel links for a given user.
+	ListByUser(ctx context.Context, userID string) ([]*UserChannel, error)
+
+	// ListByChannelType returns all verified+enabled links for a channel type.
+	// Used to build the dynamic allowlist for Telegram.
+	ListByChannelType(ctx context.Context, channelType string) ([]*UserChannel, error)
+
+	// ListByUsers returns all channel links for a set of user IDs and channel type.
+	// Used for delivery resolution (find all Telegram targets for a list of team members).
+	ListByUsers(ctx context.Context, userIDs []string, channelType string) ([]*UserChannel, error)
+
+	// Update updates mutable fields (display_name, default_org_slug, default_team_slug, enabled).
+	Update(ctx context.Context, ch *UserChannel) error
+
+	// Verify marks a channel link as verified.
+	Verify(ctx context.Context, id string) error
+}
 
 // Team represents a team within an organization.
 type Team struct {

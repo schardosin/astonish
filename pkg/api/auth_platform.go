@@ -30,7 +30,6 @@ type PlatformAuth struct {
 	authCfg      config.PlatformAuthConfig
 	pgStore      *pgstore.PGStore
 	storeCfg     config.StorageConfig
-	migrationMgr *MigrationManager
 }
 
 // NewPlatformAuth creates a new platform auth manager.
@@ -47,11 +46,6 @@ func NewPlatformAuth(authCfg config.PlatformAuthConfig, pgStore *pgstore.PGStore
 // JWTIssuer returns the JWT issuer for use by middleware.
 func (pa *PlatformAuth) JWTIssuer() *JWTIssuer {
 	return pa.jwt
-}
-
-// SetMigrationManager sets the migration manager for setup-status checks.
-func (pa *PlatformAuth) SetMigrationManager(mm *MigrationManager) {
-	pa.migrationMgr = mm
 }
 
 // RegisterPlatformAuthRoutes registers platform auth endpoints.
@@ -506,11 +500,6 @@ func (pa *PlatformAuth) handleSetupStatus(w http.ResponseWriter, r *http.Request
 		"initialized":        count > 0,
 		"allow_registration": pa.authCfg.IsRegistrationAllowed(),
 		"auth_mode":          pa.authCfg.Mode,
-	}
-
-	// Check if migration is available (fresh DB + file data exists)
-	if count == 0 && pa.migrationMgr != nil {
-		resp["migration_available"] = pa.migrationMgr.IsMigrationAvailable()
 	}
 
 	respondJSON(w, http.StatusOK, resp)

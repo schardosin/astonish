@@ -27,7 +27,6 @@ import (
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/memory"
-	"github.com/schardosin/astonish/pkg/migration"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -238,7 +237,6 @@ func Run(cfg RunConfig) error {
 	// --- Initialize device authorization for Studio ---
 	var authManager *api.AuthManager
 	var platformAuth *api.PlatformAuth
-	var migrationMgr *api.MigrationManager
 
 	if svc.Mode == store.ModePlatform && pgStore != nil {
 		// Platform mode: JWT-based authentication
@@ -248,13 +246,6 @@ func Run(cfg RunConfig) error {
 			logger.Printf("A random key has been generated — tokens will not survive daemon restarts")
 		}
 		logger.Printf("Platform authentication enabled (mode: %s)", appCfg.Storage.Auth.Mode)
-
-		// Check if file→database migration is available
-		if configDir != "" && !migration.IsMigrationComplete(configDir) && migration.HasFileData(configDir) {
-			migrationMgr = api.NewMigrationManager(pgStore, appCfg.Storage.Auth, appCfg.Storage, configDir, appCfg)
-			platformAuth.SetMigrationManager(migrationMgr)
-			logger.Printf("File data detected — migration available for first-time platform setup")
-		}
 	} else if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
 		// Personal mode: device authorization flow
 		authStore, authErr := api.NewAuthStore(configDir, appCfg.Daemon.Auth.GetSessionTTL())
@@ -1100,9 +1091,6 @@ func Run(cfg RunConfig) error {
 		studioOpts = append(studioOpts, launcher.WithPlatformAuth(platformAuth, pgStore))
 	} else if authManager != nil {
 		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
-	}
-	if migrationMgr != nil {
-		studioOpts = append(studioOpts, launcher.WithMigrationManager(migrationMgr))
 	}
 	if configDir != "" {
 		studioOpts = append(studioOpts, launcher.WithConfigDir(configDir))

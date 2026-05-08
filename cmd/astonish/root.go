@@ -95,9 +95,6 @@ func Execute() error {
 		return handleNodeCommand(os.Args[2:])
 	case "demo":
 		return handleDemoCommand(os.Args[2:])
-	case "migrate":
-		mustNotBeRemote("migrate")
-		return handleMigrateCommand(os.Args[2:])
 	case "platform":
 		mustNotBeRemote("platform")
 		return handlePlatformCommand(os.Args[2:])
@@ -111,7 +108,7 @@ func printUsage() {
 	fmt.Println("usage: astonish [-h] [-v] {login,logout,status,org,team,chat,sessions,flows,...} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,migrate,platform}")
+	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,platform}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    login               Connect to a remote Astonish server")
 	fmt.Println("    logout              Disconnect from the remote server")
@@ -135,7 +132,6 @@ func printUsage() {
 	fmt.Println("    setup               Run interactive setup")
 	fmt.Println("    tools               Manage MCP tools")
 	fmt.Println("    memory              Manage semantic memory and knowledge")
-	fmt.Println("    migrate             Migrate file data to PostgreSQL (platform mode)")
 	fmt.Println("    platform            Manage the multi-tenant platform")
 	fmt.Println("")
 	fmt.Println("options:")

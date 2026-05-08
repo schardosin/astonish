@@ -31,7 +31,6 @@ export interface SetupStatus {
   initialized: boolean
   allow_registration: boolean
   auth_mode: string
-  migration_available?: boolean
 }
 
 export interface MeResponse {
@@ -159,83 +158,4 @@ async function _doCheckAuth(): Promise<MeResponse | null> {
       return null
     }
   }
-}
-
-// --- Migration API ---
-
-export interface MigrationStatus {
-  migration_available: boolean
-  running: boolean
-  summary?: MigrationSummary
-}
-
-export interface MigrationProgress {
-  category: string
-  current: number
-  total: number
-  status: string
-  error?: string
-}
-
-export interface MigrationSummary {
-  success: boolean
-  categories: Record<string, number>
-  duration: number
-  errors?: string[]
-}
-
-export async function getMigrationStatus(): Promise<MigrationStatus> {
-  const res = await fetch('/api/migration/status')
-  if (!res.ok) throw new Error('Failed to check migration status')
-  return res.json()
-}
-
-export async function startMigration(
-  email: string,
-  password: string,
-  displayName: string
-): Promise<{ status: string; user_id: string; org: string; team: string }> {
-  const res = await fetch('/api/migration/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password, display_name: displayName }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }))
-    throw new Error(err.message || err.error || 'Migration failed to start')
-  }
-  return res.json()
-}
-
-export function subscribeMigrationProgress(
-  onProgress: (p: MigrationProgress) => void,
-  onComplete: (s: MigrationSummary) => void,
-  onError: (err: Error) => void
-): () => void {
-  const eventSource = new EventSource('/api/migration/progress')
-
-  eventSource.addEventListener('progress', (e: MessageEvent) => {
-    try {
-      onProgress(JSON.parse(e.data))
-    } catch {
-      // ignore parse errors
-    }
-  })
-
-  eventSource.addEventListener('complete', (e: MessageEvent) => {
-    try {
-      onComplete(JSON.parse(e.data))
-    } catch {
-      // ignore parse errors
-    }
-    eventSource.close()
-  })
-
-  eventSource.onerror = () => {
-    onError(new Error('Migration progress connection lost'))
-    eventSource.close()
-  }
-
-  // Return cleanup function
-  return () => eventSource.close()
 }

@@ -12,7 +12,6 @@ import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SetupWizard from './components/SetupWizard'
 import LoginPage from './components/LoginPage'
-import MigrationPage from './components/MigrationPage'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
@@ -68,18 +67,11 @@ function App() {
   // In platform mode (postgres backend), it returns setup status.
   const [isPlatformMode, setIsPlatformMode] = useState(false)
   const [isPlatformChecked, setIsPlatformChecked] = useState(false)
-  const [migrationAvailable, setMigrationAvailable] = useState(false)
-  const [showMigration, setShowMigration] = useState(false)
   useEffect(() => {
     fetch('/api/auth/setup-status')
       .then(async res => {
         if (res.ok) {
           setIsPlatformMode(true)
-          const data = await res.json()
-          if (data.migration_available && !data.initialized) {
-            setMigrationAvailable(true)
-            setShowMigration(true)
-          }
         }
       })
       .catch(() => {})
@@ -1473,24 +1465,8 @@ layout:
 
   return (
     <>
-      {/* Migration Gate — shown when file data exists and platform is fresh */}
-      {isPlatformMode && isPlatformChecked && showMigration && (
-        <MigrationPage
-          onComplete={() => {
-            setShowMigration(false)
-            setMigrationAvailable(false)
-            // After migration, auth hook will pick up the new session
-            auth.refresh()
-          }}
-          onSkip={() => {
-            setShowMigration(false)
-            setMigrationAvailable(false)
-          }}
-        />
-      )}
-
-      {/* Platform Auth Gate — only in platform mode, after migration is dismissed */}
-      {isPlatformMode && !showMigration && !auth.isAuthenticated && !auth.isLoading && isPlatformChecked && (
+      {/* Platform Auth Gate — only in platform mode */}
+      {isPlatformMode && !auth.isAuthenticated && !auth.isLoading && isPlatformChecked && (
         <LoginPage
           onLogin={async (email, password) => { await auth.login(email, password) }}
           onRegister={async (email, password, displayName) => { await auth.register(email, password, displayName) }}
@@ -1498,7 +1474,7 @@ layout:
       )}
 
       {/* Loading state while checking platform mode or auth */}
-      {!showMigration && (!isPlatformChecked || (isPlatformMode && auth.isLoading)) && (
+      {(!isPlatformChecked || (isPlatformMode && auth.isLoading)) && (
         <div
           className="flex flex-col h-screen items-center justify-center"
           style={{ background: 'var(--bg-primary)' }}
@@ -1508,7 +1484,7 @@ layout:
       )}
 
       {/* Setup Wizard (personal mode only, or after platform auth) */}
-      {showSetupWizard && !isCheckingSetup && !showMigration && (!isPlatformMode || auth.isAuthenticated) && (
+      {showSetupWizard && !isCheckingSetup && (!isPlatformMode || auth.isAuthenticated) && (
         <SetupWizard
           onComplete={() => {
             setShowSetupWizard(false)
@@ -1530,7 +1506,7 @@ layout:
       )}
 
       {/* Main App (only show when not in setup wizard and not checking, and authenticated if platform) */}
-      {!showSetupWizard && !isCheckingSetup && !showMigration && (!isPlatformMode || auth.isAuthenticated) && (
+      {!showSetupWizard && !isCheckingSetup && (!isPlatformMode || auth.isAuthenticated) && (
       <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Top Bar */}
         <TopBar 

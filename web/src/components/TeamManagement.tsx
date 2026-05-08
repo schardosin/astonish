@@ -113,6 +113,7 @@ function MembersPanel({ user, team, canManageTeam }: MembersPanelProps) {
   const [showAddMember, setShowAddMember] = useState(false)
   const [addEmail, setAddEmail] = useState('')
   const [addRole, setAddRole] = useState('member')
+  const [addNotify, setAddNotify] = useState(true)
   const [adding, setAdding] = useState(false)
   const [addError, setAddError] = useState('')
 
@@ -146,8 +147,8 @@ function MembersPanel({ user, team, canManageTeam }: MembersPanelProps) {
     e.preventDefault()
     setAdding(true); setAddError('')
     try {
-      await addTeamMember(team.slug, addEmail, addRole)
-      setShowAddMember(false); setAddEmail(''); setAddRole('member')
+      await addTeamMember(team.slug, addEmail, addRole, addNotify)
+      setShowAddMember(false); setAddEmail(''); setAddRole('member'); setAddNotify(true)
       await loadMembers()
     } catch (err) { setAddError(errMsg(err, 'Failed to add member')) }
     finally { setAdding(false) }
@@ -174,12 +175,16 @@ function MembersPanel({ user, team, canManageTeam }: MembersPanelProps) {
       )}
 
       {showAddMember && (
-        <form onSubmit={handleAddMember} className="flex items-center gap-3 px-6 py-3 border-b" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+        <form onSubmit={handleAddMember} className="flex items-center gap-3 px-6 py-3 border-b flex-wrap" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
           <input type="email" value={addEmail} onChange={e => setAddEmail(e.target.value)} placeholder="Email address" required className="flex-1 px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle} autoFocus />
           <select value={addRole} onChange={e => setAddRole(e.target.value)} className="px-3 py-2 rounded-lg text-sm outline-none" style={inputStyle}>
             <option value="member">Member</option>
             <option value="admin">Admin</option>
           </select>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+            <input type="checkbox" checked={addNotify} onChange={e => setAddNotify(e.target.checked)} className="rounded" />
+            Notify
+          </label>
           <button type="submit" disabled={adding} className="px-4 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90 disabled:opacity-50" style={gradientPurple}>
             {adding ? <Loader2 size={16} className="animate-spin" /> : 'Add'}
           </button>

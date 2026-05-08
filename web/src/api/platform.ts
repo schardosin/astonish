@@ -74,11 +74,11 @@ export async function fetchTeamMembers(slug: string): Promise<TeamMembersRespons
   return { members: data.members || [], callerRole: data.callerRole || '' }
 }
 
-export async function addTeamMember(slug: string, email: string, role?: string): Promise<void> {
+export async function addTeamMember(slug: string, email: string, role?: string, sendNotify?: boolean): Promise<void> {
   const res = await teamFetch(`/api/teams/${slug}/members`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, role: role || 'member' }),
+    body: JSON.stringify({ email, role: role || 'member', send_notify: sendNotify ?? true }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))

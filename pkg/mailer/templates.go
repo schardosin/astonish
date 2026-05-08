@@ -90,3 +90,43 @@ func (m VerificationCode) HTMLBody() string {
 		`<p style="color: #6b7280; font-size: 13px; margin: 0;">This code expires in 5 minutes.</p>`
 	return wrapHTML(inner)
 }
+
+// ---------------------------------------------------------------------------
+// TeamAdded — sent when a user is added to a team.
+// ---------------------------------------------------------------------------
+
+// TeamAdded is the notification email sent when a user is added to a team.
+type TeamAdded struct {
+	Recipient   string // email address
+	DisplayName string
+	TeamName    string
+	OrgName     string
+	AppURL      string // e.g. "https://astonish.local.muxpie.com"
+}
+
+func (m TeamAdded) To() []string { return []string{m.Recipient} }
+
+func (m TeamAdded) Subject() string {
+	return fmt.Sprintf("You've been added to %s on Astonish", m.TeamName)
+}
+
+func (m TeamAdded) TextBody() string {
+	return fmt.Sprintf(`Hi %s,
+
+You've been added to the "%s" team in the "%s" organization on Astonish.
+
+You now have access to the team's shared agents, knowledge, and resources.
+
+Sign in here: %s
+
+— Astonish`, m.DisplayName, m.TeamName, m.OrgName, m.AppURL)
+}
+
+func (m TeamAdded) HTMLBody() string {
+	inner := heading(fmt.Sprintf("Added to %s", m.TeamName)) +
+		paragraph(fmt.Sprintf("Hi %s,", m.DisplayName)) +
+		paragraph(fmt.Sprintf("You've been added to the <strong>%s</strong> team in the <strong>%s</strong> organization on Astonish.", m.TeamName, m.OrgName)) +
+		paragraph("You now have access to the team's shared agents, knowledge, and resources.") +
+		button("Sign in to Astonish", m.AppURL)
+	return wrapHTML(inner)
+}

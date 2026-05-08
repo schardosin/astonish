@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
+	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
@@ -279,9 +280,10 @@ func (pa *PlatformAuth) handleListTeamMembers(w http.ResponseWriter, r *http.Req
 // --- Handler: POST /api/teams/{slug}/members ---
 
 type addMemberRequest struct {
-	UserID string `json:"user_id"`
-	Email  string `json:"email"`
-	Role   string `json:"role"`
+	UserID     string `json:"user_id"`
+	Email      string `json:"email"`
+	Role       string `json:"role"`
+	SendNotify *bool  `json:"send_notify"` // pointer so we detect absence (default true)
 }
 
 func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +334,23 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// Ensure the user is a member of this org. Auto-add as "member" if not.
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
+		return
+	}
+	existingOrgRole, _ := pa.pgStore.Organizations().GetMemberRole(ctx, resolvedID, org.ID)
+	if existingOrgRole == "" {
+		if err := pa.pgStore.Organizations().AddMember(ctx, resolvedID, org.ID, "member"); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to add user to organization")
+			return
+		}
+		// Provision personal schema in the org DB.
+		_ = orgDataStore.ProvisionPersonalSchema(ctx, resolvedID)
+	}
+
+	// Add to team.
 	if err := orgDataStore.Teams().AddMember(ctx, &store.TeamMembership{
 		UserID:   resolvedID,
 		TeamID:   team.ID,
@@ -340,6 +359,29 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 	}); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to add member")
 		return
+	}
+
+	// Send notification email (default: true).
+	sendNotify := req.SendNotify == nil || *req.SendNotify
+	if sendNotify {
+		// Look up the target user's details for the email.
+		targetUser, _ := pa.pgStore.Users().GetByID(ctx, resolvedID)
+		if targetUser != nil && targetUser.Email != "" {
+			scheme := "https"
+			if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+				scheme = proto
+			} else if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
+				scheme = "http"
+			}
+			appURL := scheme + "://" + r.Host
+			mailer.SendAsync(ctx, mailer.TeamAdded{
+				Recipient:   targetUser.Email,
+				DisplayName: targetUser.DisplayName,
+				TeamName:    team.Name,
+				OrgName:     org.Name,
+				AppURL:      appURL,
+			})
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "added"})

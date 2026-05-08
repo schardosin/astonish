@@ -612,6 +612,7 @@ type ChannelsConfig struct {
 	Enabled  *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Telegram TelegramConfig `yaml:"telegram,omitempty" json:"telegram,omitempty"`
 	Email    EmailConfig    `yaml:"email,omitempty" json:"email,omitempty"`
+	Slack    SlackConfig    `yaml:"slack,omitempty" json:"slack,omitempty"`
 }
 
 // IsChannelsEnabled returns true if channels are explicitly enabled.
@@ -850,6 +851,44 @@ func (c *EmailConfig) GetPollInterval() int {
 		return 30
 	}
 	return c.PollInterval
+}
+
+// SlackConfig holds configuration for the Slack channel adapter.
+type SlackConfig struct {
+	// Enabled controls whether the Slack adapter is active. Default: false (nil means false).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Mode selects the transport: "socket" (default) or "events".
+	// Socket Mode uses a WebSocket connection (no public URL needed).
+	// Events API uses HTTP webhooks (requires public URL, more scalable).
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// BotToken is the bot token (xoxb-...) for the primary workspace.
+	// In multi-workspace mode (OAuth), additional tokens are stored per workspace.
+	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	// AppToken is the app-level token (xapp-...) for Socket Mode.
+	// Required only when Mode == "socket".
+	AppToken string `yaml:"app_token,omitempty" json:"app_token,omitempty"`
+	// SigningSecret is used to verify incoming HTTP requests in Events API mode.
+	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
+	// ClientID is the Slack App's client ID (for OAuth multi-workspace installs).
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
+	// ClientSecret is the Slack App's client secret (for OAuth multi-workspace installs).
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+	// AllowFrom is a list of allowed Slack user IDs. Empty blocks all (safe default).
+	// In platform mode, this is dynamically refreshed from user_channels.
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+}
+
+// IsSlackEnabled returns true if the Slack channel is explicitly enabled.
+func (c *SlackConfig) IsSlackEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// GetMode returns the configured transport mode, defaulting to "socket".
+func (c *SlackConfig) GetMode() string {
+	if c.Mode == "" {
+		return "socket"
+	}
+	return c.Mode
 }
 
 type ProviderConfig map[string]string

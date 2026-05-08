@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -332,7 +333,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check email channel is configured
-		if getEmailClient() == nil {
+		if !mailer.IsConfigured() {
 			respondError(w, http.StatusServiceUnavailable, "email channel is not configured")
 			return
 		}
@@ -341,7 +342,10 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		code := store.Generate(user.ID, user.Email, "email:"+emailAddr)
 
 		// Send verification email
-		if err := sendEmailVerificationCode(r.Context(), emailAddr, code); err != nil {
+		if err := mailer.Send(r.Context(), mailer.VerificationCode{
+			Recipient: emailAddr,
+			Code:      code,
+		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to send verification email: "+err.Error())
 			return
 		}
@@ -350,6 +354,22 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 			"code_sent":  true,
 			"email":      emailAddr,
 			"expires_in": 300,
+		})
+
+	case "slack":
+		// Generate the code
+		code := store.Generate(user.ID, user.Email, "slack")
+
+		// Get bot user ID from channel manager
+		botUserID := ""
+		if cm := GetChannelManager(); cm != nil {
+			botUserID = cm.GetSlackBotUserID()
+		}
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"code":        code,
+			"bot_user_id": botUserID,
+			"expires_in":  300,
 		})
 
 	default:
@@ -558,6 +578,33 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 		"enabled":    emailEnabled,
 		"error":      emailError,
 		"address":    emailAddress,
+	}
+
+	// --- Slack ---
+	slackBotUserID := ""
+	slackConnected := false
+	if cm := GetChannelManager(); cm != nil {
+		slackBotUserID = cm.GetSlackBotUserID()
+		slackConnected = slackBotUserID != ""
+	}
+
+	slackEnabled := false
+	slackError := ""
+	if cfgStatuses := getChannelConfigStatuses(); cfgStatuses != nil {
+		if sl, ok := cfgStatuses["slack"]; ok {
+			slackEnabled = sl.Enabled
+			slackError = sl.Error
+		}
+	}
+	if slackConnected {
+		slackEnabled = true
+	}
+
+	info["slack"] = map[string]any{
+		"bot_user_id": slackBotUserID,
+		"configured":  slackConnected,
+		"enabled":     slackEnabled,
+		"error":       slackError,
 	}
 
 	respondJSON(w, http.StatusOK, info)

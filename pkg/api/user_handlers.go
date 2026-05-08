@@ -4,18 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/schardosin/astonish/pkg/mailer"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // RegisterUserRoutes registers admin user management endpoints.
 // These require platform mode and an authenticated admin/owner.
 func RegisterUserRoutes(router *mux.Router, pa *PlatformAuth) {
 	router.HandleFunc("/api/admin/users", pa.handleListUsers).Methods("GET")
+	router.HandleFunc("/api/admin/users/invite", pa.handleInviteUser).Methods("POST")
 	router.HandleFunc("/api/admin/users/{id}", pa.handleGetUser).Methods("GET")
-	router.HandleFunc("/api/admin/users/{id}", pa.handleDeleteUser).Methods("DELETE")
+	router.HandleFunc("/api/admin/users/{id}", pa.handleRemoveUser).Methods("DELETE")
 	router.HandleFunc("/api/admin/users/{id}/password", pa.handleSetUserPassword).Methods("PUT")
 	router.HandleFunc("/api/admin/users/{id}/status", pa.handleSetUserStatus).Methods("PUT")
 	router.HandleFunc("/api/admin/users/{id}/role", pa.handleSetUserOrgRole).Methods("PUT")
@@ -33,6 +39,135 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) *PlatformUser {
 		return nil
 	}
 	return user
+}
+
+// --- Handler: POST /api/admin/users/invite ---
+// Adds a user to the caller's organization. Creates the user on the platform if new.
+
+type inviteUserRequest struct {
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+	SendInvite  *bool  `json:"send_invite"` // pointer so we can detect absence (default true)
+}
+
+func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request) {
+	caller := requireAdmin(w, r)
+	if caller == nil {
+		return
+	}
+
+	var req inviteUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	req.DisplayName = strings.TrimSpace(req.DisplayName)
+
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+	if req.DisplayName == "" {
+		respondError(w, http.StatusBadRequest, "display_name is required")
+		return
+	}
+
+	// Validate role.
+	if req.Role == "" {
+		req.Role = "member"
+	}
+	if req.Role != "member" && req.Role != "admin" && req.Role != "owner" {
+		respondError(w, http.StatusBadRequest, "role must be member, admin, or owner")
+		return
+	}
+	// Only owners can assign owner role.
+	if req.Role == "owner" && caller.Role != "owner" {
+		respondError(w, http.StatusForbidden, "only owners can assign the owner role")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Look up the caller's org.
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, caller.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
+		return
+	}
+
+	// Look up or create the user.
+	var target *store.User
+	created := false
+
+	existing, _ := pa.pgStore.Users().GetByEmail(ctx, req.Email)
+	if existing != nil {
+		target = existing
+	} else {
+		// Create user on the platform (no password, no platform role).
+		target = &store.User{
+			ID:          uuid.New().String(),
+			Email:       req.Email,
+			DisplayName: req.DisplayName,
+			Status:      "active",
+			CreatedAt:   time.Now(),
+		}
+		if err := pa.pgStore.Users().Create(ctx, target); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to create user")
+			return
+		}
+		created = true
+	}
+
+	// Check if already a member of this org.
+	existingRole, _ := pa.pgStore.Organizations().GetMemberRole(ctx, target.ID, org.ID)
+	if existingRole != "" {
+		respondError(w, http.StatusConflict, "user is already a member of this organization")
+		return
+	}
+
+	// Add to org.
+	if err := pa.pgStore.Organizations().AddMember(ctx, target.ID, org.ID, req.Role); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to add user to organization")
+		return
+	}
+
+	// Provision personal schema in the org DB.
+	if orgDS, err := pa.pgStore.ForOrg(caller.OrgSlug); err == nil {
+		_ = orgDS.ProvisionPersonalSchema(ctx, target.ID)
+	}
+
+	// Send welcome email (default: true).
+	sendInvite := req.SendInvite == nil || *req.SendInvite
+	if sendInvite {
+		scheme := "https"
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		} else if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
+			scheme = "http"
+		}
+		appURL := scheme + "://" + r.Host
+		mailer.SendAsync(ctx, mailer.OrgInvite{
+			Recipient:   req.Email,
+			DisplayName: target.DisplayName,
+			OrgName:     org.Name,
+			AppURL:      appURL,
+			IsNewUser:   created,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"user": map[string]any{
+			"id":           target.ID,
+			"email":        target.Email,
+			"display_name": target.DisplayName,
+			"role":         req.Role,
+			"status":       target.Status,
+		},
+		"created": created,
+	})
 }
 
 // --- Handler: GET /api/admin/users ---
@@ -129,8 +264,9 @@ func (pa *PlatformAuth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Handler: DELETE /api/admin/users/{id} ---
+// Removes a user from the caller's organization (does NOT delete from platform).
 
-func (pa *PlatformAuth) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+func (pa *PlatformAuth) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
 	user := requireAdmin(w, r)
 	if user == nil {
 		return
@@ -139,24 +275,47 @@ func (pa *PlatformAuth) handleDeleteUser(w http.ResponseWriter, r *http.Request)
 	ctx := r.Context()
 	targetID := mux.Vars(r)["id"]
 
-	// Prevent self-deletion.
+	// Prevent self-removal.
 	if targetID == user.ID {
-		respondError(w, http.StatusBadRequest, "cannot delete your own account")
+		respondError(w, http.StatusBadRequest, "cannot remove yourself from the organization")
 		return
 	}
 
-	target, err := pa.pgStore.Users().GetByID(ctx, targetID)
-	if err != nil || target == nil {
-		respondError(w, http.StatusNotFound, "user not found")
+	// Look up the caller's org.
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve organization")
 		return
 	}
 
-	if err := pa.pgStore.Users().Delete(ctx, targetID); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to delete user")
+	// Verify target user is actually in this org.
+	role, err := pa.pgStore.Organizations().GetMemberRole(ctx, targetID, org.ID)
+	if err != nil || role == "" {
+		respondError(w, http.StatusNotFound, "user is not a member of this organization")
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+	// Only owners can remove other owners.
+	if role == "owner" && user.Role != "owner" {
+		respondError(w, http.StatusForbidden, "only owners can remove other owners")
+		return
+	}
+
+	// Remove all team memberships in this org for the target user.
+	if orgDS, err := pa.pgStore.ForOrg(user.OrgSlug); err == nil {
+		teams, _ := orgDS.Teams().ListTeams(ctx)
+		for _, t := range teams {
+			_ = orgDS.Teams().RemoveMember(ctx, targetID, t.ID)
+		}
+	}
+
+	// Remove org membership.
+	if err := pa.pgStore.Organizations().RemoveMember(ctx, targetID, org.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to remove user from organization")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
 // --- Handler: PUT /api/admin/users/{id}/password ---

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,29 +39,31 @@ func PlatformAdminListOIDCProvidersHandler(w http.ResponseWriter, r *http.Reques
 
 	// Redact client secrets in list response
 	type providerResponse struct {
-		ID        string   `json:"id"`
-		OrgID     string   `json:"org_id,omitempty"`
-		Name      string   `json:"name"`
-		IssuerURL string   `json:"issuer_url"`
-		ClientID  string   `json:"client_id"`
-		Scopes    []string `json:"scopes"`
-		TeamClaim string   `json:"team_claim,omitempty"`
-		Enabled   bool     `json:"enabled"`
-		CreatedAt string   `json:"created_at"`
+		ID           string   `json:"id"`
+		OrgID        string   `json:"org_id,omitempty"`
+		Name         string   `json:"name"`
+		IssuerURL    string   `json:"issuer_url"`
+		DiscoveryURL string   `json:"discovery_url,omitempty"`
+		ClientID     string   `json:"client_id"`
+		Scopes       []string `json:"scopes"`
+		TeamClaim    string   `json:"team_claim,omitempty"`
+		Enabled      bool     `json:"enabled"`
+		CreatedAt    string   `json:"created_at"`
 	}
 
 	var resp []providerResponse
 	for _, p := range providers {
 		resp = append(resp, providerResponse{
-			ID:        p.ID,
-			OrgID:     p.OrgID,
-			Name:      p.Name,
-			IssuerURL: p.IssuerURL,
-			ClientID:  p.ClientID,
-			Scopes:    p.Scopes,
-			TeamClaim: p.TeamClaim,
-			Enabled:   p.Enabled,
-			CreatedAt: p.CreatedAt.Format(time.RFC3339),
+			ID:           p.ID,
+			OrgID:        p.OrgID,
+			Name:         p.Name,
+			IssuerURL:    p.IssuerURL,
+			DiscoveryURL: p.DiscoveryURL,
+			ClientID:     p.ClientID,
+			Scopes:       p.Scopes,
+			TeamClaim:    p.TeamClaim,
+			Enabled:      p.Enabled,
+			CreatedAt:    p.CreatedAt.Format(time.RFC3339),
 		})
 	}
 
@@ -83,6 +86,7 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		OrgID        string   `json:"org_id"`
 		Name         string   `json:"name"`
 		IssuerURL    string   `json:"issuer_url"`
+		DiscoveryURL string   `json:"discovery_url"`
 		ClientID     string   `json:"client_id"`
 		ClientSecret string   `json:"client_secret"`
 		Scopes       []string `json:"scopes"`
@@ -111,6 +115,9 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 
 	// Normalize issuer URL (remove trailing slash)
 	req.IssuerURL = strings.TrimRight(req.IssuerURL, "/")
+	if req.DiscoveryURL != "" {
+		req.DiscoveryURL = strings.TrimRight(req.DiscoveryURL, "/")
+	}
 
 	// Default values
 	if req.Name == "" {
@@ -118,6 +125,10 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 	}
 	if len(req.Scopes) == 0 {
 		req.Scopes = []string{"openid", "email", "profile"}
+	}
+	// Ensure 'openid' is always present
+	if !slices.Contains(req.Scopes, "openid") {
+		req.Scopes = append([]string{"openid"}, req.Scopes...)
 	}
 	enabled := true
 	if req.Enabled != nil {
@@ -129,6 +140,7 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		OrgID:        req.OrgID,
 		Name:         req.Name,
 		IssuerURL:    req.IssuerURL,
+		DiscoveryURL: req.DiscoveryURL,
 		ClientID:     req.ClientID,
 		ClientSecret: req.ClientSecret,
 		Scopes:       req.Scopes,
@@ -149,15 +161,16 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 	// Return without secret
 	respondJSON(w, http.StatusCreated, map[string]any{
 		"provider": map[string]any{
-			"id":         provider.ID,
-			"org_id":     provider.OrgID,
-			"name":       provider.Name,
-			"issuer_url": provider.IssuerURL,
-			"client_id":  provider.ClientID,
-			"scopes":     provider.Scopes,
-			"team_claim": provider.TeamClaim,
-			"enabled":    provider.Enabled,
-			"created_at": provider.CreatedAt.Format(time.RFC3339),
+			"id":            provider.ID,
+			"org_id":        provider.OrgID,
+			"name":          provider.Name,
+			"issuer_url":    provider.IssuerURL,
+			"discovery_url": provider.DiscoveryURL,
+			"client_id":     provider.ClientID,
+			"scopes":        provider.Scopes,
+			"team_claim":    provider.TeamClaim,
+			"enabled":       provider.Enabled,
+			"created_at":    provider.CreatedAt.Format(time.RFC3339),
 		},
 	})
 }
@@ -193,6 +206,7 @@ func PlatformAdminGetOIDCProviderHandler(w http.ResponseWriter, r *http.Request)
 			"org_id":        provider.OrgID,
 			"name":          provider.Name,
 			"issuer_url":    provider.IssuerURL,
+			"discovery_url": provider.DiscoveryURL,
 			"client_id":     provider.ClientID,
 			"client_secret": maskedSecret,
 			"scopes":        provider.Scopes,
@@ -226,6 +240,7 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		OrgID        *string  `json:"org_id"`
 		Name         *string  `json:"name"`
 		IssuerURL    *string  `json:"issuer_url"`
+		DiscoveryURL *string  `json:"discovery_url"`
 		ClientID     *string  `json:"client_id"`
 		ClientSecret *string  `json:"client_secret"`
 		Scopes       []string `json:"scopes"`
@@ -248,6 +263,9 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 	if req.IssuerURL != nil {
 		provider.IssuerURL = strings.TrimRight(*req.IssuerURL, "/")
 	}
+	if req.DiscoveryURL != nil {
+		provider.DiscoveryURL = strings.TrimRight(*req.DiscoveryURL, "/")
+	}
 	if req.ClientID != nil {
 		provider.ClientID = *req.ClientID
 	}
@@ -256,6 +274,10 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 	}
 	if req.Scopes != nil {
 		provider.Scopes = req.Scopes
+	}
+	// Ensure 'openid' is always present
+	if !slices.Contains(provider.Scopes, "openid") {
+		provider.Scopes = append([]string{"openid"}, provider.Scopes...)
 	}
 	if req.TeamClaim != nil {
 		provider.TeamClaim = *req.TeamClaim
@@ -271,15 +293,16 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"provider": map[string]any{
-			"id":         provider.ID,
-			"org_id":     provider.OrgID,
-			"name":       provider.Name,
-			"issuer_url": provider.IssuerURL,
-			"client_id":  provider.ClientID,
-			"scopes":     provider.Scopes,
-			"team_claim": provider.TeamClaim,
-			"enabled":    provider.Enabled,
-			"created_at": provider.CreatedAt.Format(time.RFC3339),
+			"id":            provider.ID,
+			"org_id":        provider.OrgID,
+			"name":          provider.Name,
+			"issuer_url":    provider.IssuerURL,
+			"discovery_url": provider.DiscoveryURL,
+			"client_id":     provider.ClientID,
+			"scopes":        provider.Scopes,
+			"team_claim":    provider.TeamClaim,
+			"enabled":       provider.Enabled,
+			"created_at":    provider.CreatedAt.Format(time.RFC3339),
 		},
 	})
 }

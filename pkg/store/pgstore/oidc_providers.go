@@ -19,10 +19,10 @@ func (s *pgOIDCProviderStore) Create(ctx context.Context, provider *store.OIDCPr
 		return err
 	}
 	_, err = pool.Exec(ctx,
-		`INSERT INTO oidc_providers (id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		`INSERT INTO oidc_providers (id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 		provider.ID, nilIfEmpty(provider.OrgID), provider.Name, provider.IssuerURL,
-		provider.ClientID, provider.ClientSecret, provider.Scopes,
+		provider.DiscoveryURL, provider.ClientID, provider.ClientSecret, provider.Scopes,
 		nilIfEmpty(provider.TeamClaim), provider.Enabled, provider.CreatedAt,
 	)
 	return err
@@ -34,7 +34,7 @@ func (s *pgOIDCProviderStore) GetByID(ctx context.Context, id string) (*store.OI
 		return nil, err
 	}
 	return scanOIDCProvider(pool.QueryRow(ctx,
-		`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+		`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 		 FROM oidc_providers WHERE id = $1`, id,
 	))
 }
@@ -45,11 +45,11 @@ func (s *pgOIDCProviderStore) Update(ctx context.Context, provider *store.OIDCPr
 		return err
 	}
 	_, err = pool.Exec(ctx,
-		`UPDATE oidc_providers SET org_id = $2, name = $3, issuer_url = $4, client_id = $5,
-		 client_secret = $6, scopes = $7, team_claim = $8, enabled = $9
+		`UPDATE oidc_providers SET org_id = $2, name = $3, issuer_url = $4, discovery_url = $5,
+		 client_id = $6, client_secret = $7, scopes = $8, team_claim = $9, enabled = $10
 		 WHERE id = $1`,
 		provider.ID, nilIfEmpty(provider.OrgID), provider.Name, provider.IssuerURL,
-		provider.ClientID, provider.ClientSecret, provider.Scopes,
+		provider.DiscoveryURL, provider.ClientID, provider.ClientSecret, provider.Scopes,
 		nilIfEmpty(provider.TeamClaim), provider.Enabled,
 	)
 	return err
@@ -75,17 +75,17 @@ func (s *pgOIDCProviderStore) List(ctx context.Context, orgID string) ([]*store.
 	case "*":
 		// All providers across all orgs
 		rows, err = pool.Query(ctx,
-			`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+			`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 			 FROM oidc_providers ORDER BY created_at`)
 	case "":
 		// Platform-wide only (org_id IS NULL)
 		rows, err = pool.Query(ctx,
-			`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+			`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 			 FROM oidc_providers WHERE org_id IS NULL ORDER BY created_at`)
 	default:
 		// Specific org + platform-wide
 		rows, err = pool.Query(ctx,
-			`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+			`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 			 FROM oidc_providers WHERE org_id IS NULL OR org_id = $1 ORDER BY created_at`, orgID)
 	}
 	if err != nil {
@@ -113,11 +113,11 @@ func (s *pgOIDCProviderStore) ListEnabled(ctx context.Context, orgID string) ([]
 	var rows pgx.Rows
 	if orgID == "" {
 		rows, err = pool.Query(ctx,
-			`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+			`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 			 FROM oidc_providers WHERE enabled = true AND org_id IS NULL ORDER BY created_at`)
 	} else {
 		rows, err = pool.Query(ctx,
-			`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+			`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 			 FROM oidc_providers WHERE enabled = true AND (org_id IS NULL OR org_id = $1) ORDER BY created_at`, orgID)
 	}
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *pgOIDCProviderStore) GetByIssuer(ctx context.Context, issuerURL string)
 		return nil, err
 	}
 	return scanOIDCProvider(pool.QueryRow(ctx,
-		`SELECT id, org_id, name, issuer_url, client_id, client_secret, scopes, team_claim, enabled, created_at
+		`SELECT id, org_id, name, issuer_url, discovery_url, client_id, client_secret, scopes, team_claim, enabled, created_at
 		 FROM oidc_providers WHERE issuer_url = $1 AND enabled = true LIMIT 1`, issuerURL,
 	))
 }
@@ -151,7 +151,7 @@ func (s *pgOIDCProviderStore) GetByIssuer(ctx context.Context, issuerURL string)
 func scanOIDCProvider(row scannable) (*store.OIDCProvider, error) {
 	p := &store.OIDCProvider{}
 	var orgID, teamClaim *string
-	err := row.Scan(&p.ID, &orgID, &p.Name, &p.IssuerURL, &p.ClientID, &p.ClientSecret,
+	err := row.Scan(&p.ID, &orgID, &p.Name, &p.IssuerURL, &p.DiscoveryURL, &p.ClientID, &p.ClientSecret,
 		&p.Scopes, &teamClaim, &p.Enabled, &p.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan oidc_provider: %w", err)

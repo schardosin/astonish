@@ -379,17 +379,14 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		Email       string `json:"email"`
 		DisplayName string `json:"display_name"`
 		Password    string `json:"password"`
-		OrgSlug     string `json:"org_slug,omitempty"`
-		TeamSlug    string `json:"team_slug,omitempty"`
-		OrgRole     string `json:"org_role,omitempty"` // "owner", "admin", "member"
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if req.Email == "" || req.DisplayName == "" || req.Password == "" {
-		respondError(w, http.StatusBadRequest, "email, display_name, and password are required")
+	if req.Email == "" || req.DisplayName == "" {
+		respondError(w, http.StatusBadRequest, "email and display_name are required")
 		return
 	}
 
@@ -407,18 +404,22 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hash password
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to hash password")
-		return
+	// Hash password (optional — empty means SSO-only user)
+	var passwordHash string
+	if req.Password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to hash password")
+			return
+		}
+		passwordHash = string(hash)
 	}
 
 	user := &store.User{
 		ID:           uuid.New().String(),
 		Email:        req.Email,
 		DisplayName:  req.DisplayName,
-		PasswordHash: string(hash),
+		PasswordHash: passwordHash,
 		Status:       "active",
 		CreatedAt:    time.Now(),
 	}
@@ -426,38 +427,6 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	if err := pgStore.Users().Create(ctx, user); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create user: %v", err))
 		return
-	}
-
-	// Optionally add to org
-	if req.OrgSlug != "" {
-		org, err := pgStore.Organizations().GetBySlug(ctx, req.OrgSlug)
-		if err == nil && org != nil {
-			role := req.OrgRole
-			if role == "" {
-				role = "member"
-			}
-			_ = pgStore.Organizations().AddMember(ctx, user.ID, org.ID, role)
-
-			// Add to team if specified
-			if req.TeamSlug != "" {
-				if orgDS, err := pgStore.ForOrg(req.OrgSlug); err == nil {
-					teams, _ := orgDS.Teams().ListTeams(ctx)
-					for _, t := range teams {
-						if t.Slug == req.TeamSlug {
-							_ = orgDS.Teams().AddMember(ctx, &store.TeamMembership{
-								UserID:   user.ID,
-								TeamID:   t.ID,
-								Role:     "member",
-								JoinedAt: time.Now(),
-							})
-							break
-						}
-					}
-					// Provision personal schema
-					_ = orgDS.ProvisionPersonalSchema(ctx, user.ID)
-				}
-			}
-		}
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]any{

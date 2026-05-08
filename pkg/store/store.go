@@ -211,6 +211,7 @@ type OIDCProvider struct {
 	OrgID        string    `json:"org_id,omitempty"` // Empty = platform-wide
 	Name         string    `json:"name"`
 	IssuerURL    string    `json:"issuer_url"`
+	DiscoveryURL string    `json:"discovery_url,omitempty"` // Base URL for .well-known discovery (if different from issuer)
 	ClientID     string    `json:"client_id"`
 	ClientSecret string    `json:"client_secret,omitempty"` // Omitted in list responses
 	Scopes       []string  `json:"scopes"`

@@ -92,9 +92,9 @@ func TestRateLimitMiddleware_BlocksAuthEndpoint(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// First 2 should pass
+	// First 2 should pass (using /login which is under the strict auth budget)
 	for i := 0; i < 2; i++ {
-		req := httptest.NewRequest("GET", "/api/auth/code", nil)
+		req := httptest.NewRequest("POST", "/api/auth/login", nil)
 		req.RemoteAddr = "192.168.1.100:54321"
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
@@ -104,7 +104,7 @@ func TestRateLimitMiddleware_BlocksAuthEndpoint(t *testing.T) {
 	}
 
 	// 3rd should be blocked
-	req := httptest.NewRequest("GET", "/api/auth/code", nil)
+	req := httptest.NewRequest("POST", "/api/auth/login", nil)
 	req.RemoteAddr = "192.168.1.100:54321"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -172,38 +172,56 @@ func TestRateLimitMiddleware_SkipsNonAPIPaths(t *testing.T) {
 func TestRateLimitMiddleware_AuthAndAPIAreSeparate(t *testing.T) {
 	cfg := &RateLimitConfig{
 		Auth: NewRateLimiter(1, time.Minute),
-		API:  NewRateLimiter(1, time.Minute),
+		API:  NewRateLimiter(2, time.Minute),
 	}
 
 	handler := RateLimitMiddleware(cfg, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Exhaust auth limit
-	req := httptest.NewRequest("GET", "/api/auth/code", nil)
+	// Exhaust auth limit with /login (strict auth budget)
+	req := httptest.NewRequest("POST", "/api/auth/login", nil)
 	req.RemoteAddr = "10.0.0.1:54321"
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("first auth request: got %d, want 200", rec.Code)
+		t.Fatalf("first auth/login request: got %d, want 200", rec.Code)
 	}
 
-	// Auth is now blocked
-	req = httptest.NewRequest("GET", "/api/auth/code", nil)
+	// Auth/login is now blocked
+	req = httptest.NewRequest("POST", "/api/auth/login", nil)
 	req.RemoteAddr = "10.0.0.1:54321"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("second auth request: got %d, want 429", rec.Code)
+		t.Fatalf("second auth/login request: got %d, want 429", rec.Code)
 	}
 
-	// But API should still work (different limiter)
+	// Non-sensitive auth endpoints (e.g. /refresh) use the API budget — still works
+	req = httptest.NewRequest("POST", "/api/auth/refresh", nil)
+	req.RemoteAddr = "10.0.0.1:54321"
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auth/refresh request: got %d, want 200 (should use API budget)", rec.Code)
+	}
+
+	// Regular API endpoint also uses API budget — still works (2nd of 2 allowed)
 	req = httptest.NewRequest("GET", "/api/studio/sessions", nil)
 	req.RemoteAddr = "10.0.0.1:54321"
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("first API request: got %d, want 200", rec.Code)
+	}
+
+	// API budget now exhausted (auth/refresh + studio/sessions = 2) — next should 429
+	req = httptest.NewRequest("GET", "/api/studio/sessions", nil)
+	req.RemoteAddr = "10.0.0.1:54321"
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third API request: got %d, want 429", rec.Code)
 	}
 }
 

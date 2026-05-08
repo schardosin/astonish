@@ -146,10 +146,7 @@ export async function listUsers(): Promise<AdminUser[]> {
 export async function createUser(params: {
   email: string
   display_name: string
-  password: string
-  org_slug?: string
-  team_slug?: string
-  org_role?: string
+  password?: string
 }): Promise<{ user: AdminUser; message: string }> {
   const res = await fetch(`${ADMIN_BASE}/users`, {
     method: 'POST',

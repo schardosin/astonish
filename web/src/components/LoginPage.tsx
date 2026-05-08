@@ -29,15 +29,26 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
       // Failed to check — show login by default
     })
 
-    // Fetch available SSO providers
-    fetch('/api/auth/sso/providers')
-      .then(r => r.json())
-      .then(data => {
-        if (data.providers && data.providers.length > 0) {
-          setSsoProviders(data.providers)
+    // Fetch available SSO providers (retry up to 3 times on failure)
+    const fetchSSOProviders = async () => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const res = await fetch('/api/auth/sso/providers')
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const data = await res.json()
+          if (data.providers && data.providers.length > 0) {
+            setSsoProviders(data.providers)
+            return
+          }
+          // Got empty providers with 200 — genuinely no providers configured, stop retrying
+          return
+        } catch {
+          // Transient failure — retry after delay
+          if (attempt < 2) await new Promise(r => setTimeout(r, 1000))
         }
-      })
-      .catch(() => {})
+      }
+    }
+    fetchSSOProviders()
   }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -266,8 +277,22 @@ export default function LoginPage({ onLogin, onRegister }: LoginPageProps) {
                     const resp = await fetch('/api/auth/sso/init', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ provider_id: provider.id }),
+                      body: JSON.stringify({ provider_id: provider.id, client_type: 'web' }),
                     })
+                    if (!resp.ok) {
+                      // Try to extract error message from response
+                      const text = await resp.text()
+                      let msg = 'Failed to initiate SSO login'
+                      try {
+                        const parsed = JSON.parse(text)
+                        msg = parsed.error || parsed.message || msg
+                      } catch {
+                        if (text) msg = text.trim()
+                      }
+                      setError(msg)
+                      setLoading(false)
+                      return
+                    }
                     const data = await resp.json()
                     if (data.verify_url) {
                       window.location.href = data.verify_url

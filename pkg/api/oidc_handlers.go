@@ -23,6 +23,37 @@ import (
 // Device session management (in-memory, TTL-based)
 // --------------------------------------------------------------------------
 
+// ssoPageBaseCSS is the shared CSS foundation for all server-rendered SSO pages.
+// It uses prefers-color-scheme to match the user's OS theme preference, and
+// mirrors the Astonish Studio design tokens (Inter font, colors, radiuses).
+const ssoPageBaseCSS = `
+:root {
+  --bg: #fafbfe; --surface: #ffffff; --text: #0b1222;
+  --muted: #6b7280; --border: #e5e8f0; --accent: #7c3aed;
+  --shadow: 0 8px 28px rgba(15, 23, 42, 0.1);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0b1222; --surface: #0f172a; --text: #f6f7fb;
+    --muted: #9ca3af; --border: rgba(255,255,255,0.08); --accent: #8d7ae0;
+    --shadow: 0 10px 32px rgba(0, 0, 0, 0.42);
+  }
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  background: var(--bg); color: var(--text);
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; padding: 24px;
+}
+.card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 16px; padding: 48px; max-width: 420px; width: 100%;
+  text-align: center; box-shadow: var(--shadow);
+}
+.muted { color: var(--muted); font-size: 14px; line-height: 1.6; }
+`
+
 // deviceSessionStatus represents the state of an SSO device flow.
 type deviceSessionStatus string
 
@@ -38,6 +69,7 @@ type deviceSession struct {
 	State      string // OIDC state parameter (binds browser flow to this session)
 	Nonce      string // OIDC nonce for ID token validation
 	ProviderID string // Which OIDC provider to use
+	ClientType string // "web" for Studio UI, "cli" (or empty) for CLI device flow
 
 	Status       deviceSessionStatus
 	ErrorMessage string
@@ -163,6 +195,7 @@ func RegisterSSORoutes(router *mux.Router, sso *SSOHandler) {
 
 type ssoInitRequest struct {
 	ProviderID string `json:"provider_id,omitempty"` // Optional: specific provider. If empty, use the first enabled one.
+	ClientType string `json:"client_type,omitempty"` // "web" for Studio UI, empty/"cli" for CLI device flow.
 }
 
 type ssoInitResponse struct {
@@ -214,6 +247,7 @@ func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 		State:      state,
 		Nonce:      nonce,
 		ProviderID: provider.ID,
+		ClientType: req.ClientType,
 		Status:     deviceStatusPending,
 		CreatedAt:  time.Now(),
 	}
@@ -345,7 +379,7 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create OIDC verifier
-	oidcProvider, err := oidc.NewProvider(ctx, provider.IssuerURL)
+	oidcProvider, err := h.discoverOIDCProvider(provider)
 	if err != nil {
 		slog.Error("failed to create OIDC provider", "issuer", provider.IssuerURL, "error", err)
 		h.failDeviceSession(sess, "OIDC discovery failed")
@@ -547,7 +581,15 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	sess.AvailableTeams = availableTeams
 	h.deviceSessions.Complete(sess.DeviceCode, sess)
 
-	// Render success page to the browser
+	// Web UI flow: set session cookies and redirect to the app
+	if sess.ClientType == "web" {
+		setAccessTokenCookie(w, accessToken, h.pa.jwt.AccessTokenTTL())
+		setRefreshTokenCookie(w, refreshToken, h.pa.jwt.RefreshTokenTTL())
+		h.renderSSOBounce(w)
+		return
+	}
+
+	// CLI flow: render success page (user closes tab, CLI polls for tokens)
 	h.renderCallbackSuccess(w, user.DisplayName, org.Name)
 }
 
@@ -606,12 +648,19 @@ func (h *SSOHandler) handlePoll(w http.ResponseWriter, r *http.Request) {
 func (h *SSOHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
 	pgStore := getPlatformPGStore()
 	if pgStore == nil {
-		respondJSON(w, http.StatusOK, map[string]any{"providers": []any{}})
+		// Platform store not initialized — return 503 so frontend knows to retry
+		respondError(w, http.StatusServiceUnavailable, "platform not ready")
 		return
 	}
 
 	providers, err := pgStore.OIDCProviders().ListEnabled(r.Context(), "")
-	if err != nil || len(providers) == 0 {
+	if err != nil {
+		slog.Warn("failed to list SSO providers", "error", err)
+		respondError(w, http.StatusServiceUnavailable, "temporarily unable to load SSO providers")
+		return
+	}
+
+	if len(providers) == 0 {
 		respondJSON(w, http.StatusOK, map[string]any{"providers": []any{}})
 		return
 	}
@@ -649,16 +698,19 @@ func (h *SSOHandler) buildOAuth2Config(r *http.Request, provider *store.OIDCProv
 	redirectURL := fmt.Sprintf("%s://%s/api/auth/sso/callback", scheme, r.Host)
 
 	// Discover OIDC endpoints
-	ctx := context.Background()
-	oidcProvider, err := oidc.NewProvider(ctx, provider.IssuerURL)
+	oidcProvider, err := h.discoverOIDCProvider(provider)
 
 	var endpoint oauth2.Endpoint
 	if err != nil {
 		// Fallback: construct manually (shouldn't happen in production)
 		slog.Warn("OIDC discovery failed, using manual endpoint construction", "issuer", provider.IssuerURL, "error", err)
+		baseURL := provider.IssuerURL
+		if provider.DiscoveryURL != "" {
+			baseURL = provider.DiscoveryURL
+		}
 		endpoint = oauth2.Endpoint{
-			AuthURL:  provider.IssuerURL + "/oauth2/authorize",
-			TokenURL: provider.IssuerURL + "/oauth2/token",
+			AuthURL:  baseURL + "/oauth2/authorize",
+			TokenURL: baseURL + "/oauth2/token",
 		}
 	} else {
 		endpoint = oidcProvider.Endpoint()
@@ -673,6 +725,24 @@ func (h *SSOHandler) buildOAuth2Config(r *http.Request, provider *store.OIDCProv
 	}
 }
 
+// discoverOIDCProvider performs OIDC discovery for the given provider.
+// It handles providers where the discovery URL differs from the issuer URL
+// (e.g., SAP BTP XSUAA where issuer is "{base}/oauth/token" but discovery
+// is at "{base}/.well-known/openid-configuration").
+func (h *SSOHandler) discoverOIDCProvider(provider *store.OIDCProvider) (*oidc.Provider, error) {
+	ctx := context.Background()
+
+	if provider.DiscoveryURL != "" && provider.DiscoveryURL != provider.IssuerURL {
+		// Use InsecureIssuerURLContext to decouple discovery URL from issuer validation.
+		// This tells go-oidc: fetch .well-known from DiscoveryURL, but accept IssuerURL
+		// as the issuer claim in ID tokens.
+		ctx = oidc.InsecureIssuerURLContext(ctx, provider.IssuerURL)
+		return oidc.NewProvider(ctx, provider.DiscoveryURL)
+	}
+
+	return oidc.NewProvider(ctx, provider.IssuerURL)
+}
+
 // failDeviceSession marks a device session as failed.
 func (h *SSOHandler) failDeviceSession(sess *deviceSession, msg string) {
 	sess.Status = deviceStatusFailed
@@ -680,55 +750,117 @@ func (h *SSOHandler) failDeviceSession(sess *deviceSession, msg string) {
 	h.deviceSessions.Complete(sess.DeviceCode, sess)
 }
 
-// renderCallbackSuccess renders an HTML page shown to the user after successful SSO login.
-func (h *SSOHandler) renderCallbackSuccess(w http.ResponseWriter, displayName, orgName string) {
+// renderSSOBounce renders a tiny HTML page that performs a same-origin redirect to "/".
+// This is used for web UI SSO login: the IdP redirects to /callback (cross-origin),
+// the server sets cookies, and this page triggers a same-origin navigation so that
+// SameSite=Strict cookies are included in subsequent requests.
+// Uses <meta http-equiv="refresh"> instead of inline <script> to avoid CSP issues.
+func (h *SSOHandler) renderSSOBounce(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Astonish - Login Successful</title>
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0;url=/">
+<title>Astonish — Logging in</title>
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0; }
-.card { background: #16213e; border-radius: 12px; padding: 48px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.3); max-width: 400px; }
-h1 { color: #4ecca3; margin-bottom: 16px; font-size: 24px; }
-p { color: #a0a0b0; line-height: 1.6; }
-.name { color: #e0e0e0; font-weight: 600; }
+`+ssoPageBaseCSS+`
+.spinner {
+  width: 24px; height: 24px;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.8s linear infinite;
+  margin: 0 auto 16px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
 <div class="card">
-<h1>Login Successful</h1>
-<p>Welcome, <span class="name">%s</span>!</p>
-<p>Organization: <span class="name">%s</span></p>
-<p>You can close this browser tab and return to your terminal.</p>
+<div class="spinner"></div>
+<p class="muted">Logging in…</p>
 </div>
 </body>
-</html>`, displayName, orgName)
+</html>`)
+}
+
+// renderCallbackSuccess renders an HTML page shown to the user after successful SSO login.
+func (h *SSOHandler) renderCallbackSuccess(w http.ResponseWriter, displayName, orgName string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astonish — Login Successful</title>
+<style>
+`+ssoPageBaseCSS+`
+.icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  background: linear-gradient(135deg, #a855f7 0%, #7c3aed 100%);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px; font-size: 20px;
+}
+h1 { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.detail { font-size: 14px; color: var(--muted); margin-top: 4px; line-height: 1.6; }
+.detail strong { color: var(--text); font-weight: 500; }
+.hint { font-size: 13px; color: var(--muted); margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="card">
+<div class="icon"><svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+<h1>Login Successful</h1>`)
+	fmt.Fprintf(w, `
+<p class="detail">Welcome, <strong>%s</strong></p>
+<p class="detail">Organization: <strong>%s</strong></p>`, displayName, orgName)
+	fmt.Fprint(w, `
+<p class="hint">You can close this browser tab and return to your terminal.</p>
+</div>
+</body>
+</html>`)
 }
 
 // renderCallbackError renders an HTML error page shown to the user on SSO failure.
 func (h *SSOHandler) renderCallbackError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusBadRequest)
-	fmt.Fprintf(w, `<!DOCTYPE html>
-<html>
-<head><title>Astonish - Login Failed</title>
+	fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astonish — Login Failed</title>
 <style>
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #1a1a2e; color: #e0e0e0; }
-.card { background: #16213e; border-radius: 12px; padding: 48px; text-align: center; box-shadow: 0 4px 24px rgba(0,0,0,0.3); max-width: 400px; }
-h1 { color: #e74c3c; margin-bottom: 16px; font-size: 24px; }
-p { color: #a0a0b0; line-height: 1.6; }
-.error { color: #e0e0e0; background: #2d1b1b; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+`+ssoPageBaseCSS+`
+.icon {
+  width: 48px; height: 48px; border-radius: 12px;
+  background: rgba(239, 68, 68, 0.1);
+  display: flex; align-items: center; justify-content: center;
+  margin: 0 auto 20px; font-size: 20px;
+}
+h1 { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+.error-box {
+  font-size: 14px; color: #ef4444; background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.2); border-radius: 10px;
+  padding: 14px 16px; margin-top: 20px; text-align: left; line-height: 1.5;
+}
+.hint { font-size: 13px; color: var(--muted); margin-top: 24px; }
 </style>
 </head>
 <body>
 <div class="card">
-<h1>Login Failed</h1>
-<div class="error">%s</div>
-<p style="margin-top:24px">Please close this tab and try again, or contact your administrator.</p>
+<div class="icon"><svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+<h1>Login Failed</h1>`)
+	fmt.Fprintf(w, `
+<div class="error-box">%s</div>`, message)
+	fmt.Fprint(w, `
+<p class="hint">Please close this tab and try again, or contact your administrator.</p>
 </div>
 </body>
-</html>`, message)
+</html>`)
 }
 
 // generateSecureToken generates a cryptographically secure random hex string.

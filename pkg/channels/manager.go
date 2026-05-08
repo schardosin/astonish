@@ -320,6 +320,21 @@ func (m *ChannelManager) GetTelegramBotUsername() string {
 	return ""
 }
 
+// GetSlackBotUserID returns the connected Slack bot's user ID, or empty
+// string if Slack is not configured or not connected.
+func (m *ChannelManager) GetSlackBotUserID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["slack"]
+	if !ok {
+		return ""
+	}
+	if provider, ok := ch.(BotUsernameProvider); ok {
+		return provider.BotUsername()
+	}
+	return ""
+}
+
 // GetEmailAddress returns the connected email channel's address, or empty
 // string if email is not configured or not connected.
 func (m *ChannelManager) GetEmailAddress() string {
@@ -337,13 +352,23 @@ func (m *ChannelManager) GetEmailAddress() string {
 // SetTelegramLinkHandler sets the link handler on the Telegram channel adapter.
 // The handler is called when a user sends /link <code> to the bot.
 func (m *ChannelManager) SetTelegramLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.setLinkHandlerForChannel("telegram", fn)
+}
+
+// SetSlackLinkHandler sets the link handler on the Slack channel adapter.
+// The handler is called when a user sends /link <code> to the bot.
+func (m *ChannelManager) SetSlackLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.setLinkHandlerForChannel("slack", fn)
+}
+
+// setLinkHandlerForChannel sets the link handler on a specific channel adapter.
+func (m *ChannelManager) setLinkHandlerForChannel(channelID string, fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	ch, ok := m.channels["telegram"]
+	ch, ok := m.channels[channelID]
 	if !ok {
 		return
 	}
-	// Type-assert to the concrete TelegramChannel which has LinkHandler field
 	type linkHandlerChannel interface {
 		SetLinkHandler(func(ctx context.Context, senderID, senderUsername, code string) (bool, string))
 	}
@@ -992,6 +1017,14 @@ func channelHints(channelID string) string {
 - Use simple formatting only: **bold**, *italic*, ` + "`code`" + `, and fenced code blocks
 - Break long responses into short paragraphs
 - Be conversational — this is a chat, not a terminal`
+	case "slack":
+		return `You are responding via Slack.
+- Keep responses concise (under 300 words when possible)
+- Use Slack-compatible formatting: **bold**, ~~strikethrough~~, ` + "`code`" + `, and fenced code blocks
+- NEVER use markdown tables — use bullet lists instead
+- Break long responses into short paragraphs
+- Be conversational — this is a chat, not a terminal
+- Use [text](url) for links (they will be auto-converted to Slack format)`
 	case "email":
 		return `You are responding via email.
 - Produce ONE comprehensive reply — do not narrate intermediate steps

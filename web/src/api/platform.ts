@@ -409,8 +409,26 @@ export async function deleteOrgUser(userId: string): Promise<void> {
   const res = await teamFetch(`/api/admin/users/${userId}`, { method: 'DELETE' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(err.error || err.message || 'Failed to delete user')
+    throw new Error(err.error || err.message || 'Failed to remove user')
   }
+}
+
+export async function inviteUserToOrg(params: {
+  email: string
+  display_name: string
+  role: string
+  send_invite: boolean
+}): Promise<{ user: OrgUser; created: boolean }> {
+  const res = await teamFetch('/api/admin/users/invite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || err.message || 'Failed to add user')
+  }
+  return res.json()
 }
 
 export async function resetUserPassword(userId: string, password: string): Promise<void> {

@@ -171,7 +171,7 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	if pu.Role != "admin" {
+	if !isOrgAdmin(pu) {
 		http.Error(w, "admin role required for knowledge promotion", http.StatusForbidden)
 		return
 	}
@@ -424,7 +424,7 @@ func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	if pu.Role != "admin" {
+	if !isOrgAdmin(pu) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}

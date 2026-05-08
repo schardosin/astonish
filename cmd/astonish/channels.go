@@ -22,6 +22,7 @@ import (
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	slackPkg "github.com/slack-go/slack"
 )
 
 func handleChannelsCommand(args []string) error {
@@ -41,6 +42,7 @@ func handleChannelsCommand(args []string) error {
 			fmt.Println("Available channels:")
 			fmt.Println("  telegram      Set up Telegram bot integration")
 			fmt.Println("  email         Set up Email integration (IMAP/SMTP)")
+			fmt.Println("  slack         Set up Slack bot integration")
 			return nil
 		}
 		switch args[1] {
@@ -48,8 +50,10 @@ func handleChannelsCommand(args []string) error {
 			return handleTelegramSetup()
 		case "email":
 			return handleEmailSetup()
+		case "slack":
+			return handleSlackSetup()
 		default:
-			return fmt.Errorf("unknown channel: %s (available: telegram, email)", args[1])
+			return fmt.Errorf("unknown channel: %s (available: telegram, email, slack)", args[1])
 		}
 	case "disable":
 		if len(args) < 2 {
@@ -598,6 +602,277 @@ func handleEmailSetup() error {
 	return nil
 }
 
+// handleSlackSetup runs the interactive Slack bot setup flow.
+func handleSlackSetup() error {
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Check if already configured
+	if cfg.Channels.Slack.IsSlackEnabled() {
+		fmt.Println()
+		fmt.Println("  Slack is already configured and enabled.")
+		fmt.Println()
+
+		var reconfigure bool
+		reconfigErr := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Reconfigure Slack?").
+					Description("This will overwrite the current Slack configuration.").
+					Affirmative("Yes, reconfigure").
+					Negative("Cancel").
+					Value(&reconfigure),
+			),
+		).Run()
+		if reconfigErr != nil || !reconfigure {
+			fmt.Println("  Setup cancelled.")
+			return nil
+		}
+	}
+
+	fmt.Println()
+	channelsPrintHeader("Slack Bot Setup")
+	fmt.Println()
+	fmt.Println("  To set up a Slack bot, you'll need to create a Slack App:")
+	fmt.Println()
+	fmt.Println("  1. Go to \033[4;36mhttps://api.slack.com/apps\033[0m")
+	fmt.Println("  2. Click \"Create New App\" → \"From scratch\"")
+	fmt.Println("  3. Name your app and select your workspace")
+	fmt.Println()
+	fmt.Println("  4. Under \033[1mOAuth & Permissions\033[0m → Bot Token Scopes, add:")
+	fmt.Println("     • app_mentions:read")
+	fmt.Println("     • chat:write")
+	fmt.Println("     • im:history")
+	fmt.Println("     • im:read")
+	fmt.Println("     • im:write")
+	fmt.Println("     • users:read")
+	fmt.Println()
+	fmt.Println("  5. Install the app to your workspace")
+	fmt.Println("     → Copy the \033[1mBot User OAuth Token\033[0m (starts with xoxb-)")
+	fmt.Println()
+	fmt.Println("  6. Under \033[1mSocket Mode\033[0m, enable it")
+	fmt.Println("     → Generate an \033[1mApp-Level Token\033[0m with 'connections:write' scope")
+	fmt.Println("     → Copy the token (starts with xapp-)")
+	fmt.Println()
+	fmt.Println("  7. Under \033[1mEvent Subscriptions\033[0m, enable events and subscribe to:")
+	fmt.Println("     • app_mention (in bot events)")
+	fmt.Println("     • message.im (in bot events)")
+	fmt.Println()
+
+	// Mode selection
+	mode := "socket"
+	modeErr := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Connection mode").
+				Description("Socket Mode is recommended for most setups. Events API requires a public HTTPS endpoint.").
+				Options(
+					huh.NewOption("Socket Mode (recommended)", "socket"),
+					huh.NewOption("Events API (HTTP webhook)", "events"),
+				).
+				Value(&mode),
+		),
+	).Run()
+	if modeErr != nil {
+		return modeErr
+	}
+
+	// Bot Token (required for both modes)
+	var botToken string
+	tokenErr := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Bot User OAuth Token").
+				Description("Found under OAuth & Permissions → Bot User OAuth Token (xoxb-...)").
+				Placeholder("xoxb-...").
+				EchoMode(huh.EchoModePassword).
+				Value(&botToken),
+		),
+	).Run()
+	if tokenErr != nil {
+		return tokenErr
+	}
+	botToken = strings.TrimSpace(botToken)
+	if botToken == "" {
+		return fmt.Errorf("bot token is required")
+	}
+	if !strings.HasPrefix(botToken, "xoxb-") {
+		fmt.Println("  \033[33mWarning: Token doesn't start with 'xoxb-'. This might not be a Bot User OAuth Token.\033[0m")
+	}
+
+	// Validate bot token
+	channelsRunSpinner("Validating bot token...")
+	slackClient := slackPkg.New(botToken)
+	authResp, authErr := slackClient.AuthTest()
+	if authErr != nil {
+		return fmt.Errorf("token validation failed: %w", authErr)
+	}
+	fmt.Printf("  \033[32m✓ Connected!\033[0m  Bot: %s  |  Workspace: %s\n", authResp.User, authResp.Team)
+	fmt.Println()
+
+	// Mode-specific secrets
+	var appToken string
+	var signingSecret string
+
+	if mode == "socket" {
+		// App-Level Token (Socket Mode)
+		appTokenErr := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("App-Level Token (Socket Mode)").
+					Description("Generate under Basic Information → App-Level Tokens with 'connections:write' scope (xapp-...)").
+					Placeholder("xapp-...").
+					EchoMode(huh.EchoModePassword).
+					Value(&appToken),
+			),
+		).Run()
+		if appTokenErr != nil {
+			return appTokenErr
+		}
+		appToken = strings.TrimSpace(appToken)
+		if appToken == "" {
+			return fmt.Errorf("app-level token is required for Socket Mode")
+		}
+		if !strings.HasPrefix(appToken, "xapp-") {
+			fmt.Println("  \033[33mWarning: Token doesn't start with 'xapp-'. This might not be an App-Level Token.\033[0m")
+		}
+	} else {
+		// Signing Secret (Events API)
+		signingErr := huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Signing Secret").
+					Description("Found under Basic Information → App Credentials → Signing Secret").
+					Placeholder("abc123...").
+					EchoMode(huh.EchoModePassword).
+					Value(&signingSecret),
+			),
+		).Run()
+		if signingErr != nil {
+			return signingErr
+		}
+		signingSecret = strings.TrimSpace(signingSecret)
+		if signingSecret == "" {
+			return fmt.Errorf("signing secret is required for Events API mode")
+		}
+	}
+
+	// Determine if we're in platform mode
+	isPlatform := cfg.Storage.Backend == "postgres" && cfg.Storage.Postgres.PlatformDSN != ""
+
+	if isPlatform {
+		fmt.Println()
+		fmt.Println("  \033[36mPlatform mode detected.\033[0m")
+		fmt.Println("  Access control is managed through user account linking.")
+		fmt.Println("  Users link their Slack via Settings → Connected Channels.")
+		fmt.Println()
+	} else {
+		// Personal mode: optionally allow specific Slack user IDs
+		fmt.Println()
+		fmt.Println("  \033[36mPersonal mode:\033[0m The bot will respond to all DMs by default.")
+		fmt.Println("  You can restrict access to specific Slack user IDs later in config.")
+		fmt.Println()
+	}
+
+	// Save configuration
+	enabled := true
+	cfg.Channels.Enabled = &enabled
+	cfg.Channels.Slack.Enabled = &enabled
+	cfg.Channels.Slack.Mode = mode
+
+	// Save secrets to the appropriate store based on mode
+	if isPlatform {
+		// Platform mode: store in platform_secrets table (DB)
+		_, pgStore, pgErr := pgstore.NewPlatformServices(context.Background(), cfg.Storage.Postgres)
+		if pgErr != nil {
+			return fmt.Errorf("failed to connect to platform database: %w", pgErr)
+		}
+		if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.bot_token", botToken); setErr != nil {
+			return fmt.Errorf("failed to store bot token in platform database: %w", setErr)
+		}
+		if mode == "socket" && appToken != "" {
+			if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.app_token", appToken); setErr != nil {
+				return fmt.Errorf("failed to store app token in platform database: %w", setErr)
+			}
+		}
+		if mode == "events" && signingSecret != "" {
+			if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.signing_secret", signingSecret); setErr != nil {
+				return fmt.Errorf("failed to store signing secret in platform database: %w", setErr)
+			}
+		}
+		fmt.Println("  Secrets stored in platform database.")
+	} else {
+		// Personal mode: store in file-based encrypted credential store
+		configDir, configDirErr := config.GetConfigDir()
+		if configDirErr != nil {
+			slog.Warn("failed to get config directory", "error", configDirErr)
+		}
+		if configDir != "" {
+			if store, storeErr := credentials.Open(configDir); storeErr == nil {
+				if setErr := store.SetSecret("channels.slack.bot_token", botToken); setErr != nil {
+					slog.Warn("failed to store bot token in credential store", "error", setErr)
+					cfg.Channels.Slack.BotToken = botToken // fallback
+				}
+				if mode == "socket" && appToken != "" {
+					if setErr := store.SetSecret("channels.slack.app_token", appToken); setErr != nil {
+						slog.Warn("failed to store app token in credential store", "error", setErr)
+						cfg.Channels.Slack.AppToken = appToken // fallback
+					}
+				}
+				if mode == "events" && signingSecret != "" {
+					if setErr := store.SetSecret("channels.slack.signing_secret", signingSecret); setErr != nil {
+						slog.Warn("failed to store signing secret in credential store", "error", setErr)
+						cfg.Channels.Slack.SigningSecret = signingSecret // fallback
+					}
+				}
+			} else {
+				// Credential store unavailable — save in config as fallback
+				cfg.Channels.Slack.BotToken = botToken
+				if mode == "socket" {
+					cfg.Channels.Slack.AppToken = appToken
+				}
+				if mode == "events" {
+					cfg.Channels.Slack.SigningSecret = signingSecret
+				}
+			}
+		}
+	}
+
+	// Always scrub tokens from config.yaml
+	cfg.Channels.Slack.BotToken = ""
+	cfg.Channels.Slack.AppToken = ""
+	cfg.Channels.Slack.SigningSecret = ""
+
+	if err := config.SaveAppConfig(cfg); err != nil {
+		return fmt.Errorf("failed to save config: %w", err)
+	}
+
+	// Success message
+	summary := fmt.Sprintf("Slack bot '%s' configured successfully! (workspace: %s, mode: %s)", authResp.User, authResp.Team, mode)
+	channelsPrintSuccess(summary)
+
+	fmt.Println()
+	if isPlatform {
+		fmt.Printf("  Bot:       %s\n", authResp.User)
+		fmt.Printf("  Workspace: %s\n", authResp.Team)
+		fmt.Printf("  Mode:      %s\n", mode)
+		fmt.Println()
+		fmt.Println("  Users can link their accounts via the web UI.")
+	} else {
+		fmt.Printf("  Bot:       %s\n", authResp.User)
+		fmt.Printf("  Workspace: %s\n", authResp.Team)
+		fmt.Printf("  Mode:      %s\n", mode)
+	}
+	fmt.Println()
+
+	notifyDaemonChannelsChanged(cfg)
+	fmt.Println()
+
+	return nil
+}
+
 // emailTestConfig holds the minimal config for testing an IMAP connection.
 type emailTestConfig struct {
 	IMAPServer string
@@ -679,8 +954,20 @@ func handleChannelDisable(channel string) error {
 		}
 		fmt.Println("Email channel disabled.")
 		notifyDaemonChannelsChanged(cfg)
+	case "slack":
+		if !cfg.Channels.Slack.IsSlackEnabled() {
+			fmt.Println("Slack is not currently enabled.")
+			return nil
+		}
+		disabled := false
+		cfg.Channels.Slack.Enabled = &disabled
+		if err := config.SaveAppConfig(cfg); err != nil {
+			return fmt.Errorf("failed to save config: %w", err)
+		}
+		fmt.Println("Slack channel disabled.")
+		notifyDaemonChannelsChanged(cfg)
 	default:
-		return fmt.Errorf("unknown channel: %s (available: telegram, email)", channel)
+		return fmt.Errorf("unknown channel: %s (available: telegram, email, slack)", channel)
 	}
 
 	return nil
@@ -822,7 +1109,7 @@ func handleChannelsStatus() error {
 func printChannelsUsage() {
 	fmt.Println("usage: astonish channels {status,setup,disable}")
 	fmt.Println("")
-	fmt.Println("Manage communication channels (Telegram, Email, etc.)")
+	fmt.Println("Manage communication channels (Telegram, Email, Slack)")
 	fmt.Println("")
 	fmt.Println("subcommands:")
 	fmt.Println("  status              Show status of all channels")
@@ -832,6 +1119,7 @@ func printChannelsUsage() {
 	fmt.Println("available channels:")
 	fmt.Println("  telegram            Telegram bot integration")
 	fmt.Println("  email               Email integration (IMAP/SMTP)")
+	fmt.Println("  slack               Slack bot integration (Socket Mode / Events API)")
 }
 
 // maskToken returns the last 8 chars of a token, with the rest replaced by dots.

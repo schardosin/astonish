@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { Users, Shield, ShieldCheck, AlertCircle, Loader2, Trash2, KeyRound, Ban, CheckCircle2 } from 'lucide-react'
+import { Users, UserPlus, Shield, ShieldCheck, AlertCircle, Loader2, Trash2, KeyRound, Ban, CheckCircle2 } from 'lucide-react'
 import {
-  fetchOrgUsers, setUserOrgRole, setUserStatus, deleteOrgUser, resetUserPassword,
+  fetchOrgUsers, setUserOrgRole, setUserStatus, deleteOrgUser, resetUserPassword, inviteUserToOrg,
   type OrgUser,
 } from '../api/platform'
 
@@ -82,6 +82,15 @@ export default function UserManagement({ user, org }: UserManagementProps) {
   const [deleteTarget, setDeleteTarget] = useState<OrgUser | null>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // Invite user modal state
+  const [showInvite, setShowInvite] = useState(false)
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteDisplayName, setInviteDisplayName] = useState('')
+  const [inviteRole, setInviteRole] = useState('member')
+  const [inviteSendEmail, setInviteSendEmail] = useState(true)
+  const [inviting, setInviting] = useState(false)
+  const [inviteError, setInviteError] = useState('')
+
   const isOwner = user.role === 'owner'
 
   const loadUsers = useCallback(async () => {
@@ -149,10 +158,28 @@ export default function UserManagement({ user, org }: UserManagementProps) {
     try {
       await deleteOrgUser(deleteTarget.id)
       setDeleteTarget(null)
-      setSuccess('User deleted')
+      setSuccess('User removed from organization')
       await loadUsers()
-    } catch (err) { setActionError(errMsg(err, 'Failed to delete user')) }
+    } catch (err) { setActionError(errMsg(err, 'Failed to remove user')) }
     finally { setDeleting(false) }
+  }
+
+  const handleInvite = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setInviting(true); setInviteError('')
+    try {
+      const result = await inviteUserToOrg({
+        email: inviteEmail,
+        display_name: inviteDisplayName,
+        role: inviteRole,
+        send_invite: inviteSendEmail,
+      })
+      setShowInvite(false)
+      setInviteEmail(''); setInviteDisplayName(''); setInviteRole('member'); setInviteSendEmail(true)
+      setSuccess(result.created ? `User created and added to ${org.name}` : `User added to ${org.name}`)
+      await loadUsers()
+    } catch (err) { setInviteError(errMsg(err, 'Failed to add user')) }
+    finally { setInviting(false) }
   }
 
   return (
@@ -168,6 +195,14 @@ export default function UserManagement({ user, org }: UserManagementProps) {
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{org.name} &middot; {users.length} user{users.length !== 1 ? 's' : ''}</p>
           </div>
         </div>
+        <button
+          onClick={() => setShowInvite(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white hover:opacity-90 transition-opacity"
+          style={gradientBlue}
+        >
+          <UserPlus size={16} />
+          Add User
+        </button>
       </div>
 
       {/* Status messages */}
@@ -268,7 +303,7 @@ export default function UserManagement({ user, org }: UserManagementProps) {
                               onClick={() => setDeleteTarget(u)}
                               className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
                               style={{ color: 'var(--danger)' }}
-                              title="Delete user"
+                              title="Remove from organization"
                             >
                               <Trash2 size={14} />
                             </button>
@@ -314,26 +349,83 @@ export default function UserManagement({ user, org }: UserManagementProps) {
         </div>
       )}
 
-      {/* Delete confirmation modal */}
+      {/* Remove from org confirmation modal */}
       {deleteTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setDeleteTarget(null)} />
           <div className="relative w-full max-w-sm mx-4 rounded-2xl shadow-2xl overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
             <div className="px-6 py-5" style={{ background: 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)' }}>
-              <h2 className="text-lg font-semibold text-white">Delete User</h2>
-              <p className="text-sm text-white/70 mt-0.5">This action cannot be undone</p>
+              <h2 className="text-lg font-semibold text-white">Remove User</h2>
+              <p className="text-sm text-white/70 mt-0.5">Remove from {org.name}</p>
             </div>
             <div className="p-6 space-y-4">
               <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                Are you sure you want to permanently delete <strong style={{ color: 'var(--text-primary)' }}>{deleteTarget.display_name}</strong> ({deleteTarget.email})? All their data, sessions, and team memberships will be removed.
+                Are you sure you want to remove <strong style={{ color: 'var(--text-primary)' }}>{deleteTarget.display_name}</strong> ({deleteTarget.email}) from this organization? They will lose access to all teams and data in {org.name}.
               </p>
               <div className="flex gap-3 pt-2">
                 <button onClick={() => setDeleteTarget(null)} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
                 <button onClick={handleDelete} disabled={deleting} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={{ background: 'var(--danger)' }}>
-                  {deleting ? <Loader2 size={16} className="animate-spin" /> : 'Delete User'}
+                  {deleting ? <Loader2 size={16} className="animate-spin" /> : 'Remove'}
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invite user modal */}
+      {showInvite && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setShowInvite(false); setInviteError('') }} />
+          <div className="relative w-full max-w-sm mx-4 rounded-2xl shadow-2xl overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
+            <div className="px-6 py-5" style={gradientBlue}>
+              <h2 className="text-lg font-semibold text-white">Add User</h2>
+              <p className="text-sm text-white/70 mt-0.5">Add a user to {org.name}</p>
+            </div>
+            <form onSubmit={handleInvite} className="p-6 space-y-4">
+              <InlineError msg={inviteError} />
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Email</label>
+                <input
+                  type="email" value={inviteEmail} onChange={e => setInviteEmail(e.target.value)}
+                  placeholder="user@company.com" required
+                  className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Display Name</label>
+                <input
+                  type="text" value={inviteDisplayName} onChange={e => setInviteDisplayName(e.target.value)}
+                  placeholder="Jane Smith" required
+                  className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle}
+                />
+                <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Required if the user is new to the platform</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Role</label>
+                <select
+                  value={inviteRole} onChange={e => setInviteRole(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle}
+                >
+                  <option value="member">Member</option>
+                  <option value="admin">Admin</option>
+                  {isOwner && <option value="owner">Owner</option>}
+                </select>
+              </div>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox" checked={inviteSendEmail} onChange={e => setInviteSendEmail(e.target.checked)}
+                  className="w-4 h-4 rounded"
+                />
+                <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Send welcome email</span>
+              </label>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => { setShowInvite(false); setInviteError('') }} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
+                <button type="submit" disabled={inviting} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={gradientBlue}>
+                  {inviting ? <Loader2 size={16} className="animate-spin" /> : 'Add User'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

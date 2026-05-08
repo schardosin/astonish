@@ -358,39 +358,51 @@ var authPageHTML = `<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Astonish Studio — Authorize</title>
 <style>
+  :root {
+    --bg: #fafbfe; --surface: #ffffff; --text: #0b1222;
+    --muted: #6b7280; --border: #e5e8f0; --accent: #7c3aed;
+    --accent-soft: #eeebff; --shadow: 0 8px 28px rgba(15, 23, 42, 0.1);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1222; --surface: #0f172a; --text: #f6f7fb;
+      --muted: #9ca3af; --border: rgba(255,255,255,0.08); --accent: #8d7ae0;
+      --accent-soft: rgba(141, 122, 224, 0.12); --shadow: 0 10px 32px rgba(0, 0, 0, 0.42);
+    }
+  }
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0d121f; color: #e0e0e0;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    background: var(--bg); color: var(--text);
     display: flex; align-items: center; justify-content: center;
-    min-height: 100vh;
+    min-height: 100vh; padding: 24px;
   }
   .card {
-    background: #161b2e; border: 1px solid #2a3050; border-radius: 16px;
-    padding: 48px; max-width: 440px; width: 90%; text-align: center;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 16px; padding: 48px; max-width: 440px; width: 100%;
+    text-align: center; box-shadow: var(--shadow);
   }
-  h1 { font-size: 20px; font-weight: 600; margin-bottom: 8px; color: #fff; }
-  .subtitle { font-size: 14px; color: #8890a8; margin-bottom: 32px; line-height: 1.5; }
+  h1 { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+  .subtitle { font-size: 14px; color: var(--muted); margin-bottom: 32px; line-height: 1.5; }
   .code-display {
-    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-family: ui-monospace, 'SF Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
     font-size: 36px; font-weight: 700; letter-spacing: 8px;
-    color: #60a5fa; background: #0d121f; border: 1px solid #2a3050;
+    color: var(--accent); background: var(--bg); border: 1px solid var(--border);
     border-radius: 12px; padding: 20px; margin-bottom: 32px;
     user-select: all;
   }
-  .steps { text-align: left; font-size: 13px; line-height: 1.8; color: #8890a8; }
-  .steps strong { color: #c0c8e0; }
+  .steps { text-align: left; font-size: 13px; line-height: 2; color: var(--muted); }
+  .steps strong { color: var(--text); font-weight: 500; }
   .steps code {
-    background: #0d121f; padding: 2px 6px; border-radius: 4px;
-    font-family: 'SF Mono', monospace; font-size: 12px; color: #60a5fa;
+    background: var(--accent-soft); padding: 2px 8px; border-radius: 6px;
+    font-family: ui-monospace, 'SF Mono', monospace; font-size: 12px; color: var(--accent);
   }
-  .status { margin-top: 24px; font-size: 13px; color: #6b7280; }
-  .status.ok { color: #34d399; font-weight: 500; }
-  .status.err { color: #f87171; }
+  .status { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--muted); }
+  .status.ok { color: #16a34a; font-weight: 500; }
+  .status.err { color: #ef4444; }
   .spinner {
     display: inline-block; width: 12px; height: 12px;
-    border: 2px solid #2a3050; border-top-color: #60a5fa;
+    border: 2px solid var(--border); border-top-color: var(--accent);
     border-radius: 50%; animation: spin 0.8s linear infinite;
     vertical-align: middle; margin-right: 6px;
   }

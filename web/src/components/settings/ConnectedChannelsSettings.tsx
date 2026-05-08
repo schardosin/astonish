@@ -17,6 +17,7 @@ interface UserChannel {
 interface LinkCodeResponse {
   code: string
   bot_username: string
+  bot_user_id?: string
   expires_in: number
 }
 
@@ -33,16 +34,24 @@ interface ChannelInfo {
     error: string
     address?: string
   }
+  slack?: {
+    bot_user_id: string
+    configured: boolean
+    enabled: boolean
+    error: string
+  }
 }
 
 const channelIcons: Record<string, string> = {
   telegram: '✈️',
   email: '📧',
+  slack: '💬',
 }
 
 const channelLabels: Record<string, string> = {
   telegram: 'Telegram',
   email: 'Email',
+  slack: 'Slack',
 }
 
 export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin?: boolean }) {
@@ -74,6 +83,15 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   const emailTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const emailPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Slack link flow state
+  const [slackLinkCode, setSlackLinkCode] = useState<string | null>(null)
+  const [slackLinkLoading, setSlackLinkLoading] = useState(false)
+  const [slackCodeCopied, setSlackCodeCopied] = useState(false)
+  const [slackExpiresAt, setSlackExpiresAt] = useState<number | null>(null)
+  const [slackTimeLeft, setSlackTimeLeft] = useState<number>(0)
+  const slackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const slackPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   // Edit form state
   const [editForm, setEditForm] = useState({
     display_name: '',
@@ -84,6 +102,8 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
   const botUsername = linkCode?.bot_username || channelInfo?.telegram?.bot_username || ''
   const botConfigured = channelInfo?.telegram?.configured ?? false
   const emailConfigured = channelInfo?.email?.configured ?? false
+  const slackConfigured = channelInfo?.slack?.configured ?? false
+  const slackBotUserID = channelInfo?.slack?.bot_user_id || ''
 
   const fetchChannels = useCallback(async () => {
     try {
@@ -286,6 +306,96 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
 
   // --- End email linking handlers ---
 
+  // --- Slack linking handlers ---
+
+  // Countdown timer for Slack code expiry
+  useEffect(() => {
+    if (slackExpiresAt === null) {
+      setSlackTimeLeft(0)
+      return
+    }
+    const update = () => {
+      const remaining = Math.max(0, Math.floor((slackExpiresAt - Date.now()) / 1000))
+      setSlackTimeLeft(remaining)
+      if (remaining === 0) {
+        setSlackLinkCode(null)
+        setSlackExpiresAt(null)
+        if (slackPollRef.current) clearInterval(slackPollRef.current)
+      }
+    }
+    update()
+    slackTimerRef.current = setInterval(update, 1000)
+    return () => { if (slackTimerRef.current) clearInterval(slackTimerRef.current) }
+  }, [slackExpiresAt])
+
+  // Poll for Slack link completion when code is active
+  useEffect(() => {
+    if (!slackLinkCode) return
+    const initialCount = channels.filter(c => c.channel_type === 'slack').length
+
+    slackPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch('/api/user/channels', { credentials: 'include' })
+        if (!res.ok) return
+        const data = await res.json()
+        const slackChannels = (data.channels || []).filter((c: UserChannel) => c.channel_type === 'slack')
+        if (slackChannels.length > initialCount) {
+          setChannels(data.channels || [])
+          setSlackLinkCode(null)
+          setSlackExpiresAt(null)
+          setSuccess('Slack linked and verified successfully!')
+          if (slackPollRef.current) clearInterval(slackPollRef.current)
+          setTimeout(() => setSuccess(null), 5000)
+        }
+      } catch { /* ignore poll errors */ }
+    }, 3000)
+
+    return () => { if (slackPollRef.current) clearInterval(slackPollRef.current) }
+  }, [slackLinkCode, channels])
+
+  const handleGenerateSlackCode = async () => {
+    setSlackLinkLoading(true)
+    setError(null)
+    try {
+      const res = await fetch('/api/user/channels/link-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ channel_type: 'slack' }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: 'Failed to generate code' }))
+        throw new Error(data.error || 'Failed to generate link code')
+      }
+      const data = await res.json()
+      if (!data.code) {
+        throw new Error('Slack bot is not connected. Contact your administrator.')
+      }
+      setSlackLinkCode(data.code)
+      setSlackExpiresAt(Date.now() + (data.expires_in || 300) * 1000)
+      setSlackCodeCopied(false)
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSlackLinkLoading(false)
+    }
+  }
+
+  const handleSlackCopyCode = () => {
+    if (!slackLinkCode) return
+    navigator.clipboard.writeText(`/link ${slackLinkCode}`)
+    setSlackCodeCopied(true)
+    setTimeout(() => setSlackCodeCopied(false), 2000)
+  }
+
+  const handleSlackCancelLink = () => {
+    setSlackLinkCode(null)
+    setSlackExpiresAt(null)
+    if (slackPollRef.current) clearInterval(slackPollRef.current)
+  }
+
+  // --- End Slack linking handlers ---
+
   const handleUnlink = async (id: string) => {
     setActionLoading(id)
     setError(null)
@@ -344,6 +454,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
 
   const hasTelegram = channels.some(c => c.channel_type === 'telegram' && c.verified)
   const hasEmail = channels.some(c => c.channel_type === 'email' && c.verified)
+  const hasSlack = channels.some(c => c.channel_type === 'slack' && c.verified)
 
   return (
     <div className="max-w-xl space-y-6">
@@ -429,9 +540,44 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                 )}
               </>
             )}
+
+            {/* Slack status */}
+            {channelInfo.slack && (
+              <>
+                <div className="flex items-center justify-between py-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">💬</span>
+                    <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Slack</span>
+                    {channelInfo.slack.bot_user_id && (
+                      <span className="text-xs font-mono" style={hintStyle}>{channelInfo.slack.bot_user_id}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {channelInfo.slack.enabled ? (
+                      <span className="flex items-center gap-1 text-xs" style={{ color: '#22c55e' }}>
+                        <CheckCircle size={12} /> Running
+                      </span>
+                    ) : channelInfo.slack.configured ? (
+                      <span className="flex items-center gap-1 text-xs" style={{ color: '#f59e0b' }}>
+                        <AlertCircle size={12} /> Configured (not running)
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                        <XCircle size={12} /> Not configured
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {channelInfo.slack.error && (
+                  <div className="ml-7 text-xs px-2 py-1 rounded" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171' }}>
+                    {channelInfo.slack.error}
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <p className="text-xs pt-2 border-t" style={{ ...sectionBorderStyle, color: 'var(--text-muted)' }}>
-            To set up or reconfigure channels, use the CLI: <code className="px-1 py-0.5 rounded text-xs" style={{ background: 'var(--bg-tertiary)' }}>astonish channels setup telegram</code>
+            To set up or reconfigure channels, use the CLI: <code className="px-1 py-0.5 rounded text-xs" style={{ background: 'var(--bg-tertiary)' }}>astonish channels setup [telegram|slack|email]</code>
           </p>
         </div>
       )}
@@ -465,7 +611,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
           <Radio size={28} className="mx-auto mb-2" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
           <p className="text-sm" style={hintStyle}>No channels connected yet.</p>
           <p className="text-xs mt-1" style={hintStyle}>
-            Link your Telegram to receive notifications and interact with the AI.
+            Link your Telegram, Slack, or Email to receive notifications and interact with the AI.
           </p>
         </div>
       )}
@@ -791,6 +937,118 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
         </p>
       )}
 
+      {/* --- Slack Linking --- */}
+
+      {/* Slack Link Code Flow */}
+      {slackLinkCode && (
+        <div className="rounded-lg border p-5 space-y-4" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Link Slack</h4>
+            <button onClick={handleSlackCancelLink} className="p-1 rounded" style={{ color: 'var(--text-muted)' }}>
+              <X size={16} />
+            </button>
+          </div>
+
+          {/* Instructions */}
+          <div className="text-center">
+            <p className="text-sm font-medium mb-1" style={{ color: 'var(--text-primary)' }}>
+              Send this command to the bot via DM in Slack:
+            </p>
+          </div>
+
+          {/* Code display */}
+          <div className="space-y-3">
+            <div className="text-center">
+              <div
+                className="inline-flex items-center gap-3 px-5 py-3 rounded-lg font-mono text-lg tracking-widest select-all"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)' }}
+              >
+                <span>/link {slackLinkCode}</span>
+                <button
+                  onClick={handleSlackCopyCode}
+                  className="p-1 rounded transition-colors hover:bg-gray-600/30"
+                  style={{ color: slackCodeCopied ? '#22c55e' : 'var(--text-muted)' }}
+                  title="Copy to clipboard"
+                >
+                  {slackCodeCopied ? <Check size={16} /> : <Copy size={16} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Timer */}
+            <div className="text-center">
+              <span className="text-xs" style={{ color: slackTimeLeft < 60 ? '#f59e0b' : 'var(--text-muted)' }}>
+                Expires in {formatTime(slackTimeLeft)}
+              </span>
+            </div>
+
+            {/* Instructions */}
+            <div className="space-y-1 pt-2 border-t" style={{ borderColor: 'var(--border-color)' }}>
+              <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Steps:</p>
+              <ol className="text-xs space-y-1 list-decimal list-inside" style={hintStyle}>
+                <li>Open your Slack workspace and find the bot in your sidebar (or Apps section)</li>
+                <li>Send a direct message: <code className="px-1 py-0.5 rounded text-xs" style={{ background: 'var(--bg-tertiary)' }}>/link {slackLinkCode}</code></li>
+                <li>Wait for confirmation — this page updates automatically</li>
+              </ol>
+              {slackBotUserID && (
+                <p className="text-xs mt-1 font-mono" style={hintStyle}>
+                  Bot ID: {slackBotUserID}
+                </p>
+              )}
+            </div>
+
+            {/* Polling indicator */}
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <Loader2 size={12} className="animate-spin" style={{ color: 'var(--accent)' }} />
+              <span className="text-xs" style={hintStyle}>Waiting for verification...</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Link Slack Button — only when Slack is configured and user has no verified Slack channel */}
+      {!slackLinkCode && !loading && !hasSlack && slackConfigured && (
+        <button
+          onClick={handleGenerateSlackCode}
+          disabled={slackLinkLoading}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all hover:scale-[1.02] disabled:opacity-50"
+          style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+        >
+          {slackLinkLoading ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+          Link Slack
+        </button>
+      )}
+
+      {/* Slack not configured warning */}
+      {!slackLinkCode && !loading && !hasSlack && !slackConfigured && channelInfo !== null && channelInfo.slack && (
+        <div className="flex items-start gap-3 p-4 rounded-lg border"
+          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+          <AlertCircle size={18} className="mt-0.5 flex-shrink-0" style={{ color: '#f59e0b' }} />
+          <div>
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Slack bot is not connected
+            </p>
+            <p className="text-xs mt-1" style={hintStyle}>
+              {channelInfo.slack.error
+                ? `Reason: ${channelInfo.slack.error}. `
+                : ''}
+              Contact your administrator to configure the Slack bot token
+              {!channelInfo.slack.enabled && ' and enable the Slack channel'}.
+            </p>
+            <p className="text-xs mt-1 font-mono" style={hintStyle}>
+              Run: astonish channels setup slack
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Already linked Slack note */}
+      {!slackLinkCode && !loading && hasSlack && (
+        <p className="text-xs" style={hintStyle}>
+          To link a different Slack account, unlink the current one first.
+        </p>
+      )}
+
       {/* Edit Modal */}
       {editingChannel && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
@@ -860,7 +1118,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
         <p className="text-xs" style={hintStyle}>
           {isAdmin
             ? 'Channel infrastructure is managed via CLI. Users link their accounts via this panel. Verified channels receive scheduled job results and allow direct AI interaction.'
-            : 'Verified channels receive scheduled job results and allow you to interact with the AI agent directly via Telegram. The linking process is automatic \u2014 just send the code to the bot and you\'re connected.'}
+            : 'Verified channels receive scheduled job results and allow you to interact with the AI agent directly via Telegram, Slack, or Email. The linking process is automatic \u2014 just send the code to the bot and you\'re connected.'}
         </p>
       </div>
     </div>

@@ -18,12 +18,14 @@ import (
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/channels"
 	emailchan "github.com/schardosin/astonish/pkg/channels/email"
+	slackchan "github.com/schardosin/astonish/pkg/channels/slack"
 	"github.com/schardosin/astonish/pkg/channels/telegram"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	emailpkg "github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/migration"
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -457,6 +459,46 @@ func Run(cfg RunConfig) error {
 			}
 		}
 
+		// Register Slack if enabled
+		var slackConfigError string
+		if freshCfg.Channels.Slack.IsSlackEnabled() {
+			botToken := freshCfg.Channels.Slack.BotToken
+			if botToken == "" {
+				botToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.bot_token")
+			}
+			appToken := freshCfg.Channels.Slack.AppToken
+			if appToken == "" {
+				appToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.app_token")
+			}
+			signingSecret := freshCfg.Channels.Slack.SigningSecret
+			if signingSecret == "" {
+				signingSecret = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.signing_secret")
+			}
+
+			mode := freshCfg.Channels.Slack.GetMode()
+			if mode == "socket" && botToken == "" {
+				slackConfigError = "bot_token not configured"
+				logger.Printf("Warning: Slack channel enabled (socket mode) but no bot token found")
+			} else if mode == "socket" && appToken == "" {
+				slackConfigError = "app_token not configured for socket mode"
+				logger.Printf("Warning: Slack channel enabled (socket mode) but no app token found")
+			} else if mode == "events" && signingSecret == "" {
+				slackConfigError = "signing_secret not configured for events mode"
+				logger.Printf("Warning: Slack channel enabled (events mode) but no signing secret found")
+			} else {
+				sl := slackchan.New(&slackchan.Config{
+					Mode:         mode,
+					BotToken:     botToken,
+					AppToken:     appToken,
+					SigningSecret: signingSecret,
+					AllowFrom:    freshCfg.Channels.Slack.AllowFrom,
+					Commands:     mgr.Commands(),
+				}, log.Default())
+				mgr.Register(sl)
+				logger.Printf("Slack channel registered (mode: %s)", mode)
+			}
+		}
+
 		if err := mgr.StartAll(ctx); err != nil {
 			return mgr, fmt.Errorf("failed to start channels: %w", err)
 		}
@@ -470,6 +512,9 @@ func Run(cfg RunConfig) error {
 		}
 		if freshCfg.Channels.Email.IsEmailEnabled() {
 			cfgStatuses["email"] = api.ChannelConfigStatus{Enabled: true, Error: emailConfigError}
+		}
+		if freshCfg.Channels.Slack.IsSlackEnabled() {
+			cfgStatuses["slack"] = api.ChannelConfigStatus{Enabled: true, Error: slackConfigError}
 		}
 		api.SetChannelConfigStatuses(cfgStatuses)
 
@@ -526,37 +571,71 @@ func Run(cfg RunConfig) error {
 	api.SetChannelManager(channelMgr)
 
 	// --- Dynamic allowlist from user_channels (platform mode) ---
-	// In platform mode, the Telegram allowlist is built from the user_channels
+	// In platform mode, channel allowlists are built from the user_channels
 	// table instead of the static config.yaml. A background goroutine refreshes
-	// the allowlist every 60 seconds. This replaces AllowFrom in config.
+	// the allowlists every 60 seconds.
 	var refreshAllowlistStop context.CancelFunc
 	if pgStore != nil && channelMgr != nil {
 		refreshAllowlist := func() {
 			bgCtx := context.Background()
-			links, err := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			allowlists := make(map[string][]string)
+
+			// Telegram allowlist
+			tgLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Telegram allowlist from DB: %v", err)
-				return
-			}
-			ids := make([]string, 0, len(links))
-			for _, link := range links {
-				ids = append(ids, link.ExternalID)
-			}
-			// Merge with static config allowlist (for backward compat / admin access)
-			for _, staticID := range appCfg.Channels.Telegram.AllowFrom {
-				found := false
-				for _, id := range ids {
-					if id == staticID {
-						found = true
-						break
+			} else {
+				ids := make([]string, 0, len(tgLinks))
+				for _, link := range tgLinks {
+					ids = append(ids, link.ExternalID)
+				}
+				// Merge with static config allowlist
+				for _, staticID := range appCfg.Channels.Telegram.AllowFrom {
+					found := false
+					for _, id := range ids {
+						if id == staticID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ids = append(ids, staticID)
 					}
 				}
-				if !found {
-					ids = append(ids, staticID)
+				if len(ids) > 0 {
+					allowlists["telegram"] = ids
 				}
 			}
-			if len(ids) > 0 {
-				channelMgr.UpdateAllowlists(map[string][]string{"telegram": ids})
+
+			// Slack allowlist
+			slLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "slack")
+			if err != nil {
+				logger.Printf("[channels] Failed to refresh Slack allowlist from DB: %v", err)
+			} else {
+				ids := make([]string, 0, len(slLinks))
+				for _, link := range slLinks {
+					ids = append(ids, link.ExternalID)
+				}
+				// Merge with static config allowlist
+				for _, staticID := range appCfg.Channels.Slack.AllowFrom {
+					found := false
+					for _, id := range ids {
+						if id == staticID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ids = append(ids, staticID)
+					}
+				}
+				if len(ids) > 0 {
+					allowlists["slack"] = ids
+				}
+			}
+
+			if len(allowlists) > 0 {
+				channelMgr.UpdateAllowlists(allowlists)
 			}
 		}
 
@@ -588,7 +667,7 @@ func Run(cfg RunConfig) error {
 	}
 
 	// --- Link code store for code-based channel linking (platform mode) ---
-	// Allows users to link their Telegram by sending /link <code> to the bot.
+	// Allows users to link their Telegram/Slack by sending /link <code> to the bot.
 	if pgStore != nil && channelMgr != nil {
 		linkStore := api.NewLinkCodeStore()
 		api.SetLinkCodeStore(linkStore)
@@ -596,6 +675,9 @@ func Run(cfg RunConfig) error {
 		// Set the link handler on the Telegram channel — bridges /link commands
 		// to the link code store and user_channels DB.
 		channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
+
+		// Set the link handler on the Slack channel.
+		channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(pgStore, linkStore, channelMgr))
 	}
 
 	// reloadChannels re-reads config, stops existing channels, and starts new
@@ -668,10 +750,13 @@ func Run(cfg RunConfig) error {
 		// Refresh dynamic allowlist after channel reload (platform mode)
 		if pgStore != nil && channelMgr != nil {
 			bgCtx := context.Background()
-			links, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			allowlists := make(map[string][]string)
+
+			// Telegram
+			tgLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
 			if linkErr == nil {
-				ids := make([]string, 0, len(links))
-				for _, link := range links {
+				ids := make([]string, 0, len(tgLinks))
+				for _, link := range tgLinks {
 					ids = append(ids, link.ExternalID)
 				}
 				for _, staticID := range freshCfg.Channels.Telegram.AllowFrom {
@@ -687,8 +772,36 @@ func Run(cfg RunConfig) error {
 					}
 				}
 				if len(ids) > 0 {
-					channelMgr.UpdateAllowlists(map[string][]string{"telegram": ids})
+					allowlists["telegram"] = ids
 				}
+			}
+
+			// Slack
+			slLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "slack")
+			if linkErr == nil {
+				ids := make([]string, 0, len(slLinks))
+				for _, link := range slLinks {
+					ids = append(ids, link.ExternalID)
+				}
+				for _, staticID := range freshCfg.Channels.Slack.AllowFrom {
+					found := false
+					for _, id := range ids {
+						if id == staticID {
+							found = true
+							break
+						}
+					}
+					if !found {
+						ids = append(ids, staticID)
+					}
+				}
+				if len(ids) > 0 {
+					allowlists["slack"] = ids
+				}
+			}
+
+			if len(allowlists) > 0 {
+				channelMgr.UpdateAllowlists(allowlists)
 			}
 		}
 
@@ -697,11 +810,12 @@ func Run(cfg RunConfig) error {
 			channelMgr.SetPlatformResolver(&channelPlatformResolver{pgStore: pgStore})
 		}
 
-		// Re-attach link handler after reload
+		// Re-attach link handlers after reload
 		if pgStore != nil && channelMgr != nil {
 			linkStore := api.GetLinkCodeStore()
 			if linkStore != nil {
 				channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
+				channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(pgStore, linkStore, channelMgr))
 			}
 		}
 
@@ -1281,7 +1395,7 @@ func setupEmailTools(cfg *emailToolConfig) {
 		return
 	}
 	tools.SetEmailClient(client)
-	api.SetEmailClient(client)
+	mailer.Init(client)
 }
 
 // fleetSchedulerBridge adapts scheduler.Scheduler to fleet.SchedulerAccess,

@@ -579,15 +579,13 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }: { onCreate
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
-  const [orgSlug, setOrgSlug] = useState('')
-  const [orgRole, setOrgRole] = useState('member')
   const [submitting, setSubmitting] = useState(false)
   const [localError, setLocalError] = useState('')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email.trim() || !displayName.trim() || !password.trim()) {
-      setLocalError('Email, display name, and password are required')
+    if (!email.trim() || !displayName.trim()) {
+      setLocalError('Email and display name are required')
       return
     }
     setSubmitting(true); setLocalError('')
@@ -595,9 +593,7 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }: { onCreate
       const result = await adminApi.createUser({
         email: email.trim(),
         display_name: displayName.trim(),
-        password,
-        org_slug: orgSlug.trim() || undefined,
-        org_role: orgRole || undefined,
+        password: password.trim() || undefined,
       })
       onSuccess(result.message)
       onCreated()
@@ -627,23 +623,11 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }: { onCreate
             <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Alice Smith" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Password *</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Minimum 8 characters" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Password <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Leave empty for SSO-only users" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>If empty, user can only log in via configured SSO provider.</p>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Org Slug <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-              <input type="text" value={orgSlug} onChange={e => setOrgSlug(e.target.value)} placeholder="acme-corp" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Org Role</label>
-              <select value={orgRole} onChange={e => setOrgRole(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle}>
-                <option value="member">Member</option>
-                <option value="admin">Admin</option>
-                <option value="owner">Owner</option>
-              </select>
-            </div>
-          </div>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>To assign the user to an organization, go to the org's user management page after creation.</p>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onCancel} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
             <button type="submit" disabled={submitting} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={gradientAmber}>
@@ -723,6 +707,7 @@ interface OIDCProvider {
   org_id: string
   name: string
   issuer_url: string
+  discovery_url?: string
   client_id: string
   client_secret?: string
   scopes: string[]
@@ -746,6 +731,7 @@ async function fetchOIDCProviders(): Promise<OIDCProvider[]> {
 async function createOIDCProvider(params: {
   name: string
   issuer_url: string
+  discovery_url?: string
   client_id: string
   client_secret: string
   scopes?: string[]
@@ -1017,6 +1003,7 @@ function AuthTab() {
 function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }: { onCreated: () => void; onCancel: () => void; onError: (m: string) => void; onSuccess: (m: string) => void }) {
   const [name, setName] = useState('')
   const [issuerUrl, setIssuerUrl] = useState('')
+  const [discoveryUrl, setDiscoveryUrl] = useState('')
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const [scopes, setScopes] = useState('openid email profile')
@@ -1036,6 +1023,7 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }: { 
       const result = await createOIDCProvider({
         name: name.trim() || issuerUrl.trim(),
         issuer_url: issuerUrl.trim(),
+        discovery_url: discoveryUrl.trim() || undefined,
         client_id: clientId.trim(),
         client_secret: clientSecret,
         scopes: scopeList.length > 0 ? scopeList : undefined,
@@ -1069,6 +1057,11 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }: { 
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Issuer URL *</label>
             <input type="url" value={issuerUrl} onChange={e => setIssuerUrl(e.target.value)} placeholder="https://tenant.accounts.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>The OIDC issuer URL. Must serve <code>.well-known/openid-configuration</code>.</p>
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Discovery URL <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
+            <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)} placeholder="https://subdomain.authentication.region.hana.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Only needed if the discovery endpoint differs from the issuer (e.g. SAP BTP XSUAA).</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client ID *</label>
@@ -1112,6 +1105,7 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }: { 
 function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess }: { provider: OIDCProvider; onSaved: () => void; onCancel: () => void; onError: (m: string) => void; onSuccess: (m: string) => void }) {
   const [name, setName] = useState(provider.name)
   const [issuerUrl, setIssuerUrl] = useState(provider.issuer_url)
+  const [discoveryUrl, setDiscoveryUrl] = useState(provider.discovery_url || '')
   const [clientId, setClientId] = useState(provider.client_id)
   const [clientSecret, setClientSecret] = useState('')
   const [scopes, setScopes] = useState((provider.scopes || []).join(' '))
@@ -1129,6 +1123,7 @@ function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess
       const params: Record<string, unknown> = {}
       if (name.trim() !== provider.name) params.name = name.trim()
       if (issuerUrl.trim() !== provider.issuer_url) params.issuer_url = issuerUrl.trim()
+      if (discoveryUrl.trim() !== (provider.discovery_url || '')) params.discovery_url = discoveryUrl.trim()
       if (clientId.trim() !== provider.client_id) params.client_id = clientId.trim()
       if (clientSecret) params.client_secret = clientSecret
       const scopeList = scopes.trim().split(/[\s,]+/).filter(Boolean)
@@ -1165,6 +1160,11 @@ function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Issuer URL *</label>
             <input type="url" value={issuerUrl} onChange={e => setIssuerUrl(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Discovery URL <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
+            <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)} placeholder="Leave empty for standard providers" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Only needed if discovery endpoint differs from issuer (e.g. SAP BTP XSUAA).</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client ID *</label>

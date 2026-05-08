@@ -361,7 +361,7 @@ func (mm *MigrationManager) broadcastProgress(p migration.Progress) {
 // If org is omitted, uses the caller's org. If team is omitted, defaults to "general".
 func handleReimportFlows(pgStore *pgstore.PGStore, configDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		user := requireAdmin(w, r)
+		user := RequireOrgAdmin(w, r)
 		if user == nil {
 			return
 		}

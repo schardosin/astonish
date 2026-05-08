@@ -74,8 +74,8 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := SkillsListResponse{
 			Skills:      items,
-			IsTeamAdmin: isTeamAdminCheck(r),
-			IsOrgAdmin:  isPlatformOrgAdmin(r),
+			IsTeamAdmin: CanManageTeam(r, GetPlatformUser(r)),
+			IsOrgAdmin:  !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
 		}
 		respondJSON(w, http.StatusOK, resp)
 		return
@@ -344,19 +344,6 @@ func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 
 // --- Platform mode helpers ---
 
-// isPlatformOrgAdmin returns true if the current user is an org admin/owner.
-// Does not write HTTP errors — pure check.
-func isPlatformOrgAdmin(r *http.Request) bool {
-	if !isPlatformMode(r) {
-		return true // personal mode
-	}
-	user := GetPlatformUser(r)
-	if user == nil {
-		return false
-	}
-	return isOrgAdmin(user)
-}
-
 // resolveSkillStoreForWrite returns the appropriate SkillStore for a write operation
 // based on the requested scope. Returns nil and writes an error if auth fails.
 func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.Services, scope string) store.SkillStore {
@@ -366,7 +353,7 @@ func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *stor
 			respondError(w, http.StatusServiceUnavailable, "Team skills store not available")
 			return nil
 		}
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return nil
 		}
 		return svc.TeamSkills
@@ -381,7 +368,7 @@ func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *stor
 			respondError(w, http.StatusUnauthorized, "Authentication required")
 			return nil
 		}
-		if !isOrgAdmin(user) {
+		if !CanManageOrg(user) {
 			respondError(w, http.StatusForbidden, "Organization admin access required to manage org skills")
 			return nil
 		}
@@ -392,7 +379,7 @@ func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *stor
 			respondError(w, http.StatusServiceUnavailable, "Team skills store not available")
 			return nil
 		}
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return nil
 		}
 		return svc.TeamSkills
@@ -560,7 +547,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 			Scope:       "org",
 			Content:     extractBody(skill.Content),
 			RawFile:     skill.Content,
-			Editable:    isPlatformOrgAdmin(r),
+			Editable:    !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
 		})
 
 	default:
@@ -574,7 +561,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 					Scope:       "team",
 					Content:     extractBody(skill.Content),
 					RawFile:     skill.Content,
-					Editable:    isTeamAdminCheck(r),
+					Editable:    CanManageTeam(r, GetPlatformUser(r)),
 				})
 				return
 			}
@@ -589,7 +576,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 					Scope:       "org",
 					Content:     extractBody(skill.Content),
 					RawFile:     skill.Content,
-					Editable:    isPlatformOrgAdmin(r),
+					Editable:    !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
 				})
 				return
 			}

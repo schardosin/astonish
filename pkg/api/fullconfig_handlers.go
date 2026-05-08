@@ -427,7 +427,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 				respondError(w, http.StatusUnauthorized, "authentication required")
 				return
 			}
-			if user.Role != "admin" && user.Role != "owner" && user.PlatformRole != "superadmin" {
+			if !CanManageOrg(user) && !IsPlatformAdmin(user) {
 				respondError(w, http.StatusForbidden, "Only org admins can modify system settings in platform mode.")
 				return
 			}

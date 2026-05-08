@@ -35,6 +35,11 @@ type FlowForkRequest struct {
 // the personal copy remains). The team gets an independent copy that can
 // be edited separately.
 func FlowPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins can publish flows to the team.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	svc := store.FromRequest(r)
 	if svc == nil || svc.Mode != store.ModePlatform {
 		respondError(w, http.StatusBadRequest, "platform mode required")

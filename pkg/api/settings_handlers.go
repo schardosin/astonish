@@ -212,6 +212,11 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSettingsHandler handles PUT /api/settings/config
 func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can modify settings.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	var req UpdateAppSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -459,6 +464,11 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can modify MCP settings.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	var newCfg config.MCPConfig
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
@@ -661,7 +671,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: save directly to DB store
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
 		// Team-scoped install requires team admin privileges
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 		userID := effectiveUserID(r)

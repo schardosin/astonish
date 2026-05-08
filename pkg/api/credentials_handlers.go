@@ -8,7 +8,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // --- Credential API types ---
@@ -115,86 +114,6 @@ func hasMasterKey() bool {
 	return cs != nil && cs.HasMasterKey()
 }
 
-// requireTeamAdmin returns true if the user is a team or org admin.
-// Returns false and writes an HTTP 403 error if not.
-func requireTeamAdmin(w http.ResponseWriter, r *http.Request) bool {
-	if !isPlatformMode(r) {
-		return true // personal mode — no admin check
-	}
-	user := GetPlatformUser(r)
-	if user == nil {
-		respondError(w, http.StatusUnauthorized, "Authentication required")
-		return false
-	}
-	// Org-level admin/owner can manage any team's credentials
-	if user.Role == "owner" || user.Role == "admin" {
-		return true
-	}
-	// Check team-level admin
-	tc := pgstore.TenantContextFrom(r.Context())
-	if tc == nil || tc.OrgSlug == "" {
-		respondError(w, http.StatusForbidden, "Team admin access required")
-		return false
-	}
-	svc := store.FromRequest(r)
-	if svc == nil || svc.TenantRouter == nil {
-		respondError(w, http.StatusForbidden, "Team admin access required")
-		return false
-	}
-	orgStore, err := svc.TenantRouter.ForOrg(tc.OrgSlug)
-	if err != nil {
-		respondError(w, http.StatusForbidden, "Team admin access required")
-		return false
-	}
-	teamBySlug, err := orgStore.Teams().GetTeamBySlug(r.Context(), tc.TeamSlug)
-	if err != nil || teamBySlug == nil {
-		respondError(w, http.StatusForbidden, "Team admin access required")
-		return false
-	}
-	role, err := orgStore.Teams().GetMemberRole(r.Context(), user.ID, teamBySlug.ID)
-	if err != nil || role != "admin" {
-		respondError(w, http.StatusForbidden, "Team admin access required")
-		return false
-	}
-	return true
-}
-
-// isTeamAdminCheck returns true if the current user is an org-level or team-level admin.
-// Unlike requireTeamAdmin, this does not write any HTTP response — it is a pure read-only check.
-func isTeamAdminCheck(r *http.Request) bool {
-	if !isPlatformMode(r) {
-		return true // personal mode — always admin
-	}
-	user := GetPlatformUser(r)
-	if user == nil {
-		return false
-	}
-	if user.Role == "owner" || user.Role == "admin" {
-		return true
-	}
-	tc := pgstore.TenantContextFrom(r.Context())
-	if tc == nil || tc.OrgSlug == "" {
-		return false
-	}
-	svc := store.FromRequest(r)
-	if svc == nil || svc.TenantRouter == nil {
-		return false
-	}
-	orgStore, err := svc.TenantRouter.ForOrg(tc.OrgSlug)
-	if err != nil {
-		return false
-	}
-	teamBySlug, err := orgStore.Teams().GetTeamBySlug(r.Context(), tc.TeamSlug)
-	if err != nil || teamBySlug == nil {
-		return false
-	}
-	role, err := orgStore.Teams().GetMemberRole(r.Context(), user.ID, teamBySlug.ID)
-	if err != nil || role != "admin" {
-		return false
-	}
-	return true
-}
-
 // --- Handlers ---
 
 // ListCredentialsHandler returns all credential names/types and secret keys.
@@ -241,7 +160,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
-		IsTeamAdmin:  isTeamAdminCheck(r),
+		IsTeamAdmin:  CanManageTeam(r, GetPlatformUser(r)),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -302,7 +221,7 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
-		IsTeamAdmin:  isTeamAdminCheck(r),
+		IsTeamAdmin:  CanManageTeam(r, GetPlatformUser(r)),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -317,7 +236,7 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Team credential values: admin-only
 	if scope == "team" && isPlatformMode(r) {
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 	}
@@ -374,7 +293,7 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Team credential writes: admin-only
 	if scope == "team" && isPlatformMode(r) {
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 	}
@@ -412,7 +331,7 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Team credential deletes: admin-only
 	if scope == "team" && isPlatformMode(r) {
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 	}
@@ -457,7 +376,7 @@ func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "Publish is only available in platform mode")
 		return
 	}
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -502,7 +421,7 @@ func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusNotFound, "Fork is only available in platform mode")
 		return
 	}
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -544,7 +463,7 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Team secrets: admin-only to reveal
 	if scope == "team" && isPlatformMode(r) {
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 	}
@@ -580,7 +499,7 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Team secrets: admin-only
 	if scope == "team" && isPlatformMode(r) {
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 	}

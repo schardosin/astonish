@@ -158,6 +158,13 @@ func ChannelsStatusHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	{ "status": "ok", "message": "Channels reloaded" }
 func ChannelsReloadHandler(w http.ResponseWriter, r *http.Request) {
+	// Only org admins can reload channel configuration.
+	if isPlatformMode(r) {
+		if RequireOrgAdmin(w, r) == nil {
+			return
+		}
+	}
+
 	reload := getChannelReloadFunc()
 	if reload == nil {
 		http.Error(w, `{"error":"reload not available"}`, http.StatusServiceUnavailable)

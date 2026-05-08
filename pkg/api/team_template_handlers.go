@@ -29,7 +29,7 @@ type TeamTemplateStatusResponse struct {
 // TeamTemplateStatusHandler handles GET /api/team/template/status.
 // Returns whether the team template container exists and its state.
 func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -73,7 +73,7 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateCreateHandler handles POST /api/team/template/create.
 // Creates the team template container from @base and starts it.
 func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -129,7 +129,7 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateSaveHandler handles POST /api/team/template/save.
 // Saves the current template state and sets it as the team's default for fleet sessions.
 func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -189,7 +189,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateRestoreHandler handles POST /api/team/template/restore.
 // Destroys the current team template and recreates it fresh from @base.
 func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -253,7 +253,7 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateDeleteHandler handles DELETE /api/team/template.
 // Destroys the team template container and clears the team settings.
 func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -303,7 +303,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateStartHandler handles POST /api/team/template/start.
 // Starts the team template container (for terminal access after save/stop).
 func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 
@@ -357,7 +357,7 @@ type TeamTemplatePackagesRequest struct {
 }
 
 func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 

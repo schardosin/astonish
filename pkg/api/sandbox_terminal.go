@@ -41,7 +41,7 @@ type terminalResizeMsg struct {
 //   - Text messages from client: JSON control messages (e.g., {"type":"resize","cols":120,"rows":40})
 func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	// Require team admin
-	if !requireTeamAdmin(w, r) {
+	if !RequireTeamAdmin(w, r) {
 		return
 	}
 

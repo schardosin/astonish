@@ -27,20 +27,6 @@ func RegisterUserRoutes(router *mux.Router, pa *PlatformAuth) {
 	router.HandleFunc("/api/admin/users/{id}/role", pa.handleSetUserOrgRole).Methods("PUT")
 }
 
-// requireAdmin extracts the platform user and returns nil (with an error response) if not admin/owner.
-func requireAdmin(w http.ResponseWriter, r *http.Request) *PlatformUser {
-	user := GetPlatformUser(r)
-	if user == nil {
-		respondError(w, http.StatusUnauthorized, "authentication required")
-		return nil
-	}
-	if user.Role != "owner" && user.Role != "admin" {
-		respondError(w, http.StatusForbidden, "admin or owner role required")
-		return nil
-	}
-	return user
-}
-
 // --- Handler: POST /api/admin/users/invite ---
 // Adds a user to the caller's organization. Creates the user on the platform if new.
 
@@ -52,7 +38,7 @@ type inviteUserRequest struct {
 }
 
 func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request) {
-	caller := requireAdmin(w, r)
+	caller := RequireOrgAdmin(w, r)
 	if caller == nil {
 		return
 	}
@@ -84,7 +70,7 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// Only owners can assign owner role.
-	if req.Role == "owner" && caller.Role != "owner" {
+	if req.Role == "owner" && !IsOrgOwner(caller) {
 		respondError(w, http.StatusForbidden, "only owners can assign the owner role")
 		return
 	}
@@ -174,7 +160,7 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 // Query params: ?org=<slug> to filter by org (defaults to caller's org).
 
 func (pa *PlatformAuth) handleListUsers(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -229,7 +215,7 @@ func (pa *PlatformAuth) handleListUsers(w http.ResponseWriter, r *http.Request) 
 // --- Handler: GET /api/admin/users/{id} ---
 
 func (pa *PlatformAuth) handleGetUser(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -267,7 +253,7 @@ func (pa *PlatformAuth) handleGetUser(w http.ResponseWriter, r *http.Request) {
 // Removes a user from the caller's organization (does NOT delete from platform).
 
 func (pa *PlatformAuth) handleRemoveUser(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -296,7 +282,7 @@ func (pa *PlatformAuth) handleRemoveUser(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Only owners can remove other owners.
-	if role == "owner" && user.Role != "owner" {
+	if role == "owner" && !IsOrgOwner(user) {
 		respondError(w, http.StatusForbidden, "only owners can remove other owners")
 		return
 	}
@@ -325,7 +311,7 @@ type setPasswordRequest struct {
 }
 
 func (pa *PlatformAuth) handleSetUserPassword(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -373,7 +359,7 @@ type setUserStatusRequest struct {
 }
 
 func (pa *PlatformAuth) handleSetUserStatus(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -421,7 +407,7 @@ type setUserOrgRoleRequest struct {
 }
 
 func (pa *PlatformAuth) handleSetUserOrgRole(w http.ResponseWriter, r *http.Request) {
-	user := requireAdmin(w, r)
+	user := RequireOrgAdmin(w, r)
 	if user == nil {
 		return
 	}
@@ -440,7 +426,7 @@ func (pa *PlatformAuth) handleSetUserOrgRole(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Only owners can promote to owner.
-	if req.Role == "owner" && user.Role != "owner" {
+	if req.Role == "owner" && !IsOrgOwner(user) {
 		respondError(w, http.StatusForbidden, "only owners can promote to owner")
 		return
 	}
@@ -466,7 +452,7 @@ func (pa *PlatformAuth) handleSetUserOrgRole(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Only owners can change another owner's role.
-	if currentRole == "owner" && user.Role != "owner" {
+	if currentRole == "owner" && !IsOrgOwner(user) {
 		respondError(w, http.StatusForbidden, "only owners can change an owner's role")
 		return
 	}

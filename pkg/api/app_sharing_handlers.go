@@ -226,7 +226,7 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	if !isOrgAdmin(pu) {
+	if !CanManageOrg(pu) {
 		http.Error(w, "admin role required for app promotion", http.StatusForbidden)
 		return
 	}
@@ -347,7 +347,7 @@ func DeleteOrgAppHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	if !isOrgAdmin(pu) {
+	if !CanManageOrg(pu) {
 		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}

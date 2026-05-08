@@ -18,7 +18,7 @@ import (
 
 // PlatformAdminListOIDCProvidersHandler handles GET /api/platform/admin/oidc-providers
 func PlatformAdminListOIDCProvidersHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -72,7 +72,7 @@ func PlatformAdminListOIDCProvidersHandler(w http.ResponseWriter, r *http.Reques
 
 // PlatformAdminCreateOIDCProviderHandler handles POST /api/platform/admin/oidc-providers
 func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -177,7 +177,7 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 
 // PlatformAdminGetOIDCProviderHandler handles GET /api/platform/admin/oidc-providers/{id}
 func PlatformAdminGetOIDCProviderHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -219,7 +219,7 @@ func PlatformAdminGetOIDCProviderHandler(w http.ResponseWriter, r *http.Request)
 
 // PlatformAdminUpdateOIDCProviderHandler handles PATCH /api/platform/admin/oidc-providers/{id}
 func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -309,7 +309,7 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 
 // PlatformAdminDeleteOIDCProviderHandler handles DELETE /api/platform/admin/oidc-providers/{id}
 func PlatformAdminDeleteOIDCProviderHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 

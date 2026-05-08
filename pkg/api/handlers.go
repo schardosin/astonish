@@ -450,6 +450,10 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		scope := r.URL.Query().Get("scope")
 		if scope == "team" && svc.Flows != nil {
+			// Writing to team scope requires team admin.
+			if !RequireTeamAdmin(w, r) {
+				return
+			}
 			if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
 				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
 				return
@@ -633,6 +637,10 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 		scope := r.URL.Query().Get("scope")
 		var err error
 		if scope == "team" && svc.Flows != nil {
+			// Deleting from team scope requires team admin.
+			if !RequireTeamAdmin(w, r) {
+				return
+			}
 			err = svc.Flows.DeleteFlow(name)
 		} else if scope == "personal" && svc.PersonalFlows != nil {
 			err = svc.PersonalFlows.DeleteFlow(name)
@@ -929,6 +937,11 @@ type UpdateMCPServerResponse struct {
 
 // UpdateMCPServerHandler handles PATCH /api/mcp/servers/{name}
 func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can toggle MCP servers.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	vars := mux.Vars(r)
 	serverName := vars["name"]
 

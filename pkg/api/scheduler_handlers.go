@@ -70,6 +70,9 @@ func SchedulerJobsHandler(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		handleListJobs(w, svc.Scheduler)
 	case http.MethodPost:
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
 		handleCreateJob(w, r, svc.Scheduler)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -108,6 +111,9 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(storeJobToAPIJob(job))
 
 	case http.MethodPut:
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
 		var update struct {
 			Name         string            `json:"name"`
 			Mode         string            `json:"mode"`
@@ -178,6 +184,9 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 
 	case http.MethodDelete:
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
 		if err := svc.Scheduler.Remove(jobID); err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
 			return

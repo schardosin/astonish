@@ -15,26 +15,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// requirePlatformAdmin checks that the current request is from a platform superadmin.
-// Returns the PlatformUser if authorized, nil otherwise (and writes the error response).
-func requirePlatformAdmin(w http.ResponseWriter, r *http.Request) *PlatformUser {
-	user := GetPlatformUser(r)
-	if user == nil {
-		respondError(w, http.StatusUnauthorized, "authentication required")
-		return nil
-	}
-	if user.PlatformRole != "superadmin" {
-		respondError(w, http.StatusForbidden, "platform superadmin access required")
-		return nil
-	}
-	return user
-}
-
 // --- Organization Endpoints ---
 
 // PlatformAdminListOrgsHandler handles GET /api/platform/admin/orgs
 func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -89,7 +74,7 @@ func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateOrgHandler handles POST /api/platform/admin/orgs
 func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -194,7 +179,7 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetOrgHandler handles GET /api/platform/admin/orgs/{slug}
 func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -230,7 +215,7 @@ func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateOrgHandler handles PATCH /api/platform/admin/orgs/{slug}
 func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -281,7 +266,7 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 // PlatformAdminDeleteOrgHandler handles DELETE /api/platform/admin/orgs/{slug}
 // Permanently deletes an org — only allowed if status is 'suspended'.
 func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -323,7 +308,7 @@ func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminListUsersHandler handles GET /api/platform/admin/users
 func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -371,7 +356,7 @@ func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateUserHandler handles POST /api/platform/admin/users
 func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -437,7 +422,7 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetUserHandler handles GET /api/platform/admin/users/{id}
 func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -465,7 +450,7 @@ func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateUserHandler handles PATCH /api/platform/admin/users/{id}
 func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
-	admin := requirePlatformAdmin(w, r)
+	admin := RequirePlatformAdmin(w, r)
 	if admin == nil {
 		return
 	}
@@ -542,7 +527,7 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminDeleteUserHandler handles DELETE /api/platform/admin/users/{id}
 func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
-	admin := requirePlatformAdmin(w, r)
+	admin := RequirePlatformAdmin(w, r)
 	if admin == nil {
 		return
 	}
@@ -590,7 +575,7 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminAddUserToOrgHandler handles POST /api/platform/admin/users/{id}/orgs
 func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 
@@ -667,7 +652,7 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminRemoveUserFromOrgHandler handles DELETE /api/platform/admin/users/{id}/orgs/{slug}
 func PlatformAdminRemoveUserFromOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if requirePlatformAdmin(w, r) == nil {
+	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
 

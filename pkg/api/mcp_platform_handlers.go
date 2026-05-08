@@ -66,8 +66,8 @@ func ListMCPPlatformServersHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := MCPPlatformServersListResponse{
 		Servers:     items,
-		IsTeamAdmin: isTeamAdminCheck(r),
-		IsOrgAdmin:  isPlatformOrgAdmin(r),
+		IsTeamAdmin: CanManageTeam(r, GetPlatformUser(r)),
+		IsOrgAdmin:  !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -343,7 +343,7 @@ func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.
 			respondError(w, http.StatusServiceUnavailable, "Team MCP server store not available")
 			return nil
 		}
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return nil
 		}
 		return svc.TeamMCPServers
@@ -357,7 +357,7 @@ func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.
 			respondError(w, http.StatusUnauthorized, "Authentication required")
 			return nil
 		}
-		if !isOrgAdmin(user) {
+		if !CanManageOrg(user) {
 			respondError(w, http.StatusForbidden, "Organization admin access required to manage org MCP servers")
 			return nil
 		}
@@ -368,7 +368,7 @@ func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.
 			respondError(w, http.StatusServiceUnavailable, "Team MCP server store not available")
 			return nil
 		}
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return nil
 		}
 		return svc.TeamMCPServers

@@ -53,7 +53,7 @@ func (pa *PlatformAuth) handleListTeams(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var teams []*store.Team
-	if user.Role == "owner" || user.Role == "admin" {
+	if CanManageOrg(user) {
 		// Admins/owners see all teams for management purposes.
 		teams, err = orgDataStore.Teams().ListTeams(r.Context())
 	} else {
@@ -83,7 +83,7 @@ func (pa *PlatformAuth) handleCreateTeam(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if user.Role != "owner" && user.Role != "admin" {
+	if !CanManageOrg(user) {
 		respondError(w, http.StatusForbidden, "only org admins can create teams")
 		return
 	}
@@ -187,7 +187,7 @@ func (pa *PlatformAuth) handleDeleteTeam(w http.ResponseWriter, r *http.Request)
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
-	if user.Role != "owner" && user.Role != "admin" {
+	if !CanManageOrg(user) {
 		respondError(w, http.StatusForbidden, "only org admins can delete teams")
 		return
 	}
@@ -264,7 +264,7 @@ func (pa *PlatformAuth) handleListTeamMembers(w http.ResponseWriter, r *http.Req
 	// Include the caller's role in this team so the frontend can enable
 	// team-admin management actions without an extra API call.
 	callerTeamRole := ""
-	if isOrgAdmin(user) {
+	if CanManageOrg(user) {
 		callerTeamRole = "org_admin"
 	} else {
 		callerTeamRole, _ = orgDataStore.Teams().GetMemberRole(ctx, user.ID, team.ID)
@@ -312,7 +312,7 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Org admins or team admins can add members.
-	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+	if !CanManageTeamByID(r, user, orgDataStore, team.ID) {
 		respondError(w, http.StatusForbidden, "only org admins or team admins can add team members")
 		return
 	}
@@ -372,7 +372,7 @@ func (pa *PlatformAuth) handleRemoveTeamMember(w http.ResponseWriter, r *http.Re
 	}
 
 	// Org admins or team admins can remove members.
-	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+	if !CanManageTeamByID(r, user, orgDataStore, team.ID) {
 		respondError(w, http.StatusForbidden, "only org admins or team admins can remove team members")
 		return
 	}
@@ -426,7 +426,7 @@ func (pa *PlatformAuth) handleSetTeamRole(w http.ResponseWriter, r *http.Request
 	}
 
 	// Org admins or team admins can change roles.
-	if !pa.isTeamOrOrgAdmin(r, user, orgDataStore, team.ID) {
+	if !CanManageTeamByID(r, user, orgDataStore, team.ID) {
 		respondError(w, http.StatusForbidden, "only org admins or team admins can change roles")
 		return
 	}
@@ -458,25 +458,6 @@ func (pa *PlatformAuth) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 }
 
 // --- Helpers ---
-
-// isOrgAdmin returns true if the user has org-level owner or admin role.
-func isOrgAdmin(user *PlatformUser) bool {
-	return user.Role == "owner" || user.Role == "admin"
-}
-
-// isTeamOrOrgAdmin returns true if the user is an org-level admin/owner OR
-// a team-level admin for the given team. This allows team admins to manage
-// their own team's membership without requiring org-level privileges.
-func (pa *PlatformAuth) isTeamOrOrgAdmin(r *http.Request, user *PlatformUser, orgDataStore store.OrgDataStore, teamID string) bool {
-	if isOrgAdmin(user) {
-		return true
-	}
-	role, err := orgDataStore.Teams().GetMemberRole(r.Context(), user.ID, teamID)
-	if err != nil {
-		return false
-	}
-	return role == "admin"
-}
 
 func slugify(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))

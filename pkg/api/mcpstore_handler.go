@@ -236,7 +236,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: save to DB store, discover tools async
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
 		// Team-scoped install requires team admin privileges
-		if !requireTeamAdmin(w, r) {
+		if !RequireTeamAdmin(w, r) {
 			return
 		}
 		installMCPStoreServerPlatform(w, r, mcpStore, serverName, newConfig)

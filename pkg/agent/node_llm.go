@@ -356,7 +356,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) (bool, error) {
 	// Apply per-node timeout to prevent indefinite hangs on stalled LLM calls.
 	// The timeout covers the entire attempt (LLM call + tool calls + processing).
-	const nodeTimeout = 5 * time.Minute
+	// 10 minutes allows research-heavy tasks (e.g., browser automation with many
+	// page visits) to complete without being prematurely killed.
+	const nodeTimeout = 10 * time.Minute
 	timeoutCtx, cancel := context.WithTimeout(ctx, nodeTimeout)
 	defer cancel()
 	ctx = ctx.WithContext(timeoutCtx)

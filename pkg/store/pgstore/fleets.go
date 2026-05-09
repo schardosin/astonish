@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -33,11 +35,11 @@ func (f *pgFleetTemplateStore) GetFleet(key string) (any, bool) {
 		return nil, false
 	}
 
-	var def any
-	if err := json.Unmarshal(defJSON, &def); err != nil {
+	var cfg fleet.FleetConfig
+	if err := json.Unmarshal(defJSON, &cfg); err != nil {
 		return nil, false
 	}
-	return def, true
+	return &cfg, true
 }
 
 func (f *pgFleetTemplateStore) ListFleets() []store.FleetTemplateSummary {
@@ -64,15 +66,12 @@ func (f *pgFleetTemplateStore) ListFleets() []store.FleetTemplateSummary {
 		desc, _ := def["description"].(string)
 		agentCount := 0
 		var agentNames []string
-		if agents, ok := def["agents"].([]any); ok {
-			agentCount = len(agents)
-			for _, a := range agents {
-				if am, ok := a.(map[string]any); ok {
-					if n, ok := am["name"].(string); ok {
-						agentNames = append(agentNames, n)
-					}
-				}
+		if agents, ok := def["agents"].(map[string]any); ok {
+			for agentKey := range agents {
+				agentNames = append(agentNames, agentKey)
 			}
+			sort.Strings(agentNames)
+			agentCount = len(agentNames)
 		}
 
 		templates = append(templates, store.FleetTemplateSummary{
@@ -159,11 +158,12 @@ func (f *pgFleetPlanStore) GetPlan(key string) (any, bool) {
 		return nil, false
 	}
 
-	var def any
-	if err := json.Unmarshal(defJSON, &def); err != nil {
+	var plan fleet.FleetPlan
+	if err := json.Unmarshal(defJSON, &plan); err != nil {
 		return nil, false
 	}
-	return def, true
+	plan.Key = key
+	return &plan, true
 }
 
 func (f *pgFleetPlanStore) ListPlans() []store.FleetPlanSummary {
@@ -188,11 +188,31 @@ func (f *pgFleetPlanStore) ListPlans() []store.FleetPlanSummary {
 		var def map[string]any
 		_ = json.Unmarshal(defJSON, &def)
 		desc, _ := def["description"].(string)
+		createdFrom, _ := def["created_from"].(string)
+
+		channelType := "chat"
+		if ch, ok := def["channel"].(map[string]any); ok {
+			if ct, ok := ch["type"].(string); ok {
+				channelType = ct
+			}
+		}
+
+		var agentNames []string
+		if agents, ok := def["agents"].(map[string]any); ok {
+			for agentKey := range agents {
+				agentNames = append(agentNames, agentKey)
+			}
+			sort.Strings(agentNames)
+		}
 
 		plans = append(plans, store.FleetPlanSummary{
 			Key:         key,
 			Name:        name,
 			Description: desc,
+			CreatedFrom: createdFrom,
+			ChannelType: channelType,
+			AgentCount:  len(agentNames),
+			AgentNames:  agentNames,
 		})
 	}
 	return plans
@@ -208,7 +228,10 @@ func (f *pgFleetPlanStore) Save(plan any) error {
 	// Extract key and name from the plan
 	key := ""
 	name := ""
-	if m, ok := plan.(map[string]any); ok {
+	if fp, ok := plan.(*fleet.FleetPlan); ok {
+		key = fp.Key
+		name = fp.Name
+	} else if m, ok := plan.(map[string]any); ok {
 		if k, ok := m["key"].(string); ok {
 			key = k
 		}
@@ -310,3 +333,82 @@ func (f *pgFleetPlanStore) SavePlanYAML(key string, yamlContent string) error {
 	)
 	return err
 }
+
+// --- Monitor State Store (DB-backed) ---
+
+// PGMonitorStateStore implements fleet.MonitorStateStore backed by PostgreSQL.
+// State is stored in the team's fleet_monitor_state table.
+type PGMonitorStateStore struct {
+	pool   *pgxpool.Pool
+	schema string
+}
+
+// NewPGMonitorStateStore creates a DB-backed monitor state store for a team schema.
+func NewPGMonitorStateStore(pool *pgxpool.Pool, schema string) *PGMonitorStateStore {
+	return &PGMonitorStateStore{pool: pool, schema: schema}
+}
+
+func (s *PGMonitorStateStore) tableName() string {
+	return pgx.Identifier{s.schema, "fleet_monitor_state"}.Sanitize()
+}
+
+func (s *PGMonitorStateStore) LoadState(planKey string) (*fleet.GitHubMonitorState, error) {
+	ctx := context.Background()
+	var stateJSON []byte
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT state FROM %s WHERE plan_key = $1`, s.tableName()),
+		planKey,
+	).Scan(&stateJSON)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil // no state yet
+		}
+		return nil, fmt.Errorf("loading monitor state: %w", err)
+	}
+
+	var state fleet.GitHubMonitorState
+	if err := json.Unmarshal(stateJSON, &state); err != nil {
+		return nil, fmt.Errorf("parsing monitor state: %w", err)
+	}
+
+	if state.SeenIssues == nil {
+		state.SeenIssues = make(map[int]*fleet.SeenIssueState)
+	}
+	return &state, nil
+}
+
+func (s *PGMonitorStateStore) SaveState(planKey string, state *fleet.GitHubMonitorState) error {
+	ctx := context.Background()
+	stateJSON, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("marshalling monitor state: %w", err)
+	}
+
+	_, err = s.pool.Exec(ctx, fmt.Sprintf(
+		`INSERT INTO %s (plan_key, state, updated_at)
+		 VALUES ($1, $2, now())
+		 ON CONFLICT (plan_key) DO UPDATE SET state = $2, updated_at = now()`,
+		s.tableName()),
+		planKey, stateJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("saving monitor state: %w", err)
+	}
+	return nil
+}
+
+func (s *PGMonitorStateStore) DeleteState(planKey string) error {
+	ctx := context.Background()
+	_, err := s.pool.Exec(ctx, fmt.Sprintf(
+		`DELETE FROM %s WHERE plan_key = $1`, s.tableName()),
+		planKey,
+	)
+	if err != nil {
+		return fmt.Errorf("deleting monitor state: %w", err)
+	}
+	return nil
+}
+
+// Compile-time check
+var _ fleet.MonitorStateStore = (*PGMonitorStateStore)(nil)

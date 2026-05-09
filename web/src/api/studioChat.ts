@@ -82,6 +82,24 @@ export async function deleteSession(id: string): Promise<void> {
   }
 }
 
+export interface SubtaskEventItem {
+  type: string
+  tool_name?: string
+  tool_args?: unknown
+  tool_result?: unknown
+  text?: string
+}
+
+export async function fetchSubtaskEvents(sessionId: string, taskName: string): Promise<SubtaskEventItem[]> {
+  const params = new URLSearchParams({ task_name: taskName })
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/subtask-events?${params}`)
+  if (!response.ok) {
+    return []
+  }
+  const data = await response.json()
+  return data.events || []
+}
+
 export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 

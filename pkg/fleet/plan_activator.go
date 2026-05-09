@@ -4,12 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
+
+// PlanAccess abstracts read/write access to fleet plans for the PlanActivator.
+// In personal mode, this is backed by *PlanRegistry (file-based).
+// In platform mode, this is backed by a DB store adapter.
+type PlanAccess interface {
+	GetPlan(key string) (*FleetPlan, bool)
+	Save(plan *FleetPlan) error
+	ListPlans() []PlanSummary
+	// MonitorStateStore returns the state persistence backend for monitors.
+	// In personal mode, this is file-based (under the fleet_plans directory).
+	// In platform mode, this is backed by the team's database table.
+	MonitorStateStore() MonitorStateStore
+}
 
 // SchedulerAccess abstracts scheduler operations for the PlanActivator.
 // This avoids import cycles between fleet and scheduler/tools packages.
@@ -79,7 +90,7 @@ type GHTokenResolverFunc func(plan *FleetPlan) string
 // PlanActivator manages the lifecycle of fleet plan activations.
 // It creates scheduler jobs for activated plans and removes them on deactivation.
 type PlanActivator struct {
-	planRegistryFn  func() *PlanRegistry
+	planAccessFn    func() PlanAccess
 	scheduler       SchedulerAccess
 	fleetStart      FleetStartFunc
 	fleetRecover    FleetRecoverFunc
@@ -95,21 +106,21 @@ type PlanActivator struct {
 }
 
 // NewPlanActivator creates a new activator.
-// The registryFn is called each time the activator needs the PlanRegistry,
+// The accessFn is called each time the activator needs plan access,
 // ensuring it always sees the current instance even if the package-level
 // variable is replaced (e.g., when the Studio lazy chat init re-creates it).
-func NewPlanActivator(registryFn func() *PlanRegistry, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
+func NewPlanActivator(accessFn func() PlanAccess, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
 	return &PlanActivator{
-		planRegistryFn: registryFn,
-		scheduler:      sched,
-		fleetStart:     fleetStart,
-		monitors:       make(map[string]*GitHubMonitor),
+		planAccessFn: accessFn,
+		scheduler:    sched,
+		fleetStart:   fleetStart,
+		monitors:     make(map[string]*GitHubMonitor),
 	}
 }
 
-// registry returns the current PlanRegistry instance.
-func (a *PlanActivator) registry() *PlanRegistry {
-	return a.planRegistryFn()
+// registry returns the current PlanAccess instance.
+func (a *PlanActivator) registry() PlanAccess {
+	return a.planAccessFn()
 }
 
 // SetRecoverFunc sets the function used to recover interrupted fleet sessions.
@@ -164,7 +175,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	// For GitHub Issues: initialize the monitor and mark existing issues as seen
 	// so we only trigger on NEW issues created after activation.
 	if plan.Channel.Type == "github_issues" {
-		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().Dir())
+		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().MonitorStateStore())
 		monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 		if err := monitor.LoadState(); err != nil {
 			slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", planKey, "error", err)
@@ -357,7 +368,7 @@ func (a *PlanActivator) RestoreActivated() error {
 
 		// Re-create the monitor for this plan
 		if plan.Channel.Type == "github_issues" {
-			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().Dir())
+			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().MonitorStateStore())
 			monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 			if err := monitor.LoadState(); err != nil {
 				slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", summary.Key, "error", err)
@@ -650,11 +661,10 @@ func (a *PlanActivator) ForceCleanup(planKey string) {
 			slog.Warn("failed to clear monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 	} else {
-		// No in-memory monitor, but the state file may still exist on disk.
-		// Remove it directly using the same path convention as GitHubMonitor.
-		statePath := filepath.Join(a.registry().Dir(), ".state", planKey+".json")
-		if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
-			slog.Warn("failed to remove state file", "component", "plan-activator", "path", statePath, "error", err)
+		// No in-memory monitor, but persisted state may still exist.
+		// Remove it directly using the store.
+		if err := a.registry().MonitorStateStore().DeleteState(planKey); err != nil {
+			slog.Warn("failed to remove monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 	}
 

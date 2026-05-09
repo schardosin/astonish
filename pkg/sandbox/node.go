@@ -797,6 +797,14 @@ func (lnc *LazyNodeClient) LastActivity() time.Time {
 	return time.Unix(ts, 0)
 }
 
+// TouchActivity updates the last activity timestamp without making a tool call.
+// Used by browser tools which communicate directly with Chromium inside the
+// container via CDP, bypassing the node process and thus never calling Call().
+// Without this, the idle watchdog would kill containers with active browser sessions.
+func (lnc *LazyNodeClient) TouchActivity() {
+	lnc.lastActivity.Store(time.Now().Unix())
+}
+
 // EnsureContainerReady blocks until the container is created and running,
 // but does NOT wait for the astonish node process to start. Returns the
 // container name and the Incus client.
@@ -1013,6 +1021,20 @@ func (p *NodeClientPool) Alias(childSessionID, parentSessionID string) {
 	}
 
 	p.clients[childSessionID] = parent
+}
+
+// TouchActivity updates the last activity timestamp for a session's container
+// without making a tool call. This prevents the idle watchdog from killing
+// containers that are actively being used by browser tools (which communicate
+// via CDP, bypassing the node process).
+func (p *NodeClientPool) TouchActivity(sessionID string) {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	p.mu.Unlock()
+
+	if ok && client != nil {
+		client.TouchActivity()
+	}
 }
 
 // Remove stops the node for a session and removes it from the pool.

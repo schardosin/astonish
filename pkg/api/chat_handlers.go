@@ -18,6 +18,7 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -400,10 +401,23 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// If the hint is a fleet template key, look up the wizard config
 		if hint != "" {
-			if reg := GetFleetRegistry(); reg != nil {
-				if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
-					eventData["wizard_description"] = cfg.PlanWizard.Description
-					eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+			// Try store from request first (platform mode), then global registry
+			var wizardFound bool
+			if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+				if cfgAny, ok := svc.FleetTemplates.GetFleet(hint); ok {
+					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
+						eventData["wizard_description"] = cfg.PlanWizard.Description
+						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+						wizardFound = true
+					}
+				}
+			}
+			if !wizardFound {
+				if reg := GetFleetRegistry(); reg != nil {
+					if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
+						eventData["wizard_description"] = cfg.PlanWizard.Description
+						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+					}
 				}
 			}
 		}
@@ -682,6 +696,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// the schedule_job and list_scheduled_jobs tools operate on the correct team.
 	if svc := store.FromRequest(r); svc != nil && svc.Scheduler != nil {
 		runner.InjectSchedulerStore(svc.Scheduler)
+	}
+
+	// Inject tenant-scoped fleet stores into the runner context so that
+	// fleet tools (save_fleet_plan, list_fleets) can read/write from the DB.
+	if svc := store.FromRequest(r); svc != nil && (svc.FleetTemplates != nil || svc.FleetPlans != nil) {
+		runner.InjectFleetStores(svc.FleetTemplates, svc.FleetPlans)
 	}
 
 	// Inject the team's custom sandbox template so that chat containers use

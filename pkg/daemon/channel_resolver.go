@@ -109,6 +109,8 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 		Team: teamStore.MCPServers(),
 	})
 	enrichedCtx = store.WithMemoryStore(enrichedCtx, teamStore.Memories())
+	enrichedCtx = store.WithFleetTemplateStore(enrichedCtx, teamStore.FleetTemplates())
+	enrichedCtx = store.WithFleetPlanStore(enrichedCtx, teamStore.FleetPlans())
 
 	return enrichedCtx, link.UserID, user.DisplayName, nil
 }

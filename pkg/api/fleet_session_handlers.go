@@ -113,13 +113,28 @@ type FleetSessionResult struct {
 // teamSlug scopes the session to a team (empty for personal mode).
 // sessionStore is the PG-backed session store for platform mode (nil for personal mode).
 // mcpStores provides platform MCP server stores for sandbox tool injection (nil for personal mode).
-func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string) (*FleetSessionResult, error) {
-	if fleetPlanRegistryVar == nil {
-		return nil, fmt.Errorf("fleet plan system not initialized")
-	}
-	plan, ok := fleetPlanRegistryVar.GetPlan(planKey)
-	if !ok {
-		return nil, fmt.Errorf("fleet plan %q not found", planKey)
+// fleetPlanStore is the DB-backed plan store for platform mode (nil uses the file-based registry).
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string, fleetPlanStore store.FleetPlanStore) (*FleetSessionResult, error) {
+	// Resolve plan from the provided store (platform mode) or the global registry (personal mode)
+	var plan *fleet.FleetPlan
+	if fleetPlanStore != nil {
+		planAny, ok := fleetPlanStore.GetPlan(planKey)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q not found", planKey)
+		}
+		plan, ok = planAny.(*fleet.FleetPlan)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q has unexpected type: %T", planKey, planAny)
+		}
+	} else {
+		if fleetPlanRegistryVar == nil {
+			return nil, fmt.Errorf("fleet plan system not initialized")
+		}
+		var ok bool
+		plan, ok = fleetPlanRegistryVar.GetPlan(planKey)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q not found", planKey)
+		}
 	}
 
 	subAgentMgr := tools.GetSubAgentManager()
@@ -317,7 +332,12 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 				handlerTeamTemplate = settings.TemplateName
 			}
 		}
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate)
+		// Resolve fleet plan store for platform mode
+		var handlerFleetPlanStore store.FleetPlanStore
+		if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+			handlerFleetPlanStore = svc.FleetPlans
+		}
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate, handlerFleetPlanStore)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -334,15 +354,31 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start from a regular fleet template
-	fleetReg := GetFleetRegistry()
-	if fleetReg == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-	cfg, ok := fleetReg.GetFleet(req.FleetKey)
-	if !ok {
-		http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
-		return
+	var cfg *fleet.FleetConfig
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		cfgAny, found := svc.FleetTemplates.GetFleet(req.FleetKey)
+		if !found {
+			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+			return
+		}
+		var cfgOk bool
+		cfg, cfgOk = cfgAny.(*fleet.FleetConfig)
+		if !cfgOk {
+			http.Error(w, fmt.Sprintf("Fleet %q has unexpected type", req.FleetKey), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		fleetReg := GetFleetRegistry()
+		if fleetReg == nil {
+			http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+			return
+		}
+		var found bool
+		cfg, found = fleetReg.GetFleet(req.FleetKey)
+		if !found {
+			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+			return
+		}
 	}
 
 	subAgentMgr := tools.GetSubAgentManager()
@@ -1292,6 +1328,21 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 		if len(cachedTools) == 0 {
 			continue
 		}
+
+		// Filter out excluded tools for standard servers (e.g., tavily_research)
+		if excluded := config.GetExcludedTools(name); excluded != nil {
+			filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+			for _, t := range cachedTools {
+				if !excluded[t.Name] {
+					filtered = append(filtered, t)
+				}
+			}
+			cachedTools = filtered
+			if len(cachedTools) == 0 {
+				continue
+			}
+		}
+
 		lt := agent.NewLazyMCPToolset(name, cachedTools, serverCfg, false)
 		lt.SetSandboxClient(lazyNode, incusClient)
 		toolsets = append(toolsets, agent.NewSanitizedToolset(lt, false))

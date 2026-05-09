@@ -138,6 +138,18 @@ func (cr *ChatRunner) InjectMCPServerStores(org, team store.MCPServerStore) {
 	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{Org: org, Team: team})
 }
 
+// InjectFleetStores adds tenant-scoped fleet template and plan stores to the
+// runner's context so that fleet tools (save_fleet_plan, list_fleets) can
+// read/write from the database in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectFleetStores(templates store.FleetTemplateStore, plans store.FleetPlanStore) {
+	if templates != nil {
+		cr.ctx = store.WithFleetTemplateStore(cr.ctx, templates)
+	}
+	if plans != nil {
+		cr.ctx = store.WithFleetPlanStore(cr.ctx, plans)
+	}
+}
+
 // InjectSandboxTemplate adds the team's custom sandbox template name to the
 // runner's context. NodeTool reads this at container creation time so that chat
 // sessions use the team's pre-configured container image rather than @base.

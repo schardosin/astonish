@@ -117,15 +117,31 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the plan
-	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan registry not available", http.StatusServiceUnavailable)
-		return
-	}
-	plan, ok := fleetPlanRegistryVar.GetPlan(key)
-	if !ok {
-		http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
-		return
+	// Get the plan — try store from request first (platform mode), then global registry
+	var plan *fleet.FleetPlan
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		planAny, found := svc.FleetPlans.GetPlan(key)
+		if !found {
+			http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
+			return
+		}
+		var ok bool
+		plan, ok = planAny.(*fleet.FleetPlan)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Fleet plan %q has unexpected type", key), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		if fleetPlanRegistryVar == nil {
+			http.Error(w, "Fleet plan registry not available", http.StatusServiceUnavailable)
+			return
+		}
+		var ok bool
+		plan, ok = fleetPlanRegistryVar.GetPlan(key)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
+			return
+		}
 	}
 
 	// Reset the retry count so the issue can be picked up again

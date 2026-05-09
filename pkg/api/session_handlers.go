@@ -411,6 +411,172 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(output)
 }
 
+// StudioSubtaskEventsHandler handles GET /api/studio/sessions/{id}/subtask-events.
+// Returns the full tool call/result history for a specific sub-agent task,
+// loaded from the child session. Used by the frontend TaskPlanPanel for
+// lazy-loading detail when a user expands a completed task after page refresh.
+//
+// Query params:
+//
+//	task_name=<name>  - required, the sub-task name to load events for
+func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+	taskName := r.URL.Query().Get("task_name")
+	if taskName == "" {
+		http.Error(w, "task_name query parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	userID := effectiveUserID(r)
+
+	type subtaskEventItem struct {
+		Type       string `json:"type"`
+		ToolName   string `json:"tool_name,omitempty"`
+		ToolArgs   any    `json:"tool_args,omitempty"`
+		ToolResult any    `json:"tool_result,omitempty"`
+		Text       string `json:"text,omitempty"`
+	}
+
+	type subtaskEventsResponse struct {
+		Events []subtaskEventItem `json:"events"`
+	}
+
+	// extractChildToolEvents parses ADK session events from a child session
+	// and returns subtask event items (tool calls, results, and text).
+	extractChildToolEvents := func(events []*session.Event) []subtaskEventItem {
+		var items []subtaskEventItem
+		for _, evt := range events {
+			if evt.Content == nil {
+				continue
+			}
+			for _, part := range evt.Content.Parts {
+				if part.FunctionCall != nil {
+					// Skip internal tools that don't add value for display
+					name := part.FunctionCall.Name
+					if name == "search_tools" || name == "announce_plan" || name == "update_plan" {
+						continue
+					}
+					items = append(items, subtaskEventItem{
+						Type:     "task_tool_call",
+						ToolName: name,
+						ToolArgs: part.FunctionCall.Args,
+					})
+				}
+				if part.FunctionResponse != nil {
+					name := part.FunctionResponse.Name
+					if name == "search_tools" || name == "announce_plan" || name == "update_plan" {
+						continue
+					}
+					items = append(items, subtaskEventItem{
+						Type:       "task_tool_result",
+						ToolName:   name,
+						ToolResult: summarizeToolResult(part.FunctionResponse.Response),
+					})
+				}
+				if part.Text != "" && evt.Content.Role == "model" {
+					items = append(items, subtaskEventItem{
+						Type: "task_text",
+						Text: part.Text,
+					})
+				}
+			}
+		}
+		return items
+	}
+
+	// Platform mode: resolve session store and load child sessions.
+	if svc := store.FromRequest(r); svc != nil {
+		sessionStore := resolveSessionStore(svc, sessionID)
+		if sessionStore == nil {
+			http.Error(w, "Session not found", http.StatusNotFound)
+			return
+		}
+
+		children, err := sessionStore.ListChildren(sessionID)
+		if err != nil {
+			http.Error(w, "Failed to list child sessions: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Find the last child session matching the task name (last = successful retry).
+		// Child sessions have title set to the task name.
+		var matchedChild *store.SessionMeta
+		for i := len(children) - 1; i >= 0; i-- {
+			if children[i].Title == taskName {
+				matchedChild = &children[i]
+				break
+			}
+		}
+
+		if matchedChild == nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(subtaskEventsResponse{Events: []subtaskEventItem{}})
+			return
+		}
+
+		events, err := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, matchedChild.ID)
+		if err != nil {
+			slog.Warn("failed to read child session events", "child_id", matchedChild.ID, "error", err)
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(subtaskEventsResponse{Events: []subtaskEventItem{}})
+			return
+		}
+
+		items := extractChildToolEvents(events)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(subtaskEventsResponse{Events: items})
+		return
+	}
+
+	// Personal mode: use ChatManager's file store.
+	cm := GetChatManager()
+	if err := cm.ensureReady(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fs := cm.fileStore()
+	if fs == nil {
+		http.Error(w, "File store not available", http.StatusInternalServerError)
+		return
+	}
+
+	children, err := fs.ListChildren(sessionID)
+	if err != nil {
+		http.Error(w, "Failed to list child sessions: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Find the last child session matching the task name.
+	var matchedChildID string
+	for i := len(children) - 1; i >= 0; i-- {
+		if children[i].Title == taskName {
+			matchedChildID = children[i].ID
+			break
+		}
+	}
+
+	if matchedChildID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(subtaskEventsResponse{Events: []subtaskEventItem{}})
+		return
+	}
+
+	transcriptPath := filepath.Join(fs.BaseDir(), studioChatAppName, userID, matchedChildID+".jsonl")
+	transcript := persistentsession.NewTranscript(transcriptPath)
+	events, err := transcript.ReadEvents()
+	if err != nil {
+		slog.Warn("failed to read child session transcript", "child_id", matchedChildID, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(subtaskEventsResponse{Events: []subtaskEventItem{}})
+		return
+	}
+
+	items := extractChildToolEvents(events)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(subtaskEventsResponse{Events: items})
+}
+
 // StudioDeleteSessionHandler handles DELETE /api/studio/sessions/{id}.
 func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]

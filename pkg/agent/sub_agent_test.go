@@ -247,6 +247,122 @@ func TestSubAgentManager_BuildChildPromptWithoutHTTPTools(t *testing.T) {
 	}
 }
 
+func TestSubAgentManager_BuildChildPromptPrimaryToolsGuidance(t *testing.T) {
+	mgr := NewSubAgentManager(SubAgentConfig{})
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"browser": {
+			Name:  "browser",
+			Tools: mockTools("browser_navigate", "browser_snapshot"),
+		},
+	}
+
+	// With ToolFilter set, should include primary tools guidance
+	task := SubAgentTask{
+		Name:        "researcher",
+		Description: "Get current prices from Amazon",
+		ToolFilter:  []string{"browser"},
+	}
+	prompt := mgr.buildChildPrompt(context.Background(), task)
+
+	if !contains(prompt, "PRIMARY tools") {
+		t.Error("prompt missing primary tools guidance when ToolFilter is set")
+	}
+	if !contains(prompt, "browser") {
+		t.Error("prompt missing tool filter names in primary tools guidance")
+	}
+
+	// Without ToolFilter, should NOT include primary tools guidance
+	taskNoFilter := SubAgentTask{
+		Name:        "worker",
+		Description: "Do something",
+	}
+	promptNoFilter := mgr.buildChildPrompt(context.Background(), taskNoFilter)
+
+	if contains(promptNoFilter, "PRIMARY tools") {
+		t.Error("prompt should NOT contain primary tools guidance when ToolFilter is empty")
+	}
+}
+
+func TestSubAgentManager_BuildChildPromptWithWebTools(t *testing.T) {
+	mgr := NewSubAgentManager(SubAgentConfig{})
+	mgr.WebSearchToolName = "tavily_search"
+	mgr.WebExtractToolName = "tavily_extract"
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"web": {
+			Name:  "web",
+			Tools: mockTools("web_fetch", "tavily_search", "tavily_extract"),
+		},
+	}
+
+	task := SubAgentTask{
+		Name:        "researcher",
+		Description: "Research a topic",
+		ToolFilter:  []string{"web"},
+	}
+
+	prompt := mgr.buildChildPrompt(context.Background(), task)
+
+	// Should have web tools section
+	if !contains(prompt, "## Web Tools") {
+		t.Error("prompt missing Web Tools section when web_fetch and search tools are available")
+	}
+	// Should mention tavily_search with staleness caveat
+	if !contains(prompt, "tavily_search") {
+		t.Error("prompt missing tavily_search tool name")
+	}
+	if !contains(prompt, "stale") {
+		t.Error("prompt missing staleness caveat for search results")
+	}
+	// Should mention tavily_extract as fallback
+	if !contains(prompt, "tavily_extract") {
+		t.Error("prompt missing tavily_extract fallback")
+	}
+	// Should NOT mention browser when browser tools are absent
+	if contains(prompt, "browser_navigate") {
+		t.Error("prompt should NOT mention browser tools when they are not in the toolset")
+	}
+}
+
+func TestSubAgentManager_BuildChildPromptWithWebAndBrowserTools(t *testing.T) {
+	mgr := NewSubAgentManager(SubAgentConfig{})
+	mgr.WebSearchToolName = "tavily_search"
+	mgr.WebExtractToolName = "tavily_extract"
+	mgr.ToolGroups = map[string]*ToolGroup{
+		"web": {
+			Name:  "web",
+			Tools: mockTools("web_fetch", "tavily_search", "tavily_extract"),
+		},
+		"browser": {
+			Name:  "browser",
+			Tools: mockTools("browser_navigate", "browser_snapshot", "browser_click", "browser_type"),
+		},
+	}
+
+	task := SubAgentTask{
+		Name:        "researcher",
+		Description: "Get current prices from a website",
+		ToolFilter:  []string{"web", "browser"},
+	}
+
+	prompt := mgr.buildChildPrompt(context.Background(), task)
+
+	// Should have web tools section
+	if !contains(prompt, "## Web Tools") {
+		t.Error("prompt missing Web Tools section")
+	}
+	// Should mention browser tools with live data guidance
+	if !contains(prompt, "Browser tools") {
+		t.Error("prompt missing browser tools guidance when browser_navigate is available")
+	}
+	if !contains(prompt, "live/current data") {
+		t.Error("prompt missing live/current data guidance for browser tools")
+	}
+	// Should NOT contain the old prescriptive "Do NOT use web_fetch for search"
+	if contains(prompt, "Do NOT use") {
+		t.Error("prompt still contains prescriptive 'Do NOT use' language (should be behavior-based)")
+	}
+}
+
 func TestSubAgentManager_DepthCheck(t *testing.T) {
 	mgr := NewSubAgentManager(SubAgentConfig{MaxDepth: 2})
 

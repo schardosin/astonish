@@ -937,12 +937,13 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize fleet plan activator ---
 	// This bridges fleet plans to the scheduler for automated polling.
-	// Requires both the scheduler and the plan registry to be initialized.
-	// In platform mode, fleet plans use the default org/team for now.
+	// Requires the scheduler to be initialized.
+	// In personal mode, also requires the plan registry to be initialized.
+	// In platform mode, fleet plans are read from the database.
 	schedulerAvailable := sched != nil || mtSched != nil
 	if schedulerAvailable {
-		planReg := api.GetFleetPlanRegistry()
-		if planReg != nil {
+		planRegAvailable := api.GetFleetPlanRegistry() != nil || pgStore != nil
+		if planRegAvailable {
 			// In platform mode without a personal-mode scheduler, create a
 			// temporary single-team scheduler bridge for fleet plan management.
 			// Fleet plans are org-level resources that get stored in the default team.
@@ -965,10 +966,33 @@ func Run(cfg RunConfig) error {
 				fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
 					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore)
 				}
-				// Pass api.GetFleetPlanRegistry as a function so the activator
-				// always sees the current registry instance, even if the Studio
-				// lazy chat init replaces it with a new one.
-				activator := fleet.NewPlanActivator(api.GetFleetPlanRegistry, fleetSchedBridge, fleetStarter)
+				// Wrap the plan registry getter to satisfy fleet.PlanAccess interface.
+				// In personal mode, returns the file-based PlanRegistry.
+				// In platform mode (when pgStore != nil), returns a DB-backed adapter.
+				planAccessFn := func() fleet.PlanAccess {
+					if pgStore != nil {
+						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+							teamStore := orgStore.ForTeam("general")
+							// Get the org pool for the monitor state store
+							orgPool, poolErr := pgStore.PoolManager().OrgPool(context.Background(), orgSlug)
+							if poolErr != nil {
+								slog.Warn("failed to get org pool for monitor state", "error", poolErr)
+								return nil
+							}
+							return &dbPlanAccessAdapter{
+								store:        teamStore.FleetPlans(),
+								monitorStore: pgstore.NewPGMonitorStateStore(orgPool, pgstore.TeamSchemaName("general")),
+							}
+						}
+					}
+					reg := api.GetFleetPlanRegistry()
+					if reg == nil {
+						return nil
+					}
+					return reg
+				}
+				activator := fleet.NewPlanActivator(planAccessFn, fleetSchedBridge, fleetStarter)
 
 				// Wire the poll function into the scheduler executor
 				if schedExec != nil {
@@ -1027,6 +1051,15 @@ func Run(cfg RunConfig) error {
 				return api.GetFleetSessionRegistry()
 			},
 			GetPlanRegistry: func() channels.FleetPlanRegistry {
+				// Platform mode: use DB store
+				if pgStore != nil {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam("general")
+						return &dbFleetPlanRegistryAdapter{store: teamStore.FleetPlans()}
+					}
+				}
+				// Personal mode: use file-based registry
 				reg := api.GetFleetPlanRegistry()
 				if reg == nil {
 					return nil
@@ -1034,6 +1067,15 @@ func Run(cfg RunConfig) error {
 				return &fleetPlanRegistryAdapter{reg: reg}
 			},
 			GetFleetRegistry: func() channels.FleetTemplateRegistry {
+				// Platform mode: use DB store
+				if pgStore != nil {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam("general")
+						return &dbFleetTemplateRegistryAdapter{store: teamStore.FleetTemplates()}
+					}
+				}
+				// Personal mode: use file-based registry
 				reg := api.GetFleetRegistry()
 				if reg == nil {
 					return nil
@@ -1041,7 +1083,16 @@ func Run(cfg RunConfig) error {
 				return &fleetTemplateRegistryAdapter{reg: reg}
 			},
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "")
+				// Resolve fleet plan store for platform mode
+				var fleetPlanStore store.FleetPlanStore
+				if pgStore != nil {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam("general")
+						fleetPlanStore = teamStore.FleetPlans()
+					}
+				}
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "", fleetPlanStore)
 				if err != nil {
 					return nil, err
 				}
@@ -1506,6 +1557,110 @@ func (a *fleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSumm
 
 func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTemplateWithWizard, bool) {
 	cfg, ok := a.reg.GetFleet(key)
+	if !ok {
+		return channels.FleetTemplateWithWizard{}, false
+	}
+	var wizardPrompt string
+	if cfg.PlanWizard != nil {
+		wizardPrompt = cfg.PlanWizard.SystemPrompt
+	}
+	return channels.FleetTemplateWithWizard{
+		Name:               cfg.Name,
+		WizardSystemPrompt: wizardPrompt,
+	}, true
+}
+
+// dbPlanAccessAdapter wraps a store.FleetPlanStore to satisfy fleet.PlanAccess
+// for use by the PlanActivator in platform mode.
+type dbPlanAccessAdapter struct {
+	store        store.FleetPlanStore
+	monitorStore fleet.MonitorStateStore
+}
+
+func (a *dbPlanAccessAdapter) GetPlan(key string) (*fleet.FleetPlan, bool) {
+	planAny, ok := a.store.GetPlan(key)
+	if !ok {
+		return nil, false
+	}
+	plan, ok := planAny.(*fleet.FleetPlan)
+	return plan, ok
+}
+
+func (a *dbPlanAccessAdapter) Save(plan *fleet.FleetPlan) error {
+	return a.store.Save(plan)
+}
+
+func (a *dbPlanAccessAdapter) ListPlans() []fleet.PlanSummary {
+	summaries := a.store.ListPlans()
+	result := make([]fleet.PlanSummary, len(summaries))
+	for i, s := range summaries {
+		result[i] = fleet.PlanSummary{
+			Key:         s.Key,
+			Name:        s.Name,
+			Description: s.Description,
+			CreatedFrom: s.CreatedFrom,
+			ChannelType: s.ChannelType,
+			AgentCount:  s.AgentCount,
+			AgentNames:  s.AgentNames,
+		}
+	}
+	return result
+}
+
+func (a *dbPlanAccessAdapter) MonitorStateStore() fleet.MonitorStateStore {
+	return a.monitorStore
+}
+
+// Compile-time check
+var _ fleet.PlanAccess = (*dbPlanAccessAdapter)(nil)
+
+// dbFleetPlanRegistryAdapter adapts store.FleetPlanStore to channels.FleetPlanRegistry.
+// Used in platform mode when FleetDeps needs to list plans from the DB.
+type dbFleetPlanRegistryAdapter struct {
+	store store.FleetPlanStore
+}
+
+func (a *dbFleetPlanRegistryAdapter) ListPlans() []channels.FleetPlanSummary {
+	plans := a.store.ListPlans()
+	result := make([]channels.FleetPlanSummary, len(plans))
+	for i, p := range plans {
+		result[i] = channels.FleetPlanSummary{
+			Key:         p.Key,
+			Name:        p.Name,
+			Description: p.Description,
+			ChannelType: p.ChannelType,
+			AgentNames:  p.AgentNames,
+		}
+	}
+	return result
+}
+
+// dbFleetTemplateRegistryAdapter adapts store.FleetTemplateStore to channels.FleetTemplateRegistry.
+// Used in platform mode when FleetDeps needs to list/get fleet templates from the DB.
+type dbFleetTemplateRegistryAdapter struct {
+	store store.FleetTemplateStore
+}
+
+func (a *dbFleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSummary {
+	fleets := a.store.ListFleets()
+	result := make([]channels.FleetTemplateSummary, len(fleets))
+	for i, f := range fleets {
+		result[i] = channels.FleetTemplateSummary{
+			Key:         f.Key,
+			Name:        f.Name,
+			Description: f.Description,
+			AgentNames:  f.AgentNames,
+		}
+	}
+	return result
+}
+
+func (a *dbFleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTemplateWithWizard, bool) {
+	cfgAny, ok := a.store.GetFleet(key)
+	if !ok {
+		return channels.FleetTemplateWithWizard{}, false
+	}
+	cfg, ok := cfgAny.(*fleet.FleetConfig)
 	if !ok {
 		return channels.FleetTemplateWithWizard{}, false
 	}

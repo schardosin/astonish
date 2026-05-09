@@ -1090,6 +1090,9 @@ func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTas
 	sb.WriteString("- Do NOT attempt to save to memory or schedule jobs — you don't have those capabilities.\n")
 	sb.WriteString("- Do NOT write scripts or code unless explicitly asked — use your tools directly.\n")
 	sb.WriteString("- If you encounter an error, report it clearly in your response.\n")
+	if len(task.ToolFilter) > 0 {
+		sb.WriteString(fmt.Sprintf("- Your assigned tools (%s) are your PRIMARY tools — use them first. Additional tools may be available via `search_tools`, but use them only if your primary tools are genuinely insufficient to complete the task (e.g., all primary tools are failing or the task requires a capability they don't have).\n", strings.Join(task.ToolFilter, ", ")))
+	}
 
 	// Tool-specific operational guidance based on what tools the child actually has
 	resolvedTools, _, resolveWarnings := m.resolveTools(ctx, task.ToolFilter)
@@ -1116,13 +1119,16 @@ func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTas
 		sb.WriteString("- You cannot create or modify credentials — only read existing ones.\n")
 	}
 
-	// Web tool guidance: prefer dedicated search/extract tools over raw web_fetch
+	// Web tool guidance: help sub-agents choose between search, fetch, and browser
 	if childToolSet["web_fetch"] && m.WebSearchToolName != "" {
 		sb.WriteString("\n## Web Tools\n")
-		sb.WriteString(fmt.Sprintf("- For **search queries** (discovering information, finding news, looking up topics), use `%s`. Do NOT use `web_fetch` for search.\n", m.WebSearchToolName))
-		sb.WriteString("- For **fetching a specific known URL**, use `web_fetch`.\n")
+		sb.WriteString(fmt.Sprintf("- `%s` — for quick factual lookups and discovering URLs/resources. Returns search-engine-indexed results (may be hours/days stale).\n", m.WebSearchToolName))
+		sb.WriteString("- `web_fetch` — for fetching content from a specific known URL.\n")
 		if m.WebExtractToolName != "" {
-			sb.WriteString(fmt.Sprintf("- If `web_fetch` returns empty or broken content for a URL, retry with `%s` as a fallback.\n", m.WebExtractToolName))
+			sb.WriteString(fmt.Sprintf("- `%s` — fallback for extracting content from URLs when `web_fetch` returns empty or broken content.\n", m.WebExtractToolName))
+		}
+		if childToolSet["browser_navigate"] {
+			sb.WriteString("- **Browser tools** (`browser_navigate`, `browser_snapshot`, etc.) — for navigating websites to get live/current data (prices, availability, dynamic content). Prefer browser when the task requires what a site shows *right now*, not what was indexed days ago.\n")
 		}
 	}
 

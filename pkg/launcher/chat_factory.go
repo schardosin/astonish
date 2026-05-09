@@ -586,6 +586,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				cachedTools = cache.GetToolsForServer(name)
 			}
 
+			// Filter out excluded tools for standard servers (e.g., tavily_research
+			// is expensive and redundant with Astonish's delegation-based approach).
+			if excluded := config.GetExcludedTools(name); excluded != nil {
+				filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+				for _, t := range cachedTools {
+					if !excluded[t.Name] {
+						filtered = append(filtered, t)
+					}
+				}
+				cachedTools = filtered
+			}
+
 			if len(cachedTools) == 0 {
 				if cfg.DebugMode {
 					slog.Debug("MCP server has no cached tools", "component", "lazy-mcp", "server", name)
@@ -719,6 +731,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
 					dialer := &sandbox.ContainerDialer{Client: client}
 					return dialer.Dial(containerName, port)
+				}
+
+				// ActivityTouchFunc: reset the sandbox idle timer on every browser
+				// tool call. Browser tools communicate with Chromium via CDP, bypassing
+				// the node process — without this, the idle watchdog would kill
+				// containers with active browser sessions after 10 minutes.
+				pool := nodePool // capture for closure
+				browserMgr.ActivityTouchFunc = func(sessionID string) {
+					pool.TouchActivity(sessionID)
 				}
 			}
 		}
@@ -917,7 +938,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if len(browserToolsSlice) > 0 {
 		toolGroups["browser"] = &agent.ToolGroup{
 			Name:        "browser",
-			Description: "Web automation, screenshots, form filling, page interaction",
+			Description: "Browse and research websites, get live/current data, take screenshots, fill forms, interact with web pages",
 			Tools:       browserToolsSlice,
 		}
 	}
@@ -1146,158 +1167,176 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 5b. Initialize fleet registry ---
-	fleetsDir, flErr := config.GetFleetsDir()
-	if flErr == nil {
-		// Ensure bundled fleets exist on disk
-		fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
-		if fEnsErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
-			}
-		} else if fWritten > 0 && cfg.DebugMode {
-			slog.Debug("bootstrapped bundled fleets", "count", fWritten, "dir", fleetsDir)
-		}
-
-		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
-		if fRegErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load fleet registry", "error", fRegErr)
-			}
-		} else {
-			// Wire fleet registry to API handlers
-			api.SetFleetRegistry(fleetReg)
-
-			// Wire registry to fleet execution tool
-			tools.SetFleetRegistry(fleetReg)
-
-			// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
-			// This must happen before any fleet tool runs so the delegate subprocess inherits them.
-			delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
-			if len(delegateEnvNames) > 0 {
-				var getSecret config.SecretGetter
-				if credStore != nil {
-					getSecret = credStore.GetSecret
+	// In platform mode, fleet data lives in the database (per-team).
+	// File-based fleet initialization is only needed for personal mode.
+	if !cfg.PlatformMode {
+		fleetsDir, flErr := config.GetFleetsDir()
+		if flErr == nil {
+			// Ensure bundled fleets exist on disk
+			fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
+			if fEnsErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
 				}
-				config.SetupDelegateEnv(delegateEnvNames, getSecret)
+			} else if fWritten > 0 && cfg.DebugMode {
+				slog.Debug("bootstrapped bundled fleets", "count", fWritten, "dir", fleetsDir)
 			}
 
-			// Register fleet tools (requires sub-agents to be enabled)
-			if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-				// Build fleet-only tools (opencode delegate). These are NOT added to
-				// internalTools (so the main agent can't call them). Instead they go
-				// on SubAgentManager.FleetTools, accessible only to fleet
-				// worker agents via their explicit tool filter.
-				var ftErr error
-				fleetOnlyTools, ftErr = tools.GetFleetTools()
-				if ftErr != nil {
+			fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
+			if fRegErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load fleet registry", "error", fRegErr)
+				}
+			} else {
+				// Wire fleet registry to API handlers
+				api.SetFleetRegistry(fleetReg)
+
+				// Wire registry to fleet execution tool
+				tools.SetFleetRegistry(fleetReg)
+
+				// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
+				// This must happen before any fleet tool runs so the delegate subprocess inherits them.
+				delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
+				if len(delegateEnvNames) > 0 {
+					var getSecret config.SecretGetter
+					if credStore != nil {
+						getSecret = credStore.GetSecret
+					}
+					config.SetupDelegateEnv(delegateEnvNames, getSecret)
+				}
+
+				// Register fleet tools (requires sub-agents to be enabled)
+				if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+					// Build fleet-only tools (opencode delegate). These are NOT added to
+					// internalTools (so the main agent can't call them). Instead they go
+					// on SubAgentManager.FleetTools, accessible only to fleet
+					// worker agents via their explicit tool filter.
+					var ftErr error
+					fleetOnlyTools, ftErr = tools.GetFleetTools()
+					if ftErr != nil {
+						if cfg.DebugMode {
+							slog.Warn("failed to create fleet internal tools", "error", ftErr)
+						}
+					}
+				}
+
+				// Build fleet awareness section for system prompt
+				if fleetReg.Count() > 0 {
+					summaries := fleetReg.ListFleets()
+					promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
+						summaries,
+						func(key string) (*fleet.FleetConfig, bool) {
+							return fleetReg.GetFleet(key)
+						},
+					)
 					if cfg.DebugMode {
-						slog.Warn("failed to create fleet internal tools", "error", ftErr)
+						slog.Debug("fleet awareness", "fleets", fleetReg.Count())
 					}
 				}
 			}
 
-			// Build fleet awareness section for system prompt
-			if fleetReg.Count() > 0 {
-				summaries := fleetReg.ListFleets()
-				promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
-					summaries,
-					func(key string) (*fleet.FleetConfig, bool) {
-						return fleetReg.GetFleet(key)
-					},
-				)
-				if cfg.DebugMode {
-					slog.Debug("fleet awareness", "fleets", fleetReg.Count())
+			// Initialize fleet plan registry
+			fleetPlansDir, fpErr := config.GetFleetPlansDir()
+			if fpErr == nil {
+				planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
+				if prErr != nil {
+					if cfg.DebugMode {
+						slog.Warn("failed to load fleet plan registry", "error", prErr)
+					}
+				} else {
+					// Wire plan registry to API handlers
+					api.SetFleetPlanRegistry(planReg)
+					// Wire plan registry to the save_fleet_plan tool
+					tools.SetFleetPlanRegistry(planReg)
+					if cfg.DebugMode {
+						slog.Debug("fleet plans loaded", "count", planReg.Count(), "dir", fleetPlansDir)
+					}
 				}
 			}
 		}
-
-		// Initialize fleet plan registry
-		fleetPlansDir, fpErr := config.GetFleetPlansDir()
-		if fpErr == nil {
-			planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
-			if prErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to load fleet plan registry", "error", prErr)
-				}
-			} else {
-				// Wire plan registry to API handlers
-				api.SetFleetPlanRegistry(planReg)
-				// Wire plan registry to the save_fleet_plan tool
-				tools.SetFleetPlanRegistry(planReg)
-				if cfg.DebugMode {
-					slog.Debug("fleet plans loaded", "count", planReg.Count(), "dir", fleetPlansDir)
-				}
-			}
-		}
-
-		// Fleet plan tools → deferred category
-		var fleetToolsSlice []tool.Tool
-		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
-		if fptErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create fleet plan tools", "error", fptErr)
-			}
-		} else {
-			fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
-		}
-
-		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
-		if fpvErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create fleet plan validate tools", "error", fpvErr)
-			}
-		} else {
-			fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
-		}
-
-		if len(fleetToolsSlice) > 0 {
-			toolGroups["fleet"] = &agent.ToolGroup{
-				Name:        "fleet",
-				Description: "Create and validate fleet plans",
-				Tools:       fleetToolsSlice,
-			}
-		}
-
-		// opencode tool → add to main thread tools
+	} else {
+		// Platform mode: Fleet data is in the DB.
+		// Still register fleet tools (they use context-based stores at runtime)
+		// and fleet-only tools for sub-agents.
 		if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-			ocTool, ocErr := tools.NewOpenCodeTool()
-			if ocErr != nil {
+			var ftErr error
+			fleetOnlyTools, ftErr = tools.GetFleetTools()
+			if ftErr != nil {
 				if cfg.DebugMode {
-					slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
-				}
-			} else {
-				mainThreadTools = append(mainThreadTools, ocTool)
-				// Also add to core group for sub-agents
-				if g, ok := toolGroups["core"]; ok {
-					g.Tools = append(g.Tools, ocTool)
+					slog.Warn("failed to create fleet internal tools", "error", ftErr)
 				}
 			}
 		}
+	}
 
-		// Sandbox template tools → deferred category
-		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
-			var sandboxTplTools []tool.Tool
-			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
-			if tplErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to create save_sandbox_template tool", "error", tplErr)
-				}
-			} else {
-				sandboxTplTools = append(sandboxTplTools, tplTool)
+	// Fleet plan tools → deferred category (available in both modes)
+	var fleetToolsSlice []tool.Tool
+	fleetPlanTools, fptErr := tools.GetFleetPlanTools()
+	if fptErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet plan tools", "error", fptErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
+	}
+
+	fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
+	if fpvErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet plan validate tools", "error", fpvErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
+	}
+
+	if len(fleetToolsSlice) > 0 {
+		toolGroups["fleet"] = &agent.ToolGroup{
+			Name:        "fleet",
+			Description: "Create and validate fleet plans",
+			Tools:       fleetToolsSlice,
+		}
+	}
+
+	// opencode tool → add to main thread tools (available in both modes)
+	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+		ocTool, ocErr := tools.NewOpenCodeTool()
+		if ocErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
 			}
-
-			listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
-			if listErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to create list_sandbox_templates tool", "error", listErr)
-				}
-			} else {
-				sandboxTplTools = append(sandboxTplTools, listTplTool)
+		} else {
+			mainThreadTools = append(mainThreadTools, ocTool)
+			// Also add to core group for sub-agents
+			if g, ok := toolGroups["core"]; ok {
+				g.Tools = append(g.Tools, ocTool)
 			}
+		}
+	}
 
-			useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
-			if useErr != nil {
-				if cfg.DebugMode {
+	// Sandbox template tools → deferred category
+	if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
+		var sandboxTplTools []tool.Tool
+		tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
+		if tplErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create save_sandbox_template tool", "error", tplErr)
+			}
+		} else {
+			sandboxTplTools = append(sandboxTplTools, tplTool)
+		}
+
+		listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
+		if listErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create list_sandbox_templates tool", "error", listErr)
+			}
+		} else {
+			sandboxTplTools = append(sandboxTplTools, listTplTool)
+		}
+
+		useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
+		if useErr != nil {
+			if cfg.DebugMode {
 					slog.Warn("failed to create use_sandbox_template tool", "error", useErr)
 				}
 			} else {
@@ -1309,7 +1348,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					Name:        "sandbox_templates",
 					Description: "Save, list, and use sandbox container templates",
 					Tools:       sandboxTplTools,
-				}
 			}
 		}
 	}

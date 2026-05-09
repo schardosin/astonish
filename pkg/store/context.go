@@ -185,6 +185,43 @@ func MCPServerStoresFromContext(ctx context.Context) *MCPServerStores {
 	return ms
 }
 
+const fleetTemplateStoreKey contextKey = "astonish_fleet_template_store"
+const fleetPlanStoreKey contextKey = "astonish_fleet_plan_store"
+
+// WithFleetTemplateStore returns a new context containing a tenant-scoped FleetTemplateStore.
+// Used to propagate the PG fleet template store into the ADK runner context so that
+// fleet tools can resolve templates from the database in platform mode.
+func WithFleetTemplateStore(ctx context.Context, fs FleetTemplateStore) context.Context {
+	return context.WithValue(ctx, fleetTemplateStoreKey, fs)
+}
+
+// FleetTemplateStoreFromContext retrieves the FleetTemplateStore from a context.
+// Returns nil if no FleetTemplateStore is present (personal mode or tests).
+func FleetTemplateStoreFromContext(ctx context.Context) FleetTemplateStore {
+	if ctx == nil {
+		return nil
+	}
+	fs, _ := ctx.Value(fleetTemplateStoreKey).(FleetTemplateStore)
+	return fs
+}
+
+// WithFleetPlanStore returns a new context containing a tenant-scoped FleetPlanStore.
+// Used to propagate the PG fleet plan store into the ADK runner context so that
+// fleet tools can read/write plans from the database in platform mode.
+func WithFleetPlanStore(ctx context.Context, fs FleetPlanStore) context.Context {
+	return context.WithValue(ctx, fleetPlanStoreKey, fs)
+}
+
+// FleetPlanStoreFromContext retrieves the FleetPlanStore from a context.
+// Returns nil if no FleetPlanStore is present (personal mode or tests).
+func FleetPlanStoreFromContext(ctx context.Context) FleetPlanStore {
+	if ctx == nil {
+		return nil
+	}
+	fs, _ := ctx.Value(fleetPlanStoreKey).(FleetPlanStore)
+	return fs
+}
+
 const sandboxTemplateKey contextKey = "astonish_sandbox_template"
 const sessionServiceKey contextKey = "astonish_session_service"
 const userIDKey contextKey = "astonish_user_id"

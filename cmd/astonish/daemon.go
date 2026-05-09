@@ -112,17 +112,20 @@ func handleDaemonInstall(args []string) error {
 	// Capture delegate env vars from the current shell (e.g. BIFROST_API_KEY).
 	// Fleet configs declare which env vars their delegates need. We snapshot
 	// the current values so the daemon service has them from the start.
-	fleetsDir, flErr := config.GetFleetsDir()
-	if flErr == nil {
-		// Ensure bundled fleets are on disk before loading
-		_, bundleErr := fleet.EnsureBundled(fleetsDir)
-		if bundleErr != nil {
-			slog.Warn("failed to ensure bundled fleets", "error", bundleErr)
-		}
-		if fleets, loadErr := fleet.LoadFleets(fleetsDir); loadErr == nil {
-			for _, name := range fleet.CollectDelegateEnvVars(fleets) {
-				if val := os.Getenv(name); val != "" {
-					envVars[name] = val
+	// In platform mode, fleet data lives in the database — skip file-based bootstrapping.
+	if appCfg == nil || !appCfg.Storage.IsPostgres() {
+		fleetsDir, flErr := config.GetFleetsDir()
+		if flErr == nil {
+			// Ensure bundled fleets are on disk before loading
+			_, bundleErr := fleet.EnsureBundled(fleetsDir)
+			if bundleErr != nil {
+				slog.Warn("failed to ensure bundled fleets", "error", bundleErr)
+			}
+			if fleets, loadErr := fleet.LoadFleets(fleetsDir); loadErr == nil {
+				for _, name := range fleet.CollectDelegateEnvVars(fleets) {
+					if val := os.Getenv(name); val != "" {
+						envVars[name] = val
+					}
 				}
 			}
 		}

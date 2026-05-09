@@ -183,6 +183,12 @@ func (r *PlanRegistry) Dir() string {
 	return r.dir
 }
 
+// MonitorStateStore returns a file-based monitor state store rooted at the
+// plan registry's directory. Used in personal mode.
+func (r *PlanRegistry) MonitorStateStore() MonitorStateStore {
+	return NewFileMonitorStateStore(r.dir)
+}
+
 // LoadFleetPlan reads and parses a single fleet plan YAML file.
 func LoadFleetPlan(path string) (*FleetPlan, error) {
 	data, err := os.ReadFile(path)

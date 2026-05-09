@@ -2369,7 +2369,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               }
 
               if (msg.type === 'subtask_execution') {
-                return <TaskPlanPanel key={index} data={msg as SubTaskExecutionMessage} />
+                return <TaskPlanPanel key={index} data={msg as SubTaskExecutionMessage} sessionId={activeSessionId || undefined} />
               }
 
               if (msg.type === 'fleet_message') {

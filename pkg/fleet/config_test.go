@@ -1129,7 +1129,7 @@ func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
 	m := NewGitHubMonitor("test-plan", map[string]any{
 		"repo":  "owner/repo",
 		"label": "astonish_fleet",
-	}, stateDir)
+	}, NewFileMonitorStateStore(stateDir))
 
 	if len(m.Labels) != 1 || m.Labels[0] != "astonish_fleet" {
 		t.Errorf("expected labels=[astonish_fleet] from singular 'label' key, got %v", m.Labels)
@@ -1140,7 +1140,7 @@ func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
 		"repo":   "owner/repo",
 		"labels": []any{"bug", "fleet"},
 		"label":  "ignored",
-	}, stateDir)
+	}, NewFileMonitorStateStore(stateDir))
 
 	if len(m2.Labels) != 2 || m2.Labels[0] != "bug" || m2.Labels[1] != "fleet" {
 		t.Errorf("expected labels=[bug, fleet] from plural 'labels' key, got %v", m2.Labels)
@@ -1154,7 +1154,7 @@ func TestNewGitHubMonitor_LabelFallback(t *testing.T) {
 func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	m.MarkSeen(42, "session-abc", "Fix the bug")
 
@@ -1178,7 +1178,7 @@ func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
 func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	m.MarkSeen(10, "sess-1", "Issue 10")
 
@@ -1206,7 +1206,7 @@ func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
 func TestGitHubMonitor_RetryCountAndBackoff(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	m.MarkSeen(10, "sess-1", "Issue 10")
 
@@ -1249,7 +1249,7 @@ func TestGitHubMonitor_RetryCountAndBackoff(t *testing.T) {
 func TestGitHubMonitor_ResetRetryCount(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	m.MarkSeen(10, "sess-1", "Issue 10")
 	m.IncrementRetryCount(10, "error 1")
@@ -1288,7 +1288,7 @@ func TestGitHubMonitor_ResetRetryCount(t *testing.T) {
 func TestGitHubMonitor_ClearRetryOnSuccess(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	m.MarkSeen(10, "sess-1", "Issue 10")
 	m.IncrementRetryCount(10, "transient error")
@@ -1311,13 +1311,13 @@ func TestGitHubMonitor_StatePersistence(t *testing.T) {
 	stateDir := t.TempDir()
 
 	// Create and populate a monitor
-	m1 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m1 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 	m1.MarkSeen(10, "sess-1", "Issue 10")
 	m1.UpdateCursor(10, 500)
 	m1.IncrementRetryCount(10, "some error")
 
 	// Create a new monitor and load state from disk
-	m2 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m2 := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 	if err := m2.LoadState(); err != nil {
 		t.Fatal(err)
 	}
@@ -1343,7 +1343,7 @@ func TestGitHubMonitor_StatePersistence(t *testing.T) {
 func TestGitHubMonitor_BackoffLogic(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()
-	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, stateDir)
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
 
 	// No failures — backoff expired (should proceed)
 	s := &SeenIssueState{RetryCount: 0}

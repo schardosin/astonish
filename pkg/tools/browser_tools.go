@@ -31,7 +31,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	navigateTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_navigate",
 		Description: "Navigate the browser to a URL. The browser is managed by Astonish — it launches automatically, no installation needed in the container. In sandbox mode, use the container bridge IP (not localhost) to reach services.",
-	}, BrowserNavigate(mgr, guard))
+	}, safeBrowserFunc(BrowserNavigate(mgr, guard)))
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	navigateBackTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_navigate_back",
 		Description: "Go back to the previous page in the browser history.",
-	}, BrowserNavigateBack(mgr))
+	}, safeBrowserFunc(BrowserNavigateBack(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	clickTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_click",
 		Description: "Click an element on the page. Use a ref from browser_snapshot.",
-	}, BrowserClick(mgr, refs))
+	}, safeBrowserFunc(BrowserClick(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	typeTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_type",
 		Description: "Type text into an editable element (input, textarea). Clears existing content first.",
-	}, BrowserType(mgr, refs))
+	}, safeBrowserFunc(BrowserType(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	hoverTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_hover",
 		Description: "Hover over an element on the page to trigger hover effects or tooltips.",
-	}, BrowserHover(mgr, refs))
+	}, safeBrowserFunc(BrowserHover(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	dragTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_drag",
 		Description: "Drag an element from one position to another.",
-	}, BrowserDrag(mgr, refs))
+	}, safeBrowserFunc(BrowserDrag(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +81,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	pressKeyTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_press_key",
 		Description: "Press a keyboard key (e.g. Enter, Tab, Escape, ArrowDown). Works on the focused element.",
-	}, BrowserPressKey(mgr))
+	}, safeBrowserFunc(BrowserPressKey(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	selectOptionTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_select_option",
 		Description: "Select option(s) from a dropdown select element by visible text.",
-	}, BrowserSelectOption(mgr, refs))
+	}, safeBrowserFunc(BrowserSelectOption(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	fillFormTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_fill_form",
 		Description: "Fill multiple form fields at once. Pass an array of {ref, value} pairs.",
-	}, BrowserFillForm(mgr, refs))
+	}, safeBrowserFunc(BrowserFillForm(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	snapshotTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_snapshot",
 		Description: "Capture an accessibility snapshot of the current page. Returns a text tree with ref IDs for interaction. Use mode=\"efficient\" for large pages (compact, interactive-only, depth=6, maxChars=10000).",
-	}, BrowserSnapshot(mgr, refs))
+	}, safeBrowserFunc(BrowserSnapshot(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	screenshotTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_take_screenshot",
 		Description: "Take a screenshot of the current page. You can't perform actions based on the screenshot — use browser_snapshot for that.",
-	}, BrowserTakeScreenshot(mgr, refs))
+	}, safeBrowserFunc(BrowserTakeScreenshot(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	consoleTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_console_messages",
 		Description: "Returns console messages (log, warn, error, debug) from the current page.",
-	}, BrowserConsoleMessages(mgr))
+	}, safeBrowserFunc(BrowserConsoleMessages(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -131,7 +131,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	networkTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_network_requests",
 		Description: "Returns network requests made by the current page. Useful for debugging API calls.",
-	}, BrowserNetworkRequests(mgr))
+	}, safeBrowserFunc(BrowserNetworkRequests(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	tabsTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_tabs",
 		Description: "Manage browser tabs: list, new, close, or select. Use targetId from list results for close/select.",
-	}, BrowserTabs(mgr, guard))
+	}, safeBrowserFunc(BrowserTabs(mgr, guard)))
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	closeTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_close",
 		Description: "Close the current browser page/tab.",
-	}, BrowserClose(mgr))
+	}, safeBrowserFunc(BrowserClose(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	resizeTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_resize",
 		Description: "Resize the browser viewport to the specified width and height in pixels.",
-	}, BrowserResize(mgr))
+	}, safeBrowserFunc(BrowserResize(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	waitForTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_wait_for",
 		Description: "Wait for a condition: text to appear/disappear, CSS selector visible, URL match, page load state, or JS expression truthy. Avoid state=\"networkidle\" on SPAs (persistent WebSocket connections cause full timeout).",
-	}, BrowserWaitFor(mgr))
+	}, safeBrowserFunc(BrowserWaitFor(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	fileUploadTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_file_upload",
 		Description: "Upload files to a file input element on the page.",
-	}, BrowserFileUpload(mgr, refs))
+	}, safeBrowserFunc(BrowserFileUpload(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	handleDialogTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_handle_dialog",
 		Description: "Handle a native JS dialog (alert, confirm, prompt). Must be called before the triggering action. Only works for native dialogs — use browser_snapshot for custom modals.",
-	}, BrowserHandleDialog(mgr))
+	}, safeBrowserFunc(BrowserHandleDialog(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	evaluateTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_evaluate",
 		Description: "Evaluate a JavaScript expression in the page context. Returns the result. Optionally scope to an element via ref.",
-	}, BrowserEvaluate(mgr, refs))
+	}, safeBrowserFunc(BrowserEvaluate(mgr, refs)))
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	runCodeTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_run_code",
 		Description: "Run a multi-line JavaScript code snippet in the page context. Supports async/await. Has access to the full browser DOM API.",
-	}, BrowserRunCode(mgr))
+	}, safeBrowserFunc(BrowserRunCode(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +207,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	pdfTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_pdf",
 		Description: "Save the current page as a PDF file. Returns the file path.",
-	}, BrowserPDF(mgr))
+	}, safeBrowserFunc(BrowserPDF(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	responseBodyTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_response_body",
 		Description: "Intercept and read HTTP response bodies. Workflow: action=\"listen\" urlPattern=\"*api/data*\" → trigger request → action=\"read\" to get body. Use action=\"stop\" to remove interceptor.",
-	}, BrowserResponseBody(mgr))
+	}, safeBrowserFunc(BrowserResponseBody(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +225,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	cookiesTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_cookies",
 		Description: "Get, set, or clear browser cookies. Use action=get to inspect, action=set to add/modify, action=clear to remove all.",
-	}, BrowserCookies(mgr))
+	}, safeBrowserFunc(BrowserCookies(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -233,7 +233,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	storageTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_storage",
 		Description: "Read, write, or clear localStorage/sessionStorage. Use kind=local or kind=session with action=get/getAll/set/clear.",
-	}, BrowserStorage(mgr))
+	}, safeBrowserFunc(BrowserStorage(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +241,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setOfflineTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_offline",
 		Description: "Enable or disable network connectivity for the browser page. Simulates offline mode.",
-	}, BrowserSetOffline(mgr))
+	}, safeBrowserFunc(BrowserSetOffline(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setHeadersTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_headers",
 		Description: "Add extra HTTP headers to all requests from this page. Pass an empty map to clear.",
-	}, BrowserSetHeaders(mgr))
+	}, safeBrowserFunc(BrowserSetHeaders(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -257,7 +257,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setCredentialsTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_credentials",
 		Description: "Set HTTP Basic Auth credentials. The browser will automatically respond to auth challenges.",
-	}, BrowserSetCredentials(mgr))
+	}, safeBrowserFunc(BrowserSetCredentials(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +265,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setGeolocationTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_geolocation",
 		Description: "Override the browser's geolocation (latitude, longitude, accuracy).",
-	}, BrowserSetGeolocation(mgr))
+	}, safeBrowserFunc(BrowserSetGeolocation(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +273,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setMediaTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_media",
 		Description: "Set the preferred color scheme (dark, light, no-preference) for CSS media queries.",
-	}, BrowserSetMedia(mgr))
+	}, safeBrowserFunc(BrowserSetMedia(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -281,7 +281,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setTimezoneTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_timezone",
 		Description: "Override the browser's timezone (IANA ID like 'America/New_York'). Empty to clear.",
-	}, BrowserSetTimezone(mgr))
+	}, safeBrowserFunc(BrowserSetTimezone(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -289,7 +289,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setLocaleTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_locale",
 		Description: "Override the browser's locale (BCP 47 like 'en-US', 'fr-FR'). Empty to clear.",
-	}, BrowserSetLocale(mgr))
+	}, safeBrowserFunc(BrowserSetLocale(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -297,7 +297,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	setDeviceTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_set_device",
 		Description: "Emulate a mobile/tablet device (viewport, user agent, touch, DPR). Supports iPhone, iPad, Pixel, Galaxy, etc. Use device=\"clear\" to remove emulation.",
-	}, BrowserSetDevice(mgr))
+	}, safeBrowserFunc(BrowserSetDevice(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -307,7 +307,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	requestHumanTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_request_human",
 		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms). Returns immediately — the chat stays interactive so the user can give you instructions while watching the browser. The user clicks Done when they no longer need visual access.",
-	}, BrowserRequestHuman(mgr))
+	}, safeBrowserFunc(BrowserRequestHuman(mgr)))
 	if err != nil {
 		return nil, err
 	}

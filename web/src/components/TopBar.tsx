@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, FolderCog } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -10,7 +10,6 @@ interface SandboxStatus {
 interface TopBarProps {
   theme: 'dark' | 'light'
   onToggleTheme: () => void
-  onOpenSettings: () => void
   onOpenSandbox: () => void
   defaultProvider: string | null
   defaultModel: string | null
@@ -63,29 +62,25 @@ const secondaryNavItems: NavItem[] = [
   { view: 'credentials', label: 'Credentials', Icon: KeyRound, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' },
 ]
 
-// All core items combined (for mobile drawer)
-const allCoreNavItems: NavItem[] = [...primaryNavItems, ...secondaryNavItems]
-
-function getPlatformNavItems(): NavItem[] {
-  const items: NavItem[] = []
-  items.push({ view: 'team-mgmt', label: 'Management', Icon: FolderCog, gradient: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' })
-  return items
-}
+// All core items combined (for mobile drawer — includes settings which lives in the icon area on desktop)
+const allCoreNavItems: NavItem[] = [
+  ...primaryNavItems,
+  ...secondaryNavItems,
+  { view: 'settings', label: 'Settings', Icon: Settings, gradient: 'linear-gradient(135deg, #64748b 0%, #475569 100%)' },
+]
 
 // Breakpoint thresholds (must match Tailwind classes used in the template)
 const BP_MD = 768
 const BP_LG = 1024
-const BP_XL = 1312  // custom: aligns with min-[1312px] for platform nav inline
 
 // Hook to track which breakpoint tier we're in
-function useBreakpointTier(): 'sm' | 'md' | 'lg' | 'xl' {
-  const [tier, setTier] = useState<'sm' | 'md' | 'lg' | 'xl'>(() => {
-    if (typeof window === 'undefined') return 'xl'
+function useBreakpointTier(): 'sm' | 'md' | 'lg' {
+  const [tier, setTier] = useState<'sm' | 'md' | 'lg'>(() => {
+    if (typeof window === 'undefined') return 'lg'
     const w = window.innerWidth
     if (w < BP_MD) return 'sm'
     if (w < BP_LG) return 'md'
-    if (w < BP_XL) return 'lg'
-    return 'xl'
+    return 'lg'
   })
 
   useEffect(() => {
@@ -93,8 +88,7 @@ function useBreakpointTier(): 'sm' | 'md' | 'lg' | 'xl' {
       const w = window.innerWidth
       if (w < BP_MD) setTier('sm')
       else if (w < BP_LG) setTier('md')
-      else if (w < BP_XL) setTier('lg')
-      else setTier('xl')
+      else setTier('lg')
     }
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
@@ -107,7 +101,7 @@ function useBreakpointTier(): 'sm' | 'md' | 'lg' | 'xl' {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, orgs, onOrgSwitch, activeTeam, teams, onTeamChange, onLogout }: TopBarProps) {
+export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, orgs, onOrgSwitch, activeTeam, teams, onTeamChange, onLogout }: TopBarProps) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
   const navBorder = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'var(--border-color)'
   const inactiveBg = theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'
@@ -128,15 +122,11 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
   const nav = (view: string) => onNavigate && onNavigate(view)
   const activeTeamName = teams?.find(t => t.slug === activeTeam)?.name || activeTeam || 'No team'
   const initials = user?.display_name ? user.display_name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase() : '?'
-  const platformItems = isPlatformMode ? getPlatformNavItems() : []
 
   // Build the "More" dropdown items based on current breakpoint tier:
-  // - md (768–1024): secondary core items + platform items
-  // - lg (1024–1280): platform items only (secondary are visible inline)
-  // - xl+: nothing (More button is hidden via CSS)
-  const moreItems: NavItem[] = tier === 'md'
-    ? [...secondaryNavItems, ...platformItems]
-    : platformItems
+  // - md (768–1024): secondary items go in More dropdown
+  // - lg+: all visible inline, More hidden
+  const moreItems: NavItem[] = tier === 'md' ? secondaryNavItems : []
 
   const isMoreActive = moreItems.some(i => i.view === currentView)
   const showMore = moreItems.length > 0
@@ -148,7 +138,6 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
   useEffect(() => {
     const onResize = () => {
       if (window.innerWidth >= 768) setMobileOpen(false)
-      // Close More dropdown on resize — contents differ per breakpoint tier
       setMoreOpen(false)
     }
     window.addEventListener('resize', onResize)
@@ -237,17 +226,12 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
           {/* Primary nav buttons (Chat, Flows) — always visible from md+ */}
           {primaryNavItems.map(item => navBtn(item, 'hidden md:flex'))}
 
-          {/* Secondary nav buttons (Fleet, Drill, Apps) — visible from lg+ */}
+          {/* Secondary nav buttons (Fleet, Drill, Apps, Credentials, Settings) — visible from lg+ */}
           {secondaryNavItems.map(item => navBtn(item, 'hidden lg:flex'))}
 
-          {/* Platform nav buttons — inline only at xl tier (1312px+) */}
-          {isPlatformMode && tier === 'xl' && platformItems.map(item => navBtn(item, 'hidden md:flex'))}
-
-          {/* "More" overflow dropdown — visible from md up, only when tier is not xl
-              Contents adapt: at md–lg includes secondary+platform; at lg–xl includes platform only
-              At xl+ tier, all items are inline so More is not needed */}
-          {showMore && tier !== 'xl' && (
-            <div ref={moreRef} className="relative hidden md:block">
+          {/* "More" overflow dropdown — visible at md tier only (secondary items overflow) */}
+          {showMore && (
+            <div ref={moreRef} className="relative hidden md:block lg:hidden">
               <button
                 onClick={() => setMoreOpen(!moreOpen)}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl transition-all whitespace-nowrap ${isMoreActive ? 'shadow-md' : 'hover:bg-purple-500/10'}`}
@@ -334,12 +318,12 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
             {theme === 'dark' ? <Sun size={18} className="text-yellow-400" /> : <Moon size={18} className="text-gray-500" />}
           </button>
 
-          {/* Settings */}
+          {/* Settings gear icon */}
           <button
-            onClick={onOpenSettings}
-            className="p-2 rounded-full transition-colors hover:bg-purple-500/15"
+            onClick={() => nav('settings')}
+            className="hidden sm:flex p-2 rounded-full transition-colors hover:bg-purple-500/15"
             title="Settings"
-            style={{ border: `1px solid ${navBorder}`, color: 'var(--text-secondary)' }}
+            style={{ border: `1px solid ${currentView === 'settings' ? 'var(--accent)' : navBorder}`, color: currentView === 'settings' ? 'var(--accent)' : 'var(--text-secondary)' }}
           >
             <Settings size={18} />
           </button>
@@ -441,22 +425,10 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
 
             {/* Scrollable nav content */}
             <div className="flex-1 overflow-y-auto py-2 px-3 space-y-1">
-              {/* Core nav */}
               {allCoreNavItems.map(item => mobileNavItem(item))}
-
-              {/* Platform nav (if applicable) */}
-              {isPlatformMode && platformItems.length > 0 && (
-                <>
-                  <div className="my-2 mx-2 border-t" style={{ borderColor: 'var(--border-color)' }} />
-                  <div className="px-4 py-1">
-                    <span className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>Platform</span>
-                  </div>
-                  {platformItems.map(item => mobileNavItem(item))}
-                </>
-              )}
             </div>
 
-            {/* Drawer footer: team selector, theme, settings, user */}
+            {/* Drawer footer: team selector, theme, user */}
             <div className="shrink-0 border-t px-3 py-3 space-y-3" style={{ borderColor: 'var(--border-color)' }}>
               {/* Team selector */}
               {isPlatformMode && teams && teams.length > 1 && (
@@ -514,14 +486,6 @@ export default function TopBar({ theme, onToggleTheme, onOpenSettings, onOpenSan
                   style={{ border: `1px solid ${navBorder}`, color: 'var(--text-secondary)' }}
                 >
                   {theme === 'dark' ? <Sun size={18} className="text-yellow-400" /> : <Moon size={18} className="text-gray-500" />}
-                </button>
-                <button
-                  onClick={() => { onOpenSettings(); setMobileOpen(false) }}
-                  className="p-2 rounded-full transition-colors hover:bg-purple-500/15"
-                  title="Settings"
-                  style={{ border: `1px solid ${navBorder}`, color: 'var(--text-secondary)' }}
-                >
-                  <Settings size={18} />
                 </button>
               </div>
 

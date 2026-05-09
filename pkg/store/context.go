@@ -186,6 +186,8 @@ func MCPServerStoresFromContext(ctx context.Context) *MCPServerStores {
 }
 
 const sandboxTemplateKey contextKey = "astonish_sandbox_template"
+const sessionServiceKey contextKey = "astonish_session_service"
+const userIDKey contextKey = "astonish_user_id"
 
 // WithSandboxTemplate returns a new context containing the team's sandbox
 // template name. Used to propagate the team's custom container template into
@@ -204,4 +206,41 @@ func SandboxTemplateFromContext(ctx context.Context) string {
 	}
 	tpl, _ := ctx.Value(sandboxTemplateKey).(string)
 	return tpl
+}
+
+// WithSessionService returns a new context containing a tenant-scoped SessionStore.
+// Used to propagate the per-request session service (e.g., pgstore PersonalSessions)
+// into the ADK runner context so that sub-agents (delegate_tasks) create child
+// sessions in the correct store rather than the factory-time default.
+func WithSessionService(ctx context.Context, ss SessionStore) context.Context {
+	return context.WithValue(ctx, sessionServiceKey, ss)
+}
+
+// SessionServiceFromContext retrieves the SessionStore from a context.
+// Returns nil if no SessionStore is present (personal mode or tests).
+// SubAgentManager checks this to prefer the per-request store over its default.
+func SessionServiceFromContext(ctx context.Context) SessionStore {
+	if ctx == nil {
+		return nil
+	}
+	ss, _ := ctx.Value(sessionServiceKey).(SessionStore)
+	return ss
+}
+
+// WithUserID returns a new context containing the effective user ID.
+// Used to propagate the per-request platform user ID (UUID) into the ADK runner
+// context so that sub-agents create child sessions with the correct user_id
+// (required by pgstore where user_id is a UUID column).
+func WithUserID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, userIDKey, id)
+}
+
+// UserIDFromContext retrieves the user ID from a context.
+// Returns "" if no user ID is present (personal mode, tests, or non-platform contexts).
+func UserIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(userIDKey).(string)
+	return id
 }

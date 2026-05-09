@@ -443,7 +443,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
           <div className={showConfig ? 'pt-4 border-t' : ''} style={showConfig ? sectionBorderStyle : undefined}>
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-                {scope === 'team' ? 'Team Skills' : scope === 'org' ? 'Organization Skills' : 'Installed Skills'}
+                {scope === 'team' ? 'Team Skills' : scope === 'org' ? 'Organization Skills' : isPlatform ? 'Skills' : 'Installed Skills'}
                 {!skillsLoading && (
                   <span className="ml-2 text-xs font-normal" style={hintStyle}>
                     {skillsList.filter(s => s.eligible).length} eligible, {skillsList.length} total
@@ -493,7 +493,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                 {/* Org Skills */}
                 {orgSkills.length > 0 && (
                   <SkillSection
-                    label="Organization"
+                    label="Organization (inherited)"
                     skills={orgSkills}
                     canManage={isOrgAdmin}
                     onView={(s) => handleOpenSkill(s.name, 'view', 'org')}
@@ -505,7 +505,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                 {/* Bundled Skills */}
                 {bundledSkills.length > 0 && (
                   <SkillSection
-                    label="Bundled"
+                    label="Bundled (read-only)"
                     skills={bundledSkills}
                     canManage={false}
                     onView={(s) => handleOpenSkill(s.name, 'view', undefined)}

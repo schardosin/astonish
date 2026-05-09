@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import SettingsPage from '../SettingsPage'
 
@@ -45,7 +45,6 @@ beforeEach(() => {
 
 describe('SettingsPage', () => {
   const defaultProps = {
-    onClose: vi.fn(),
     activeSection: 'general',
     onSectionChange: vi.fn(),
     theme: 'dark',
@@ -77,23 +76,6 @@ describe('SettingsPage', () => {
     // Verify the sidebar menu contains expected items
     expect(screen.getByText('Providers')).toBeInTheDocument()
     expect(screen.getByText('MCP Servers')).toBeInTheDocument()
-  })
-
-  it('calls onClose when close button is clicked', async () => {
-    const user = userEvent.setup()
-    const onClose = vi.fn()
-    render(<SettingsPage {...defaultProps} onClose={onClose} />)
-    // Wait for loading to complete
-    await screen.findByText('Settings')
-    const closeButtons = screen.getAllByRole('button')
-    // Find the button that triggers onClose (the X button in the sidebar header)
-    const closeButton = closeButtons.find(
-      btn => btn.querySelector('svg') && btn.closest('.w-64')
-    )
-    if (closeButton) {
-      await user.click(closeButton)
-      expect(onClose).toHaveBeenCalledTimes(1)
-    }
   })
 
   it('calls onSectionChange when a menu item is clicked', async () => {

@@ -146,6 +146,23 @@ func (cr *ChatRunner) InjectSandboxTemplate(tpl string) {
 	cr.ctx = store.WithSandboxTemplate(cr.ctx, tpl)
 }
 
+// InjectSessionService adds a tenant-scoped session store to the runner's context
+// so that sub-agents (delegate_tasks) create child sessions in the correct store
+// (e.g., pgstore PersonalSessions) rather than the factory-time default (FileStore).
+// Must be called before Run().
+func (cr *ChatRunner) InjectSessionService(ss store.SessionStore) {
+	cr.ctx = store.WithSessionService(cr.ctx, ss)
+}
+
+// InjectUserID adds the effective user ID to the runner's context so that
+// sub-agents (delegate_tasks) create child sessions with the correct user_id.
+// In platform mode, the pgstore user_id column is UUID-typed, so this must be
+// the platform user's UUID rather than the factory default ("console_user").
+// Must be called before Run().
+func (cr *ChatRunner) InjectUserID(id string) {
+	cr.ctx = store.WithUserID(cr.ctx, id)
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

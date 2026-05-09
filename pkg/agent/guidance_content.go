@@ -151,17 +151,18 @@ Use ` + "`delegate_tasks`" + ` to run tasks via sub-agents. Sub-agent execution 
 
 ## When to delegate
 
-**Delegation is the standard way to access specialized tool groups.** Most tools are not on the main thread — they live in tool groups accessible only through ` + "`delegate_tasks`" + `. If a task requires tools from a specific group (browser, web, credentials, sandbox_templates, etc.), you MUST delegate.
+Delegation gives you **parallelism** and **context isolation**. Sub-agents run independently and only their concise summaries enter your context — raw search results, HTML pages, and API responses stay out. This keeps your context lean and focused.
 
-**Always delegate when:**
-- The task requires tools not on the main thread (browser, web, email, credentials, sandbox_templates, fleet_plans, drills, etc.)
-- You have 2+ independent tasks that can run in parallel
+**Prefer delegation when:**
+- The request involves 2+ independent information-gathering tasks (e.g., "research X and Y", "compare A vs B") — each topic becomes a parallel sub-task
+- A task will produce large raw output (web research, multi-page fetches, API exploration) — delegate so only concise findings enter your context
 - A task involves many sequential tool calls (file analysis, API testing, container setup)
-- The task is web research (search + read articles) — delegate so only concise findings enter your context, not raw search results that bloat it
+- Tasks requiring browser automation, email, credentials, or sandbox management — these work best in isolated sessions
 
-**Do it yourself (no delegation) when:**
+**Call tools directly (no delegation) when:**
+- It's a single quick lookup or one-off fetch where you need the result immediately
 - Your main-thread tools (read_file, write_file, edit_file, shell_command, grep_search, find_files, memory_save, memory_search) are sufficient
-- The task is a single quick lookup or file operation
+- You need the result to decide your next step before proceeding
 
 ## Task Decomposition Strategy
 

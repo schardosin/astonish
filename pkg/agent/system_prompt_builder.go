@@ -209,8 +209,16 @@ func (b *SystemPromptBuilder) Build() string {
 	if len(b.Catalog) > 0 {
 		sb.WriteString("\n## Task Delegation\n\n")
 		sb.WriteString("`delegate_tasks` runs tasks in isolated sub-agents with their own sessions. ")
-		sb.WriteString("Use it for: parallel execution of independent tasks, long-running operations, or tasks requiring isolation. ")
-		sb.WriteString("Do NOT use it just to access tools — relevant tools are injected automatically and can be called directly.\n\n")
+		sb.WriteString("Benefits: parallel execution, context isolation (only concise summaries enter your context, not raw search results), and independent timeouts.\n\n")
+
+		sb.WriteString("**Prefer delegation when:**\n")
+		sb.WriteString("- The request involves 2+ independent information-gathering tasks (e.g., \"research X and Y\", \"compare A vs B\") — each topic becomes a parallel sub-task\n")
+		sb.WriteString("- A task will produce large raw output (web research, multi-page fetches, API exploration)\n")
+		sb.WriteString("- Tasks can meaningfully run in parallel\n\n")
+
+		sb.WriteString("**Call tools directly when:**\n")
+		sb.WriteString("- It's a single quick lookup or one-off fetch\n")
+		sb.WriteString("- You need the result immediately to decide your next step\n\n")
 
 		sb.WriteString("**Planning strategy:**\n")
 		sb.WriteString("1. For multi-step tasks, call `announce_plan` first to show the user your approach as a visible checklist.\n")

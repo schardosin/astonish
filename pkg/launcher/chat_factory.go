@@ -575,6 +575,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if cfg.PlatformMode {
 				// Platform mode: tools are stored in the MCPConfig extensions
 				cachedTools = getPlatformCachedTools(ctx, name)
+				// Fallback for standard servers (tavily, brave, firecrawl, etc.)
+				// that are configured via config.yaml + credential store but are
+				// never stored in the org/team DB. Use the file-based cache.
+				if len(cachedTools) == 0 && config.IsStandardServerInstalled(name) {
+					cachedTools = cache.GetToolsForServer(name)
+				}
 			} else {
 				// Personal mode: tools from file-based cache
 				cachedTools = cache.GetToolsForServer(name)
@@ -1538,6 +1544,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 		if skillIndex != "" {
 			subAgentMgr.SkillIndex = skillIndex
+		}
+		// Wire web search/extract tool names so sub-agents get proper guidance
+		// preferring dedicated search over web_fetch.
+		if promptBuilder.WebSearchAvailable && promptBuilder.WebSearchToolName != "" {
+			// Normalize hyphens → underscores to match actual MCP tool names
+			subAgentMgr.WebSearchToolName = strings.ReplaceAll(promptBuilder.WebSearchToolName, "-", "_")
+		}
+		if promptBuilder.WebExtractAvailable && promptBuilder.WebExtractToolName != "" {
+			subAgentMgr.WebExtractToolName = strings.ReplaceAll(promptBuilder.WebExtractToolName, "-", "_")
 		}
 		// Alias sub-agent sessions to the parent's sandbox container so they
 		// share the same container instead of each creating a new one.

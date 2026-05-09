@@ -18,6 +18,11 @@ import (
 	adksession "google.golang.org/adk/session"
 )
 
+// stateKeyParentID is the session state key used to pass a parent session ID
+// during child session creation. Mirrors session.StateKeyParentID to avoid
+// an import dependency on the session package.
+const stateKeyParentID = "_astonish_parent_id"
+
 // pgSessionStore implements store.SessionStore for PostgreSQL.
 //
 // It maintains an in-memory sessions map so that the ADK runner's
@@ -192,6 +197,14 @@ func (s *pgSessionStore) Create(ctx context.Context, req *adksession.CreateReque
 		state = make(map[string]any)
 	}
 
+	// Extract parent_id from state (mirrors FileStore behavior).
+	// Sub-agents pass "_astonish_parent_id" in state to link child sessions.
+	var parentID *string
+	if pid, ok := state[stateKeyParentID].(string); ok && pid != "" {
+		parentID = &pid
+		delete(state, stateKeyParentID)
+	}
+
 	// Create in-memory session
 	sess := &pgSession{
 		id:        sessionID,
@@ -208,10 +221,10 @@ func (s *pgSessionStore) Create(ctx context.Context, req *adksession.CreateReque
 
 	// Persist metadata in PG
 	_, pgErr := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, '', $3, $3)
+		`INSERT INTO %s (id, user_id, title, parent_id, created_at, updated_at)
+		 VALUES ($1, $2, '', $3, $4, $4)
 		 ON CONFLICT (id) DO NOTHING`, s.sessionsTable()),
-		sessionID, req.UserID, now,
+		sessionID, req.UserID, parentID, now,
 	)
 	if pgErr != nil {
 		return nil, fmt.Errorf("failed to persist session %s: %w", sessionID, pgErr)

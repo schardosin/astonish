@@ -22,11 +22,9 @@ export interface BuildPathParams {
   subKey2?: string
   tab?: string
   tabSection?: string
-  /** Management view: sidebar section (teams/users/audit) */
-  mgmtSection?: string
-  /** Management view: selected team slug */
+  /** Settings: team slug for team-scoped sections */
   teamSlug?: string
-  /** Management view: active tab within team detail */
+  /** Settings: tab within team detail */
   teamTab?: string
 }
 
@@ -73,10 +71,34 @@ function parseHash(hash: string): RouterPath {
   }
 
   if (view === 'settings') {
-    return { 
-      view: 'settings', 
-      params: { section: parts[1] || 'general' }
+    // Routes:
+    //   #/settings                        → section='chat' (first item)
+    //   #/settings/general                → section='general'
+    //   #/settings/team/members           → section='team', teamTab='members' (active team)
+    //   #/settings/team/engineering/skills → section='team', teamSlug='engineering', teamTab='skills'
+    //   #/settings/org/users              → section='org', subsection='users'
+    //   #/settings/platform/orgs          → section='platform', subsection='orgs'
+    const section = parts[1] || 'chat'
+
+    if (section === 'team') {
+      // 2 parts after 'team' → slug + tab; 1 part → just tab (use active team)
+      if (parts.length >= 4) {
+        // #/settings/team/:slug/:tab
+        return { view: 'settings', params: { section: 'team', teamSlug: decodeURIComponent(parts[2]), teamTab: parts[3] || 'members' } }
+      }
+      // #/settings/team/:tab
+      return { view: 'settings', params: { section: 'team', teamSlug: '', teamTab: parts[2] || 'members' } }
     }
+
+    if (section === 'org') {
+      return { view: 'settings', params: { section: 'org', subsection: parts[2] || 'users' } }
+    }
+
+    if (section === 'platform') {
+      return { view: 'settings', params: { section: 'platform', subsection: parts[2] || 'orgs' } }
+    }
+
+    return { view: 'settings', params: { section } }
   }
 
   if (view === 'chat') {
@@ -112,19 +134,25 @@ function parseHash(hash: string): RouterPath {
     return { view: 'credentials', params: {} }
   }
 
+  // Legacy: redirect team-mgmt URLs to new settings paths
   if (view === 'team-mgmt') {
-    // Routes: #/team-mgmt, #/team-mgmt/users, #/team-mgmt/audit,
-    //         #/team-mgmt/teams/:slug, #/team-mgmt/teams/:slug/:tab
     const mgmtSection = parts[1] || 'teams'
-    const teamSlug = mgmtSection === 'teams' ? (parts[2] || '') : ''
-    const teamTab = mgmtSection === 'teams' && parts[2] ? (parts[3] || 'members') : 'members'
-    return { view: 'team-mgmt', params: { mgmtSection, teamSlug, teamTab } }
+    if (mgmtSection === 'users') return { view: 'settings', params: { section: 'org', subsection: 'users' } }
+    if (mgmtSection === 'audit') return { view: 'settings', params: { section: 'org', subsection: 'audit' } }
+    if (mgmtSection === 'platform') return { view: 'settings', params: { section: 'platform', subsection: 'orgs' } }
+    if (mgmtSection === 'teams' && parts[2]) {
+      const teamSlug = parts[2]
+      const teamTab = parts[3] || 'members'
+      return { view: 'settings', params: { section: 'team', teamSlug, teamTab } }
+    }
+    // Default: go to team members
+    return { view: 'settings', params: { section: 'team', teamSlug: '', teamTab: 'members' } }
   }
 
   if (view === 'platform-admin') {
-    // Routes: #/platform-admin, #/platform-admin/orgs, #/platform-admin/users
+    // Legacy: redirect to new settings/platform path
     const tab = parts[1] || 'orgs'
-    return { view: 'platform-admin', params: { tab } }
+    return { view: 'settings', params: { section: 'platform', subsection: tab } }
   }
 
   return { view, params: {} }
@@ -134,8 +162,31 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
   switch (view) {
     case 'agent':
       return `/agent/${encodeURIComponent(params.agentName || '')}`
-    case 'settings':
-      return `/settings/${params.section || 'general'}`
+    case 'settings': {
+      const section = params.section || 'chat'
+
+      if (section === 'team') {
+        const tab = params.teamTab || 'members'
+        if (params.teamSlug) {
+          if (tab !== 'members') return `/settings/team/${encodeURIComponent(params.teamSlug)}/${tab}`
+          return `/settings/team/${encodeURIComponent(params.teamSlug)}/members`
+        }
+        // No slug — use active team (just tab in URL)
+        return `/settings/team/${tab}`
+      }
+
+      if (section === 'org') {
+        const sub = params.subView || 'users'
+        return `/settings/org/${sub}`
+      }
+
+      if (section === 'platform') {
+        const sub = params.subView || 'orgs'
+        return `/settings/platform/${sub}`
+      }
+
+      return `/settings/${section}`
+    }
     case 'chat':
       if (params.sessionId) {
         return `/chat/${encodeURIComponent(params.sessionId)}`
@@ -161,31 +212,10 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
         return `/apps/${encodeURIComponent(params.subKey)}`
       }
       return '/apps'
-    case 'team-mgmt': {
-      const sec = params.mgmtSection || 'teams'
-      if (sec === 'teams' && params.teamSlug) {
-        const tab = params.teamTab || 'members'
-        if (tab !== 'members') {
-          return `/team-mgmt/teams/${encodeURIComponent(params.teamSlug)}/${tab}`
-        }
-        return `/team-mgmt/teams/${encodeURIComponent(params.teamSlug)}`
-      }
-      if (sec !== 'teams') {
-        return `/team-mgmt/${sec}`
-      }
-      return '/team-mgmt'
-    }
     case 'credentials':
       return '/credentials'
     case 'knowledge':
       return '/knowledge'
-    case 'platform-admin': {
-      const tab = params.tab || params.tabSection || 'orgs'
-      if (tab !== 'orgs') {
-        return `/platform-admin/${tab}`
-      }
-      return '/platform-admin'
-    }
     default:
       return '/chat'
   }

@@ -692,6 +692,19 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Inject the per-request session service so that sub-agents (delegate_tasks)
+	// create child sessions in the correct store (pgstore PersonalSessions in
+	// platform mode) rather than the factory-time default (FileStore).
+	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
+		runner.InjectSessionService(svc.PersonalSessions)
+	}
+
+	// Inject the effective user ID so sub-agents create child sessions with the
+	// correct user_id (UUID in platform mode). Without this, the SubAgentManager
+	// would use its factory-time default ("console_user") which fails pgstore's
+	// UUID column constraint.
+	runner.InjectUserID(userID)
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {

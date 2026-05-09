@@ -206,6 +206,14 @@ type SubAgentManager struct {
 	// exist and can call skill_lookup to load them.
 	SkillIndex string
 
+	// WebSearchToolName is the configured web search tool (e.g., "tavily_search").
+	// Injected into sub-agent prompts so they prefer dedicated search over web_fetch.
+	WebSearchToolName string
+
+	// WebExtractToolName is the configured web extract tool (e.g., "tavily_extract").
+	// Injected into sub-agent prompts so they use it as fallback when web_fetch fails.
+	WebExtractToolName string
+
 	// Internal
 	sem          chan struct{}     // concurrency semaphore
 	lastTracesMu sync.Mutex        // protects lastTraces
@@ -545,7 +553,22 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
-	// Create child session linked to parent
+	// Create child session linked to parent.
+	// Prefer the per-request session service from context (e.g., pgstore in
+	// platform mode) over the factory-time default (m.SessionService).
+	sessionSvc := m.SessionService
+	if ctxSvc := store.SessionServiceFromContext(ctx); ctxSvc != nil {
+		sessionSvc = ctxSvc
+	}
+
+	// Prefer the per-request user ID from context (e.g., platform user UUID)
+	// over the factory-time default (m.UserID = "console_user"). The pgstore
+	// user_id column is UUID-typed and rejects non-UUID strings.
+	userID := m.UserID
+	if ctxUID := store.UserIDFromContext(ctx); ctxUID != "" {
+		userID = ctxUID
+	}
+
 	childSessionID := uuid.NewString()
 	createState := map[string]any{}
 	if task.ParentID != "" {
@@ -556,9 +579,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		createState[k] = v
 	}
 
-	_, err := m.SessionService.Create(taskCtx, &adksession.CreateRequest{
+	_, err := sessionSvc.Create(taskCtx, &adksession.CreateRequest{
 		AppName:   m.AppName,
-		UserID:    m.UserID,
+		UserID:    userID,
 		SessionID: childSessionID,
 		State:     createState,
 	})
@@ -574,8 +597,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 
 	// Persist the task name as the session title so fleet reconstruction
 	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
-	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
-		if err := fs.SetSessionTitle(childSessionID, task.Name); err != nil {
+	if titleSetter, ok := sessionSvc.(interface{ SetSessionTitle(string, string) error }); ok {
+		if err := titleSetter.SetSessionTitle(childSessionID, task.Name); err != nil {
 			slog.Warn("failed to set sub-agent session title", "session_id", childSessionID, "title", task.Name, "error", err)
 		}
 	}
@@ -768,7 +791,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	r, err := runner.New(runner.Config{
 		AppName:        m.AppName,
 		Agent:          childAgent,
-		SessionService: m.SessionService,
+		SessionService: sessionSvc,
 	})
 	if err != nil {
 		result = TaskResult{
@@ -789,7 +812,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	var outputParts []string
 	var toolCallCount int
 
-	for event, runErr := range r.Run(taskCtx, m.UserID, childSessionID, userMsg, adkagent.RunConfig{}) {
+	for event, runErr := range r.Run(taskCtx, userID, childSessionID, userMsg, adkagent.RunConfig{}) {
 		if runErr != nil {
 			trace.Finalize()
 			result = TaskResult{
@@ -1091,6 +1114,16 @@ func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTas
 		sb.WriteString("- Use `resolve_credential` to get raw credential fields (username, password) for non-HTTP use.\n")
 		sb.WriteString("- Use `list_credentials` to discover available credentials.\n")
 		sb.WriteString("- You cannot create or modify credentials — only read existing ones.\n")
+	}
+
+	// Web tool guidance: prefer dedicated search/extract tools over raw web_fetch
+	if childToolSet["web_fetch"] && m.WebSearchToolName != "" {
+		sb.WriteString("\n## Web Tools\n")
+		sb.WriteString(fmt.Sprintf("- For **search queries** (discovering information, finding news, looking up topics), use `%s`. Do NOT use `web_fetch` for search.\n", m.WebSearchToolName))
+		sb.WriteString("- For **fetching a specific known URL**, use `web_fetch`.\n")
+		if m.WebExtractToolName != "" {
+			sb.WriteString(fmt.Sprintf("- If `web_fetch` returns empty or broken content for a URL, retry with `%s` as a fallback.\n", m.WebExtractToolName))
+		}
 	}
 
 	// Load and inject memory content if available

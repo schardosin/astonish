@@ -55,7 +55,6 @@ const StudioChat = lazy(() => import('./components/StudioChat'))
 const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
-const TeamManagement = lazy(() => import('./components/TeamManagement'))
 const CredentialsView = lazy(() => import('./components/CredentialsView'))
 
 function App() {
@@ -118,7 +117,13 @@ function App() {
     if (path.view === 'agent') {
       navigate(buildPath('canvas'))
     }
-  }, [path.view, navigate])
+
+    // If on a team-scoped settings page, update the URL to the new team
+    if (path.view === 'settings' && path.params.section === 'team') {
+      const tab = path.params.teamTab || 'members'
+      replaceHash(buildPath('settings', { section: `team/${teamSlug}/${tab}` }))
+    }
+  }, [path.view, path.params, navigate, replaceHash])
 
   // Switch to a different organization — tokens are re-issued, teams reload.
   const handleOrgSwitch = useCallback(async (orgSlug: string) => {
@@ -218,14 +223,11 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const MAX_HISTORY = 100
 
-  // Derive showSettings from path
-  const showSettings = path.view === 'settings'
-  const settingsSection = path.params.section || 'general'
-
-  // Derive workspace (team-mgmt) management params from path
-  const mgmtSection = path.params.mgmtSection || 'teams'
-  const mgmtTeamSlug = path.params.teamSlug || ''
-  const mgmtTeamTab = path.params.teamTab || 'members'
+  // Derive settings params from path
+  const settingsSection = path.params.section || 'chat'
+  const settingsTeamSlug = path.params.teamSlug || ''
+  const settingsTeamTab = path.params.teamTab || 'members'
+  const settingsSubsection = path.params.subsection || ''
 
   // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
@@ -620,8 +622,8 @@ function App() {
       setView('drill')
     } else if (path.view === 'apps') {
       setView('apps')
-    } else if (path.view === 'team-mgmt') {
-      setView('team-mgmt')
+    } else if (path.view === 'settings') {
+      setView('settings')
     } else if (path.view === 'credentials') {
       setView('credentials')
     }
@@ -1512,7 +1514,6 @@ layout:
         <TopBar 
           theme={theme} 
           onToggleTheme={toggleTheme}
-          onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
           onOpenSandbox={() => navigate(buildPath('settings', { section: 'sandbox' }))}
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
@@ -1615,18 +1616,28 @@ layout:
               onForkApp={isPlatformMode ? handleForkApp : undefined}
             />
             </Suspense>
-          ) : view === 'team-mgmt' && isPlatformMode && auth.user && auth.org ? (
+          ) : view === 'settings' ? (
             <Suspense fallback={null}>
-            <TeamManagement
+            <SettingsPage
               key={activeTeam || 'personal'}
+              activeSection={settingsSection}
+              onSectionChange={(section: string) => replaceHash(buildPath('settings', { section }))}
               theme={theme}
+              onToolsRefresh={loadTools}
+              onSettingsSaved={loadSettings}
+              updateAvailable={updateAvailable as any}
+              onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
+              appVersion={appVersion}
+              isPlatformMode={isPlatformMode}
+              userRole={auth.user?.role}
+              platformRole={auth.user?.platform_role}
               user={auth.user}
               org={auth.org}
               activeTeam={activeTeam}
-              activeSection={mgmtSection}
-              activeTeamSlug={mgmtTeamSlug}
-              activeTeamTab={mgmtTeamTab}
-              onNavigate={(section, teamSlug, tab) => replaceHash(buildPath('team-mgmt', { mgmtSection: section, teamSlug, teamTab: tab }))}
+              teams={platformTeams}
+              teamSlug={settingsTeamSlug}
+              teamTab={settingsTeamTab}
+              subsection={settingsSubsection}
             />
             </Suspense>
           ) : view === 'credentials' ? (
@@ -1965,31 +1976,6 @@ layout:
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
         </button>
-      )}
-
-      {/* Settings Page */}
-      {showSettings && (
-        <Suspense fallback={null}>
-        <SettingsPage
-          onClose={() => {
-            if (selectedAgent) {
-              navigate(buildPath('agent', { agentName: selectedAgent.id }))
-            } else {
-              navigate('/')
-            }
-          }}
-          activeSection={settingsSection}
-          onSectionChange={(section: string) => replaceHash(buildPath('settings', { section }))}
-          theme={theme}
-          onToolsRefresh={loadTools}
-          onSettingsSaved={loadSettings}
-          updateAvailable={updateAvailable as any}
-          onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
-          appVersion={appVersion}
-          isPlatformMode={isPlatformMode}
-          userRole={auth.user?.role}
-        />
-        </Suspense>
       )}
 
       {/* Toast Notification */}

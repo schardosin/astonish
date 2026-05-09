@@ -545,17 +545,23 @@ func extractFilePath(toolName string, args map[string]any) string {
 	if args == nil {
 		return ""
 	}
+	var p string
 	switch toolName {
 	case "write_file":
-		if p, ok := args["file_path"].(string); ok {
-			return p
-		}
+		p, _ = args["file_path"].(string)
 	case "edit_file":
-		if p, ok := args["path"].(string); ok {
-			return p
+		p, _ = args["path"].(string)
+	}
+	if p == "" {
+		return ""
+	}
+	// Ensure path is absolute for consistent artifact resolution
+	if !filepath.IsAbs(p) {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
 		}
 	}
-	return ""
+	return p
 }
 
 // fileTypeFromExt returns a human-readable file type from a file extension.

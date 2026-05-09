@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -252,18 +253,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
 
-			// Capture file artifacts from write_file and edit_file tool calls.
-			// The file path is extracted from input args and stashed for UI delivery.
-			switch t.Name() {
-			case "write_file":
-				if path, ok := input["file_path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(path, t.Name())
-				}
-			case "edit_file":
-				if path, ok := input["path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(path, t.Name())
-				}
+		// Capture file artifacts from write_file and edit_file tool calls.
+		// The file path is extracted from input args and stashed for UI delivery.
+		switch t.Name() {
+		case "write_file":
+			if path, ok := input["file_path"].(string); ok && path != "" {
+				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
 			}
+		case "edit_file":
+			if path, ok := input["path"].(string); ok && path != "" {
+				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+			}
+		}
 
 			// Strip large flow output from run_flow results. The full output
 			// is stashed for direct delivery to the user (via SSE or channel),
@@ -629,4 +630,17 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 		c.traceMu.Unlock()
 	}
+}
+
+// resolveAbsPath ensures a file path is absolute. If the path is relative,
+// it is resolved against the current working directory. Used when capturing
+// file artifacts to ensure consistent absolute paths for later retrieval.
+func resolveAbsPath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

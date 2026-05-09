@@ -531,8 +531,13 @@ func validateArtifactPath(rawPath string) (string, error) {
 		return "", fmt.Errorf("path contains illegal traversal")
 	}
 	cleaned := filepath.Clean(rawPath)
+	// Resolve relative paths against the process working directory
 	if !filepath.IsAbs(cleaned) {
-		return "", fmt.Errorf("path must be absolute")
+		abs, err := filepath.Abs(cleaned)
+		if err != nil {
+			return "", fmt.Errorf("cannot resolve relative path: %w", err)
+		}
+		cleaned = abs
 	}
 	return cleaned, nil
 }

@@ -286,6 +286,10 @@ func ToggleMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset the chat agent so it reinitializes with the updated enabled state.
+	// Without this, the singleton keeps the old tool configuration.
+	GetChatManager().Reset()
+
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

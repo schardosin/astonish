@@ -495,7 +495,7 @@ func (c *ChatAgent) extractAndStripImages(output map[string]any) map[string]any 
 // to the current user based on their org and team stores in the context.
 // Returns true if:
 //   - Not in platform mode (no stores in context → personal mode, allow all)
-//   - The server exists in either the org store or the user's team store
+//   - The server exists in either the org store or the user's team store AND is enabled
 //
 // This is the per-request authorization gate for MCP tools.
 func isMCPServerAccessible(ctx context.Context, serverName string) bool {
@@ -510,12 +510,12 @@ func isMCPServerAccessible(ctx context.Context, serverName string) bool {
 	}
 	if stores.Org != nil {
 		if s, _ := stores.Org.Get(serverName); s != nil {
-			return true
+			return s.IsEnabled()
 		}
 	}
 	if stores.Team != nil {
 		if s, _ := stores.Team.Get(serverName); s != nil {
-			return true
+			return s.IsEnabled()
 		}
 	}
 	return false

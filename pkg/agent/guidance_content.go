@@ -417,42 +417,39 @@ delegate_tasks(tasks: [{
 
 const guidanceWebResearch = `# Guidance: Web Research & Information Gathering
 
-When you need to research information from the web — product prices, comparisons, current data, fact-finding — follow this strategy.
+When you need to research information from the web, choose the right tool based on the nature of the information you need.
 
-## Use web search API as the primary research tool
+## Search tools vs browser navigation
 
-For ANY task that involves finding information across multiple sources (product prices, stock availability, comparisons, reviews, current events), delegate a SINGLE task with the ` + "`web`" + ` tool group to search via the configured web search tool.
+Search tools (tavily_search, brave_web_search, web_fetch) query search engine indexes — they return summarized results, snippets, and links. This is ideal for **discovering** information: finding articles, understanding topics, locating relevant URLs, or getting general knowledge that doesn't change minute-to-minute.
 
-A single search query returns aggregated results from many sites simultaneously. This is faster, more comprehensive, and more reliable than visiting individual sites with the browser.
+For tasks requiring **live, current data from specific websites** — real-time prices, stock availability, product listings, account dashboards, dynamically-rendered content, or any information that changes frequently and must reflect the present state — delegate with browser tools to navigate the site directly. Search indexes are often hours or days stale and incomplete for this kind of data.
 
-**Examples of search-first tasks:**
-- "Find the best price for [product]" → search for the SKU or model number
-- "Compare prices across retailers" → one search covers Amazon, Newegg, B&H, Best Buy, etc. via aggregation sites like PCPartPicker and Google Shopping
-- "What is the current price of [stock/crypto]?" → search returns live quotes
-- "Find reviews for [product]" → search aggregates review sites
-- "What are the specs of [product]?" → search finds spec sheets and comparisons
+**Rule of thumb:** If the answer depends on what a website shows *right now* (not what was indexed days ago), use the browser. If you need to discover *which* websites or resources exist, use search.
 
-## Do NOT use browser agents to visit individual retail or data sites
+## When to use search (delegate with web tools)
 
-Launching multiple browser agents to individually visit Amazon, Newegg, B&H Photo, etc. is the WRONG approach:
-- **Slow**: Each browser session takes minutes with navigation, rendering, and anti-bot delays. Search API returns in seconds.
-- **Fragile**: Retail sites have anti-bot measures, redirects, CAPTCHAs, and cookie walls that cause browser agents to get stuck in loops.
-- **Redundant**: Price aggregation sites (PCPartPicker, Google Shopping, Pangoly, CamelCamelCamel) already compile multi-retailer data. A single search query finds them.
-- **Wasteful**: Parallel browser agents share browser state, causing redirect cross-contamination between sessions.
+- General knowledge research: "What is X?", "How does Y work?"
+- News and current events (search indexes update frequently for news)
+- Finding documentation, articles, guides
+- Discovering which sites/URLs to visit for deeper investigation
+- Getting aggregated information from multiple sources simultaneously
 
-## When browser IS appropriate for research
+## When to use browser (delegate with browser tools)
 
-Use the browser only as a targeted follow-up, not as the primary discovery method:
-- Verify a specific price or detail on one retailer page when search data might be stale
-- Access content behind a login (with stored credentials)
-- Interact with a page (add to cart, configure a product, fill forms, complete checkout)
-- Extract data from a JS-heavy page that ` + "`web_fetch`" + ` and search cannot parse
+- Current prices, availability, or inventory on a specific store or site
+- Content that is dynamically rendered (SPAs, JS-heavy pages)
+- Tasks that require interaction (login, form fill, configuration, checkout)
+- Data that must be verified as current (financial, inventory, scheduling)
+- When search results seem stale or don't match what the site actually shows
 
-## Recommended strategy: Search → Compile → Verify (optional)
+## Research strategy
 
-1. **Search**: Delegate ONE ` + "`web`" + ` task to search for the topic, product, or SKU
-2. **Compile**: Format the search results into the user's requested format (table, summary, etc.)
-3. **Verify** (only if needed): If a specific data point seems stale, missing, or suspicious, delegate ONE browser task to check that specific URL — never multiple parallel browser agents for the same research goal
+1. **Assess the task** — Does the user need live site data, or general knowledge?
+2. **For general research**: Delegate with web tools (search + extract). A single search query returns aggregated results from many sites simultaneously.
+3. **For live/current data**: Delegate with browser tools to navigate the target site directly and extract what is currently displayed.
+4. **Combine when appropriate**: Use search to discover which sites to check, then use browser to get the live data from those sites.
+5. **Synthesize**: After sub-tasks complete, structure the final output around the user's original question. Save as a markdown file for substantial research output.
 `
 
 const guidanceGenerativeUI = `# Guidance: Generative UI (Visual Apps)

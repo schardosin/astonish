@@ -976,8 +976,9 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	hasDefaultProvider := cfg.General.DefaultProvider != ""
 	hasDefaultModel := cfg.General.DefaultModel != ""
 
-	// Setup is required if no default provider OR no configured providers
-	setupRequired := !hasDefaultProvider || len(configuredProviders) == 0
+	// Setup is required only if there are no configured providers at all.
+	// Having a default_provider explicitly set is a convenience, not a prerequisite.
+	setupRequired := len(configuredProviders) == 0
 
 	respondJSON(w, http.StatusOK, SetupStatusResponse{
 		SetupRequired:       setupRequired,

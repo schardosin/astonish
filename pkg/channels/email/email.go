@@ -63,7 +63,7 @@ type EmailChannel struct {
 	// threadIndex maps email Message-IDs to session keys for per-thread sessions.
 	// When set, new emails create new sessions and replies are routed to the
 	// same session as the original thread. When nil, falls back to per-sender routing.
-	threadIndex *session.ThreadIndex
+	threadIndex session.ThreadIndexer
 }
 
 // New creates a new Email channel adapter.
@@ -104,7 +104,7 @@ func New(cfg *Config, logger *log.Logger) *EmailChannel {
 // Must be called before Start. When set, new emails create new sessions and
 // replies (identified by In-Reply-To / References) are routed to the existing
 // thread session. Without it, all emails from a sender share one session.
-func (e *EmailChannel) SetThreadIndex(idx *session.ThreadIndex) {
+func (e *EmailChannel) SetThreadIndex(idx session.ThreadIndexer) {
 	e.threadIndex = idx
 }
 

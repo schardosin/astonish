@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -46,10 +47,9 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	}
 
 	var workspaceDir string
-	fileStore := getFleetFileStore()
-	if fileStore != nil {
+	if wsDir, wsErr := config.GetWorkspacesDir(); wsErr == nil {
 		workspaceDir = fleet.ResolveSessionWorkspaceDir(
-			fileStore.BaseDir(), "", taskSlug)
+			wsDir, "", taskSlug)
 		if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
 			slog.Warn("could not set up workspace", "component", "fleet-headless", "workspace", workspaceDir, "error", err)
 			workspaceDir = "" // fall back to legacy behavior
@@ -139,14 +139,24 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		}
 	}
 
-	// Start the fleet message loop in a background goroutine
+	// Start the fleet message loop in a background goroutine.
+	// Enrich the context with the session store so child sub-agent sessions
+	// are persisted to PostgreSQL (making tool executions visible in traces).
+	runCtx := context.Background()
+	if sessionStore != nil {
+		runCtx = store.WithSessionService(runCtx, sessionStore)
+		if userID != "" {
+			runCtx = store.WithUserID(runCtx, userID)
+		}
+	}
+
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet-headless", "session_id", fleetSession.ID)
 		}()
 
-		if err := fleetSession.Run(context.Background()); err != nil {
+		if err := fleetSession.Run(runCtx); err != nil {
 			slog.Error("session error", "component", "fleet-headless", "session_id", fleetSession.ID, "error", err)
 		}
 	}()

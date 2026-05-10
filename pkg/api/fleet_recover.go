@@ -282,14 +282,21 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
 
-	// Start the fleet message loop in a background goroutine
+	// Start the fleet message loop in a background goroutine.
+	// Enrich the context with the session store so child sub-agent sessions
+	// are persisted to PostgreSQL (making tool executions visible in traces).
+	runCtx := context.Background()
+	if sessionStore != nil {
+		runCtx = store.WithSessionService(runCtx, sessionStore)
+	}
+
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet-recover", "session_id", fleetSession.ID)
 		}()
 
-		if runErr := fleetSession.Run(context.Background()); runErr != nil {
+		if runErr := fleetSession.Run(runCtx); runErr != nil {
 			slog.Error("session error", "component", "fleet-recover", "session_id", fleetSession.ID, "error", runErr)
 		}
 	}()

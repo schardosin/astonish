@@ -95,6 +95,14 @@ type Services struct {
 	// Nil in personal mode (host config is used directly).
 	Settings SettingsStore
 
+	// OrgSettings provides access to org-level configuration (providers, defaults).
+	// Visible to all teams within the organization. Nil in personal mode.
+	OrgSettings OrgSettingsStore
+
+	// PlatformSettings provides access to platform-wide configuration (providers, defaults).
+	// Visible to all organizations and teams. Nil in personal mode.
+	PlatformSettings PlatformSettingsStore
+
 	// Audit provides audit logging.
 	Audit AuditStore
 

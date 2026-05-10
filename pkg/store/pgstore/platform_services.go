@@ -22,9 +22,10 @@ func NewPlatformServices(ctx context.Context, cfg config.PostgresConfig) (*store
 	}
 
 	svc := &store.Services{
-		Mode:         store.ModePlatform,
-		Platform:     pgStore,
-		TenantRouter: pgStore,
+		Mode:             store.ModePlatform,
+		Platform:         pgStore,
+		TenantRouter:     pgStore,
+		PlatformSettings: pgStore.PlatformSettings(),
 	}
 
 	return svc, pgStore, nil
@@ -85,12 +86,14 @@ func TenantMiddleware(pgStore *PGStore) func(http.Handler) http.Handler {
 
 		// Create a request-scoped clone with tenant-specific stores
 		reqSvc := &store.Services{
-			Mode:         store.ModePlatform,
-			Platform:     baseSvc.Platform,
-			TenantRouter: baseSvc.TenantRouter,
-			Audit:        orgStore.OrgAudit(),
-			Skills:       orgStore.OrgSkills(),
-			MCPServers:   orgStore.OrgMCPServers(),
+			Mode:             store.ModePlatform,
+			Platform:         baseSvc.Platform,
+			TenantRouter:     baseSvc.TenantRouter,
+			Audit:            orgStore.OrgAudit(),
+			Skills:           orgStore.OrgSkills(),
+			MCPServers:       orgStore.OrgMCPServers(),
+			PlatformSettings: pgStore.PlatformSettings(),
+			OrgSettings:      pgStore.OrgSettings(tc.OrgSlug),
 		}
 
 		// Populate team-scoped stores if team is known

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -198,8 +199,63 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 	return mcpCfg
 }
 
+// EffectiveAppConfigFromContext builds the effective application configuration using
+// the 3-tier provider cascade from the context's store.Services.
+// Use this when you have a context with store.Services but no *http.Request
+// (e.g., chat agent initialization, background tasks).
+// In personal mode (isPlatformMode=false), returns config.LoadAppConfig() directly.
+func EffectiveAppConfigFromContext(ctx context.Context, isPlatformMode bool) *config.AppConfig {
+	appCfg, err := config.LoadAppConfig()
+	if err != nil {
+		slog.Warn("failed to load app config", "error", err)
+		appCfg = &config.AppConfig{}
+	}
+
+	if !isPlatformMode {
+		return appCfg
+	}
+
+	svc := store.FromContext(ctx)
+	if svc == nil {
+		return appCfg
+	}
+
+	// Platform mode: providers come exclusively from the database.
+	appCfg.Providers = nil
+	appCfg.General.DefaultProvider = ""
+	appCfg.General.DefaultModel = ""
+
+	// Layer 1: Platform settings (all orgs and teams see these)
+	if svc.PlatformSettings != nil {
+		if ps, psErr := svc.PlatformSettings.Get(ctx); psErr == nil && ps != nil {
+			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
+		}
+	}
+
+	// Layer 2: Org settings (all teams in this org see these)
+	if svc.OrgSettings != nil {
+		if os, osErr := svc.OrgSettings.Get(ctx); osErr == nil && os != nil {
+			applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
+		}
+	}
+
+	// Layer 3: Team settings (only this team sees these)
+	if svc.Settings != nil {
+		teamSettings, tsErr := svc.Settings.Get(ctx)
+		if tsErr == nil && teamSettings != nil {
+			applyTeamSettings(appCfg, teamSettings)
+		}
+	}
+
+	return appCfg
+}
+
 // effectiveAppConfig returns the application configuration appropriate for the request.
-// In platform mode, it loads the host config and overlays team-level settings from the DB.
+// In platform mode, providers come exclusively from the database (3-tier cascade):
+//   1. Platform settings (visible to all orgs/teams)
+//   2. Org settings (visible to all teams in the org)
+//   3. Team settings (specific to this team)
+// config.yaml providers are NOT used in platform mode.
 // In personal mode, it simply returns config.LoadAppConfig().
 func effectiveAppConfig(r *http.Request) *config.AppConfig {
 	appCfg, err := config.LoadAppConfig()
@@ -209,34 +265,69 @@ func effectiveAppConfig(r *http.Request) *config.AppConfig {
 	}
 
 	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform || svc.Settings == nil {
+	if svc == nil || svc.Mode != store.ModePlatform {
 		return appCfg
 	}
 
-	// Platform mode: overlay team settings from DB
-	teamSettings, err := svc.Settings.Get(r.Context())
-	if err != nil {
-		slog.Warn("failed to load team settings", "error", err)
-		return appCfg
-	}
-	if teamSettings == nil {
-		return appCfg
+	// Platform mode: providers come exclusively from the database.
+	// Clear any config.yaml providers so they don't leak into the cascade.
+	appCfg.Providers = nil
+	appCfg.General.DefaultProvider = ""
+	appCfg.General.DefaultModel = ""
+
+	ctx := r.Context()
+
+	// Layer 1: Platform settings (all orgs and teams see these)
+	if svc.PlatformSettings != nil {
+		if ps, psErr := svc.PlatformSettings.Get(ctx); psErr == nil && ps != nil {
+			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
+		}
 	}
 
-	// Overlay team settings onto host config
-	applyTeamSettings(appCfg, teamSettings)
+	// Layer 2: Org settings (all teams in this org see these)
+	if svc.OrgSettings != nil {
+		if os, osErr := svc.OrgSettings.Get(ctx); osErr == nil && os != nil {
+			applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
+		}
+	}
+
+	// Layer 3: Team settings (only this team sees these)
+	if svc.Settings != nil {
+		teamSettings, tsErr := svc.Settings.Get(ctx)
+		if tsErr == nil && teamSettings != nil {
+			applyTeamSettings(appCfg, teamSettings)
+		}
+	}
+
 	return appCfg
+}
+
+// applyProviderLayer merges a provider configuration layer into the app config.
+// Providers are additive by name; defaults override only if non-empty.
+func applyProviderLayer(appCfg *config.AppConfig, providers map[string]store.ProviderConfig, defaultProvider, defaultModel string) {
+	if defaultProvider != "" {
+		appCfg.General.DefaultProvider = defaultProvider
+	}
+	if defaultModel != "" {
+		appCfg.General.DefaultModel = defaultModel
+	}
+	if len(providers) > 0 {
+		if appCfg.Providers == nil {
+			appCfg.Providers = make(map[string]config.ProviderConfig)
+		}
+		for name, provCfg := range providers {
+			appCfg.Providers[name] = config.ProviderConfig(provCfg)
+		}
+	}
 }
 
 // applyTeamSettings overlays team-level settings from the DB onto the host AppConfig.
 // Only non-zero/non-empty team values override the host defaults.
 func applyTeamSettings(appCfg *config.AppConfig, ts *store.TeamSettings) {
-	if ts.DefaultProvider != "" {
-		appCfg.General.DefaultProvider = ts.DefaultProvider
-	}
-	if ts.DefaultModel != "" {
-		appCfg.General.DefaultModel = ts.DefaultModel
-	}
+	// Apply providers and defaults via the shared layer function.
+	applyProviderLayer(appCfg, ts.Providers, ts.DefaultProvider, ts.DefaultModel)
+
+	// Team-specific non-provider settings.
 	if ts.WebSearchTool != "" {
 		appCfg.General.WebSearchTool = ts.WebSearchTool
 	}
@@ -245,16 +336,6 @@ func applyTeamSettings(appCfg *config.AppConfig, ts *store.TeamSettings) {
 	}
 	if ts.ContextLength > 0 {
 		appCfg.General.ContextLength = ts.ContextLength
-	}
-
-	// Overlay providers: team providers replace host providers entirely if set
-	if len(ts.Providers) > 0 {
-		if appCfg.Providers == nil {
-			appCfg.Providers = make(map[string]config.ProviderConfig)
-		}
-		for name, provCfg := range ts.Providers {
-			appCfg.Providers[name] = config.ProviderConfig(provCfg)
-		}
 	}
 
 	// Overlay web servers: team web server configs replace host configs

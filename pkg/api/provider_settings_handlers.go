@@ -1,0 +1,355 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// PlatformProvidersRequest is the request body for saving platform provider settings.
+type PlatformProvidersRequest struct {
+	Providers       map[string]map[string]string `json:"providers,omitempty"`
+	DefaultProvider string                       `json:"default_provider,omitempty"`
+	DefaultModel    string                       `json:"default_model,omitempty"`
+}
+
+// GetPlatformProvidersHandler handles GET /api/settings/platform/providers.
+// Returns the platform-level provider configuration (secrets masked).
+// Requires: Platform Admin
+func GetPlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.PlatformSettings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
+		return
+	}
+
+	settings, err := svc.PlatformSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load platform settings: "+err.Error())
+		return
+	}
+
+	// Mask secrets for the response
+	masked := maskProviderSecrets(settings.Providers)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"providers":        masked,
+		"default_provider": settings.DefaultProvider,
+		"default_model":    settings.DefaultModel,
+	})
+}
+
+// SavePlatformProvidersHandler handles PUT /api/settings/platform/providers.
+// Saves platform-level provider configuration (encrypts secrets).
+// Requires: Platform Admin
+func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.PlatformSettings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
+		return
+	}
+
+	var req PlatformProvidersRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	// Load existing to preserve secrets for masked fields
+	existing, _ := svc.PlatformSettings.Get(r.Context())
+	if existing == nil {
+		existing = &store.PlatformSettings{}
+	}
+
+	// Merge: update providers, preserving existing secrets for masked values
+	settings := &store.PlatformSettings{
+		DefaultProvider: req.DefaultProvider,
+		DefaultModel:    req.DefaultModel,
+		Providers:       mergeProviders(existing.Providers, req.Providers),
+	}
+
+	if err := svc.PlatformSettings.Save(r.Context(), settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save platform settings: "+err.Error())
+		return
+	}
+
+	// Reset chat agent so next request picks up fresh config
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// GetOrgProvidersHandler handles GET /api/settings/org/providers.
+// Returns the org-level provider configuration (secrets masked).
+// Requires: Org Admin
+func GetOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.OrgSettings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Org settings not available")
+		return
+	}
+
+	settings, err := svc.OrgSettings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load org settings: "+err.Error())
+		return
+	}
+
+	// Mask secrets for the response
+	masked := maskProviderSecrets(settings.Providers)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"providers":        masked,
+		"default_provider": settings.DefaultProvider,
+		"default_model":    settings.DefaultModel,
+	})
+}
+
+// SaveOrgProvidersHandler handles PUT /api/settings/org/providers.
+// Saves org-level provider configuration (encrypts secrets).
+// Requires: Org Admin
+func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.OrgSettings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Org settings not available")
+		return
+	}
+
+	var req PlatformProvidersRequest // same shape for org level
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	// Load existing to preserve secrets for masked fields
+	existing, _ := svc.OrgSettings.Get(r.Context())
+	if existing == nil {
+		existing = &store.OrgSettings{}
+	}
+
+	settings := &store.OrgSettings{
+		DefaultProvider: req.DefaultProvider,
+		DefaultModel:    req.DefaultModel,
+		Providers:       mergeProviders(existing.Providers, req.Providers),
+	}
+
+	if err := svc.OrgSettings.Save(r.Context(), settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save org settings: "+err.Error())
+		return
+	}
+
+	// Reset chat agent so next request picks up fresh config
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// mergeProviders merges incoming provider configs with existing ones,
+// preserving secret values when the incoming value is masked (****...).
+func mergeProviders(existing, incoming map[string]map[string]string) map[string]map[string]string {
+	if incoming == nil {
+		return existing
+	}
+
+	result := make(map[string]map[string]string, len(incoming))
+	for name, inCfg := range incoming {
+		merged := make(map[string]string, len(inCfg))
+		for k, v := range inCfg {
+			if isMaskedValue(v) {
+				// Preserve existing secret
+				if existing != nil && existing[name] != nil {
+					merged[k] = existing[name][k]
+				}
+			} else {
+				merged[k] = v
+			}
+		}
+		result[name] = merged
+	}
+	return result
+}
+
+// maskProviderSecrets returns a copy of providers with secret fields masked.
+func maskProviderSecrets(providers map[string]store.ProviderConfig) map[string]map[string]string {
+	if providers == nil {
+		return nil
+	}
+	masked := make(map[string]map[string]string, len(providers))
+	for name, pCfg := range providers {
+		mCfg := make(map[string]string, len(pCfg))
+		for k, v := range pCfg {
+			mCfg[k] = v
+		}
+		// Mask secret fields
+		provType := pCfg["type"]
+		for _, secretKey := range providerSecretKeysForType(provType) {
+			if val, has := mCfg[secretKey]; has && val != "" {
+				mCfg[secretKey] = maskValue(val)
+			}
+		}
+		masked[name] = mCfg
+	}
+	return masked
+}
+
+// providerSecretKeysForType returns fields that should be masked/encrypted for a provider type.
+func providerSecretKeysForType(provType string) []string {
+	switch provType {
+	case "sap_ai_core":
+		return []string{"client_id", "client_secret", "auth_url"}
+	default:
+		return []string{"api_key"}
+	}
+}
+
+func maskValue(val string) string {
+	if len(val) <= 4 {
+		return "****"
+	}
+	return "****" + val[len(val)-4:]
+}
+
+
+// GetEffectiveProvidersHandler handles GET /api/settings/providers/effective.
+// Returns the fully merged provider configuration (all 3 layers cascaded, secrets masked).
+// Useful for the UI to show the user what providers are actually available.
+func GetEffectiveProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	appCfg := effectiveAppConfig(r)
+
+	providers := make(map[string]map[string]string, len(appCfg.Providers))
+	for name, pCfg := range appCfg.Providers {
+		masked := make(map[string]string, len(pCfg))
+		for k, v := range pCfg {
+			masked[k] = v
+		}
+		provType := masked["type"]
+		for _, secretKey := range providerSecretKeysForType(provType) {
+			if val, has := masked[secretKey]; has && val != "" {
+				masked[secretKey] = maskValue(val)
+			}
+		}
+		providers[name] = masked
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"providers":        providers,
+		"default_provider": appCfg.General.DefaultProvider,
+		"default_model":    appCfg.General.DefaultModel,
+	})
+}
+
+// GetTeamProvidersHandler handles GET /api/settings/team/providers.
+// Returns raw team-level provider defaults WITHOUT cascade (no platform/org fallback).
+// This is used by the UI to distinguish explicitly-set team defaults from inherited ones.
+func GetTeamProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Settings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Team settings not available")
+		return
+	}
+
+	settings, err := svc.Settings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load team settings: "+err.Error())
+		return
+	}
+
+	// Mask secrets for the response
+	masked := maskProviderSecrets(settings.Providers)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"providers":        masked,
+		"default_provider": settings.DefaultProvider,
+		"default_model":    settings.DefaultModel,
+	})
+}
+
+// DeleteProviderHandler handles DELETE /api/settings/{level}/providers/{name}.
+// Removes a provider from the specified level (platform, org, or team).
+func DeleteProviderHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	level := vars["level"]
+	providerName := vars["name"]
+	if providerName == "" {
+		respondError(w, http.StatusBadRequest, "provider name is required")
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil {
+		respondError(w, http.StatusServiceUnavailable, "Store not available")
+		return
+	}
+
+	ctx := r.Context()
+
+	switch level {
+	case "platform":
+		if svc.PlatformSettings == nil {
+			respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
+			return
+		}
+		settings, err := svc.PlatformSettings.Get(ctx)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		delete(settings.Providers, providerName)
+		if settings.DefaultProvider == providerName {
+			settings.DefaultProvider = ""
+		}
+		if err := svc.PlatformSettings.Save(ctx, settings); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+	case "org":
+		if svc.OrgSettings == nil {
+			respondError(w, http.StatusServiceUnavailable, "Org settings not available")
+			return
+		}
+		settings, err := svc.OrgSettings.Get(ctx)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		delete(settings.Providers, providerName)
+		if settings.DefaultProvider == providerName {
+			settings.DefaultProvider = ""
+		}
+		if err := svc.OrgSettings.Save(ctx, settings); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+	case "team":
+		if svc.Settings == nil {
+			respondError(w, http.StatusServiceUnavailable, "Team settings not available")
+			return
+		}
+		settings, err := svc.Settings.Get(ctx)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		delete(settings.Providers, providerName)
+		if settings.DefaultProvider == providerName {
+			settings.DefaultProvider = ""
+		}
+		if err := svc.Settings.Save(ctx, settings); err != nil {
+			respondError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+	default:
+		respondError(w, http.StatusBadRequest, "level must be 'platform', 'org', or 'team'")
+		return
+	}
+
+	GetChatManager().Reset()
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+

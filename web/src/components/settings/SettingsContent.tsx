@@ -168,6 +168,11 @@ export default function SettingsContent({
           setError={setError}
           loadData={loadData}
           onSettingsSaved={onSettingsSaved}
+          inheritedProviders={[]}
+          onSaveDefault={async (provider, model) => {
+            await saveSettings({ general: { default_provider: provider, default_model: model } })
+            if (onSettingsSaved) onSettingsSaved()
+          }}
         />
       )}
 

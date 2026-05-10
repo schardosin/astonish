@@ -18,7 +18,8 @@ type PGStore struct {
 	poolMgr     *PoolManager
 	platformDSN string
 	pgCfg       config.PostgresConfig
-	embedFunc   store.EmbedFunc // optional; propagated to memory stores for hybrid search
+	embedFunc   store.EmbedFunc          // optional; propagated to memory stores for hybrid search
+	secrets     *PlatformSecretStore     // platform-level secret store (for provider encryption)
 }
 
 // New creates a new PGStore connected to the platform database.
@@ -36,6 +37,7 @@ func New(ctx context.Context, platformDSN string, pgCfg config.PostgresConfig) (
 		poolMgr:     pm,
 		platformDSN: platformDSN,
 		pgCfg:       pgCfg,
+		secrets:     NewPlatformSecretStore(pm),
 	}, nil
 }
 
@@ -47,12 +49,32 @@ func (s *PGStore) PoolManager() *PoolManager {
 // PlatformSecrets returns the platform-level secret store for instance-wide
 // secrets (bot tokens, API keys, etc.) that are not org/team-scoped.
 func (s *PGStore) PlatformSecrets() *PlatformSecretStore {
-	return NewPlatformSecretStore(s.poolMgr)
+	return s.secrets
 }
 
 // InstanceSuffix returns the instance suffix used for database naming.
 func (s *PGStore) InstanceSuffix() string {
 	return s.pgCfg.InstanceSuffix
+}
+
+// PlatformSettings returns the platform-wide settings store.
+// Used for provider configuration visible to all orgs and teams.
+func (s *PGStore) PlatformSettings() store.PlatformSettingsStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		return nil
+	}
+	return NewPGPlatformSettingsStore(pool, s.secrets)
+}
+
+// OrgSettings returns the org-level settings store for a given org.
+// Used for provider configuration visible to all teams in the org.
+func (s *PGStore) OrgSettings(orgSlug string) store.OrgSettingsStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		return nil
+	}
+	return NewPGOrgSettingsStore(pool, orgSlug, s.secrets)
 }
 
 // SetEmbedFunc configures the embedding function used by memory stores for
@@ -102,12 +124,25 @@ func (s *PGStore) Close() error {
 // The function is idempotent — already-applied migrations are skipped via the
 // schema_migrations version tracking table.
 func (s *PGStore) MigrateAllSchemas(ctx context.Context) error {
-	// 1. Get all active org slugs from the platform database
+	// 0. Run pending platform-level migrations.
+	// This ensures new platform tables (e.g. platform_settings, platform_secrets)
+	// are created on existing deployments that were bootstrapped before those
+	// migrations were added.
 	platformPool, err := s.poolMgr.PlatformPool(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get platform pool: %w", err)
 	}
+	platConn, err := platformPool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to acquire platform connection for migrations: %w", err)
+	}
+	if err := Migrate(ctx, platConn.Conn(), MigrationPlatform, ""); err != nil {
+		platConn.Release()
+		return fmt.Errorf("platform migrations failed: %w", err)
+	}
+	platConn.Release()
 
+	// 1. Get all active org slugs from the platform database
 	rows, err := platformPool.Query(ctx, `SELECT slug FROM organizations WHERE status = 'active'`)
 	if err != nil {
 		return fmt.Errorf("failed to list organizations: %w", err)
@@ -228,6 +263,7 @@ func (s *PGStore) ForOrg(orgSlug string) (store.OrgDataStore, error) {
 		poolMgr:   s.poolMgr,
 		embedFunc: s.embedFunc,
 		credKey:   credKey,
+		secrets:   s.secrets,
 	}, nil
 }
 
@@ -273,10 +309,11 @@ type pgOrgDataStore struct {
 	poolMgr   *PoolManager
 	embedFunc store.EmbedFunc
 	credKey   []byte // AES-256 credential encryption key (nil = no encryption)
+	secrets   *PlatformSecretStore
 }
 
 func (o *pgOrgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
-	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug, embedFunc: o.embedFunc, credKey: o.credKey}
+	return &pgTeamDataStore{pool: o.pool, teamSlug: teamSlug, orgSlug: o.orgSlug, embedFunc: o.embedFunc, credKey: o.credKey, secrets: o.secrets}
 }
 
 func (o *pgOrgDataStore) ForUser(userID string) store.PersonalDataStore {
@@ -335,9 +372,11 @@ func (o *pgOrgDataStore) Close() error {
 type pgTeamDataStore struct {
 	pool      *pgxpool.Pool
 	teamSlug  string
-	userID    string         // optional: used for per-user app state scoping
-	embedFunc store.EmbedFunc // optional: for memory store hybrid search
-	credKey   []byte          // AES-256 credential encryption key (nil = no encryption)
+	orgSlug   string             // parent org slug (for secret key scoping)
+	userID    string             // optional: used for per-user app state scoping
+	embedFunc store.EmbedFunc    // optional: for memory store hybrid search
+	credKey   []byte             // AES-256 credential encryption key (nil = no encryption)
+	secrets   *PlatformSecretStore // optional: for provider secret encryption
 }
 
 func (t *pgTeamDataStore) schema() string {
@@ -397,7 +436,7 @@ func (t *pgTeamDataStore) MCPServers() store.MCPServerStore {
 }
 
 func (t *pgTeamDataStore) Settings() store.SettingsStore {
-	return &pgSettingsStore{pool: t.pool, teamSlug: t.teamSlug}
+	return &pgSettingsStore{pool: t.pool, teamSlug: t.teamSlug, orgSlug: t.orgSlug, secrets: t.secrets}
 }
 
 // --- store.PersonalDataStore implementation ---

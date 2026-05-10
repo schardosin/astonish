@@ -111,6 +111,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	enrichedCtx = store.WithMemoryStore(enrichedCtx, teamStore.Memories())
 	enrichedCtx = store.WithFleetTemplateStore(enrichedCtx, teamStore.FleetTemplates())
 	enrichedCtx = store.WithFleetPlanStore(enrichedCtx, teamStore.FleetPlans())
+	enrichedCtx = store.WithSessionService(enrichedCtx, teamStore.Sessions())
 
 	return enrichedCtx, link.UserID, user.DisplayName, nil
 }

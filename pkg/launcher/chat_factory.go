@@ -197,10 +197,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 2b. Initialize memory manager ---
-	memMgr, memErr := memory.NewManager("", cfg.DebugMode)
-	if memErr != nil {
-		if cfg.DebugMode {
-			slog.Warn("failed to initialize memory manager", "error", memErr)
+	// In platform mode, memory is fully managed by PostgreSQL (per-team pgvector
+	// tables). The file-based MEMORY.md manager and chromem-go vector store are
+	// only needed in personal mode.
+	var memMgr *memory.Manager
+	if !cfg.PlatformMode {
+		var memErr error
+		memMgr, memErr = memory.NewManager("", cfg.DebugMode)
+		if memErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to initialize memory manager", "error", memErr)
+			}
 		}
 	}
 
@@ -212,8 +219,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	indexingDone := make(chan struct{})
 	var indexingErr error
 
-	// If the daemon already started the indexer, reuse it.
-	if cfg.DaemonIndexer != nil {
+	if cfg.PlatformMode {
+		// Platform mode: memory search is always available (via PG context stores).
+		// No filesystem directories or chromem-go stores needed.
+		memorySearchAvailable = true
+		close(indexingDone)
+	} else if cfg.DaemonIndexer != nil {
+		// If the daemon already started the indexer, reuse it.
 		memStore = cfg.DaemonIndexer.Store
 		memIndexer = cfg.DaemonIndexer.Indexer
 		memEmbeddingFunc = cfg.DaemonIndexer.EmbeddingFunc
@@ -323,7 +335,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// Create memory tools → core category (always available)
-	if memMgr != nil {
+	if cfg.PlatformMode {
+		// Platform mode: create memory tools with nil backing stores.
+		// At runtime, they detect PG stores from request context (injected by
+		// TenantMiddleware / ChatRunner.InjectMemoryStores) and route there.
+		// memory_get is omitted — it reads filesystem .md files which don't exist
+		// in platform mode (memory content lives in PG rows).
+		memorySaveTool, msErr := tools.NewMemorySaveTool(nil, nil)
+		if msErr == nil {
+			coreTools = append(coreTools, memorySaveTool)
+		}
+		searchTool, searchErr := tools.NewMemorySearchTool(nil)
+		if searchErr == nil {
+			coreTools = append(coreTools, searchTool)
+		}
+	} else if memMgr != nil {
 		var saveStore tools.MemorySaveStore
 		if memStore != nil {
 			saveStore = memStore
@@ -338,7 +364,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	if memorySearchAvailable && memStore != nil {
+	if !cfg.PlatformMode && memorySearchAvailable && memStore != nil {
 		searchTool, searchErr := tools.NewMemorySearchTool(memStore)
 		if searchErr != nil {
 			if cfg.DebugMode {
@@ -759,32 +785,36 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 		// Auto-prune stale session containers from previous daemon runs.
 		// Only destroy containers whose sessions no longer exist in the store.
-		existingSessionIDs := make(map[string]bool)
-		if cfg.SessionStore != nil {
-			// Preferred: use the shared store's index (daemon/studio path).
-			if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
-				for id := range indexData.Sessions {
-					existingSessionIDs[id] = true
-				}
-			}
-		} else if cfg.AppConfig != nil {
-			// Fallback: read the index file directly (console/CLI path).
-			// Without this, existingSessionIDs is empty and prune would
-			// destroy every stopped container — even valid ones.
-			var sessCfg *config.SessionConfig
-			sessCfg = &cfg.AppConfig.Sessions
-			if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
-				idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
-				if indexData, err := idx.Load(); err == nil {
+		// In platform mode, session IDs live in PG across many team schemas;
+		// startup pruning is skipped — use scheduled cleanup instead.
+		if !cfg.PlatformMode {
+			existingSessionIDs := make(map[string]bool)
+			if cfg.SessionStore != nil {
+				// Preferred: use the shared store's index (daemon/studio path).
+				if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
 					for id := range indexData.Sessions {
 						existingSessionIDs[id] = true
 					}
 				}
+			} else if cfg.AppConfig != nil {
+				// Fallback: read the index file directly (console/CLI path).
+				// Without this, existingSessionIDs is empty and prune would
+				// destroy every stopped container — even valid ones.
+				var sessCfg *config.SessionConfig
+				sessCfg = &cfg.AppConfig.Sessions
+				if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
+					idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
+					if indexData, err := idx.Load(); err == nil {
+						for id := range indexData.Sessions {
+							existingSessionIDs[id] = true
+						}
+					}
+				}
 			}
-		}
-		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
-			startupNotices = append(startupNotices,
-				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+			if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
+				startupNotices = append(startupNotices,
+					fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+			}
 		}
 
 		// Start idle watchdog: stops containers that have been inactive for the
@@ -812,6 +842,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sessionService = cfg.SessionStore
 		if cfg.DebugMode {
 			slog.Debug("session storage: file (shared store)", "component", "chat-factory")
+		}
+	} else if cfg.PlatformMode {
+		// Platform mode: sessions are persisted in PostgreSQL per-request.
+		// Use in-memory as the factory-level default; actual persistence is
+		// handled by context-injected PG stores at the API/channel layer.
+		sessionService = session.InMemoryService()
+		if cfg.DebugMode {
+			slog.Debug("session storage: in-memory (platform mode, PG per-request)", "component", "chat-factory")
 		}
 	} else if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
 		sessionService = session.InMemoryService()
@@ -1095,38 +1133,43 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.SkillIndex = skillIndex
 	}
 
-	// Load INSTRUCTIONS.md
+	// Load INSTRUCTIONS.md and generate SELF.md (personal mode only).
+	// In platform mode, custom instructions are stored per-team in PostgreSQL
+	// and injected via the request context. SELF.md and guidance docs are
+	// filesystem artifacts for vector indexing which doesn't apply to PG mode.
 	var memDir string
-	if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
-		var err error
-		memDir, err = config.GetMemoryDir(&cfg.AppConfig.Memory)
-		if err != nil {
-			slog.Warn("failed to get memory directory from config", "error", err)
-		}
-	}
-	if memDir == "" {
-		var err error
-		memDir, err = config.GetMemoryDir(nil)
-		if err != nil {
-			slog.Warn("failed to get default memory directory", "error", err)
-		}
-	}
-	if memDir != "" {
-		created, ensErr := memory.EnsureInstructions(memDir)
-		if ensErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
+	if !cfg.PlatformMode {
+		if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
+			var err error
+			memDir, err = config.GetMemoryDir(&cfg.AppConfig.Memory)
+			if err != nil {
+				slog.Warn("failed to get memory directory from config", "error", err)
 			}
-		} else if created && cfg.DebugMode {
-			slog.Debug("created default INSTRUCTIONS.md", "component", "chat-factory", "dir", memDir)
 		}
-		instrContent, instrErr := memory.LoadInstructions(memDir)
-		if instrErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load INSTRUCTIONS.md", "error", instrErr)
+		if memDir == "" {
+			var err error
+			memDir, err = config.GetMemoryDir(nil)
+			if err != nil {
+				slog.Warn("failed to get default memory directory", "error", err)
 			}
-		} else if instrContent != "" {
-			promptBuilder.InstructionsContent = instrContent
+		}
+		if memDir != "" {
+			created, ensErr := memory.EnsureInstructions(memDir)
+			if ensErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
+				}
+			} else if created && cfg.DebugMode {
+				slog.Debug("created default INSTRUCTIONS.md", "component", "chat-factory", "dir", memDir)
+			}
+			instrContent, instrErr := memory.LoadInstructions(memDir)
+			if instrErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load INSTRUCTIONS.md", "error", instrErr)
+				}
+			} else if instrContent != "" {
+				promptBuilder.InstructionsContent = instrContent
+			}
 		}
 	}
 
@@ -1643,7 +1686,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// ChatRunner.InjectMemoryStores) and use it for cross-tier search.
 	// In personal mode (or when no PG searcher is available), they fall
 	// back to the file-based chromem-go store.
-	if memorySearchAvailable && memStore != nil {
+	if memorySearchAvailable {
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
 			// Platform mode: prefer PG three-tier searcher from context.
 			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
@@ -1670,6 +1713,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 
 			// Personal mode fallback: file-based chromem-go.
+			if memStore == nil {
+				return nil, nil
+			}
 			results, err := memStore.SearchHybridWithContext(ctx, query, bm25Query, maxResults, minScore)
 			if err != nil {
 				return nil, err
@@ -1710,6 +1756,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 
 			// Personal mode fallback: file-based chromem-go.
+			if memStore == nil {
+				return nil, nil
+			}
 			results, err := memStore.SearchHybridByCategoryWithContext(ctx, query, bm25Query, maxResults, minScore, category)
 			if err != nil {
 				return nil, err

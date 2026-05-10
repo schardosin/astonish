@@ -1,7 +1,4 @@
-import { useState } from 'react'
-import { Save, Search, Loader2 } from 'lucide-react'
-import ProviderModelSelector from '../ProviderModelSelector'
-import { fetchProviderModels } from './settingsApi'
+import { Save } from 'lucide-react'
 import type { SettingsData, WebCapableTools, StandardServer } from './settingsApi'
 
 interface GeneralSettingsProps {
@@ -22,7 +19,6 @@ interface GeneralSettingsProps {
 }
 
 export default function GeneralSettings({
-  settings,
   generalForm,
   setGeneralForm,
   webCapableTools,
@@ -31,146 +27,10 @@ export default function GeneralSettings({
   onSave,
   onSectionChange
 }: GeneralSettingsProps) {
-  // Model selector state
-  const [showModelSelector, setShowModelSelector] = useState(false)
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [loadingModels, setLoadingModels] = useState(false)
-  const [modelsError, setModelsError] = useState<string | null>(null)
-
-  const loadModelsForProvider = async (providerId: string) => {
-    if (!providerId) {
-      setAvailableModels([])
-      return
-    }
-    setLoadingModels(true)
-    setModelsError(null)
-    try {
-      const data = await fetchProviderModels(providerId)
-      setAvailableModels(data.models || [])
-    } catch (err: any) {
-      setModelsError(err.message)
-      setAvailableModels([])
-    } finally {
-      setLoadingModels(false)
-    }
-  }
-
-  const handleProviderChange = (providerId: string) => {
-    setGeneralForm({ ...generalForm, default_provider: providerId, default_model: '' })
-    setAvailableModels([])
-    setModelsError(null)
-  }
-
   return (
     <div className="max-w-xl space-y-6">
-      <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-          Default Provider
-        </label>
-        <select
-          value={generalForm.default_provider}
-          onChange={(e) => handleProviderChange(e.target.value)}
-          className="w-full px-4 py-2.5 rounded-lg border text-sm"
-          style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-        >
-          <option value="">Select a provider...</option>
-          {settings?.providers.slice().sort((a, b) => a.name.localeCompare(b.name)).map(p => (
-            <option key={p.name} value={p.name}>
-              {p.name}{p.name !== p.display_name ? ` (${p.display_name})` : ''}
-              {!p.configured && ' (not configured)'}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-          Default Model
-        </label>
-        
-        {/* Providers with enhanced selector — resolve instance name to type */}
-        {(() => {
-          const providerType = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
-          return ['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama', 'openai_compat'].includes(providerType)
-        })() ? (
-          <div>
-            <button
-              onClick={() => setShowModelSelector(true)}
-              className="w-full px-4 py-2.5 rounded-lg border text-sm text-left flex items-center justify-between"
-              style={{ 
-                background: 'var(--bg-secondary)', 
-                borderColor: 'var(--border-color)', 
-                color: generalForm.default_model ? 'var(--text-primary)' : 'var(--text-muted)' 
-              }}
-            >
-              <span className="truncate">
-                {generalForm.default_model || 'Click to select a model...'}
-              </span>
-              <Search size={16} style={{ color: 'var(--text-muted)' }} />
-            </button>
-            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-              {(() => {
-                const pt = settings?.providers?.find(p => p.name === generalForm.default_provider)?.type || ''
-                return pt === 'openrouter'
-                  ? 'Click to open model browser with pricing info'
-                  : ['gemini', 'groq'].includes(pt)
-                    ? 'Click to open model browser with context window'
-                    : 'Click to open model browser'
-              })()}
-            </p>
-          </div>
-        ) : (
-          /* Other providers: Standard dropdown */
-          <div className="relative">
-            <select
-              value={generalForm.default_model}
-              onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
-              onFocus={() => {
-                if (generalForm.default_provider && availableModels.length === 0 && !loadingModels) {
-                  loadModelsForProvider(generalForm.default_provider)
-                }
-              }}
-              className="w-full px-4 py-2.5 rounded-lg border text-sm"
-              style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              disabled={!generalForm.default_provider}
-            >
-              {!generalForm.default_provider && (
-                <option value="">Select a provider first...</option>
-              )}
-              {generalForm.default_provider && availableModels.length === 0 && !loadingModels && (
-                <option value={generalForm.default_model || ''}>
-                  {generalForm.default_model || 'Click to load models...'}
-                </option>
-              )}
-              {loadingModels && (
-                <option value="">Loading models...</option>
-              )}
-              {availableModels.length > 0 && (
-                <>
-                  <option value="">Select a model...</option>
-                  {availableModels.map(model => (
-                    <option key={model} value={model}>{model}</option>
-                  ))}
-                </>
-              )}
-            </select>
-            {loadingModels && (
-              <div className="absolute right-10 top-1/2 -translate-y-1/2">
-                <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
-              </div>
-            )}
-            {modelsError && (
-              <p className="text-xs mt-1" style={{ color: 'var(--danger)' }}>{modelsError}</p>
-            )}
-            <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-              Click the dropdown to load available models from the provider
-            </p>
-          </div>
-        )}
-      </div>
-
       {/* Web Tools Section */}
-      <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
+      <div>
         <h4 className="text-sm font-medium mb-3" style={{ color: 'var(--text-primary)' }}>
           Web Tools
         </h4>
@@ -267,15 +127,6 @@ export default function GeneralSettings({
         <Save size={16} />
         {saving ? 'Saving...' : 'Save Changes'}
       </button>
-
-      {/* Enhanced Model Selector */}
-      <ProviderModelSelector
-        isOpen={showModelSelector}
-        onClose={() => setShowModelSelector(false)}
-        onSelect={(modelId) => setGeneralForm({ ...generalForm, default_model: modelId })}
-        currentModel={generalForm.default_model}
-        provider={generalForm.default_provider}
-      />
     </div>
   )
 }

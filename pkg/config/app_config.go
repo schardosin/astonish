@@ -1011,6 +1011,17 @@ func GetSessionsDir(cfg *SessionConfig) (string, error) {
 	return filepath.Join(configDir, "sessions"), nil
 }
 
+// GetWorkspacesDir returns the directory for per-session fleet workspaces.
+// Fleet sessions create isolated git clones here (one per session).
+// Defaults to ~/.config/astonish/workspaces/.
+func GetWorkspacesDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "workspaces"), nil
+}
+
 func LoadAppConfig() (*AppConfig, error) {
 	path, err := GetConfigPath()
 	if err != nil {

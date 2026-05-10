@@ -151,26 +151,33 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 	// Pre-initialize the session context so that the session appears as
 	// "running" immediately (PostHumanMessage checks fs.ctx != nil).
 	// Run() will reuse this context instead of creating its own.
+	// Enrich with session store so child sub-agent sessions are persisted
+	// to PostgreSQL (making tool executions visible in session traces).
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+	if sessionStore != nil {
+		sessionCtx = store.WithSessionService(sessionCtx, sessionStore)
+		if userID != "" {
+			sessionCtx = store.WithUserID(sessionCtx, userID)
+		}
+	}
 	fleetSession.InitContext(sessionCtx, sessionCancel)
 
 	// Resolve per-session workspace directory. Each session gets its own
-	// isolated workspace (via git clone --local from the base) under the sessions dir.
+	// isolated workspace (via git clone --local from the base) under the workspaces dir.
 	// The base workspace (~/astonish_projects/<repo-name>/) is where the wizard
 	// cloned the repo and generated AGENTS.md.
 	baseDir := plan.ResolveWorkspaceDir()
 	var workspaceDir string
 	if fleetCfg.ProjectContext != nil || plan.ResolveProjectSource() != nil {
-		fileStore := getFleetFileStore()
-		if fileStore != nil {
+		if wsDir, wsErr := config.GetWorkspacesDir(); wsErr == nil {
 			workspaceDir = fleet.ResolveSessionWorkspaceDir(
-				fileStore.BaseDir(), fleetSession.ID, "" /* chat sessions use short session ID */)
+				wsDir, fleetSession.ID, "" /* chat sessions use short session ID */)
 			if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
 				slog.Warn("could not set up workspace", "component", "fleet", "workspace", workspaceDir, "error", err)
 				workspaceDir = "" // fall back to legacy behavior
 			}
 		}
-		// Fall back to the legacy shared workspace if no file store is available
+		// Fall back to the legacy shared workspace if no workspace dir available
 		if workspaceDir == "" {
 			workspaceDir = baseDir
 			if workspaceDir != "" {
@@ -401,7 +408,17 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet", "session_id", fleetSession.ID)
 		}()
-		if err := fleetSession.Run(context.Background()); err != nil {
+		// Enrich context with session store so child sub-agent sessions
+		// are persisted to PostgreSQL (tool executions visible in traces).
+		runCtx := context.Background()
+		if handlerSessionStore != nil {
+			runCtx = store.WithSessionService(runCtx, handlerSessionStore)
+			uid := effectiveUserID(r)
+			if uid != "" {
+				runCtx = store.WithUserID(runCtx, uid)
+			}
+		}
+		if err := fleetSession.Run(runCtx); err != nil {
 			slog.Error("session error", "component", "fleet", "session_id", fleetSession.ID, "error", err)
 		}
 	}()

@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, lazy, Suspense, type FormEvent } from 'react'
-import { ChevronRight, Download, Plus, Trash2, UserPlus, AlertCircle, Loader2 } from 'lucide-react'
+import { ChevronRight, Download, Plus, Trash2, UserPlus, AlertCircle, Loader2, Key } from 'lucide-react'
 import SettingsContent from './settings/SettingsContent'
 import { PREFERENCE_ITEMS, RESOURCE_ITEMS, TEAM_ITEMS, ORG_ITEMS, PLATFORM_ITEMS, SYSTEM_ITEMS } from './settings/settingsMenuItems'
 import type { SettingsMenuItem } from './settings/settingsMenuItems'
 import { useSettingsData } from '../hooks/useSettingsData'
-import type { UpdateInfo, MCPServerConfig } from './settings/settingsApi'
-import { fetchMCPConfig } from './settings/settingsApi'
+import type { UpdateInfo, MCPServerConfig, SettingsData, ProviderInfo } from './settings/settingsApi'
+import { fetchMCPConfig, fetchPlatformProviders, fetchOrgProviders, fetchTeamProviders, fetchSettings, savePlatformProviders, saveOrgProviders, saveSettings as saveTeamSettings } from './settings/settingsApi'
 import {
   fetchTeams, createTeam, deleteTeam,
   fetchTeamMembers, addTeamMember, removeTeamMember, setTeamMemberRole,
@@ -19,6 +19,7 @@ const UserManagement = lazy(() => import('./UserManagement'))
 const AuditViewer = lazy(() => import('./AuditViewer'))
 const SkillsSettings = lazy(() => import('./settings/SkillsSettings'))
 const MCPServersSettings = lazy(() => import('./settings/MCPServersSettings'))
+const ProvidersSettings = lazy(() => import('./settings/ProvidersSettings'))
 const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
@@ -405,6 +406,423 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// PlatformProvidersTab — wraps ProvidersSettings for platform-level provider management (superadmin)
+// ---------------------------------------------------------------------------
+
+function PlatformProvidersTab() {
+  const [settings, setSettings] = useState<SettingsData | null>(null)
+  const [providerForms, setProviderForms] = useState<Record<string, Record<string, string>>>({})
+  const [generalForm, setGeneralForm] = useState({ default_provider: '', default_model: '' })
+  const [saving, setSaving] = useState(false)
+  const [, setSaveSuccess] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadData = useCallback(async () => {
+    try {
+      const data = await fetchPlatformProviders()
+      const providers: ProviderInfo[] = []
+      if (data.providers) {
+        for (const [name, fields] of Object.entries(data.providers)) {
+          const type = fields?.type || name
+          const fieldsCopy = { ...fields }
+          delete fieldsCopy.type
+          providers.push({
+            name,
+            type,
+            display_name: type,
+            configured: Object.keys(fieldsCopy).length > 0,
+            fields: fieldsCopy
+          })
+        }
+      }
+      const settingsData: SettingsData = {
+        general: {
+          default_provider: data.default_provider || '',
+          default_model: data.default_model || '',
+          web_search_tool: '',
+          web_extract_tool: '',
+          timezone: ''
+        },
+        providers
+      }
+      setSettings(settingsData)
+      setGeneralForm({ default_provider: data.default_provider || '', default_model: data.default_model || '' })
+      const pForms: Record<string, Record<string, string>> = {}
+      providers.forEach(p => { pForms[p.name] = { ...p.fields } })
+      setProviderForms(pForms)
+    } catch (err) {
+      console.error('Failed to load platform providers:', err)
+    }
+  }, [])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  return (
+    <ProvidersSettings
+      settings={settings}
+      providerForms={providerForms}
+      setProviderForms={setProviderForms}
+      generalForm={generalForm}
+      setGeneralForm={setGeneralForm}
+      saving={saving}
+      setSaving={setSaving}
+      setSaveSuccess={setSaveSuccess}
+      error={error}
+      setError={setError}
+      loadData={loadData}
+      level="platform"
+      inheritedProviders={[]}
+      onSaveDefault={async (provider, model) => {
+        await savePlatformProviders({ default_provider: provider, default_model: model })
+        loadData()
+      }}
+    />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// OrgProvidersTab — wraps ProvidersSettings with org-scoped data + inherited platform providers
+// ---------------------------------------------------------------------------
+
+function OrgProvidersTab() {
+  const [settings, setSettings] = useState<SettingsData | null>(null)
+  const [providerForms, setProviderForms] = useState<Record<string, Record<string, string>>>({})
+  const [generalForm, setGeneralForm] = useState({ default_provider: '', default_model: '' })
+  const [saving, setSaving] = useState(false)
+  const [, setSaveSuccess] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Inherited providers (read-only)
+  const [platformProviders, setPlatformProviders] = useState<{ name: string; type: string; configured: boolean }[]>([])
+  // Platform-level defaults for inheritance display
+  const [platformDefaults, setPlatformDefaults] = useState<{ provider: string; model: string }>({ provider: '', model: '' })
+
+  const loadData = useCallback(async () => {
+    // Load org-level settings (raw, no cascade)
+    try {
+      const data = await fetchOrgProviders()
+      const providers: ProviderInfo[] = []
+      if (data.providers) {
+        for (const [name, fields] of Object.entries(data.providers)) {
+          const type = fields?.type || name
+          const fieldsCopy = { ...fields }
+          delete fieldsCopy.type
+          providers.push({
+            name,
+            type,
+            display_name: type,
+            configured: Object.keys(fieldsCopy).length > 0,
+            fields: fieldsCopy
+          })
+        }
+      }
+      const settingsData: SettingsData = {
+        general: {
+          default_provider: data.default_provider || '',
+          default_model: data.default_model || '',
+          web_search_tool: '',
+          web_extract_tool: '',
+          timezone: ''
+        },
+        providers
+      }
+      setSettings(settingsData)
+      // Show only the org's explicit values (empty = "Not Set")
+      setGeneralForm({
+        default_provider: data.default_provider || '',
+        default_model: data.default_model || ''
+      })
+      const pForms: Record<string, Record<string, string>> = {}
+      providers.forEach(p => { pForms[p.name] = { ...p.fields } })
+      setProviderForms(pForms)
+    } catch (err) {
+      console.error('Failed to load org providers:', err)
+    }
+
+    // Load platform providers (for inherited list + defaults display)
+    try {
+      const platformData = await fetchPlatformProviders()
+      const items: { name: string; type: string; configured: boolean }[] = []
+      if (platformData.providers) {
+        for (const [name, fields] of Object.entries(platformData.providers)) {
+          const type = fields?.type || name
+          const fieldsCopy = { ...fields }
+          delete fieldsCopy.type
+          items.push({ name, type, configured: Object.keys(fieldsCopy).length > 0 })
+        }
+      }
+      setPlatformProviders(items)
+      setPlatformDefaults({
+        provider: platformData.default_provider || '',
+        model: platformData.default_model || ''
+      })
+    } catch {
+      // Platform providers are optional
+    }
+  }, [])
+
+  useEffect(() => { loadData() }, [loadData])
+
+  return (
+    <div className="space-y-6">
+      {/* Inherited platform providers (read-only) */}
+      {platformProviders.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Platform (inherited)
+          </div>
+          <div className="space-y-2">
+            {platformProviders.map(p => (
+              <div
+                key={p.name}
+                className="flex items-center justify-between p-3 rounded-lg"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', opacity: 0.85 }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                    <Key size={14} style={{ color: '#a855f7' }} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{p.name}</div>
+                    <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{p.type}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {generalForm.default_provider === p.name && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full"
+                      style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#a855f7' }}>
+                      default
+                    </span>
+                  )}
+                  <span className="text-[10px] px-2 py-0.5 rounded-full"
+                    style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
+                    platform
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Org-level providers header (shown when there are inherited items) */}
+      {platformProviders.length > 0 && (
+        <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+          Organization
+        </div>
+      )}
+
+      {/* Org-level providers (editable) */}
+      <ProvidersSettings
+        settings={settings}
+        providerForms={providerForms}
+        setProviderForms={setProviderForms}
+        generalForm={generalForm}
+        setGeneralForm={setGeneralForm}
+        saving={saving}
+        setSaving={setSaving}
+        setSaveSuccess={setSaveSuccess}
+        error={error}
+        setError={setError}
+        loadData={loadData}
+        level="org"
+        inheritedProviders={platformProviders.map(p => ({ name: p.name, type: p.type, level: 'platform' }))}
+        inheritedDefaults={platformDefaults.provider || platformDefaults.model ? { provider: platformDefaults.provider, model: platformDefaults.model, source: 'Platform' } : undefined}
+        onSaveDefault={async (provider, model) => {
+          await saveOrgProviders({ default_provider: provider, default_model: model })
+          loadData()
+        }}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TeamProvidersTab — wraps ProvidersSettings with team-scoped data + inherited platform/org providers
+// ---------------------------------------------------------------------------
+
+function TeamProvidersTab({ teamSlug }: { teamSlug: string }) {
+  const [settings, setSettings] = useState<SettingsData | null>(null)
+  const [providerForms, setProviderForms] = useState<Record<string, Record<string, string>>>({})
+  const [generalForm, setGeneralForm] = useState({ default_provider: '', default_model: '' })
+  const [saving, setSaving] = useState(false)
+  const [, setSaveSuccess] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Inherited providers (read-only)
+  const [inheritedProviders, setInheritedProviders] = useState<{ name: string; type: string; configured: boolean; level: string }[]>([])
+  // Inherited defaults for display
+  const [inheritedDefaults, setInheritedDefaults] = useState<{ provider: string; model: string; source: string }>({ provider: '', model: '', source: '' })
+
+  const loadData = useCallback(async () => {
+    // Load effective settings for the full provider list
+    try {
+      const data = await fetchSettings()
+      setSettings(data)
+      const pForms: Record<string, Record<string, string>> = {}
+      data.providers.forEach(p => { pForms[p.name] = { ...p.fields } })
+      setProviderForms(pForms)
+    } catch (err) {
+      console.error('Failed to load team settings:', err)
+    }
+
+    // Load raw team-level defaults (no cascade) for generalForm
+    try {
+      const teamData = await fetchTeamProviders()
+      setGeneralForm({
+        default_provider: teamData.default_provider || '',
+        default_model: teamData.default_model || ''
+      })
+    } catch {
+      // If team providers endpoint fails, defaults stay empty (= "Not Set")
+      setGeneralForm({ default_provider: '', default_model: '' })
+    }
+  }, [teamSlug])
+
+  const loadInheritedProviders = useCallback(async () => {
+    const inherited: { name: string; type: string; configured: boolean; level: string }[] = []
+    let platformDefaultProvider = ''
+    let platformDefaultModel = ''
+    let orgDefaultProvider = ''
+    let orgDefaultModel = ''
+
+    try {
+      const platformData = await fetchPlatformProviders()
+      platformDefaultProvider = platformData.default_provider || ''
+      platformDefaultModel = platformData.default_model || ''
+      if (platformData.providers) {
+        for (const [name, fields] of Object.entries(platformData.providers)) {
+          const type = fields?.type || name
+          const fieldsCopy = { ...fields }
+          delete fieldsCopy.type
+          inherited.push({ name, type, configured: Object.keys(fieldsCopy).length > 0, level: 'platform' })
+        }
+      }
+    } catch { /* ignore */ }
+    try {
+      const orgData = await fetchOrgProviders()
+      orgDefaultProvider = orgData.default_provider || ''
+      orgDefaultModel = orgData.default_model || ''
+      if (orgData.providers) {
+        for (const [name, fields] of Object.entries(orgData.providers)) {
+          const type = fields?.type || name
+          const fieldsCopy = { ...fields }
+          delete fieldsCopy.type
+          // Don't duplicate if already inherited from platform
+          if (!inherited.find(i => i.name === name)) {
+            inherited.push({ name, type, configured: Object.keys(fieldsCopy).length > 0, level: 'org' })
+          }
+        }
+      }
+    } catch { /* ignore */ }
+    setInheritedProviders(inherited)
+
+    // Compute effective inherited defaults (org wins over platform)
+    const effectiveProvider = orgDefaultProvider || platformDefaultProvider
+    const effectiveModel = orgDefaultModel || platformDefaultModel
+    const source = orgDefaultProvider || orgDefaultModel ? 'Org' : 'Platform'
+    setInheritedDefaults({ provider: effectiveProvider, model: effectiveModel, source })
+  }, [])
+
+  useEffect(() => { loadData(); loadInheritedProviders() }, [loadData, loadInheritedProviders])
+
+  // Team-only providers (exclude inherited ones from the editable list)
+  const inheritedNames = new Set(inheritedProviders.map(p => p.name))
+  const teamOnlySettings: SettingsData | null = settings ? {
+    ...settings,
+    providers: settings.providers.filter(p => !inheritedNames.has(p.name))
+  } : null
+
+  return (
+    <div className="space-y-6">
+      {/* Inherited providers (read-only) */}
+      {inheritedProviders.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Inherited
+          </div>
+          <div className="space-y-2">
+            {inheritedProviders.map(p => (
+              <div
+                key={p.name}
+                className="flex items-center justify-between p-3 rounded-lg"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', opacity: 0.85 }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ background: 'rgba(168, 85, 247, 0.15)', border: '1px solid rgba(168, 85, 247, 0.2)' }}>
+                    <Key size={14} style={{ color: '#a855f7' }} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{p.name}</div>
+                    <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{p.type}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {generalForm.default_provider === p.name && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full"
+                      style={{ background: 'rgba(168, 85, 247, 0.2)', color: '#a855f7' }}>
+                      default
+                    </span>
+                  )}
+                  <span className="text-[10px] px-2 py-0.5 rounded-full"
+                    style={{ background: p.level === 'platform' ? 'rgba(59, 130, 246, 0.15)' : 'rgba(34, 197, 94, 0.15)', color: p.level === 'platform' ? '#3b82f6' : '#22c55e' }}>
+                    {p.level}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Team-level providers header (shown when there are inherited items) */}
+      {inheritedProviders.length > 0 && (
+        <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+          Team
+        </div>
+      )}
+
+      {/* Team-level providers (editable) */}
+      <ProvidersSettings
+        settings={teamOnlySettings}
+        providerForms={providerForms}
+        setProviderForms={setProviderForms}
+        generalForm={generalForm}
+        setGeneralForm={setGeneralForm}
+        saving={saving}
+        setSaving={setSaving}
+        setSaveSuccess={setSaveSuccess}
+        error={error}
+        setError={setError}
+        loadData={loadData}
+        level="team"
+        inheritedProviders={inheritedProviders.map(p => ({ name: p.name, type: p.type, level: p.level }))}
+        inheritedDefaults={inheritedDefaults.provider || inheritedDefaults.model ? inheritedDefaults : undefined}
+        onSaveDefault={async (provider, model) => {
+          // Load current team settings to preserve other general fields (web tools, etc.)
+          try {
+            const current = await fetchSettings()
+            await saveTeamSettings({
+              general: {
+                ...current.general,
+                default_provider: provider,
+                default_model: model
+              }
+            })
+          } catch {
+            // Fallback: just save defaults (may clear other fields if settings can't be loaded)
+            await saveTeamSettings({ general: { default_provider: provider, default_model: model } })
+          }
+          loadData()
+        }}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // TeamContent — renders the right sub-component for each team tab
 // ---------------------------------------------------------------------------
 
@@ -480,6 +898,7 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+        {tabId === 'providers' && <TeamProvidersTab teamSlug={teamSlug} />}
         {tabId === 'skills' && <SkillsSettings config={fullConfig?.skills || null} onSaved={handleSaved} theme={theme} isPlatform canManage={canManageTeam} teamSlug={teamSlug} />}
         {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
         {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={handleSaved} teamSlug={teamSlug} />}
@@ -566,8 +985,10 @@ export default function SettingsPage({
   const canManageTeam = isAdmin || callerRoles[resolvedTeamSlug] === 'admin' || callerRoles[resolvedTeamSlug] === 'org_admin'
 
   // --- Build sidebar categories ---
-  // In platform mode, skills and MCP are managed at org/team level, not system
-  const platformSystemItems = SYSTEM_ITEMS.filter(item => item.id !== 'skills' && item.id !== 'mcp')
+  // In platform mode, skills, MCP, and providers are managed at org/team level, not system
+  const platformSystemItems = SYSTEM_ITEMS.filter(item => 
+    item.id !== 'skills' && item.id !== 'mcp' && item.id !== 'providers'
+  )
 
   const categories: MenuCategory[] = isPlatformMode
     ? isAdmin
@@ -798,8 +1219,23 @@ export default function SettingsPage({
             </Suspense>
           )}
 
+          {activeSection === 'org-providers' && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <div className="p-6">
+                <OrgProvidersTab />
+              </div>
+            </Suspense>
+          )}
+
           {/* Platform sections */}
-          {activeSection.startsWith('platform-') && isSuperadmin && (
+          {activeSection === 'platform-providers' && isSuperadmin && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <div className="p-6">
+                <PlatformProvidersTab />
+              </div>
+            </Suspense>
+          )}
+          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <PlatformAdminPanel theme={theme as 'dark' | 'light'} activeTab={activeSection.replace('platform-', '')} />
             </Suspense>

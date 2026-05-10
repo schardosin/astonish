@@ -2,17 +2,49 @@ package store
 
 import "context"
 
+// ProviderConfig holds a single provider's configuration fields.
+// Keys include: type, base_url, api_key, client_id, client_secret, auth_url,
+// resource_group, etc. Secret fields are stored encrypted and scrubbed from
+// the JSONB on save; they are re-injected at read time for runtime use.
+type ProviderConfig = map[string]string
+
+// PlatformSettings represents platform-wide configuration visible to ALL
+// organizations and teams. Stored in the platform_settings table.
+type PlatformSettings struct {
+	// Providers maps provider instance names to their configuration.
+	Providers map[string]ProviderConfig `json:"providers,omitempty"`
+
+	// DefaultProvider is the platform-wide default provider instance name.
+	DefaultProvider string `json:"default_provider,omitempty"`
+
+	// DefaultModel is the platform-wide default model ID.
+	DefaultModel string `json:"default_model,omitempty"`
+}
+
+// OrgSettings represents organization-wide configuration visible to all
+// teams within the org. Stored in organizations.settings JSONB column.
+type OrgSettings struct {
+	// Providers maps provider instance names to their configuration.
+	Providers map[string]ProviderConfig `json:"providers,omitempty"`
+
+	// DefaultProvider overrides the platform default for this org.
+	DefaultProvider string `json:"default_provider,omitempty"`
+
+	// DefaultModel overrides the platform default for this org.
+	DefaultModel string `json:"default_model,omitempty"`
+}
+
 // TeamSettings represents the team-level subset of application configuration
 // that can be independently configured per-team in platform mode.
 // These settings are stored in the teams.settings JSONB column.
 type TeamSettings struct {
-	// Providers maps provider instance names to their configuration (API keys, base URLs, models).
-	Providers map[string]map[string]string `json:"providers,omitempty"`
+	// Providers maps provider instance names to their configuration.
+	Providers map[string]ProviderConfig `json:"providers,omitempty"`
 
-	// DefaultProvider is the default provider instance name.
+	// DefaultProvider overrides the org/platform default for this team.
 	DefaultProvider string `json:"default_provider,omitempty"`
 
-	// DefaultModel is the default model ID.
+	// DefaultModel overrides the org/platform default for this team.
 	DefaultModel string `json:"default_model,omitempty"`
 
 	// WebSearchTool is the configured web search tool.
@@ -37,6 +69,26 @@ type TeamSettings struct {
 	// When set, all fleet sessions for this team use this template instead of @base.
 	// Format: "team-<slug>" (e.g., "team-general").
 	TemplateName string `json:"template_name,omitempty"`
+}
+
+// PlatformSettingsStore provides read/write access to platform-level settings.
+// These are visible to all organizations and teams.
+type PlatformSettingsStore interface {
+	// Get returns the current platform settings.
+	Get(ctx context.Context) (*PlatformSettings, error)
+
+	// Save persists the platform settings.
+	Save(ctx context.Context, settings *PlatformSettings) error
+}
+
+// OrgSettingsStore provides read/write access to org-level settings.
+// These are visible to all teams within the organization.
+type OrgSettingsStore interface {
+	// Get returns the current org settings.
+	Get(ctx context.Context) (*OrgSettings, error)
+
+	// Save persists the org settings.
+	Save(ctx context.Context, settings *OrgSettings) error
 }
 
 // SettingsStore provides read/write access to team-level settings.

@@ -7,6 +7,22 @@ import (
 	"sync"
 )
 
+// ThreadIndexer is the interface for email thread-to-session mapping.
+// In personal mode, this is backed by a JSON file on disk.
+// In platform mode, this is backed by a PostgreSQL table.
+type ThreadIndexer interface {
+	// LookupChain searches a list of Message-IDs and returns the session key
+	// for the first match. Used to route email replies to existing sessions.
+	LookupChain(messageIDs []string) (string, bool)
+
+	// Associate maps one or more Message-IDs to a session key.
+	// Used to index both inbound and outbound Message-IDs.
+	Associate(messageIDs []string, sessionKey string) error
+
+	// RemoveSession removes all thread mappings for a given session key.
+	RemoveSession(sessionKey string) error
+}
+
 // ThreadIndex manages a persistent mapping from email Message-ID values to
 // session keys. This enables per-thread email sessions: new emails create new
 // sessions, and replies (identified by In-Reply-To / References headers) are

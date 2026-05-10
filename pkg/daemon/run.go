@@ -98,29 +98,35 @@ func Run(cfg RunConfig) error {
 		slog.Warn("failed to get config directory", "error", err)
 	}
 	var credStore *credentials.Store
+	isPlatformMode := appCfg.Storage.Backend == "postgres"
 	if configDir != "" {
 		if cs, csErr := credentials.Open(configDir); csErr == nil {
 			credStore = cs
 			config.SetInstalledSecretGetter(cs.GetSecret)
 			api.SetAPICredentialStore(cs)
 
-			// Auto-migrate secrets from config.yaml (one-time)
-			migrated, migrateErr := credentials.MigrateFromConfig(cs, appCfg, log.Default())
-			if migrateErr != nil {
-				logger.Printf("Warning: Credential migration error: %v", migrateErr)
-			} else if migrated > 0 {
-				if saveErr := config.SaveAppConfig(appCfg); saveErr != nil {
-					logger.Printf("Warning: Failed to save scrubbed config: %v", saveErr)
-				} else {
-					logger.Printf("Migrated %d secrets from config.yaml to encrypted store", migrated)
+			if !isPlatformMode {
+				// Personal mode only: auto-migrate secrets from config.yaml (one-time)
+				migrated, migrateErr := credentials.MigrateFromConfig(cs, appCfg, log.Default())
+				if migrateErr != nil {
+					logger.Printf("Warning: Credential migration error: %v", migrateErr)
+				} else if migrated > 0 {
+					if saveErr := config.SaveAppConfig(appCfg); saveErr != nil {
+						logger.Printf("Warning: Failed to save scrubbed config: %v", saveErr)
+					} else {
+						logger.Printf("Migrated %d secrets from config.yaml to encrypted store", migrated)
+					}
 				}
+				// Personal mode: set up provider env vars from config.yaml + filesystem credential store
+				config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
 			}
-			config.SetupAllProviderEnvFromStore(appCfg, cs.GetSecret)
 		} else {
 			logger.Printf("Warning: Failed to open credential store: %v", csErr)
-			config.SetupAllProviderEnv(appCfg)
+			if !isPlatformMode {
+				config.SetupAllProviderEnv(appCfg)
+			}
 		}
-	} else {
+	} else if !isPlatformMode {
 		config.SetupAllProviderEnv(appCfg)
 	}
 
@@ -187,6 +193,18 @@ func Run(cfg RunConfig) error {
 		filestore.SetCredentialStore(svc, credStore)
 	}
 
+	// In platform mode, cascade platform and default-org provider settings
+	// into appCfg so the channel/fleet agent sees all configured providers.
+	// This is the daemon-level equivalent of effectiveAppConfig() in HTTP handlers.
+	// Provider env vars are set here (not earlier) because in platform mode
+	// providers come exclusively from the database, not config.yaml.
+	if pgStore != nil {
+		cascadePlatformProviders(context.Background(), pgStore, appCfg, logger)
+		// Set up provider env vars from the DB-sourced config
+		getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
+		config.SetupAllProviderEnvFromStore(appCfg, getSecret)
+	}
+
 	// Set up MCP environment variables
 	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
 		config.SetupMCPEnv(mcpCfg)
@@ -215,23 +233,27 @@ func Run(cfg RunConfig) error {
 		api.InitToolsCache(ctx)
 	}
 
-	// --- Initialize file store for session persistence ---
-	// A single shared FileStore is used for ALL session persistence in the daemon:
-	// fleet session transcripts, Studio chat sub-agent sessions, and channel
-	// sub-agent sessions. Using one instance prevents index.json race conditions
-	// that caused child sessions to become orphaned (invisible in trace view).
+	// --- Initialize session persistence ---
+	// In personal mode: a single shared FileStore handles all sessions.
+	// In platform mode: sessions are in PostgreSQL (per-team schema).
+	// The file store is only needed in personal mode.
 	var sharedFileStore *persistentsession.FileStore
-	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
-		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
-			sharedFileStore = store
-			api.SetFleetSessionStore(store)
-			filestore.SetSessionStore(svc, store)
-			logger.Printf("Session store initialized (%s)", sessDir)
+	if pgStore == nil {
+		// Personal mode: file-based session persistence.
+		if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+			if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+				sharedFileStore = store
+				api.SetFleetSessionStore(store)
+				filestore.SetSessionStore(svc, store)
+				logger.Printf("Session store initialized (%s)", sessDir)
+			} else {
+				logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
+			}
 		} else {
-			logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
+			logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
 		}
 	} else {
-		logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
+		logger.Printf("Session store: PostgreSQL (platform mode)")
 	}
 
 	// --- Initialize device authorization for Studio ---
@@ -263,12 +285,14 @@ func Run(cfg RunConfig) error {
 		logger.Printf("Studio device authorization disabled by config")
 	}
 
-	// --- Start memory indexer (independent of channels/ChatAgent) ---
-	// The vector index must be maintained by the daemon regardless of whether
-	// channels are enabled. Studio's lazy-init skips IndexAll when the daemon
-	// is running, trusting the daemon to keep the index up to date.
+	// --- Start memory indexer (personal mode only) ---
+	// In personal mode: the daemon maintains a chromem-go vector index on the
+	// filesystem (~/.config/astonish/memory/vectors/). Studio's lazy-init skips
+	// IndexAll when the daemon is running, trusting it to keep the index current.
+	// In platform mode: memory is fully managed by PostgreSQL (per-team pgvector
+	// tables). The embedding function for PG is already initialized above.
 	var daemonIndexer *memory.DaemonIndexerResult
-	{
+	if pgStore == nil {
 		embGetSecret := daemonSecretGetter(pgStore, appCfg, credStore)
 		di, diErr := memory.StartDaemonIndexer(ctx, appCfg, cfg.Debug, embGetSecret)
 		if diErr != nil {
@@ -444,6 +468,13 @@ func Run(cfg RunConfig) error {
 				// to the same session via In-Reply-To / References headers.
 				if sharedFileStore != nil {
 					em.SetThreadIndex(sharedFileStore.ThreadIndex())
+				} else if pgStore != nil {
+					// Platform mode: use PG-backed thread index
+					if pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background()); poolErr == nil {
+						em.SetThreadIndex(pgstore.NewPGThreadIndex(pool))
+					} else {
+						logger.Printf("Warning: Failed to get platform pool for thread index: %v", poolErr)
+					}
 				}
 				mgr.Register(em)
 				logger.Printf("Email channel registered (%s)", freshCfg.Channels.Email.Address)
@@ -1008,7 +1039,26 @@ func Run(cfg RunConfig) error {
 				// When a plan has credentials: { github: "some-store-entry" }, this
 				// resolver extracts the token from the encrypted credential store so
 				// it can be injected as GH_TOKEN into gh CLI commands.
-				if credStore != nil {
+				if pgStore != nil {
+					// Platform mode: resolve from PG team credential store.
+					pgStoreRef := pgStore
+					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+						orgStore, orgErr := pgStoreRef.ForOrg(orgSlug)
+						if orgErr != nil {
+							slog.Warn("failed to get org store for fleet credentials", "plan", plan.Key, "error", orgErr)
+							return ""
+						}
+						teamStore := orgStore.ForTeam("general")
+						cs := teamStore.Credentials()
+						resolved, err := fleet.ResolveCredentialsPlatform(plan, cs)
+						if err != nil {
+							slog.Warn("failed to resolve fleet credentials (platform)", "plan", plan.Key, "error", err)
+						}
+						return fleet.GitHubToken(resolved)
+					})
+				} else if credStore != nil {
+					// Personal mode: resolve from file-based credential store.
 					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
 						resolved, err := fleet.ResolveCredentials(plan, credStore)
 						if err != nil {
@@ -1750,6 +1800,57 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 					}
 				}
 			}
+		}
+	}
+}
+
+// cascadePlatformProviders merges platform-level and default-org provider
+// settings from the PostgreSQL store into appCfg. This gives the daemon-level
+// channel/fleet agent access to providers configured via the admin UI.
+func cascadePlatformProviders(ctx context.Context, pgStore *pgstore.PGStore, appCfg *config.AppConfig, logger *Logger) {
+	// Platform mode: providers come exclusively from the database.
+	// Clear any config.yaml residue so the DB is the sole source of truth.
+	appCfg.Providers = nil
+	appCfg.General.DefaultProvider = ""
+	appCfg.General.DefaultModel = ""
+
+	// Layer 1: Platform settings
+	psStore := pgStore.PlatformSettings()
+	if psStore != nil {
+		if ps, err := psStore.Get(ctx); err == nil && ps != nil {
+			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
+			logger.Printf("Platform providers cascaded (%d providers)", len(ps.Providers))
+		}
+	}
+
+	// Layer 2: Default org settings
+	orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+	if orgSlug != "" {
+		osStore := pgStore.OrgSettings(orgSlug)
+		if osStore != nil {
+			if os, err := osStore.Get(ctx); err == nil && os != nil {
+				applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
+				logger.Printf("Org '%s' providers cascaded (%d providers)", orgSlug, len(os.Providers))
+			}
+		}
+	}
+}
+
+// applyProviderLayer merges a provider configuration layer into the app config.
+// Providers are additive by name; defaults override only if non-empty.
+func applyProviderLayer(appCfg *config.AppConfig, providers map[string]store.ProviderConfig, defaultProvider, defaultModel string) {
+	if defaultProvider != "" {
+		appCfg.General.DefaultProvider = defaultProvider
+	}
+	if defaultModel != "" {
+		appCfg.General.DefaultModel = defaultModel
+	}
+	if len(providers) > 0 {
+		if appCfg.Providers == nil {
+			appCfg.Providers = make(map[string]config.ProviderConfig)
+		}
+		for name, provCfg := range providers {
+			appCfg.Providers[name] = config.ProviderConfig(provCfg)
 		}
 	}
 }

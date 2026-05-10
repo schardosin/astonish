@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -941,8 +942,15 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 // getOrCreateSession retrieves an existing session by key or creates a new one.
 // Session keys are used as session IDs for deterministic mapping.
 func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID, sessionKey string) (session.Session, error) {
+	// In platform mode, the context carries a per-tenant session service
+	// injected by the platform resolver. Prefer it over the factory default.
+	svc := m.sessSvc
+	if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+		svc = ctxSvc
+	}
+
 	// Try to get existing session
-	getResp, err := m.sessSvc.Get(ctx, &session.GetRequest{
+	getResp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionKey,
@@ -952,7 +960,7 @@ func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID
 	}
 
 	// Create new session with the key as ID
-	createResp, err := m.sessSvc.Create(ctx, &session.CreateRequest{
+	createResp, err := svc.Create(ctx, &session.CreateRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionKey,
@@ -961,6 +969,16 @@ func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID
 		return nil, err
 	}
 	return createResp.Session, nil
+}
+
+// sessionServiceFromContext extracts a session.Service from context if one
+// was injected by the platform resolver. Returns nil in personal mode.
+func sessionServiceFromContext(ctx context.Context) session.Service {
+	ss := store.SessionServiceFromContext(ctx)
+	if ss == nil {
+		return nil
+	}
+	return ss
 }
 
 // getChannel returns a registered channel by ID.

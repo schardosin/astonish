@@ -13,7 +13,6 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -97,10 +96,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	sharedIndexer := s.daemonIndexer   // capture for closure
 	isPlatform := s.platformAuth != nil // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
-		appCfg, err := config.LoadAppConfig()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", err)
-		}
+		appCfg := api.EffectiveAppConfigFromContext(ctx, isPlatform)
 
 		result, err := NewWiredChatAgent(ctx, &ChatFactoryConfig{
 			AppConfig:     appCfg,
@@ -132,7 +128,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			ModelName:         result.ModelName,
 			Compactor:         result.Compactor,
 			InternalToolCount: len(result.InternalTools),
-			MemoryActive:      result.MemoryManager != nil,
+			MemoryActive:      result.MemoryManager != nil || result.MemorySearchAvailable,
 			SandboxEnabled:    sandbox.IsSandboxEnabled(&appCfg.Sandbox),
 			StartupNotices:    result.StartupNotices,
 			ShutdownSandbox:   result.ShutdownSandbox,

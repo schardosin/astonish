@@ -9,9 +9,12 @@ import (
 )
 
 // pgSettingsStore implements store.SettingsStore using the teams.settings JSONB column.
+// Provider secrets are stored in platform_secrets with team-scoped keys.
 type pgSettingsStore struct {
 	pool     *pgxpool.Pool
 	teamSlug string
+	orgSlug  string
+	secrets  *PlatformSecretStore
 }
 
 func (s *pgSettingsStore) Get(ctx context.Context) (*store.TeamSettings, error) {
@@ -28,10 +31,23 @@ func (s *pgSettingsStore) Get(ctx context.Context) (*store.TeamSettings, error) 
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return nil, err
 	}
+
+	// Inject secrets from platform_secrets (team-scoped keys).
+	if s.secrets != nil && settings.Providers != nil {
+		secretLevel := "team." + s.orgSlug + "." + s.teamSlug
+		injectProviderSecrets(settings.Providers, secretLevel, s.secrets.GetSecret)
+	}
+
 	return &settings, nil
 }
 
 func (s *pgSettingsStore) Save(ctx context.Context, settings *store.TeamSettings) error {
+	// Extract secrets from provider configs and store encrypted.
+	if s.secrets != nil && settings.Providers != nil {
+		secretLevel := "team." + s.orgSlug + "." + s.teamSlug
+		extractProviderSecrets(settings.Providers, secretLevel, s.secrets.SetSecret)
+	}
+
 	data, err := json.Marshal(settings)
 	if err != nil {
 		return err

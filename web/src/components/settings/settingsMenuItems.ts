@@ -20,6 +20,7 @@ export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
 export const TEAM_ITEMS: SettingsMenuItem[] = [
   { id: 'team-members', label: 'Members', icon: Users },
   { id: 'team-knowledge', label: 'Knowledge', icon: BookOpen },
+  { id: 'team-providers', label: 'Providers', icon: Key },
   { id: 'team-skills', label: 'Skills', icon: Wand2 },
   { id: 'team-mcp', label: 'MCP Servers', icon: Server },
   { id: 'team-scheduler', label: 'Scheduler', icon: Clock },
@@ -39,6 +40,7 @@ export const RESOURCE_ITEMS: SettingsMenuItem[] = [
 // Organization management — org admin/owner only (platform mode)
 export const ORG_ITEMS: SettingsMenuItem[] = [
   { id: 'org-users', label: 'Users', icon: UserCog },
+  { id: 'org-providers', label: 'Providers', icon: Key },
   { id: 'org-skills', label: 'Skills', icon: Wand2 },
   { id: 'org-mcp', label: 'MCP Servers', icon: Server },
   { id: 'org-audit', label: 'Audit', icon: FileText },
@@ -48,6 +50,7 @@ export const ORG_ITEMS: SettingsMenuItem[] = [
 export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-orgs', label: 'Organizations', icon: Building2 },
   { id: 'platform-users', label: 'Users', icon: UserCog },
+  { id: 'platform-providers', label: 'Providers', icon: Key },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
 ]
 

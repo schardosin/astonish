@@ -1,7 +1,20 @@
 import { useState } from 'react'
-import { Key, ChevronRight, Save, Plus, Trash2, X, AlertCircle, Loader2 } from 'lucide-react'
-import { saveSettings, replaceAllProviders } from './settingsApi'
+import { Key, ChevronRight, Save, Plus, Trash2, X, AlertCircle, Loader2, Search, Settings2 } from 'lucide-react'
+import { saveSettings, replaceAllProviders, savePlatformProviders, saveOrgProviders, deleteProviderAtLevel, fetchProviderModels } from './settingsApi'
 import type { SettingsData, ProviderFieldDef } from './settingsApi'
+import ProviderModelSelector from '../ProviderModelSelector'
+
+export interface InheritedProvider {
+  name: string
+  type: string
+  level: string
+}
+
+export interface InheritedDefaults {
+  provider: string
+  model: string
+  source: string // 'Platform' or 'Org'
+}
 
 interface ProvidersSettingsProps {
   settings: SettingsData | null
@@ -19,6 +32,14 @@ interface ProvidersSettingsProps {
   setError: (error: string | null) => void
   loadData: () => void
   onSettingsSaved?: () => void
+  /** When set, routes save/delete to level-specific APIs instead of the generic settings endpoint */
+  level?: 'platform' | 'org' | 'team'
+  /** Providers inherited from higher levels (platform/org) — shown in the default provider dropdown */
+  inheritedProviders?: InheritedProvider[]
+  /** Callback to save default provider + model at the appropriate level */
+  onSaveDefault?: (provider: string, model: string) => Promise<void>
+  /** Inherited defaults from higher levels — shown as informational when not explicitly set */
+  inheritedDefaults?: InheritedDefaults
 }
 
 export default function ProvidersSettings({
@@ -33,13 +54,74 @@ export default function ProvidersSettings({
   error,
   setError,
   loadData,
-  onSettingsSaved
+  onSettingsSaved,
+  level,
+  inheritedProviders = [],
+  onSaveDefault,
+  inheritedDefaults
 }: ProvidersSettingsProps) {
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null)
   const [showAddProvider, setShowAddProvider] = useState(false)
   const [newProviderName, setNewProviderName] = useState('')
   const [newProviderType, setNewProviderType] = useState('openai')
   const [deletingProvider, setDeletingProvider] = useState<string | null>(null)
+
+  // Default Configuration section state
+  const [showModelSelector, setShowModelSelector] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [savingDefault, setSavingDefault] = useState(false)
+  const [defaultError, setDefaultError] = useState<string | null>(null)
+
+  // Build the effective list of all providers for the default dropdown
+  // (own providers at this level + inherited from higher levels)
+  const allEffectiveProviders: { name: string; type: string; level?: string }[] = [
+    ...inheritedProviders.map(p => ({ name: p.name, type: p.type, level: p.level })),
+    ...(settings?.providers || []).map(p => ({ name: p.name, type: p.type, level: level }))
+  ]
+
+  // Resolve the type of the currently selected default provider
+  const selectedDefaultType = allEffectiveProviders.find(p => p.name === generalForm.default_provider)?.type || ''
+
+  // Provider types that support the enhanced model browser
+  const enhancedModelTypes = ['openrouter', 'anthropic', 'gemini', 'groq', 'litellm', 'openai', 'poe', 'sap_ai_core', 'xai', 'lm_studio', 'ollama', 'openai_compat']
+
+  const handleDefaultProviderChange = (providerName: string) => {
+    setGeneralForm({ ...generalForm, default_provider: providerName, default_model: '' })
+    setAvailableModels([])
+    setDefaultError(null)
+  }
+
+  const loadModelsForDefaultProvider = async (providerId: string) => {
+    if (!providerId) {
+      setAvailableModels([])
+      return
+    }
+    setLoadingModels(true)
+    setDefaultError(null)
+    try {
+      const data = await fetchProviderModels(providerId)
+      setAvailableModels(data.models || [])
+    } catch (err: any) {
+      setDefaultError(err.message)
+      setAvailableModels([])
+    } finally {
+      setLoadingModels(false)
+    }
+  }
+
+  const handleSaveDefault = async () => {
+    if (!onSaveDefault) return
+    setSavingDefault(true)
+    setDefaultError(null)
+    try {
+      await onSaveDefault(generalForm.default_provider, generalForm.default_model)
+      setSavingDefault(false)
+    } catch (err: any) {
+      setDefaultError(err.message)
+      setSavingDefault(false)
+    }
+  }
 
   const providerTypeOptions = [
     { value: 'anthropic', label: 'Anthropic' },
@@ -89,35 +171,64 @@ export default function ProvidersSettings({
   const handleSaveProvider = async (providerName: string) => {
     setSaving(true)
     try {
-      const currentProviders = (settings?.providers || []).map(p => {
-        const provider: Record<string, unknown> = { name: p.name, type: p.type }
-        if (p.fields) {
-          for (const [key, val] of Object.entries(p.fields)) {
-            provider[key] = val
+      if (level === 'platform' || level === 'org') {
+        // Level-specific save: build a providers map with this provider's fields
+        const fields = providerForms[providerName] || {}
+        const existingProvider = settings?.providers?.find(p => p.name === providerName)
+        const provType = existingProvider?.type || providerName
+        const providerConfig: Record<string, string> = { type: provType }
+        for (const [key, value] of Object.entries(fields)) {
+          if (value && key !== 'type') providerConfig[key] = value
+        }
+        // Build full providers map from current settings
+        const allProviders: Record<string, Record<string, string>> = {}
+        for (const p of (settings?.providers || [])) {
+          if (p.name === providerName) {
+            allProviders[p.name] = providerConfig
+          } else {
+            const cfg: Record<string, string> = { type: p.type }
+            if (p.fields) for (const [k, v] of Object.entries(p.fields)) cfg[k] = v
+            allProviders[p.name] = cfg
           }
         }
-        return provider
-      })
-
-      const existingProvider = settings?.providers?.find(p => p.name === providerName)
-      const existingType = existingProvider?.type || providerName
-      const newProviderConfig: Record<string, unknown> = { name: providerName, type: existingType }
-      for (const [key, value] of Object.entries(providerForms[providerName] || {})) {
-        if (value && key !== 'type') {
-          newProviderConfig[key] = value
+        // If it's a new provider not in the list yet, add it
+        if (!allProviders[providerName]) {
+          allProviders[providerName] = providerConfig
         }
-      }
-
-      let updatedProviders: Record<string, unknown>[]
-      const existingIndex = currentProviders.findIndex(p => p.name === providerName)
-      if (existingIndex >= 0) {
-        updatedProviders = [...currentProviders]
-        updatedProviders[existingIndex] = newProviderConfig
+        const saveFn = level === 'platform' ? savePlatformProviders : saveOrgProviders
+        await saveFn({ providers: allProviders })
       } else {
-        updatedProviders = [...currentProviders, newProviderConfig]
-      }
+        // Default: use the existing replace-all-providers approach (team/personal mode)
+        const currentProviders = (settings?.providers || []).map(p => {
+          const provider: Record<string, unknown> = { name: p.name, type: p.type }
+          if (p.fields) {
+            for (const [key, val] of Object.entries(p.fields)) {
+              provider[key] = val
+            }
+          }
+          return provider
+        })
 
-      await replaceAllProviders(updatedProviders)
+        const existingProvider = settings?.providers?.find(p => p.name === providerName)
+        const existingType = existingProvider?.type || providerName
+        const newProviderConfig: Record<string, unknown> = { name: providerName, type: existingType }
+        for (const [key, value] of Object.entries(providerForms[providerName] || {})) {
+          if (value && key !== 'type') {
+            newProviderConfig[key] = value
+          }
+        }
+
+        let updatedProviders: Record<string, unknown>[]
+        const existingIndex = currentProviders.findIndex(p => p.name === providerName)
+        if (existingIndex >= 0) {
+          updatedProviders = [...currentProviders]
+          updatedProviders[existingIndex] = newProviderConfig
+        } else {
+          updatedProviders = [...currentProviders, newProviderConfig]
+        }
+
+        await replaceAllProviders(updatedProviders)
+      }
 
       setExpandedProvider(providerName)
       setSaving(false)
@@ -143,11 +254,24 @@ export default function ProvidersSettings({
 
     setSaving(true)
     try {
-      await saveSettings({
-        providers: {
-          [newProviderName.trim()]: { type: newProviderType }
+      if (level === 'platform' || level === 'org') {
+        // Level-specific add: rebuild full providers map including new one
+        const allProviders: Record<string, Record<string, string>> = {}
+        for (const p of (settings?.providers || [])) {
+          const cfg: Record<string, string> = { type: p.type }
+          if (p.fields) for (const [k, v] of Object.entries(p.fields)) cfg[k] = v
+          allProviders[p.name] = cfg
         }
-      })
+        allProviders[newProviderName.trim()] = { type: newProviderType }
+        const saveFn = level === 'platform' ? savePlatformProviders : saveOrgProviders
+        await saveFn({ providers: allProviders })
+      } else {
+        await saveSettings({
+          providers: {
+            [newProviderName.trim()]: { type: newProviderType }
+          }
+        })
+      }
       setShowAddProvider(false)
       setNewProviderName('')
       setNewProviderType('openai')
@@ -163,17 +287,21 @@ export default function ProvidersSettings({
   const handleDeleteProvider = async (providerName: string) => {
     setDeletingProvider(providerName)
     try {
-      const currentProviders = (settings?.providers || []).map(p => {
-        const provider: Record<string, unknown> = { name: p.name, type: p.type }
-        if (p.fields) {
-          for (const [key, val] of Object.entries(p.fields)) {
-            provider[key] = val
+      if (level === 'platform' || level === 'org' || level === 'team') {
+        await deleteProviderAtLevel(level, providerName)
+      } else {
+        const currentProviders = (settings?.providers || []).map(p => {
+          const provider: Record<string, unknown> = { name: p.name, type: p.type }
+          if (p.fields) {
+            for (const [key, val] of Object.entries(p.fields)) {
+              provider[key] = val
+            }
           }
-        }
-        return provider
-      })
-      const updatedProviders = currentProviders.filter(p => p.name !== providerName)
-      await replaceAllProviders(updatedProviders)
+          return provider
+        })
+        const updatedProviders = currentProviders.filter(p => p.name !== providerName)
+        await replaceAllProviders(updatedProviders)
+      }
 
       if (generalForm.default_provider === providerName) {
         setGeneralForm({ ...generalForm, default_provider: '', default_model: '' })
@@ -191,6 +319,188 @@ export default function ProvidersSettings({
   return (
     <>
       <div className="space-y-6">
+        {/* Default Configuration Section */}
+        {onSaveDefault && (
+          <div className="rounded-lg border p-4" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-secondary)' }}>
+            <div className="flex items-center gap-2 mb-4">
+              <Settings2 size={16} style={{ color: '#a855f7' }} />
+              <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+                Default Configuration
+              </h3>
+            </div>
+
+            <div className="space-y-4">
+              {/* Default Provider Dropdown */}
+              <div>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                  Default Provider
+                </label>
+                {allEffectiveProviders.length > 0 ? (
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={generalForm.default_provider}
+                      onChange={(e) => handleDefaultProviderChange(e.target.value)}
+                      className="flex-1 px-3 py-2 rounded-lg border text-sm"
+                      style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    >
+                      {level === 'platform' ? (
+                        <option value="">Select a provider...</option>
+                      ) : (
+                        <option value="">Not Set</option>
+                      )}
+                      {allEffectiveProviders.map(p => (
+                        <option key={p.name} value={p.name}>
+                          {p.name} ({p.type}){p.level && p.level !== level ? ` — ${p.level}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {/* Clear button for org/team when explicitly set */}
+                    {level !== 'platform' && generalForm.default_provider && (
+                      <button
+                        onClick={() => setGeneralForm({ ...generalForm, default_provider: '', default_model: '' })}
+                        className="p-1.5 rounded-md border transition-colors hover:border-red-400"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+                        title="Clear override (revert to inherited)"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Configure a provider below to set defaults
+                  </p>
+                )}
+              </div>
+
+              {/* Default Model Selector */}
+              <div>
+                <label className="block text-xs font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>
+                  Default Model
+                </label>
+                {generalForm.default_provider ? (
+                  <>
+                    {enhancedModelTypes.includes(selectedDefaultType) ? (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setShowModelSelector(true)}
+                          className="flex-1 px-3 py-2 rounded-lg border text-sm text-left flex items-center justify-between"
+                          style={{
+                            background: 'var(--bg-primary)',
+                            borderColor: 'var(--border-color)',
+                            color: generalForm.default_model ? 'var(--text-primary)' : 'var(--text-muted)'
+                          }}
+                        >
+                          <span className="truncate">
+                            {generalForm.default_model || (level === 'platform' ? 'Click to select a model...' : 'Not Set')}
+                          </span>
+                          <Search size={14} style={{ color: 'var(--text-muted)' }} />
+                        </button>
+                        {/* Clear button for model when explicitly set at org/team */}
+                        {level !== 'platform' && generalForm.default_model && (
+                          <button
+                            onClick={() => setGeneralForm({ ...generalForm, default_model: '' })}
+                            className="p-1.5 rounded-md border transition-colors hover:border-red-400"
+                            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+                            title="Clear override (revert to inherited)"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <select
+                            value={generalForm.default_model}
+                            onChange={(e) => setGeneralForm({ ...generalForm, default_model: e.target.value })}
+                            onFocus={() => {
+                              if (generalForm.default_provider && availableModels.length === 0 && !loadingModels) {
+                                loadModelsForDefaultProvider(generalForm.default_provider)
+                              }
+                            }}
+                            className="w-full px-3 py-2 rounded-lg border text-sm"
+                            style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                          >
+                            {availableModels.length === 0 && !loadingModels && (
+                              <option value={generalForm.default_model || ''}>
+                                {generalForm.default_model || (level === 'platform' ? 'Click to load models...' : 'Not Set')}
+                              </option>
+                            )}
+                            {loadingModels && <option value="">Loading models...</option>}
+                            {availableModels.length > 0 && (
+                              <>
+                                <option value="">{level === 'platform' ? 'Select a model...' : 'Not Set'}</option>
+                                {availableModels.map(model => (
+                                  <option key={model} value={model}>{model}</option>
+                                ))}
+                              </>
+                            )}
+                          </select>
+                          {loadingModels && (
+                            <div className="absolute right-8 top-1/2 -translate-y-1/2">
+                              <Loader2 size={14} className="animate-spin" style={{ color: 'var(--accent)' }} />
+                            </div>
+                          )}
+                        </div>
+                        {/* Clear button for model when explicitly set at org/team */}
+                        {level !== 'platform' && generalForm.default_model && (
+                          <button
+                            onClick={() => setGeneralForm({ ...generalForm, default_model: '' })}
+                            className="p-1.5 rounded-md border transition-colors hover:border-red-400"
+                            style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}
+                            title="Clear override (revert to inherited)"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
+                    {level === 'platform' ? 'Select a provider first' : 'Not Set'}
+                  </div>
+                )}
+              </div>
+
+              {/* Inheritance info (org/team only — shown when at least one field is not explicitly set) */}
+              {level !== 'platform' && inheritedDefaults && (inheritedDefaults.provider || inheritedDefaults.model) && (!generalForm.default_provider || !generalForm.default_model) && (
+                <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'var(--bg-primary)', border: '1px dashed var(--border-color)' }}>
+                  <Settings2 size={12} className="mt-0.5 flex-shrink-0" style={{ color: 'var(--text-muted)' }} />
+                  <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <span className="font-medium">Inheriting from {inheritedDefaults.source}:</span>{' '}
+                    {inheritedDefaults.provider && <span>{inheritedDefaults.provider}</span>}
+                    {inheritedDefaults.provider && inheritedDefaults.model && <span> / </span>}
+                    {inheritedDefaults.model && <span className="font-mono">{inheritedDefaults.model}</span>}
+                  </div>
+                </div>
+              )}
+
+              {/* Save Default Button */}
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSaveDefault}
+                  disabled={savingDefault}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-all shadow-sm hover:shadow-md hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                  style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
+                >
+                  <Save size={14} />
+                  {savingDefault ? 'Saving...' : 'Save Default'}
+                </button>
+              </div>
+
+              {/* Error */}
+              {defaultError && (
+                <div className="flex items-center gap-2 p-2 rounded text-xs" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171' }}>
+                  <AlertCircle size={12} />
+                  {defaultError}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Add Provider Button */}
         <div className="flex items-center justify-between">
           <button
@@ -517,6 +827,18 @@ export default function ProvidersSettings({
           </div>
         </div>
       )}
+
+      {/* Model Selector Modal for Default Configuration */}
+      <ProviderModelSelector
+        isOpen={showModelSelector}
+        onClose={() => setShowModelSelector(false)}
+        onSelect={(modelId) => {
+          setGeneralForm({ ...generalForm, default_model: modelId })
+          setShowModelSelector(false)
+        }}
+        currentModel={generalForm.default_model}
+        provider={generalForm.default_provider}
+      />
     </>
   )
 }

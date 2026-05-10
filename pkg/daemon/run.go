@@ -1021,7 +1021,17 @@ func Run(cfg RunConfig) error {
 
 			if fleetSchedBridge != nil {
 				fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
-					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore)
+					// Resolve tenant-scoped stores for the fleet session so sub-agents
+					// can access team drills, credentials, skills, etc. in platform mode.
+					var fleetStores *api.FleetStores
+					if pgStore != nil && fCfg.TeamSlug != "" {
+						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+							teamStore := orgStore.ForTeam(fCfg.TeamSlug)
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
+						}
+					}
+					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore, fleetStores)
 				}
 				// Wrap the plan registry getter to satisfy fleet.PlanAccess interface.
 				// In personal mode, returns the file-based PlanRegistry.
@@ -1050,6 +1060,9 @@ func Run(cfg RunConfig) error {
 					return reg
 				}
 				activator := fleet.NewPlanActivator(planAccessFn, fleetSchedBridge, fleetStarter)
+				// Set the team slug so headless fleet sessions know which team's
+				// stores to resolve. Matches the team used for plan storage above.
+				activator.TeamSlug = "general"
 
 				// Wire the poll function into the scheduler executor
 				if schedExec != nil {
@@ -1058,7 +1071,16 @@ func Run(cfg RunConfig) error {
 
 				// Wire the recover function for session recovery after restart
 				activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
-					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore)
+					// Resolve tenant-scoped stores for the recovered fleet session.
+					var fleetStores *api.FleetStores
+					if pgStore != nil && rCfg.TeamSlug != "" {
+						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+							teamStore := orgStore.ForTeam(rCfg.TeamSlug)
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
+						}
+					}
+					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore, fleetStores)
 				})
 
 				// Wire credential-based GitHub token resolver for fleet plans.
@@ -1161,14 +1183,16 @@ func Run(cfg RunConfig) error {
 			StartSessionFromPlan: func(planKey, initialMessage string) (*channels.FleetSessionStartResult, error) {
 				// Resolve fleet plan store for platform mode
 				var fleetPlanStore store.FleetPlanStore
+				var fleetStores *api.FleetStores
 				if pgStore != nil {
 					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
 						teamStore := orgStore.ForTeam("general")
 						fleetPlanStore = teamStore.FleetPlans()
+						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
 					}
 				}
-				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "", fleetPlanStore)
+				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "", fleetPlanStore, fleetStores)
 				if err != nil {
 					return nil, err
 				}

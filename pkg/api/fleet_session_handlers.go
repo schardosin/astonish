@@ -114,7 +114,7 @@ type FleetSessionResult struct {
 // sessionStore is the PG-backed session store for platform mode (nil for personal mode).
 // mcpStores provides platform MCP server stores for sandbox tool injection (nil for personal mode).
 // fleetPlanStore is the DB-backed plan store for platform mode (nil uses the file-based registry).
-func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string, fleetPlanStore store.FleetPlanStore) (*FleetSessionResult, error) {
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string, fleetPlanStore store.FleetPlanStore, fleetStores *FleetStores) (*FleetSessionResult, error) {
 	// Resolve plan from the provided store (platform mode) or the global registry (personal mode)
 	var plan *fleet.FleetPlan
 	if fleetPlanStore != nil {
@@ -160,6 +160,10 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 			sessionCtx = store.WithUserID(sessionCtx, userID)
 		}
 	}
+	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
+	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
+	// and other platform-mode resources during execution.
+	sessionCtx = fleetStores.InjectIntoContext(sessionCtx)
 	fleetSession.InitContext(sessionCtx, sessionCancel)
 
 	// Resolve per-session workspace directory. Each session gets its own
@@ -344,7 +348,12 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 			handlerFleetPlanStore = svc.FleetPlans
 		}
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate, handlerFleetPlanStore)
+		// Build tenant-scoped stores for the fleet session context
+		var handlerFleetStores *FleetStores
+		if svc := store.FromRequest(r); svc != nil {
+			handlerFleetStores = FleetStoresFromServices(svc)
+		}
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate, handlerFleetPlanStore, handlerFleetStores)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -398,6 +407,13 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	fleetSession := fleet.NewFleetSession(req.FleetKey, cfg, channel, subAgentMgr)
 	fleetSession.TeamSlug = effectiveTeamSlug(r)
 
+	// Build tenant-scoped stores for the fleet session context (must capture
+	// before the goroutine starts since the request context won't be available).
+	var directFleetStores *FleetStores
+	if svc := store.FromRequest(r); svc != nil {
+		directFleetStores = FleetStoresFromServices(svc)
+	}
+
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
 	persistFleetSessionMeta(fleetSession, cfg, effectiveUserID(r), 0, "", handlerSessionStore)
@@ -418,6 +434,9 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 				runCtx = store.WithUserID(runCtx, uid)
 			}
 		}
+		// Inject tenant-scoped stores so fleet sub-agents can access team
+		// drills, credentials, and other platform-mode resources.
+		runCtx = directFleetStores.InjectIntoContext(runCtx)
 		if err := fleetSession.Run(runCtx); err != nil {
 			slog.Error("session error", "component", "fleet", "session_id", fleetSession.ID, "error", err)
 		}

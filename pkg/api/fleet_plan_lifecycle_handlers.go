@@ -189,7 +189,13 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		retrySessionStore = svc.Sessions
 	}
 
-	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg, retrySessionStore); recoverErr != nil {
+	// Build tenant-scoped stores for the recovered fleet session.
+	var retryFleetStores *FleetStores
+	if svc := store.FromRequest(r); svc != nil {
+		retryFleetStores = FleetStoresFromServices(svc)
+	}
+
+	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg, retrySessionStore, retryFleetStores); recoverErr != nil {
 		// Recovery failed; increment retry count
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("retry recovery failed: %v", recoverErr))
 		http.Error(w, fmt.Sprintf("Recovery failed: %v", recoverErr), http.StatusInternalServerError)

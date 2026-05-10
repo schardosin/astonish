@@ -96,6 +96,11 @@ type PlanActivator struct {
 	fleetRecover    FleetRecoverFunc
 	ghTokenResolver GHTokenResolverFunc
 
+	// TeamSlug is the team this activator manages plans for.
+	// Set by the daemon at initialization; used to stamp HeadlessFleetConfig
+	// and RecoverFleetConfig so fleet sessions know which team's stores to use.
+	TeamSlug string
+
 	// sessionRegistry provides active session lookup for CheckForWork.
 	// Set by the daemon after initialization via SetSessionRegistry.
 	sessionRegistry *SessionRegistry
@@ -526,6 +531,7 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 		Repo:        repo,
 		GHToken:     a.ResolveGHTokenForPlan(plan),
 		UserID:      plan.CreatedBy, // run under plan creator's identity
+		TeamSlug:    a.TeamSlug,
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
 				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
@@ -577,6 +583,7 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 		Repo:            repo,
 		GHToken:         a.ResolveGHTokenForPlan(plan),
 		UserID:          plan.CreatedBy, // run under plan creator's identity
+		TeamSlug:        a.TeamSlug,
 		CustomerMessage: item.CustomerReply,
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {

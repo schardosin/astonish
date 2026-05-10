@@ -25,7 +25,7 @@ import (
 // For github_issues plans, the session uses a GitHubIssueChannel that posts
 // every agent message as a comment on the issue and polls for human replies.
 // For chat plans, it falls back to the in-memory ChatChannel.
-func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfig, sessionStore store.SessionStore) (string, error) {
+func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfig, sessionStore store.SessionStore, fleetStores *FleetStores) (string, error) {
 	plan := cfg.Plan
 	if plan == nil {
 		return "", fmt.Errorf("plan is required")
@@ -150,6 +150,10 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		runCtx = store.WithSessionService(runCtx, sessionStore)
 		runCtx = store.WithUserID(runCtx, userID)
 	}
+	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
+	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
+	// and other platform-mode resources during execution.
+	runCtx = fleetStores.InjectIntoContext(runCtx)
 
 	go func() {
 		defer func() {

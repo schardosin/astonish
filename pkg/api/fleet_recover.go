@@ -29,7 +29,7 @@ import (
 //   - The transcript file is appended to (not overwritten)
 //   - The session index entry remains valid
 //   - The Studio UI shows a single continuous session
-func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sessionStore store.SessionStore) error {
+func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sessionStore store.SessionStore, fleetStores *FleetStores) error {
 	plan := cfg.Plan
 	if plan == nil {
 		return fmt.Errorf("plan is required for recovery")
@@ -296,6 +296,10 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 		}
 		runCtx = store.WithUserID(runCtx, userID)
 	}
+	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
+	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
+	// and other platform-mode resources during execution.
+	runCtx = fleetStores.InjectIntoContext(runCtx)
 
 	go func() {
 		defer func() {

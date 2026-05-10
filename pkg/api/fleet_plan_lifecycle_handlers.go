@@ -168,6 +168,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 		IssueTitle:  monitor.GetIssueTitle(issueNum),
 		Repo:        repo,
 		GHToken:     planActivatorVar.ResolveGHTokenForPlan(plan),
+		UserID:      plan.CreatedBy, // run under plan creator's identity
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
 				monitor.IncrementRetryCount(issueNum, sessionErr.Error())

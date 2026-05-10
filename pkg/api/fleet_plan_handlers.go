@@ -134,6 +134,11 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		planData["key"] = key
+		// Attribute the plan to the authenticated user so fleet sessions
+		// spawned from this plan run under the creator's identity.
+		if user := GetPlatformUser(r); user != nil {
+			planData["created_by"] = user.ID
+		}
 		if err := svc.FleetPlans.Save(planData); err != nil {
 			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
 			return

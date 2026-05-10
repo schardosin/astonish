@@ -106,12 +106,15 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
 
-	// Determine user ID. In platform mode (sessionStore != nil), keep the
-	// UUID from cfg.UserID or leave empty — AddSessionMeta stores NULL for
-	// the UUID column. In personal mode, fall back to the default studio
-	// user string (file store doesn't require UUID format).
+	// Determine user ID. In platform mode (sessionStore != nil), use the
+	// plan creator's identity so the session has access to their credentials.
+	// Falls back to SystemUserID for legacy plans without a creator.
+	// In personal mode, fall back to the default studio user string
+	// (file store doesn't require UUID format).
 	userID := cfg.UserID
-	if userID == "" && sessionStore == nil {
+	if userID == "" && sessionStore != nil {
+		userID = store.SystemUserID
+	} else if userID == "" && sessionStore == nil {
 		userID = studioChatUserID
 	}
 
@@ -145,9 +148,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	runCtx := context.Background()
 	if sessionStore != nil {
 		runCtx = store.WithSessionService(runCtx, sessionStore)
-		if userID != "" {
-			runCtx = store.WithUserID(runCtx, userID)
-		}
+		runCtx = store.WithUserID(runCtx, userID)
 	}
 
 	go func() {

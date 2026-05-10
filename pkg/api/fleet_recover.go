@@ -288,6 +288,13 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	runCtx := context.Background()
 	if sessionStore != nil {
 		runCtx = store.WithSessionService(runCtx, sessionStore)
+		// Propagate the plan creator's user ID so sub-agent child sessions
+		// have a valid UUID for the pgstore user_id column.
+		userID := cfg.UserID
+		if userID == "" {
+			userID = store.SystemUserID
+		}
+		runCtx = store.WithUserID(runCtx, userID)
 	}
 
 	go func() {

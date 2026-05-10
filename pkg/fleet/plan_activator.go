@@ -525,6 +525,7 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 		IssueTitle:  issue.Title,
 		Repo:        repo,
 		GHToken:     a.ResolveGHTokenForPlan(plan),
+		UserID:      plan.CreatedBy, // run under plan creator's identity
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
 				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
@@ -575,6 +576,7 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 		IssueTitle:      item.IssueTitle,
 		Repo:            repo,
 		GHToken:         a.ResolveGHTokenForPlan(plan),
+		UserID:          plan.CreatedBy, // run under plan creator's identity
 		CustomerMessage: item.CustomerReply,
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {

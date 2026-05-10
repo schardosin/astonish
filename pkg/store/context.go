@@ -281,3 +281,9 @@ func UserIDFromContext(ctx context.Context) string {
 	id, _ := ctx.Value(userIDKey).(string)
 	return id
 }
+
+// SystemUserID is the nil UUID used for system-initiated sessions (fleet plans
+// without an owner, scheduler jobs, and other headless execution contexts).
+// It represents "the platform acting autonomously" when no human user is
+// associated with the action. Universally recognizable as a system identity.
+const SystemUserID = "00000000-0000-0000-0000-000000000000"

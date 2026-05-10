@@ -163,7 +163,7 @@ CRITICAL RULES:
 
 	// Create a per-job session key for isolation
 	sessionKey := fmt.Sprintf("scheduler:adaptive:%s", job.ID)
-	userID := "scheduler"
+	userID := store.SystemUserID
 	appName := "astonish"
 
 	// Get or create session

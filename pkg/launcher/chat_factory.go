@@ -1631,7 +1631,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
 
 		subAgentMgr.AppName = "astonish"
-		subAgentMgr.UserID = "console_user"
+		// In platform mode, use SystemUserID as the fallback for child sessions.
+		// The per-request user ID from context (store.UserIDFromContext) takes
+		// precedence in sub_agent.go — this is only the factory-time default.
+		// In personal mode, keep "console_user" (file store accepts any string).
+		if cfg.PlatformMode {
+			subAgentMgr.UserID = store.SystemUserID
+		} else {
+			subAgentMgr.UserID = "console_user"
+		}
 
 		// Wire plan tools: announce_plan emits events through
 		// the same ChatAgent.SubTaskProgressCallback pipeline.

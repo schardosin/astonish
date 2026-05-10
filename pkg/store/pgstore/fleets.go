@@ -149,12 +149,13 @@ func (f *pgFleetPlanStore) tableName() string {
 func (f *pgFleetPlanStore) GetPlan(key string) (any, bool) {
 	ctx := context.Background()
 	row := f.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT definition FROM %s WHERE key = $1`, f.tableName()),
+		`SELECT definition, created_by FROM %s WHERE key = $1`, f.tableName()),
 		key,
 	)
 
 	var defJSON []byte
-	if err := row.Scan(&defJSON); err != nil {
+	var createdBy *string
+	if err := row.Scan(&defJSON, &createdBy); err != nil {
 		return nil, false
 	}
 
@@ -163,6 +164,9 @@ func (f *pgFleetPlanStore) GetPlan(key string) (any, bool) {
 		return nil, false
 	}
 	plan.Key = key
+	if createdBy != nil {
+		plan.CreatedBy = *createdBy
+	}
 	return &plan, true
 }
 
@@ -225,18 +229,25 @@ func (f *pgFleetPlanStore) Save(plan any) error {
 		return err
 	}
 
-	// Extract key and name from the plan
+	// Extract key, name, and created_by from the plan
 	key := ""
 	name := ""
+	var createdBy *string
 	if fp, ok := plan.(*fleet.FleetPlan); ok {
 		key = fp.Key
 		name = fp.Name
+		if fp.CreatedBy != "" {
+			createdBy = &fp.CreatedBy
+		}
 	} else if m, ok := plan.(map[string]any); ok {
 		if k, ok := m["key"].(string); ok {
 			key = k
 		}
 		if n, ok := m["name"].(string); ok {
 			name = n
+		}
+		if cb, ok := m["created_by"].(string); ok && cb != "" {
+			createdBy = &cb
 		}
 	}
 	if key == "" {
@@ -247,11 +258,11 @@ func (f *pgFleetPlanStore) Save(plan any) error {
 	}
 
 	_, err = f.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (key, name, definition, updated_at)
-		 VALUES ($1, $2, $3, now())
+		`INSERT INTO %s (key, name, definition, created_by, updated_at)
+		 VALUES ($1, $2, $3, $4, now())
 		 ON CONFLICT (key) DO UPDATE SET name = $2, definition = $3, updated_at = now()`,
 		f.tableName()),
-		key, name, defJSON,
+		key, name, defJSON, createdBy,
 	)
 	return err
 }

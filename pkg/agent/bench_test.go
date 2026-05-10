@@ -9,6 +9,21 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+// newBenchToolIndex creates a ToolIndex for benchmarks.
+func newBenchToolIndex(b *testing.B) *ToolIndex {
+	b.Helper()
+	db := chromem.NewDB()
+	vs, err := NewChromemToolVectorStore(db, testEmbeddingFunc())
+	if err != nil {
+		b.Fatal(err)
+	}
+	idx, err := NewToolIndex(vs, EmbedFunc(testEmbeddingFunc()))
+	if err != nil {
+		b.Fatal(err)
+	}
+	return idx
+}
+
 // generateBenchTools creates N tools with realistic names and descriptions.
 func generateBenchTools(n int) []tool.Tool {
 	categories := []string{"file", "git", "web", "shell", "search", "memory", "database", "api"}
@@ -52,11 +67,7 @@ func BenchmarkHybridSearch(b *testing.B) {
 		b.Run(fmt.Sprintf("tools=%d", numTools), func(b *testing.B) {
 			ctx := context.Background()
 
-			db := chromem.NewDB()
-			idx, err := NewToolIndex(db, testEmbeddingFunc())
-			if err != nil {
-				b.Fatal(err)
-			}
+			idx := newBenchToolIndex(b)
 
 			tools := generateBenchTools(numTools)
 			if err := idx.SyncTools(ctx, tools, nil); err != nil {
@@ -79,11 +90,7 @@ func BenchmarkVectorSearch(b *testing.B) {
 		b.Run(fmt.Sprintf("tools=%d", numTools), func(b *testing.B) {
 			ctx := context.Background()
 
-			db := chromem.NewDB()
-			idx, err := NewToolIndex(db, testEmbeddingFunc())
-			if err != nil {
-				b.Fatal(err)
-			}
+			idx := newBenchToolIndex(b)
 
 			tools := generateBenchTools(numTools)
 			if err := idx.SyncTools(ctx, tools, nil); err != nil {

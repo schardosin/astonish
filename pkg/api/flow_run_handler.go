@@ -10,6 +10,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
@@ -201,6 +202,8 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		// Inject Redactor into context so memory_save can Placeholderize()
+		ctx = credentials.WithRedactor(ctx, cs.Redactor())
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

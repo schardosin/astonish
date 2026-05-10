@@ -182,9 +182,18 @@ func saveCredential(ctx tool.Context, args SaveCredentialArgs) (SaveCredentialRe
 		}, nil
 	}
 
+	// Immediately register the new credential's secret values with the
+	// Redactor so that tool outputs in the same session are protected.
+	if r := credentials.RedactorFromContext(ctx); r != nil {
+		r.HydrateFromStore(cs)
+	}
+
 	return SaveCredentialResult{
-		Status:  "saved",
-		Message: fmt.Sprintf("Credential %q saved (%s). The value is encrypted and will not appear in conversation history.", args.Name, args.Type),
+		Status: "saved",
+		Message: fmt.Sprintf("Credential %q saved (%s). The value is encrypted and will not appear in conversation history. "+
+			"IMPORTANT: Now save a memory note documenting: (1) credential name %q, (2) what format/prefix is already included in the stored value "+
+			"(so you never double-prefix it), (3) the header name and how to use it with api_call, (4) the target API base URL. "+
+			"Do NOT include the actual secret value in the memory note — reference it by name only.", args.Name, args.Type, args.Name),
 	}, nil
 }
 
@@ -524,8 +533,8 @@ func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCre
 
 func NewSaveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name:        "save_credential",
-		Description: `Save a credential to the encrypted store. Credentials saved here are PERSONAL (only you can see/use them). To share with the team, use the Settings UI 'Publish to Team'. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential.`,
+		Name: "save_credential",
+		Description: `Save a credential to the encrypted store. Credentials saved here are PERSONAL (only you can see/use them). To share with the team, use the Settings UI 'Publish to Team'. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential. After saving, ALWAYS use memory_save to document: credential name, what format/prefix is already in the stored value, the header name, and the target API base URL — but NEVER include the actual secret value in the memory note.`,
 	}, saveCredential)
 }
 

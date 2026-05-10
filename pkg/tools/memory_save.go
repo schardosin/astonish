@@ -7,11 +7,24 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
+
+// placeholderizeContent uses the Redactor from context to replace any raw
+// credential values in memory content with {{CREDENTIAL:name:field}} tokens.
+// Returns the (possibly modified) content and how many credential values were replaced.
+// If no Redactor is in context, returns the content unchanged (0 replacements).
+func placeholderizeContent(ctx context.Context, content string) (string, int) {
+	r := credentials.RedactorFromContext(ctx)
+	if r == nil {
+		return content, 0
+	}
+	return r.Placeholderize(content)
+}
 
 // MemorySaveArgs defines the arguments for the memory_save tool.
 type MemorySaveArgs struct {
@@ -47,9 +60,14 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 			return MemorySaveResult{}, fmt.Errorf("content is required")
 		}
 
+		// Auto-replace any raw credential values with {{CREDENTIAL:name:field}}
+		// placeholders. This prevents secrets from being persisted to memory
+		// while preserving actionable references the agent can use later.
+		content, redactCount := placeholderizeContent(ctx, args.Content)
+
 		// In platform mode, prefer the PG-backed memory store from context.
 		if pgMem := store.MemoryStoreFromContext(ctx); pgMem != nil {
-			return platformMemorySave(ctx, args, mgr, pgMem)
+			return platformMemorySave(ctx, args, content, redactCount, mgr, pgMem)
 		}
 
 		// Personal mode: use file-based memory system.
@@ -57,7 +75,7 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 
 		// If no kind specified, use the core tier (MEMORY.md)
 		if kind == "" {
-			if err := mgr.Append(args.Category, args.Content, args.Overwrite); err != nil {
+			if err := mgr.Append(args.Category, content, args.Overwrite); err != nil {
 				return MemorySaveResult{}, fmt.Errorf("failed to save to memory: %w", err)
 			}
 
@@ -68,9 +86,13 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 				}
 			}
 
+			msg := fmt.Sprintf("Saved to MEMORY.md under '%s'", args.Category)
+			if redactCount > 0 {
+				msg += fmt.Sprintf(" (%d credential value(s) auto-replaced with {{CREDENTIAL:...}} placeholders)", redactCount)
+			}
 			return MemorySaveResult{
 				Saved:   true,
-				Message: fmt.Sprintf("Saved to MEMORY.md under '%s'", args.Category),
+				Message: msg,
 			}, nil
 		}
 
@@ -99,7 +121,7 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 		}
 
 		// Use section-aware append with dedup and fuzzy heading matching
-		if err := memory.AppendToFile(resolvedPath, args.Category, args.Content, args.Overwrite, false); err != nil {
+		if err := memory.AppendToFile(resolvedPath, args.Category, content, args.Overwrite, false); err != nil {
 			return MemorySaveResult{}, fmt.Errorf("failed to write to %s: %w", resolvedRel, err)
 		}
 
@@ -110,9 +132,13 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 			}
 		}
 
+		msg := fmt.Sprintf("Saved to %s under '%s'", resolvedRel, args.Category)
+		if redactCount > 0 {
+			msg += fmt.Sprintf(" (%d credential value(s) auto-replaced with {{CREDENTIAL:...}} placeholders)", redactCount)
+		}
 		return MemorySaveResult{
 			Saved:   true,
-			Message: fmt.Sprintf("Saved to %s under '%s'", resolvedRel, args.Category),
+			Message: msg,
 		}, nil
 	}
 }
@@ -120,7 +146,7 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 // platformMemorySave is the shared implementation for platform-mode saves.
 // Writes to the PG team memory store, with optional MEMORY.md fallback for
 // core tier (backward compat with personal-mode tools).
-func platformMemorySave(ctx context.Context, args MemorySaveArgs, fileMgr *memory.Manager, pgMem store.MemoryStore) (MemorySaveResult, error) {
+func platformMemorySave(ctx context.Context, args MemorySaveArgs, content string, redactCount int, fileMgr *memory.Manager, pgMem store.MemoryStore) (MemorySaveResult, error) {
 	kind := strings.TrimSpace(strings.ToLower(args.Kind))
 
 	// Determine the category for the database entry.
@@ -133,7 +159,7 @@ func platformMemorySave(ctx context.Context, args MemorySaveArgs, fileMgr *memor
 	// If file-based manager is available and no kind specified, also append
 	// to MEMORY.md for backward compatibility with personal-mode tools that read it.
 	if kind == "" && fileMgr != nil {
-		if err := fileMgr.Append(args.Category, args.Content, args.Overwrite); err != nil {
+		if err := fileMgr.Append(args.Category, content, args.Overwrite); err != nil {
 			slog.Warn("failed to append to MEMORY.md in platform mode", "error", err)
 			// Don't fail — the PG store write below is the primary target
 		}
@@ -142,7 +168,7 @@ func platformMemorySave(ctx context.Context, args MemorySaveArgs, fileMgr *memor
 	// Save to the team memory store (PG)
 	if pgMem != nil {
 		entry := store.MemoryEntry{
-			Content:  args.Content,
+			Content:  content,
 			Category: dbCategory,
 		}
 		if err := pgMem.Add(ctx, entry); err != nil {
@@ -150,9 +176,13 @@ func platformMemorySave(ctx context.Context, args MemorySaveArgs, fileMgr *memor
 		}
 	}
 
+	msg := fmt.Sprintf("Saved to team memory under '%s'", dbCategory)
+	if redactCount > 0 {
+		msg += fmt.Sprintf(" (%d credential value(s) auto-replaced with {{CREDENTIAL:...}} placeholders)", redactCount)
+	}
 	return MemorySaveResult{
 		Saved:   true,
-		Message: fmt.Sprintf("Saved to team memory under '%s'", dbCategory),
+		Message: msg,
 	}, nil
 }
 
@@ -169,9 +199,14 @@ func PlatformMemorySave(memMgr store.MemoryManager, memStore store.MemoryStore) 
 			return MemorySaveResult{}, fmt.Errorf("content is required")
 		}
 
+		// Auto-replace any raw credential values with {{CREDENTIAL:name:field}}
+		// placeholders. This prevents secrets from being persisted to memory
+		// while preserving actionable references the agent can use later.
+		content, redactCount := placeholderizeContent(ctx, args.Content)
+
 		// Wrap store.MemoryManager as *memory.Manager if available
 		// (PlatformMemorySave uses store.MemoryManager, not *memory.Manager)
-		return platformMemorySave(ctx, args, nil, memStore)
+		return platformMemorySave(ctx, args, content, redactCount, nil, memStore)
 	}
 }
 

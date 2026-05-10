@@ -22,6 +22,25 @@ func (a *StoreAdapter) Get(name string) *Credential {
 	if sc == nil {
 		return nil
 	}
+	return storeCredToInternal(sc)
+}
+
+func (a *StoreAdapter) Resolve(name string) (headerKey, headerValue string, err error) {
+	return a.inner.Resolve(name)
+}
+
+func (a *StoreAdapter) Reload() error {
+	return a.inner.Reload()
+}
+
+// Compile-time check.
+var _ CredentialResolver = (*StoreAdapter)(nil)
+
+// storeCredToInternal converts a store.Credential to the internal credentials.Credential type.
+func storeCredToInternal(sc *store.Credential) *Credential {
+	if sc == nil {
+		return nil
+	}
 	return &Credential{
 		Type:         CredentialType(sc.Type),
 		Header:       sc.Header,
@@ -40,13 +59,32 @@ func (a *StoreAdapter) Get(name string) *Credential {
 	}
 }
 
-func (a *StoreAdapter) Resolve(name string) (headerKey, headerValue string, err error) {
-	return a.inner.Resolve(name)
-}
+// HydrateFromStore populates the Redactor's signature map from a store.CredentialStore.
+// This is used in platform mode to ensure the Redactor knows about all credential
+// values from the PG-backed store. It is additive — existing signatures are preserved.
+// Safe to call on every request (idempotent for unchanged credentials).
+func (r *Redactor) HydrateFromStore(cs store.CredentialStore) {
+	if cs == nil {
+		return
+	}
 
-func (a *StoreAdapter) Reload() error {
-	return a.inner.Reload()
-}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-// Compile-time check.
-var _ CredentialResolver = (*StoreAdapter)(nil)
+	for name := range cs.List() {
+		sc := cs.Get(name)
+		if sc == nil {
+			continue
+		}
+		cred := storeCredToInternal(sc)
+		r.addSecretFieldsLocked(name, cred)
+	}
+
+	// Also register key-value secrets (provider keys, tokens, etc.)
+	for _, key := range cs.ListSecrets() {
+		val := cs.GetSecret(key)
+		if len(val) >= minSignatureLen {
+			r.addVariantsLocked("secret/"+key, "value", val)
+		}
+	}
+}

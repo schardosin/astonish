@@ -324,8 +324,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// shares the same args map by reference) never persists real secrets.
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 
-		if c.CredentialStore != nil {
-			agentResolver := c.CredentialStore
+		// Always register credential substitution callback. In platform mode,
+		// the PG-backed credential store is injected into the context per-request
+		// (even if the file-based store failed to open). The callback checks both
+		// the context store and the agent-level fallback.
+		{
+			agentResolver := c.CredentialStore // may be nil if file-based store failed
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 				// In platform mode, prefer the tenant-scoped PG credential store
 				// injected into the context by chat_handlers.go. Fall back to the
@@ -333,9 +337,14 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				var resolver credentials.CredentialResolver
 				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
 					resolver = credentials.NewStoreAdapter(cs)
-				} else {
+				} else if agentResolver != nil {
 					resolver = agentResolver
 				}
+
+				if resolver == nil {
+					return nil, nil // no credential store available at all
+				}
+
 				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				// Chain with any existing restore (e.g. pending secrets added later).

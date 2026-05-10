@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -95,10 +96,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	sharedStore := s.sessionStore      // capture for closure
 	sharedIndexer := s.daemonIndexer   // capture for closure
 	isPlatform := s.platformAuth != nil // capture for closure
+	pgStoreRef := s.pgStore            // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
 		appCfg := api.EffectiveAppConfigFromContext(ctx, isPlatform)
 
-		result, err := NewWiredChatAgent(ctx, &ChatFactoryConfig{
+		factoryCfg := &ChatFactoryConfig{
 			AppConfig:     appCfg,
 			ProviderName:  appCfg.General.DefaultProvider,
 			ModelName:     appCfg.General.DefaultModel,
@@ -109,7 +111,23 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			PlatformMode:  isPlatform,
 			SessionStore:  sharedStore,
 			DaemonIndexer: sharedIndexer,
-		})
+		}
+
+		// In platform mode, create pgvector-backed ToolIndex for dynamic tool discovery.
+		if isPlatform && pgStoreRef != nil {
+			if embedFunc := pgStoreRef.GetEmbedFunc(); embedFunc != nil {
+				pool, poolErr := pgStoreRef.PoolManager().PlatformPool(ctx)
+				if poolErr == nil {
+					vs, vsErr := pgstore.NewPGToolVectorStore(pool, embedFunc)
+					if vsErr == nil {
+						factoryCfg.PlatformToolVectorStore = vs
+						factoryCfg.PlatformEmbedFunc = agent.EmbedFunc(embedFunc)
+					}
+				}
+			}
+		}
+
+		result, err := NewWiredChatAgent(ctx, factoryCfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)
 		}

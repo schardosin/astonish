@@ -62,6 +62,16 @@ type ChatFactoryConfig struct {
 	// When set, the factory reuses it instead of creating a new store/indexer,
 	// avoiding double-indexing and duplicate file watchers.
 	DaemonIndexer *memory.DaemonIndexerResult
+
+	// PlatformToolVectorStore is the vector store for tool discovery in platform mode.
+	// When set, it's used instead of the chromem-go backed store (personal mode).
+	// Callers should create this via pgstore.NewPGToolVectorStore().
+	PlatformToolVectorStore agent.ToolVectorStore
+
+	// PlatformEmbedFunc is the embedding function for platform mode tool discovery.
+	// Required when PlatformToolVectorStore is set (used to embed query strings
+	// before vector search). Typically the same Hugot-based embedder used for memory.
+	PlatformEmbedFunc agent.EmbedFunc
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -1426,10 +1436,33 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Create the dedicated tool index for retrieval-based tool discovery.
 	// One document per tool (name + description) enables accurate semantic
 	// search without the chunking problems of the general memory store.
+	//
+	// Personal mode: uses chromem-go backed vector store (shared with memory).
+	// Platform mode: uses pgvector backed vector store (shared platform DB).
 	var toolIndex *agent.ToolIndex
-	if memStore != nil && memEmbeddingFunc != nil {
+	var vectorStore agent.ToolVectorStore
+	var toolEmbedFunc agent.EmbedFunc
+
+	if cfg.PlatformToolVectorStore != nil && cfg.PlatformEmbedFunc != nil {
+		// Platform mode: use pre-created pgvector store
+		vectorStore = cfg.PlatformToolVectorStore
+		toolEmbedFunc = cfg.PlatformEmbedFunc
+	} else if memStore != nil && memEmbeddingFunc != nil {
+		// Personal mode: create chromem-backed vector store
+		var vsErr error
+		vectorStore, vsErr = agent.NewChromemToolVectorStore(memStore.DB(), memEmbeddingFunc)
+		if vsErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create chromem tool vector store", "error", vsErr)
+			}
+		} else {
+			toolEmbedFunc = agent.EmbedFunc(memEmbeddingFunc)
+		}
+	}
+
+	if vectorStore != nil && toolEmbedFunc != nil {
 		var tiErr error
-		toolIndex, tiErr = agent.NewToolIndex(memStore.DB(), memEmbeddingFunc)
+		toolIndex, tiErr = agent.NewToolIndex(vectorStore, toolEmbedFunc)
 		if tiErr != nil {
 			if cfg.DebugMode {
 				slog.Warn("failed to create tool index", "error", tiErr)
@@ -1495,31 +1528,38 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		chatAgent.ToolIndex = toolIndex
 	}
 
-	// Wire credential redactor to ChatAgent, session service, and sub-agents
+	// Wire credential redactor to ChatAgent, session service, and sub-agents.
+	// The Redactor is a security boundary — it MUST always exist (never nil),
+	// even when the file-based credential store fails (platform mode with
+	// regenerated .store_key). In platform mode, it gets hydrated per-request
+	// from the PG-backed credential store in chat_handlers.go.
+	redactor := credentials.NewRedactor()
 	if credStore != nil {
-		redactor := credStore.Redactor()
-		chatAgent.Redactor = redactor
+		redactor = credStore.Redactor()
 		chatAgent.CredentialStore = credStore
-		// Create per-session PendingVault for <<<SECRET_N>>> token resolution.
-		// The vault extracts raw secrets from user messages before the LLM sees
-		// them, and registers them with the redactor as a safety net.
-		chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
-		// Attach proactive secret scanner if enabled (default: true).
-		// Scans user messages for untagged secrets using keyword, entropy,
-		// and structural analysis before they reach the LLM provider.
-		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
-			scanner := credentials.NewSecretScanner()
-			if cfg.AppConfig != nil {
-				sc := cfg.AppConfig.Security.SecretScanner
-				if sc.EntropyThreshold > 0 {
-					scanner.EntropyThreshold = sc.EntropyThreshold
-				}
-				if sc.MinTokenLength > 0 {
-					scanner.MinTokenLength = sc.MinTokenLength
-				}
+	}
+	chatAgent.Redactor = redactor
+	// Create per-session PendingVault for <<<SECRET_N>>> token resolution.
+	// The vault extracts raw secrets from user messages before the LLM sees
+	// them, and registers them with the redactor as a safety net.
+	chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
+	// Attach proactive secret scanner if enabled (default: true).
+	// Scans user messages for untagged secrets using keyword, entropy,
+	// and structural analysis before they reach the LLM provider.
+	if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
+		scanner := credentials.NewSecretScanner()
+		if cfg.AppConfig != nil {
+			sc := cfg.AppConfig.Security.SecretScanner
+			if sc.EntropyThreshold > 0 {
+				scanner.EntropyThreshold = sc.EntropyThreshold
 			}
-			chatAgent.PendingSecrets.Scanner = scanner
+			if sc.MinTokenLength > 0 {
+				scanner.MinTokenLength = sc.MinTokenLength
+			}
 		}
+		chatAgent.PendingSecrets.Scanner = scanner
+	}
+	if credStore != nil {
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact

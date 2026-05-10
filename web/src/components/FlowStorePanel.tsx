@@ -60,7 +60,7 @@ const updateStore = async (teamSlug?: string): Promise<Record<string, unknown>> 
   return res.json()
 }
 
-export default function FlowStorePanel({ teamSlug }: { teamSlug?: string }) {
+export default function FlowStorePanel({ teamSlug, canManage = true }: { teamSlug?: string; canManage?: boolean }) {
   const [taps, setTaps] = useState<Tap[]>([])
   const [flows, setFlows] = useState<Flow[]>([])
   const [loading, setLoading] = useState(true)
@@ -179,6 +179,7 @@ export default function FlowStorePanel({ teamSlug }: { teamSlug?: string }) {
           </span>
         </div>
         
+        {canManage && (
         <button
           onClick={handleRefresh}
           disabled={loading}
@@ -188,6 +189,7 @@ export default function FlowStorePanel({ teamSlug }: { teamSlug?: string }) {
         >
           <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
         </button>
+        )}
       </div>
 
       {/* Error Banner */}
@@ -334,7 +336,7 @@ export default function FlowStorePanel({ teamSlug }: { teamSlug?: string }) {
                           )}
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          {flow.installed ? (
+                          {canManage && (flow.installed ? (
                             <button
                               onClick={() => handleUninstall(flow)}
                               disabled={installing === flow.fullName}
@@ -370,6 +372,11 @@ export default function FlowStorePanel({ teamSlug }: { teamSlug?: string }) {
                                 </>
                               )}
                             </button>
+                          ))}
+                          {!canManage && flow.installed && (
+                            <span className="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-500/20 text-green-400">
+                              Installed
+                            </span>
                           )}
                         </div>
                       </div>

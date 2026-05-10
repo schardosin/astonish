@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -797,6 +798,8 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// Wire credential redactor so secrets are masked in SSE output
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		// Inject Redactor into context so memory_save can Placeholderize()
+		ctx = credentials.WithRedactor(ctx, cs.Redactor())
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

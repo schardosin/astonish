@@ -564,7 +564,20 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		} else {
 			ctx = enrichedCtx
 			userID = platformUserID
+
+			// Hydrate the shared Redactor from the resolved credential store
+			// so tool output redaction catches PG-backed credentials.
+			if m.redactor != nil {
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					m.redactor.HydrateFromStore(cs)
+				}
+			}
 		}
+	}
+
+	// Inject Redactor into context so memory_save can Placeholderize()
+	if m.redactor != nil {
+		ctx = credentials.WithRedactor(ctx, m.redactor)
 	}
 
 	sess, err := m.getOrCreateSession(ctx, appName, userID, route.SessionKey)

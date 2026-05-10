@@ -903,7 +903,7 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
         {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
         {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={handleSaved} teamSlug={teamSlug} />}
         {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
-        {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} />}
+        {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} canManage={canManageTeam} />}
       </Suspense>
     </div>
   )
@@ -985,6 +985,10 @@ export default function SettingsPage({
   const canManageTeam = isAdmin || callerRoles[resolvedTeamSlug] === 'admin' || callerRoles[resolvedTeamSlug] === 'org_admin'
 
   // --- Build sidebar categories ---
+  // Admin-only team items (hidden from regular members)
+  const adminOnlyTeamItems = new Set(['team-providers', 'team-mcp', 'team-scheduler', 'team-taps', 'team-container'])
+  const memberTeamItems = canManageTeam ? TEAM_ITEMS : TEAM_ITEMS.filter(item => !adminOnlyTeamItems.has(item.id))
+
   // In platform mode, skills, MCP, and providers are managed at org/team level, not system
   const platformSystemItems = SYSTEM_ITEMS.filter(item => 
     item.id !== 'skills' && item.id !== 'mcp' && item.id !== 'providers'
@@ -1001,7 +1005,7 @@ export default function SettingsPage({
         ]
       : [
           { label: 'Preferences', items: PREFERENCE_ITEMS },
-          { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: TEAM_ITEMS },
+          { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: memberTeamItems },
         ]
     : [
         { label: 'Preferences', items: PREFERENCE_ITEMS },

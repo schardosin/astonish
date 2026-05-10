@@ -9,6 +9,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -179,6 +180,11 @@ CRITICAL RULES:
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to create ADK agent: %w", err)
+	}
+
+	// Inject Redactor into context so memory_save can Placeholderize()
+	if e.ChatAgent.Redactor != nil {
+		ctx = credentials.WithRedactor(ctx, e.ChatAgent.Redactor)
 	}
 
 	// Create runner

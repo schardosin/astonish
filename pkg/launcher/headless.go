@@ -166,6 +166,8 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
 		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
+		// Inject Redactor into context so memory_save can Placeholderize()
+		ctx = credentials.WithRedactor(ctx, cs.Redactor())
 		// Attach proactive secret scanner
 		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
 			scanner := credentials.NewSecretScanner()

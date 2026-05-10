@@ -727,17 +727,22 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Wire credential placeholder substitution so sub-agents can use
 	// {{CREDENTIAL:...}} tokens in tool args.
 	var beforeToolCallbacks []llmagent.BeforeToolCallback
-	if m.CredentialStore != nil {
-		agentResolver := m.CredentialStore
+	{
+		agentResolver := m.CredentialStore // may be nil if file-based store failed
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 			// In platform mode, prefer the tenant-scoped PG credential store
 			// injected into the context. Fall back to agent-level store.
 			var resolver credentials.CredentialResolver
 			if cs := store.CredentialStoreFromContext(ctx); cs != nil {
 				resolver = credentials.NewStoreAdapter(cs)
-			} else {
+			} else if agentResolver != nil {
 				resolver = agentResolver
 			}
+
+			if resolver == nil {
+				return nil, nil // no credential store available at all
+			}
+
 			credRestore := credentials.SubstituteAndRestore(args, resolver)
 			callID := ctx.FunctionCallID()
 			if prev, loaded := restoreFuncs.Load(callID); loaded {

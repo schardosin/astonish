@@ -710,17 +710,22 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Per-call restore functions keyed by FunctionCallID so parallel
 		// tool calls don't clobber each other's restore closures.
 		var restoreFuncs sync.Map // map[string]func()
-		if a.CredentialStore != nil {
-			agentResolver := a.CredentialStore
+		{
+			agentResolver := a.CredentialStore // may be nil if file-based store failed
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
 				// In platform mode, prefer the tenant-scoped PG credential store
 				// injected into the context. Fall back to agent-level store.
 				var resolver credentials.CredentialResolver
 				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
 					resolver = credentials.NewStoreAdapter(cs)
-				} else {
+				} else if agentResolver != nil {
 					resolver = agentResolver
 				}
+
+				if resolver == nil {
+					return nil, nil // no credential store available at all
+				}
+
 				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				if prev, loaded := restoreFuncs.Load(callID); loaded {

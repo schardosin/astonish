@@ -89,6 +89,12 @@ func (s *PGStore) SetEmbedFunc(fn store.EmbedFunc) {
 	s.embedFunc = fn
 }
 
+// GetEmbedFunc returns the configured embedding function.
+// Returns nil if no embedding function has been set.
+func (s *PGStore) GetEmbedFunc() store.EmbedFunc {
+	return s.embedFunc
+}
+
 // --- store.PlatformStore implementation ---
 
 func (s *PGStore) Users() store.UserStore {

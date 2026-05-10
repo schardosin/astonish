@@ -142,6 +142,10 @@ func ListTapsHandler(w http.ResponseWriter, r *http.Request) {
 
 // AddTapHandler handles POST /api/flow-store/taps
 func AddTapHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	var req AddTapRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -183,6 +187,10 @@ func AddTapHandler(w http.ResponseWriter, r *http.Request) {
 
 // RemoveTapHandler handles DELETE /api/flow-store/taps/{name}
 func RemoveTapHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	vars := mux.Vars(r)
 	name := vars["name"]
 
@@ -206,6 +214,10 @@ func RemoveTapHandler(w http.ResponseWriter, r *http.Request) {
 
 // InstallFlowHandler handles POST /api/flow-store/{tap}/{flow}/install
 func InstallFlowHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	vars := mux.Vars(r)
 	tapName := vars["tap"]
 	flowName := vars["flow"]
@@ -256,6 +268,10 @@ func InstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 
 // UninstallFlowHandler handles DELETE /api/flow-store/{tap}/{flow}
 func UninstallFlowHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	vars := mux.Vars(r)
 	tapName := vars["tap"]
 	flowName := vars["flow"]
@@ -295,6 +311,10 @@ func UninstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 // UpdateFlowStoreHandler handles POST /api/flow-store/update
 // Forces a refresh from remote, bypassing the cache
 func UpdateFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	store, err := flowstore.NewStore()
 	if err != nil {
 		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)

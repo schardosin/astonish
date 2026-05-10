@@ -9,7 +9,6 @@ import (
 	"sync"
 	"unicode"
 
-	chromem "github.com/philippgille/chromem-go"
 	"google.golang.org/adk/tool"
 )
 
@@ -23,8 +22,9 @@ import (
 //   - Sub-agents: queries it at creation time to auto-discover which tools to load,
 //     and also get search_tools for mid-execution discovery
 type ToolIndex struct {
-	collection *chromem.Collection
-	mu         sync.RWMutex
+	vectorStore ToolVectorStore
+	embedFunc   EmbedFunc
+	mu          sync.RWMutex
 
 	// toolRegistry maps tool_name → ToolEntry for resolving search results
 	// back to group names and concrete tool implementations.
@@ -74,24 +74,20 @@ type ToolMatch struct {
 	Score       float64 `json:"score"`
 }
 
-// NewToolIndex creates a new tool index backed by a dedicated chromem collection.
-// The collection is created on the provided chromem DB (shared with the memory store)
-// using the same embedding function for consistency.
-func NewToolIndex(db *chromem.DB, embeddingFunc chromem.EmbeddingFunc) (*ToolIndex, error) {
-	if db == nil {
-		return nil, fmt.Errorf("chromem DB is required")
+// NewToolIndex creates a new tool index backed by a ToolVectorStore.
+// The vectorStore handles embedding storage and nearest-neighbor search.
+// The embedFunc is used to embed query strings before vector search.
+func NewToolIndex(vectorStore ToolVectorStore, embedFunc EmbedFunc) (*ToolIndex, error) {
+	if vectorStore == nil {
+		return nil, fmt.Errorf("vector store is required")
 	}
-	if embeddingFunc == nil {
+	if embedFunc == nil {
 		return nil, fmt.Errorf("embedding function is required")
 	}
 
-	col, err := db.GetOrCreateCollection("tools", nil, embeddingFunc)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tools collection: %w", err)
-	}
-
 	return &ToolIndex{
-		collection:   col,
+		vectorStore:  vectorStore,
+		embedFunc:    embedFunc,
 		toolRegistry: make(map[string]ToolEntry),
 		bm25:         nil, // built during SyncTools
 	}, nil
@@ -123,7 +119,7 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 
 	// Build the registry and document list
 	registry := make(map[string]ToolEntry)
-	var docs []chromem.Document
+	var docs []ToolVectorDoc
 
 	// Index main-thread tools
 	for _, t := range mainTools {
@@ -136,7 +132,7 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 			Tool:        t,
 		}
 		registry[name] = entry
-		docs = append(docs, chromem.Document{
+		docs = append(docs, ToolVectorDoc{
 			ID:      "main:" + name,
 			Content: name + ": " + t.Description(),
 			Metadata: map[string]string{
@@ -164,7 +160,7 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 				Tool:        t,
 			}
 			registry[name] = entry
-			docs = append(docs, chromem.Document{
+			docs = append(docs, ToolVectorDoc{
 				ID:      g.Name + ":" + name,
 				Content: name + ": " + t.Description(),
 				Metadata: map[string]string{
@@ -194,7 +190,7 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 					Tool:        t,
 				}
 				registry[name] = entry
-				docs = append(docs, chromem.Document{
+				docs = append(docs, ToolVectorDoc{
 					ID:      g.Name + ":" + name,
 					Content: name + ": " + t.Description(),
 					Metadata: map[string]string{
@@ -209,12 +205,11 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 
 	// Incremental sync: only embed tools whose content has changed.
 	// On a typical restart where tools haven't changed, this skips all
-	// embedding calls — the only cost is GetByID lookups against the
-	// in-memory map (nanoseconds per tool).
-	var toEmbed []chromem.Document
+	// embedding calls — the only cost is GetByID lookups against the store.
+	var toEmbed []ToolVectorDoc
 	for _, doc := range docs {
-		existing, err := idx.collection.GetByID(ctx, doc.ID)
-		if err == nil && existing.Content == doc.Content {
+		existing, _ := idx.vectorStore.GetByID(ctx, doc.ID)
+		if existing != nil && existing.Content == doc.Content {
 			continue // already embedded with same content
 		}
 		toEmbed = append(toEmbed, doc)
@@ -228,7 +223,7 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 
 	if len(toEmbed) > 0 {
 		// Only embed the new/changed documents (concurrency=4)
-		if err := idx.collection.AddDocuments(ctx, toEmbed, 4); err != nil {
+		if err := idx.vectorStore.AddDocuments(ctx, toEmbed, 4); err != nil {
 			return fmt.Errorf("failed to index tools: %w", err)
 		}
 	}
@@ -253,7 +248,7 @@ func (idx *ToolIndex) Search(ctx context.Context, query string, topK int, minSco
 		minScore = 0.3
 	}
 
-	docCount := idx.collection.Count()
+	docCount := idx.vectorStore.Count()
 	if docCount == 0 {
 		return nil, nil
 	}
@@ -261,7 +256,13 @@ func (idx *ToolIndex) Search(ctx context.Context, query string, topK int, minSco
 		topK = docCount
 	}
 
-	results, err := idx.collection.Query(ctx, query, topK, nil, nil)
+	// Embed the query
+	queryEmb, err := idx.embedFunc(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to embed query: %w", err)
+	}
+
+	results, err := idx.vectorStore.QueryByEmbedding(ctx, queryEmb, topK)
 	if err != nil {
 		return nil, fmt.Errorf("tool search failed: %w", err)
 	}
@@ -278,7 +279,7 @@ func (idx *ToolIndex) Search(ctx context.Context, query string, topK int, minSco
 		isMain := r.Metadata["is_main"] == "true"
 
 		// Use the registry for the description (it's cleaner than parsing Content).
-		// Fall back to the chromem document content if the tool isn't in the
+		// Fall back to the stored document content if the tool isn't in the
 		// current registry (e.g., persisted docs from a previous session).
 		desc := ""
 		if entry, ok := idx.toolRegistry[toolName]; ok {
@@ -392,7 +393,7 @@ func truncateDesc(s string, maxLen int) string {
 func (idx *ToolIndex) Count() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.collection.Count()
+	return idx.vectorStore.Count()
 }
 
 // ListAll returns every tool in the registry grouped by group name.
@@ -470,9 +471,9 @@ func tokenize(s string) []string {
 	return tokens
 }
 
-// buildBM25Index constructs a BM25 inverted index from chromem documents.
+// buildBM25Index constructs a BM25 inverted index from tool vector documents.
 // Each document's Content is tokenized and scored with sublinear TF * IDF.
-func buildBM25Index(docs []chromem.Document) *bm25Index {
+func buildBM25Index(docs []ToolVectorDoc) *bm25Index {
 	N := len(docs)
 	if N == 0 {
 		return nil
@@ -663,18 +664,24 @@ func (idx *ToolIndex) SearchHybrid(ctx context.Context, query string, topK int, 
 	}
 
 	// --- Vector search ---
-	var vectorResults []chromem.Result
-	docCount := idx.collection.Count()
+	var vectorResults []ToolVectorResult
+	docCount := idx.vectorStore.Count()
 	if docCount > 0 {
 		vK := candidateK
 		if vK > docCount {
 			vK = docCount
 		}
-		var err error
-		vectorResults, err = idx.collection.Query(ctx, query, vK, nil, nil)
-		if err != nil {
-			return nil, fmt.Errorf("vector search failed: %w", err)
+
+		// Embed the query for vector search
+		queryEmb, embErr := idx.embedFunc(ctx, query)
+		if embErr == nil && len(queryEmb) > 0 {
+			var err error
+			vectorResults, err = idx.vectorStore.QueryByEmbedding(ctx, queryEmb, vK)
+			if err != nil {
+				return nil, fmt.Errorf("vector search failed: %w", err)
+			}
 		}
+		// If embedding fails, fall through to BM25-only
 	}
 
 	// --- BM25 keyword search ---

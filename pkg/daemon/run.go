@@ -205,6 +205,28 @@ func Run(cfg RunConfig) error {
 		config.SetupAllProviderEnvFromStore(appCfg, getSecret)
 	}
 
+	// Create the pgvector-backed ToolVectorStore for platform mode.
+	// This enables dynamic tool injection (semantic tool discovery) in platform mode.
+	var platformToolVectorStore agent.ToolVectorStore
+	var platformEmbedFunc agent.EmbedFunc
+	if pgStore != nil {
+		if embedFunc := pgStore.GetEmbedFunc(); embedFunc != nil {
+			pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background())
+			if poolErr == nil {
+				vs, vsErr := pgstore.NewPGToolVectorStore(pool, embedFunc)
+				if vsErr == nil {
+					platformToolVectorStore = vs
+					platformEmbedFunc = agent.EmbedFunc(embedFunc)
+					logger.Printf("Tool discovery: pgvector-backed (platform mode)")
+				} else if cfg.Debug {
+					logger.Printf("Warning: failed to create PG tool vector store: %v", vsErr)
+				}
+			} else if cfg.Debug {
+				logger.Printf("Warning: failed to get platform pool for tool index: %v", poolErr)
+			}
+		}
+	}
+
 	// Set up MCP environment variables
 	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
 		config.SetupMCPEnv(mcpCfg)
@@ -332,15 +354,17 @@ func Run(cfg RunConfig) error {
 
 		// Build a fully-wired ChatAgent for channel/scheduler use
 		fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
-			AppConfig:     appCfg,
-			ProviderName:  appCfg.General.DefaultProvider,
-			ModelName:     appCfg.General.DefaultModel,
-			DebugMode:     cfg.Debug,
-			AutoApprove:   true, // Channels/scheduler auto-approve all tools
-			IsDaemon:      true, // We ARE the daemon — always run indexing/watchers.
-			PlatformMode:  pgStore != nil,
-			SessionStore:  sharedFileStore,
-			DaemonIndexer: daemonIndexer,
+			AppConfig:               appCfg,
+			ProviderName:            appCfg.General.DefaultProvider,
+			ModelName:               appCfg.General.DefaultModel,
+			DebugMode:               cfg.Debug,
+			AutoApprove:             true, // Channels/scheduler auto-approve all tools
+			IsDaemon:                true, // We ARE the daemon — always run indexing/watchers.
+			PlatformMode:            pgStore != nil,
+			SessionStore:            sharedFileStore,
+			DaemonIndexer:           daemonIndexer,
+			PlatformToolVectorStore: platformToolVectorStore,
+			PlatformEmbedFunc:       platformEmbedFunc,
 		})
 		if factoryErr != nil {
 			logger.Printf("Warning: Failed to initialize ChatAgent: %v", factoryErr)
@@ -737,13 +761,15 @@ func Run(cfg RunConfig) error {
 		if freshCfg.Channels.IsChannelsEnabled() && factoryResult == nil {
 			logger.Printf("Initializing ChatAgent for newly enabled channels...")
 			fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
-				AppConfig:    freshCfg,
-				ProviderName: freshCfg.General.DefaultProvider,
-				ModelName:    freshCfg.General.DefaultModel,
-				DebugMode:    cfg.Debug,
-				AutoApprove:  true,
-				PlatformMode: pgStore != nil,
-				SessionStore: sharedFileStore,
+				AppConfig:               freshCfg,
+				ProviderName:            freshCfg.General.DefaultProvider,
+				ModelName:               freshCfg.General.DefaultModel,
+				DebugMode:               cfg.Debug,
+				AutoApprove:             true,
+				PlatformMode:            pgStore != nil,
+				SessionStore:            sharedFileStore,
+				PlatformToolVectorStore: platformToolVectorStore,
+				PlatformEmbedFunc:       platformEmbedFunc,
 			})
 			if factoryErr != nil {
 				return fmt.Errorf("failed to initialize ChatAgent: %w", factoryErr)

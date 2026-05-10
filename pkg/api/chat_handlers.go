@@ -656,7 +656,22 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		if svc.PersonalCredentials != nil || svc.Credentials != nil {
 			merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
 			runner.InjectCredentialStore(merged)
+
+			// Hydrate the shared Redactor from the PG-backed credential store.
+			// This ensures the Redactor knows about all credential values for
+			// this user's session — critical for tool output redaction and
+			// preventing secret leakage into session history.
+			if chatAgent.Redactor != nil {
+				chatAgent.Redactor.HydrateFromStore(merged)
+			}
 		}
+	}
+
+	// Inject the Redactor into the runner context so that memory_save can
+	// call Placeholderize() to replace raw credential values with actionable
+	// {{CREDENTIAL:name:field}} tokens before persisting to memory.
+	if chatAgent.Redactor != nil {
+		runner.InjectRedactor(chatAgent.Redactor)
 	}
 
 	// Inject tenant-scoped memory stores into the runner context so that

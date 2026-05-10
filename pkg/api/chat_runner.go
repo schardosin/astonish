@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -173,6 +174,14 @@ func (cr *ChatRunner) InjectSessionService(ss store.SessionStore) {
 // Must be called before Run().
 func (cr *ChatRunner) InjectUserID(id string) {
 	cr.ctx = store.WithUserID(cr.ctx, id)
+}
+
+// InjectRedactor adds the session's Redactor to the runner's context so that
+// tool functions (e.g., memory_save) can call Placeholderize() to replace raw
+// credential values with {{CREDENTIAL:name:field}} tokens before persisting.
+// Must be called before Run().
+func (cr *ChatRunner) InjectRedactor(r *credentials.Redactor) {
+	cr.ctx = credentials.WithRedactor(cr.ctx, r)
 }
 
 // Run executes the agent in the background. It creates the ADK runner,

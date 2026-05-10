@@ -45,6 +45,10 @@ func GetPlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 // Saves platform-level provider configuration (encrypts secrets).
 // Requires: Platform Admin
 func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequirePlatformAdmin(w, r) == nil {
+		return
+	}
+
 	svc := store.FromRequest(r)
 	if svc == nil || svc.PlatformSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Platform settings not available")
@@ -111,6 +115,10 @@ func GetOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 // Saves org-level provider configuration (encrypts secrets).
 // Requires: Org Admin
 func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
+	if RequireOrgAdmin(w, r) == nil {
+		return
+	}
+
 	svc := store.FromRequest(r)
 	if svc == nil || svc.OrgSettings == nil {
 		respondError(w, http.StatusServiceUnavailable, "Org settings not available")
@@ -274,6 +282,25 @@ func DeleteProviderHandler(w http.ResponseWriter, r *http.Request) {
 	providerName := vars["name"]
 	if providerName == "" {
 		respondError(w, http.StatusBadRequest, "provider name is required")
+		return
+	}
+
+	// Enforce role checks based on level
+	switch level {
+	case "platform":
+		if RequirePlatformAdmin(w, r) == nil {
+			return
+		}
+	case "org":
+		if RequireOrgAdmin(w, r) == nil {
+			return
+		}
+	case "team":
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
+	default:
+		respondError(w, http.StatusBadRequest, "invalid level: "+level)
 		return
 	}
 

@@ -246,12 +246,6 @@ func validateTeamMembership(ctx context.Context, resolver DeliveryResolver, user
 	return nil
 }
 
-// resolveMultipleUsers resolves channels for multiple user IDs and deduplicates.
-// Legacy helper — delegates to resolveMultipleUsersFiltered with no filtering.
-func resolveMultipleUsers(ctx context.Context, resolver DeliveryResolver, userIDs []string) ([]DeliveryTarget, error) {
-	return resolveMultipleUsersFiltered(ctx, resolver, userIDs, nil)
-}
-
 // resolveMultipleUsersFiltered resolves channels for multiple user IDs, applies
 // channel filtering from the delivery config, and deduplicates results.
 //

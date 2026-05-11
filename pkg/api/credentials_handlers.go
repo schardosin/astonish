@@ -160,7 +160,7 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
-		IsTeamAdmin:  CanManageTeam(r, GetPlatformUser(r)),
+		IsTeamAdmin:  IsTeamAdmin(r),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -221,7 +221,7 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 		Credentials:  items,
 		Secrets:      secretItems,
 		HasMasterKey: hasMasterKey(),
-		IsTeamAdmin:  CanManageTeam(r, GetPlatformUser(r)),
+		IsTeamAdmin:  IsTeamAdmin(r),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }

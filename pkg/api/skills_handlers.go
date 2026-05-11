@@ -74,7 +74,7 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := SkillsListResponse{
 			Skills:      items,
-			IsTeamAdmin: CanManageTeam(r, GetPlatformUser(r)),
+			IsTeamAdmin: IsTeamAdmin(r),
 			IsOrgAdmin:  !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
 		}
 		respondJSON(w, http.StatusOK, resp)
@@ -561,7 +561,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 					Scope:       "team",
 					Content:     extractBody(skill.Content),
 					RawFile:     skill.Content,
-					Editable:    CanManageTeam(r, GetPlatformUser(r)),
+					Editable:    IsTeamAdmin(r),
 				})
 				return
 			}

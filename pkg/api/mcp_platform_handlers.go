@@ -52,9 +52,8 @@ type MCPServerCreateRequest struct {
 func ListMCPPlatformServersHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -66,8 +65,8 @@ func ListMCPPlatformServersHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := MCPPlatformServersListResponse{
 		Servers:     items,
-		IsTeamAdmin: CanManageTeam(r, GetPlatformUser(r)),
-		IsOrgAdmin:  !isPlatformMode(r) || CanManageOrg(GetPlatformUser(r)),
+		IsTeamAdmin: IsTeamAdmin(r),
+		IsOrgAdmin:  CanManageOrg(GetPlatformUser(r)),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -77,9 +76,8 @@ func GetMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -103,9 +101,8 @@ func GetMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -169,9 +166,8 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -229,9 +225,8 @@ func DeleteMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -254,9 +249,8 @@ func ToggleMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -299,9 +293,8 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusServiceUnavailable, "MCP platform servers are only available in platform mode")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 

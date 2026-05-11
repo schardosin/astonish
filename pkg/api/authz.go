@@ -97,6 +97,18 @@ func RequireTeamAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return false
 }
 
+// RequirePlatformServices extracts the store.Services from the request and verifies
+// the system is running in platform mode. Returns nil (and writes 503) if not.
+// Use this at the top of handlers that are exclusively platform-mode features.
+func RequirePlatformServices(w http.ResponseWriter, r *http.Request) *store.Services {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		respondError(w, http.StatusServiceUnavailable, "this feature is only available in platform mode")
+		return nil
+	}
+	return svc
+}
+
 // ---------------------------------------------------------------------------
 // Can* helpers — pure boolean checks, no HTTP side effects.
 // Use these for conditional logic (e.g., "show edit button in response?").
@@ -147,6 +159,12 @@ func CanManageTeamByID(r *http.Request, user *PlatformUser, orgDS store.OrgDataS
 		return false
 	}
 	return role == "admin"
+}
+
+// IsTeamAdmin is a convenience wrapper that checks whether the current request's
+// user can manage team-level resources. Equivalent to CanManageTeam(r, GetPlatformUser(r)).
+func IsTeamAdmin(r *http.Request) bool {
+	return CanManageTeam(r, GetPlatformUser(r))
 }
 
 // ---------------------------------------------------------------------------

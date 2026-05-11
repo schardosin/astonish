@@ -37,6 +37,63 @@ func (m *pgMemoryStore) ownerColumn() string {
 	return "created_by"
 }
 
+// scanSearchRow scans a row from a search query into a MemorySearchResult.
+// Expected columns: id, chunk_text, category, source_path, score.
+func (m *pgMemoryStore) scanSearchRow(rows pgx.Rows) (store.MemorySearchResult, error) {
+	var id, content string
+	var cat, sourcePath *string
+	var score float64
+	if err := rows.Scan(&id, &content, &cat, &sourcePath, &score); err != nil {
+		return store.MemorySearchResult{}, err
+	}
+	r := store.MemorySearchResult{
+		ID:      id,
+		Snippet: content,
+		Score:   score,
+		Scope:   m.scope,
+	}
+	if cat != nil {
+		r.Category = *cat
+	}
+	if sourcePath != nil {
+		r.Path = *sourcePath
+	}
+	return r, nil
+}
+
+// scanDetailRow scans a row from a list/get query into a MemorySearchResult.
+// Expected columns: id, chunk_text, category, source_path, created_by, created_at, session_id.
+func (m *pgMemoryStore) scanDetailRow(rows pgx.Rows) (store.MemorySearchResult, error) {
+	var id, content string
+	var cat, sourcePath, createdBy, sessionID *string
+	var createdAt *time.Time
+	if err := rows.Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessionID); err != nil {
+		return store.MemorySearchResult{}, err
+	}
+	r := store.MemorySearchResult{
+		ID:      id,
+		Snippet: content,
+		Score:   1.0,
+		Scope:   m.scope,
+	}
+	if cat != nil {
+		r.Category = *cat
+	}
+	if sourcePath != nil {
+		r.Path = *sourcePath
+	}
+	if createdBy != nil {
+		r.CreatedBy = *createdBy
+	}
+	if createdAt != nil {
+		r.CreatedAt = createdAt.Format(time.RFC3339)
+	}
+	if sessionID != nil {
+		r.SessionID = *sessionID
+	}
+	return r, nil
+}
+
 // Search performs a hybrid vector + tsvector keyword search.
 // When an embedder is available, generates a query embedding and runs
 // full RRF fusion (vector + keyword). Otherwise falls back to tsvector-only.
@@ -109,26 +166,12 @@ func (m *pgMemoryStore) hybridSearch(ctx context.Context, query string, maxResul
 
 	var results []store.MemorySearchResult
 	for rows.Next() {
-		var id, content string
-		var cat, sourcePath *string
-		var score float64
-		if err := rows.Scan(&id, &content, &cat, &sourcePath, &score); err != nil {
+		r, err := m.scanSearchRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		if score < minScore {
+		if r.Score < minScore {
 			continue
-		}
-		r := store.MemorySearchResult{
-			ID:      id,
-			Snippet: content,
-			Score:   score,
-			Scope:   m.scope,
-		}
-		if cat != nil {
-			r.Category = *cat
-		}
-		if sourcePath != nil {
-			r.Path = *sourcePath
 		}
 		results = append(results, r)
 	}
@@ -220,26 +263,12 @@ func (m *pgMemoryStore) VectorSearch(ctx context.Context, embedding []float32, m
 
 	var results []store.MemorySearchResult
 	for rows.Next() {
-		var id, content string
-		var cat, sourcePath *string
-		var score float64
-		if err := rows.Scan(&id, &content, &cat, &sourcePath, &score); err != nil {
+		r, err := m.scanSearchRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		if score < minScore {
+		if r.Score < minScore {
 			continue
-		}
-		r := store.MemorySearchResult{
-			ID:      id,
-			Snippet: content,
-			Score:   score,
-			Scope:   m.scope,
-		}
-		if cat != nil {
-			r.Category = *cat
-		}
-		if sourcePath != nil {
-			r.Path = *sourcePath
 		}
 		results = append(results, r)
 	}
@@ -383,32 +412,9 @@ func (m *pgMemoryStore) List(ctx context.Context, category string, limit, offset
 
 	var results []store.MemorySearchResult
 	for rows.Next() {
-		var id, content string
-		var cat, sourcePath, createdBy, sessionID *string
-		var createdAt *time.Time
-		if err := rows.Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessionID); err != nil {
+		r, err := m.scanDetailRow(rows)
+		if err != nil {
 			return nil, err
-		}
-		r := store.MemorySearchResult{
-			ID:      id,
-			Snippet: content,
-			Score:   1.0,
-			Scope:   m.scope,
-		}
-		if cat != nil {
-			r.Category = *cat
-		}
-		if sourcePath != nil {
-			r.Path = *sourcePath
-		}
-		if createdBy != nil {
-			r.CreatedBy = *createdBy
-		}
-		if createdAt != nil {
-			r.CreatedAt = createdAt.Format(time.RFC3339)
-		}
-		if sessionID != nil {
-			r.SessionID = *sessionID
 		}
 		results = append(results, r)
 	}
@@ -431,32 +437,9 @@ func (m *pgMemoryStore) ListBySession(ctx context.Context, sessionID string) ([]
 
 	var results []store.MemorySearchResult
 	for rows.Next() {
-		var id, content string
-		var cat, sourcePath, createdBy, sessID *string
-		var createdAt *time.Time
-		if err := rows.Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessID); err != nil {
+		r, err := m.scanDetailRow(rows)
+		if err != nil {
 			return nil, err
-		}
-		r := store.MemorySearchResult{
-			ID:      id,
-			Snippet: content,
-			Score:   1.0,
-			Scope:   m.scope,
-		}
-		if cat != nil {
-			r.Category = *cat
-		}
-		if sourcePath != nil {
-			r.Path = *sourcePath
-		}
-		if createdBy != nil {
-			r.CreatedBy = *createdBy
-		}
-		if createdAt != nil {
-			r.CreatedAt = createdAt.Format(time.RFC3339)
-		}
-		if sessID != nil {
-			r.SessionID = *sessID
 		}
 		results = append(results, r)
 	}

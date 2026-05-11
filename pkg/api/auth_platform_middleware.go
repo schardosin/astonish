@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -27,113 +28,22 @@ import (
 // 9. On missing/invalid token: returns 401 for API requests.
 func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-
-		// Allow SPA static assets without authentication.
-		// The React app contains the login/register page — it needs to load
-		// before the user can authenticate. Only /api/* paths require auth.
-		if !strings.HasPrefix(path, "/api/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Always allow auth endpoints (register, login, refresh, setup-status, etc.)
-		if strings.HasPrefix(path, "/api/auth/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Allow platform setup endpoints — the frontend needs to check deployment
-		// mode and init status before any user has registered.
-		// NOTE: Only allow specific setup paths, NOT /api/platform/admin/* which
-		// requires superadmin authentication.
-		if path == "/api/platform/mode" ||
-			path == "/api/platform/init" ||
-			path == "/api/platform/init/status" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Allow migration endpoints — migration runs before first user registration
-		// when transitioning from file-based to platform mode.
-		if strings.HasPrefix(path, "/api/migration/") {
+		// Allow unauthenticated access to exempt paths (SPA assets, auth endpoints, etc.)
+		if isAuthExemptPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		// Loopback address handling (CLI, local tools, daemon internals).
-		// Behavior is controlled by the LoopbackBypass config:
-		//   "always"     — pass without token (personal mode default)
-		//   "with_token" — must carry a valid JWT (platform mode default)
-		//   "never"      — full auth required (treated like remote requests)
 		if isLoopbackRequest(r) {
-			loopbackMode := pa.authCfg.LoopbackBypass
-			if loopbackMode == "" {
-				loopbackMode = "with_token" // platform mode default
+			if pa.handleLoopbackAuth(w, r, next) {
+				return // Handled (either served or wrote error)
 			}
-
-			if loopbackMode == "never" {
-				// Fall through to normal auth validation below
-			} else {
-				// "always" or "with_token" — attempt to extract token
-				var loopbackToken string
-				if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-					loopbackToken = strings.TrimPrefix(authHeader, "Bearer ")
-				} else {
-					cookie, cookieErr := r.Cookie(accessCookieName)
-					if cookieErr == nil && cookie.Value != "" {
-						loopbackToken = cookie.Value
-					}
-				}
-
-				if loopbackToken != "" {
-					if claims, jwtErr := pa.jwt.ValidateAccessToken(loopbackToken); jwtErr == nil {
-						teamSlug := claims.DefaultTeamSlug
-						if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
-							teamSlug = headerTeam
-						}
-						tc := &pgstore.TenantContext{
-							OrgSlug:  claims.OrgSlug,
-							TeamSlug: teamSlug,
-							UserID:   claims.UserID,
-						}
-						ctx := pgstore.WithTenantContext(r.Context(), tc)
-						ctx = WithPlatformUser(ctx, &PlatformUser{
-							ID:           claims.UserID,
-							Email:        claims.Email,
-							DisplayName:  claims.DisplayName,
-							OrgSlug:      claims.OrgSlug,
-							TeamSlug:     teamSlug,
-							Role:         claims.Role,
-							PlatformRole: claims.PlatformRole,
-						})
-						next.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
-				}
-
-				// No valid token found
-				if loopbackMode == "always" {
-					// Pass through without user context (backward compat for personal mode)
-					next.ServeHTTP(w, r)
-					return
-				}
-				// "with_token" mode: token required but missing/invalid → 401
-				respondError(w, http.StatusUnauthorized, "loopback requests require a valid token")
-				return
-			}
+			// Fall through to normal auth for "never" mode
 		}
 
-		// Extract access token from Authorization header (CLI clients) or cookie (browser).
-		var tokenStr string
-		if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		} else {
-			cookie, err := r.Cookie(accessCookieName)
-			if err == nil && cookie.Value != "" {
-				tokenStr = cookie.Value
-			}
-		}
+		// Extract access token from Authorization header (CLI) or cookie (browser).
+		tokenStr := extractAccessToken(r)
 		if tokenStr == "" {
 			handleUnauthenticated(w, r)
 			return
@@ -146,76 +56,187 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 			return
 		}
 
-		// CSRF protection: require a custom header on state-changing requests
-		// from cookie-authenticated clients. Bearer token requests (CLI) are
-		// exempt because cross-origin scripts cannot read/set Bearer headers.
-		// SameSite=Strict already blocks most CSRF vectors; this is defense-in-depth.
-		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
-			authHeader := r.Header.Get("Authorization")
-			isBearerAuth := strings.HasPrefix(authHeader, "Bearer ")
-			if !isBearerAuth {
-				// Cookie-authenticated request — require CSRF indicator header
-				if r.Header.Get("X-Requested-With") == "" && r.Header.Get("Content-Type") != "application/json" {
-					respondError(w, http.StatusForbidden, "missing CSRF protection header")
-					return
-				}
-			}
+		// CSRF protection for state-changing requests from cookie-authenticated clients.
+		if err := validateCSRF(r); err != nil {
+			respondError(w, http.StatusForbidden, err.Error())
+			return
 		}
 
-		// Populate TenantContext for downstream middleware
-		teamSlug := claims.DefaultTeamSlug
-		// Allow per-request team override via header
-		if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
-			teamSlug = headerTeam
-		}
-		// Allow team override via query parameter (for WebSocket connections
-		// which cannot set custom headers from the browser).
-		if qTeam := r.URL.Query().Get("team"); qTeam != "" && teamSlug == claims.DefaultTeamSlug {
-			teamSlug = qTeam
+		// Resolve team and validate membership.
+		teamSlug := resolveTeamSlug(r, claims)
+		if err := pa.checkTeamAccess(r.Context(), claims, teamSlug); err != nil {
+			respondError(w, http.StatusForbidden, err.Error())
+			return
 		}
 
-		// Validate that non-admin users are members of the requested team.
-		// Admins/owners can access any team in the org for management.
-		if teamSlug != "" && claims.Role != "owner" && claims.Role != "admin" {
-			orgDS, dsErr := pa.pgStore.ForOrg(claims.OrgSlug)
-			if dsErr != nil {
-				slog.Warn("team membership check: failed to access org", "org", claims.OrgSlug, "err", dsErr)
-				respondError(w, http.StatusInternalServerError, "failed to verify team membership")
-				return
-			}
-			isMember, memberErr := orgDS.Teams().IsTeamMember(r.Context(), claims.UserID, teamSlug)
-			if memberErr != nil {
-				slog.Warn("team membership check failed", "user", claims.UserID, "team", teamSlug, "err", memberErr)
-				respondError(w, http.StatusInternalServerError, "failed to verify team membership")
-				return
-			}
-			if !isMember {
-				respondError(w, http.StatusForbidden, "you are not a member of this team")
-				return
-			}
-		}
-
-		tc := &pgstore.TenantContext{
-			OrgSlug:  claims.OrgSlug,
-			TeamSlug: teamSlug,
-			UserID:   claims.UserID,
-		}
-
-		// Store tenant context and user info in request context
-		ctx := pgstore.WithTenantContext(r.Context(), tc)
-		ctx = WithPlatformUser(ctx, &PlatformUser{
-			ID:           claims.UserID,
-			Email:        claims.Email,
-			DisplayName:  claims.DisplayName,
-			OrgSlug:      claims.OrgSlug,
-			TeamSlug:     teamSlug,
-			Role:         claims.Role,
-			PlatformRole: claims.PlatformRole,
-		})
-
+		// Populate authenticated context and serve.
+		ctx := buildAuthenticatedContext(r.Context(), claims, teamSlug)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+// ---------------------------------------------------------------------------
+// Sub-functions extracted from PlatformAuthMiddleware
+// ---------------------------------------------------------------------------
+
+// isAuthExemptPath returns true for paths that do not require authentication.
+// This includes SPA static assets, auth endpoints, platform setup, and migrations.
+func isAuthExemptPath(path string) bool {
+	// SPA static assets — the React app contains the login page and needs to load first.
+	if !strings.HasPrefix(path, "/api/") {
+		return true
+	}
+	// Auth endpoints (register, login, refresh, setup-status, etc.)
+	if strings.HasPrefix(path, "/api/auth/") {
+		return true
+	}
+	// Platform setup endpoints — needed before any user has registered.
+	// NOTE: Does NOT include /api/platform/admin/* which requires superadmin auth.
+	if path == "/api/platform/mode" ||
+		path == "/api/platform/init" ||
+		path == "/api/platform/init/status" {
+		return true
+	}
+	// Migration endpoints — migration runs before first user registration.
+	if strings.HasPrefix(path, "/api/migration/") {
+		return true
+	}
+	return false
+}
+
+// extractAccessToken extracts the JWT access token from the request.
+// Checks Authorization header first (CLI clients), then falls back to cookie (browser).
+func extractAccessToken(r *http.Request) string {
+	if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+		return strings.TrimPrefix(authHeader, "Bearer ")
+	}
+	if cookie, err := r.Cookie(accessCookieName); err == nil && cookie.Value != "" {
+		return cookie.Value
+	}
+	return ""
+}
+
+// validateCSRF checks CSRF protection on state-changing requests.
+// Bearer token requests (CLI) are exempt because cross-origin scripts cannot read/set Bearer headers.
+// SameSite=Strict already blocks most CSRF vectors; this is defense-in-depth.
+func validateCSRF(r *http.Request) error {
+	if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
+		return nil
+	}
+	// Bearer-auth requests are exempt
+	if strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		return nil
+	}
+	// Cookie-authenticated request — require CSRF indicator header
+	if r.Header.Get("X-Requested-With") == "" && r.Header.Get("Content-Type") != "application/json" {
+		return fmt.Errorf("missing CSRF protection header")
+	}
+	return nil
+}
+
+// resolveTeamSlug determines the team slug for the request from claims and overrides.
+// Priority: X-Astonish-Team header > ?team query param > JWT default.
+func resolveTeamSlug(r *http.Request, claims *PlatformClaims) string {
+	teamSlug := claims.DefaultTeamSlug
+	// Allow per-request team override via header
+	if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
+		teamSlug = headerTeam
+	}
+	// Allow team override via query parameter (for WebSocket connections
+	// which cannot set custom headers from the browser).
+	if qTeam := r.URL.Query().Get("team"); qTeam != "" && teamSlug == claims.DefaultTeamSlug {
+		teamSlug = qTeam
+	}
+	return teamSlug
+}
+
+// checkTeamAccess verifies that non-admin users are members of the requested team.
+// Admins/owners can access any team in the org for management purposes.
+func (pa *PlatformAuth) checkTeamAccess(ctx context.Context, claims *PlatformClaims, teamSlug string) error {
+	if teamSlug == "" || claims.Role == "owner" || claims.Role == "admin" {
+		return nil
+	}
+	orgDS, err := pa.pgStore.ForOrg(claims.OrgSlug)
+	if err != nil {
+		slog.Warn("team membership check: failed to access org", "org", claims.OrgSlug, "err", err)
+		return fmt.Errorf("failed to verify team membership")
+	}
+	isMember, err := orgDS.Teams().IsTeamMember(ctx, claims.UserID, teamSlug)
+	if err != nil {
+		slog.Warn("team membership check failed", "user", claims.UserID, "team", teamSlug, "err", err)
+		return fmt.Errorf("failed to verify team membership")
+	}
+	if !isMember {
+		return fmt.Errorf("you are not a member of this team")
+	}
+	return nil
+}
+
+// buildAuthenticatedContext constructs a request context with TenantContext and PlatformUser.
+func buildAuthenticatedContext(ctx context.Context, claims *PlatformClaims, teamSlug string) context.Context {
+	tc := &pgstore.TenantContext{
+		OrgSlug:  claims.OrgSlug,
+		TeamSlug: teamSlug,
+		UserID:   claims.UserID,
+	}
+	ctx = pgstore.WithTenantContext(ctx, tc)
+	ctx = WithPlatformUser(ctx, &PlatformUser{
+		ID:           claims.UserID,
+		Email:        claims.Email,
+		DisplayName:  claims.DisplayName,
+		OrgSlug:      claims.OrgSlug,
+		TeamSlug:     teamSlug,
+		Role:         claims.Role,
+		PlatformRole: claims.PlatformRole,
+	})
+	return ctx
+}
+
+// handleLoopbackAuth handles authentication for loopback (localhost) requests.
+// Returns true if the request was handled (served or error written), false if
+// the caller should fall through to normal auth (for "never" mode).
+//
+// Behavior is controlled by the LoopbackBypass config:
+//
+//	"always"     — pass without token (personal mode default)
+//	"with_token" — must carry a valid JWT (platform mode default)
+//	"never"      — fall through to normal auth
+func (pa *PlatformAuth) handleLoopbackAuth(w http.ResponseWriter, r *http.Request, next http.Handler) bool {
+	loopbackMode := pa.authCfg.LoopbackBypass
+	if loopbackMode == "" {
+		loopbackMode = "with_token" // platform mode default
+	}
+
+	if loopbackMode == "never" {
+		return false // Fall through to normal auth
+	}
+
+	// "always" or "with_token" — attempt to extract token
+	token := extractAccessToken(r)
+
+	if token != "" {
+		if claims, err := pa.jwt.ValidateAccessToken(token); err == nil {
+			teamSlug := resolveTeamSlug(r, claims)
+			ctx := buildAuthenticatedContext(r.Context(), claims, teamSlug)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return true
+		}
+	}
+
+	// No valid token found
+	if loopbackMode == "always" {
+		// Pass through without user context (backward compat for personal mode)
+		next.ServeHTTP(w, r)
+		return true
+	}
+	// "with_token" mode: token required but missing/invalid → 401
+	respondError(w, http.StatusUnauthorized, "loopback requests require a valid token")
+	return true
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
 
 // handleUnauthenticated returns 401 for API requests.
 // The frontend SPA checks for 401 and shows the login form.

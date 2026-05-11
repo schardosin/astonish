@@ -30,7 +30,7 @@
     "js-yaml": "^4.1.1",
     "lucide-react": "^1.11.0",
     "react": "^19.2.0",
-    "react-dom": "^19.2.0",
+    "react-dom": "^19.2.6",
     "react-markdown": "^10.1.0",
     "recharts": "^3.8.1",
     "remark-gfm": "^4.0.1",

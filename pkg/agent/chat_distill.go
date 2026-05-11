@@ -10,26 +10,28 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/session"
 	"gopkg.in/yaml.v3"
 )
 
-// reconstructTraces rebuilds execution traces from persisted session events.
-// This allows /distill to work across daemon restarts — the session transcript
-// on disk contains all the tool call/response events we need.
+// reconstructTracesFromService rebuilds execution traces from persisted session
+// events using the provided session.Service. This is decoupled from ChatAgent
+// so it can work with any session service (context-injected PG store in platform
+// mode, or the ChatAgent's own SessionService in personal/console mode).
 //
 // Strategy: walk events chronologically. Each user message starts a new trace.
 // FunctionCall events provide tool name + args. FunctionResponse events provide
 // results. Final text after tools becomes the trace output.
-func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []*ExecutionTrace {
-	resp, err := c.SessionService.Get(ctx, &session.GetRequest{
+func reconstructTracesFromService(ctx context.Context, svc session.Service, ds DistillSession, debugMode bool) []*ExecutionTrace {
+	resp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   ds.AppName,
 		UserID:    ds.UserID,
 		SessionID: ds.SessionID,
 	})
 	if err != nil || resp.Session == nil {
-		if c.DebugMode {
-			slog.Debug("reconstructTraces: failed to load session", "component", "chat", "sessionID", ds.SessionID, "error", err)
+		if debugMode {
+			slog.Debug("reconstructTracesFromService: failed to load session", "component", "chat", "sessionID", ds.SessionID, "error", err)
 		}
 		return nil
 	}
@@ -132,8 +134,8 @@ func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []
 		traces = append(traces, current)
 	}
 
-	if c.DebugMode {
-		slog.Debug("reconstructTraces: rebuilt traces", "component", "chat", "traces", len(traces), "sessionID", ds.SessionID)
+	if debugMode {
+		slog.Debug("reconstructTracesFromService: rebuilt traces", "component", "chat", "traces", len(traces), "sessionID", ds.SessionID)
 		for i, t := range traces {
 			slog.Debug("reconstructed trace", "component", "chat", "trace", i+1, "request", t.UserRequest, "toolCalls", t.ToolCallCount())
 		}
@@ -142,26 +144,41 @@ func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []
 	return traces
 }
 
+// reconstructTraces is a convenience wrapper for console/personal mode where
+// the ChatAgent's own SessionService is used.
+func (c *ChatAgent) reconstructTraces(ctx context.Context, ds DistillSession) []*ExecutionTrace {
+	return reconstructTracesFromService(ctx, c.SessionService, ds, c.DebugMode)
+}
+
 // PreviewDistill analyzes the conversation trace history for the given session
 // and identifies the primary task to distill. Returns a description for user
 // confirmation. The result is cached internally for use by ConfirmAndDistill.
 func (c *ChatAgent) PreviewDistill(ctx context.Context, ds DistillSession) (string, error) {
 	sessionID := ds.SessionID
 
-	c.traceMu.Lock()
-	sessionTraces := c.traceHistory[sessionID]
-	c.traceMu.Unlock()
+	var sessionTraces []*ExecutionTrace
 
-	// If no in-memory traces, reconstruct from persisted session events.
-	// This handles daemon restarts — traces are ephemeral but session
-	// events survive on disk.
-	if len(sessionTraces) == 0 && c.SessionService != nil && ds.AppName != "" && ds.UserID != "" {
-		reconstructed := c.reconstructTraces(ctx, ds)
-		if len(reconstructed) > 0 {
-			c.traceMu.Lock()
-			c.traceHistory[sessionID] = reconstructed
-			sessionTraces = reconstructed
-			c.traceMu.Unlock()
+	// Platform mode: reconstruct traces from context-injected SessionService (PG).
+	// Personal mode: use in-memory traceHistory (populated during ChatAgent.Run).
+	if ss := store.SessionServiceFromContext(ctx); ss != nil && ds.AppName != "" && ds.UserID != "" {
+		// Platform mode — PG session store is the sole data source
+		sessionTraces = reconstructTracesFromService(ctx, ss, ds, c.DebugMode)
+	} else {
+		// Personal mode — in-memory traces from this ChatAgent instance
+		c.traceMu.Lock()
+		sessionTraces = c.traceHistory[sessionID]
+		c.traceMu.Unlock()
+
+		// Console/personal fallback: if no in-memory traces, try ChatAgent's
+		// own SessionService (FileStore) for daemon restart recovery.
+		if len(sessionTraces) == 0 && c.SessionService != nil && ds.AppName != "" && ds.UserID != "" {
+			reconstructed := c.reconstructTraces(ctx, ds)
+			if len(reconstructed) > 0 {
+				c.traceMu.Lock()
+				c.traceHistory[sessionID] = reconstructed
+				sessionTraces = reconstructed
+				c.traceMu.Unlock()
+			}
 		}
 	}
 
@@ -336,6 +353,42 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, pr
 			return err
 		}
 	}
+
+	// Save the distilled flow.
+	// Platform mode: persist to PG FlowStore exclusively (no disk write).
+	// Personal mode: write to disk + register in local FlowRegistry.
+	if flowStore := store.FlowStoreFromContext(ctx); flowStore != nil {
+		// Platform mode — PG FlowStore is the sole persistence target
+		if saveErr := flowStore.SaveFlow(result.FlowName, result.YAML); saveErr != nil {
+			return fmt.Errorf("failed to save flow to store: %w", saveErr)
+		}
+
+		// Build success message for platform mode
+		msg := fmt.Sprintf("\nFlow saved: `%s`\n", result.FlowName)
+		msg += fmt.Sprintf("  Description: %s\n", result.Description)
+		if len(result.Tags) > 0 {
+			msg += fmt.Sprintf("  Tags: %s\n", strings.Join(result.Tags, ", "))
+		}
+
+		// Build run command with parameter suggestions
+		runCmd := "astonish flows run " + result.FlowName
+		paramFlags := c.extractInputParams(ctx, result.YAML, merged)
+		for _, pf := range paramFlags {
+			parts := strings.SplitN(pf, "=", 2)
+			if len(parts) == 2 && strings.ContainsAny(parts[1], " \t") {
+				runCmd += fmt.Sprintf(` -p %s="%s"`, parts[0], parts[1])
+			} else {
+				runCmd += " -p " + pf
+			}
+		}
+		runCmd += " --auto-approve"
+		msg += "\nYou can run this flow with:\n  " + runCmd + "\n"
+
+		print(msg)
+		return nil
+	}
+
+	// Personal mode — write to local filesystem + FlowRegistry
 
 	// Determine save directory
 	saveDir := c.FlowSaveDir
@@ -765,6 +818,34 @@ func (c *ChatAgent) SaveDistillReview(ctx context.Context, sessionID string) (fi
 		return "", "", fmt.Errorf("no pending distill review to save")
 	}
 
+	// Build run command with parameter suggestions (shared by both modes)
+	cmd := "astonish flows run " + review.FlowName
+	if len(review.Traces) > 0 {
+		merged := c.mergeTraces(review.Traces)
+		paramFlags := c.extractInputParams(ctx, review.YAML, merged)
+		for _, pf := range paramFlags {
+			parts := strings.SplitN(pf, "=", 2)
+			if len(parts) == 2 && strings.ContainsAny(parts[1], " \t") {
+				cmd += fmt.Sprintf(` -p %s="%s"`, parts[0], parts[1])
+			} else {
+				cmd += " -p " + pf
+			}
+		}
+	}
+	cmd += " --auto-approve"
+
+	// Platform mode: persist to PG FlowStore exclusively (no disk write).
+	// Personal mode: write to disk + register in local FlowRegistry.
+	if flowStore := store.FlowStoreFromContext(ctx); flowStore != nil {
+		// Platform mode — PG FlowStore is the sole persistence target
+		if saveErr := flowStore.SaveFlow(review.FlowName, review.YAML); saveErr != nil {
+			return "", "", fmt.Errorf("failed to save flow to store: %w", saveErr)
+		}
+		return review.FlowName, cmd, nil
+	}
+
+	// Personal mode — write to local filesystem + FlowRegistry
+
 	// Determine save directory
 	saveDir := c.FlowSaveDir
 	if saveDir == "" {
@@ -805,22 +886,6 @@ func (c *ChatAgent) SaveDistillReview(ctx context.Context, sessionID string) (fi
 			}
 		}
 	}
-
-	// Build run command with parameter suggestions
-	cmd := "astonish flows run " + review.FlowName
-	if len(review.Traces) > 0 {
-		merged := c.mergeTraces(review.Traces)
-		paramFlags := c.extractInputParams(ctx, review.YAML, merged)
-		for _, pf := range paramFlags {
-			parts := strings.SplitN(pf, "=", 2)
-			if len(parts) == 2 && strings.ContainsAny(parts[1], " \t") {
-				cmd += fmt.Sprintf(` -p %s="%s"`, parts[0], parts[1])
-			} else {
-				cmd += " -p " + pf
-			}
-		}
-	}
-	cmd += " --auto-approve"
 
 	return flowPath, cmd, nil
 }

@@ -68,6 +68,14 @@ type JobDelivery struct {
 	Mode DeliveryMode `json:"mode,omitempty"`
 	// MemberIDs is the list of platform user IDs for "members" mode delivery.
 	MemberIDs []string `json:"member_ids,omitempty"`
+	// ChannelFilter restricts delivery to specific channel types (e.g., ["email", "telegram"]).
+	// When set, only linked channels matching these types are used for delivery.
+	// When empty, all linked channels are used.
+	ChannelFilter []string `json:"channel_filter,omitempty"`
+	// MemberChannels maps user IDs to their allowed channel types for this job.
+	// Per-member override that takes precedence over ChannelFilter.
+	// e.g., {"user-uuid-1": ["telegram", "email"], "user-uuid-2": ["telegram"]}
+	MemberChannels map[string][]string `json:"member_channels,omitempty"`
 }
 
 // DeliveryMode defines how a job's output is routed to recipients.

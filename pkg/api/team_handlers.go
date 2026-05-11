@@ -36,6 +36,9 @@ func RegisterTeamRoutes(router *mux.Router, pa *PlatformAuth) {
 
 	// Org info
 	router.HandleFunc("/api/org", pa.handleGetOrg).Methods("GET")
+
+	// Team members with delivery channels (for scheduler UI)
+	router.HandleFunc("/api/team/members/channels", TeamMemberChannelsHandler(pa)).Methods("GET")
 }
 
 // --- Handler: GET /api/teams ---

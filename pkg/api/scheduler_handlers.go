@@ -115,16 +115,19 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var update struct {
-			Name         string            `json:"name"`
-			Mode         string            `json:"mode"`
-			Cron         string            `json:"cron"`
-			Timezone     string            `json:"timezone"`
-			Flow         string            `json:"flow"`
-			Params       map[string]string `json:"params"`
-			Instructions string            `json:"instructions"`
-			Channel      string            `json:"channel"`
-			Target       string            `json:"target"`
-			Enabled      *bool             `json:"enabled"`
+			Name           string              `json:"name"`
+			Mode           string              `json:"mode"`
+			Cron           string              `json:"cron"`
+			Timezone       string              `json:"timezone"`
+			Flow           string              `json:"flow"`
+			Params         map[string]string   `json:"params"`
+			Instructions   string              `json:"instructions"`
+			Channel        string              `json:"channel"`
+			Target         string              `json:"target"`
+			Enabled        *bool               `json:"enabled"`
+			Delivery       *store.JobDelivery  `json:"delivery"`
+			ChannelFilter  []string            `json:"channel_filter"`
+			MemberChannels map[string][]string `json:"member_channels"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid request body")
@@ -167,6 +170,18 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if update.Enabled != nil {
 			existing.Enabled = *update.Enabled
+		}
+		// Apply delivery object if provided (full replace)
+		if update.Delivery != nil {
+			existing.Delivery = *update.Delivery
+		}
+		// Apply channel filter (can be set to empty to clear)
+		if update.ChannelFilter != nil {
+			existing.Delivery.ChannelFilter = update.ChannelFilter
+		}
+		// Apply per-member channel overrides (can be set to empty map to clear)
+		if update.MemberChannels != nil {
+			existing.Delivery.MemberChannels = update.MemberChannels
 		}
 
 		if err := svc.Scheduler.Update(existing); err != nil {
@@ -423,10 +438,15 @@ func storeJobToSchedulerJob(sj *store.ScheduledJob) *scheduler.Job {
 			Instructions: sj.Payload.Instructions,
 		},
 		Delivery: scheduler.JobDelivery{
-			Channel: sj.Delivery.Channel,
-			Target:  sj.Delivery.Target,
+			Channel:        sj.Delivery.Channel,
+			Target:         sj.Delivery.Target,
+			Mode:           scheduler.DeliveryMode(sj.Delivery.Mode),
+			MemberIDs:      sj.Delivery.MemberIDs,
+			ChannelFilter:  sj.Delivery.ChannelFilter,
+			MemberChannels: sj.Delivery.MemberChannels,
 		},
 		Enabled:             sj.Enabled,
+		OwnerID:             sj.OwnerID,
 		CreatedAt:           sj.CreatedAt,
 		LastRun:             sj.LastRun,
 		LastStatus:          scheduler.JobStatus(sj.LastStatus),
@@ -459,4 +479,95 @@ func split(s string, sep byte) []string {
 	}
 	result = append(result, s[start:])
 	return result
+}
+
+// --- Team members with channels endpoint ---
+
+// TeamMemberChannelsHandler handles GET /api/team/members/channels.
+// Returns all team members with their linked (enabled+verified) channel types.
+// Used by the Scheduler Settings UI to populate the member picker and
+// per-member channel selection.
+func TeamMemberChannelsHandler(pa *PlatformAuth) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		user := GetPlatformUser(r)
+		if user == nil {
+			respondError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		ctx := r.Context()
+		orgDataStore, err := pa.pgStore.ForOrg(user.OrgSlug)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to access organization")
+			return
+		}
+
+		teamSlug := effectiveTeamSlug(r)
+		if teamSlug == "" {
+			respondError(w, http.StatusBadRequest, "team context required")
+			return
+		}
+
+		team, err := orgDataStore.Teams().GetTeamBySlug(ctx, teamSlug)
+		if err != nil || team == nil {
+			respondError(w, http.StatusNotFound, "team not found")
+			return
+		}
+
+		members, err := orgDataStore.Teams().ListMembers(ctx, team.ID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to list members")
+			return
+		}
+
+		// Enrich with user details and channel links
+		type memberChannelInfo struct {
+			UserID         string   `json:"user_id"`
+			DisplayName    string   `json:"display_name"`
+			Email          string   `json:"email"`
+			Role           string   `json:"role"`
+			LinkedChannels []string `json:"linked_channels"`
+		}
+
+		userStore := pa.pgStore.Users()
+		channelStore := pa.pgStore.UserChannels()
+		result := make([]memberChannelInfo, 0, len(members))
+
+		for _, m := range members {
+			info := memberChannelInfo{
+				UserID: m.UserID,
+				Role:   m.Role,
+				Email:  m.Email,
+			}
+
+			// Get display name from platform users table
+			if u, err := userStore.GetByID(ctx, m.UserID); err == nil && u != nil {
+				info.DisplayName = u.DisplayName
+				if info.Email == "" {
+					info.Email = u.Email
+				}
+			}
+
+			// Get linked channels (only enabled+verified)
+			if links, err := channelStore.ListByUser(ctx, m.UserID); err == nil {
+				for _, link := range links {
+					if link.Enabled && link.Verified {
+						info.LinkedChannels = append(info.LinkedChannels, link.ChannelType)
+					}
+				}
+			}
+
+			result = append(result, info)
+		}
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"members": result,
+			"count":   len(result),
+		})
+	}
 }

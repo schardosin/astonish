@@ -190,6 +190,21 @@ func (cr *ChatRunner) InjectDisabledTools(names []string) {
 	cr.ctx = store.WithDisabledTools(cr.ctx, names)
 }
 
+// InjectTenantSlugs propagates org/team identity into the runner's context so
+// that tools (e.g., list_team_members) can resolve team membership and user
+// channels without importing pgstore directly.
+func (cr *ChatRunner) InjectTenantSlugs(orgSlug, teamSlug string) {
+	cr.ctx = store.WithOrgSlug(cr.ctx, orgSlug)
+	cr.ctx = store.WithTeamSlug(cr.ctx, teamSlug)
+}
+
+// InjectRunJobFunc adds a scheduler test-execution function to the runner's
+// context. This allows the schedule_job tool to execute a dry-run in platform
+// mode without going through the unauthenticated HTTP bridge.
+func (cr *ChatRunner) InjectRunJobFunc(fn store.RunJobFunc) {
+	cr.ctx = store.WithRunJobFunc(cr.ctx, fn)
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.

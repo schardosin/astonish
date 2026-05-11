@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -76,14 +77,20 @@ func (s *pgSchedulerStore) Add(job *store.ScheduledJob) error {
 	ctx := context.Background()
 	combinedJSON := buildCombinedPayload(job)
 
+	// Auto-generate UUID if not provided (the DB column is uuid type and
+	// won't accept an empty string)
+	if job.ID == "" {
+		job.ID = uuid.New().String()
+	}
+
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (id, name, schedule, mode, payload, status, last_status, last_error, consecutive_failures, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+		`INSERT INTO %s (id, name, schedule, mode, payload, status, last_status, last_error, consecutive_failures, created_by, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
 		 ON CONFLICT (id) DO NOTHING`,
 		s.tableName()),
 		job.ID, job.Name, job.Schedule.Cron, job.Mode, combinedJSON,
 		enabledStatusStr(job.Enabled), job.LastStatus, job.LastError, job.ConsecutiveFailures,
-		job.CreatedAt,
+		nullableUUID(job.OwnerID), job.CreatedAt,
 	)
 	return err
 }
@@ -185,4 +192,13 @@ func enabledStatusStr(enabled bool) string {
 
 func nilTimePtrField(t *time.Time) *time.Time {
 	return t
+}
+
+// nullableUUID returns nil (SQL NULL) if the string is empty, otherwise the string.
+// Used for uuid columns that allow NULL but reject empty strings.
+func nullableUUID(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }

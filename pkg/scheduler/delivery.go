@@ -183,7 +183,7 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 		if err := validateTeamMembership(ctx, resolver, []string{job.OwnerID}); err != nil {
 			return nil, fmt.Errorf("owner team membership check failed: %w", err)
 		}
-		return resolver.ResolveUserChannels(ctx, job.OwnerID)
+		return resolveMultipleUsersFiltered(ctx, resolver, []string{job.OwnerID}, &job.Delivery)
 
 	case DeliveryModeTeam:
 		dctx := GetDeliveryContext(ctx)
@@ -194,7 +194,7 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve team members: %w", err)
 		}
-		return resolveMultipleUsers(ctx, resolver, memberIDs)
+		return resolveMultipleUsersFiltered(ctx, resolver, memberIDs, &job.Delivery)
 
 	case DeliveryModeMembers:
 		if len(job.Delivery.MemberIDs) == 0 {
@@ -204,7 +204,7 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 		if err := validateTeamMembership(ctx, resolver, job.Delivery.MemberIDs); err != nil {
 			return nil, fmt.Errorf("members team membership check failed: %w", err)
 		}
-		return resolveMultipleUsers(ctx, resolver, job.Delivery.MemberIDs)
+		return resolveMultipleUsersFiltered(ctx, resolver, job.Delivery.MemberIDs, &job.Delivery)
 
 	default:
 		// Unknown mode or empty — no targets (will broadcast)
@@ -247,9 +247,30 @@ func validateTeamMembership(ctx context.Context, resolver DeliveryResolver, user
 }
 
 // resolveMultipleUsers resolves channels for multiple user IDs and deduplicates.
+// Legacy helper — delegates to resolveMultipleUsersFiltered with no filtering.
 func resolveMultipleUsers(ctx context.Context, resolver DeliveryResolver, userIDs []string) ([]DeliveryTarget, error) {
+	return resolveMultipleUsersFiltered(ctx, resolver, userIDs, nil)
+}
+
+// resolveMultipleUsersFiltered resolves channels for multiple user IDs, applies
+// channel filtering from the delivery config, and deduplicates results.
+//
+// Channel filtering priority (per user):
+//  1. If delivery.MemberChannels[userID] is set → only those channel types
+//  2. Else if delivery.ChannelFilter is set → only those channel types
+//  3. Else → all linked channels (no filtering)
+func resolveMultipleUsersFiltered(ctx context.Context, resolver DeliveryResolver, userIDs []string, delivery *JobDelivery) ([]DeliveryTarget, error) {
 	seen := make(map[string]bool)
 	var targets []DeliveryTarget
+
+	// Build global filter set (if any)
+	var globalFilter map[string]bool
+	if delivery != nil && len(delivery.ChannelFilter) > 0 {
+		globalFilter = make(map[string]bool, len(delivery.ChannelFilter))
+		for _, ch := range delivery.ChannelFilter {
+			globalFilter[ch] = true
+		}
+	}
 
 	for _, uid := range userIDs {
 		userTargets, err := resolver.ResolveUserChannels(ctx, uid)
@@ -257,7 +278,27 @@ func resolveMultipleUsers(ctx context.Context, resolver DeliveryResolver, userID
 			// Skip users with resolution errors (they may have no linked channels)
 			continue
 		}
+
+		// Determine channel filter for this user
+		var userFilter map[string]bool
+		if delivery != nil && delivery.MemberChannels != nil {
+			if perMember, ok := delivery.MemberChannels[uid]; ok && len(perMember) > 0 {
+				userFilter = make(map[string]bool, len(perMember))
+				for _, ch := range perMember {
+					userFilter[ch] = true
+				}
+			}
+		}
+		// Fall back to global filter if no per-member override
+		if userFilter == nil {
+			userFilter = globalFilter
+		}
+
 		for _, t := range userTargets {
+			// Apply channel filter
+			if userFilter != nil && !userFilter[t.ChannelID] {
+				continue
+			}
 			key := t.ChannelID + ":" + t.ChatID
 			if !seen[key] {
 				seen[key] = true

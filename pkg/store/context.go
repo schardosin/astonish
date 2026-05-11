@@ -310,3 +310,64 @@ func DisabledToolsFromContext(ctx context.Context) []string {
 	names, _ := ctx.Value(disabledToolsKey{}).([]string)
 	return names
 }
+
+// --- Tenant Identity (org/team slug propagation) ---
+
+type orgSlugKey struct{}
+type teamSlugKey struct{}
+
+// WithOrgSlug attaches the organization slug to the context.
+// Used to propagate tenant identity into the ADK runner context.
+func WithOrgSlug(ctx context.Context, slug string) context.Context {
+	return context.WithValue(ctx, orgSlugKey{}, slug)
+}
+
+// OrgSlugFromContext retrieves the organization slug from the context.
+// Returns "" if not in platform mode or if the context lacks tenant identity.
+func OrgSlugFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(orgSlugKey{}).(string)
+	return s
+}
+
+// WithTeamSlug attaches the team slug to the context.
+// Used to propagate tenant identity into the ADK runner context.
+func WithTeamSlug(ctx context.Context, slug string) context.Context {
+	return context.WithValue(ctx, teamSlugKey{}, slug)
+}
+
+// TeamSlugFromContext retrieves the team slug from the context.
+// Returns "" if not in platform mode or if the context lacks tenant identity.
+func TeamSlugFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(teamSlugKey{}).(string)
+	return s
+}
+
+// --- Run Job Function (for scheduler test execution) ---
+
+// RunJobFunc executes a scheduled job by ID and returns its output.
+// This is injected into the tool context so that the schedule_job tool can
+// trigger test execution without going through the unauthenticated HTTP bridge.
+type RunJobFunc func(ctx context.Context, jobID string) (string, error)
+
+type runJobFuncKey struct{}
+
+// WithRunJobFunc injects a RunJobFunc into the context.
+func WithRunJobFunc(ctx context.Context, fn RunJobFunc) context.Context {
+	return context.WithValue(ctx, runJobFuncKey{}, fn)
+}
+
+// RunJobFuncFromContext retrieves the RunJobFunc from the context.
+// Returns nil if not available (personal mode or not injected).
+func RunJobFuncFromContext(ctx context.Context) RunJobFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(runJobFuncKey{}).(RunJobFunc)
+	return fn
+}

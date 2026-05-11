@@ -42,6 +42,12 @@ type SchedulerJob struct {
 	Enabled   bool              `json:"enabled"`
 	TestFirst bool              `json:"test_first,omitempty"`
 
+	// Delivery configuration
+	DeliveryMode   string              `json:"delivery_mode,omitempty"`    // owner, team, members, target
+	MemberIDs      []string            `json:"member_ids,omitempty"`      // for "members" mode
+	ChannelFilter  []string            `json:"channel_filter,omitempty"`  // restrict to these channel types
+	MemberChannels map[string][]string `json:"member_channels,omitempty"` // per-member channel overrides
+
 	// Runtime state (populated on list)
 	LastRun    *time.Time `json:"last_run,omitempty"`
 	LastStatus string     `json:"last_status,omitempty"`
@@ -72,22 +78,26 @@ func getEffectiveSchedulerStore(ctx context.Context) store.SchedulerStore {
 // storeJobToToolJob converts a store.ScheduledJob to a tools.SchedulerJob.
 func storeJobToToolJob(sj *store.ScheduledJob) *SchedulerJob {
 	return &SchedulerJob{
-		ID:         sj.ID,
-		Name:       sj.Name,
-		Mode:       sj.Mode,
-		Cron:       sj.Schedule.Cron,
-		Timezone:   sj.Schedule.Timezone,
-		Flow:       sj.Payload.Flow,
-		Params:     sj.Payload.Params,
-		Instr:      sj.Payload.Instructions,
-		Channel:    sj.Delivery.Channel,
-		Target:     sj.Delivery.Target,
-		Enabled:    sj.Enabled,
-		LastRun:    sj.LastRun,
-		LastStatus: sj.LastStatus,
-		NextRun:    sj.NextRun,
-		Failures:   sj.ConsecutiveFailures,
-		CreatedAt:  sj.CreatedAt,
+		ID:             sj.ID,
+		Name:           sj.Name,
+		Mode:           sj.Mode,
+		Cron:           sj.Schedule.Cron,
+		Timezone:       sj.Schedule.Timezone,
+		Flow:           sj.Payload.Flow,
+		Params:         sj.Payload.Params,
+		Instr:          sj.Payload.Instructions,
+		Channel:        sj.Delivery.Channel,
+		Target:         sj.Delivery.Target,
+		DeliveryMode:   sj.Delivery.Mode,
+		MemberIDs:      sj.Delivery.MemberIDs,
+		ChannelFilter:  sj.Delivery.ChannelFilter,
+		MemberChannels: sj.Delivery.MemberChannels,
+		Enabled:        sj.Enabled,
+		LastRun:        sj.LastRun,
+		LastStatus:     sj.LastStatus,
+		NextRun:        sj.NextRun,
+		Failures:       sj.ConsecutiveFailures,
+		CreatedAt:      sj.CreatedAt,
 	}
 }
 
@@ -107,8 +117,12 @@ func toolJobToStoreJob(tj *SchedulerJob) *store.ScheduledJob {
 			Instructions: tj.Instr,
 		},
 		Delivery: store.JobDelivery{
-			Channel: tj.Channel,
-			Target:  tj.Target,
+			Channel:        tj.Channel,
+			Target:         tj.Target,
+			Mode:           tj.DeliveryMode,
+			MemberIDs:      tj.MemberIDs,
+			ChannelFilter:  tj.ChannelFilter,
+			MemberChannels: tj.MemberChannels,
 		},
 		Enabled:             tj.Enabled,
 		CreatedAt:           tj.CreatedAt,
@@ -129,9 +143,16 @@ type ScheduleJobArgs struct {
 	Flow         string            `json:"flow,omitempty" jsonschema:"Flow name to execute (required for routine mode)"`
 	Params       map[string]string `json:"params,omitempty" jsonschema:"Flow parameters as key-value pairs (for routine mode)"`
 	Instructions string            `json:"instructions,omitempty" jsonschema:"Task instructions for the AI agent (required for adaptive mode). Be specific and detailed. MUST include the exact output format the user last saw, with a concrete example copied from the conversation."`
-	Channel      string            `json:"channel,omitempty" jsonschema:"Optional label for delivery channel (e.g. 'telegram'). Results are broadcast to all active channels automatically."`
-	Target       string            `json:"target,omitempty" jsonschema:"Optional target ID. Results are broadcast to all active channels automatically — you do NOT need to provide this."`
 	TestFirst    bool              `json:"test_first,omitempty" jsonschema:"If true, execute immediately to test, then ask user to confirm before enabling. Only set this AFTER the user has approved the test plan."`
+
+	// Delivery configuration — ASK the user about these before scheduling
+	DeliveryMode     string   `json:"delivery_mode,omitempty" jsonschema:"Who receives the results: 'owner' (only you), 'team' (all team members), 'members' (specific people). Default is 'owner'. ALWAYS ask the user who should receive the scheduled results before creating the job."`
+	DeliveryChannels []string `json:"delivery_channels,omitempty" jsonschema:"Which channels to deliver through (e.g. ['telegram', 'email', 'slack']). If empty, all linked channels are used. Ask the user which channel(s) they prefer for delivery."`
+	DeliveryMembers  []string `json:"delivery_members,omitempty" jsonschema:"User IDs for 'members' delivery mode. Use list_team_members first to get available members and their linked channels, then ask the user which members should receive results."`
+
+	// Legacy fields (prefer delivery_mode instead)
+	Channel string `json:"channel,omitempty" jsonschema:"DEPRECATED: Use delivery_mode instead. Legacy label for delivery channel."`
+	Target  string `json:"target,omitempty" jsonschema:"DEPRECATED: Use delivery_mode instead. Legacy target ID for direct delivery."`
 }
 
 type ScheduleJobResult struct {
@@ -208,17 +229,25 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 
 	// Create job
 	job := &SchedulerJob{
-		Name:      args.Name,
-		Mode:      args.Mode,
-		Cron:      args.Schedule,
-		Timezone:  args.Timezone,
-		Flow:      args.Flow,
-		Params:    args.Params,
-		Instr:     args.Instructions,
-		Channel:   args.Channel,
-		Target:    args.Target,
-		Enabled:   !args.TestFirst,
-		TestFirst: args.TestFirst,
+		Name:           args.Name,
+		Mode:           args.Mode,
+		Cron:           args.Schedule,
+		Timezone:       args.Timezone,
+		Flow:           args.Flow,
+		Params:         args.Params,
+		Instr:          args.Instructions,
+		Channel:        args.Channel,
+		Target:         args.Target,
+		Enabled:        !args.TestFirst,
+		TestFirst:      args.TestFirst,
+		DeliveryMode:   args.DeliveryMode,
+		MemberIDs:      args.DeliveryMembers,
+		ChannelFilter:  args.DeliveryChannels,
+	}
+
+	// Default delivery mode to "owner" if not specified
+	if job.DeliveryMode == "" && job.Channel == "" && job.Target == "" {
+		job.DeliveryMode = "owner"
 	}
 
 	// Add job to store
@@ -227,6 +256,10 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		storeJob := toolJobToStoreJob(job)
 		storeJob.CreatedAt = time.Now()
 		storeJob.LastStatus = "pending"
+		// Set owner from context so delivery mode "owner" knows who to deliver to
+		if uid := store.UserIDFromContext(ctx); uid != "" {
+			storeJob.OwnerID = uid
+		}
 		if err := ss.Add(storeJob); err != nil {
 			return ScheduleJobResult{
 				Status:  "error",
@@ -253,7 +286,11 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	if args.TestFirst {
 		var result string
 		var execErr error
-		if schedulerAccessVar != nil {
+		// Platform mode: use context-injected executor (bypasses auth)
+		if runJob := store.RunJobFuncFromContext(ctx); runJob != nil {
+			result, execErr = runJob(ctx, job.ID)
+		} else if schedulerAccessVar != nil {
+			// Personal mode: use HTTP bridge
 			result, execErr = schedulerAccessVar.RunNow(ctx, job.ID)
 		}
 		status := "test_complete"
@@ -614,8 +651,34 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 // NewScheduleJobTool creates the schedule_job tool.
 func NewScheduleJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name:        "schedule_job",
-		Description: `Create a scheduled job on a cron schedule. Modes: "routine" (run a saved flow with fixed params) or "adaptive" (LLM-driven agentic execution with instructions). Uses 5-field cron syntax. Set test_first=true to test before enabling. Results broadcast to all active channels automatically. Only call after user approval.`,
+		Name: "schedule_job",
+		Description: `Create a scheduled job on a cron schedule. Uses 5-field cron syntax.
+
+CRITICAL RULES:
+- NEVER change the mode from what the user requested. If user says "routine", use "routine". If the flow doesn't exist yet, use distill_flow to create it FIRST, then come back to scheduling.
+- NEVER silently switch from "routine" to "adaptive" or vice versa. If there's a problem with the chosen mode, EXPLAIN the issue to the user and ask how to proceed.
+- NEVER call this tool without completing ALL workflow steps below.
+
+WORKFLOW — Follow these steps IN ORDER, one at a time:
+
+1. MODE SELECTION — Present BOTH options and wait for the user's explicit choice:
+   - "routine": Runs a saved flow with fixed parameters. Best for repeatable, deterministic tasks. Requires an existing flow (use distill_flow to create one if needed).
+   - "adaptive": An AI agent executes free-form instructions each run. Best for tasks needing web searches, analysis, or dynamic reasoning.
+   You MUST wait for the user to explicitly choose. Do NOT pre-select or suggest a default.
+
+2. SCHEDULE — Ask when and how often. Confirm the cron expression and timezone with the user before proceeding.
+
+3. DELIVERY — You MUST ask about delivery preferences:
+   - "Who should receive the results?" → delivery_mode: "owner" (just you), "team" (everyone), or "members" (specific people)
+   - "Via which channel(s)?" → delivery_channels: ["telegram"], ["email"], etc. If not specified, all linked channels are used.
+   - If "members" mode: call list_team_members first to show available members, then ask which should receive results.
+   Do NOT skip this step. Do NOT assume "owner" without asking.
+
+4. TEST — ALWAYS set test_first=true on the first creation. This runs the job immediately as a dry-run without enabling the schedule. Show the test results to the user and ask if the output looks good.
+
+5. CONFIRM — After the user approves the test output, call update_scheduled_job to enable it.
+
+Each step requires a separate user interaction. Never combine multiple steps into one message.`,
 	}, scheduleJob)
 }
 
@@ -671,6 +734,12 @@ func GetSchedulerTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("update_scheduled_job: %w", err)
 	}
 	tools = append(tools, updateTool)
+
+	membersTool, err := NewListTeamMembersTool()
+	if err != nil {
+		return nil, fmt.Errorf("list_team_members: %w", err)
+	}
+	tools = append(tools, membersTool)
 
 	return tools, nil
 }

@@ -91,10 +91,12 @@ type JobPayload struct {
 
 // JobDelivery defines where job results are delivered.
 type JobDelivery struct {
-	Channel   string   `json:"channel"`
-	Target    string   `json:"target"`
-	Mode      string   `json:"mode,omitempty"`       // owner, team, members, target
-	MemberIDs []string `json:"member_ids,omitempty"` // for "members" mode
+	Channel        string              `json:"channel"`
+	Target         string              `json:"target"`
+	Mode           string              `json:"mode,omitempty"`            // owner, team, members, target
+	MemberIDs      []string            `json:"member_ids,omitempty"`      // for "members" mode
+	ChannelFilter  []string            `json:"channel_filter,omitempty"`  // restrict delivery to these channel types (e.g., ["email", "telegram"])
+	MemberChannels map[string][]string `json:"member_channels,omitempty"` // userID → allowed channel types (overrides ChannelFilter per-member)
 }
 
 // SchedulerStore manages scheduled job persistence.

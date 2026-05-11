@@ -20,6 +20,7 @@ import (
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -444,7 +445,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				userText = "Save Flow"
 			}
 			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
-			filePath, runCmd, err := chatAgent.SaveDistillReview(r.Context(), req.SessionID)
+
+			// Enrich context with FlowStore so SaveDistillReview can persist
+			// to PG in platform mode (no disk write).
+			saveCtx := r.Context()
+			if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+				saveCtx = store.WithFlowStore(saveCtx, svc.Flows)
+			}
+
+			filePath, runCmd, err := chatAgent.SaveDistillReview(saveCtx, req.SessionID)
 			if err != nil {
 				errText := fmt.Sprintf("Failed to save flow: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
@@ -747,6 +756,28 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// UUID column constraint.
 	runner.InjectUserID(userID)
 
+	// Inject org/team slugs so tools can resolve team membership in platform mode.
+	if tc := pgstore.TenantContextFrom(r.Context()); tc != nil {
+		runner.InjectTenantSlugs(tc.OrgSlug, tc.TeamSlug)
+	}
+
+	// Inject RunJobFunc so schedule_job test execution works in platform mode
+	// (bypasses the unauthenticated HTTP bridge which can't pass auth middleware).
+	if exec := GetExecutor(); exec != nil {
+		reqSvc := store.FromRequest(r)
+		runner.InjectRunJobFunc(func(ctx context.Context, jobID string) (string, error) {
+			if reqSvc == nil || reqSvc.Scheduler == nil {
+				return "", fmt.Errorf("scheduler store not available")
+			}
+			storeJob := reqSvc.Scheduler.Get(jobID)
+			if storeJob == nil {
+				return "", fmt.Errorf("job %q not found", jobID)
+			}
+			job := storeJobToSchedulerJob(storeJob)
+			return exec.Execute(ctx, job)
+		})
+	}
+
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {
@@ -957,20 +988,33 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 			persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 		} else {
+			// Enrich context with SessionService and FlowStore so that
+			// PreviewDistill can reconstruct traces from PG (platform mode)
+			// and DistillToReview/SaveDistillReview can save to PG FlowStore.
+			distillCtx := ctx
+			if svc := store.FromContext(ctx); svc != nil {
+				if svc.PersonalSessions != nil {
+					distillCtx = store.WithSessionService(distillCtx, svc.PersonalSessions)
+				}
+				if svc.Flows != nil {
+					distillCtx = store.WithFlowStore(distillCtx, svc.Flows)
+				}
+			}
+
 			ds := agent.DistillSession{
 				SessionID: sessionID,
 				AppName:   studioChatAppName,
 				UserID:    userID,
 			}
 			// Identify traces and immediately run distillation (no confirmation step)
-			_, err := chatAgent.PreviewDistill(ctx, ds)
+			_, err := chatAgent.PreviewDistill(distillCtx, ds)
 			if err != nil {
 				responseText := fmt.Sprintf("Cannot distill: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 				persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 			} else {
 				// Run distillation and send preview directly
-				review, distillErr := chatAgent.DistillToReview(ctx, ds, func(text string) {
+				review, distillErr := chatAgent.DistillToReview(distillCtx, ds, func(text string) {
 					SendSSE(w, flusher, "text", map[string]interface{}{"text": text})
 				})
 				if distillErr != nil {

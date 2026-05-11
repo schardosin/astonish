@@ -716,7 +716,12 @@ func Run(cfg RunConfig) error {
 	// Set platform resolver for inbound channel messages (platform mode only).
 	// This enables team-scoped context injection when users message via Telegram.
 	if pgStore != nil && channelMgr != nil {
-		channelMgr.SetPlatformResolver(&channelPlatformResolver{pgStore: pgStore})
+		resolver := &channelPlatformResolver{pgStore: pgStore}
+		// Wire the cross-session memory merge function if PlatformReflector is available.
+		if factoryResult != nil && factoryResult.ChatAgent != nil && factoryResult.ChatAgent.PlatformReflector != nil {
+			resolver.memorySaveOrMerge = factoryResult.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc()
+		}
+		channelMgr.SetPlatformResolver(resolver)
 	}
 
 	// --- Link code store for code-based channel linking (platform mode) ---
@@ -843,7 +848,11 @@ func Run(cfg RunConfig) error {
 
 		// Re-attach platform resolver after reload
 		if pgStore != nil && channelMgr != nil {
-			channelMgr.SetPlatformResolver(&channelPlatformResolver{pgStore: pgStore})
+			resolver := &channelPlatformResolver{pgStore: pgStore}
+			if factoryResult != nil && factoryResult.ChatAgent != nil && factoryResult.ChatAgent.PlatformReflector != nil {
+				resolver.memorySaveOrMerge = factoryResult.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc()
+			}
+			channelMgr.SetPlatformResolver(resolver)
 		}
 
 		// Re-attach link handlers after reload

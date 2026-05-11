@@ -24,6 +24,10 @@ type FleetStores struct {
 	Scheduler      store.SchedulerStore
 	FleetTemplates store.FleetTemplateStore
 	FleetPlans     store.FleetPlanStore
+
+	// MemorySaveOrMerge is the cross-session memory merge function.
+	// When set, memory_save operations use LLM-based dedup/merge instead of raw inserts.
+	MemorySaveOrMerge store.MemorySaveOrMergeFunc
 }
 
 // FleetStoresFromTeam builds a FleetStores from a TeamDataStore and OrgDataStore.
@@ -130,6 +134,9 @@ func (fs *FleetStores) InjectIntoContext(ctx context.Context) context.Context {
 	}
 	if fs.FleetPlans != nil {
 		ctx = store.WithFleetPlanStore(ctx, fs.FleetPlans)
+	}
+	if fs.MemorySaveOrMerge != nil {
+		ctx = store.WithMemorySaveOrMerge(ctx, fs.MemorySaveOrMerge)
 	}
 
 	return ctx

@@ -388,3 +388,31 @@ func SessionIDFromContext(ctx context.Context) string {
 	s, _ := ctx.Value(sessionIDKey).(string)
 	return s
 }
+
+// --- Memory Merge Function (cross-session dedup) ---
+
+// MemorySaveOrMergeFunc is a function that saves a memory entry, performing
+// cross-session deduplication and LLM-based merge when an existing entry with
+// a related category already exists. If no merge function is in context,
+// callers should fall back to a raw memStore.Add().
+type MemorySaveOrMergeFunc func(ctx context.Context, memStore MemoryStore, entry MemoryEntry) error
+
+type memorySaveOrMergeKey struct{}
+
+// WithMemorySaveOrMerge injects a MemorySaveOrMergeFunc into the context.
+// This is set by the launcher when wiring the ChatRunner in platform mode,
+// allowing the memory_save tool to perform cross-session dedup without
+// needing direct access to the LLM or agent.MemoryMerger.
+func WithMemorySaveOrMerge(ctx context.Context, fn MemorySaveOrMergeFunc) context.Context {
+	return context.WithValue(ctx, memorySaveOrMergeKey{}, fn)
+}
+
+// MemorySaveOrMergeFromContext retrieves the MemorySaveOrMergeFunc from context.
+// Returns nil if not available (personal mode or not injected).
+func MemorySaveOrMergeFromContext(ctx context.Context) MemorySaveOrMergeFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(memorySaveOrMergeKey{}).(MemorySaveOrMergeFunc)
+	return fn
+}

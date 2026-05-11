@@ -105,6 +105,16 @@ func (cr *ChatRunner) InjectMemoryStores(memStore store.MemoryStore, searcher st
 	}
 }
 
+// InjectMemorySaveOrMerge adds a cross-session memory merge function to the
+// runner's context. When set, the memory_save tool will use this function
+// instead of a raw insert, enabling deduplication across sessions via LLM merge.
+// Must be called before Run().
+func (cr *ChatRunner) InjectMemorySaveOrMerge(fn store.MemorySaveOrMergeFunc) {
+	if fn != nil {
+		cr.ctx = store.WithMemorySaveOrMerge(cr.ctx, fn)
+	}
+}
+
 // InjectFlowStore adds a tenant-scoped flow store to the runner's context
 // so that drill tools (save_drill, delete_drill, list_drills, read_drill,
 // edit_drill) and the run_drill tool can read/write flows from the database

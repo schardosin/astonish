@@ -15,6 +15,10 @@ import (
 type channelPlatformResolver struct {
 	pgStore *pgstore.PGStore
 
+	// memorySaveOrMerge is the cross-session memory merge function.
+	// Injected at construction time from the ChatAgent's PlatformReflector.
+	memorySaveOrMerge store.MemorySaveOrMergeFunc
+
 	// Persistent per-user routing preferences set via /org and /team commands.
 	// Key: "channelType:externalID" (e.g., "telegram:12345").
 	prefsMu sync.RWMutex
@@ -112,6 +116,11 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	enrichedCtx = store.WithFleetTemplateStore(enrichedCtx, teamStore.FleetTemplates())
 	enrichedCtx = store.WithFleetPlanStore(enrichedCtx, teamStore.FleetPlans())
 	enrichedCtx = store.WithSessionService(enrichedCtx, teamStore.Sessions())
+
+	// Inject cross-session memory merge function for channel interactions.
+	if r.memorySaveOrMerge != nil {
+		enrichedCtx = store.WithMemorySaveOrMerge(enrichedCtx, r.memorySaveOrMerge)
+	}
 
 	return enrichedCtx, link.UserID, user.DisplayName, nil
 }

@@ -146,6 +146,7 @@ func MemorySave(mgr *memory.Manager, saveStore MemorySaveStore) func(ctx tool.Co
 // platformMemorySave is the shared implementation for platform-mode saves.
 // Writes to the PG team memory store, with optional MEMORY.md fallback for
 // core tier (backward compat with personal-mode tools).
+// Uses cross-session merge when a MemorySaveOrMergeFunc is available in context.
 func platformMemorySave(ctx context.Context, args MemorySaveArgs, content string, redactCount int, fileMgr *memory.Manager, pgMem store.MemoryStore) (MemorySaveResult, error) {
 	kind := strings.TrimSpace(strings.ToLower(args.Kind))
 
@@ -171,9 +172,19 @@ func platformMemorySave(ctx context.Context, args MemorySaveArgs, content string
 			Content:   content,
 			Category:  dbCategory,
 			SessionID: store.SessionIDFromContext(ctx),
+			CreatedBy: store.UserIDFromContext(ctx),
 		}
-		if err := pgMem.Add(ctx, entry); err != nil {
-			return MemorySaveResult{}, fmt.Errorf("failed to save memory: %w", err)
+
+		// Use cross-session merge if available (platform mode with LLM merger)
+		if mergeFunc := store.MemorySaveOrMergeFromContext(ctx); mergeFunc != nil {
+			if err := mergeFunc(ctx, pgMem, entry); err != nil {
+				return MemorySaveResult{}, fmt.Errorf("failed to save memory: %w", err)
+			}
+		} else {
+			// Fallback: raw insert (no merge capability available)
+			if err := pgMem.Add(ctx, entry); err != nil {
+				return MemorySaveResult{}, fmt.Errorf("failed to save memory: %w", err)
+			}
 		}
 	}
 

@@ -208,6 +208,12 @@ func (mts *MultiTenantScheduler) executeJob(
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
 	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
 
+	// Inject cross-session memory merge function so that memory_save tool
+	// performs dedup/merge instead of blind inserts during scheduled execution.
+	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
+		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+	}
+
 	// Inject per-team disabled tool list so the agent filters them out.
 	if ts := teamStore.Settings(); ts != nil {
 		if settings, err := ts.Get(ctx); err == nil && len(settings.DisabledTools) > 0 {
@@ -332,6 +338,11 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
 	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
+
+	// Inject cross-session memory merge function for fleet plan execution.
+	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
+		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+	}
 
 	// Convert and execute
 	job := storeJobToSchedulerJob(storeJob)

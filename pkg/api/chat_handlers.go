@@ -699,6 +699,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		runner.InjectMemoryStores(memStore, svc.MemorySearcher)
+
+		// Inject the cross-session memory merge function so that memory_save
+		// performs dedup/merge instead of blind inserts. This requires the
+		// PlatformReflector (which provides the LLM for merge calls).
+		if chatAgent.PlatformReflector != nil {
+			runner.InjectMemorySaveOrMerge(chatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+		}
 	}
 
 	// Inject tenant-scoped flow store into the runner context so that

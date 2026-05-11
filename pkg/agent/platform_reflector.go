@@ -23,12 +23,34 @@ import (
 type PlatformReflector struct {
 	LLM       model.LLM
 	DebugMode bool
+	Merger    *MemoryMerger // Cross-session memory dedup/merge (initialized lazily)
+}
+
+// merger returns the MemoryMerger instance, creating it lazily from the same LLM.
+func (r *PlatformReflector) merger() *MemoryMerger {
+	if r.Merger == nil {
+		r.Merger = &MemoryMerger{LLM: r.LLM, DebugMode: r.DebugMode}
+	}
+	return r.Merger
+}
+
+// MemorySaveOrMergeFunc returns a store.MemorySaveOrMergeFunc that tools can use
+// to save memory entries with cross-session dedup/merge. This is injected into
+// the runner context so the memory_save tool can perform intelligent merging
+// without needing direct access to the LLM.
+func (r *PlatformReflector) MemorySaveOrMergeFunc() store.MemorySaveOrMergeFunc {
+	return func(ctx context.Context, memStore store.MemoryStore, entry store.MemoryEntry) error {
+		_, err := r.merger().SaveOrMerge(ctx, memStore, entry)
+		return err
+	}
 }
 
 // platformReflectionPrompt is the system instruction for the reflection LLM call
 // in platform mode. Same logic as the file-based version but saves are simpler
 // (no "kind" routing needed — all PG entries use category directly).
 const platformReflectionPrompt = `You are a memory management assistant. Your ONLY job is to decide whether the conversation and task execution below contain durable knowledge worth saving to persistent memory.
+
+CRITICAL: If the "ALREADY SAVED IN TEAM MEMORY" section below contains information about a topic, do NOT re-save that same information. Only save genuinely NEW facts not already covered.
 
 Durable knowledge includes:
 - Connection details, configuration parameters, or environment-specific information (hostnames, API base URLs, auth methods, credential names, ports)
@@ -104,6 +126,13 @@ func (r *PlatformReflector) Reflect(ctx context.Context, trace *ExecutionTrace, 
 func (r *PlatformReflector) runReflection(ctx context.Context, trace *ExecutionTrace, events session.Events, memStore store.MemoryStore, sessionID string) {
 	// Build rich context for the reflection LLM
 	reflectionContext := buildReflectionContext(trace, events)
+
+	// Inject a summary of existing team memories so the LLM knows what's
+	// already saved and can avoid redundant saves.
+	existingSummary := r.buildExistingMemorySummary(ctx, memStore)
+	if existingSummary != "" {
+		reflectionContext = existingSummary + "\n\n" + reflectionContext
+	}
 
 	if r.DebugMode {
 		slog.Debug("running platform reflection",
@@ -181,6 +210,8 @@ func (r *PlatformReflector) runReflection(ctx context.Context, trace *ExecutionT
 }
 
 // executePlatformSave saves a single memory entry to the PG team store.
+// Uses cross-session dedup/merge: if a related memory already exists in any
+// session, the content is merged via an LLM call rather than creating a duplicate.
 func (r *PlatformReflector) executePlatformSave(ctx context.Context, fc *genai.FunctionCall, memStore store.MemoryStore, sessionID string) {
 	args := fc.Args
 	if args == nil {
@@ -196,39 +227,26 @@ func (r *PlatformReflector) executePlatformSave(ctx context.Context, fc *genai.F
 		return
 	}
 
-	// Validate against existing session memories to avoid duplicates
-	existingMemories, err := memStore.ListBySession(ctx, sessionID)
-	if err == nil {
-		for _, m := range existingMemories {
-			if m.Category == category {
-				// Category already exists in this session — check if content overlaps
-				if contentOverlaps(m.Snippet, content) {
-					slog.Debug("platform reflection skipped save: content overlaps with existing",
-						"component", "platform-reflector",
-						"category", category)
-					return
-				}
-			}
-		}
-	}
-
 	entry := store.MemoryEntry{
 		Content:   content,
 		Category:  category,
 		SessionID: sessionID,
 		CreatedBy: store.UserIDFromContext(ctx),
 	}
-	if err := memStore.Add(ctx, entry); err != nil {
-		slog.Debug("platform reflection failed to save",
+
+	result, err := r.merger().SaveOrMerge(ctx, memStore, entry)
+	if err != nil {
+		slog.Debug("platform reflection failed to save/merge",
 			"component", "platform-reflector",
 			"category", category,
 			"error", err)
 		return
 	}
 
-	slog.Debug("platform reflection saved to PG",
+	slog.Debug("platform reflection save result",
 		"component", "platform-reflector",
 		"category", category,
+		"action", result.Action,
 		"sessionID", sessionID)
 }
 
@@ -431,46 +449,36 @@ func (r *PlatformReflector) applyExtraction(ctx context.Context, memStore store.
 		"originalCount", len(originals))
 }
 
-// contentOverlaps checks if two content strings have significant overlap,
-// indicating the proposed content is largely a duplicate of the existing one.
-// Uses a simple line-based overlap check.
-func contentOverlaps(existing, proposed string) bool {
-	existingLines := strings.Split(strings.TrimSpace(existing), "\n")
-	proposedLines := strings.Split(strings.TrimSpace(proposed), "\n")
-
-	if len(existingLines) == 0 || len(proposedLines) == 0 {
-		return false
+// buildExistingMemorySummary generates a concise summary of existing team
+// memories to inject into the reflection prompt. This helps the reflection LLM
+// avoid re-saving knowledge that's already stored.
+func (r *PlatformReflector) buildExistingMemorySummary(ctx context.Context, memStore store.MemoryStore) string {
+	// Fetch recent/all team memories (limit to a reasonable number)
+	memories, err := memStore.List(ctx, "", 50, 0)
+	if err != nil || len(memories) == 0 {
+		return ""
 	}
 
-	// Count how many proposed lines appear in the existing content
-	overlapCount := 0
-	for _, pl := range proposedLines {
-		pl = strings.TrimSpace(pl)
-		if pl == "" || pl == "-" {
-			continue
-		}
-		for _, el := range existingLines {
-			el = strings.TrimSpace(el)
-			if el == pl {
-				overlapCount++
-				break
-			}
-		}
+	var sb strings.Builder
+	sb.WriteString("=== ALREADY SAVED IN TEAM MEMORY (do NOT re-save this information) ===\n")
+	for _, m := range memories {
+		sb.WriteString(fmt.Sprintf("• [%s] %s\n", m.Category, truncateForSummary(m.Snippet, 120)))
 	}
+	sb.WriteString("=== END OF EXISTING MEMORY ===\n")
+	sb.WriteString("Only save GENUINELY NEW knowledge not already covered above.")
 
-	// If more than 50% of proposed lines already exist, consider it an overlap
-	nonEmptyProposed := 0
-	for _, pl := range proposedLines {
-		if strings.TrimSpace(pl) != "" && strings.TrimSpace(pl) != "-" {
-			nonEmptyProposed++
-		}
+	return sb.String()
+}
+
+// truncateForSummary shortens a string to maxLen, appending "..." if truncated.
+func truncateForSummary(s string, maxLen int) string {
+	// Replace newlines with "; " for inline display
+	s = strings.ReplaceAll(s, "\n", "; ")
+	s = strings.TrimSpace(s)
+	if len(s) <= maxLen {
+		return s
 	}
-
-	if nonEmptyProposed == 0 {
-		return false
-	}
-
-	return float64(overlapCount)/float64(nonEmptyProposed) > 0.5
+	return s[:maxLen] + "..."
 }
 
 // extractionSystemPrompt is shared with the API handler — same consolidation instructions.

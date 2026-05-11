@@ -435,10 +435,12 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "failed to issue refresh token")
 			return
 		}
+		// Delete the old refresh token from login_sessions (prevents reuse)
+		_ = pa.pgStore.LoginSessions().Delete(ctx, tokenHash)
 		// Store new refresh token hash for revocation support
-		tokenHash := hashRefreshToken(newRefreshToken)
+		newTokenHash := hashRefreshToken(newRefreshToken)
 		loginSession := &store.LoginSession{
-			TokenHash: tokenHash,
+			TokenHash: newTokenHash,
 			UserID:    user.ID,
 			OrgID:     org.ID,
 			CreatedAt: time.Now(),
@@ -479,6 +481,31 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 // --- Handler: POST /api/auth/logout ---
 
 func (pa *PlatformAuth) handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Revoke the refresh token server-side so it can no longer be used.
+	// Read the token from cookie (browser) or body (CLI).
+	var refreshTokenStr string
+	type logoutRequest struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	var bodyReq logoutRequest
+	if err := json.NewDecoder(r.Body).Decode(&bodyReq); err == nil && bodyReq.RefreshToken != "" {
+		refreshTokenStr = bodyReq.RefreshToken
+	}
+	if refreshTokenStr == "" {
+		if cookie, err := r.Cookie("astonish_refresh"); err == nil {
+			refreshTokenStr = cookie.Value
+		}
+	}
+
+	// Delete the refresh token from login_sessions (server-side revocation)
+	if refreshTokenStr != "" {
+		tokenHash := hashRefreshToken(refreshTokenStr)
+		if err := pa.pgStore.LoginSessions().Delete(r.Context(), tokenHash); err != nil {
+			slog.Debug("logout: failed to delete login session (may already be gone)",
+				"error", err)
+		}
+	}
+
 	clearAuthCookies(w)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }

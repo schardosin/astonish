@@ -5,8 +5,6 @@ import (
 	"net/http"
 
 	"github.com/gorilla/mux"
-
-	"github.com/schardosin/astonish/pkg/store"
 )
 
 // --------------------------------------------------------------------------
@@ -40,9 +38,8 @@ func FlowPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusBadRequest, "platform mode required")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
@@ -93,9 +90,8 @@ func FlowPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 // Platform mode only. Creates a personal copy that the user can modify
 // independently without affecting the team version.
 func FlowForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		respondError(w, http.StatusBadRequest, "platform mode required")
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 

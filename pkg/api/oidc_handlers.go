@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -436,7 +437,20 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	// Step 1: Try to find user by OIDC subject
 	user, err := pgStore.Users().GetByOIDC(ctx, issuer, subject)
 	if err != nil && email != "" {
-		// Step 2: Fall back to email match and auto-link
+		// Step 2: Fall back to email match and auto-link.
+		// Only allow auto-linking if the IdP has verified the email address.
+		// Without this check, an attacker with an unverified email on the IdP
+		// could hijack an existing account by triggering auto-link.
+		if !claims.EmailVerified {
+			slog.Warn("OIDC auto-link blocked: email not verified by IdP",
+				"email", email,
+				"issuer", issuer,
+				"subject", subject,
+			)
+			h.failDeviceSession(sess, "email not verified")
+			h.renderCallbackError(w, "Your email address has not been verified by the identity provider. Please verify your email and try again.")
+			return
+		}
 		user, err = pgStore.Users().GetByEmail(ctx, email)
 		if err == nil && user != nil {
 			// Auto-link: set OIDC subject/issuer on the user
@@ -820,7 +834,7 @@ h1 { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 8px; 
 <h1>Login Successful</h1>`)
 	fmt.Fprintf(w, `
 <p class="detail">Welcome, <strong>%s</strong></p>
-<p class="detail">Organization: <strong>%s</strong></p>`, displayName, orgName)
+<p class="detail">Organization: <strong>%s</strong></p>`, html.EscapeString(displayName), html.EscapeString(orgName))
 	fmt.Fprint(w, `
 <p class="hint">You can close this browser tab and return to your terminal.</p>
 </div>
@@ -860,7 +874,7 @@ h1 { font-size: 20px; font-weight: 600; color: var(--text); margin-bottom: 8px; 
 <div class="icon"><svg width="24" height="24" fill="none" viewBox="0 0 24 24"><path d="M6 18L18 6M6 6l12 12" stroke="#ef4444" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
 <h1>Login Failed</h1>`)
 	fmt.Fprintf(w, `
-<div class="error-box">%s</div>`, message)
+<div class="error-box">%s</div>`, html.EscapeString(message))
 	fmt.Fprint(w, `
 <p class="hint">Please close this tab and try again, or contact your administrator.</p>
 </div>

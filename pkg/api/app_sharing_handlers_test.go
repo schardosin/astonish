@@ -455,8 +455,9 @@ func TestAppPromoteToOrg_PersonalMode(t *testing.T) {
 
 	AppPromoteToOrgHandler(w, r)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for personal mode, got %d: %s", w.Code, w.Body.String())
+	// RequirePlatformServices returns 503 for personal mode (feature unavailable)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503 for personal mode, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

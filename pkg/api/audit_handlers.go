@@ -15,24 +15,18 @@ import (
 //
 // Platform mode only, admin role required.
 func AuditQueryHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireOrgAdmin(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
 	if svc.Audit == nil {
-		http.Error(w, "audit store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "audit store not available")
 		return
 	}
 
@@ -73,7 +67,7 @@ func AuditQueryHandler(w http.ResponseWriter, r *http.Request) {
 
 	entries, err := svc.Audit.Query(r.Context(), filter)
 	if err != nil {
-		http.Error(w, "failed to query audit logs", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to query audit logs")
 		return
 	}
 

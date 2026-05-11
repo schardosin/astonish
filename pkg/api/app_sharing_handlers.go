@@ -42,58 +42,54 @@ type AppPromoteRequest struct {
 // Platform mode only. The app definition is copied as-is, preserving code
 // and version. The published_by column is set to the current user.
 func AppPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	var req AppPublishRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Slug == "" {
-		http.Error(w, "slug is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "slug is required")
 		return
 	}
 
 	// Load from personal store (prefer svc.PersonalApps, fall back to TenantRouter)
-	var personalApps store.AppStore
-	if svc.PersonalApps != nil {
-		personalApps = svc.PersonalApps
-	} else {
+	var personalApps = svc.PersonalApps
+	if personalApps == nil {
 		if svc.TenantRouter == nil {
-			http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+			respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 			return
 		}
 		orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 		if err != nil {
-			http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 			return
 		}
 		personalApps = orgStore.ForUser(pu.ID).Apps()
 	}
 	app, err := personalApps.Load(req.Slug)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("personal app not found: %v", err), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("personal app not found: %v", err))
 		return
 	}
 
 	// Save to team store
 	if svc.Apps == nil {
-		http.Error(w, "team app store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "team app store not available")
 		return
 	}
 	slug, err := svc.Apps.Save(app)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to publish app to team: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to publish app to team: %v", err))
 		return
 	}
 
@@ -117,29 +113,27 @@ func AppPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 // Platform mode only. Creates a personal copy that the user can modify
 // independently.
 func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	var req AppForkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Slug == "" {
-		http.Error(w, "slug is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "slug is required")
 		return
 	}
 	if req.Source != "team" && req.Source != "org" {
-		http.Error(w, "source must be 'team' or 'org'", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "source must be 'team' or 'org'")
 		return
 	}
 
@@ -149,40 +143,38 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 	var orgStore store.OrgDataStore
 	if req.Source == "team" {
 		if svc.Apps == nil {
-			http.Error(w, "team app store not available", http.StatusServiceUnavailable)
+			respondError(w, http.StatusServiceUnavailable, "team app store not available")
 			return
 		}
 		app, err = svc.Apps.Load(req.Slug)
 	} else {
 		if svc.TenantRouter == nil {
-			http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+			respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 			return
 		}
 		orgStore, err = svc.TenantRouter.ForOrg(pu.OrgSlug)
 		if err != nil {
-			http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 			return
 		}
 		app, err = orgStore.OrgApps().Load(req.Slug)
 	}
 	if err != nil {
-		http.Error(w, fmt.Sprintf("source app not found: %v", err), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("source app not found: %v", err))
 		return
 	}
 
 	// Save to personal store (prefer svc.PersonalApps, fall back to TenantRouter)
-	var personalApps store.AppStore
-	if svc.PersonalApps != nil {
-		personalApps = svc.PersonalApps
-	} else {
+	var personalApps = svc.PersonalApps
+	if personalApps == nil {
 		if orgStore == nil {
 			if svc.TenantRouter == nil {
-				http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+				respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 				return
 			}
 			orgStore, err = svc.TenantRouter.ForOrg(pu.OrgSlug)
 			if err != nil {
-				http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+				respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 				return
 			}
 		}
@@ -190,7 +182,7 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	slug, err := personalApps.Save(app)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to fork app: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to fork app: %v", err))
 		return
 	}
 
@@ -215,43 +207,37 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 // Admin-only. The app definition is stored as JSONB in org_apps with
 // promoted_by and promoted_from_team metadata.
 func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireOrgAdmin(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required for app promotion", http.StatusForbidden)
 		return
 	}
 
 	var req AppPromoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Slug == "" {
-		http.Error(w, "slug is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "slug is required")
 		return
 	}
 	if req.TeamSlug == "" {
-		http.Error(w, "team_slug is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "team_slug is required")
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
@@ -259,19 +245,19 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	teamApps := orgStore.ForTeam(req.TeamSlug).Apps()
 	app, err := teamApps.Load(req.Slug)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("team app not found: %v", err), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("team app not found: %v", err))
 		return
 	}
 
 	// Enrich with promotion metadata for org storage
 	appData, err := json.Marshal(app)
 	if err != nil {
-		http.Error(w, "failed to serialize app", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to serialize app")
 		return
 	}
 	var appMap map[string]any
 	if err := json.Unmarshal(appData, &appMap); err != nil {
-		http.Error(w, "failed to parse app data", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to parse app data")
 		return
 	}
 	appMap["promotedBy"] = pu.ID
@@ -281,7 +267,7 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	orgApps := orgStore.OrgApps()
 	slug, err := orgApps.Save(appMap)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to promote app to org: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to promote app to org: %v", err))
 		return
 	}
 
@@ -302,27 +288,25 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	GET /api/apps/org
 func ListOrgAppsHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
 	items, err := orgStore.OrgApps().List()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list org apps: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list org apps: %v", err))
 		return
 	}
 
@@ -336,36 +320,30 @@ func ListOrgAppsHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Admin-only.
 func DeleteOrgAppHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
-	pu := GetPlatformUser(r)
+	pu := RequireOrgAdmin(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
 	name := mux.Vars(r)["name"]
 	if name == "" {
-		http.Error(w, "app name required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "app name required")
 		return
 	}
 
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
 	if err := orgStore.OrgApps().Delete(name); err != nil {
-		http.Error(w, fmt.Sprintf("failed to delete org app: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete org app: %v", err))
 		return
 	}
 

@@ -159,23 +159,8 @@ func (c *pgCredentialStore) Count() int {
 
 func (c *pgCredentialStore) Resolve(name string) (headerKey, headerValue string, err error) {
 	cred := c.Get(name)
-	if cred == nil {
-		return "", "", fmt.Errorf("credential %q not found", name)
-	}
-	switch cred.Type {
-	case store.CredAPIKey:
-		header := cred.Header
-		if header == "" {
-			header = "Authorization"
-		}
-		return header, cred.Value, nil
-	case store.CredBearer:
-		return "Authorization", "Bearer " + cred.Token, nil
-	case store.CredBasic:
-		encoded := credentials.BasicAuthValue(cred.Username, cred.Password)
-		return "Authorization", "Basic " + encoded, nil
-	case store.CredOAuthClientCreds:
-		// Convert store.Credential to credentials.Credential for the OAuth flow
+	return store.ResolveCredentialHeader(name, cred, func(cred *store.Credential) (string, error) {
+		// OAuth client_credentials: fetch token directly (no caching in pgstore)
 		oauthCred := &credentials.Credential{
 			Type:         credentials.CredOAuthClientCreds,
 			AuthURL:      cred.AuthURL,
@@ -184,22 +169,8 @@ func (c *pgCredentialStore) Resolve(name string) (headerKey, headerValue string,
 			Scope:        cred.Scope,
 		}
 		token, _, err := credentials.FetchOAuthToken(oauthCred)
-		if err != nil {
-			return "", "", fmt.Errorf("credential %q OAuth: %w", name, err)
-		}
-		return "Authorization", "Bearer " + token, nil
-	case store.CredOAuthAuthCode:
-		// For auth code flow, use the stored access token directly
-		// (refresh would need additional infrastructure)
-		if cred.AccessToken != "" {
-			return "Authorization", "Bearer " + cred.AccessToken, nil
-		}
-		return "", "", fmt.Errorf("credential %q: no access token available (OAuth authorization_code flow requires token refresh)", name)
-	case store.CredPassword:
-		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)
-	default:
-		return "", "", fmt.Errorf("unsupported credential type: %s", cred.Type)
-	}
+		return token, err
+	})
 }
 
 func (c *pgCredentialStore) SetSecret(key, value string) error {

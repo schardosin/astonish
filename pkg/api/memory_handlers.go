@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
@@ -50,24 +51,23 @@ type MemoryListResponse struct {
 //
 // Platform mode only. The memory is saved to the current user's team store.
 func MemoryShareToTeamHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "memory sharing requires platform mode", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
 
 	if svc.Memory == nil {
-		http.Error(w, "team memory store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "team memory store not available")
 		return
 	}
 
 	var req MemorySaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Content == "" {
-		http.Error(w, "content is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "content is required")
 		return
 	}
 
@@ -79,12 +79,11 @@ func MemoryShareToTeamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := svc.Memory.Add(r.Context(), entry); err != nil {
-		http.Error(w, fmt.Sprintf("failed to save team memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save team memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"saved":   true,
 		"scope":   "team",
 		"message": "Memory saved to team",
@@ -97,37 +96,34 @@ func MemoryShareToTeamHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Platform mode only. The memory is saved to the personal schema.
 func MemorySavePersonalHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	// Resolve personal memory store via TenantRouter
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 	personalMem := orgStore.ForUser(pu.ID).Memories()
 
 	var req MemorySaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Content == "" {
-		http.Error(w, "content is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "content is required")
 		return
 	}
 
@@ -138,12 +134,11 @@ func MemorySavePersonalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := personalMem.Add(r.Context(), entry); err != nil {
-		http.Error(w, fmt.Sprintf("failed to save personal memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save personal memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"saved":   true,
 		"scope":   "personal",
 		"message": "Memory saved to personal store",
@@ -160,44 +155,41 @@ func MemorySavePersonalHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Admin-only. Requires "admin" role on the platform user.
 func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required for knowledge promotion", http.StatusForbidden)
+		respondError(w, http.StatusForbidden, "admin role required for knowledge promotion")
 		return
 	}
 
 	var req MemoryPromoteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.MemoryID == "" {
-		http.Error(w, "memory_id is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "memory_id is required")
 		return
 	}
 	if req.TeamSlug == "" {
-		http.Error(w, "team_slug is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "team_slug is required")
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
@@ -205,7 +197,7 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	teamMem := orgStore.ForTeam(req.TeamSlug).Memories()
 	results, err := teamMem.List(r.Context(), "", 1000, 0)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to read team memories: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read team memories: %v", err))
 		return
 	}
 
@@ -218,7 +210,7 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if source == nil {
-		http.Error(w, "memory not found in team store", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "memory not found in team store")
 		return
 	}
 
@@ -235,18 +227,17 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := orgMem.Add(r.Context(), entry); err != nil {
-		http.Error(w, fmt.Sprintf("failed to promote memory to org: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to promote memory to org: %v", err))
 		return
 	}
 
 	// Delete from team store (move semantics)
 	if err := teamMem.Delete(r.Context(), req.MemoryID); err != nil {
 		// Non-fatal: memory was already promoted to org
-		fmt.Printf("warning: failed to delete team memory after promotion: %v\n", err)
+		slog.Warn("failed to delete team memory after promotion", "error", err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"promoted": true,
 		"scope":    "org",
 		"message":  fmt.Sprintf("Memory promoted from team '%s' to org", req.TeamSlug),
@@ -261,9 +252,12 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	GET /api/memories/team?category=...&limit=...&offset=...
 func MemoryListTeamHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform || svc.Memory == nil {
-		http.Error(w, "platform mode with team context required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
+		return
+	}
+	if svc.Memory == nil {
+		respondError(w, http.StatusBadRequest, "platform mode with team context required")
 		return
 	}
 
@@ -273,12 +267,11 @@ func MemoryListTeamHandler(w http.ResponseWriter, r *http.Request) {
 
 	results, err := svc.Memory.List(r.Context(), category, limit, offset)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list team memories: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list team memories: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(MemoryListResponse{
+	respondJSON(w, http.StatusOK, MemoryListResponse{
 		Results: results,
 		Count:   len(results),
 	})
@@ -288,21 +281,18 @@ func MemoryListTeamHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	GET /api/memories/org?category=...&limit=...&offset=...
 func MemoryListOrgHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
@@ -313,12 +303,11 @@ func MemoryListOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 	results, err := orgMem.List(r.Context(), category, limit, offset)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list org memories: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list org memories: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(MemoryListResponse{
+	respondJSON(w, http.StatusOK, MemoryListResponse{
 		Results: results,
 		Count:   len(results),
 	})
@@ -333,11 +322,11 @@ func MemoryListOrgHandler(w http.ResponseWriter, r *http.Request) {
 func MemorySearchCrossTierHandler(w http.ResponseWriter, r *http.Request) {
 	var req MemorySearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Query == "" {
-		http.Error(w, "query is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "query is required")
 		return
 	}
 	if req.MaxResults <= 0 {
@@ -356,11 +345,10 @@ func MemorySearchCrossTierHandler(w http.ResponseWriter, r *http.Request) {
 			results, err = svc.MemorySearcher.SearchAllTiersByCategory(r.Context(), req.Query, req.MaxResults, 0, req.Category)
 		}
 		if err != nil {
-			http.Error(w, fmt.Sprintf("cross-tier search failed: %v", err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("cross-tier search failed: %v", err))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(MemoryListResponse{Results: results, Count: len(results)})
+		respondJSON(w, http.StatusOK, MemoryListResponse{Results: results, Count: len(results)})
 		return
 	}
 
@@ -374,15 +362,14 @@ func MemorySearchCrossTierHandler(w http.ResponseWriter, r *http.Request) {
 			results, err = svc.Memory.SearchByCategory(r.Context(), req.Query, req.MaxResults, 0, req.Category)
 		}
 		if err != nil {
-			http.Error(w, fmt.Sprintf("memory search failed: %v", err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("memory search failed: %v", err))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(MemoryListResponse{Results: results, Count: len(results)})
+		respondJSON(w, http.StatusOK, MemoryListResponse{Results: results, Count: len(results)})
 		return
 	}
 
-	http.Error(w, "memory store not available", http.StatusServiceUnavailable)
+	respondError(w, http.StatusServiceUnavailable, "memory store not available")
 }
 
 // MemoryDeleteTeamHandler deletes a memory from the team store.
@@ -391,46 +378,46 @@ func MemorySearchCrossTierHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Access control: creator can delete their own OR team admin can delete any.
 func MemoryDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform || svc.Memory == nil {
-		http.Error(w, "platform mode with team context required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	if svc.Memory == nil {
+		respondError(w, http.StatusBadRequest, "platform mode with team context required")
+		return
+	}
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "memory ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "memory ID required")
 		return
 	}
 
 	// Check ownership
 	existing, err := svc.Memory.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get memory: %v", err))
 		return
 	}
 	if existing == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "memory not found")
 		return
 	}
 	if !canManageMemory(r, pu, existing, "team") {
-		http.Error(w, "permission denied: you can only delete memories you created or that you have admin access to", http.StatusForbidden)
+		respondError(w, http.StatusForbidden, "permission denied: you can only delete memories you created or that you have admin access to")
 		return
 	}
 
 	if err := svc.Memory.Delete(r.Context(), id); err != nil {
-		http.Error(w, fmt.Sprintf("failed to delete team memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete team memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"deleted": true,
 		"id":      id,
 	})
@@ -442,27 +429,24 @@ func MemoryDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Access control: promoter/creator can delete their own OR org admin can delete any.
 func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "memory ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "memory ID required")
 		return
 	}
 
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
@@ -471,25 +455,24 @@ func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	// Check ownership
 	existing, err := orgMem.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get memory: %v", err))
 		return
 	}
 	if existing == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "memory not found")
 		return
 	}
 	if !canManageMemory(r, pu, existing, "org") {
-		http.Error(w, "permission denied: you can only delete memories you promoted or that you have admin access to", http.StatusForbidden)
+		respondError(w, http.StatusForbidden, "permission denied: you can only delete memories you promoted or that you have admin access to")
 		return
 	}
 
 	if err := orgMem.Delete(r.Context(), id); err != nil {
-		http.Error(w, fmt.Sprintf("failed to delete org memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete org memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"deleted": true,
 		"id":      id,
 	})
@@ -520,25 +503,22 @@ func queryInt(r *http.Request, key string, defaultVal int) int {
 //
 //	GET /api/memories/personal?category=...&limit=...&offset=...
 func MemoryListPersonalHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 	personalMem := orgStore.ForUser(pu.ID).Memories()
@@ -549,12 +529,11 @@ func MemoryListPersonalHandler(w http.ResponseWriter, r *http.Request) {
 
 	results, err := personalMem.List(r.Context(), category, limit, offset)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to list personal memories: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list personal memories: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(MemoryListResponse{
+	respondJSON(w, http.StatusOK, MemoryListResponse{
 		Results: results,
 		Count:   len(results),
 	})
@@ -568,42 +547,38 @@ func MemoryListPersonalHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/memories/personal/{id}
 func MemoryDeletePersonalHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	id := mux.Vars(r)["id"]
 	if id == "" {
-		http.Error(w, "memory ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "memory ID required")
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 	personalMem := orgStore.ForUser(pu.ID).Memories()
 
 	if err := personalMem.Delete(r.Context(), id); err != nil {
-		http.Error(w, fmt.Sprintf("failed to delete personal memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete personal memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"deleted": true,
 		"id":      id,
 	})
@@ -624,35 +599,32 @@ type MemoryPromotePersonalToTeamRequest struct {
 //
 // Any user can promote their own personal memories to the team.
 func MemoryPromotePersonalToTeamHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
 	var req MemoryPromotePersonalToTeamRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.MemoryID == "" {
-		http.Error(w, "memory_id is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "memory_id is required")
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 	personalMem := orgStore.ForUser(pu.ID).Memories()
@@ -660,17 +632,17 @@ func MemoryPromotePersonalToTeamHandler(w http.ResponseWriter, r *http.Request) 
 	// Read the memory from personal store
 	entry, err := personalMem.Get(r.Context(), req.MemoryID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to read personal memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read personal memory: %v", err))
 		return
 	}
 	if entry == nil {
-		http.Error(w, "personal memory not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "personal memory not found")
 		return
 	}
 
 	// Verify team memory store is available
 	if svc.Memory == nil {
-		http.Error(w, "team memory store not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "team memory store not available")
 		return
 	}
 
@@ -681,7 +653,7 @@ func MemoryPromotePersonalToTeamHandler(w http.ResponseWriter, r *http.Request) 
 		CreatedBy: pu.ID,
 	}
 	if err := svc.Memory.Add(r.Context(), teamEntry); err != nil {
-		http.Error(w, fmt.Sprintf("failed to promote memory to team: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to promote memory to team: %v", err))
 		return
 	}
 
@@ -689,11 +661,10 @@ func MemoryPromotePersonalToTeamHandler(w http.ResponseWriter, r *http.Request) 
 	if err := personalMem.Delete(r.Context(), req.MemoryID); err != nil {
 		// Non-fatal: the memory was already copied to team
 		// Log but don't fail the response
-		fmt.Printf("warning: failed to delete personal memory after promotion: %v\n", err)
+		slog.Warn("failed to delete personal memory after promotion", "error", err)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"promoted": true,
 		"scope":    "team",
 		"message":  "Memory promoted from personal to team",
@@ -716,15 +687,12 @@ type MemoryEditRequest struct {
 //
 // Access control: creator can edit their own OR admin for that scope.
 func MemoryUpdateHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 
@@ -732,52 +700,51 @@ func MemoryUpdateHandler(w http.ResponseWriter, r *http.Request) {
 	scope := vars["scope"]
 	id := vars["id"]
 	if id == "" || scope == "" {
-		http.Error(w, "scope and memory ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "scope and memory ID required")
 		return
 	}
 
 	var req MemoryEditRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Content == "" {
-		http.Error(w, "content is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "content is required")
 		return
 	}
 
 	// Resolve the appropriate memory store based on scope
 	memStore, err := resolveMemoryStoreForScope(r, svc, pu, scope)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Check ownership/permissions
 	existing, err := memStore.Get(r.Context(), id)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get memory: %v", err))
 		return
 	}
 	if existing == nil {
-		http.Error(w, "memory not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "memory not found")
 		return
 	}
 
 	// Access control: creator can edit OR admin for the scope
 	if !canManageMemory(r, pu, existing, scope) {
-		http.Error(w, "permission denied: you can only edit memories you created or that you have admin access to", http.StatusForbidden)
+		respondError(w, http.StatusForbidden, "permission denied: you can only edit memories you created or that you have admin access to")
 		return
 	}
 
 	// Perform the update
 	if err := memStore.Update(r.Context(), id, req.Content, req.Category); err != nil {
-		http.Error(w, fmt.Sprintf("failed to update memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to update memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"updated": true,
 		"id":      id,
 		"scope":   scope,
@@ -794,39 +761,36 @@ func MemoryUpdateHandler(w http.ResponseWriter, r *http.Request) {
 //
 // Admin-only. Saves directly to org memories.
 func MemorySaveOrgHandler(w http.ResponseWriter, r *http.Request) {
-	svc := store.FromRequest(r)
-	if svc == nil || svc.Mode != store.ModePlatform {
-		http.Error(w, "platform mode required", http.StatusBadRequest)
+	svc := RequirePlatformServices(w, r)
+	if svc == nil {
 		return
 	}
-
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
 	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required to save org memories", http.StatusForbidden)
+		respondError(w, http.StatusForbidden, "admin role required to save org memories")
 		return
 	}
 
 	var req MemorySaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Content == "" {
-		http.Error(w, "content is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "content is required")
 		return
 	}
 
 	if svc.TenantRouter == nil {
-		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "tenant router not available")
 		return
 	}
 	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
 	if err != nil {
-		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 		return
 	}
 
@@ -837,12 +801,11 @@ func MemorySaveOrgHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedBy: pu.ID,
 	}
 	if err := orgMem.Add(r.Context(), entry); err != nil {
-		http.Error(w, fmt.Sprintf("failed to save org memory: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save org memory: %v", err))
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"saved":   true,
 		"scope":   "org",
 		"message": "Memory saved to organization",
@@ -914,28 +877,27 @@ func canManageMemory(r *http.Request, pu *PlatformUser, entry *store.MemorySearc
 // GET /api/memories/session/{id}
 // Returns memories from whichever store is active (personal or team mode).
 func MemoryListBySessionHandler(w http.ResponseWriter, r *http.Request) {
-	pu := GetPlatformUser(r)
+	pu := RequireAuth(w, r)
 	if pu == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session id required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session id required")
 		return
 	}
 
 	svc := store.FromRequest(r)
 	if svc == nil {
-		http.Error(w, "services not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "services not available")
 		return
 	}
 
 	// Try team store first, then personal
 	teamStore, err := resolveMemoryStoreForScope(r, svc, pu, "team")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -943,7 +905,7 @@ func MemoryListBySessionHandler(w http.ResponseWriter, r *http.Request) {
 	if teamStore != nil {
 		results, err = teamStore.ListBySession(r.Context(), sessionID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("failed to list session memories: %v", err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list session memories: %v", err))
 			return
 		}
 	}
@@ -957,8 +919,7 @@ func MemoryListBySessionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	respondJSON(w, http.StatusOK, map[string]any{
 		"session_id": sessionID,
 		"memories":   results,
 		"count":      len(results),

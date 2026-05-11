@@ -77,6 +77,23 @@ func (s *PGStore) OrgSettings(orgSlug string) store.OrgSettingsStore {
 	return NewPGOrgSettingsStore(pool, orgSlug, s.secrets)
 }
 
+// PlatformMCPServers returns the platform-level MCP server store.
+// Platform MCP servers are inherited by all organizations and teams.
+// Env values are encrypted at rest using the platform master key.
+func (s *PGStore) PlatformMCPServers() store.MCPServerStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for MCP servers", "error", err)
+		return nil
+	}
+	return &pgMCPServerStore{
+		pool:    pool,
+		schema:  "public",
+		table:   "platform_mcp_servers",
+		secrets: s.secrets,
+	}
+}
+
 // SetEmbedFunc configures the embedding function used by memory stores for
 // vector search. When set, Search() uses hybrid vector+keyword RRF fusion
 // and Add() auto-generates embeddings for new memories. When nil (default),
@@ -327,7 +344,7 @@ func (o *pgOrgDataStore) ForUser(userID string) store.PersonalDataStore {
 }
 
 func (o *pgOrgDataStore) OrgMemories() store.MemoryStore {
-	return &pgMemoryStore{pool: o.pool, schema: "public", tablePrefix: "org_", scope: string(store.MemoryScopeOrg), embedFunc: o.embedFunc}
+	return &pgMemoryStore{pool: o.pool, schema: "public", tablePrefix: "org_", scope: string(store.MemoryScopeOrg), embedFunc: o.embedFunc, createdByColumn: "promoted_by"}
 }
 
 func (o *pgOrgDataStore) OrgSkills() store.SkillStore {

@@ -228,8 +228,8 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 		Content:    source.Snippet,
 		Category:   source.Category,
 		SourcePath: source.Path,
+		CreatedBy:  pu.ID,
 		Metadata: map[string]any{
-			"promoted_by":        pu.ID,
 			"promoted_from_team": req.TeamSlug,
 		},
 	}
@@ -237,6 +237,12 @@ func MemoryPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	if err := orgMem.Add(r.Context(), entry); err != nil {
 		http.Error(w, fmt.Sprintf("failed to promote memory to org: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Delete from team store (move semantics)
+	if err := teamMem.Delete(r.Context(), req.MemoryID); err != nil {
+		// Non-fatal: memory was already promoted to org
+		fmt.Printf("warning: failed to delete team memory after promotion: %v\n", err)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -382,6 +388,8 @@ func MemorySearchCrossTierHandler(w http.ResponseWriter, r *http.Request) {
 // MemoryDeleteTeamHandler deletes a memory from the team store.
 //
 //	DELETE /api/memories/team/{id}
+//
+// Access control: creator can delete their own OR team admin can delete any.
 func MemoryDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	if svc == nil || svc.Mode != store.ModePlatform || svc.Memory == nil {
@@ -389,9 +397,30 @@ func MemoryDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
 	id := mux.Vars(r)["id"]
 	if id == "" {
 		http.Error(w, "memory ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Check ownership
+	existing, err := svc.Memory.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+	if !canManageMemory(r, pu, existing, "team") {
+		http.Error(w, "permission denied: you can only delete memories you created or that you have admin access to", http.StatusForbidden)
 		return
 	}
 
@@ -411,7 +440,7 @@ func MemoryDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 //
 //	DELETE /api/memories/org/{id}
 //
-// Admin-only.
+// Access control: promoter/creator can delete their own OR org admin can delete any.
 func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	if svc == nil || svc.Mode != store.ModePlatform {
@@ -422,10 +451,6 @@ func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	pu := GetPlatformUser(r)
 	if pu == nil {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
-		return
-	}
-	if !CanManageOrg(pu) {
-		http.Error(w, "admin role required", http.StatusForbidden)
 		return
 	}
 
@@ -442,6 +467,22 @@ func MemoryDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orgMem := orgStore.OrgMemories()
+
+	// Check ownership
+	existing, err := orgMem.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+	if !canManageMemory(r, pu, existing, "org") {
+		http.Error(w, "permission denied: you can only delete memories you promoted or that you have admin access to", http.StatusForbidden)
+		return
+	}
+
 	if err := orgMem.Delete(r.Context(), id); err != nil {
 		http.Error(w, fmt.Sprintf("failed to delete org memory: %v", err), http.StatusInternalServerError)
 		return
@@ -469,4 +510,457 @@ func queryInt(r *http.Request, key string, defaultVal int) int {
 		return defaultVal
 	}
 	return n
+}
+
+// --------------------------------------------------------------------------
+// List personal memories (Phase 1B)
+// --------------------------------------------------------------------------
+
+// MemoryListPersonalHandler lists memories in the user's personal store.
+//
+//	GET /api/memories/personal?category=...&limit=...&offset=...
+func MemoryListPersonalHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		http.Error(w, "platform mode required", http.StatusBadRequest)
+		return
+	}
+
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	if svc.TenantRouter == nil {
+		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		return
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil {
+		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		return
+	}
+	personalMem := orgStore.ForUser(pu.ID).Memories()
+
+	category := r.URL.Query().Get("category")
+	limit := queryInt(r, "limit", 50)
+	offset := queryInt(r, "offset", 0)
+
+	results, err := personalMem.List(r.Context(), category, limit, offset)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to list personal memories: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(MemoryListResponse{
+		Results: results,
+		Count:   len(results),
+	})
+}
+
+// --------------------------------------------------------------------------
+// Delete personal memory (Phase 1E)
+// --------------------------------------------------------------------------
+
+// MemoryDeletePersonalHandler deletes a memory from the user's personal store.
+//
+//	DELETE /api/memories/personal/{id}
+func MemoryDeletePersonalHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		http.Error(w, "platform mode required", http.StatusBadRequest)
+		return
+	}
+
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	id := mux.Vars(r)["id"]
+	if id == "" {
+		http.Error(w, "memory ID required", http.StatusBadRequest)
+		return
+	}
+
+	if svc.TenantRouter == nil {
+		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		return
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil {
+		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		return
+	}
+	personalMem := orgStore.ForUser(pu.ID).Memories()
+
+	if err := personalMem.Delete(r.Context(), id); err != nil {
+		http.Error(w, fmt.Sprintf("failed to delete personal memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"deleted": true,
+		"id":      id,
+	})
+}
+
+// --------------------------------------------------------------------------
+// Promote personal memory to team (Phase 1C)
+// --------------------------------------------------------------------------
+
+// MemoryPromotePersonalToTeamRequest is the payload for personal→team promotion.
+type MemoryPromotePersonalToTeamRequest struct {
+	MemoryID string `json:"memory_id"`
+}
+
+// MemoryPromotePersonalToTeamHandler moves a personal memory to the team store.
+//
+//	POST /api/memories/promote-to-team
+//
+// Any user can promote their own personal memories to the team.
+func MemoryPromotePersonalToTeamHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		http.Error(w, "platform mode required", http.StatusBadRequest)
+		return
+	}
+
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	var req MemoryPromotePersonalToTeamRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.MemoryID == "" {
+		http.Error(w, "memory_id is required", http.StatusBadRequest)
+		return
+	}
+
+	if svc.TenantRouter == nil {
+		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		return
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil {
+		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		return
+	}
+	personalMem := orgStore.ForUser(pu.ID).Memories()
+
+	// Read the memory from personal store
+	entry, err := personalMem.Get(r.Context(), req.MemoryID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to read personal memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if entry == nil {
+		http.Error(w, "personal memory not found", http.StatusNotFound)
+		return
+	}
+
+	// Verify team memory store is available
+	if svc.Memory == nil {
+		http.Error(w, "team memory store not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Copy to team store with created_by
+	teamEntry := store.MemoryEntry{
+		Content:   entry.Snippet,
+		Category:  entry.Category,
+		CreatedBy: pu.ID,
+	}
+	if err := svc.Memory.Add(r.Context(), teamEntry); err != nil {
+		http.Error(w, fmt.Sprintf("failed to promote memory to team: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete from personal store (move semantics)
+	if err := personalMem.Delete(r.Context(), req.MemoryID); err != nil {
+		// Non-fatal: the memory was already copied to team
+		// Log but don't fail the response
+		fmt.Printf("warning: failed to delete personal memory after promotion: %v\n", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"promoted": true,
+		"scope":    "team",
+		"message":  "Memory promoted from personal to team",
+	})
+}
+
+// --------------------------------------------------------------------------
+// Update memory (Phase 1D)
+// --------------------------------------------------------------------------
+
+// MemoryEditRequest is the payload for updating a memory entry's content.
+type MemoryEditRequest struct {
+	Content  string `json:"content"`
+	Category string `json:"category,omitempty"`
+}
+
+// MemoryUpdateHandler updates a memory entry in the specified scope.
+//
+//	PUT /api/memories/{scope}/{id}
+//
+// Access control: creator can edit their own OR admin for that scope.
+func MemoryUpdateHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		http.Error(w, "platform mode required", http.StatusBadRequest)
+		return
+	}
+
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+
+	vars := mux.Vars(r)
+	scope := vars["scope"]
+	id := vars["id"]
+	if id == "" || scope == "" {
+		http.Error(w, "scope and memory ID required", http.StatusBadRequest)
+		return
+	}
+
+	var req MemoryEditRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Content == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+
+	// Resolve the appropriate memory store based on scope
+	memStore, err := resolveMemoryStoreForScope(r, svc, pu, scope)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Check ownership/permissions
+	existing, err := memStore.Get(r.Context(), id)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to get memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if existing == nil {
+		http.Error(w, "memory not found", http.StatusNotFound)
+		return
+	}
+
+	// Access control: creator can edit OR admin for the scope
+	if !canManageMemory(r, pu, existing, scope) {
+		http.Error(w, "permission denied: you can only edit memories you created or that you have admin access to", http.StatusForbidden)
+		return
+	}
+
+	// Perform the update
+	if err := memStore.Update(r.Context(), id, req.Content, req.Category); err != nil {
+		http.Error(w, fmt.Sprintf("failed to update memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"updated": true,
+		"id":      id,
+		"scope":   scope,
+	})
+}
+
+// --------------------------------------------------------------------------
+// Save memory to org (Phase 2B backend — for the new "Share with Org" option)
+// --------------------------------------------------------------------------
+
+// MemorySaveOrgHandler saves a memory entry directly to the org scope.
+//
+//	POST /api/memories/org
+//
+// Admin-only. Saves directly to org memories.
+func MemorySaveOrgHandler(w http.ResponseWriter, r *http.Request) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		http.Error(w, "platform mode required", http.StatusBadRequest)
+		return
+	}
+
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	if !CanManageOrg(pu) {
+		http.Error(w, "admin role required to save org memories", http.StatusForbidden)
+		return
+	}
+
+	var req MemorySaveRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if req.Content == "" {
+		http.Error(w, "content is required", http.StatusBadRequest)
+		return
+	}
+
+	if svc.TenantRouter == nil {
+		http.Error(w, "tenant router not available", http.StatusServiceUnavailable)
+		return
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil {
+		http.Error(w, "failed to resolve org store", http.StatusInternalServerError)
+		return
+	}
+
+	orgMem := orgStore.OrgMemories()
+	entry := store.MemoryEntry{
+		Content:   req.Content,
+		Category:  req.Category,
+		CreatedBy: pu.ID,
+	}
+	if err := orgMem.Add(r.Context(), entry); err != nil {
+		http.Error(w, fmt.Sprintf("failed to save org memory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"saved":   true,
+		"scope":   "org",
+		"message": "Memory saved to organization",
+	})
+}
+
+// --------------------------------------------------------------------------
+// Helpers (memory-specific)
+// --------------------------------------------------------------------------
+
+// resolveMemoryStoreForScope returns the appropriate MemoryStore for a given scope.
+func resolveMemoryStoreForScope(r *http.Request, svc *store.Services, pu *PlatformUser, scope string) (store.MemoryStore, error) {
+	switch scope {
+	case "personal":
+		if svc.TenantRouter == nil {
+			return nil, fmt.Errorf("tenant router not available")
+		}
+		orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve org store: %w", err)
+		}
+		return orgStore.ForUser(pu.ID).Memories(), nil
+	case "team":
+		if svc.Memory == nil {
+			return nil, fmt.Errorf("team memory store not available")
+		}
+		return svc.Memory, nil
+	case "org":
+		if svc.TenantRouter == nil {
+			return nil, fmt.Errorf("tenant router not available")
+		}
+		orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve org store: %w", err)
+		}
+		return orgStore.OrgMemories(), nil
+	default:
+		return nil, fmt.Errorf("invalid scope: %s (must be personal, team, or org)", scope)
+	}
+}
+
+// canManageMemory checks whether a user has permission to edit/delete a memory.
+// Rules:
+//   - Personal scope: always allowed (it's their own store)
+//   - Team scope: creator can manage their own OR team admin can manage any
+//   - Org scope: promoter/creator can manage their own OR org admin can manage any
+func canManageMemory(r *http.Request, pu *PlatformUser, entry *store.MemorySearchResult, scope string) bool {
+	switch scope {
+	case "personal":
+		// Personal memories are always manageable by the user
+		return true
+	case "team":
+		// Creator can manage their own, or admin can manage any
+		if entry.CreatedBy == pu.ID {
+			return true
+		}
+		return CanManageTeam(r, pu)
+	case "org":
+		// Creator/promoter can manage their own, or org admin can manage any
+		if entry.CreatedBy == pu.ID {
+			return true
+		}
+		return CanManageOrg(pu)
+	}
+	return false
+}
+
+// MemoryListBySessionHandler returns all memories created during a specific session.
+// GET /api/memories/session/{id}
+// Returns memories from whichever store is active (personal or team mode).
+func MemoryListBySessionHandler(w http.ResponseWriter, r *http.Request) {
+	pu := GetPlatformUser(r)
+	if pu == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	sessionID := mux.Vars(r)["id"]
+	if sessionID == "" {
+		http.Error(w, "session id required", http.StatusBadRequest)
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil {
+		http.Error(w, "services not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Try team store first, then personal
+	teamStore, err := resolveMemoryStoreForScope(r, svc, pu, "team")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	var results []store.MemorySearchResult
+	if teamStore != nil {
+		results, err = teamStore.ListBySession(r.Context(), sessionID)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to list session memories: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Also check personal store
+	personalStore, err := resolveMemoryStoreForScope(r, svc, pu, "personal")
+	if err == nil && personalStore != nil {
+		personalResults, pErr := personalStore.ListBySession(r.Context(), sessionID)
+		if pErr == nil {
+			results = append(results, personalResults...)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"session_id": sessionID,
+		"memories":   results,
+		"count":      len(results),
+	})
 }

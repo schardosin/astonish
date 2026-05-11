@@ -168,8 +168,9 @@ func platformMemorySave(ctx context.Context, args MemorySaveArgs, content string
 	// Save to the team memory store (PG)
 	if pgMem != nil {
 		entry := store.MemoryEntry{
-			Content:  content,
-			Category: dbCategory,
+			Content:   content,
+			Category:  dbCategory,
+			SessionID: store.SessionIDFromContext(ctx),
 		}
 		if err := pgMem.Add(ctx, entry); err != nil {
 			return MemorySaveResult{}, fmt.Errorf("failed to save memory: %w", err)

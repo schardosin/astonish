@@ -24,7 +24,8 @@ type MemoryEntry struct {
 	SourcePath string         `json:"sourcePath,omitempty"`
 	Embedding  []float32      `json:"-"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
-	CreatedBy  string         `json:"createdBy,omitempty"` // user ID (for team memories)
+	CreatedBy  string         `json:"createdBy,omitempty"`  // user ID (for team memories)
+	SessionID  string         `json:"sessionId,omitempty"` // session that created this memory
 }
 
 // MemorySearchResult represents a single result from memory search.
@@ -36,7 +37,10 @@ type MemorySearchResult struct {
 	Score     float64 `json:"score"`
 	Snippet   string  `json:"snippet"`
 	Category  string  `json:"category,omitempty"`
-	Scope     string  `json:"scope,omitempty"` // "personal", "team", "org" (multi-tenant)
+	Scope     string  `json:"scope,omitempty"`       // "personal", "team", "org" (multi-tenant)
+	CreatedBy string  `json:"created_by,omitempty"`  // user ID of the creator
+	CreatedAt string  `json:"created_at,omitempty"`  // RFC3339 timestamp
+	SessionID string  `json:"session_id,omitempty"` // session that created this memory
 }
 
 // MemoryStore provides access to the vector + BM25 memory search system.
@@ -53,12 +57,23 @@ type MemoryStore interface {
 	// Add inserts a memory chunk into the store.
 	Add(ctx context.Context, entry MemoryEntry) error
 
+	// Get retrieves a single memory entry by ID.
+	// Returns nil, nil if not found.
+	Get(ctx context.Context, id string) (*MemorySearchResult, error)
+
+	// Update modifies the content and/or category of an existing memory.
+	// Re-generates the embedding if content changes.
+	Update(ctx context.Context, id string, content string, category string) error
+
 	// Delete removes a memory chunk by ID.
 	Delete(ctx context.Context, id string) error
 
 	// List returns memory chunks, optionally filtered by category.
 	// If category is empty, all chunks are returned.
 	List(ctx context.Context, category string, limit, offset int) ([]MemorySearchResult, error)
+
+	// ListBySession returns all memory chunks created during a specific session.
+	ListBySession(ctx context.Context, sessionID string) ([]MemorySearchResult, error)
 
 	// Count returns the number of indexed memory chunks.
 	Count() int

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, User, Users } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -25,6 +25,8 @@ interface TopBarProps {
   teams?: { slug: string, name: string }[] | null
   onTeamChange?: (teamSlug: string) => void
   onLogout?: () => void
+  personalMemoryMode?: boolean
+  onTogglePersonalMemoryMode?: () => void
 }
 
 function useClickOutside(ref: any, handler: () => void) {
@@ -101,7 +103,7 @@ function useBreakpointTier(): 'sm' | 'md' | 'lg' {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, orgs, onOrgSwitch, activeTeam, teams, onTeamChange, onLogout }: TopBarProps) {
+export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultProvider, defaultModel, currentView, onNavigate, sandboxStatus, isPlatformMode, user, org, orgs, onOrgSwitch, activeTeam, teams, onTeamChange, onLogout, personalMemoryMode, onTogglePersonalMemoryMode }: TopBarProps) {
   const navBackground = theme === 'dark' ? 'rgba(15, 23, 42, 0.92)' : 'rgba(255,255,255,0.86)'
   const navBorder = theme === 'dark' ? 'rgba(255,255,255,0.08)' : 'var(--border-color)'
   const inactiveBg = theme === 'dark' ? 'rgba(255,255,255,0.04)' : 'var(--bg-tertiary)'
@@ -263,8 +265,25 @@ export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultPro
           </div>
         )}
 
-        {/* ---- Right: Team selector, action buttons, user avatar ---- */}
+        {/* ---- Right: Memory mode, Team selector, action buttons, user avatar ---- */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Personal Memory Mode toggle — platform mode only */}
+          {isPlatformMode && onTogglePersonalMemoryMode && (
+            <button
+              onClick={onTogglePersonalMemoryMode}
+              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium transition-all"
+              title={personalMemoryMode ? 'Personal mode: memories saved privately. Click to switch to team mode.' : 'Team mode: memories shared with team. Click to switch to personal mode.'}
+              style={{
+                background: personalMemoryMode ? 'rgba(59,130,246,0.15)' : 'rgba(168,85,247,0.15)',
+                color: personalMemoryMode ? '#3b82f6' : '#a855f7',
+                border: `1px solid ${personalMemoryMode ? 'rgba(59,130,246,0.3)' : 'rgba(168,85,247,0.3)'}`,
+              }}
+            >
+              {personalMemoryMode ? <User size={13} /> : <Users size={13} />}
+              <span className="hidden xl:inline">{personalMemoryMode ? 'Personal' : 'Team'}</span>
+            </button>
+          )}
+
           {/* Team selector — hidden below md (available in mobile drawer instead) */}
           {isPlatformMode && teams && teams.length > 1 && (
             <div ref={teamRef} className="relative hidden md:block">

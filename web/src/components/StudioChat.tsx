@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow, Brain } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
@@ -18,6 +18,8 @@ import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
 import TodoPanel from './chat/TodoPanel'
 import AppsPanel from './chat/AppsPanel'
+import SessionMemoryPanel from './SessionMemoryPanel'
+import { listSessionMemories } from '../api/platform'
 import UsagePopover from './chat/UsagePopover'
 import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
@@ -216,6 +218,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Token usage state (from API-reported UsageMetadata)
   const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
+  const [hasSessionMemories, setHasSessionMemories] = useState(false) // whether session has any memories
+  const [showMemoryPanel, setShowMemoryPanel] = useState(false)
+  const [isConsolidatingMemories, setIsConsolidatingMemories] = useState(false) // true while reflector+extraction runs after done
 
   // Refs
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -276,6 +281,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setActiveSessionId(sessionId)
     setActiveAppId(null) // clear active app refinement state on session switch
     setAppsPanelOpen(false)
+    setHasSessionMemories(false) // reset memory state on session switch
     if (userInitiated) {
       setActiveWizardContext(null) // only clear wizard context on explicit user navigation
     }
@@ -528,6 +534,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     } finally {
       setIsLoadingHistory(false)
     }
+
+    // Check if this session has any memories (async, non-blocking)
+    listSessionMemories(sessionId)
+      .then(res => {
+        if (res.memories && res.memories.length > 0) {
+          setHasSessionMemories(true)
+        }
+      })
+      .catch(() => { /* ignore */ })
   }
 
   // Reconnect to an active background chat runner. The runner streams all
@@ -599,6 +614,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             if (data.data && data.mimeType) {
               setMessages((prev: ChatMsg[]) => [...prev, { type: 'image', data: data.data, mimeType: data.mimeType }])
             }
+            break
+
+          case 'memory_saved':
+            setHasSessionMemories(true)
             break
 
           case 'artifact':
@@ -745,6 +764,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               })
             }
             setIsStreaming(false)
+            // After done, check for session memories (reflector may still be running)
+            setIsConsolidatingMemories(true)
+            setTimeout(async () => {
+              try {
+                const res = await listSessionMemories(sessionId)
+                if (res.memories && res.memories.length > 0) {
+                  setHasSessionMemories(true)
+                }
+              } catch { /* ignore */ }
+              setIsConsolidatingMemories(false)
+            }, 8000)
             break
 
           case 'subtask_progress': {
@@ -1173,6 +1203,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }
             break
 
+          case 'memory_saved':
+            // Mark that this session has memories (optimistic)
+            setHasSessionMemories(true)
+            break
+
           case 'image':
             if (data.data && data.mimeType) {
               setMessages((prev: ChatMsg[]) => [...prev, { type: 'image', data: data.data, mimeType: data.mimeType }])
@@ -1566,6 +1601,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               })
             }
             setIsStreaming(false)
+            // After done, the platform reflector runs async (reflection + extraction).
+            // Mark as consolidating so the memory panel shows a loading state.
+            setIsConsolidatingMemories(true)
+            if (activeSessionId) {
+              const sid = activeSessionId
+              setTimeout(async () => {
+                try {
+                  const res = await listSessionMemories(sid)
+                  if (res.memories && res.memories.length > 0) {
+                    setHasSessionMemories(true)
+                  }
+                } catch { /* ignore — session may have been deleted */ }
+                setIsConsolidatingMemories(false)
+              }, 8000) // 8s delay to give reflector + extraction time to finish
+            } else {
+              setIsConsolidatingMemories(false)
+            }
             break
 
           case 'usage': {
@@ -2646,6 +2698,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 <Square size={16} />
               </button>
             )}
+            {hasSessionMemories && (
+              <button
+                type="button"
+                className="px-3 py-2.5 rounded-lg cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+                title="View session memories — click to review and edit"
+                onClick={() => setShowMemoryPanel(true)}
+              >
+                <Brain size={16} className="text-purple-400" />
+              </button>
+            )}
             <div className="relative flex-1">
               <textarea
                 data-testid="chat-input"
@@ -2750,6 +2813,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           sendMessage(`/fleet-plan ${templateKey}`)
         }}
         onCancel={() => setShowTemplatePicker(false)}
+      />
+    )}
+
+    {/* Session Memory Panel */}
+    {showMemoryPanel && activeSessionId && (
+      <SessionMemoryPanel
+        sessionId={activeSessionId}
+        isConsolidating={isConsolidatingMemories}
+        onClose={() => setShowMemoryPanel(false)}
       />
     )}
     </>

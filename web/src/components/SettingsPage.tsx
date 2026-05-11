@@ -251,6 +251,8 @@ function TeamMCPServersTab({ teamSlug, theme }: { teamSlug: string; theme: strin
 
   // Org-level MCP servers (inherited, read-only)
   const [orgServers, setOrgServers] = useState<Record<string, MCPServerConfig>>({})
+  // Platform-level MCP servers (inherited, read-only)
+  const [platformServers, setPlatformServers] = useState<Record<string, MCPServerConfig>>({})
 
   const loadData = useCallback(async () => {
     try {
@@ -280,12 +282,56 @@ function TeamMCPServersTab({ teamSlug, theme }: { teamSlug: string; theme: strin
     }
   }, [])
 
-  useEffect(() => { loadData(); loadOrgServers() }, [loadData, loadOrgServers])
+  const loadPlatformServers = useCallback(async () => {
+    try {
+      const data = await fetchMCPConfig(undefined, 'platform')
+      setPlatformServers(data.mcpServers || {})
+    } catch {
+      // Platform servers are optional/inherited — ignore errors
+    }
+  }, [])
 
+  useEffect(() => { loadData(); loadOrgServers(); loadPlatformServers() }, [loadData, loadOrgServers, loadPlatformServers])
+
+  const platformServerEntries = Object.entries(platformServers)
   const orgServerEntries = Object.entries(orgServers)
 
   return (
     <div className="space-y-6">
+      {/* Platform-level inherited MCP servers (read-only) */}
+      {platformServerEntries.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Platform (inherited)
+          </div>
+          <div className="space-y-2">
+            {platformServerEntries.map(([name, server]) => (
+              <div
+                key={name}
+                className="flex items-center justify-between p-3 rounded-lg"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', opacity: 0.85 }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: server.enabled !== false ? '#22c55e' : '#6b7280' }}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{name}</div>
+                    <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                      {server.transport === 'sse' || server.url ? server.url || 'SSE' : `${server.command || ''} ${(server.args || []).join(' ')}`.trim() || 'No command'}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
+                  platform
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Org-level inherited MCP servers (read-only) */}
       {orgServerEntries.length > 0 && (
         <div>
@@ -321,7 +367,7 @@ function TeamMCPServersTab({ teamSlug, theme }: { teamSlug: string; theme: strin
       )}
 
       {/* Team-level MCP servers (editable) */}
-      {orgServerEntries.length > 0 && (
+      {(orgServerEntries.length > 0 || platformServerEntries.length > 0) && (
         <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
           Team
         </div>
@@ -362,6 +408,9 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
   const [, setSaveSuccess] = useState(false)
   const [, setError] = useState<string | null>(null)
 
+  // Platform-level MCP servers (inherited, read-only)
+  const [platformServers, setPlatformServers] = useState<Record<string, MCPServerConfig>>({})
+
   const loadData = useCallback(async () => {
     try {
       // No teamSlug → fetches org-level MCP config
@@ -381,6 +430,119 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
     }
   }, [])
 
+  const loadPlatformServers = useCallback(async () => {
+    try {
+      const data = await fetchMCPConfig(undefined, 'platform')
+      setPlatformServers(data.mcpServers || {})
+    } catch {
+      // Platform servers are optional/inherited — ignore errors
+    }
+  }, [])
+
+  useEffect(() => { loadData(); loadPlatformServers() }, [loadData, loadPlatformServers])
+
+  const platformServerEntries = Object.entries(platformServers)
+
+  return (
+    <div className="space-y-6">
+      {/* Platform-level inherited MCP servers (read-only) */}
+      {platformServerEntries.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Platform (inherited)
+          </div>
+          <div className="space-y-2">
+            {platformServerEntries.map(([name, server]) => (
+              <div
+                key={name}
+                className="flex items-center justify-between p-3 rounded-lg"
+                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', opacity: 0.85 }}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ background: server.enabled !== false ? '#22c55e' : '#6b7280' }}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{name}</div>
+                    <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                      {server.transport === 'sse' || server.url ? server.url || 'SSE' : `${server.command || ''} ${(server.args || []).join(' ')}`.trim() || 'No command'}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] px-2 py-0.5 rounded-full shrink-0" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#a855f7' }}>
+                  platform
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Org-level MCP servers (editable) */}
+      {platformServerEntries.length > 0 && (
+        <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+          Organization
+        </div>
+      )}
+      <MCPServersSettings
+        mcpServers={mcpServers}
+        setMcpServers={setMcpServers}
+        mcpServerNames={mcpServerNames}
+        setMcpServerNames={setMcpServerNames}
+        mcpServerArgs={mcpServerArgs}
+        setMcpServerArgs={setMcpServerArgs}
+        setMcpHasChanges={setMcpHasChanges}
+        standardServers={[]}
+        saving={saving}
+        setSaving={setSaving}
+        setSaveSuccess={setSaveSuccess}
+        setError={setError}
+        onToolsRefresh={loadData}
+        loadData={loadData}
+        setGeneralForm={() => {}}
+        theme={theme}
+      />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// PlatformMCPServersTab — wraps MCPServersSettings for platform-level MCP management (superadmin)
+// ---------------------------------------------------------------------------
+
+function PlatformMCPServersTab({ theme }: { theme: string }) {
+  const [mcpServers, setMcpServers] = useState<Record<string, MCPServerConfig>>({})
+  const [mcpServerNames, setMcpServerNames] = useState<Record<string, string>>({})
+  const [mcpServerArgs, setMcpServerArgs] = useState<Record<string, string>>({})
+  const [, setMcpHasChanges] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [, setSaveSuccess] = useState(false)
+  const [, setError] = useState<string | null>(null)
+  const [standardServers, setStandardServers] = useState<any[]>([])
+
+  const loadData = useCallback(async () => {
+    try {
+      const [data, stdServers] = await Promise.all([
+        fetchMCPConfig(undefined, 'platform'),
+        fetch('/api/standard-servers').then(r => r.ok ? r.json() : { servers: [] }).catch(() => ({ servers: [] }))
+      ])
+      const servers = data.mcpServers || {}
+      setMcpServers(servers)
+      setStandardServers(stdServers.servers || [])
+      const names: Record<string, string> = {}
+      const args: Record<string, string> = {}
+      Object.entries(servers).forEach(([name, server]) => {
+        names[name] = name
+        args[name] = (server.args || []).join(', ')
+      })
+      setMcpServerNames(names)
+      setMcpServerArgs(args)
+    } catch (err) {
+      console.error('Failed to load platform MCP config:', err)
+    }
+  }, [])
+
   useEffect(() => { loadData() }, [loadData])
 
   return (
@@ -392,7 +554,7 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
       mcpServerArgs={mcpServerArgs}
       setMcpServerArgs={setMcpServerArgs}
       setMcpHasChanges={setMcpHasChanges}
-      standardServers={[]}
+      standardServers={standardServers}
       saving={saving}
       setSaving={setSaving}
       setSaveSuccess={setSaveSuccess}
@@ -401,6 +563,7 @@ function OrgMCPServersTab({ theme }: { theme: string }) {
       loadData={loadData}
       setGeneralForm={() => {}}
       theme={theme}
+      scope="platform"
     />
   )
 }
@@ -1238,7 +1401,12 @@ export default function SettingsPage({
               </div>
             </Suspense>
           )}
-          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && isSuperadmin && (
+          {activeSection === 'platform-mcp' && isSuperadmin && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <PlatformMCPServersTab theme={theme as string} />
+            </Suspense>
+          )}
+          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <PlatformAdminPanel theme={theme as 'dark' | 'light'} activeTab={activeSection.replace('platform-', '')} />
             </Suspense>

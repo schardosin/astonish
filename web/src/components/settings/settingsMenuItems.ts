@@ -50,6 +50,7 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-orgs', label: 'Organizations', icon: Building2 },
   { id: 'platform-users', label: 'Users', icon: UserCog },
   { id: 'platform-providers', label: 'Providers', icon: Key },
+  { id: 'platform-mcp', label: 'MCP Servers', icon: Server },
   { id: 'platform-channels', label: 'Channels', icon: Radio },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
 ]

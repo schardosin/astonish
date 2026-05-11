@@ -53,6 +53,18 @@ func (w *MemoryStoreWrapper) Add(ctx context.Context, entry store.MemoryEntry) e
 	return w.inner.AddDocuments(ctx, []memory.Chunk{chunk})
 }
 
+// Get retrieves a single memory entry by ID.
+// The file-based store doesn't support ID-based retrieval natively.
+func (w *MemoryStoreWrapper) Get(_ context.Context, _ string) (*store.MemorySearchResult, error) {
+	return nil, fmt.Errorf("get by ID not supported in file-based memory store")
+}
+
+// Update modifies a memory entry by ID.
+// The file-based store doesn't support ID-based updates.
+func (w *MemoryStoreWrapper) Update(_ context.Context, _, _, _ string) error {
+	return fmt.Errorf("update not supported in file-based memory store")
+}
+
 // Delete removes a memory chunk by ID from the file-based store.
 func (w *MemoryStoreWrapper) Delete(ctx context.Context, id string) error {
 	return w.inner.DeleteByIDs(ctx, []string{id})
@@ -83,6 +95,12 @@ func (w *MemoryStoreWrapper) Count() int {
 
 func (w *MemoryStoreWrapper) Close() error {
 	return w.inner.Close()
+}
+
+// ListBySession is not supported in the file-based memory store.
+// File-based memories don't track session provenance.
+func (w *MemoryStoreWrapper) ListBySession(_ context.Context, _ string) ([]store.MemorySearchResult, error) {
+	return nil, nil
 }
 
 func convertSearchResults(results []memory.SearchResult) []store.MemorySearchResult {

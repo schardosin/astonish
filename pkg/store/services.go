@@ -87,6 +87,11 @@ type Services struct {
 	// Team MCP servers override org MCP servers of the same name. Team admins manage these.
 	TeamMCPServers MCPServerStore
 
+	// PlatformMCPServers provides access to platform-wide MCP server configurations.
+	// Platform MCP servers are inherited by all organizations and teams.
+	// Only superadmins can manage these. Nil in personal mode.
+	PlatformMCPServers MCPServerStore
+
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,12 +14,14 @@ import (
 
 // pgMCPServerStore implements store.MCPServerStore for PostgreSQL.
 //
-// Reused for both org-level ("public"."org_mcp_servers") and
-// team-level ("team_<slug>"."mcp_servers") by parameterizing schema and table.
+// Reused for org-level ("public"."org_mcp_servers"), team-level
+// ("team_<slug>"."mcp_servers"), and platform-level ("public"."platform_mcp_servers")
+// by parameterizing schema, table, and optional encryption.
 type pgMCPServerStore struct {
-	pool   *pgxpool.Pool
-	schema string
-	table  string
+	pool    *pgxpool.Pool
+	schema  string
+	table   string
+	secrets *PlatformSecretStore // optional; when set, Env values are encrypted at rest
 }
 
 func (s *pgMCPServerStore) tableName() string {
@@ -69,6 +72,15 @@ func (s *pgMCPServerStore) Save(server *store.MCPServer) error {
 	envJSON, err := json.Marshal(server.Env)
 	if err != nil {
 		envJSON = []byte("{}")
+	}
+
+	// Encrypt env JSON at rest when secrets store is configured (platform tier).
+	if s.secrets != nil && len(envJSON) > 2 { // > 2 = not empty "{}"
+		encrypted, encErr := s.secrets.encrypt(envJSON)
+		if encErr != nil {
+			return fmt.Errorf("encrypt mcp env: %w", encErr)
+		}
+		envJSON = encrypted
 	}
 
 	enabled := true
@@ -155,6 +167,7 @@ func (s *pgMCPServerStore) scanRow(rows pgx.Rows) (*store.MCPServer, error) {
 		_ = json.Unmarshal(argsJSON, &srv.Args)
 	}
 	if len(envJSON) > 0 {
+		envJSON = s.decryptEnv(envJSON)
 		_ = json.Unmarshal(envJSON, &srv.Env)
 	}
 	if len(cachedToolsJSON) > 0 {
@@ -194,6 +207,7 @@ func (s *pgMCPServerStore) scanSingleRow(row pgx.Row) (*store.MCPServer, error) 
 		_ = json.Unmarshal(argsJSON, &srv.Args)
 	}
 	if len(envJSON) > 0 {
+		envJSON = s.decryptEnv(envJSON)
 		_ = json.Unmarshal(envJSON, &srv.Env)
 	}
 	if len(cachedToolsJSON) > 0 {
@@ -201,4 +215,19 @@ func (s *pgMCPServerStore) scanSingleRow(row pgx.Row) (*store.MCPServer, error) 
 	}
 
 	return &srv, nil
+}
+
+// decryptEnv decrypts env JSON if encryption is configured.
+// Falls back to returning raw data if decryption fails (unencrypted legacy data).
+func (s *pgMCPServerStore) decryptEnv(data []byte) []byte {
+	if s.secrets == nil {
+		return data
+	}
+	plaintext, err := s.secrets.decrypt(data)
+	if err != nil {
+		// Likely unencrypted (stored before encryption was enabled)
+		slog.Debug("mcp env decrypt fallback to raw", "error", err)
+		return data
+	}
+	return plaintext
 }

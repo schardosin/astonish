@@ -62,7 +62,8 @@ type ChatAgent struct {
 
 	// Memory and knowledge
 	MemoryManager             *memory.Manager               // Persistent memory manager
-	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled)
+	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled, personal mode)
+	PlatformReflector         *PlatformReflector            // Post-task memory reflection for platform mode (nil = disabled)
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
 	// Task delegation

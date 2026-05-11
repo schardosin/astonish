@@ -185,7 +185,7 @@ export default function SettingsContent({
           mcpServerArgs={mcpServerArgs}
           setMcpServerArgs={setMcpServerArgs}
           setMcpHasChanges={setMcpHasChanges}
-          standardServers={standardServers}
+          standardServers={isPlatformMode ? [] : standardServers}
           saving={saving}
           setSaving={setSaving}
           setSaveSuccess={setSaveSuccess}

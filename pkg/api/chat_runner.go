@@ -70,6 +70,9 @@ type ChatRunner struct {
 // immediately (used in tests).
 func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 	ctx, cancel := context.WithCancel(context.Background())
+	// Inject session ID into context so tool functions (e.g., memory_save)
+	// can tag entries with the session that created them.
+	ctx = store.WithSessionID(ctx, sessionID)
 	return &ChatRunner{
 		SessionID:   sessionID,
 		UserID:      userID,
@@ -414,6 +417,17 @@ func (cr *ChatRunner) Run(
 				}
 			}
 		}
+
+		// Emit memory_saved when a sub-agent saves a memory
+		if evt.Type == "task_tool_result" && evt.ToolName == "memory_save" {
+			if resultMap, ok := evt.ToolResult.(map[string]any); ok {
+				if saved, ok := resultMap["saved"]; ok && saved == true {
+					cr.emitEvent("memory_saved", map[string]any{
+						"session_id": cr.SessionID,
+					})
+				}
+			}
+		}
 	}
 	defer func() { chatAgent.SubTaskProgressCallback = nil }()
 
@@ -490,6 +504,15 @@ func (cr *ChatRunner) Run(
 						"result": summarizeToolResult(resp),
 					})
 					cr.drainImagesAndFlowOutput(chatAgent)
+
+					// Emit memory_saved SSE event when memory_save tool succeeds
+					if part.FunctionResponse.Name == "memory_save" && resp != nil {
+						if saved, ok := resp["saved"]; ok && saved == true {
+							cr.emitEvent("memory_saved", map[string]any{
+								"session_id": cr.SessionID,
+							})
+						}
+					}
 				}
 			}
 		}

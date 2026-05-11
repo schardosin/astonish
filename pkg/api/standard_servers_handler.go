@@ -241,6 +241,22 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		return
 	}
 
+	// Write the API key to platform_secrets so that IsStandardServerInstalled()
+	// and MergeStandardServers() can resolve it via the registered SecretGetter.
+	// This is the critical bridge between DB MCP config and the credential resolution path.
+	if pgStore := getPlatformPGStore(); pgStore != nil {
+		for _, ev := range srv.EnvVars {
+			if val, ok := req.Env[ev.Name]; ok && val != "" {
+				storeKey := "web_servers." + srv.ID + ".api_key"
+				if err := pgStore.PlatformSecrets().SetSecret(storeKey, val); err != nil {
+					slog.Warn("failed to write standard server API key to platform_secrets",
+						"server", srv.ID, "key", storeKey, "error", err)
+				}
+				break
+			}
+		}
+	}
+
 	// Discover tools in background
 	servers := map[string]config.MCPServerConfig{srv.ID: newConfig}
 	go func() {

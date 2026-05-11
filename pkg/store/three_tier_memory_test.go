@@ -94,6 +94,51 @@ func (m *mockMemoryStore) Count() int {
 	return len(m.entries)
 }
 
+func (m *mockMemoryStore) Get(_ context.Context, id string) (*MemorySearchResult, error) {
+	for i, e := range m.entries {
+		entryID := fmt.Sprintf("%s-%d", m.scope, i)
+		if entryID == id {
+			return &MemorySearchResult{
+				ID:       entryID,
+				Snippet:  e.Content,
+				Category: e.Category,
+				Score:    1.0,
+				Scope:    m.scope,
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+func (m *mockMemoryStore) Update(_ context.Context, id string, content string, category string) error {
+	for i := range m.entries {
+		entryID := fmt.Sprintf("%s-%d", m.scope, i)
+		if entryID == id {
+			m.entries[i].Content = content
+			m.entries[i].Category = category
+			return nil
+		}
+	}
+	return fmt.Errorf("not found: %s", id)
+}
+
+func (m *mockMemoryStore) ListBySession(_ context.Context, sessionID string) ([]MemorySearchResult, error) {
+	var results []MemorySearchResult
+	for i, e := range m.entries {
+		if e.SessionID == sessionID {
+			results = append(results, MemorySearchResult{
+				ID:        fmt.Sprintf("%s-%d", m.scope, i),
+				Snippet:   e.Content,
+				Category:  e.Category,
+				Score:     1.0,
+				Scope:     m.scope,
+				SessionID: e.SessionID,
+			})
+		}
+	}
+	return results, nil
+}
+
 func (m *mockMemoryStore) Close() error {
 	return nil
 }

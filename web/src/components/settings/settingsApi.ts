@@ -134,20 +134,22 @@ export const replaceAllProviders = async (providers: Record<string, unknown>[]):
   return res.json()
 }
 
-export const fetchMCPConfig = async (teamSlug?: string): Promise<MCPConfigData> => {
-  const url = teamSlug ? '/api/settings/mcp?scope=team' : '/api/settings/mcp'
-  const res = await teamFetch(url, undefined, teamSlug)
+export const fetchMCPConfig = async (teamSlug?: string, scope?: string): Promise<MCPConfigData> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/settings/mcp?scope=${effectiveScope}` : '/api/settings/mcp'
+  const res = await teamFetch(url, undefined, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP config')
   return res.json()
 }
 
-export const saveMCPConfig = async (data: Record<string, unknown>, teamSlug?: string): Promise<unknown> => {
-  const url = teamSlug ? '/api/settings/mcp?scope=team' : '/api/settings/mcp'
+export const saveMCPConfig = async (data: Record<string, unknown>, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/settings/mcp?scope=${effectiveScope}` : '/api/settings/mcp'
   const res = await teamFetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  }, teamSlug)
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to save MCP config')
   return res.json()
 }
@@ -197,34 +199,37 @@ export const removeTap = async (name: string, teamSlug?: string): Promise<unknow
 }
 
 // Fetch MCP server status
-export const fetchMCPStatus = async (teamSlug?: string): Promise<{ servers: MCPServerStatusEntry[] }> => {
-  const url = teamSlug ? '/api/mcp/status?scope=team' : '/api/mcp/status'
-  const res = await teamFetch(url, undefined, teamSlug)
+export const fetchMCPStatus = async (teamSlug?: string, scope?: string): Promise<{ servers: MCPServerStatusEntry[] }> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/mcp/status?scope=${effectiveScope}` : '/api/mcp/status'
+  const res = await teamFetch(url, undefined, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP status')
   return res.json()
 }
 
 // Toggle MCP server enabled/disabled
-export const toggleMCPServer = async (name: string, enabled: boolean, teamSlug?: string): Promise<unknown> => {
-  const url = teamSlug
-    ? `/api/mcp/servers/${encodeURIComponent(name)}?scope=team`
+export const toggleMCPServer = async (name: string, enabled: boolean, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope
+    ? `/api/mcp/servers/${encodeURIComponent(name)}?scope=${effectiveScope}`
     : `/api/mcp/servers/${encodeURIComponent(name)}`
   const res = await teamFetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled })
-  }, teamSlug)
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to toggle server')
   return res.json()
 }
 
-export const refreshMCPServer = async (serverName: string, teamSlug?: string): Promise<unknown> => {
-  const url = teamSlug
-    ? `/api/mcp/${encodeURIComponent(serverName)}/refresh?scope=team`
+export const refreshMCPServer = async (serverName: string, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope
+    ? `/api/mcp/${encodeURIComponent(serverName)}/refresh?scope=${effectiveScope}`
     : `/api/mcp/${encodeURIComponent(serverName)}/refresh`
   const res = await teamFetch(url, {
     method: 'POST'
-  }, teamSlug)
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to refresh server')

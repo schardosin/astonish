@@ -1913,6 +1913,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			reflector.MemoryStore = memStore
 		}
 		chatAgent.MemoryReflector = reflector
+	} else if cfg.PlatformMode {
+		// Platform mode: use PlatformReflector which writes to PG team memory
+		// store via context injection. It also runs extraction/consolidation
+		// after each turn to keep session memories well-organized.
+		chatAgent.PlatformReflector = &agent.PlatformReflector{
+			LLM:       llm,
+			DebugMode: cfg.DebugMode,
+		}
 	}
 
 	// Build ShutdownSandbox callback (nil when sandbox is not enabled)

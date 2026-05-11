@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Search, Brain, Plus, Trash2, ArrowUpRight, Loader2, AlertCircle, BookOpen } from 'lucide-react'
+import { Search, Brain, Plus, Trash2, ArrowUpRight, Loader2, AlertCircle, BookOpen, User, ChevronDown, ChevronUp, Pencil, X, Check } from 'lucide-react'
 import {
-  searchMemories, listTeamMemories, listOrgMemories,
-  saveTeamMemory, savePersonalMemory,
-  deleteTeamMemory, deleteOrgMemory, promoteMemoryToOrg,
+  searchMemories, listTeamMemories, listOrgMemories, listPersonalMemories,
+  saveTeamMemory, savePersonalMemory, saveOrgMemory,
+  deleteTeamMemory, deleteOrgMemory, deletePersonalMemory,
+  promoteMemoryToOrg, promotePersonalToTeam, updateMemory,
 } from '../api/platform'
 import type { MemoryEntry } from '../api/platform'
 
@@ -12,7 +13,7 @@ interface KnowledgeBrowserProps {
   user: { id: string; email: string; display_name: string; role: string }
   activeTeam?: string | null
 }
-type Tab = 'team' | 'org' | 'add'
+type Tab = 'personal' | 'team' | 'org' | 'add'
 const SCOPE_COLORS: Record<string, string> = { personal: '#3b82f6', team: '#a855f7', org: '#10b981' }
 
 function ScopeBadge({ scope }: { scope: string }) {
@@ -26,18 +27,101 @@ function ScopeBadge({ scope }: { scope: string }) {
 }
 
 interface MemoryCardProps {
-  entry: MemoryEntry; isAdmin: boolean; showPromote: boolean
-  onDelete: (id: string) => void; onPromote?: (id: string) => void
+  entry: MemoryEntry
+  userId: string
+  isAdmin: boolean
+  currentTab: Tab
+  onDelete: (id: string, scope: string) => void
+  onPromote?: (id: string, direction: 'to-team' | 'to-org') => void
+  onUpdate?: (id: string, scope: string, content: string, category: string) => void
 }
 
-function MemoryCard({ entry, isAdmin, showPromote, onDelete, onPromote }: MemoryCardProps) {
-  const snippet = entry.snippet.length > 200 ? entry.snippet.slice(0, 200) + '...' : entry.snippet
-  const canDelete = entry.scope === 'team' || (entry.scope === 'org' && isAdmin)
+function MemoryCard({ entry, userId, isAdmin, currentTab, onDelete, onPromote, onUpdate }: MemoryCardProps) {
+  const [expanded, setExpanded] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editContent, setEditContent] = useState(entry.snippet)
+  const [editCategory, setEditCategory] = useState(entry.category || '')
+  const isLong = entry.snippet.length > 200
+
+  // Determine if user can manage this memory
+  const isOwner = entry.created_by === userId
+  const canManage = entry.scope === 'personal' || isOwner || (entry.scope === 'team' && isAdmin) || (entry.scope === 'org' && isAdmin)
+
+  // Determine promotion options
+  const canPromoteToTeam = entry.scope === 'personal' && currentTab === 'personal'
+  const canPromoteToOrg = entry.scope === 'team' && currentTab === 'team' && isAdmin
+
+  const handleSaveEdit = () => {
+    if (editContent.trim() && onUpdate) {
+      onUpdate(entry.id, entry.scope, editContent.trim(), editCategory.trim())
+      setEditing(false)
+    }
+  }
+
+  const handleCancelEdit = () => {
+    setEditContent(entry.snippet)
+    setEditCategory(entry.category || '')
+    setEditing(false)
+  }
+
+  const displayText = expanded || editing ? entry.snippet : (isLong ? entry.snippet.slice(0, 200) + '...' : entry.snippet)
 
   return (
-    <div className="p-4 rounded-lg border"
+    <div className="p-4 rounded-lg border transition-all"
       style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-      <p className="text-sm mb-3 leading-relaxed" style={{ color: 'var(--text-primary)' }}>{snippet}</p>
+
+      {/* Content area */}
+      {editing ? (
+        <div className="space-y-3 mb-3">
+          <textarea
+            value={editContent}
+            onChange={e => setEditContent(e.target.value)}
+            rows={6}
+            className="w-full rounded-lg px-3 py-2 text-sm outline-none resize-y"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+          />
+          <input
+            type="text"
+            value={editCategory}
+            onChange={e => setEditCategory(e.target.value)}
+            placeholder="Category"
+            className="w-full rounded-lg px-3 py-2 text-sm outline-none"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+          />
+          <div className="flex gap-2">
+            <button onClick={handleSaveEdit} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent, #a855f7)' }}>
+              <Check size={12} /> Save
+            </button>
+            <button onClick={handleCancelEdit} className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs" style={{ color: 'var(--text-muted)' }}>
+              <X size={12} /> Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mb-3">
+          <p className="text-sm leading-relaxed whitespace-pre-wrap" style={{ color: 'var(--text-primary)' }}>{displayText}</p>
+          {isLong && !expanded && (
+            <button
+              onClick={() => setExpanded(true)}
+              className="flex items-center gap-1 mt-2 text-xs font-medium transition-colors hover:opacity-80"
+              style={{ color: 'var(--accent, #a855f7)' }}
+            >
+              <ChevronDown size={14} /> Show more
+            </button>
+          )}
+          {isLong && expanded && (
+            <button
+              onClick={() => setExpanded(false)}
+              className="flex items-center gap-1 mt-2 text-xs font-medium transition-colors hover:opacity-80"
+              style={{ color: 'var(--accent, #a855f7)' }}
+            >
+              <ChevronUp size={14} /> Show less
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Footer with badges and actions */}
       <div className="flex items-center gap-2 flex-wrap">
         <ScopeBadge scope={entry.scope} />
         {entry.category && (
@@ -46,14 +130,32 @@ function MemoryCard({ entry, isAdmin, showPromote, onDelete, onPromote }: Memory
             {entry.category}
           </span>
         )}
-        {entry.score != null && (
+        {entry.score != null && entry.score < 1.0 && (
           <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-            {(entry.score * 100).toFixed(0)}% match</span>
+            {(entry.score * 100).toFixed(0)}% match
+          </span>
         )}
+        {entry.created_at && (
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            {new Date(entry.created_at).toLocaleDateString()}
+          </span>
+        )}
+
+        {/* Actions */}
         <div className="flex items-center gap-1 ml-auto">
-          {showPromote && isAdmin && entry.scope === 'team' && onPromote && (
+          {canPromoteToTeam && onPromote && (
             <button
-              onClick={() => onPromote(entry.id)}
+              onClick={() => onPromote(entry.id, 'to-team')}
+              title="Promote to Team"
+              className="p-1.5 rounded-md transition-colors hover:opacity-80"
+              style={{ color: SCOPE_COLORS.team }}
+            >
+              <ArrowUpRight size={15} />
+            </button>
+          )}
+          {canPromoteToOrg && onPromote && (
+            <button
+              onClick={() => onPromote(entry.id, 'to-org')}
               title="Promote to Org"
               className="p-1.5 rounded-md transition-colors hover:opacity-80"
               style={{ color: SCOPE_COLORS.org }}
@@ -61,9 +163,19 @@ function MemoryCard({ entry, isAdmin, showPromote, onDelete, onPromote }: Memory
               <ArrowUpRight size={15} />
             </button>
           )}
-          {canDelete && (
+          {canManage && !editing && (
             <button
-              onClick={() => onDelete(entry.id)}
+              onClick={() => { setEditing(true); setExpanded(true) }}
+              title="Edit"
+              className="p-1.5 rounded-md transition-colors hover:opacity-80"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Pencil size={15} />
+            </button>
+          )}
+          {canManage && (
+            <button
+              onClick={() => onDelete(entry.id, entry.scope)}
               title="Delete"
               className="p-1.5 rounded-md transition-colors hover:opacity-80"
               style={{ color: 'var(--danger, #ef4444)' }}
@@ -77,21 +189,23 @@ function MemoryCard({ entry, isAdmin, showPromote, onDelete, onPromote }: Memory
   )
 }
 
-// ─── Main Component ───
+// Main Component
 export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeBrowserProps) {
-  const isAdmin = user.role === 'admin'
-  const [tab, setTab] = useState<Tab>('team')
+  const isAdmin = user.role === 'admin' || user.role === 'owner'
+  const [tab, setTab] = useState<Tab>('personal')
   const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState<MemoryEntry[] | null>(null)
+  const [personalEntries, setPersonalEntries] = useState<MemoryEntry[]>([])
   const [teamEntries, setTeamEntries] = useState<MemoryEntry[]>([])
   const [orgEntries, setOrgEntries] = useState<MemoryEntry[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [success, setSuccess] = useState<string | null>(null)
 
   // Add-form state
   const [snippet, setSnippet] = useState('')
   const [category, setCategory] = useState('')
-  const [saveScope, setSaveScope] = useState<'personal' | 'team'>('personal')
+  const [saveScope, setSaveScope] = useState<'personal' | 'team' | 'org'>('personal')
   const [saving, setSaving] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -100,8 +214,10 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     setLoading(true)
     setError(null)
     try {
-      if (t === 'team') setTeamEntries(await listTeamMemories(activeTeam || undefined))
-      else setOrgEntries(await listOrgMemories(activeTeam || undefined))
+      const teamSlug = activeTeam || undefined
+      if (t === 'personal') setPersonalEntries(await listPersonalMemories(teamSlug))
+      else if (t === 'team') setTeamEntries(await listTeamMemories(teamSlug))
+      else setOrgEntries(await listOrgMemories(teamSlug))
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -118,6 +234,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
 
   const switchTab = useCallback((t: Tab) => {
     setTab(t)
+    setSuccess(null)
     loadTab(t)
   }, [loadTab])
 
@@ -142,24 +259,44 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
   }, [query, activeTeam])
 
   const handleDelete = useCallback(async (id: string, scope: string) => {
+    if (!confirm('Delete this memory permanently?')) return
     setError(null)
     try {
-      if (scope === 'team') await deleteTeamMemory(id, activeTeam || undefined)
-      else if (scope === 'org') await deleteOrgMemory(id, activeTeam || undefined)
-      // Refresh the current view
+      const teamSlug = activeTeam || undefined
+      if (scope === 'personal') await deletePersonalMemory(id, teamSlug)
+      else if (scope === 'team') await deleteTeamMemory(id, teamSlug)
+      else if (scope === 'org') await deleteOrgMemory(id, teamSlug)
+      // Remove from local state
       if (searchResults) {
         setSearchResults(prev => prev ? prev.filter(e => e.id !== id) : null)
       }
+      setSuccess('Memory deleted')
       loadTab(tab)
     } catch (err: any) {
       setError(err.message)
     }
   }, [searchResults, tab, loadTab, activeTeam])
 
-  const handlePromote = useCallback(async (id: string) => {
+  const handlePromote = useCallback(async (id: string, direction: 'to-team' | 'to-org') => {
+    const label = direction === 'to-team' ? 'team' : 'organization'
+    if (!confirm(`Promote this memory to ${label}? It will be moved (removed from the current level).`)) return
     setError(null)
     try {
-      await promoteMemoryToOrg(id, activeTeam || undefined)
+      const teamSlug = activeTeam || undefined
+      if (direction === 'to-team') await promotePersonalToTeam(id, teamSlug)
+      else await promoteMemoryToOrg(id, teamSlug)
+      setSuccess(`Memory promoted to ${label}`)
+      loadTab(tab)
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }, [tab, loadTab, activeTeam])
+
+  const handleUpdate = useCallback(async (id: string, scope: string, content: string, cat: string) => {
+    setError(null)
+    try {
+      await updateMemory(scope, id, content, cat, activeTeam || undefined)
+      setSuccess('Memory updated')
       loadTab(tab)
     } catch (err: any) {
       setError(err.message)
@@ -172,11 +309,14 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     setError(null)
     try {
       const cat = category.trim() || 'general'
-      if (saveScope === 'team') await saveTeamMemory(snippet, cat, activeTeam || undefined)
-      else await savePersonalMemory(snippet, cat, activeTeam || undefined)
+      const teamSlug = activeTeam || undefined
+      if (saveScope === 'team') await saveTeamMemory(snippet, cat, teamSlug)
+      else if (saveScope === 'org') await saveOrgMemory(snippet, cat, teamSlug)
+      else await savePersonalMemory(snippet, cat, teamSlug)
       setSnippet('')
       setCategory('')
-      switchTab('team')
+      setSuccess('Memory saved')
+      switchTab(saveScope === 'org' ? 'org' : saveScope === 'team' ? 'team' : 'personal')
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -184,12 +324,13 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
     }
   }, [snippet, category, saveScope, switchTab, activeTeam])
 
-  const entries = tab === 'team' ? teamEntries : orgEntries
+  const entries = tab === 'personal' ? personalEntries : tab === 'team' ? teamEntries : orgEntries
   const displayList = searchResults ?? entries
-  const showPromote = tab === 'org'
+
   const tabDefs: { key: Tab; label: string; icon: typeof Brain }[] = [
-    { key: 'team', label: 'Team Memories', icon: Brain },
-    { key: 'org', label: 'Org Memories', icon: BookOpen },
+    { key: 'personal', label: 'Personal', icon: User },
+    { key: 'team', label: 'Team', icon: Brain },
+    { key: 'org', label: 'Organization', icon: BookOpen },
     { key: 'add', label: 'Add New', icon: Plus },
   ]
 
@@ -224,12 +365,17 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
         </div>
       </div>
 
-      {/* Error banner */}
+      {/* Messages */}
       {error && (
         <div className="mx-6 mb-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
-          style={{ background: 'rgba(239,68,68,0.12)', color: 'var(--danger, #ef4444)' }}
-        >
+          style={{ background: 'rgba(239,68,68,0.12)', color: 'var(--danger, #ef4444)' }}>
           <AlertCircle size={16} /> {error}
+        </div>
+      )}
+      {success && (
+        <div className="mx-6 mb-3 flex items-center gap-2 px-4 py-2 rounded-lg text-sm"
+          style={{ background: 'rgba(34,197,94,0.12)', color: '#22c55e' }}>
+          <Check size={16} /> {success}
         </div>
       )}
 
@@ -274,7 +420,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
         {searchResults && !loading && (
           <div className="flex items-center justify-between mb-4">
             <span className="text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
-              {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for "{query}"
+              {searchResults.length} result{searchResults.length !== 1 ? 's' : ''} for &quot;{query}&quot;
             </span>
             <button
               onClick={() => { setQuery(''); setSearchResults(null) }}
@@ -299,10 +445,12 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
               <MemoryCard
                 key={entry.id}
                 entry={entry}
+                userId={user.id}
                 isAdmin={isAdmin}
-                showPromote={showPromote && !searchResults}
-                onDelete={id => handleDelete(id, entry.scope)}
+                currentTab={tab}
+                onDelete={handleDelete}
                 onPromote={handlePromote}
+                onUpdate={handleUpdate}
               />
             ))}
           </div>
@@ -319,7 +467,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
             </h2>
 
             <label className="block text-sm font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>
-              Snippet
+              Content
             </label>
             <textarea
               rows={5}
@@ -365,7 +513,7 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
                 <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Save for me only</span>
                 <ScopeBadge scope="personal" />
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
+              <label className="flex items-center gap-2 mb-2 cursor-pointer">
                 <input
                   type="radio"
                   name="scope"
@@ -375,6 +523,19 @@ export default function KnowledgeBrowser({ theme, user, activeTeam }: KnowledgeB
                 />
                 <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Share with team</span>
                 <ScopeBadge scope="team" />
+              </label>
+              <label className={`flex items-center gap-2 cursor-pointer ${!isAdmin ? 'opacity-40 pointer-events-none' : ''}`}>
+                <input
+                  type="radio"
+                  name="scope"
+                  checked={saveScope === 'org'}
+                  onChange={() => setSaveScope('org')}
+                  disabled={!isAdmin}
+                  style={{ accentColor: SCOPE_COLORS.org }}
+                />
+                <span className="text-sm" style={{ color: 'var(--text-primary)' }}>Share with organization</span>
+                <ScopeBadge scope="org" />
+                {!isAdmin && <span className="text-xs" style={{ color: 'var(--text-muted)' }}>(admin only)</span>}
               </label>
             </fieldset>
 

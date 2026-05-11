@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,15 +17,24 @@ import (
 // pgMemoryStore implements store.MemoryStore for PostgreSQL.
 // It supports hybrid search: pgvector cosine similarity + tsvector keyword search.
 type pgMemoryStore struct {
-	pool        *pgxpool.Pool
-	schema      string
-	tablePrefix string // "org_" for org-level, "" for team/personal
-	scope       string // "personal", "team", "org" — set on results
-	embedFunc   store.EmbedFunc // optional; when set, Search() uses vector+keyword hybrid
+	pool            *pgxpool.Pool
+	schema          string
+	tablePrefix     string         // "org_" for org-level, "" for team/personal
+	scope           string         // "personal", "team", "org" — set on results
+	embedFunc       store.EmbedFunc // optional; when set, Search() uses vector+keyword hybrid
+	createdByColumn string         // column name for creator tracking ("created_by" or "promoted_by")
 }
 
 func (m *pgMemoryStore) tableName() string {
 	return pgx.Identifier{m.schema, m.tablePrefix + "memories"}.Sanitize()
+}
+
+// ownerColumn returns the column name used for creator/promoter tracking.
+func (m *pgMemoryStore) ownerColumn() string {
+	if m.createdByColumn != "" {
+		return m.createdByColumn
+	}
+	return "created_by"
 }
 
 // Search performs a hybrid vector + tsvector keyword search.
@@ -258,11 +268,76 @@ func (m *pgMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) error 
 	metaJSON, _ := json.Marshal(entry.Metadata)
 
 	_, err := m.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (chunk_text, embedding, category, source_path, metadata)
-		 VALUES ($1, $2::vector, $3, $4, $5)`, m.tableName()),
-		entry.Content, embStr, nilIfEmpty(entry.Category), nilIfEmpty(entry.SourcePath), metaJSON,
+		`INSERT INTO %s (chunk_text, embedding, category, source_path, metadata, %s, session_id)
+		 VALUES ($1, $2::vector, $3, $4, $5, $6, $7)`, m.tableName(), m.ownerColumn()),
+		entry.Content, embStr, nilIfEmpty(entry.Category), nilIfEmpty(entry.SourcePath), metaJSON, nilIfEmpty(entry.CreatedBy), nilIfEmpty(entry.SessionID),
 	)
 	return err
+}
+
+// Get retrieves a single memory entry by ID.
+func (m *pgMemoryStore) Get(ctx context.Context, id string) (*store.MemorySearchResult, error) {
+	sql := fmt.Sprintf(
+		`SELECT id::text, chunk_text, category, source_path, %s::text, created_at, session_id::text
+		 FROM %s WHERE id = $1`, m.ownerColumn(), m.tableName())
+
+	var content string
+	var cat, sourcePath, createdBy, sessionID *string
+	var createdAt *time.Time
+	err := m.pool.QueryRow(ctx, sql, id).Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessionID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("memory get failed: %w", err)
+	}
+
+	r := &store.MemorySearchResult{
+		ID:      id,
+		Snippet: content,
+		Score:   1.0,
+		Scope:   m.scope,
+	}
+	if cat != nil {
+		r.Category = *cat
+	}
+	if sourcePath != nil {
+		r.Path = *sourcePath
+	}
+	if createdBy != nil {
+		r.CreatedBy = *createdBy
+	}
+	if createdAt != nil {
+		r.CreatedAt = createdAt.Format(time.RFC3339)
+	}
+	if sessionID != nil {
+		r.SessionID = *sessionID
+	}
+	return r, nil
+}
+
+// Update modifies the content and/or category of an existing memory.
+// Re-generates the embedding if content changes and an embedder is available.
+func (m *pgMemoryStore) Update(ctx context.Context, id string, content string, category string) error {
+	var embStr *string
+	if m.embedFunc != nil {
+		if emb, err := m.embedFunc(ctx, content); err == nil && len(emb) > 0 {
+			s := fmt.Sprintf("[%s]", float32SliceToString(emb))
+			embStr = &s
+		}
+	}
+
+	result, err := m.pool.Exec(ctx, fmt.Sprintf(
+		`UPDATE %s SET chunk_text = $1, category = $2, embedding = $3::vector WHERE id = $4`, m.tableName()),
+		content, nilIfEmpty(category), embStr, id,
+	)
+	if err != nil {
+		return fmt.Errorf("memory update failed: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("memory not found: %s", id)
+	}
+	return nil
 }
 
 // Delete removes a memory chunk by ID.
@@ -285,18 +360,18 @@ func (m *pgMemoryStore) List(ctx context.Context, category string, limit, offset
 
 	if category == "" {
 		sql = fmt.Sprintf(
-			`SELECT id::text, chunk_text, category, source_path
+			`SELECT id::text, chunk_text, category, source_path, %s::text, created_at, session_id::text
 			 FROM %s
 			 ORDER BY created_at DESC
-			 LIMIT $1 OFFSET $2`, m.tableName())
+			 LIMIT $1 OFFSET $2`, m.ownerColumn(), m.tableName())
 		args = []any{limit, offset}
 	} else {
 		sql = fmt.Sprintf(
-			`SELECT id::text, chunk_text, category, source_path
+			`SELECT id::text, chunk_text, category, source_path, %s::text, created_at, session_id::text
 			 FROM %s
 			 WHERE category = $3
 			 ORDER BY created_at DESC
-			 LIMIT $1 OFFSET $2`, m.tableName())
+			 LIMIT $1 OFFSET $2`, m.ownerColumn(), m.tableName())
 		args = []any{limit, offset, category}
 	}
 
@@ -309,8 +384,9 @@ func (m *pgMemoryStore) List(ctx context.Context, category string, limit, offset
 	var results []store.MemorySearchResult
 	for rows.Next() {
 		var id, content string
-		var cat, sourcePath *string
-		if err := rows.Scan(&id, &content, &cat, &sourcePath); err != nil {
+		var cat, sourcePath, createdBy, sessionID *string
+		var createdAt *time.Time
+		if err := rows.Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessionID); err != nil {
 			return nil, err
 		}
 		r := store.MemorySearchResult{
@@ -324,6 +400,63 @@ func (m *pgMemoryStore) List(ctx context.Context, category string, limit, offset
 		}
 		if sourcePath != nil {
 			r.Path = *sourcePath
+		}
+		if createdBy != nil {
+			r.CreatedBy = *createdBy
+		}
+		if createdAt != nil {
+			r.CreatedAt = createdAt.Format(time.RFC3339)
+		}
+		if sessionID != nil {
+			r.SessionID = *sessionID
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+// ListBySession returns all memory chunks created during a specific session.
+func (m *pgMemoryStore) ListBySession(ctx context.Context, sessionID string) ([]store.MemorySearchResult, error) {
+	sql := fmt.Sprintf(
+		`SELECT id::text, chunk_text, category, source_path, %s::text, created_at, session_id::text
+		 FROM %s
+		 WHERE session_id = $1
+		 ORDER BY created_at ASC`, m.ownerColumn(), m.tableName())
+
+	rows, err := m.pool.Query(ctx, sql, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("memory list by session failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var id, content string
+		var cat, sourcePath, createdBy, sessID *string
+		var createdAt *time.Time
+		if err := rows.Scan(&id, &content, &cat, &sourcePath, &createdBy, &createdAt, &sessID); err != nil {
+			return nil, err
+		}
+		r := store.MemorySearchResult{
+			ID:      id,
+			Snippet: content,
+			Score:   1.0,
+			Scope:   m.scope,
+		}
+		if cat != nil {
+			r.Category = *cat
+		}
+		if sourcePath != nil {
+			r.Path = *sourcePath
+		}
+		if createdBy != nil {
+			r.CreatedBy = *createdBy
+		}
+		if createdAt != nil {
+			r.CreatedAt = createdAt.Format(time.RFC3339)
+		}
+		if sessID != nil {
+			r.SessionID = *sessID
 		}
 		results = append(results, r)
 	}

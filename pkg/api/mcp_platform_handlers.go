@@ -332,6 +332,8 @@ func resolveMCPStoreForRead(svc *store.Services, scope string) store.MCPServerSt
 		return svc.TeamMCPServers
 	case "org":
 		return svc.MCPServers
+	case "platform":
+		return svc.PlatformMCPServers
 	default:
 		// For merged reads, caller should use listMCPServersPlatform
 		return svc.TeamMCPServers
@@ -342,6 +344,15 @@ func resolveMCPStoreForRead(svc *store.Services, scope string) store.MCPServerSt
 // based on the requested scope. Returns nil and writes an error if auth fails.
 func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.Services, scope string) store.MCPServerStore {
 	switch scope {
+	case "platform":
+		if svc.PlatformMCPServers == nil {
+			respondError(w, http.StatusServiceUnavailable, "Platform MCP server store not available")
+			return nil
+		}
+		if RequirePlatformAdmin(w, r) == nil {
+			return nil
+		}
+		return svc.PlatformMCPServers
 	case "team":
 		if svc.TeamMCPServers == nil {
 			respondError(w, http.StatusServiceUnavailable, "Team MCP server store not available")
@@ -379,10 +390,12 @@ func resolveMCPStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.
 	}
 }
 
-// listMCPServersPlatform loads MCP servers with two-tier merge: org → team.
-// Team servers override org servers of the same name.
+// listMCPServersPlatform loads MCP servers with three-tier merge: platform → org → team.
+// Lower tiers override higher tiers by name.
 func listMCPServersPlatform(svc *store.Services, scope string) ([]MCPServerListItem, error) {
 	switch scope {
+	case "platform":
+		return listMCPServersFromStore(svc.PlatformMCPServers, "platform")
 	case "team":
 		return listMCPServersFromStore(svc.TeamMCPServers, "team")
 	case "org":
@@ -410,11 +423,23 @@ func listMCPServersFromStore(mcpStore store.MCPServerStore, scope string) ([]MCP
 	return items, nil
 }
 
-// listMCPServersMerged returns all MCP servers merged: org + team (team wins by name).
+// listMCPServersMerged returns all MCP servers merged: platform → org → team (lower wins by name).
 func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 	byName := make(map[string]MCPServerListItem)
 
-	// 1. Org servers as base
+	// 1. Platform servers as base (inherited by all)
+	if svc.PlatformMCPServers != nil {
+		platformServers, err := svc.PlatformMCPServers.List()
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range platformServers {
+			item := mcpServerToListItem(&s, "platform")
+			byName[s.Name] = item
+		}
+	}
+
+	// 2. Org servers override platform by name
 	if svc.MCPServers != nil {
 		orgServers, err := svc.MCPServers.List()
 		if err != nil {
@@ -426,7 +451,7 @@ func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 		}
 	}
 
-	// 2. Team servers override org by name
+	// 3. Team servers override org+platform by name
 	if svc.TeamMCPServers != nil {
 		teamServers, err := svc.TeamMCPServers.List()
 		if err != nil {

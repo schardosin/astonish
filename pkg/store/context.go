@@ -13,6 +13,7 @@ const memoryStoreKey contextKey = "astonish_memory_store"
 const memorySearcherKey contextKey = "astonish_memory_searcher"
 const flowStoreKey contextKey = "astonish_flow_store"
 const drillReportStoreKey contextKey = "astonish_drill_report_store"
+const sessionIDKey contextKey = "astonish_session_id"
 
 // WithServices returns a new context containing the Services instance.
 func WithServices(ctx context.Context, svc *Services) context.Context {
@@ -370,4 +371,20 @@ func RunJobFuncFromContext(ctx context.Context) RunJobFunc {
 	}
 	fn, _ := ctx.Value(runJobFuncKey{}).(RunJobFunc)
 	return fn
+}
+
+// WithSessionID returns a new context containing the active session ID.
+// This is used to tag memories created during a session.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDKey, sessionID)
+}
+
+// SessionIDFromContext retrieves the active session ID from the context.
+// Returns empty string if no session ID is present.
+func SessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	s, _ := ctx.Value(sessionIDKey).(string)
+	return s
 }

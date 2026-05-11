@@ -682,6 +682,24 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				defer reflectCancel()
 				reflector.Reflect(reflectCtx, trace, events)
 			}()
+		} else if c.PlatformReflector != nil {
+			// Platform mode: the reflector needs the runner context (which has
+			// MemoryStore, SessionID, UserID injected by ChatRunner). We derive
+			// a new context from the invocation context (which IS the runner ctx)
+			// with a timeout so it can't hang indefinitely.
+			events := ctx.Session().Events()
+			platformReflector := c.PlatformReflector
+			// Propagate store values from invocation context to a detached ctx
+			// so the goroutine survives after the ADK Run returns.
+			reflectCtx := context.Background()
+			reflectCtx = store.WithMemoryStore(reflectCtx, store.MemoryStoreFromContext(ctx))
+			reflectCtx = store.WithSessionID(reflectCtx, store.SessionIDFromContext(ctx))
+			reflectCtx = store.WithUserID(reflectCtx, store.UserIDFromContext(ctx))
+			go func() {
+				tCtx, tCancel := context.WithTimeout(reflectCtx, 120*time.Second)
+				defer tCancel()
+				platformReflector.Reflect(tCtx, trace, events)
+			}()
 		}
 
 		// Store the trace keyed by session ID for on-demand /distill

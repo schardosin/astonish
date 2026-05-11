@@ -107,6 +107,7 @@ func effectiveTeamSlug(r *http.Request) string {
 //
 // Scope values:
 //   - "team": returns the team-scoped MCP server store
+//   - "platform": returns the platform-wide MCP server store (superadmin only)
 //   - "org" or "" (empty): returns the org-level MCP server store
 //
 // Returns nil if not in platform mode or if the requested store is not available.
@@ -119,6 +120,8 @@ func effectiveMCPStore(r *http.Request) store.MCPServerStore {
 	switch scope {
 	case "team":
 		return svc.TeamMCPServers
+	case "platform":
+		return svc.PlatformMCPServers
 	default:
 		return svc.MCPServers
 	}
@@ -148,11 +151,31 @@ func storeMetaToResponse(m store.SessionMeta) StudioSessionResponse {
 }
 
 // loadMCPConfigForRequest returns the merged MCP server config appropriate for
-// the request context. In platform mode it reads from the org+team DB stores;
+// the request context. In platform mode it reads from the platform+org+team DB
+// stores with a three-tier cascade (platform base → org overrides → team overrides);
 // in personal mode it reads from the filesystem.
 func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
 		merged := make(map[string]config.MCPServerConfig)
+
+		// Tier 1: Platform-level (base, inherited by all orgs/teams)
+		if svc.PlatformMCPServers != nil {
+			platformServers, err := svc.PlatformMCPServers.List()
+			if err == nil {
+				for _, s := range platformServers {
+					merged[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+
+		// Tier 2: Org-level (overrides platform by name)
 		if svc.MCPServers != nil {
 			orgServers, err := svc.MCPServers.List()
 			if err == nil {
@@ -168,6 +191,8 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 				}
 			}
 		}
+
+		// Tier 3: Team-level (overrides org+platform by name)
 		if svc.TeamMCPServers != nil {
 			teamServers, err := svc.TeamMCPServers.List()
 			if err == nil {

@@ -687,7 +687,18 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// memory_search, memory_save tools, and the KnowledgeSearch callback can
 	// use the PG-backed stores (team + three-tier) in platform mode.
 	if svc := store.FromRequest(r); svc != nil {
-		runner.InjectMemoryStores(svc.Memory, svc.MemorySearcher)
+		memStore := svc.Memory
+		// If personal memory mode is active, the memory_save tool should
+		// write to the user's personal store instead of team.
+		// The ThreeTierSearcher remains unchanged (always searches all tiers).
+		if r.Header.Get("X-Astonish-Memory-Mode") == "personal" && svc.TenantRouter != nil {
+			if pu := GetPlatformUser(r); pu != nil {
+				if orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug); err == nil {
+					memStore = orgStore.ForUser(pu.ID).Memories()
+				}
+			}
+		}
+		runner.InjectMemoryStores(memStore, svc.MemorySearcher)
 	}
 
 	// Inject tenant-scoped flow store into the runner context so that

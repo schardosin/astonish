@@ -1,46 +1,78 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
-// channelAdapterInfo describes a channel adapter's configuration status.
-type channelAdapterInfo struct {
-	Type        string   `json:"type"`        // "telegram", "email", "slack"
-	Configured  bool     `json:"configured"`  // whether all required secrets are set
-	SecretKeys  []string `json:"secret_keys"` // which keys are configured (no values!)
-	Description string   `json:"description"` // human-readable description
+// --- Channel Configuration Types ---
+
+// channelFullInfo describes a channel's full configuration and secret status.
+type channelFullInfo struct {
+	Type        string            `json:"type"`
+	Description string            `json:"description"`
+	Enabled     bool              `json:"enabled"`
+	Config      map[string]any    `json:"config"`            // non-secret config fields
+	Secrets     []channelSecretAt `json:"secrets"`           // which secrets are set (no values)
+	SecretsSet  bool              `json:"secrets_configured"` // all required secrets present
 }
 
-// channelSecretDefinition defines the required secrets for each channel type.
-var channelSecretDefinitions = map[string]struct {
+type channelSecretAt struct {
+	Key       string `json:"key"`
+	Label     string `json:"label"`
+	Configured bool  `json:"configured"`
+}
+
+// channelDefinition defines the metadata for each channel type.
+type channelDefinition struct {
 	description string
-	keys        []string
-}{
+	secrets     []struct {
+		key   string
+		label string
+	}
+}
+
+var channelDefinitions = map[string]channelDefinition{
 	"telegram": {
 		description: "Telegram Bot (via BotFather)",
-		keys:        []string{"channels.telegram.bot_token"},
+		secrets: []struct {
+			key   string
+			label string
+		}{
+			{"channels.telegram.bot_token", "Bot Token"},
+		},
 	},
 	"email": {
 		description: "Email (IMAP/SMTP)",
-		keys:        []string{"channels.email.password"},
+		secrets: []struct {
+			key   string
+			label string
+		}{
+			{"channels.email.password", "IMAP/SMTP Password"},
+		},
 	},
 	"slack": {
 		description: "Slack App",
-		keys: []string{
-			"channels.slack.bot_token",
-			"channels.slack.app_token",
-			"channels.slack.signing_secret",
+		secrets: []struct {
+			key   string
+			label string
+		}{
+			{"channels.slack.bot_token", "Bot Token (xoxb-...)"},
+			{"channels.slack.app_token", "App-Level Token (xapp-...)"},
+			{"channels.slack.signing_secret", "Signing Secret"},
+			{"channels.slack.client_id", "OAuth Client ID"},
+			{"channels.slack.client_secret", "OAuth Client Secret"},
 		},
 	},
 }
 
 // PlatformAdminListChannelsHandler handles GET /api/platform/admin/channels.
-// Returns the configuration status of each channel adapter.
+// Returns the full configuration and secret status of each channel adapter.
 func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 	if RequirePlatformAdmin(w, r) == nil {
 		return
@@ -53,31 +85,120 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	secrets := pgStore.PlatformSecrets()
-	var adapters []channelAdapterInfo
 
-	for adapterType, def := range channelSecretDefinitions {
-		info := channelAdapterInfo{
-			Type:        adapterType,
-			Description: def.description,
-		}
-
-		configuredKeys := []string{}
-		for _, key := range def.keys {
-			if secrets.GetSecret(key) != "" {
-				configuredKeys = append(configuredKeys, key)
-			}
-		}
-		info.SecretKeys = configuredKeys
-		info.Configured = len(configuredKeys) == len(def.keys)
-		adapters = append(adapters, info)
+	// Load platform settings for channel config
+	settingsStore := pgStore.PlatformSettings()
+	settings, _ := settingsStore.Get(r.Context())
+	if settings == nil {
+		settings = &store.PlatformSettings{}
+	}
+	channels := settings.Channels
+	if channels == nil {
+		channels = &store.PlatformChannelSettings{}
 	}
 
-	respondJSON(w, http.StatusOK, adapters)
+	var result []channelFullInfo
+
+	// Telegram
+	{
+		def := channelDefinitions["telegram"]
+		info := channelFullInfo{
+			Type:        "telegram",
+			Description: def.description,
+			Config:      map[string]any{},
+		}
+		if channels.Telegram != nil {
+			info.Enabled = channels.Telegram.Enabled
+		}
+		allSecretsSet := true
+		for _, s := range def.secrets {
+			configured := secrets.GetSecret(s.key) != ""
+			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
+			if !configured {
+				allSecretsSet = false
+			}
+		}
+		info.SecretsSet = allSecretsSet
+		result = append(result, info)
+	}
+
+	// Email
+	{
+		def := channelDefinitions["email"]
+		info := channelFullInfo{
+			Type:        "email",
+			Description: def.description,
+			Config:      map[string]any{},
+		}
+		if channels.Email != nil {
+			info.Enabled = channels.Email.Enabled
+			info.Config["provider"] = channels.Email.Provider
+			info.Config["imap_server"] = channels.Email.IMAPServer
+			info.Config["smtp_server"] = channels.Email.SMTPServer
+			info.Config["address"] = channels.Email.Address
+			info.Config["username"] = channels.Email.Username
+			info.Config["poll_interval"] = channels.Email.PollInterval
+			info.Config["folder"] = channels.Email.Folder
+			info.Config["max_body_chars"] = channels.Email.MaxBodyChars
+			if channels.Email.MarkRead != nil {
+				info.Config["mark_read"] = *channels.Email.MarkRead
+			} else {
+				info.Config["mark_read"] = true
+			}
+		}
+		allSecretsSet := true
+		for _, s := range def.secrets {
+			configured := secrets.GetSecret(s.key) != ""
+			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
+			if !configured {
+				allSecretsSet = false
+			}
+		}
+		info.SecretsSet = allSecretsSet
+		result = append(result, info)
+	}
+
+	// Slack
+	{
+		def := channelDefinitions["slack"]
+		info := channelFullInfo{
+			Type:        "slack",
+			Description: def.description,
+			Config:      map[string]any{},
+		}
+		if channels.Slack != nil {
+			info.Enabled = channels.Slack.Enabled
+			info.Config["mode"] = channels.Slack.Mode
+		}
+		allSecretsSet := true
+		// For Slack, bot_token is always required. app_token required for socket mode,
+		// signing_secret required for events mode. client_id/client_secret are optional.
+		requiredSecrets := map[string]bool{
+			"channels.slack.bot_token": true,
+		}
+		if channels.Slack != nil && channels.Slack.Mode == "events" {
+			requiredSecrets["channels.slack.signing_secret"] = true
+		} else {
+			// socket mode (default)
+			requiredSecrets["channels.slack.app_token"] = true
+		}
+		for _, s := range def.secrets {
+			configured := secrets.GetSecret(s.key) != ""
+			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
+			if requiredSecrets[s.key] && !configured {
+				allSecretsSet = false
+			}
+		}
+		info.SecretsSet = allSecretsSet
+		result = append(result, info)
+	}
+
+	respondJSON(w, http.StatusOK, result)
 }
 
-// PlatformAdminSetChannelSecretsHandler handles PUT /api/platform/admin/channels/{type}.
-// Sets one or more secrets for a channel adapter.
-func PlatformAdminSetChannelSecretsHandler(w http.ResponseWriter, r *http.Request) {
+// PlatformAdminSaveChannelHandler handles PUT /api/platform/admin/channels/{type}.
+// Saves both config fields and secrets for a channel adapter in one request.
+func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 	if RequirePlatformAdmin(w, r) == nil {
 		return
 	}
@@ -89,66 +210,125 @@ func PlatformAdminSetChannelSecretsHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	channelType := mux.Vars(r)["type"]
-	def, ok := channelSecretDefinitions[channelType]
-	if !ok {
+	if _, ok := channelDefinitions[channelType]; !ok {
 		respondError(w, http.StatusBadRequest, "unknown channel type: "+channelType)
 		return
 	}
 
-	// Parse request body: map of secret key → value
-	var body map[string]string
+	// Parse unified request body
+	var body struct {
+		Enabled bool              `json:"enabled"`
+		Config  map[string]any    `json:"config"`
+		Secrets map[string]string `json:"secrets"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
 
-	// Validate that all provided keys belong to this channel type
-	allowedKeys := make(map[string]bool, len(def.keys))
-	for _, k := range def.keys {
-		allowedKeys[k] = true
+	// Save non-secret config to PlatformSettings
+	settingsStore := pgStore.PlatformSettings()
+	settings, _ := settingsStore.Get(r.Context())
+	if settings == nil {
+		settings = &store.PlatformSettings{}
+	}
+	if settings.Channels == nil {
+		settings.Channels = &store.PlatformChannelSettings{}
 	}
 
-	secrets := pgStore.PlatformSecrets()
-	var saved []string
-
-	for key, value := range body {
-		if !allowedKeys[key] {
-			respondError(w, http.StatusBadRequest, "key "+key+" is not valid for channel type "+channelType)
-			return
+	switch channelType {
+	case "telegram":
+		settings.Channels.Telegram = &store.PlatformTelegramConfig{
+			Enabled: body.Enabled,
 		}
-		if value == "" {
-			// Empty value = remove
-			_ = secrets.RemoveSecret(key)
-		} else {
-			if err := secrets.SetSecret(key, value); err != nil {
+	case "email":
+		cfg := &store.PlatformEmailConfig{
+			Enabled: body.Enabled,
+		}
+		if v, ok := body.Config["provider"].(string); ok {
+			cfg.Provider = v
+		}
+		if v, ok := body.Config["imap_server"].(string); ok {
+			cfg.IMAPServer = v
+		}
+		if v, ok := body.Config["smtp_server"].(string); ok {
+			cfg.SMTPServer = v
+		}
+		if v, ok := body.Config["address"].(string); ok {
+			cfg.Address = v
+		}
+		if v, ok := body.Config["username"].(string); ok {
+			cfg.Username = v
+		}
+		if v, ok := body.Config["poll_interval"]; ok {
+			cfg.PollInterval = toInt(v)
+		}
+		if v, ok := body.Config["folder"].(string); ok {
+			cfg.Folder = v
+		}
+		if v, ok := body.Config["mark_read"].(bool); ok {
+			cfg.MarkRead = &v
+		}
+		if v, ok := body.Config["max_body_chars"]; ok {
+			cfg.MaxBodyChars = toInt(v)
+		}
+		settings.Channels.Email = cfg
+	case "slack":
+		cfg := &store.PlatformSlackConfig{
+			Enabled: body.Enabled,
+		}
+		if v, ok := body.Config["mode"].(string); ok {
+			cfg.Mode = v
+		}
+		settings.Channels.Slack = cfg
+	}
+
+	if err := settingsStore.Save(r.Context(), settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save channel config: "+err.Error())
+		return
+	}
+
+	// Save secrets (only non-empty values; empty means "keep existing")
+	if len(body.Secrets) > 0 {
+		def := channelDefinitions[channelType]
+		allowedKeys := make(map[string]bool, len(def.secrets))
+		for _, s := range def.secrets {
+			allowedKeys[s.key] = true
+		}
+
+		secretStore := pgStore.PlatformSecrets()
+		for key, value := range body.Secrets {
+			if !allowedKeys[key] {
+				respondError(w, http.StatusBadRequest, "key "+key+" is not valid for channel type "+channelType)
+				return
+			}
+			if value == "" {
+				continue // empty = keep existing
+			}
+			if err := secretStore.SetSecret(key, value); err != nil {
 				respondError(w, http.StatusInternalServerError, "failed to save secret: "+err.Error())
 				return
 			}
-			saved = append(saved, key)
 		}
 	}
 
-	// Trigger automatic channel reload so the adapter picks up the new secrets
-	// without requiring a manual daemon restart.
-	reloadMsg := "Channel secrets updated."
+	// Trigger channel reload
+	reloadMsg := "Channel configuration saved."
 	if reload := getChannelReloadFunc(); reload != nil {
 		if err := reload(); err != nil {
-			reloadMsg = "Channel secrets saved, but reload failed: " + err.Error() + ". Restart the daemon manually."
+			reloadMsg = "Configuration saved, but channel reload failed: " + err.Error()
 		} else {
-			reloadMsg = "Channel secrets updated and channels reloaded successfully."
+			reloadMsg = "Channel configuration saved and channels reloaded successfully."
 		}
-	} else {
-		reloadMsg = "Channel secrets updated. Restart the daemon for changes to take effect."
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
-		"saved":   saved,
 		"message": reloadMsg,
 	})
 }
 
 // PlatformAdminDeleteChannelHandler handles DELETE /api/platform/admin/channels/{type}.
-// Removes all secrets for a channel adapter.
+// Removes all secrets and disables the channel.
 func PlatformAdminDeleteChannelHandler(w http.ResponseWriter, r *http.Request) {
 	if RequirePlatformAdmin(w, r) == nil {
 		return
@@ -161,19 +341,35 @@ func PlatformAdminDeleteChannelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	channelType := mux.Vars(r)["type"]
-	def, ok := channelSecretDefinitions[channelType]
+	def, ok := channelDefinitions[channelType]
 	if !ok {
 		respondError(w, http.StatusBadRequest, "unknown channel type: "+channelType)
 		return
 	}
 
+	// Remove all secrets
 	secrets := pgStore.PlatformSecrets()
-	for _, key := range def.keys {
-		_ = secrets.RemoveSecret(key)
+	for _, s := range def.secrets {
+		_ = secrets.RemoveSecret(s.key)
 	}
 
-	// Trigger channel reload to stop the adapter that lost its credentials.
-	reloadMsg := "All secrets removed for channel " + channelType + "."
+	// Disable the channel in PlatformSettings
+	settingsStore := pgStore.PlatformSettings()
+	settings, _ := settingsStore.Get(r.Context())
+	if settings != nil && settings.Channels != nil {
+		switch channelType {
+		case "telegram":
+			settings.Channels.Telegram = nil
+		case "email":
+			settings.Channels.Email = nil
+		case "slack":
+			settings.Channels.Slack = nil
+		}
+		_ = settingsStore.Save(r.Context(), settings)
+	}
+
+	// Trigger channel reload
+	reloadMsg := "Channel " + channelType + " removed."
 	if reload := getChannelReloadFunc(); reload != nil {
 		if err := reload(); err != nil {
 			reloadMsg += " Reload failed: " + err.Error()
@@ -306,4 +502,21 @@ func PlatformAdminDeleteWebServiceHandler(w http.ResponseWriter, r *http.Request
 	respondJSON(w, http.StatusOK, map[string]any{
 		"message": "API key removed for " + srv.DisplayName,
 	})
+}
+
+// --- Helper: Load platform channel config for use by daemon ---
+
+// GetPlatformChannelSettings loads the channel configuration from PlatformSettings.
+// Returns nil if not in platform mode or if no channel config exists.
+func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSettings {
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		return nil
+	}
+	settingsStore := pgStore.PlatformSettings()
+	settings, err := settingsStore.Get(ctx)
+	if err != nil || settings == nil {
+		return nil
+	}
+	return settings.Channels
 }

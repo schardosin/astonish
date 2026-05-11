@@ -1367,7 +1367,7 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 
 		// Channel adapter management (superadmin only)
 		router.HandleFunc("/api/platform/admin/channels", PlatformAdminListChannelsHandler).Methods("GET")
-		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminSetChannelSecretsHandler).Methods("PUT")
+		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminSaveChannelHandler).Methods("PUT")
 		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminDeleteChannelHandler).Methods("DELETE")
 
 		// Standard MCP servers / web services management (superadmin only)

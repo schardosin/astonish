@@ -19,6 +19,42 @@ type PlatformSettings struct {
 
 	// DefaultModel is the platform-wide default model ID.
 	DefaultModel string `json:"default_model,omitempty"`
+
+	// Channels holds per-channel-type configuration (non-secret fields).
+	// Secrets (tokens, passwords) are stored separately in platform_secrets.
+	Channels *PlatformChannelSettings `json:"channels,omitempty"`
+}
+
+// PlatformChannelSettings groups configuration for all supported channel adapters.
+type PlatformChannelSettings struct {
+	Telegram *PlatformTelegramConfig `json:"telegram,omitempty"`
+	Email    *PlatformEmailConfig    `json:"email,omitempty"`
+	Slack    *PlatformSlackConfig    `json:"slack,omitempty"`
+}
+
+// PlatformTelegramConfig holds non-secret Telegram channel settings.
+type PlatformTelegramConfig struct {
+	Enabled bool `json:"enabled"`
+}
+
+// PlatformEmailConfig holds non-secret Email channel settings.
+type PlatformEmailConfig struct {
+	Enabled      bool   `json:"enabled"`
+	Provider     string `json:"provider,omitempty"`      // "imap" (default) or "gmail"
+	IMAPServer   string `json:"imap_server"`             // e.g. "imap.gmail.com:993"
+	SMTPServer   string `json:"smtp_server"`             // e.g. "smtp.gmail.com:587"
+	Address      string `json:"address"`                 // agent's email address
+	Username     string `json:"username,omitempty"`      // login username (defaults to address)
+	PollInterval int    `json:"poll_interval,omitempty"` // seconds, default 30
+	Folder       string `json:"folder,omitempty"`        // default "INBOX"
+	MarkRead     *bool  `json:"mark_read,omitempty"`     // default true
+	MaxBodyChars int    `json:"max_body_chars,omitempty"` // default 50000
+}
+
+// PlatformSlackConfig holds non-secret Slack channel settings.
+type PlatformSlackConfig struct {
+	Enabled bool   `json:"enabled"`
+	Mode    string `json:"mode,omitempty"` // "socket" (default) or "events"
 }
 
 // OrgSettings represents organization-wide configuration visible to all

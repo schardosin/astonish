@@ -441,6 +441,13 @@ func Run(cfg RunConfig) error {
 		mgr.BrowserPDF = pdfBrowserMgr
 		defer pdfBrowserMgr.Cleanup()
 
+		// In platform mode, overlay DB-stored channel configuration onto
+		// the file-based config. PlatformSettings.Channels is the authoritative
+		// source; config.yaml serves only as fallback for backward compatibility.
+		if pgStore != nil {
+			applyPlatformChannelConfig(pgStore, freshCfg, logger)
+		}
+
 		// Register Telegram if enabled
 		var tgConfigError string
 		if freshCfg.Channels.Telegram.IsTelegramEnabled() {

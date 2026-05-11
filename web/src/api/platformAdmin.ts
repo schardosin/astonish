@@ -232,16 +232,24 @@ export async function removeUserFromOrg(userId: string, orgSlug: string): Promis
   }
 }
 
-// --- Channel Adapter Management ---
+// --- Channel Configuration Management ---
 
-export interface ChannelAdapterInfo {
-  type: string
+export interface ChannelSecretInfo {
+  key: string
+  label: string
   configured: boolean
-  secret_keys: string[]
-  description: string
 }
 
-export async function listChannelAdapters(): Promise<ChannelAdapterInfo[]> {
+export interface ChannelFullInfo {
+  type: string
+  description: string
+  enabled: boolean
+  config: Record<string, any>
+  secrets: ChannelSecretInfo[]
+  secrets_configured: boolean
+}
+
+export async function listChannels(): Promise<ChannelFullInfo[]> {
   const res = await fetch(`${ADMIN_BASE}/channels`, { credentials: 'include' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
@@ -250,32 +258,33 @@ export async function listChannelAdapters(): Promise<ChannelAdapterInfo[]> {
   return res.json()
 }
 
-export async function setChannelSecrets(
+export async function saveChannel(
   channelType: string,
-  secrets: Record<string, string>
-): Promise<{ saved: string[]; message: string }> {
+  payload: { enabled: boolean; config: Record<string, any>; secrets: Record<string, string> }
+): Promise<{ message: string }> {
   const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(secrets),
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to save channel secrets')
+    throw new Error(err.error || 'Failed to save channel configuration')
   }
   return res.json()
 }
 
-export async function deleteChannelAdapter(channelType: string): Promise<void> {
+export async function deleteChannel(channelType: string): Promise<{ message: string }> {
   const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete channel adapter')
+    throw new Error(err.error || 'Failed to delete channel')
   }
+  return res.json()
 }
 
 // --- Web Services (Standard MCP Servers) ---

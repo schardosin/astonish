@@ -541,7 +541,12 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		UserAgent: r.UserAgent(),
 		IPAddress: clientIP(r),
 	}
-	_ = pgStore.LoginSessions().Create(ctx, loginSession)
+	if err := pgStore.LoginSessions().Create(ctx, loginSession); err != nil {
+		slog.Error("failed to persist login session during OIDC callback", "error", err, "user_id", user.ID)
+		h.failDeviceSession(sess, "failed to create session")
+		h.renderCallbackError(w, "Internal error creating session")
+		return
+	}
 
 	// Build available orgs/teams for CLI selection
 	var availableOrgs []authOrgOption

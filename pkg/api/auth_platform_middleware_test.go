@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/config"
 )
 
 // testPlatformAuth creates a minimal PlatformAuth for middleware testing.
@@ -177,9 +179,10 @@ func TestPlatformAuthMiddleware_AllowsMigrationEndpoints(t *testing.T) {
 }
 
 // TestPlatformAuthMiddleware_AllowsLoopback verifies that loopback requests
-// bypass auth for all paths.
+// bypass auth when LoopbackBypass is set to "always".
 func TestPlatformAuthMiddleware_AllowsLoopback(t *testing.T) {
 	pa := testPlatformAuth(t)
+	pa.authCfg = config.PlatformAuthConfig{LoopbackBypass: "always"}
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -197,7 +200,7 @@ func TestPlatformAuthMiddleware_AllowsLoopback(t *testing.T) {
 			handler.ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
-				t.Errorf("loopback %q should be allowed, got status %d", addr, w.Code)
+				t.Errorf("loopback %q should be allowed in 'always' mode, got status %d", addr, w.Code)
 			}
 		})
 	}

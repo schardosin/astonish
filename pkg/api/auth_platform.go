@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -342,11 +343,19 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	// Verify the refresh token hasn't been revoked (e.g., by logout or admin action).
 	// The token hash must still exist in login_sessions and not be expired.
+	// Graceful degrade: if no row exists (legacy token issued before revocation tracking),
+	// allow the refresh and self-heal by inserting the hash after org resolution.
 	tokenHash := hashRefreshToken(refreshTokenStr)
+	needsSelfHeal := false
 	if _, err := pa.pgStore.LoginSessions().Validate(ctx, tokenHash); err != nil {
-		clearAuthCookies(w)
-		respondError(w, http.StatusUnauthorized, "refresh token revoked; please login again")
-		return
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Legacy token — no session row. Allow refresh but schedule self-heal.
+			slog.Info("refresh token not in login_sessions; will self-heal", "user_id", claims.UserID)
+			needsSelfHeal = true
+		} else {
+			// DB error — degrade gracefully, log and continue (don't lock user out)
+			slog.Warn("login_sessions.Validate error during refresh; allowing", "error", err)
+		}
 	}
 
 	// Verify user still exists and is active
@@ -387,6 +396,25 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	teamSlug := claims.DefaultTeamSlug
 	if teamSlug == "" {
 		teamSlug = pa.resolveDefaultTeam(ctx, user.ID, org)
+	}
+
+	// Self-heal: insert the token hash into login_sessions so future refreshes are tracked.
+	// This handles legacy tokens issued before revocation tracking was added.
+	if needsSelfHeal {
+		loginSession := &store.LoginSession{
+			TokenHash: tokenHash,
+			UserID:    user.ID,
+			OrgID:     org.ID,
+			CreatedAt: time.Now(),
+			ExpiresAt: time.Now().Add(pa.jwt.RefreshTokenTTL()),
+			UserAgent: r.UserAgent(),
+			IPAddress: clientIP(r),
+		}
+		if err := pa.pgStore.LoginSessions().Create(ctx, loginSession); err != nil {
+			slog.Warn("failed to self-heal login session", "error", err)
+		} else {
+			slog.Info("self-healed login session", "user_id", user.ID)
+		}
 	}
 
 	// Issue new access token
@@ -775,7 +803,9 @@ func (pa *PlatformAuth) issueTokensAndRespondWithContext(w http.ResponseWriter, 
 		IPAddress: clientIP(r),
 	}
 	if err := pa.pgStore.LoginSessions().Create(ctx, loginSession); err != nil {
-		slog.Warn("failed to persist login session", "error", err)
+		slog.Error("failed to persist login session during login", "error", err, "user_id", user.ID)
+		respondError(w, http.StatusInternalServerError, "failed to create session")
+		return
 	}
 
 	// Set cookies
@@ -846,8 +876,9 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 		IPAddress: clientIP(r),
 	}
 	if err := pa.pgStore.LoginSessions().Create(ctx, loginSession); err != nil {
-		slog.Warn("failed to persist login session", "error", err)
-		// Non-fatal: tokens still work, just can't be revoked
+		slog.Error("failed to persist login session during register", "error", err, "user_id", user.ID)
+		respondError(w, http.StatusInternalServerError, "failed to create session")
+		return
 	}
 
 	// Set cookies

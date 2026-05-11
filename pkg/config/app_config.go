@@ -249,6 +249,14 @@ type PlatformAuthConfig struct {
 
 	// OIDC holds OpenID Connect provider settings. Only used when mode is "oidc".
 	OIDC OIDCConfig `yaml:"oidc,omitempty" json:"oidc,omitempty"`
+
+	// LoopbackBypass controls how requests from 127.0.0.1/::1 are authenticated.
+	// Values:
+	//   "always"     — loopback requests pass without any token (personal mode default)
+	//   "with_token" — loopback requests must carry a valid JWT (platform mode default)
+	//   "never"      — loopback requests go through full auth like remote requests
+	// Default: "with_token" in platform mode, "always" in personal mode.
+	LoopbackBypass string `yaml:"loopback_bypass,omitempty" json:"loopback_bypass,omitempty"`
 }
 
 // OIDCConfig holds settings for an external OpenID Connect identity provider.

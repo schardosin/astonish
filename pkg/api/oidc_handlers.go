@@ -583,8 +583,8 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Web UI flow: set session cookies and redirect to the app
 	if sess.ClientType == "web" {
-		setAccessTokenCookie(w, accessToken, h.pa.jwt.AccessTokenTTL())
-		setRefreshTokenCookie(w, refreshToken, h.pa.jwt.RefreshTokenTTL())
+		setAccessTokenCookie(w, r, accessToken, h.pa.jwt.AccessTokenTTL())
+		setRefreshTokenCookie(w, r, refreshToken, h.pa.jwt.RefreshTokenTTL())
 		h.renderSSOBounce(w)
 		return
 	}

@@ -340,6 +340,15 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
+	// Verify the refresh token hasn't been revoked (e.g., by logout or admin action).
+	// The token hash must still exist in login_sessions and not be expired.
+	tokenHash := hashRefreshToken(refreshTokenStr)
+	if _, err := pa.pgStore.LoginSessions().Validate(ctx, tokenHash); err != nil {
+		clearAuthCookies(w)
+		respondError(w, http.StatusUnauthorized, "refresh token revoked; please login again")
+		return
+	}
+
 	// Verify user still exists and is active
 	user, err := pa.pgStore.Users().GetByID(ctx, claims.UserID)
 	if err != nil || user == nil || user.Status != "active" {
@@ -412,7 +421,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		_ = pa.pgStore.LoginSessions().Create(ctx, loginSession)
 	}
 
-	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
+	setAccessTokenCookie(w, r, accessToken, pa.jwt.AccessTokenTTL())
 
 	resp := authResponse{
 		User: authUserResponse{
@@ -770,8 +779,8 @@ func (pa *PlatformAuth) issueTokensAndRespondWithContext(w http.ResponseWriter, 
 	}
 
 	// Set cookies
-	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
-	setRefreshTokenCookie(w, refreshToken, pa.jwt.RefreshTokenTTL())
+	setAccessTokenCookie(w, r, accessToken, pa.jwt.AccessTokenTTL())
+	setRefreshTokenCookie(w, r, refreshToken, pa.jwt.RefreshTokenTTL())
 
 	resp := authResponse{
 		User: authUserResponse{
@@ -842,8 +851,8 @@ func (pa *PlatformAuth) issueTokensAndRespond(w http.ResponseWriter, r *http.Req
 	}
 
 	// Set cookies
-	setAccessTokenCookie(w, accessToken, pa.jwt.AccessTokenTTL())
-	setRefreshTokenCookie(w, refreshToken, pa.jwt.RefreshTokenTTL())
+	setAccessTokenCookie(w, r, accessToken, pa.jwt.AccessTokenTTL())
+	setRefreshTokenCookie(w, r, refreshToken, pa.jwt.RefreshTokenTTL())
 
 	resp := authResponse{
 		User: authUserResponse{
@@ -878,7 +887,7 @@ const (
 	refreshCookieName = "astonish_refresh"
 )
 
-func setAccessTokenCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+func setAccessTokenCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     accessCookieName,
 		Value:    token,
@@ -886,11 +895,11 @@ func setAccessTokenCookie(w http.ResponseWriter, token string, ttl time.Duration
 		MaxAge:   int(ttl.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   false, // Set true in production with HTTPS
+		Secure:   isSecureRequest(r),
 	})
 }
 
-func setRefreshTokenCookie(w http.ResponseWriter, token string, ttl time.Duration) {
+func setRefreshTokenCookie(w http.ResponseWriter, r *http.Request, token string, ttl time.Duration) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    token,
@@ -898,8 +907,17 @@ func setRefreshTokenCookie(w http.ResponseWriter, token string, ttl time.Duratio
 		MaxAge:   int(ttl.Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   false, // Set true in production with HTTPS
+		Secure:   isSecureRequest(r),
 	})
+}
+
+// isSecureRequest returns true if the request was made over HTTPS,
+// either directly (r.TLS != nil) or via a reverse proxy (X-Forwarded-Proto).
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
 func clearAuthCookies(w http.ResponseWriter) {

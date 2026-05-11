@@ -300,6 +300,23 @@ export const deleteProviderAtLevel = async (level: string, name: string): Promis
   return res.json()
 }
 
+export interface ProviderTestResult {
+  success: boolean
+  error?: string
+  model_count?: number
+  models?: string[]
+}
+
+export const testProviderConnection = async (type: string, params: Record<string, string>): Promise<ProviderTestResult> => {
+  const res = await teamFetch('/api/settings/providers/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, params })
+  })
+  if (!res.ok) throw new Error('Failed to test provider connection')
+  return res.json()
+}
+
 // --- Common Styles ---
 
 export const inputClass: string = 'w-full px-4 py-2.5 rounded-lg border text-sm'

@@ -68,11 +68,17 @@ export function getActiveTeam(): string | null {
 export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1], explicitTeam?: string | null): Promise<Response> {
   const effectiveTeam = explicitTeam !== undefined ? explicitTeam : _activeTeam
 
-  if (!effectiveTeam) {
-    return fetch(input, init)
+  const headers = new Headers(init?.headers)
+  // CSRF protection: always include X-Requested-With so the server knows
+  // this is a programmatic request, not a cross-origin form submission.
+  if (!headers.has('X-Requested-With')) {
+    headers.set('X-Requested-With', 'XMLHttpRequest')
   }
 
-  const headers = new Headers(init?.headers)
+  if (!effectiveTeam) {
+    return fetch(input, { ...init, headers })
+  }
+
   // Only set if not already explicitly provided by the caller
   if (!headers.has('X-Astonish-Team')) {
     headers.set('X-Astonish-Team', effectiveTeam)

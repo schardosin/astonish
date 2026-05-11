@@ -5,6 +5,15 @@
 
 const ADMIN_BASE = '/api/platform/admin'
 
+// Wrapper for admin API requests — always includes credentials and CSRF header.
+async function adminFetch(input: string, init?: Parameters<typeof fetch>[1]): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  if (!headers.has('X-Requested-With')) {
+    headers.set('X-Requested-With', 'XMLHttpRequest')
+  }
+  return fetch(input, { credentials: 'include', ...init, headers })
+}
+
 // --- Types ---
 
 export interface AdminOrg {
@@ -65,7 +74,7 @@ export interface AdminUser {
 // --- Organization API ---
 
 export async function listOrgs(): Promise<AdminOrg[]> {
-  const res = await fetch(`${ADMIN_BASE}/orgs`, { credentials: 'include' })
+  const res = await adminFetch(`${ADMIN_BASE}/orgs`, { credentials: 'include' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.error || 'Failed to list organizations')
@@ -79,7 +88,7 @@ export async function createOrg(params: {
   slug?: string
   owner_email?: string
 }): Promise<{ organization: AdminOrg; message: string }> {
-  const res = await fetch(`${ADMIN_BASE}/orgs`, {
+  const res = await adminFetch(`${ADMIN_BASE}/orgs`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -93,7 +102,7 @@ export async function createOrg(params: {
 }
 
 export async function getOrg(slug: string): Promise<AdminOrgDetail> {
-  const res = await fetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
     credentials: 'include',
   })
   if (!res.ok) {
@@ -107,7 +116,7 @@ export async function updateOrg(
   slug: string,
   params: { name?: string; status?: string }
 ): Promise<{ organization: AdminOrg }> {
-  const res = await fetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
     method: 'PATCH',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -121,7 +130,7 @@ export async function updateOrg(
 }
 
 export async function deleteOrg(slug: string): Promise<void> {
-  const res = await fetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -134,7 +143,7 @@ export async function deleteOrg(slug: string): Promise<void> {
 // --- User API ---
 
 export async function listUsers(): Promise<AdminUser[]> {
-  const res = await fetch(`${ADMIN_BASE}/users`, { credentials: 'include' })
+  const res = await adminFetch(`${ADMIN_BASE}/users`, { credentials: 'include' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.error || 'Failed to list users')
@@ -148,7 +157,7 @@ export async function createUser(params: {
   display_name: string
   password?: string
 }): Promise<{ user: AdminUser; message: string }> {
-  const res = await fetch(`${ADMIN_BASE}/users`, {
+  const res = await adminFetch(`${ADMIN_BASE}/users`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -162,7 +171,7 @@ export async function createUser(params: {
 }
 
 export async function getUser(id: string): Promise<{ user: AdminUser; orgs: OrgMembership[] }> {
-  const res = await fetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
     credentials: 'include',
   })
   if (!res.ok) {
@@ -181,7 +190,7 @@ export async function updateUser(
     password?: string
   }
 ): Promise<{ user: AdminUser }> {
-  const res = await fetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -195,7 +204,7 @@ export async function updateUser(
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  const res = await fetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -209,7 +218,7 @@ export async function addUserToOrg(
   userId: string,
   params: { org_slug: string; role?: string; team_slug?: string }
 ): Promise<void> {
-  const res = await fetch(`${ADMIN_BASE}/users/${encodeURIComponent(userId)}/orgs`, {
+  const res = await adminFetch(`${ADMIN_BASE}/users/${encodeURIComponent(userId)}/orgs`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -222,7 +231,7 @@ export async function addUserToOrg(
 }
 
 export async function removeUserFromOrg(userId: string, orgSlug: string): Promise<void> {
-  const res = await fetch(
+  const res = await adminFetch(
     `${ADMIN_BASE}/users/${encodeURIComponent(userId)}/orgs/${encodeURIComponent(orgSlug)}`,
     { method: 'DELETE', credentials: 'include' }
   )
@@ -250,7 +259,7 @@ export interface ChannelFullInfo {
 }
 
 export async function listChannels(): Promise<ChannelFullInfo[]> {
-  const res = await fetch(`${ADMIN_BASE}/channels`, { credentials: 'include' })
+  const res = await adminFetch(`${ADMIN_BASE}/channels`, { credentials: 'include' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.error || 'Failed to list channels')
@@ -262,7 +271,7 @@ export async function saveChannel(
   channelType: string,
   payload: { enabled: boolean; config: Record<string, any>; secrets: Record<string, string> }
 ): Promise<{ message: string }> {
-  const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -276,7 +285,7 @@ export async function saveChannel(
 }
 
 export async function deleteChannel(channelType: string): Promise<{ message: string }> {
-  const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
     method: 'DELETE',
     credentials: 'include',
   })
@@ -299,7 +308,7 @@ export interface WebServiceInfo {
 }
 
 export async function listWebServices(): Promise<WebServiceInfo[]> {
-  const res = await fetch(`${ADMIN_BASE}/web-services`, { credentials: 'include' })
+  const res = await adminFetch(`${ADMIN_BASE}/web-services`, { credentials: 'include' })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.error || 'Failed to list web services')
@@ -311,7 +320,7 @@ export async function setWebServiceKey(
   id: string,
   apiKey: string
 ): Promise<{ message: string }> {
-  const res = await fetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
@@ -325,7 +334,7 @@ export async function setWebServiceKey(
 }
 
 export async function deleteWebService(id: string): Promise<void> {
-  const res = await fetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
+  const res = await adminFetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
     method: 'DELETE',
     credentials: 'include',
   })

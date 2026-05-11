@@ -1105,6 +1105,7 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/settings/org/providers", SaveOrgProvidersHandler).Methods("PUT")
 	router.HandleFunc("/api/settings/team/providers", GetTeamProvidersHandler).Methods("GET")
 	router.HandleFunc("/api/settings/providers/effective", GetEffectiveProvidersHandler).Methods("GET")
+	router.HandleFunc("/api/settings/providers/test", TestProviderHandler).Methods("POST")
 	router.HandleFunc("/api/settings/{level}/providers/{name}", DeleteProviderHandler).Methods("DELETE")
 	router.HandleFunc("/api/mcp/install-inline", InstallInlineMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/mcp/status", MCPStatusHandler).Methods("GET")

@@ -61,47 +61,67 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 			return
 		}
 
-		// Allow loopback addresses (CLI, local tools).
-		// If a JWT is present (cookie or Bearer header), still extract user context
-		// (best-effort) so that platform admin handlers can verify superadmin status.
+		// Loopback address handling (CLI, local tools, daemon internals).
+		// Behavior is controlled by the LoopbackBypass config:
+		//   "always"     — pass without token (personal mode default)
+		//   "with_token" — must carry a valid JWT (platform mode default)
+		//   "never"      — full auth required (treated like remote requests)
 		if isLoopbackRequest(r) {
-			var loopbackToken string
-			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
-				loopbackToken = strings.TrimPrefix(authHeader, "Bearer ")
-			} else {
-				cookie, cookieErr := r.Cookie(accessCookieName)
-				if cookieErr == nil && cookie.Value != "" {
-					loopbackToken = cookie.Value
-				}
+			loopbackMode := pa.authCfg.LoopbackBypass
+			if loopbackMode == "" {
+				loopbackMode = "with_token" // platform mode default
 			}
-			if loopbackToken != "" {
-				if claims, jwtErr := pa.jwt.ValidateAccessToken(loopbackToken); jwtErr == nil {
-					teamSlug := claims.DefaultTeamSlug
-					if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
-						teamSlug = headerTeam
+
+			if loopbackMode == "never" {
+				// Fall through to normal auth validation below
+			} else {
+				// "always" or "with_token" — attempt to extract token
+				var loopbackToken string
+				if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+					loopbackToken = strings.TrimPrefix(authHeader, "Bearer ")
+				} else {
+					cookie, cookieErr := r.Cookie(accessCookieName)
+					if cookieErr == nil && cookie.Value != "" {
+						loopbackToken = cookie.Value
 					}
-					tc := &pgstore.TenantContext{
-						OrgSlug:  claims.OrgSlug,
-						TeamSlug: teamSlug,
-						UserID:   claims.UserID,
+				}
+
+				if loopbackToken != "" {
+					if claims, jwtErr := pa.jwt.ValidateAccessToken(loopbackToken); jwtErr == nil {
+						teamSlug := claims.DefaultTeamSlug
+						if headerTeam := r.Header.Get("X-Astonish-Team"); headerTeam != "" {
+							teamSlug = headerTeam
+						}
+						tc := &pgstore.TenantContext{
+							OrgSlug:  claims.OrgSlug,
+							TeamSlug: teamSlug,
+							UserID:   claims.UserID,
+						}
+						ctx := pgstore.WithTenantContext(r.Context(), tc)
+						ctx = WithPlatformUser(ctx, &PlatformUser{
+							ID:           claims.UserID,
+							Email:        claims.Email,
+							DisplayName:  claims.DisplayName,
+							OrgSlug:      claims.OrgSlug,
+							TeamSlug:     teamSlug,
+							Role:         claims.Role,
+							PlatformRole: claims.PlatformRole,
+						})
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
 					}
-					ctx := pgstore.WithTenantContext(r.Context(), tc)
-					ctx = WithPlatformUser(ctx, &PlatformUser{
-						ID:           claims.UserID,
-						Email:        claims.Email,
-						DisplayName:  claims.DisplayName,
-						OrgSlug:      claims.OrgSlug,
-						TeamSlug:     teamSlug,
-						Role:         claims.Role,
-						PlatformRole: claims.PlatformRole,
-					})
-					next.ServeHTTP(w, r.WithContext(ctx))
+				}
+
+				// No valid token found
+				if loopbackMode == "always" {
+					// Pass through without user context (backward compat for personal mode)
+					next.ServeHTTP(w, r)
 					return
 				}
+				// "with_token" mode: token required but missing/invalid → 401
+				respondError(w, http.StatusUnauthorized, "loopback requests require a valid token")
+				return
 			}
-			// No valid token — pass through without user context (CLI tools, etc.)
-			next.ServeHTTP(w, r)
-			return
 		}
 
 		// Extract access token from Authorization header (CLI clients) or cookie (browser).
@@ -124,6 +144,22 @@ func PlatformAuthMiddleware(pa *PlatformAuth, next http.Handler) http.Handler {
 		if err != nil {
 			handleUnauthenticated(w, r)
 			return
+		}
+
+		// CSRF protection: require a custom header on state-changing requests
+		// from cookie-authenticated clients. Bearer token requests (CLI) are
+		// exempt because cross-origin scripts cannot read/set Bearer headers.
+		// SameSite=Strict already blocks most CSRF vectors; this is defense-in-depth.
+		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
+			authHeader := r.Header.Get("Authorization")
+			isBearerAuth := strings.HasPrefix(authHeader, "Bearer ")
+			if !isBearerAuth {
+				// Cookie-authenticated request — require CSRF indicator header
+				if r.Header.Get("X-Requested-With") == "" && r.Header.Get("Content-Type") != "application/json" {
+					respondError(w, http.StatusForbidden, "missing CSRF protection header")
+					return
+				}
+			}
 		}
 
 		// Populate TenantContext for downstream middleware

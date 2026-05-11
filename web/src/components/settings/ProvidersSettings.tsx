@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Key, ChevronRight, Save, Plus, Trash2, X, AlertCircle, Loader2, Search, Settings2 } from 'lucide-react'
-import { saveSettings, replaceAllProviders, savePlatformProviders, saveOrgProviders, deleteProviderAtLevel, fetchProviderModels } from './settingsApi'
-import type { SettingsData, ProviderFieldDef } from './settingsApi'
+import { Key, ChevronRight, Save, Plus, Trash2, X, AlertCircle, Loader2, Search, Settings2, Zap } from 'lucide-react'
+import { saveSettings, replaceAllProviders, savePlatformProviders, saveOrgProviders, deleteProviderAtLevel, fetchProviderModels, testProviderConnection } from './settingsApi'
+import type { SettingsData, ProviderFieldDef, ProviderTestResult } from './settingsApi'
 import ProviderModelSelector from '../ProviderModelSelector'
 
 export interface InheritedProvider {
@@ -65,6 +65,10 @@ export default function ProvidersSettings({
   const [newProviderName, setNewProviderName] = useState('')
   const [newProviderType, setNewProviderType] = useState('openai')
   const [deletingProvider, setDeletingProvider] = useState<string | null>(null)
+
+  // Test Connection state
+  const [testingProvider, setTestingProvider] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<Record<string, ProviderTestResult | null>>({})
 
   // Default Configuration section state
   const [showModelSelector, setShowModelSelector] = useState(false)
@@ -313,6 +317,36 @@ export default function ProvidersSettings({
       setError(err.message)
     } finally {
       setDeletingProvider(null)
+    }
+  }
+
+  const handleTestConnection = async (providerName: string, providerType: string) => {
+    setTestingProvider(providerName)
+    setTestResult(prev => ({ ...prev, [providerName]: null }))
+    try {
+      // Build params from form fields (only non-empty, non-masked values)
+      const formFields = providerForms[providerName] || {}
+      const existingProvider = settings?.providers?.find(p => p.name === providerName)
+      const params: Record<string, string> = {}
+      for (const [key, value] of Object.entries(formFields)) {
+        if (value && key !== 'type' && !value.startsWith('****')) {
+          params[key] = value
+        }
+      }
+      // Include existing saved fields that weren't overridden (non-masked)
+      if (existingProvider?.fields) {
+        for (const [key, value] of Object.entries(existingProvider.fields)) {
+          if (!(key in params) && value && !value.startsWith('****')) {
+            params[key] = value
+          }
+        }
+      }
+      const result = await testProviderConnection(providerType, params)
+      setTestResult(prev => ({ ...prev, [providerName]: result }))
+    } catch (err: any) {
+      setTestResult(prev => ({ ...prev, [providerName]: { success: false, error: err.message } }))
+    } finally {
+      setTestingProvider(null)
     }
   }
 
@@ -641,16 +675,56 @@ export default function ProvidersSettings({
                       )}
                     </div>
 
-                    {/* Save Button */}
-                    <button
-                      onClick={() => handleSaveProvider(provider.name)}
-                      disabled={saving}
-                      className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-                      style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
-                    >
-                      <Save size={16} />
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
+                    {/* Save & Test Buttons */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => handleSaveProvider(provider.name)}
+                        disabled={saving}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                        style={{ background: 'linear-gradient(135deg, #a855f7 0%, #7c3aed 100%)' }}
+                      >
+                        <Save size={16} />
+                        {saving ? 'Saving...' : 'Save'}
+                      </button>
+                      <button
+                        onClick={() => handleTestConnection(provider.name, provider.type)}
+                        disabled={testingProvider === provider.name}
+                        className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all border hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                        style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)', background: 'var(--bg-primary)' }}
+                      >
+                        {testingProvider === provider.name ? (
+                          <Loader2 size={16} className="animate-spin" />
+                        ) : (
+                          <Zap size={16} />
+                        )}
+                        {testingProvider === provider.name ? 'Testing...' : 'Test Connection'}
+                      </button>
+                    </div>
+
+                    {/* Test Result */}
+                    {testResult[provider.name] && (
+                      <div className={`flex items-start gap-2 p-3 rounded-lg text-sm ${
+                        testResult[provider.name]!.success ? '' : ''
+                      }`} style={{
+                        background: testResult[provider.name]!.success
+                          ? 'rgba(20, 150, 71, 0.1)'
+                          : 'rgba(239, 68, 68, 0.1)',
+                        color: testResult[provider.name]!.success ? '#149647' : '#f87171'
+                      }}>
+                        {testResult[provider.name]!.success ? (
+                          <Zap size={16} className="flex-shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
+                        )}
+                        <div>
+                          {testResult[provider.name]!.success ? (
+                            <span>Connection successful — {testResult[provider.name]!.model_count} model(s) available</span>
+                          ) : (
+                            <span>{testResult[provider.name]!.error}</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

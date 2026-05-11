@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -379,4 +382,45 @@ func DeleteProviderHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// TestProviderHandler handles POST /api/settings/providers/test.
+// Tests connectivity to a provider by attempting to list models.
+// Accepts raw credentials in the request body (not from stored config).
+// Any authenticated user can test — useful for validating before saving.
+func TestProviderHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Type   string            `json:"type"`
+		Params map[string]string `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Type == "" {
+		respondError(w, http.StatusBadRequest, "provider type is required")
+		return
+	}
+	if req.Params == nil {
+		req.Params = map[string]string{}
+	}
+
+	// Use a 15-second timeout for connectivity tests
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	models, err := provider.TestProviderConnection(ctx, req.Type, req.Params)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"success":     true,
+		"model_count": len(models),
+		"models":      models,
+	})
+}
 

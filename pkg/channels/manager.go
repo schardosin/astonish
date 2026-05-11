@@ -585,19 +585,15 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		return fmt.Errorf("session error: %w", err)
 	}
 
-	// Set channel-specific output hints on the prompt builder for this turn.
-	// This guides the LLM to produce channel-appropriate output (e.g., no tables
-	// for Telegram, shorter responses for chat).
-	if m.agent.SystemPrompt != nil {
-		m.agent.SystemPrompt.ChannelHints = channelHints(msg.ChannelID)
-		defer func() { m.agent.SystemPrompt.ChannelHints = "" }()
+	// Set channel-specific output hints and session context via context overrides
+	// (thread-safe). Run() clones the SystemPromptBuilder and applies these.
+	overrides := &agent.PromptOverrides{
+		ChannelHints: channelHints(msg.ChannelID),
 	}
-
-	// Inject one-shot session context if pending (e.g., fleet plan wizard prompt).
-	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" && m.agent.SystemPrompt != nil {
-		m.agent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
-		defer func() { m.agent.SystemPrompt.SessionContext = "" }()
+	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" {
+		overrides.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
 	}
+	ctx = agent.WithPromptOverrides(ctx, overrides)
 
 	// Create ADK agent wrapper for this turn
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -609,11 +605,18 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		return fmt.Errorf("failed to create ADK agent: %w", err)
 	}
 
-	// Create runner for this turn
+	// Create runner for this turn.
+	// Use the context-injected session service (PG in platform mode) if available,
+	// so the runner looks up sessions in the same store where getOrCreateSession put them.
+	runnerSessSvc := m.sessSvc
+	if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+		runnerSessSvc = ctxSvc
+	}
+
 	r, err := runner.New(runner.Config{
 		AppName:        appName,
 		Agent:          adkAgent,
-		SessionService: m.sessSvc,
+		SessionService: runnerSessSvc,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create runner: %w", err)
@@ -841,6 +844,22 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, route RouteResult) error {
 	userID := fmt.Sprintf("channel_%s_%s", msg.ChannelID, msg.SenderID)
 	appName := "astonish"
+	sessSvc := m.sessSvc
+
+	// Platform mode: resolve user and inject team-scoped stores (same as handleInbound).
+	// This ensures /new deletes from the correct store (PG) with the correct user ID.
+	if m.platformResolver != nil {
+		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUserWithHint(ctx, msg.ChannelID, msg.SenderID, msg.RoutingHint)
+		if resolveErr != nil {
+			m.logger.Printf("[channels] Platform resolver failed for command %s/%s: %v", msg.ChannelID, msg.SenderID, resolveErr)
+		} else {
+			ctx = enrichedCtx
+			userID = platformUserID
+			if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+				sessSvc = ctxSvc
+			}
+		}
+	}
 
 	cc := CommandContext{
 		ChannelID:      msg.ChannelID,
@@ -850,7 +869,7 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		SessionKey:     route.SessionKey,
 		UserID:         userID,
 		AppName:        appName,
-		SessionService: m.sessSvc,
+		SessionService: sessSvc,
 		ProviderName:   m.providerName,
 		ModelName:      m.modelName,
 		ToolCount:      m.toolCount,

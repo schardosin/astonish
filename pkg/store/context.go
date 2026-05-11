@@ -287,3 +287,26 @@ func UserIDFromContext(ctx context.Context) string {
 // It represents "the platform acting autonomously" when no human user is
 // associated with the action. Universally recognizable as a system identity.
 const SystemUserID = "00000000-0000-0000-0000-000000000000"
+
+// --- Disabled Tools (per-team tool restrictions) ---
+
+type disabledToolsKey struct{}
+
+// WithDisabledTools attaches a set of disabled tool names to the context.
+// Tools in this set will be filtered from the agent's tool list per-request.
+func WithDisabledTools(ctx context.Context, names []string) context.Context {
+	if len(names) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, disabledToolsKey{}, names)
+}
+
+// DisabledToolsFromContext retrieves the disabled tool names from the context.
+// Returns nil if no restrictions are set (personal mode or unrestricted team).
+func DisabledToolsFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	names, _ := ctx.Value(disabledToolsKey{}).([]string)
+	return names
+}

@@ -989,10 +989,9 @@ export default function SettingsPage({
   const adminOnlyTeamItems = new Set(['team-providers', 'team-mcp', 'team-scheduler', 'team-taps', 'team-container'])
   const memberTeamItems = canManageTeam ? TEAM_ITEMS : TEAM_ITEMS.filter(item => !adminOnlyTeamItems.has(item.id))
 
-  // In platform mode, skills, MCP, and providers are managed at org/team level, not system
-  const platformSystemItems = SYSTEM_ITEMS.filter(item => 
-    item.id !== 'skills' && item.id !== 'mcp' && item.id !== 'providers'
-  )
+  // In platform mode, hide items managed at org/team level or irrelevant for platform deployments
+  const platformHiddenItems = new Set(['skills', 'mcp', 'providers', 'open_code'])
+  const platformSystemItems = SYSTEM_ITEMS.filter(item => !platformHiddenItems.has(item.id))
 
   const categories: MenuCategory[] = isPlatformMode
     ? isAdmin

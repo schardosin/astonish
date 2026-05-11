@@ -147,19 +147,18 @@ func (e *Executor) executeAdaptive(ctx context.Context, job *Job) (string, error
 		return "", fmt.Errorf("no ChatAgent available for adaptive execution (enable channels to use adaptive mode)")
 	}
 
-	// Set scheduler-specific output constraints on the shared ChatAgent.
-	// This tells the LLM to produce data-only output with no conversational preamble.
-	if e.ChatAgent.SystemPrompt != nil {
-		e.ChatAgent.SystemPrompt.SchedulerHints = `You are executing a SCHEDULED TASK automatically. Your output will be delivered directly as a notification.
+	// Inject scheduler-specific output constraints via context (thread-safe).
+	// Run() clones the SystemPromptBuilder and applies these overrides on the clone.
+	ctx = agent.WithPromptOverrides(ctx, &agent.PromptOverrides{
+		SchedulerHints: `You are executing a SCHEDULED TASK automatically. Your output will be delivered directly as a notification.
 CRITICAL RULES:
 - Output ONLY the requested data in the format specified by the instructions
 - Do NOT add preamble, greetings, or explain what you are doing
 - Do NOT mention saved workflows, flows, or execution plans you found
 - Do NOT add conversational filler like "Here's what I found" or "Let me check"
 - Do NOT add follow-up questions or offers to help
-- Just execute the task and return the formatted result`
-		defer func() { e.ChatAgent.SystemPrompt.SchedulerHints = "" }()
-	}
+- Just execute the task and return the formatted result`,
+	})
 
 	// Create a per-job session key for isolation
 	sessionKey := fmt.Sprintf("scheduler:adaptive:%s", job.ID)

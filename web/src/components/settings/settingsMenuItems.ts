@@ -12,7 +12,6 @@ export interface SettingsMenuItem {
 
 // User preferences — personal to each user
 export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
-  { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'channels', label: 'Channels', icon: Radio },
 ]
 
@@ -51,12 +50,14 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-orgs', label: 'Organizations', icon: Building2 },
   { id: 'platform-users', label: 'Users', icon: UserCog },
   { id: 'platform-providers', label: 'Providers', icon: Key },
+  { id: 'platform-channels', label: 'Channels', icon: Radio },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
 ]
 
 // Administration — system config, admin/owner only
 export const SYSTEM_ITEMS: SettingsMenuItem[] = [
   { id: 'general', label: 'General', icon: Settings },
+  { id: 'chat', label: 'Chat', icon: MessageSquare },
   { id: 'providers', label: 'Providers', icon: Key },
   { id: 'memory', label: 'Memory', icon: Brain },
   { id: 'mcp', label: 'MCP Servers', icon: Server },

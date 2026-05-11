@@ -203,6 +203,10 @@ func Run(cfg RunConfig) error {
 		// Set up provider env vars from the DB-sourced config
 		getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
 		config.SetupAllProviderEnvFromStore(appCfg, getSecret)
+		// Override the installed secret getter to use platform_secrets.
+		// This ensures IsStandardServerInstalled() and mergeStandardServers()
+		// resolve API keys from the DB in platform mode (not the file-based store).
+		config.SetInstalledSecretGetter(getSecret)
 	}
 
 	// Create the pgvector-backed ToolVectorStore for platform mode.
@@ -448,9 +452,16 @@ func Run(cfg RunConfig) error {
 				tgConfigError = "bot token not configured"
 				logger.Printf("Warning: Telegram enabled but no bot token found")
 			} else {
+				// In platform mode, the DB is the sole authority for allowlists.
+				// Pass empty AllowFrom here; the background refresh populates it
+				// from user_channels immediately after channel init.
+				tgAllowFrom := freshCfg.Channels.Telegram.AllowFrom
+				if pgStore != nil {
+					tgAllowFrom = nil
+				}
 				tg := telegram.New(&telegram.Config{
 					BotToken:  botToken,
-					AllowFrom: freshCfg.Channels.Telegram.AllowFrom,
+					AllowFrom: tgAllowFrom,
 					Commands:  mgr.Commands(),
 				}, log.Default())
 				mgr.Register(tg)
@@ -473,6 +484,10 @@ func Run(cfg RunConfig) error {
 				logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
 			} else {
 				pollInterval := time.Duration(freshCfg.Channels.Email.GetPollInterval()) * time.Second
+				emailAllowFrom := freshCfg.Channels.Email.AllowFrom
+				if pgStore != nil {
+					emailAllowFrom = nil
+				}
 				em := emailchan.New(&emailchan.Config{
 					Provider:     freshCfg.Channels.Email.Provider,
 					IMAPServer:   freshCfg.Channels.Email.IMAPServer,
@@ -481,7 +496,7 @@ func Run(cfg RunConfig) error {
 					Username:     freshCfg.Channels.Email.Username,
 					Password:     emailPassword,
 					PollInterval: pollInterval,
-					AllowFrom:    freshCfg.Channels.Email.AllowFrom,
+					AllowFrom:    emailAllowFrom,
 					Folder:       freshCfg.Channels.Email.Folder,
 					MarkRead:     freshCfg.Channels.Email.IsMarkRead(),
 					MaxBodyChars: freshCfg.Channels.Email.MaxBodyChars,
@@ -532,12 +547,16 @@ func Run(cfg RunConfig) error {
 				slackConfigError = "signing_secret not configured for events mode"
 				logger.Printf("Warning: Slack channel enabled (events mode) but no signing secret found")
 			} else {
+				slAllowFrom := freshCfg.Channels.Slack.AllowFrom
+				if pgStore != nil {
+					slAllowFrom = nil
+				}
 				sl := slackchan.New(&slackchan.Config{
 					Mode:         mode,
 					BotToken:     botToken,
 					AppToken:     appToken,
 					SigningSecret: signingSecret,
-					AllowFrom:    freshCfg.Channels.Slack.AllowFrom,
+					AllowFrom:    slAllowFrom,
 					Commands:     mgr.Commands(),
 				}, log.Default())
 				mgr.Register(sl)
@@ -617,16 +636,17 @@ func Run(cfg RunConfig) error {
 	api.SetChannelManager(channelMgr)
 
 	// --- Dynamic allowlist from user_channels (platform mode) ---
-	// In platform mode, channel allowlists are built from the user_channels
-	// table instead of the static config.yaml. A background goroutine refreshes
-	// the allowlists every 60 seconds.
+	// In platform mode, channel allowlists are built exclusively from the
+	// user_channels table (DB is the sole authority). Static config.yaml
+	// allow_from entries are ignored — they are a personal-mode concept.
+	// A background goroutine refreshes the allowlists every 60 seconds.
 	var refreshAllowlistStop context.CancelFunc
 	if pgStore != nil && channelMgr != nil {
 		refreshAllowlist := func() {
 			bgCtx := context.Background()
 			allowlists := make(map[string][]string)
 
-			// Telegram allowlist
+			// Telegram allowlist (from DB only)
 			tgLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Telegram allowlist from DB: %v", err)
@@ -635,25 +655,10 @@ func Run(cfg RunConfig) error {
 				for _, link := range tgLinks {
 					ids = append(ids, link.ExternalID)
 				}
-				// Merge with static config allowlist
-				for _, staticID := range appCfg.Channels.Telegram.AllowFrom {
-					found := false
-					for _, id := range ids {
-						if id == staticID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ids = append(ids, staticID)
-					}
-				}
-				if len(ids) > 0 {
-					allowlists["telegram"] = ids
-				}
+				allowlists["telegram"] = ids
 			}
 
-			// Slack allowlist
+			// Slack allowlist (from DB only)
 			slLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "slack")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Slack allowlist from DB: %v", err)
@@ -662,27 +667,22 @@ func Run(cfg RunConfig) error {
 				for _, link := range slLinks {
 					ids = append(ids, link.ExternalID)
 				}
-				// Merge with static config allowlist
-				for _, staticID := range appCfg.Channels.Slack.AllowFrom {
-					found := false
-					for _, id := range ids {
-						if id == staticID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ids = append(ids, staticID)
-					}
-				}
-				if len(ids) > 0 {
-					allowlists["slack"] = ids
-				}
+				allowlists["slack"] = ids
 			}
 
-			if len(allowlists) > 0 {
-				channelMgr.UpdateAllowlists(allowlists)
+			// Email allowlist (from DB only)
+			emLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "email")
+			if err != nil {
+				logger.Printf("[channels] Failed to refresh Email allowlist from DB: %v", err)
+			} else {
+				ids := make([]string, 0, len(emLinks))
+				for _, link := range emLinks {
+					ids = append(ids, link.ExternalID)
+				}
+				allowlists["email"] = ids
 			}
+
+			channelMgr.UpdateAllowlists(allowlists)
 		}
 
 		// Initial refresh
@@ -795,7 +795,8 @@ func Run(cfg RunConfig) error {
 		}
 		api.SetChannelManager(channelMgr)
 
-		// Refresh dynamic allowlist after channel reload (platform mode)
+		// Refresh dynamic allowlist after channel reload (platform mode).
+		// DB is the sole authority — static config allow_from is ignored.
 		if pgStore != nil && channelMgr != nil {
 			bgCtx := context.Background()
 			allowlists := make(map[string][]string)
@@ -807,21 +808,7 @@ func Run(cfg RunConfig) error {
 				for _, link := range tgLinks {
 					ids = append(ids, link.ExternalID)
 				}
-				for _, staticID := range freshCfg.Channels.Telegram.AllowFrom {
-					found := false
-					for _, id := range ids {
-						if id == staticID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ids = append(ids, staticID)
-					}
-				}
-				if len(ids) > 0 {
-					allowlists["telegram"] = ids
-				}
+				allowlists["telegram"] = ids
 			}
 
 			// Slack
@@ -831,26 +818,20 @@ func Run(cfg RunConfig) error {
 				for _, link := range slLinks {
 					ids = append(ids, link.ExternalID)
 				}
-				for _, staticID := range freshCfg.Channels.Slack.AllowFrom {
-					found := false
-					for _, id := range ids {
-						if id == staticID {
-							found = true
-							break
-						}
-					}
-					if !found {
-						ids = append(ids, staticID)
-					}
-				}
-				if len(ids) > 0 {
-					allowlists["slack"] = ids
-				}
+				allowlists["slack"] = ids
 			}
 
-			if len(allowlists) > 0 {
-				channelMgr.UpdateAllowlists(allowlists)
+			// Email
+			emLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "email")
+			if linkErr == nil {
+				ids := make([]string, 0, len(emLinks))
+				for _, link := range emLinks {
+					ids = append(ids, link.ExternalID)
+				}
+				allowlists["email"] = ids
 			}
+
+			channelMgr.UpdateAllowlists(allowlists)
 		}
 
 		// Re-attach platform resolver after reload

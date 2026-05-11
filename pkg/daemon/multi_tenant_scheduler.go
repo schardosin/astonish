@@ -208,6 +208,13 @@ func (mts *MultiTenantScheduler) executeJob(
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
 	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
 
+	// Inject per-team disabled tool list so the agent filters them out.
+	if ts := teamStore.Settings(); ts != nil {
+		if settings, err := ts.Get(ctx); err == nil && len(settings.DisabledTools) > 0 {
+			execCtx = store.WithDisabledTools(execCtx, settings.DisabledTools)
+		}
+	}
+
 	// Convert to scheduler.Job for the executor
 	job := storeJobToSchedulerJob(storeJob)
 

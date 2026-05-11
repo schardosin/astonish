@@ -727,6 +727,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Inject per-team disabled tool list so the agent filters them out.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && len(settings.DisabledTools) > 0 {
+			runner.InjectDisabledTools(settings.DisabledTools)
+		}
+	}
+
 	// Inject the per-request session service so that sub-agents (delegate_tasks)
 	// create child sessions in the correct store (pgstore PersonalSessions in
 	// platform mode) rather than the factory-time default (FileStore).

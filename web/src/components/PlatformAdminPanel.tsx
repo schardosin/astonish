@@ -128,6 +128,16 @@ export default function PlatformAdminPanel({ activeTab: externalTab, onTabChange
           >
             <Shield size={13} /> Authentication
           </button>
+          <button
+            onClick={() => onTabChange('channels')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: activeTab === 'channels' ? 'var(--accent-soft)' : 'transparent',
+              color: activeTab === 'channels' ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+          >
+            <Globe size={13} /> Channels
+          </button>
         </div>
       </div>
 
@@ -135,6 +145,7 @@ export default function PlatformAdminPanel({ activeTab: externalTab, onTabChange
       {activeTab === 'orgs' && <OrgsTab />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'auth' && <AuthTab />}
+      {activeTab === 'channels' && <ChannelsTab />}
     </div>
   )
 }
@@ -561,11 +572,306 @@ function CreateOrgModal({ onCreated, onCancel, onError, onSuccess }: { onCreated
           </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onCancel} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
-            <button type="submit" disabled={submitting} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={gradientAmber}>
-              {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Create Organization'}
+            <button type="submit" disabled={submitting} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={{ background: 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' }}>
+              {submitting ? <Loader2 size={16} className="animate-spin" /> : 'Save Changes'}
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Channels Tab — Platform channel adapter configuration
+// ---------------------------------------------------------------------------
+
+const CHANNEL_SECRET_LABELS: Record<string, Record<string, string>> = {
+  telegram: {
+    'channels.telegram.bot_token': 'Bot Token (from @BotFather)',
+  },
+  email: {
+    'channels.email.password': 'IMAP/SMTP Password',
+  },
+  slack: {
+    'channels.slack.bot_token': 'Bot Token (xoxb-...)',
+    'channels.slack.app_token': 'App-Level Token (xapp-...)',
+    'channels.slack.signing_secret': 'Signing Secret',
+  },
+}
+
+function ChannelsTab() {
+  const [adapters, setAdapters] = useState<adminApi.ChannelAdapterInfo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [editing, setEditing] = useState<string | null>(null)
+  const [secretValues, setSecretValues] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const data = await adminApi.listChannelAdapters()
+      setAdapters(data || [])
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const startEdit = (adapterType: string) => {
+    setEditing(adapterType)
+    setSecretValues({})
+    setSuccess('')
+  }
+
+  const handleSave = async (adapterType: string) => {
+    const secrets: Record<string, string> = {}
+    for (const [k, v] of Object.entries(secretValues)) {
+      if (v.trim()) secrets[k] = v.trim()
+    }
+    if (Object.keys(secrets).length === 0) {
+      setError('Please provide at least one secret value')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const result = await adminApi.setChannelSecrets(adapterType, secrets)
+      setSuccess(result.message)
+      setEditing(null)
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async (adapterType: string) => {
+    if (!confirm(`Remove all secrets for ${adapterType}? The adapter will stop working until reconfigured.`)) return
+    setError('')
+    try {
+      await adminApi.deleteChannelAdapter(adapterType)
+      setSuccess(`All secrets removed for ${adapterType}`)
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  if (loading) {
+    return <div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>
+  }
+
+  return (
+    <div className="p-6 space-y-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Channel Adapters</h3>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            Configure messaging channel credentials. Changes require a daemon restart.
+          </p>
+        </div>
+      </div>
+
+      <InlineError msg={error} />
+      <InlineSuccess msg={success} />
+
+      <div className="space-y-3">
+        {adapters.map(adapter => (
+          <div key={adapter.type} className="p-4 rounded-xl" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+                  {adapter.type.charAt(0).toUpperCase() + adapter.type.slice(1)}
+                </span>
+                <span className="text-xs px-2 py-0.5 rounded-full" style={{
+                  background: adapter.configured ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  color: adapter.configured ? '#22c55e' : '#ef4444',
+                }}>
+                  {adapter.configured ? 'Configured' : 'Not configured'}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => startEdit(adapter.type)} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                  <Edit2 size={12} className="inline mr-1" />Configure
+                </button>
+                {adapter.configured && (
+                  <button onClick={() => handleDelete(adapter.type)} className="px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444' }}>
+                    <Trash2 size={12} className="inline mr-1" />Remove
+                  </button>
+                )}
+              </div>
+            </div>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{adapter.description}</p>
+            {(adapter.secret_keys?.length ?? 0) > 0 && (
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                Keys set: {adapter.secret_keys.map(k => k.split('.').pop()).join(', ')}
+              </p>
+            )}
+
+            {editing === adapter.type && (
+              <div className="mt-3 pt-3 space-y-3" style={{ borderTop: '1px solid var(--border-color)' }}>
+                {Object.entries(CHANNEL_SECRET_LABELS[adapter.type] || {}).map(([key, label]) => (
+                  <div key={key}>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>{label}</label>
+                    <input
+                      type="password"
+                      value={secretValues[key] || ''}
+                      onChange={e => setSecretValues(prev => ({ ...prev, [key]: e.target.value }))}
+                      placeholder={adapter.secret_keys.includes(key) ? '(already set — leave blank to keep)' : 'Enter value...'}
+                      className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
+                      style={inputStyle}
+                    />
+                  </div>
+                ))}
+                <div className="flex gap-2 pt-1">
+                  <button onClick={() => setEditing(null)} className="px-3 py-2 rounded-lg text-xs font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                    Cancel
+                  </button>
+                  <button onClick={() => handleSave(adapter.type)} disabled={saving} className="px-3 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
+                    {saving ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                    Save Secrets
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Web Services (Standard MCP Servers) */}
+      <WebServicesSection />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Web Services Section — Standard MCP server API key management
+// ---------------------------------------------------------------------------
+
+function WebServicesSection() {
+  const [services, setServices] = useState<adminApi.WebServiceInfo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [apiKey, setApiKey] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await adminApi.listWebServices()
+      setServices(data || [])
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const handleSave = async (id: string) => {
+    if (!apiKey.trim()) {
+      setError('API key cannot be empty')
+      return
+    }
+    setSaving(true)
+    setError('')
+    try {
+      const result = await adminApi.setWebServiceKey(id, apiKey.trim())
+      setSuccess(result.message)
+      setEditingId(null)
+      setApiKey('')
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDelete = async (id: string, name: string) => {
+    if (!confirm(`Remove API key for ${name}?`)) return
+    try {
+      await adminApi.deleteWebService(id)
+      setSuccess(`API key removed for ${name}`)
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    }
+  }
+
+  if (loading) return null
+
+  return (
+    <div className="mt-6 pt-6" style={{ borderTop: '1px solid var(--border-color)' }}>
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Web Services</h3>
+        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          API keys for web search and extraction MCP servers (available to all teams).
+        </p>
+      </div>
+
+      {error && <InlineError msg={error} />}
+      {success && <InlineSuccess msg={success} />}
+
+      <div className="space-y-2">
+        {services.map(svc => (
+          <div key={svc.id} className="flex items-center justify-between p-3 rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <div className="flex items-center gap-3">
+              <div>
+                <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{svc.name}</span>
+                <span className="text-xs ml-2 px-1.5 py-0.5 rounded" style={{
+                  background: svc.configured ? 'rgba(34, 197, 94, 0.1)' : 'rgba(100, 100, 100, 0.1)',
+                  color: svc.configured ? '#22c55e' : 'var(--text-muted)',
+                }}>
+                  {svc.configured ? 'Active' : 'Not set'}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {editingId === svc.id ? (
+                <>
+                  <input
+                    type="password"
+                    value={apiKey}
+                    onChange={e => setApiKey(e.target.value)}
+                    placeholder="Enter API key..."
+                    className="px-2 py-1.5 rounded-lg text-xs outline-none font-mono w-48"
+                    style={inputStyle}
+                    onKeyDown={e => e.key === 'Enter' && handleSave(svc.id)}
+                  />
+                  <button onClick={() => handleSave(svc.id)} disabled={saving} className="px-2 py-1.5 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
+                    Save
+                  </button>
+                  <button onClick={() => { setEditingId(null); setApiKey('') }} className="px-2 py-1.5 rounded-lg text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <X size={12} />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={() => { setEditingId(svc.id); setApiKey(''); setSuccess('') }} className="px-2 py-1.5 rounded-lg text-xs font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+                    {svc.configured ? 'Update' : 'Set Key'}
+                  </button>
+                  {svc.configured && (
+                    <button onClick={() => handleDelete(svc.id, svc.name)} className="px-2 py-1.5 rounded-lg text-xs" style={{ color: '#ef4444' }}>
+                      <Trash2 size={12} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

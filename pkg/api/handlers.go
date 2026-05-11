@@ -1364,5 +1364,15 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminGetOIDCProviderHandler).Methods("GET")
 		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminUpdateOIDCProviderHandler).Methods("PATCH")
 		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminDeleteOIDCProviderHandler).Methods("DELETE")
+
+		// Channel adapter management (superadmin only)
+		router.HandleFunc("/api/platform/admin/channels", PlatformAdminListChannelsHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminSetChannelSecretsHandler).Methods("PUT")
+		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminDeleteChannelHandler).Methods("DELETE")
+
+		// Standard MCP servers / web services management (superadmin only)
+		router.HandleFunc("/api/platform/admin/web-services", PlatformAdminListWebServicesHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminSetWebServiceKeyHandler).Methods("PUT")
+		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminDeleteWebServiceHandler).Methods("DELETE")
 	}
 }

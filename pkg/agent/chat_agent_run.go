@@ -199,24 +199,63 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		c.searchToolsResults = nil
 		c.searchToolsMu.Unlock()
 
-		// Set per-turn dynamic fields on the system prompt builder, then build.
+		// Clone the SystemPromptBuilder for this request to avoid races with
+		// concurrent callers (scheduler jobs, channel messages, Studio chat).
+		// Per-turn dynamic fields are set on the clone, which is then discarded.
+		promptBuilder := c.SystemPrompt.Clone()
+		if promptBuilder == nil {
+			yield(nil, fmt.Errorf("SystemPrompt builder is nil"))
+			return
+		}
+
+		// Apply per-turn overrides injected by callers via context
+		if po := PromptOverridesFromContext(ctx); po != nil {
+			if po.ChannelHints != "" {
+				promptBuilder.ChannelHints = po.ChannelHints
+			}
+			if po.SchedulerHints != "" {
+				promptBuilder.SchedulerHints = po.SchedulerHints
+			}
+			if po.SessionContext != "" {
+				promptBuilder.SessionContext = po.SessionContext
+			}
+		}
+
+		// Per-team tool restrictions: filter disabled tools from the prompt builder
+		// so the LLM doesn't see them in the system prompt's capabilities list.
+		if disabledTools := store.DisabledToolsFromContext(ctx); len(disabledTools) > 0 {
+			disabledSet := make(map[string]bool, len(disabledTools))
+			for _, name := range disabledTools {
+				disabledSet[name] = true
+			}
+			filtered := make([]tool.Tool, 0, len(promptBuilder.Tools))
+			for _, t := range promptBuilder.Tools {
+				if disabledSet[t.Name()] {
+					continue
+				}
+				filtered = append(filtered, t)
+			}
+			promptBuilder.Tools = filtered
+		}
+
+		// Set per-turn dynamic fields on the cloned builder, then build.
 		// These are appended at the end of the system prompt so the static prefix
 		// remains cacheable by providers.
-		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
-		c.SystemPrompt.RelevantTools = relevantTools
+		promptBuilder.RelevantKnowledge = relevantKnowledge
+		promptBuilder.RelevantTools = relevantTools
 
 		// Per-turn MCP access filter: in platform mode, only show MCP groups
 		// the current user's team/org has access to in the delegation catalog.
 		mcpStores := store.MCPServerStoresFromContext(ctx)
 		if mcpStores != nil {
-			c.SystemPrompt.MCPAccessFilter = func(serverName string) bool {
+			promptBuilder.MCPAccessFilter = func(serverName string) bool {
 				return isMCPServerAccessible(ctx, serverName)
 			}
 		} else {
-			c.SystemPrompt.MCPAccessFilter = nil // personal mode — no filtering
+			promptBuilder.MCPAccessFilter = nil // personal mode — no filtering
 		}
 
-		instruction := c.SystemPrompt.Build()
+		instruction := promptBuilder.Build()
 
 		// Capture session identity for use in AfterToolCallback closure.
 		sessionID := ctx.Session().ID()
@@ -411,6 +450,21 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Truncate oversized tool responses before they reach the model
 		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
+		// Per-team tool restrictions: remove disabled tools from the LLM request.
+		// This ensures the LLM cannot see or call tools the team admin has disabled.
+		if disabledTools := store.DisabledToolsFromContext(ctx); len(disabledTools) > 0 {
+			disabledSet := make(map[string]bool, len(disabledTools))
+			for _, name := range disabledTools {
+				disabledSet[name] = true
+			}
+			beforeModelCallbacks = append(beforeModelCallbacks, func(_ agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+				for name := range disabledSet {
+					delete(req.Tools, name)
+				}
+				return nil, nil
+			})
+		}
 
 		// Dynamically inject relevant tools into each LLM request.
 		// Fires on every LLM API call (including after tool results), adding

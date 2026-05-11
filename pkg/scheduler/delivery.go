@@ -153,6 +153,10 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 
 // resolveTargets determines concrete delivery targets for a job based on its
 // delivery mode and the available resolver.
+//
+// Team scoping enforcement: In platform mode (when DeliveryContext is present),
+// delivery is restricted to users who are members of the team that owns the job.
+// This prevents cross-team information leakage via scheduler delivery.
 func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([]DeliveryTarget, error) {
 	mode := job.Delivery.Mode
 
@@ -175,6 +179,10 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 		if job.OwnerID == "" {
 			return nil, fmt.Errorf("owner delivery mode but job has no owner_id")
 		}
+		// Validate owner is a member of the team (defense-in-depth)
+		if err := validateTeamMembership(ctx, resolver, []string{job.OwnerID}); err != nil {
+			return nil, fmt.Errorf("owner team membership check failed: %w", err)
+		}
 		return resolver.ResolveUserChannels(ctx, job.OwnerID)
 
 	case DeliveryModeTeam:
@@ -192,12 +200,50 @@ func resolveTargets(ctx context.Context, job *Job, resolver DeliveryResolver) ([
 		if len(job.Delivery.MemberIDs) == 0 {
 			return nil, fmt.Errorf("members delivery mode but no member_ids specified")
 		}
+		// Validate all specified member IDs are actually members of the team
+		if err := validateTeamMembership(ctx, resolver, job.Delivery.MemberIDs); err != nil {
+			return nil, fmt.Errorf("members team membership check failed: %w", err)
+		}
 		return resolveMultipleUsers(ctx, resolver, job.Delivery.MemberIDs)
 
 	default:
 		// Unknown mode or empty — no targets (will broadcast)
 		return nil, nil
 	}
+}
+
+// validateTeamMembership checks that all given user IDs are members of the team
+// indicated by the DeliveryContext. If no DeliveryContext is set (personal mode),
+// validation is skipped. Returns an error listing non-member IDs if any fail.
+func validateTeamMembership(ctx context.Context, resolver DeliveryResolver, userIDs []string) error {
+	dctx := GetDeliveryContext(ctx)
+	if dctx == nil || dctx.OrgSlug == "" || dctx.TeamSlug == "" {
+		// No team context (personal mode) — skip validation
+		return nil
+	}
+
+	teamMembers, err := resolver.ResolveTeamMembers(ctx, dctx.OrgSlug, dctx.TeamSlug)
+	if err != nil {
+		return fmt.Errorf("failed to resolve team roster: %w", err)
+	}
+
+	memberSet := make(map[string]struct{}, len(teamMembers))
+	for _, m := range teamMembers {
+		memberSet[m] = struct{}{}
+	}
+
+	var nonMembers []string
+	for _, uid := range userIDs {
+		if _, ok := memberSet[uid]; !ok {
+			nonMembers = append(nonMembers, uid)
+		}
+	}
+
+	if len(nonMembers) > 0 {
+		return fmt.Errorf("user(s) %s are not members of team %s/%s",
+			strings.Join(nonMembers, ", "), dctx.OrgSlug, dctx.TeamSlug)
+	}
+	return nil
 }
 
 // resolveMultipleUsers resolves channels for multiple user IDs and deduplicates.

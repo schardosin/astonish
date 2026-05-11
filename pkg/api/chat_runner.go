@@ -184,6 +184,12 @@ func (cr *ChatRunner) InjectRedactor(r *credentials.Redactor) {
 	cr.ctx = credentials.WithRedactor(cr.ctx, r)
 }
 
+// InjectDisabledTools adds per-team tool restrictions to the runner's context.
+// Tools in this list will be filtered from the LLM request and system prompt.
+func (cr *ChatRunner) InjectDisabledTools(names []string) {
+	cr.ctx = store.WithDisabledTools(cr.ctx, names)
+}
+
 // Run executes the agent in the background. It creates the ADK runner,
 // processes events, buffers them for subscribers, and handles completion.
 // This method blocks until the agent finishes or the context is cancelled.
@@ -258,10 +264,12 @@ func (cr *ChatRunner) Run(
 	// Set auto-approve for this request
 	chatAgent.AutoApprove = autoApprove
 
-	// Inject per-turn session context
+	// Inject per-turn session context via context overrides (thread-safe).
+	// Run() clones the SystemPromptBuilder and applies these on the clone.
 	if systemContext != "" {
-		chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(systemContext)
-		defer func() { chatAgent.SystemPrompt.SessionContext = "" }()
+		cr.ctx = agent.WithPromptOverrides(cr.ctx, &agent.PromptOverrides{
+			SessionContext: agent.EscapeCurlyPlaceholders(systemContext),
+		})
 	}
 
 	// Wire transparent sub-agent streaming

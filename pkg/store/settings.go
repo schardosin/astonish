@@ -69,6 +69,11 @@ type TeamSettings struct {
 	// When set, all fleet sessions for this team use this template instead of @base.
 	// Format: "team-<slug>" (e.g., "team-general").
 	TemplateName string `json:"template_name,omitempty"`
+
+	// DisabledTools is a list of built-in tool names that are disabled for this team.
+	// Tools in this list will not be available to the agent when serving this team's requests.
+	// Only applies in platform mode. Empty = all tools available (default).
+	DisabledTools []string `json:"disabled_tools,omitempty"`
 }
 
 // PlatformSettingsStore provides read/write access to platform-level settings.

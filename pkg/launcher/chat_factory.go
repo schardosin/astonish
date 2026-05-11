@@ -135,8 +135,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			credStore = cs
 			tools.SetCredentialStore(cs)
 
-			// Wire credential store into config package for standard server lookups
-			config.SetInstalledSecretGetter(cs.GetSecret)
+			// Wire credential store into config package for standard server lookups.
+			// In platform mode, the daemon sets this to the DB-backed getter after
+			// factory init, so we only set the file-based one in personal mode.
+			if !cfg.PlatformMode {
+				config.SetInstalledSecretGetter(cs.GetSecret)
+			}
 
 			// Wire credential store into API handlers
 			api.SetAPICredentialStore(cs)
@@ -611,9 +615,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if cfg.PlatformMode {
 				// Platform mode: tools are stored in the MCPConfig extensions
 				cachedTools = getPlatformCachedTools(ctx, name)
-				// Fallback for standard servers (tavily, brave, firecrawl, etc.)
-				// that are configured via config.yaml + credential store but are
-				// never stored in the org/team DB. Use the file-based cache.
+				// Fallback for standard servers (tavily, brave, firecrawl):
+				// credentials come from platform_secrets (DB), but their tool
+				// schemas are cached in the local file-based cache (populated
+				// on first successful MCP connection). This avoids requiring
+				// standard servers to be stored as DB MCP server entries.
 				if len(cachedTools) == 0 && config.IsStandardServerInstalled(name) {
 					cachedTools = cache.GetToolsForServer(name)
 				}

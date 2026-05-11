@@ -62,6 +62,41 @@ type SystemPromptBuilder struct {
 	MCPAccessFilter       func(serverName string) bool // Per-turn filter for MCP groups in catalog (nil = allow all)
 }
 
+// Clone creates a shallow copy of the SystemPromptBuilder suitable for
+// per-request mutation. Static fields (Tools, Toolsets, Catalog, etc.) are
+// shared read-only with the original — only per-turn fields should be
+// modified on the clone.
+func (b *SystemPromptBuilder) Clone() *SystemPromptBuilder {
+	if b == nil {
+		return nil
+	}
+	clone := *b // shallow copy — all fields are value types, strings, slices (shared read-only), or func
+	return &clone
+}
+
+// PromptOverrides carries per-turn system prompt field overrides that are
+// injected into the context by callers (scheduler, channel manager, API runner)
+// and applied to the cloned SystemPromptBuilder inside Run().
+// This eliminates shared mutable state across concurrent requests.
+type PromptOverrides struct {
+	ChannelHints   string // Channel-specific output constraints
+	SchedulerHints string // Scheduler-specific output constraints
+	SessionContext string // Per-turn session context (fleet wizard, etc.)
+}
+
+type promptOverridesKey struct{}
+
+// WithPromptOverrides attaches PromptOverrides to a context.
+func WithPromptOverrides(ctx context.Context, po *PromptOverrides) context.Context {
+	return context.WithValue(ctx, promptOverridesKey{}, po)
+}
+
+// PromptOverridesFromContext retrieves PromptOverrides from the context, if set.
+func PromptOverridesFromContext(ctx context.Context) *PromptOverrides {
+	po, _ := ctx.Value(promptOverridesKey{}).(*PromptOverrides)
+	return po
+}
+
 // Build constructs the full system prompt.
 //
 // The output is deliberately compact (~800 tokens static) to maximize

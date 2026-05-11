@@ -231,3 +231,97 @@ export async function removeUserFromOrg(userId: string, orgSlug: string): Promis
     throw new Error(err.error || 'Failed to remove user from org')
   }
 }
+
+// --- Channel Adapter Management ---
+
+export interface ChannelAdapterInfo {
+  type: string
+  configured: boolean
+  secret_keys: string[]
+  description: string
+}
+
+export async function listChannelAdapters(): Promise<ChannelAdapterInfo[]> {
+  const res = await fetch(`${ADMIN_BASE}/channels`, { credentials: 'include' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to list channels')
+  }
+  return res.json()
+}
+
+export async function setChannelSecrets(
+  channelType: string,
+  secrets: Record<string, string>
+): Promise<{ saved: string[]; message: string }> {
+  const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(secrets),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to save channel secrets')
+  }
+  return res.json()
+}
+
+export async function deleteChannelAdapter(channelType: string): Promise<void> {
+  const res = await fetch(`${ADMIN_BASE}/channels/${encodeURIComponent(channelType)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to delete channel adapter')
+  }
+}
+
+// --- Web Services (Standard MCP Servers) ---
+
+export interface WebServiceInfo {
+  id: string
+  name: string
+  description: string
+  category: string
+  configured: boolean
+  secret_key: string
+}
+
+export async function listWebServices(): Promise<WebServiceInfo[]> {
+  const res = await fetch(`${ADMIN_BASE}/web-services`, { credentials: 'include' })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to list web services')
+  }
+  return res.json()
+}
+
+export async function setWebServiceKey(
+  id: string,
+  apiKey: string
+): Promise<{ message: string }> {
+  const res = await fetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to save web service key')
+  }
+  return res.json()
+}
+
+export async function deleteWebService(id: string): Promise<void> {
+  const res = await fetch(`${ADMIN_BASE}/web-services/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(err.error || 'Failed to delete web service')
+  }
+}

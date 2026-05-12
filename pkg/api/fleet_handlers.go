@@ -44,23 +44,51 @@ type FleetListItem struct {
 	Description string   `json:"description,omitempty"`
 	AgentCount  int      `json:"agent_count"`
 	AgentNames  []string `json:"agent_names"`
+	Source      string   `json:"source,omitempty"` // "bundled" or "custom"
 }
 
 // ListFleetsHandler handles GET /api/fleets
 func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	// Use store abstraction if available (platform mode).
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		summaries := svc.FleetTemplates.ListFleets(r.Context())
-		items := make([]FleetListItem, len(summaries))
-		for i, s := range summaries {
-			items[i] = FleetListItem{
-				Key:         s.Key,
-				Name:        s.Name,
-				Description: s.Description,
-				AgentCount:  s.AgentCount,
-				AgentNames:  s.AgentNames,
+		// Start with bundled templates (always available from the binary).
+		items := bundledFleetListItems()
+
+		// Merge DB templates (custom, user-created). DB templates with the
+		// same key as a bundled one override it (user forked/customized).
+		dbSummaries := svc.FleetTemplates.ListFleets(r.Context())
+		bundledKeys := make(map[string]bool, len(items))
+		for _, item := range items {
+			bundledKeys[item.Key] = true
+		}
+		for _, s := range dbSummaries {
+			if bundledKeys[s.Key] {
+				// Replace the bundled entry with the DB (custom) version.
+				for i := range items {
+					if items[i].Key == s.Key {
+						items[i] = FleetListItem{
+							Key:         s.Key,
+							Name:        s.Name,
+							Description: s.Description,
+							AgentCount:  s.AgentCount,
+							AgentNames:  s.AgentNames,
+							Source:      "custom",
+						}
+						break
+					}
+				}
+			} else {
+				items = append(items, FleetListItem{
+					Key:         s.Key,
+					Name:        s.Name,
+					Description: s.Description,
+					AgentCount:  s.AgentCount,
+					AgentNames:  s.AgentNames,
+					Source:      "custom",
+				})
 			}
 		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{"fleets": items})
 		return
@@ -93,13 +121,23 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		f, ok := svc.FleetTemplates.GetFleet(r.Context(), key)
-		if !ok {
-			respondError(w, http.StatusNotFound, "Fleet not found")
+		// Check DB first (custom templates take priority).
+		if f, ok := svc.FleetTemplates.GetFleet(r.Context(), key); ok {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": "custom"})
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f})
+
+		// Fall back to bundled templates.
+		if bundled, err := fleet.LoadBundledConfigs(); err == nil {
+			if f, ok := bundled[key]; ok {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": "bundled"})
+				return
+			}
+		}
+
+		respondError(w, http.StatusNotFound, "Fleet not found")
 		return
 	}
 
@@ -183,4 +221,29 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+}
+
+// bundledFleetListItems returns list items for all bundled fleet templates.
+func bundledFleetListItems() []FleetListItem {
+	bundled, err := fleet.LoadBundledConfigs()
+	if err != nil || len(bundled) == 0 {
+		return nil
+	}
+
+	items := make([]FleetListItem, 0, len(bundled))
+	for key, cfg := range bundled {
+		names := make([]string, 0, len(cfg.Agents))
+		for name := range cfg.Agents {
+			names = append(names, name)
+		}
+		items = append(items, FleetListItem{
+			Key:         key,
+			Name:        cfg.Name,
+			Description: cfg.Description,
+			AgentCount:  len(cfg.Agents),
+			AgentNames:  names,
+			Source:      "bundled",
+		})
+	}
+	return items
 }

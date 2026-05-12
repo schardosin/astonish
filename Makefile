@@ -1,6 +1,9 @@
 # Variables
 BINARY_NAME = astonish
 WEB_DIR = web
+VERSION ?= dev
+DOCKER_REGISTRY ?= schardosin
+DEV_TAG ?= dev
 
 # Default target
 all: build-all
@@ -33,6 +36,11 @@ help:
 	@echo "  make build-linux       - Cross-compile Linux amd64 binary"
 	@echo "  make build-linux-arm64 - Cross-compile Linux arm64 binary"
 	@echo "  make docker-incus      - Build the Incus Docker image (for CI release)"
+	@echo ""
+	@echo "Registry Push (multi-arch, requires docker login + buildx):"
+	@echo "  make push-dev          - Build+push astonish:dev (multi-arch)"
+	@echo "  make push-incus-dev    - Build+push astonish-incus:dev (multi-arch)"
+	@echo "  make push-all-dev      - Push both dev images"
 
 # Build the Go binary only
 build:
@@ -106,7 +114,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
 
 # E2E Testing - Docker-based isolated environment
 e2e-up:
@@ -157,10 +165,40 @@ build-linux-arm64:
 
 # Build the Incus Docker image (for CI release pipeline)
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)
-VERSION ?= dev
 docker-incus: build-linux
 	@echo "Building Incus Docker image..."
 	docker build -f Dockerfile.incus -t schardosin/astonish-incus:$(VERSION) .
 	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
+
+# --- Registry Push (multi-arch via buildx) ---
+
+# Ensure a buildx builder with multi-platform support exists
+ensure-builder:
+	@docker buildx inspect astonish-builder >/dev/null 2>&1 || \
+		docker buildx create --name astonish-builder --use --driver docker-container --bootstrap
+	@docker buildx use astonish-builder
+
+# Build and push the main Astonish image (multi-arch)
+push-dev: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) (linux/amd64,linux/arm64)..."
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		--build-arg VERSION=$(DEV_TAG) \
+		-t $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish:$(DEV_TAG)"
+
+# Build and push the Incus image (multi-arch)
+# Requires local cross-compiled binaries for both architectures
+push-incus-dev: ensure-builder build-linux build-linux-arm64
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) (linux/amd64,linux/arm64)..."
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f Dockerfile.incus \
+		-t $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
+
+# Push both dev images
+push-all-dev: push-dev push-incus-dev
+	@echo "All dev images pushed successfully!"
 
 

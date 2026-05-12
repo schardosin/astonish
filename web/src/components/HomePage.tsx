@@ -8,7 +8,7 @@ interface HomePageProps {
 export default function HomePage({ onSuggestionClick }: HomePageProps) {
   const suggestions = [
     'What can you help me with?',
-    'Search my knowledge for recent decisions',
+    'Review my GitHub PR and suggest improvements',
     'Help me write a script to automate deployments',
     'Create an app to track my team\'s weekly goals',
   ]

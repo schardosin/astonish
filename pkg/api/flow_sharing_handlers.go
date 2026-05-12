@@ -59,14 +59,14 @@ func FlowPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read from personal store
-	yamlContent, err := svc.PersonalFlows.GetFlow(name)
+	yamlContent, err := svc.PersonalFlows.GetFlow(r.Context(), name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, fmt.Sprintf("personal flow not found: %v", err))
 		return
 	}
 
 	// Save to team store (copy semantics — personal copy remains)
-	if err := svc.Flows.SaveFlow(name, yamlContent); err != nil {
+	if err := svc.Flows.SaveFlow(r.Context(), name, yamlContent); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to publish flow to team: %v", err))
 		return
 	}
@@ -111,14 +111,14 @@ func FlowForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read from team store
-	yamlContent, err := svc.Flows.GetFlow(name)
+	yamlContent, err := svc.Flows.GetFlow(r.Context(), name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, fmt.Sprintf("team flow not found: %v", err))
 		return
 	}
 
 	// Save to personal store (copy semantics — team copy remains)
-	if err := svc.PersonalFlows.SaveFlow(name, yamlContent); err != nil {
+	if err := svc.PersonalFlows.SaveFlow(r.Context(), name, yamlContent); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to fork flow to personal: %v", err))
 		return
 	}

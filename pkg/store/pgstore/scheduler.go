@@ -26,8 +26,7 @@ func (s *pgSchedulerStore) tableName() string {
 // selectColumns is the column list used by all SELECT queries.
 const schedulerSelectCols = `id, name, schedule, mode, payload, status, last_run_at, next_run_at, created_at, last_status, last_error, consecutive_failures`
 
-func (s *pgSchedulerStore) List() []*store.ScheduledJob {
-	ctx := context.Background()
+func (s *pgSchedulerStore) List(ctx context.Context) []*store.ScheduledJob {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT %s FROM %s ORDER BY name`, schedulerSelectCols, s.tableName()),
 	)
@@ -47,8 +46,7 @@ func (s *pgSchedulerStore) List() []*store.ScheduledJob {
 	return jobs
 }
 
-func (s *pgSchedulerStore) Get(id string) *store.ScheduledJob {
-	ctx := context.Background()
+func (s *pgSchedulerStore) Get(ctx context.Context, id string) *store.ScheduledJob {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT %s FROM %s WHERE id = $1`, schedulerSelectCols, s.tableName()),
 		id,
@@ -60,8 +58,7 @@ func (s *pgSchedulerStore) Get(id string) *store.ScheduledJob {
 	return &job
 }
 
-func (s *pgSchedulerStore) GetByName(name string) *store.ScheduledJob {
-	ctx := context.Background()
+func (s *pgSchedulerStore) GetByName(ctx context.Context, name string) *store.ScheduledJob {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT %s FROM %s WHERE name = $1`, schedulerSelectCols, s.tableName()),
 		name,
@@ -73,8 +70,7 @@ func (s *pgSchedulerStore) GetByName(name string) *store.ScheduledJob {
 	return &job
 }
 
-func (s *pgSchedulerStore) Add(job *store.ScheduledJob) error {
-	ctx := context.Background()
+func (s *pgSchedulerStore) Add(ctx context.Context, job *store.ScheduledJob) error {
 	combinedJSON := buildCombinedPayload(job)
 
 	// Auto-generate UUID if not provided (the DB column is uuid type and
@@ -95,8 +91,7 @@ func (s *pgSchedulerStore) Add(job *store.ScheduledJob) error {
 	return err
 }
 
-func (s *pgSchedulerStore) Update(job *store.ScheduledJob) error {
-	ctx := context.Background()
+func (s *pgSchedulerStore) Update(ctx context.Context, job *store.ScheduledJob) error {
 	combinedJSON := buildCombinedPayload(job)
 
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
@@ -112,8 +107,7 @@ func (s *pgSchedulerStore) Update(job *store.ScheduledJob) error {
 	return err
 }
 
-func (s *pgSchedulerStore) Remove(id string) error {
-	ctx := context.Background()
+func (s *pgSchedulerStore) Remove(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE id = $1`, s.tableName()),
 		id,

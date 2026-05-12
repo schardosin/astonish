@@ -30,7 +30,7 @@ type FleetPlanListItem struct {
 func ListFleetPlansHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
-		summaries := svc.FleetPlans.ListPlans()
+		summaries := svc.FleetPlans.ListPlans(r.Context())
 		items := make([]FleetPlanListItem, len(summaries))
 		for i, s := range summaries {
 			items[i] = FleetPlanListItem{
@@ -90,7 +90,7 @@ func GetFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
-		plan, ok := svc.FleetPlans.GetPlan(key)
+		plan, ok := svc.FleetPlans.GetPlan(r.Context(), key)
 		if !ok {
 			http.Error(w, "Fleet plan not found", http.StatusNotFound)
 			return
@@ -139,7 +139,7 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		if user := GetPlatformUser(r); user != nil {
 			planData["created_by"] = user.ID
 		}
-		if err := svc.FleetPlans.Save(planData); err != nil {
+		if err := svc.FleetPlans.Save(r.Context(), planData); err != nil {
 			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -186,7 +186,7 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		if planActivatorVar != nil {
 			planActivatorVar.ForceCleanup(key)
 		}
-		if err := svc.FleetPlans.Delete(key); err != nil {
+		if err := svc.FleetPlans.Delete(r.Context(), key); err != nil {
 			http.Error(w, "Failed to delete fleet plan: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -230,7 +230,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		// Get the original plan as raw YAML, modify the key/name, re-save.
-		yamlContent, err := svc.FleetPlans.GetPlanYAML(key)
+		yamlContent, err := svc.FleetPlans.GetPlanYAML(r.Context(), key)
 		if err != nil {
 			http.Error(w, "Fleet plan not found", http.StatusNotFound)
 			return
@@ -239,7 +239,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		// Generate a unique key for the copy
 		newKey := key + "-copy"
 		for i := 2; ; i++ {
-			if _, exists := svc.FleetPlans.GetPlan(newKey); !exists {
+			if _, exists := svc.FleetPlans.GetPlan(r.Context(), newKey); !exists {
 				break
 			}
 			newKey = fmt.Sprintf("%s-copy-%d", key, i)
@@ -260,7 +260,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		delete(planMap, "activation")
 
 		modifiedYAML, _ := yaml.Marshal(planMap)
-		if err := svc.FleetPlans.SavePlanYAML(newKey, string(modifiedYAML)); err != nil {
+		if err := svc.FleetPlans.SavePlanYAML(r.Context(), newKey, string(modifiedYAML)); err != nil {
 			http.Error(w, "Failed to save duplicate: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -420,7 +420,7 @@ func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
-		yamlContent, err := svc.FleetPlans.GetPlanYAML(key)
+		yamlContent, err := svc.FleetPlans.GetPlanYAML(r.Context(), key)
 		if err != nil {
 			http.Error(w, "Fleet plan not found", http.StatusNotFound)
 			return
@@ -464,7 +464,7 @@ func SaveFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
-		if err := svc.FleetPlans.SavePlanYAML(key, string(body)); err != nil {
+		if err := svc.FleetPlans.SavePlanYAML(r.Context(), key, string(body)); err != nil {
 			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusBadRequest)
 			return
 		}

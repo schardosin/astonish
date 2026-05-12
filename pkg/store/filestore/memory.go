@@ -136,15 +136,15 @@ func (w *MemoryManagerWrapper) Inner() *memory.Manager {
 	return w.inner
 }
 
-func (w *MemoryManagerWrapper) Load() (string, error) {
+func (w *MemoryManagerWrapper) Load(_ context.Context) (string, error) {
 	return w.inner.Load()
 }
 
-func (w *MemoryManagerWrapper) Append(category, content string, overwrite bool) error {
+func (w *MemoryManagerWrapper) Append(_ context.Context, category, content string, overwrite bool) error {
 	return w.inner.Append(category, content, overwrite)
 }
 
-func (w *MemoryManagerWrapper) EnsureDir() error {
+func (w *MemoryManagerWrapper) EnsureDir(_ context.Context) error {
 	return w.inner.EnsureDir()
 }
 

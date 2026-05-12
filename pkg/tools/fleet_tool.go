@@ -51,11 +51,11 @@ type fleetRegistryStoreAdapter struct {
 	reg *fleet.Registry
 }
 
-func (a *fleetRegistryStoreAdapter) GetFleet(key string) (any, bool) {
+func (a *fleetRegistryStoreAdapter) GetFleet(_ context.Context, key string) (any, bool) {
 	return a.reg.GetFleet(key)
 }
 
-func (a *fleetRegistryStoreAdapter) ListFleets() []store.FleetTemplateSummary {
+func (a *fleetRegistryStoreAdapter) ListFleets(_ context.Context) []store.FleetTemplateSummary {
 	summaries := a.reg.ListFleets()
 	result := make([]store.FleetTemplateSummary, len(summaries))
 	for i, s := range summaries {
@@ -70,19 +70,19 @@ func (a *fleetRegistryStoreAdapter) ListFleets() []store.FleetTemplateSummary {
 	return result
 }
 
-func (a *fleetRegistryStoreAdapter) Save(_ string, _ any) error {
+func (a *fleetRegistryStoreAdapter) Save(_ context.Context, _ string, _ any) error {
 	return fmt.Errorf("save not supported via registry adapter")
 }
 
-func (a *fleetRegistryStoreAdapter) Delete(_ string) error {
+func (a *fleetRegistryStoreAdapter) Delete(_ context.Context, _ string) error {
 	return fmt.Errorf("delete not supported via registry adapter")
 }
 
-func (a *fleetRegistryStoreAdapter) Count() int {
+func (a *fleetRegistryStoreAdapter) Count(_ context.Context) int {
 	return a.reg.Count()
 }
 
-func (a *fleetRegistryStoreAdapter) Reload() error {
+func (a *fleetRegistryStoreAdapter) Reload(_ context.Context) error {
 	return a.reg.Reload()
 }
 
@@ -113,7 +113,7 @@ func ListAvailableFleetsFromContext(ctx context.Context) string {
 	if fs == nil {
 		return "Fleet system is not initialized."
 	}
-	summaries := fs.ListFleets()
+	summaries := fs.ListFleets(ctx)
 	if len(summaries) == 0 {
 		return "No fleets available."
 	}

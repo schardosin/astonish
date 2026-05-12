@@ -20,16 +20,16 @@ type AppListItem struct {
 // In platform mode, apps are stored in the appropriate schema.
 type AppStore interface {
 	// Save persists an app definition. Returns the slug.
-	Save(app any) (string, error)
+	Save(ctx context.Context, app any) (string, error)
 
 	// Load retrieves an app by slug.
-	Load(slug string) (any, error)
+	Load(ctx context.Context, slug string) (any, error)
 
 	// Delete removes an app by slug.
-	Delete(slug string) error
+	Delete(ctx context.Context, slug string) error
 
 	// List returns summaries of all apps.
-	List() ([]AppListItem, error)
+	List(ctx context.Context) ([]AppListItem, error)
 }
 
 // AppStateStore manages per-app persistent state (key-value pairs).
@@ -38,16 +38,16 @@ type AppStore interface {
 // In platform mode, state is stored per (app, user) in PostgreSQL.
 type AppStateStore interface {
 	// Get retrieves a value by key for the given app.
-	Get(appSlug, key string) (any, error)
+	Get(ctx context.Context, appSlug, key string) (any, error)
 
 	// Set stores a value by key for the given app.
-	Set(appSlug, key string, value any) error
+	Set(ctx context.Context, appSlug, key string, value any) error
 
 	// Delete removes a key for the given app.
-	Delete(appSlug, key string) error
+	Delete(ctx context.Context, appSlug, key string) error
 
 	// List returns all keys for the given app.
-	List(appSlug string) (map[string]any, error)
+	List(ctx context.Context, appSlug string) (map[string]any, error)
 }
 
 // AppStateSQLStore provides raw SQL execution against per-app databases.

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 )
@@ -103,24 +104,24 @@ func ResolveCredentialHeader(name string, cred *Credential, oauthFetcher OAuthTo
 // and arbitrary key-value secrets (for API keys, tokens, etc.).
 type CredentialStore interface {
 	// Credential CRUD.
-	Get(name string) *Credential
-	Set(name string, cred *Credential) error
-	Remove(name string) error
-	List() map[string]CredentialType
-	Count() int
+	Get(ctx context.Context, name string) *Credential
+	Set(ctx context.Context, name string, cred *Credential) error
+	Remove(ctx context.Context, name string) error
+	List(ctx context.Context) map[string]CredentialType
+	Count(ctx context.Context) int
 
 	// Credential resolution for HTTP requests.
-	Resolve(name string) (headerKey, headerValue string, err error)
+	Resolve(ctx context.Context, name string) (headerKey, headerValue string, err error)
 
 	// Secret key-value store (for API keys, tokens, etc.).
-	SetSecret(key, value string) error
-	SetSecretBatch(secrets map[string]string) error
-	GetSecret(key string) string
-	RemoveSecret(key string) error
-	HasSecrets() bool
-	SecretCount() int
-	ListSecrets() []string
+	SetSecret(ctx context.Context, key, value string) error
+	SetSecretBatch(ctx context.Context, secrets map[string]string) error
+	GetSecret(ctx context.Context, key string) string
+	RemoveSecret(ctx context.Context, key string) error
+	HasSecrets(ctx context.Context) bool
+	SecretCount(ctx context.Context) int
+	ListSecrets(ctx context.Context) []string
 
 	// Reload re-reads credentials from the backing store.
-	Reload() error
+	Reload(ctx context.Context) error
 }

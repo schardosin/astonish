@@ -160,7 +160,7 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 
 		// Tier 1: Platform-level (base, inherited by all orgs/teams)
 		if svc.PlatformMCPServers != nil {
-			platformServers, err := svc.PlatformMCPServers.List()
+			platformServers, err := svc.PlatformMCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range platformServers {
 					merged[s.Name] = config.MCPServerConfig{
@@ -177,7 +177,7 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 
 		// Tier 2: Org-level (overrides platform by name)
 		if svc.MCPServers != nil {
-			orgServers, err := svc.MCPServers.List()
+			orgServers, err := svc.MCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range orgServers {
 					merged[s.Name] = config.MCPServerConfig{
@@ -194,7 +194,7 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 
 		// Tier 3: Team-level (overrides org+platform by name)
 		if svc.TeamMCPServers != nil {
-			teamServers, err := svc.TeamMCPServers.List()
+			teamServers, err := svc.TeamMCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range teamServers {
 					merged[s.Name] = config.MCPServerConfig{

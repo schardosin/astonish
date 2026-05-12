@@ -28,12 +28,11 @@ func (s *pgSkillStore) tableName() string {
 	return pgx.Identifier{s.schema, s.table}.Sanitize()
 }
 
-func (s *pgSkillStore) LoadAll() ([]store.Skill, error) {
-	return s.List()
+func (s *pgSkillStore) LoadAll(ctx context.Context) ([]store.Skill, error) {
+	return s.List(ctx)
 }
 
-func (s *pgSkillStore) Get(name string) (*store.Skill, error) {
-	ctx := context.Background()
+func (s *pgSkillStore) Get(ctx context.Context, name string) (*store.Skill, error) {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT name, content FROM %s WHERE name = $1`, s.tableName()),
 		name,
@@ -47,9 +46,7 @@ func (s *pgSkillStore) Get(name string) (*store.Skill, error) {
 	return parseStoredSkill(dbName, rawContent), nil
 }
 
-func (s *pgSkillStore) Save(skill *store.Skill) error {
-	ctx := context.Background()
-
+func (s *pgSkillStore) Save(ctx context.Context, skill *store.Skill) error {
 	// content holds the full raw SKILL.md (frontmatter + body).
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`INSERT INTO %s (name, content, frontmatter, created_by, updated_at)
@@ -61,8 +58,7 @@ func (s *pgSkillStore) Save(skill *store.Skill) error {
 	return err
 }
 
-func (s *pgSkillStore) Delete(name string) error {
-	ctx := context.Background()
+func (s *pgSkillStore) Delete(ctx context.Context, name string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE name = $1`, s.tableName()),
 		name,
@@ -70,8 +66,7 @@ func (s *pgSkillStore) Delete(name string) error {
 	return err
 }
 
-func (s *pgSkillStore) List() ([]store.Skill, error) {
-	ctx := context.Background()
+func (s *pgSkillStore) List(ctx context.Context) ([]store.Skill, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT name, content FROM %s ORDER BY name`, s.tableName()),
 	)

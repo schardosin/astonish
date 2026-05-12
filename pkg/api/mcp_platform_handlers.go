@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -87,7 +88,7 @@ func GetMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server, err := mcpStore.Get(name)
+	server, err := mcpStore.Get(r.Context(), name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
@@ -150,7 +151,7 @@ func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedBy: createdBy,
 	}
 
-	if err := targetStore.Save(server); err != nil {
+	if err := targetStore.Save(r.Context(), server); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 		return
 	}
@@ -209,7 +210,7 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedBy: createdBy,
 	}
 
-	if err := targetStore.Save(server); err != nil {
+	if err := targetStore.Save(r.Context(), server); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to update MCP server: "+err.Error())
 		return
 	}
@@ -235,7 +236,7 @@ func DeleteMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 		return // auth error already written
 	}
 
-	if err := targetStore.Delete(name); err != nil {
+	if err := targetStore.Delete(r.Context(), name); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to delete MCP server: "+err.Error())
 		return
 	}
@@ -268,14 +269,14 @@ func ToggleMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get existing server
-	existing, err := targetStore.Get(name)
+	existing, err := targetStore.Get(r.Context(), name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
 	}
 
 	existing.Enabled = body.Enabled
-	if err := targetStore.Save(existing); err != nil {
+	if err := targetStore.Save(r.Context(), existing); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to update MCP server: "+err.Error())
 		return
 	}
@@ -304,7 +305,7 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the server config
-	server, err := targetStore.Get(name)
+	server, err := targetStore.Get(r.Context(), name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "MCP server not found: "+name)
 		return
@@ -403,7 +404,7 @@ func listMCPServersFromStore(mcpStore store.MCPServerStore, scope string) ([]MCP
 	if mcpStore == nil {
 		return []MCPServerListItem{}, nil
 	}
-	servers, err := mcpStore.List()
+	servers, err := mcpStore.List(context.TODO())
 	if err != nil {
 		return nil, err
 	}
@@ -422,7 +423,7 @@ func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 
 	// 1. Platform servers as base (inherited by all)
 	if svc.PlatformMCPServers != nil {
-		platformServers, err := svc.PlatformMCPServers.List()
+		platformServers, err := svc.PlatformMCPServers.List(context.TODO())
 		if err != nil {
 			return nil, err
 		}
@@ -434,7 +435,7 @@ func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 
 	// 2. Org servers override platform by name
 	if svc.MCPServers != nil {
-		orgServers, err := svc.MCPServers.List()
+		orgServers, err := svc.MCPServers.List(context.TODO())
 		if err != nil {
 			return nil, err
 		}
@@ -446,7 +447,7 @@ func listMCPServersMerged(svc *store.Services) ([]MCPServerListItem, error) {
 
 	// 3. Team servers override org+platform by name
 	if svc.TeamMCPServers != nil {
-		teamServers, err := svc.TeamMCPServers.List()
+		teamServers, err := svc.TeamMCPServers.List(context.TODO())
 		if err != nil {
 			return nil, err
 		}
@@ -525,7 +526,7 @@ func refreshMCPPlatformServer(mcpStore store.MCPServerStore, server *store.MCPSe
 		return
 	}
 
-	if err := mcpStore.UpdateCachedTools(server.Name, toolsJSON); err != nil {
+	if err := mcpStore.UpdateCachedTools(context.TODO(), server.Name, toolsJSON); err != nil {
 		slog.Warn("failed to update cached_tools in DB", "server", server.Name, "error", err)
 		return
 	}

@@ -137,12 +137,12 @@ func ListCredentialsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := cs.Reload(); err != nil {
+	if err := cs.Reload(r.Context()); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	creds := cs.List()
-	secrets := cs.ListSecrets()
+	creds := cs.List(r.Context())
+	secrets := cs.ListSecrets(r.Context())
 	sort.Strings(secrets)
 
 	items := make([]credentialListItem, 0, len(creds))
@@ -182,12 +182,12 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 
 	// Personal credentials
 	if svc.PersonalCredentials != nil {
-		_ = svc.PersonalCredentials.Reload()
-		for name, credType := range svc.PersonalCredentials.List() {
+		_ = svc.PersonalCredentials.Reload(r.Context())
+		for name, credType := range svc.PersonalCredentials.List(r.Context()) {
 			items = append(items, credentialListItem{Name: name, Type: credType, Scope: "personal"})
 			personalCreds[name] = true
 		}
-		for _, key := range svc.PersonalCredentials.ListSecrets() {
+		for _, key := range svc.PersonalCredentials.ListSecrets(r.Context()) {
 			secretItems = append(secretItems, secretListItem{Key: key, Scope: "personal"})
 			personalSecrets[key] = true
 		}
@@ -195,8 +195,8 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 
 	// Team credentials
 	if svc.Credentials != nil {
-		_ = svc.Credentials.Reload()
-		for name, credType := range svc.Credentials.List() {
+		_ = svc.Credentials.Reload(r.Context())
+		for name, credType := range svc.Credentials.List(r.Context()) {
 			items = append(items, credentialListItem{
 				Name:     name,
 				Type:     credType,
@@ -204,7 +204,7 @@ func listCredentialsMerged(w http.ResponseWriter, r *http.Request) {
 				Shadowed: personalCreds[name],
 			})
 		}
-		for _, key := range svc.Credentials.ListSecrets() {
+		for _, key := range svc.Credentials.ListSecrets(r.Context()) {
 			secretItems = append(secretItems, secretListItem{Key: key, Scope: "team"})
 		}
 	}
@@ -252,11 +252,11 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := mux.Vars(r)["name"]
-	if err := cs.Reload(); err != nil {
+	if err := cs.Reload(r.Context()); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	cred := cs.Get(name)
+	cred := cs.Get(r.Context(), name)
 	if cred == nil {
 		respondError(w, http.StatusNotFound, "Credential not found")
 		return
@@ -314,7 +314,7 @@ func SaveCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := cs.Set(req.Name, &req.Credential); err != nil {
+	if err := cs.Set(r.Context(), req.Name, &req.Credential); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save credential: "+err.Error())
 		return
 	}
@@ -345,8 +345,8 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 
 	// Try HTTP credential first
-	if cs.Get(name) != nil {
-		if err := cs.Remove(name); err != nil {
+	if cs.Get(r.Context(), name) != nil {
+		if err := cs.Remove(r.Context(), name); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to remove credential: "+err.Error())
 			return
 		}
@@ -355,8 +355,8 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try flat secret
-	if cs.GetSecret(name) != "" {
-		if err := cs.RemoveSecret(name); err != nil {
+	if cs.GetSecret(r.Context(), name) != "" {
+		if err := cs.RemoveSecret(r.Context(), name); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to remove secret: "+err.Error())
 			return
 		}
@@ -397,13 +397,13 @@ func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cred := personalStore.Get(req.Name)
+	cred := personalStore.Get(r.Context(), req.Name)
 	if cred == nil {
 		respondError(w, http.StatusNotFound, "Personal credential not found")
 		return
 	}
 
-	if err := teamStore.Set(req.Name, cred); err != nil {
+	if err := teamStore.Set(r.Context(), req.Name, cred); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to publish credential: "+err.Error())
 		return
 	}
@@ -442,13 +442,13 @@ func ForkCredentialHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cred := teamStore.Get(req.Name)
+	cred := teamStore.Get(r.Context(), req.Name)
 	if cred == nil {
 		respondError(w, http.StatusNotFound, "Team credential not found")
 		return
 	}
 
-	if err := personalStore.Set(req.Name, cred); err != nil {
+	if err := personalStore.Set(r.Context(), req.Name, cred); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to fork credential: "+err.Error())
 		return
 	}
@@ -479,11 +479,11 @@ func GetSecretHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := mux.Vars(r)["key"]
-	if err := cs.Reload(); err != nil {
+	if err := cs.Reload(r.Context()); err != nil {
 		slog.Warn("failed to reload credential store", "error", err)
 	}
 
-	value := cs.GetSecret(key)
+	value := cs.GetSecret(r.Context(), key)
 	if value == "" {
 		respondError(w, http.StatusNotFound, "Secret not found")
 		return
@@ -522,7 +522,7 @@ func SaveSecretHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := cs.SetSecret(key, req.Value); err != nil {
+	if err := cs.SetSecret(r.Context(), key, req.Value); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save secret: "+err.Error())
 		return
 	}

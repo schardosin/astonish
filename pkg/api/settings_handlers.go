@@ -431,7 +431,7 @@ func isMaskedValue(val string) bool {
 func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: read from DB store (org or team based on ?scope=)
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		servers, err := mcpStore.List()
+		servers, err := mcpStore.List(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
 			return
@@ -498,7 +498,7 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	}
 
 	// Load existing servers from store
-	existing, err := mcpStore.List()
+	existing, err := mcpStore.List(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load existing MCP servers: "+err.Error())
 		return
@@ -511,7 +511,7 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	// Delete removed servers
 	for name := range existingMap {
 		if _, exists := newCfg.MCPServers[name]; !exists {
-			if err := mcpStore.Delete(name); err != nil {
+			if err := mcpStore.Delete(r.Context(), name); err != nil {
 				slog.Warn("failed to delete MCP server from store", "name", name, "error", err)
 			}
 		}
@@ -529,7 +529,7 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 			Enabled:   serverCfg.Enabled,
 			CreatedBy: userID,
 		}
-		if err := mcpStore.Save(s); err != nil {
+		if err := mcpStore.Save(r.Context(), s); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 			return
 		}
@@ -685,7 +685,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			Enabled:   req.Config.Enabled,
 			CreatedBy: userID,
 		}
-		if err := mcpStore.Save(s); err != nil {
+		if err := mcpStore.Save(r.Context(), s); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 			return
 		}
@@ -696,7 +696,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			bgCtx := context.Background()
 			discoveredTools := discoverMCPToolsForPlatform(bgCtx, req.ServerName, servers)
 			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(req.ServerName, discoveredTools); err != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, req.ServerName, discoveredTools); err != nil {
 					slog.Warn("failed to update cached_tools after install", "server", req.ServerName, "error", err)
 				}
 			}

@@ -50,7 +50,7 @@ type FleetListItem struct {
 func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	// Use store abstraction if available (platform mode).
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		summaries := svc.FleetTemplates.ListFleets()
+		summaries := svc.FleetTemplates.ListFleets(r.Context())
 		items := make([]FleetListItem, len(summaries))
 		for i, s := range summaries {
 			items[i] = FleetListItem{
@@ -93,7 +93,7 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		f, ok := svc.FleetTemplates.GetFleet(key)
+		f, ok := svc.FleetTemplates.GetFleet(r.Context(), key)
 		if !ok {
 			http.Error(w, "Fleet not found", http.StatusNotFound)
 			return
@@ -134,7 +134,7 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		if err := svc.FleetTemplates.Save(key, &f); err != nil {
+		if err := svc.FleetTemplates.Save(r.Context(), key, &f); err != nil {
 			http.Error(w, "Failed to save fleet: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -162,7 +162,7 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		if err := svc.FleetTemplates.Delete(key); err != nil {
+		if err := svc.FleetTemplates.Delete(r.Context(), key); err != nil {
 			http.Error(w, "Failed to delete fleet: "+err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -126,8 +126,8 @@ type parsedDrillFlow struct {
 func ListDrillSuitesHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: discover suites from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		suiteFlows := fs.ListFlowsByType(suiteFlowTypes)
-		drillFlows := fs.ListFlowsByType(drillFlowTypes)
+		suiteFlows := fs.ListFlowsByType(r.Context(), suiteFlowTypes)
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
 
 		// Count drills per suite.
 		drillCounts := make(map[string]int)
@@ -146,7 +146,7 @@ func ListDrillSuitesHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			// Parse the YAML to extract template from suite_config.
-			if yamlContent, err := fs.GetFlow(sf.Name); err == nil {
+			if yamlContent, err := fs.GetFlow(r.Context(), sf.Name); err == nil {
 				var parsed parsedDrillFlow
 				if yaml.Unmarshal([]byte(yamlContent), &parsed) == nil {
 					if parsed.Template != "" {
@@ -160,7 +160,7 @@ func ListDrillSuitesHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Latest report from the team-scoped report store.
 			if rptStore != nil {
-				if rpt, err := rptStore.GetLatestReport(sf.Name); err == nil && rpt != nil {
+				if rpt, err := rptStore.GetLatestReport(r.Context(), sf.Name); err == nil && rpt != nil {
 					item.LastStatus = rpt.Status
 					item.LastSummary = rpt.Summary
 					ts := rpt.FinishedAt.Format("2006-01-02T15:04:05Z")
@@ -220,7 +220,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		yamlContent, err := fs.GetFlow(suiteName)
+		yamlContent, err := fs.GetFlow(r.Context(), suiteName)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "suite not found")
 			return
@@ -233,7 +233,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Find child drills for this suite.
-		drillFlows := fs.ListFlowsByType(drillFlowTypes)
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
 		drills := make([]DrillListItem, 0)
 		for _, d := range drillFlows {
 			if d.Suite != suiteName {
@@ -245,7 +245,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 				Tags:        d.Tags,
 			}
 			// Parse drill YAML for step count / timeout.
-			if dy, dErr := fs.GetFlow(d.Name); dErr == nil {
+			if dy, dErr := fs.GetFlow(r.Context(), d.Name); dErr == nil {
 				var dp parsedDrillFlow
 				if yaml.Unmarshal([]byte(dy), &dp) == nil {
 					if nodes, ok := dp.Nodes.([]any); ok {
@@ -266,7 +266,7 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Latest report from team-scoped store.
 		if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
-			if rpt, rptErr := rptStore.GetLatestReport(suiteName); rptErr == nil && rpt != nil {
+			if rpt, rptErr := rptStore.GetLatestReport(r.Context(), suiteName); rptErr == nil && rpt != nil {
 				detail.LastReport = json.RawMessage(rpt.ReportData)
 			}
 		}
@@ -322,7 +322,7 @@ func GetDrillHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		yamlContent, err := fs.GetFlow(drillName)
+		yamlContent, err := fs.GetFlow(r.Context(), drillName)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "drill not found")
 			return
@@ -394,17 +394,17 @@ func DeleteDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 		var deleted []string
 
 		// Delete child drills first.
-		drillFlows := fs.ListFlowsByType(drillFlowTypes)
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
 		for _, d := range drillFlows {
 			if d.Suite == suiteName {
-				if err := fs.DeleteFlow(d.Name); err == nil {
+				if err := fs.DeleteFlow(r.Context(), d.Name); err == nil {
 					deleted = append(deleted, d.Name)
 				}
 			}
 		}
 
 		// Delete the suite itself.
-		if err := fs.DeleteFlow(suiteName); err != nil {
+		if err := fs.DeleteFlow(r.Context(), suiteName); err != nil {
 			respondError(w, http.StatusNotFound, "suite not found")
 			return
 		}
@@ -412,7 +412,7 @@ func DeleteDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Also clean up drill reports.
 		if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
-			_ = rptStore.DeleteReportsForSuite(suiteName)
+			_ = rptStore.DeleteReportsForSuite(r.Context(), suiteName)
 		}
 
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -444,7 +444,7 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: delete from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		if err := fs.DeleteFlow(drillName); err != nil {
+		if err := fs.DeleteFlow(r.Context(), drillName); err != nil {
 			respondError(w, http.StatusNotFound, "drill not found")
 			return
 		}
@@ -479,7 +479,7 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 func ListDrillReportsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: use the team-scoped drill report store.
 	if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
-		reports, err := rptStore.ListReports()
+		reports, err := rptStore.ListReports(r.Context())
 		if err != nil {
 			slog.Error("failed to list drill reports from store", "error", err)
 			respondJSON(w, http.StatusOK, []DrillReportListItem{})
@@ -543,7 +543,7 @@ func GetDrillReportHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: use the team-scoped drill report store.
 	if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
-		rpt, err := rptStore.GetLatestReport(suiteName)
+		rpt, err := rptStore.GetLatestReport(r.Context(), suiteName)
 		if err != nil || rpt == nil {
 			respondError(w, http.StatusNotFound, "no report found for suite")
 			return
@@ -573,7 +573,7 @@ func GetDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		yamlContent, err := fs.GetFlow(drillName)
+		yamlContent, err := fs.GetFlow(r.Context(), drillName)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "drill not found")
 			return
@@ -621,7 +621,7 @@ func SaveDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: save to the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		if err := fs.SaveFlow(drillName, string(body)); err != nil {
+		if err := fs.SaveFlow(r.Context(), drillName, string(body)); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save drill: "+err.Error())
 			return
 		}
@@ -656,7 +656,7 @@ func GetSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read from the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		yamlContent, err := fs.GetFlow(suiteName)
+		yamlContent, err := fs.GetFlow(r.Context(), suiteName)
 		if err != nil {
 			respondError(w, http.StatusNotFound, "suite not found")
 			return
@@ -701,7 +701,7 @@ func SaveSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: save to the team-scoped flow store.
 	if fs := flowStoreFromRequest(r); fs != nil {
-		if err := fs.SaveFlow(suiteName, string(body)); err != nil {
+		if err := fs.SaveFlow(r.Context(), suiteName, string(body)); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save suite: "+err.Error())
 			return
 		}

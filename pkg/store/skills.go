@@ -1,5 +1,7 @@
 package store
 
+import "context"
+
 // Skill represents an operational knowledge skill.
 type Skill struct {
 	Name        string      `json:"name" yaml:"name"`
@@ -21,17 +23,17 @@ type Skill struct {
 // In platform mode, skills can be org-level or team-level.
 type SkillStore interface {
 	// LoadAll loads all available skills from all sources.
-	LoadAll() ([]Skill, error)
+	LoadAll(ctx context.Context) ([]Skill, error)
 
 	// Get retrieves a skill by name.
-	Get(name string) (*Skill, error)
+	Get(ctx context.Context, name string) (*Skill, error)
 
 	// Save persists a custom skill.
-	Save(skill *Skill) error
+	Save(ctx context.Context, skill *Skill) error
 
 	// Delete removes a custom skill.
-	Delete(name string) error
+	Delete(ctx context.Context, name string) error
 
 	// List returns all skill names and their sources.
-	List() ([]Skill, error)
+	List(ctx context.Context) ([]Skill, error)
 }

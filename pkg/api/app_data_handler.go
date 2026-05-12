@@ -479,7 +479,7 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 		if credStore == nil {
 			return nil, fmt.Errorf("credential store is not available — cannot resolve credential %q", credentialName)
 		}
-		headerKey, headerValue, err := credStore.Resolve(credentialName)
+		headerKey, headerValue, err := credStore.Resolve(r.Context(), credentialName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
 		}

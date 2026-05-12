@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 )
@@ -38,18 +39,18 @@ func (m *MCPServer) IsEnabled() bool {
 // or team-level (specific to one team, overrides org by name).
 type MCPServerStore interface {
 	// List returns all MCP server configurations.
-	List() ([]MCPServer, error)
+	List(ctx context.Context) ([]MCPServer, error)
 
 	// Get retrieves an MCP server by name.
-	Get(name string) (*MCPServer, error)
+	Get(ctx context.Context, name string) (*MCPServer, error)
 
 	// Save creates or updates an MCP server configuration (upsert by name).
-	Save(server *MCPServer) error
+	Save(ctx context.Context, server *MCPServer) error
 
 	// Delete removes an MCP server configuration by name.
-	Delete(name string) error
+	Delete(ctx context.Context, name string) error
 
 	// UpdateCachedTools updates only the cached_tools column for a server.
 	// This is called after async tool discovery completes.
-	UpdateCachedTools(name string, tools json.RawMessage) error
+	UpdateCachedTools(ctx context.Context, name string, tools json.RawMessage) error
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sort"
@@ -49,13 +50,13 @@ func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 
 // serveTraceFromStore reads trace data from a store.SessionStore (platform mode).
 func serveTraceFromStore(w http.ResponseWriter, ss store.SessionStore, sessionID, agentFilter string, opts session.TraceOpts) {
-	meta, err := ss.GetSessionMeta(sessionID)
+	meta, err := ss.GetSessionMeta(context.TODO(), sessionID)
 	if err != nil || meta == nil {
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
 
-	events, err := ss.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
+	events, err := ss.ReadTranscriptEvents(context.TODO(), meta.AppName, meta.UserID, sessionID)
 	if err != nil {
 		http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -174,7 +175,7 @@ func serveTraceFromFileStore(w http.ResponseWriter, sessionID, agentFilter strin
 // instead of the filesystem. This is used in platform mode where session
 // data lives in PostgreSQL.
 func collectChildEntriesFromStore(ss store.SessionStore, parentID string, opts session.TraceOpts, titleFilter func(string) bool) ([]session.TraceEntry, int, int) {
-	children, err := ss.ListChildren(parentID)
+	children, err := ss.ListChildren(context.TODO(), parentID)
 	if err != nil || len(children) == 0 {
 		return nil, 0, 0
 	}
@@ -202,7 +203,7 @@ func collectChildEntriesFromStore(ss store.SessionStore, parentID string, opts s
 			continue
 		}
 
-		events, readErr := ss.ReadTranscriptEvents(child.AppName, child.UserID, child.ID)
+		events, readErr := ss.ReadTranscriptEvents(context.TODO(), child.AppName, child.UserID, child.ID)
 		if readErr != nil || len(events) == 0 {
 			continue
 		}

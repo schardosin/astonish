@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,11 +28,11 @@ func (w *FleetTemplateStoreWrapper) Inner() *fleet.Registry {
 	return w.inner
 }
 
-func (w *FleetTemplateStoreWrapper) GetFleet(key string) (any, bool) {
+func (w *FleetTemplateStoreWrapper) GetFleet(_ context.Context, key string) (any, bool) {
 	return w.inner.GetFleet(key)
 }
 
-func (w *FleetTemplateStoreWrapper) ListFleets() []store.FleetTemplateSummary {
+func (w *FleetTemplateStoreWrapper) ListFleets(_ context.Context) []store.FleetTemplateSummary {
 	summaries := w.inner.ListFleets()
 	result := make([]store.FleetTemplateSummary, len(summaries))
 	for i, s := range summaries {
@@ -46,7 +47,7 @@ func (w *FleetTemplateStoreWrapper) ListFleets() []store.FleetTemplateSummary {
 	return result
 }
 
-func (w *FleetTemplateStoreWrapper) Save(key string, fleetCfg any) error {
+func (w *FleetTemplateStoreWrapper) Save(_ context.Context, key string, fleetCfg any) error {
 	fc, ok := fleetCfg.(*fleet.FleetConfig)
 	if !ok {
 		return fmt.Errorf("expected *fleet.FleetConfig, got %T", fleetCfg)
@@ -54,15 +55,15 @@ func (w *FleetTemplateStoreWrapper) Save(key string, fleetCfg any) error {
 	return w.inner.Save(key, fc)
 }
 
-func (w *FleetTemplateStoreWrapper) Delete(key string) error {
+func (w *FleetTemplateStoreWrapper) Delete(_ context.Context, key string) error {
 	return w.inner.Delete(key)
 }
 
-func (w *FleetTemplateStoreWrapper) Count() int {
+func (w *FleetTemplateStoreWrapper) Count(_ context.Context) int {
 	return w.inner.Count()
 }
 
-func (w *FleetTemplateStoreWrapper) Reload() error {
+func (w *FleetTemplateStoreWrapper) Reload(_ context.Context) error {
 	return w.inner.Reload()
 }
 
@@ -85,11 +86,11 @@ func (w *FleetPlanStoreWrapper) Inner() *fleet.PlanRegistry {
 	return w.inner
 }
 
-func (w *FleetPlanStoreWrapper) GetPlan(key string) (any, bool) {
+func (w *FleetPlanStoreWrapper) GetPlan(_ context.Context, key string) (any, bool) {
 	return w.inner.GetPlan(key)
 }
 
-func (w *FleetPlanStoreWrapper) ListPlans() []store.FleetPlanSummary {
+func (w *FleetPlanStoreWrapper) ListPlans(_ context.Context) []store.FleetPlanSummary {
 	summaries := w.inner.ListPlans()
 	result := make([]store.FleetPlanSummary, len(summaries))
 	for i, s := range summaries {
@@ -106,7 +107,7 @@ func (w *FleetPlanStoreWrapper) ListPlans() []store.FleetPlanSummary {
 	return result
 }
 
-func (w *FleetPlanStoreWrapper) Save(plan any) error {
+func (w *FleetPlanStoreWrapper) Save(_ context.Context, plan any) error {
 	fp, ok := plan.(*fleet.FleetPlan)
 	if !ok {
 		return fmt.Errorf("expected *fleet.FleetPlan, got %T", plan)
@@ -114,19 +115,19 @@ func (w *FleetPlanStoreWrapper) Save(plan any) error {
 	return w.inner.Save(fp)
 }
 
-func (w *FleetPlanStoreWrapper) Delete(key string) error {
+func (w *FleetPlanStoreWrapper) Delete(_ context.Context, key string) error {
 	return w.inner.Delete(key)
 }
 
-func (w *FleetPlanStoreWrapper) Count() int {
+func (w *FleetPlanStoreWrapper) Count(_ context.Context) int {
 	return w.inner.Count()
 }
 
-func (w *FleetPlanStoreWrapper) Reload() error {
+func (w *FleetPlanStoreWrapper) Reload(_ context.Context) error {
 	return w.inner.Reload()
 }
 
-func (w *FleetPlanStoreWrapper) GetPlanYAML(key string) (string, error) {
+func (w *FleetPlanStoreWrapper) GetPlanYAML(_ context.Context, key string) (string, error) {
 	dir := w.inner.Dir()
 	if dir == "" {
 		return "", fmt.Errorf("fleet plan directory not configured")
@@ -139,7 +140,7 @@ func (w *FleetPlanStoreWrapper) GetPlanYAML(key string) (string, error) {
 	return string(data), nil
 }
 
-func (w *FleetPlanStoreWrapper) SavePlanYAML(key string, yamlContent string) error {
+func (w *FleetPlanStoreWrapper) SavePlanYAML(_ context.Context, key string, yamlContent string) error {
 	// Parse the YAML to validate and create a proper FleetPlan
 	var plan fleet.FleetPlan
 	if err := yaml.Unmarshal([]byte(yamlContent), &plan); err != nil {

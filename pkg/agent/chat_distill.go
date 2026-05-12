@@ -359,7 +359,7 @@ func (c *ChatAgent) ConfirmAndDistill(ctx context.Context, ds DistillSession, pr
 	// Personal mode: write to disk + register in local FlowRegistry.
 	if flowStore := store.FlowStoreFromContext(ctx); flowStore != nil {
 		// Platform mode — PG FlowStore is the sole persistence target
-		if saveErr := flowStore.SaveFlow(result.FlowName, result.YAML); saveErr != nil {
+		if saveErr := flowStore.SaveFlow(ctx, result.FlowName, result.YAML); saveErr != nil {
 			return fmt.Errorf("failed to save flow to store: %w", saveErr)
 		}
 
@@ -838,7 +838,7 @@ func (c *ChatAgent) SaveDistillReview(ctx context.Context, sessionID string) (fi
 	// Personal mode: write to disk + register in local FlowRegistry.
 	if flowStore := store.FlowStoreFromContext(ctx); flowStore != nil {
 		// Platform mode — PG FlowStore is the sole persistence target
-		if saveErr := flowStore.SaveFlow(review.FlowName, review.YAML); saveErr != nil {
+		if saveErr := flowStore.SaveFlow(ctx, review.FlowName, review.YAML); saveErr != nil {
 			return "", "", fmt.Errorf("failed to save flow to store: %w", saveErr)
 		}
 		return review.FlowName, cmd, nil

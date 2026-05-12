@@ -21,7 +21,7 @@ import (
 // can find servers regardless of where they were saved.
 func mcpManagerForRequest(r *http.Request, serverName string) (*mcp.Manager, error) {
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		srv, err := mcpStore.Get(serverName)
+		srv, err := mcpStore.Get(r.Context(), serverName)
 		if err != nil || srv == nil {
 			return nil, fmt.Errorf("server '%s' not found in config", serverName)
 		}

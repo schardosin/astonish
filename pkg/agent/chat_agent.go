@@ -510,12 +510,12 @@ func isMCPServerAccessible(ctx context.Context, serverName string) bool {
 		return true
 	}
 	if stores.Org != nil {
-		if s, _ := stores.Org.Get(serverName); s != nil {
+		if s, _ := stores.Org.Get(ctx, serverName); s != nil {
 			return s.IsEnabled()
 		}
 	}
 	if stores.Team != nil {
-		if s, _ := stores.Team.Get(serverName); s != nil {
+		if s, _ := stores.Team.Get(ctx, serverName); s != nil {
 			return s.IsEnabled()
 		}
 	}

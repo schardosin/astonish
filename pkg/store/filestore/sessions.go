@@ -49,7 +49,7 @@ func (w *SessionStoreWrapper) AppendEvent(ctx context.Context, curSession adkses
 
 // --- Astonish-specific session operations ---
 
-func (w *SessionStoreWrapper) ListSessionMetas(appName, userID string) ([]store.SessionMeta, error) {
+func (w *SessionStoreWrapper) ListSessionMetas(_ context.Context, appName, userID string) ([]store.SessionMeta, error) {
 	metas, err := w.inner.ListSessionMetas(appName, userID)
 	if err != nil {
 		return nil, err
@@ -61,7 +61,7 @@ func (w *SessionStoreWrapper) ListSessionMetas(appName, userID string) ([]store.
 	return result, nil
 }
 
-func (w *SessionStoreWrapper) GetSessionMeta(sessionID string) (*store.SessionMeta, error) {
+func (w *SessionStoreWrapper) GetSessionMeta(_ context.Context, sessionID string) (*store.SessionMeta, error) {
 	meta, err := w.inner.GetSessionMeta(sessionID)
 	if err != nil {
 		return nil, err
@@ -73,11 +73,11 @@ func (w *SessionStoreWrapper) GetSessionMeta(sessionID string) (*store.SessionMe
 	return &sm, nil
 }
 
-func (w *SessionStoreWrapper) SetSessionTitle(sessionID, title string) error {
-	return w.inner.SetSessionTitle(sessionID, title)
+func (w *SessionStoreWrapper) SetSessionTitle(ctx context.Context, sessionID, title string) error {
+	return w.inner.SetSessionTitle(ctx, sessionID, title)
 }
 
-func (w *SessionStoreWrapper) ListChildren(parentID string) ([]store.SessionMeta, error) {
+func (w *SessionStoreWrapper) ListChildren(_ context.Context, parentID string) ([]store.SessionMeta, error) {
 	metas, err := w.inner.ListChildren(parentID)
 	if err != nil {
 		return nil, err
@@ -89,11 +89,11 @@ func (w *SessionStoreWrapper) ListChildren(parentID string) ([]store.SessionMeta
 	return result, nil
 }
 
-func (w *SessionStoreWrapper) AddSessionMeta(meta store.SessionMeta) error {
+func (w *SessionStoreWrapper) AddSessionMeta(_ context.Context, meta store.SessionMeta) error {
 	return w.inner.AddSessionMeta(convertToInternalMeta(meta))
 }
 
-func (w *SessionStoreWrapper) UpdateSessionMeta(sessionID string, fn func(*store.SessionMeta)) error {
+func (w *SessionStoreWrapper) UpdateSessionMeta(_ context.Context, sessionID string, fn func(*store.SessionMeta)) error {
 	return w.inner.UpdateSessionMeta(sessionID, func(m *session.SessionMeta) {
 		sm := convertSessionMeta(*m)
 		fn(&sm)
@@ -101,27 +101,27 @@ func (w *SessionStoreWrapper) UpdateSessionMeta(sessionID string, fn func(*store
 	})
 }
 
-func (w *SessionStoreWrapper) RemoveSessionMeta(sessionID string) error {
+func (w *SessionStoreWrapper) RemoveSessionMeta(_ context.Context, sessionID string) error {
 	return w.inner.RemoveSessionMeta(sessionID)
 }
 
-func (w *SessionStoreWrapper) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {
+func (w *SessionStoreWrapper) ReadTranscriptEvents(_ context.Context, appName, userID, sessionID string) ([]*adksession.Event, error) {
 	return w.inner.ReadTranscriptEvents(appName, userID, sessionID)
 }
 
-func (w *SessionStoreWrapper) ResolveSessionID(partial string) (string, error) {
+func (w *SessionStoreWrapper) ResolveSessionID(_ context.Context, partial string) (string, error) {
 	return w.inner.ResolveSessionID(partial)
 }
 
-func (w *SessionStoreWrapper) AllSessionIDs() map[string]bool {
+func (w *SessionStoreWrapper) AllSessionIDs(_ context.Context) map[string]bool {
 	return w.inner.AllSessionIDs()
 }
 
-func (w *SessionStoreWrapper) CleanupExpiredSessions(maxAgeDays int) []string {
+func (w *SessionStoreWrapper) CleanupExpiredSessions(_ context.Context, maxAgeDays int) []string {
 	return w.inner.CleanupExpiredSessions(maxAgeDays)
 }
 
-func (w *SessionStoreWrapper) RedactSession(appName, userID, sessionID string) error {
+func (w *SessionStoreWrapper) RedactSession(_ context.Context, appName, userID, sessionID string) error {
 	return w.inner.RedactSession(appName, userID, sessionID)
 }
 
@@ -132,7 +132,7 @@ func (w *SessionStoreWrapper) SetRedactFunc(fn func(string) string) {
 // AppendFleetEvent is a no-op for the file-based store since fleet transcripts
 // are managed via JSONL files in wireFleetTranscript. This method exists to
 // satisfy the SessionStore interface.
-func (w *SessionStoreWrapper) AppendFleetEvent(_ string, _ *adksession.Event) error {
+func (w *SessionStoreWrapper) AppendFleetEvent(_ context.Context, _ string, _ *adksession.Event) error {
 	return nil
 }
 

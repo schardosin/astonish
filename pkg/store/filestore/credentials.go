@@ -1,6 +1,8 @@
 package filestore
 
 import (
+	"context"
+
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -22,7 +24,7 @@ func (w *CredentialStoreWrapper) Inner() *credentials.Store {
 	return w.inner
 }
 
-func (w *CredentialStoreWrapper) Get(name string) *store.Credential {
+func (w *CredentialStoreWrapper) Get(_ context.Context, name string) *store.Credential {
 	c := w.inner.Get(name)
 	if c == nil {
 		return nil
@@ -30,15 +32,15 @@ func (w *CredentialStoreWrapper) Get(name string) *store.Credential {
 	return convertCredential(c)
 }
 
-func (w *CredentialStoreWrapper) Set(name string, cred *store.Credential) error {
+func (w *CredentialStoreWrapper) Set(_ context.Context, name string, cred *store.Credential) error {
 	return w.inner.Set(name, convertToInternalCred(cred))
 }
 
-func (w *CredentialStoreWrapper) Remove(name string) error {
+func (w *CredentialStoreWrapper) Remove(_ context.Context, name string) error {
 	return w.inner.Remove(name)
 }
 
-func (w *CredentialStoreWrapper) List() map[string]store.CredentialType {
+func (w *CredentialStoreWrapper) List(_ context.Context) map[string]store.CredentialType {
 	internal := w.inner.List()
 	result := make(map[string]store.CredentialType, len(internal))
 	for k, v := range internal {
@@ -47,43 +49,43 @@ func (w *CredentialStoreWrapper) List() map[string]store.CredentialType {
 	return result
 }
 
-func (w *CredentialStoreWrapper) Count() int {
+func (w *CredentialStoreWrapper) Count(_ context.Context) int {
 	return w.inner.Count()
 }
 
-func (w *CredentialStoreWrapper) Resolve(name string) (headerKey, headerValue string, err error) {
+func (w *CredentialStoreWrapper) Resolve(_ context.Context, name string) (headerKey, headerValue string, err error) {
 	return w.inner.Resolve(name)
 }
 
-func (w *CredentialStoreWrapper) SetSecret(key, value string) error {
+func (w *CredentialStoreWrapper) SetSecret(_ context.Context, key, value string) error {
 	return w.inner.SetSecret(key, value)
 }
 
-func (w *CredentialStoreWrapper) SetSecretBatch(secrets map[string]string) error {
+func (w *CredentialStoreWrapper) SetSecretBatch(_ context.Context, secrets map[string]string) error {
 	return w.inner.SetSecretBatch(secrets)
 }
 
-func (w *CredentialStoreWrapper) GetSecret(key string) string {
+func (w *CredentialStoreWrapper) GetSecret(_ context.Context, key string) string {
 	return w.inner.GetSecret(key)
 }
 
-func (w *CredentialStoreWrapper) RemoveSecret(key string) error {
+func (w *CredentialStoreWrapper) RemoveSecret(_ context.Context, key string) error {
 	return w.inner.RemoveSecret(key)
 }
 
-func (w *CredentialStoreWrapper) HasSecrets() bool {
+func (w *CredentialStoreWrapper) HasSecrets(_ context.Context) bool {
 	return w.inner.HasSecrets()
 }
 
-func (w *CredentialStoreWrapper) SecretCount() int {
+func (w *CredentialStoreWrapper) SecretCount(_ context.Context) int {
 	return w.inner.SecretCount()
 }
 
-func (w *CredentialStoreWrapper) ListSecrets() []string {
+func (w *CredentialStoreWrapper) ListSecrets(_ context.Context) []string {
 	return w.inner.ListSecrets()
 }
 
-func (w *CredentialStoreWrapper) Reload() error {
+func (w *CredentialStoreWrapper) Reload(_ context.Context) error {
 	return w.inner.Reload()
 }
 

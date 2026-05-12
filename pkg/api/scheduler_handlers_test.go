@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -75,7 +76,7 @@ func TestHandleCreateJob_FlatJSON(t *testing.T) {
 	}
 
 	// Verify the job was persisted in the store
-	stored := ss.Get(created.ID)
+	stored := ss.Get(context.Background(), created.ID)
 	if stored == nil {
 		t.Fatal("job not found in store after creation")
 	}

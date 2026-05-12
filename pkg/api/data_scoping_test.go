@@ -284,19 +284,19 @@ func TestAuditMiddleware_XForwardedFor(t *testing.T) {
 
 type mockCredentialStore struct{}
 
-func (m *mockCredentialStore) Get(_ string) *store.Credential         { return nil }
-func (m *mockCredentialStore) Set(_ string, _ *store.Credential) error { return nil }
-func (m *mockCredentialStore) Remove(_ string) error                   { return nil }
-func (m *mockCredentialStore) List() map[string]store.CredentialType   { return nil }
-func (m *mockCredentialStore) Count() int                              { return 0 }
-func (m *mockCredentialStore) Resolve(_ string) (string, string, error) {
+func (m *mockCredentialStore) Get(_ context.Context, _ string) *store.Credential         { return nil }
+func (m *mockCredentialStore) Set(_ context.Context, _ string, _ *store.Credential) error { return nil }
+func (m *mockCredentialStore) Remove(_ context.Context, _ string) error                   { return nil }
+func (m *mockCredentialStore) List(_ context.Context) map[string]store.CredentialType   { return nil }
+func (m *mockCredentialStore) Count(_ context.Context) int                              { return 0 }
+func (m *mockCredentialStore) Resolve(_ context.Context, _ string) (string, string, error) {
 	return "", "", nil
 }
-func (m *mockCredentialStore) SetSecret(_, _ string) error          { return nil }
-func (m *mockCredentialStore) SetSecretBatch(_ map[string]string) error { return nil }
-func (m *mockCredentialStore) GetSecret(_ string) string            { return "" }
-func (m *mockCredentialStore) RemoveSecret(_ string) error          { return nil }
-func (m *mockCredentialStore) HasSecrets() bool                     { return false }
-func (m *mockCredentialStore) SecretCount() int                     { return 0 }
-func (m *mockCredentialStore) ListSecrets() []string                { return nil }
-func (m *mockCredentialStore) Reload() error                        { return nil }
+func (m *mockCredentialStore) SetSecret(_ context.Context, _, _ string) error          { return nil }
+func (m *mockCredentialStore) SetSecretBatch(_ context.Context, _ map[string]string) error { return nil }
+func (m *mockCredentialStore) GetSecret(_ context.Context, _ string) string            { return "" }
+func (m *mockCredentialStore) RemoveSecret(_ context.Context, _ string) error          { return nil }
+func (m *mockCredentialStore) HasSecrets(_ context.Context) bool                     { return false }
+func (m *mockCredentialStore) SecretCount(_ context.Context) int                     { return 0 }
+func (m *mockCredentialStore) ListSecrets(_ context.Context) []string                { return nil }
+func (m *mockCredentialStore) Reload(_ context.Context) error                        { return nil }

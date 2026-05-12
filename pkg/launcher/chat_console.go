@@ -863,7 +863,7 @@ func generateSessionTitle(_ context.Context, llm model.LLM, store *persistentses
 		title = title[:77] + "..."
 	}
 
-	if err := store.SetSessionTitle(sessionID, title); err != nil {
+	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
 		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
 	}
 }

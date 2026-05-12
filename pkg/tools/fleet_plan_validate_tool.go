@@ -328,7 +328,7 @@ func validateCredentials(ctx tool.Context, creds map[string]string) ([]Validatio
 		checkName := fmt.Sprintf("credential_%s", logicalName)
 
 		// Try named credential first
-		cred := cs.Get(storeName)
+		cred := cs.Get(ctx, storeName)
 		if cred != nil {
 			credType := string(cred.Type)
 			checks = append(checks, ValidationCheck{
@@ -352,7 +352,7 @@ func validateCredentials(ctx tool.Context, creds map[string]string) ([]Validatio
 		}
 
 		// Try flat secret
-		secret := cs.GetSecret(storeName)
+		secret := cs.GetSecret(ctx, storeName)
 		if secret != "" {
 			checks = append(checks, ValidationCheck{
 				Name:    checkName,

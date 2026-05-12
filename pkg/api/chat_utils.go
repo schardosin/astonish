@@ -23,7 +23,7 @@ import (
 // Both *persistentsession.FileStore and store.SessionStore (pgSessionStore)
 // satisfy this interface.
 type SessionTitleSetter interface {
-	SetSessionTitle(sessionID, title string) error
+	SetSessionTitle(ctx context.Context, sessionID, title string) error
 }
 
 // titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
@@ -765,7 +765,7 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 		title = title[:77] + "..."
 	}
 
-	if err := store.SetSessionTitle(sessionID, title); err != nil {
+	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
 		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
 	} else if onTitle != nil {
 		onTitle(title)
@@ -919,7 +919,7 @@ func readArtifactContentFromSessionStore(ss store.SessionStore, appName, userID,
 		return "", false
 	}
 
-	events, err := ss.ReadTranscriptEvents(appName, userID, sessionID)
+	events, err := ss.ReadTranscriptEvents(context.TODO(), appName, userID, sessionID)
 	if err != nil {
 		return "", false
 	}

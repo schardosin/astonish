@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // FlowSummary is a summary of a flow from the flow store.
 type FlowSummary struct {
@@ -21,34 +24,34 @@ type FlowSummary struct {
 // In platform mode, flows are stored in the team's schema.
 type FlowStore interface {
 	// ListAllFlows returns all flows from all taps.
-	ListAllFlows() []FlowSummary
+	ListAllFlows(ctx context.Context) []FlowSummary
 
 	// ListFlowsByType returns flows matching any of the given types.
 	// Used by drill handlers to efficiently query drill_suite/drill flows
 	// without scanning all flows.
-	ListFlowsByType(types []string) []FlowSummary
+	ListFlowsByType(ctx context.Context, types []string) []FlowSummary
 
 	// GetFlow returns a flow's raw YAML by name.
 	// Returns the YAML string and nil error, or empty string and error if not found.
-	GetFlow(name string) (string, error)
+	GetFlow(ctx context.Context, name string) (string, error)
 
 	// SaveFlow persists a flow by name with the given raw YAML content.
-	SaveFlow(name string, yamlContent string) error
+	SaveFlow(ctx context.Context, name string, yamlContent string) error
 
 	// DeleteFlow removes a flow by name.
-	DeleteFlow(name string) error
+	DeleteFlow(ctx context.Context, name string) error
 
 	// GetTaps returns the list of configured taps.
-	GetTaps() []FlowTap
+	GetTaps(ctx context.Context) []FlowTap
 
 	// AddTap registers a new tap by URL or shorthand.
-	AddTap(urlOrShorthand string, alias string) (string, error)
+	AddTap(ctx context.Context, urlOrShorthand string, alias string) (string, error)
 
 	// RemoveTap removes a tap by name.
-	RemoveTap(name string) error
+	RemoveTap(ctx context.Context, name string) error
 
 	// GetStoreDir returns the base directory for flow stores.
-	GetStoreDir() string
+	GetStoreDir(ctx context.Context) string
 }
 
 // FlowTap represents a tap (remote flow repository).
@@ -104,10 +107,10 @@ type JobDelivery struct {
 // In personal mode, this wraps the existing scheduler.Store.
 // In platform mode, jobs are stored in the team's schema.
 type SchedulerStore interface {
-	List() []*ScheduledJob
-	Get(id string) *ScheduledJob
-	GetByName(name string) *ScheduledJob
-	Add(job *ScheduledJob) error
-	Update(job *ScheduledJob) error
-	Remove(id string) error
+	List(ctx context.Context) []*ScheduledJob
+	Get(ctx context.Context, id string) *ScheduledJob
+	GetByName(ctx context.Context, name string) *ScheduledJob
+	Add(ctx context.Context, job *ScheduledJob) error
+	Update(ctx context.Context, job *ScheduledJob) error
+	Remove(ctx context.Context, id string) error
 }

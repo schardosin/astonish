@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ func NewFlowStore() store.FlowStore {
 	return &FlowStoreWrapper{}
 }
 
-func (w *FlowStoreWrapper) ListAllFlows() []store.FlowSummary {
+func (w *FlowStoreWrapper) ListAllFlows(_ context.Context) []store.FlowSummary {
 	fs, err := flowstore.NewStore()
 	if err != nil {
 		return nil
@@ -42,7 +43,7 @@ func (w *FlowStoreWrapper) ListAllFlows() []store.FlowSummary {
 	return result
 }
 
-func (w *FlowStoreWrapper) ListFlowsByType(types []string) []store.FlowSummary {
+func (w *FlowStoreWrapper) ListFlowsByType(_ context.Context, types []string) []store.FlowSummary {
 	if len(types) == 0 {
 		return nil
 	}
@@ -115,7 +116,7 @@ func (w *FlowStoreWrapper) ListFlowsByType(types []string) []store.FlowSummary {
 	return result
 }
 
-func (w *FlowStoreWrapper) GetFlow(name string) (string, error) {
+func (w *FlowStoreWrapper) GetFlow(_ context.Context, name string) (string, error) {
 	// Try system agents directory
 	if sysDir, err := config.GetAgentsDir(); err == nil {
 		path := filepath.Join(sysDir, name+".yaml")
@@ -150,7 +151,7 @@ func (w *FlowStoreWrapper) GetFlow(name string) (string, error) {
 	return "", fmt.Errorf("flow %q not found", name)
 }
 
-func (w *FlowStoreWrapper) SaveFlow(name string, yamlContent string) error {
+func (w *FlowStoreWrapper) SaveFlow(_ context.Context, name string, yamlContent string) error {
 	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
 		return fmt.Errorf("failed to get flows directory: %w", err)
@@ -164,7 +165,7 @@ func (w *FlowStoreWrapper) SaveFlow(name string, yamlContent string) error {
 	return os.WriteFile(path, []byte(yamlContent), 0644)
 }
 
-func (w *FlowStoreWrapper) DeleteFlow(name string) error {
+func (w *FlowStoreWrapper) DeleteFlow(_ context.Context, name string) error {
 	// Search for the flow in all locations
 	locations := []string{}
 
@@ -185,7 +186,7 @@ func (w *FlowStoreWrapper) DeleteFlow(name string) error {
 	return fmt.Errorf("flow %q not found", name)
 }
 
-func (w *FlowStoreWrapper) GetTaps() []store.FlowTap {
+func (w *FlowStoreWrapper) GetTaps(_ context.Context) []store.FlowTap {
 	fs, err := flowstore.NewStore()
 	if err != nil {
 		return nil
@@ -202,7 +203,7 @@ func (w *FlowStoreWrapper) GetTaps() []store.FlowTap {
 	return result
 }
 
-func (w *FlowStoreWrapper) AddTap(urlOrShorthand string, alias string) (string, error) {
+func (w *FlowStoreWrapper) AddTap(_ context.Context, urlOrShorthand string, alias string) (string, error) {
 	fs, err := flowstore.NewStore()
 	if err != nil {
 		return "", err
@@ -210,7 +211,7 @@ func (w *FlowStoreWrapper) AddTap(urlOrShorthand string, alias string) (string, 
 	return fs.AddTap(urlOrShorthand, alias)
 }
 
-func (w *FlowStoreWrapper) RemoveTap(name string) error {
+func (w *FlowStoreWrapper) RemoveTap(_ context.Context, name string) error {
 	fs, err := flowstore.NewStore()
 	if err != nil {
 		return err
@@ -218,7 +219,7 @@ func (w *FlowStoreWrapper) RemoveTap(name string) error {
 	return fs.RemoveTap(name)
 }
 
-func (w *FlowStoreWrapper) GetStoreDir() string {
+func (w *FlowStoreWrapper) GetStoreDir(_ context.Context) string {
 	fs, err := flowstore.NewStore()
 	if err != nil {
 		return ""

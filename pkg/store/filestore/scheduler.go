@@ -1,6 +1,8 @@
 package filestore
 
 import (
+	"context"
+
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -22,7 +24,7 @@ func (w *SchedulerStoreWrapper) Inner() *scheduler.Store {
 	return w.inner
 }
 
-func (w *SchedulerStoreWrapper) List() []*store.ScheduledJob {
+func (w *SchedulerStoreWrapper) List(_ context.Context) []*store.ScheduledJob {
 	jobs := w.inner.List()
 	result := make([]*store.ScheduledJob, len(jobs))
 	for i, j := range jobs {
@@ -31,7 +33,7 @@ func (w *SchedulerStoreWrapper) List() []*store.ScheduledJob {
 	return result
 }
 
-func (w *SchedulerStoreWrapper) Get(id string) *store.ScheduledJob {
+func (w *SchedulerStoreWrapper) Get(_ context.Context, id string) *store.ScheduledJob {
 	j := w.inner.Get(id)
 	if j == nil {
 		return nil
@@ -39,7 +41,7 @@ func (w *SchedulerStoreWrapper) Get(id string) *store.ScheduledJob {
 	return convertJob(j)
 }
 
-func (w *SchedulerStoreWrapper) GetByName(name string) *store.ScheduledJob {
+func (w *SchedulerStoreWrapper) GetByName(_ context.Context, name string) *store.ScheduledJob {
 	j := w.inner.GetByName(name)
 	if j == nil {
 		return nil
@@ -47,7 +49,7 @@ func (w *SchedulerStoreWrapper) GetByName(name string) *store.ScheduledJob {
 	return convertJob(j)
 }
 
-func (w *SchedulerStoreWrapper) Add(job *store.ScheduledJob) error {
+func (w *SchedulerStoreWrapper) Add(_ context.Context, job *store.ScheduledJob) error {
 	internal := convertToInternalJob(job)
 	if err := w.inner.Add(internal); err != nil {
 		return err
@@ -57,11 +59,11 @@ func (w *SchedulerStoreWrapper) Add(job *store.ScheduledJob) error {
 	return nil
 }
 
-func (w *SchedulerStoreWrapper) Update(job *store.ScheduledJob) error {
+func (w *SchedulerStoreWrapper) Update(_ context.Context, job *store.ScheduledJob) error {
 	return w.inner.Update(convertToInternalJob(job))
 }
 
-func (w *SchedulerStoreWrapper) Remove(id string) error {
+func (w *SchedulerStoreWrapper) Remove(_ context.Context, id string) error {
 	return w.inner.Remove(id)
 }
 

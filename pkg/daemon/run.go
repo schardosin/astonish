@@ -1096,7 +1096,7 @@ func Run(cfg RunConfig) error {
 						}
 						teamStore := orgStore.ForTeam("general")
 						cs := teamStore.Credentials()
-						resolved, err := fleet.ResolveCredentialsPlatform(plan, cs)
+						resolved, err := fleet.ResolveCredentialsPlatform(context.Background(), plan, cs)
 						if err != nil {
 							slog.Warn("failed to resolve fleet credentials (platform)", "plan", plan.Key, "error", err)
 						}
@@ -1679,7 +1679,7 @@ type dbPlanAccessAdapter struct {
 }
 
 func (a *dbPlanAccessAdapter) GetPlan(key string) (*fleet.FleetPlan, bool) {
-	planAny, ok := a.store.GetPlan(key)
+	planAny, ok := a.store.GetPlan(context.Background(), key)
 	if !ok {
 		return nil, false
 	}
@@ -1688,11 +1688,11 @@ func (a *dbPlanAccessAdapter) GetPlan(key string) (*fleet.FleetPlan, bool) {
 }
 
 func (a *dbPlanAccessAdapter) Save(plan *fleet.FleetPlan) error {
-	return a.store.Save(plan)
+	return a.store.Save(context.Background(), plan)
 }
 
 func (a *dbPlanAccessAdapter) ListPlans() []fleet.PlanSummary {
-	summaries := a.store.ListPlans()
+	summaries := a.store.ListPlans(context.Background())
 	result := make([]fleet.PlanSummary, len(summaries))
 	for i, s := range summaries {
 		result[i] = fleet.PlanSummary{
@@ -1722,7 +1722,7 @@ type dbFleetPlanRegistryAdapter struct {
 }
 
 func (a *dbFleetPlanRegistryAdapter) ListPlans() []channels.FleetPlanSummary {
-	plans := a.store.ListPlans()
+	plans := a.store.ListPlans(context.Background())
 	result := make([]channels.FleetPlanSummary, len(plans))
 	for i, p := range plans {
 		result[i] = channels.FleetPlanSummary{
@@ -1743,7 +1743,7 @@ type dbFleetTemplateRegistryAdapter struct {
 }
 
 func (a *dbFleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSummary {
-	fleets := a.store.ListFleets()
+	fleets := a.store.ListFleets(context.Background())
 	result := make([]channels.FleetTemplateSummary, len(fleets))
 	for i, f := range fleets {
 		result[i] = channels.FleetTemplateSummary{
@@ -1757,7 +1757,7 @@ func (a *dbFleetTemplateRegistryAdapter) ListFleets() []channels.FleetTemplateSu
 }
 
 func (a *dbFleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTemplateWithWizard, bool) {
-	cfgAny, ok := a.store.GetFleet(key)
+	cfgAny, ok := a.store.GetFleet(context.Background(), key)
 	if !ok {
 		return channels.FleetTemplateWithWizard{}, false
 	}

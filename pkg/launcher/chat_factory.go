@@ -2204,7 +2204,7 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 
 	// 1. Load org-level servers as base
 	if mcpStores.Org != nil {
-		orgServers, err := mcpStores.Org.List()
+		orgServers, err := mcpStores.Org.List(ctx)
 		if err != nil {
 			slog.Warn("failed to load org MCP servers", "error", err)
 		} else {
@@ -2216,7 +2216,7 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 
 	// 2. Team servers override org by name
 	if mcpStores.Team != nil {
-		teamServers, err := mcpStores.Team.List()
+		teamServers, err := mcpStores.Team.List(ctx)
 		if err != nil {
 			slog.Warn("failed to load team MCP servers", "error", err)
 		} else {
@@ -2271,7 +2271,7 @@ func getPlatformCachedTools(ctx context.Context, serverName string) []cache.Tool
 
 	// Try team first (since it overrides org)
 	if mcpStores.Team != nil {
-		srv, err := mcpStores.Team.Get(serverName)
+		srv, err := mcpStores.Team.Get(ctx, serverName)
 		if err == nil && len(srv.CachedTools) > 0 {
 			return parseCachedToolsJSON(srv.CachedTools)
 		}
@@ -2279,7 +2279,7 @@ func getPlatformCachedTools(ctx context.Context, serverName string) []cache.Tool
 
 	// Fall back to org
 	if mcpStores.Org != nil {
-		srv, err := mcpStores.Org.Get(serverName)
+		srv, err := mcpStores.Org.Get(ctx, serverName)
 		if err == nil && len(srv.CachedTools) > 0 {
 			return parseCachedToolsJSON(srv.CachedTools)
 		}

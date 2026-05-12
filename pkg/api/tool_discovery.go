@@ -933,7 +933,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: save to DB store
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
 		// Check if server already exists
-		existing, _ := mcpStore.Get(serverName)
+		existing, _ := mcpStore.Get(r.Context(), serverName)
 		if existing != nil {
 			serverName = serverName + "-2"
 		}
@@ -954,7 +954,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 			CreatedBy: effectiveUserID(r),
 		}
 
-		if err := mcpStore.Save(s); err != nil {
+		if err := mcpStore.Save(r.Context(), s); err != nil {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
 				Status: "error",
@@ -969,7 +969,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 			bgCtx := context.Background()
 			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
 			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
 					slog.Warn("failed to update cached_tools after internet install", "server", serverName, "error", err)
 				}
 			}

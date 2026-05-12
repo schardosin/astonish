@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,12 +38,12 @@ var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 // Returns nil if the session is not found in any store.
 func resolveSessionStore(svc *store.Services, sessionID string) store.SessionStore {
 	if svc.PersonalSessions != nil {
-		if _, err := svc.PersonalSessions.GetSessionMeta(sessionID); err == nil {
+		if _, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil {
 			return svc.PersonalSessions
 		}
 	}
 	if svc.Sessions != nil {
-		if _, err := svc.Sessions.GetSessionMeta(sessionID); err == nil {
+		if _, err := svc.Sessions.GetSessionMeta(context.TODO(), sessionID); err == nil {
 			return svc.Sessions
 		}
 	}
@@ -56,7 +57,7 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: list from personal session store (private-first).
 	// Sessions are always private — they don't change when switching teams.
 	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
-		metas, err := svc.PersonalSessions.ListSessionMetas(studioChatAppName, userID)
+		metas, err := svc.PersonalSessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -134,7 +135,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		meta, err := sessionStore.GetSessionMeta(sessionID)
+		meta, err := sessionStore.GetSessionMeta(r.Context(), sessionID)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
 			return
@@ -142,7 +143,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Fleet sessions: read transcript events from store
 		if meta.FleetKey != "" {
-			events, readErr := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
+			events, readErr := sessionStore.ReadTranscriptEvents(r.Context(), studioChatAppName, userID, sessionID)
 			var fleetMessages []FleetMessageSummary
 			if readErr == nil && len(events) > 0 {
 				fleetMessages = fleetEventsToMessages(events)
@@ -311,13 +312,13 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		meta, err := sessionStore.GetSessionMeta(sessionID)
+		meta, err := sessionStore.GetSessionMeta(r.Context(), sessionID)
 		if err != nil || meta == nil {
 			http.Error(w, "Session not found", http.StatusNotFound)
 			return
 		}
 
-		events, err := sessionStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
+		events, err := sessionStore.ReadTranscriptEvents(r.Context(), meta.AppName, meta.UserID, sessionID)
 		if err != nil {
 			http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -492,7 +493,7 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		children, err := sessionStore.ListChildren(sessionID)
+		children, err := sessionStore.ListChildren(r.Context(), sessionID)
 		if err != nil {
 			http.Error(w, "Failed to list child sessions: "+err.Error(), http.StatusInternalServerError)
 			return
@@ -514,7 +515,7 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		events, err := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, matchedChild.ID)
+		events, err := sessionStore.ReadTranscriptEvents(r.Context(), studioChatAppName, userID, matchedChild.ID)
 		if err != nil {
 			slog.Warn("failed to read child session events", "child_id", matchedChild.ID, "error", err)
 			w.Header().Set("Content-Type", "application/json")
@@ -606,7 +607,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Clean up per-session workspace directory if one was recorded.
-		if meta, metaErr := sessionStore.GetSessionMeta(sessionID); metaErr == nil && meta.WorkspaceDir != "" {
+		if meta, metaErr := sessionStore.GetSessionMeta(r.Context(), sessionID); metaErr == nil && meta.WorkspaceDir != "" {
 			if cleanErr := fleet.CleanupSessionWorkspace(meta.WorkspaceDir); cleanErr != nil {
 				slog.Warn("could not clean up workspace", "component", "fleet", "workspace", meta.WorkspaceDir, "error", cleanErr)
 			}

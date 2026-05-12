@@ -87,13 +87,13 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 		var yamlContent string
 		var found bool
 		if svc.PersonalFlows != nil {
-			if y, err := svc.PersonalFlows.GetFlow(agentName); err == nil {
+			if y, err := svc.PersonalFlows.GetFlow(r.Context(), agentName); err == nil {
 				yamlContent = y
 				found = true
 			}
 		}
 		if !found && svc.Flows != nil {
-			if y, err := svc.Flows.GetFlow(agentName); err == nil {
+			if y, err := svc.Flows.GetFlow(r.Context(), agentName); err == nil {
 				yamlContent = y
 				found = true
 			}

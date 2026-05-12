@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -102,7 +103,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		job := svc.Scheduler.Get(jobID)
+		job := svc.Scheduler.Get(r.Context(), jobID)
 		if job == nil {
 			respondError(w, http.StatusNotFound, "job not found")
 			return
@@ -134,7 +135,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		existing := svc.Scheduler.Get(jobID)
+		existing := svc.Scheduler.Get(r.Context(), jobID)
 		if existing == nil {
 			respondError(w, http.StatusNotFound, "job not found")
 			return
@@ -184,7 +185,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 			existing.Delivery.MemberChannels = update.MemberChannels
 		}
 
-		if err := svc.Scheduler.Update(existing); err != nil {
+		if err := svc.Scheduler.Update(r.Context(), existing); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -192,7 +193,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		// Recompute NextRun so schedule changes take effect immediately
 		if existing.Enabled {
 			existing.NextRun = scheduler.ComputeNextRun(existing.Schedule.Cron, existing.Schedule.Timezone)
-			_ = svc.Scheduler.Update(existing)
+			_ = svc.Scheduler.Update(r.Context(), existing)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -202,7 +203,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		if !RequireTeamAdmin(w, r) {
 			return
 		}
-		if err := svc.Scheduler.Remove(jobID); err != nil {
+		if err := svc.Scheduler.Remove(r.Context(), jobID); err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -244,7 +245,7 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 	jobID := parts[len(parts)-2] // {id} is second to last, "run" is last
 
 	// Load job from team-scoped store
-	storeJob := svc.Scheduler.Get(jobID)
+	storeJob := svc.Scheduler.Get(r.Context(), jobID)
 	if storeJob == nil {
 		respondError(w, http.StatusNotFound, "job not found")
 		return
@@ -292,7 +293,7 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 		storeJob.ConsecutiveFailures = 0
 	}
 	storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
-	_ = svc.Scheduler.Update(storeJob)
+	_ = svc.Scheduler.Update(r.Context(), storeJob)
 
 	resp := map[string]any{
 		"job_id": jobID,
@@ -308,7 +309,7 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 
 // handleListJobs returns all scheduled jobs from the team-scoped store.
 func handleListJobs(w http.ResponseWriter, ss store.SchedulerStore) {
-	storeJobs := ss.List()
+	storeJobs := ss.List(context.TODO())
 	jobs := make([]apiJob, 0, len(storeJobs))
 	for _, sj := range storeJobs {
 		jobs = append(jobs, storeJobToAPIJob(sj))
@@ -367,7 +368,7 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 		LastStatus: "pending",
 	}
 
-	if err := ss.Add(job); err != nil {
+	if err := ss.Add(r.Context(), job); err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -375,7 +376,7 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 	// Compute initial NextRun
 	if job.Enabled {
 		job.NextRun = scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
-		_ = ss.Update(job)
+		_ = ss.Update(r.Context(), job)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

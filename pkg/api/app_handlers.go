@@ -20,7 +20,7 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Personal apps first (user's private apps)
 		if svc.PersonalApps != nil {
-			items, err := svc.PersonalApps.List()
+			items, err := svc.PersonalApps.List(r.Context())
 			if err != nil {
 				slog.Warn("failed to list personal apps", "error", err)
 			} else {
@@ -33,7 +33,7 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Team apps (shared/published apps)
 		if svc.Apps != nil {
-			teamItems, err := svc.Apps.List()
+			teamItems, err := svc.Apps.List(r.Context())
 			if err != nil {
 				slog.Warn("failed to list team apps", "error", err)
 			} else {
@@ -55,7 +55,7 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode: single store (no scope distinction).
 	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
-		items, err := svc.Apps.List()
+		items, err := svc.Apps.List(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -91,16 +91,16 @@ func GetAppHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Explicit scope requested
 		if scope == "team" && svc.Apps != nil {
-			app, err = svc.Apps.Load(name)
+			app, err = svc.Apps.Load(r.Context(), name)
 		} else if scope == "personal" && svc.PersonalApps != nil {
-			app, err = svc.PersonalApps.Load(name)
+			app, err = svc.PersonalApps.Load(r.Context(), name)
 		} else {
 			// Default: try personal first, then team
 			if svc.PersonalApps != nil {
-				app, err = svc.PersonalApps.Load(name)
+				app, err = svc.PersonalApps.Load(r.Context(), name)
 			}
 			if err != nil && svc.Apps != nil {
-				app, err = svc.Apps.Load(name)
+				app, err = svc.Apps.Load(r.Context(), name)
 			}
 		}
 
@@ -162,7 +162,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Try to load existing to preserve creation time
-		existingAny, _ := targetStore.Load(name)
+		existingAny, _ := targetStore.Load(r.Context(), name)
 
 		app := &apps.VisualApp{
 			Name:        name,
@@ -175,7 +175,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 			app.CreatedAt = existing.CreatedAt
 		}
 
-		path, err := targetStore.Save(app)
+		path, err := targetStore.Save(r.Context(), app)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -231,16 +231,16 @@ func DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Explicit scope requested
 		if scope == "team" && svc.Apps != nil {
-			err = svc.Apps.Delete(name)
+			err = svc.Apps.Delete(r.Context(), name)
 		} else if scope == "personal" && svc.PersonalApps != nil {
-			err = svc.PersonalApps.Delete(name)
+			err = svc.PersonalApps.Delete(r.Context(), name)
 		} else {
 			// Default: try personal first, then team
 			if svc.PersonalApps != nil {
-				err = svc.PersonalApps.Delete(name)
+				err = svc.PersonalApps.Delete(r.Context(), name)
 			}
 			if err != nil && svc.Apps != nil {
-				err = svc.Apps.Delete(name)
+				err = svc.Apps.Delete(r.Context(), name)
 			}
 		}
 

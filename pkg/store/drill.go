@@ -1,6 +1,9 @@
 package store
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 // DrillReport is a drill suite execution report stored in the database.
 type DrillReport struct {
@@ -22,15 +25,15 @@ type DrillReport struct {
 // In platform mode, reports are stored in the team's schema.
 type DrillReportStore interface {
 	// SaveReport persists a drill report.
-	SaveReport(report *DrillReport) error
+	SaveReport(ctx context.Context, report *DrillReport) error
 
 	// GetLatestReport returns the most recent report for a suite.
 	// Returns nil, nil if no report exists.
-	GetLatestReport(suite string) (*DrillReport, error)
+	GetLatestReport(ctx context.Context, suite string) (*DrillReport, error)
 
 	// ListReports returns all drill reports, ordered by creation time (newest first).
-	ListReports() ([]*DrillReport, error)
+	ListReports(ctx context.Context) ([]*DrillReport, error)
 
 	// DeleteReportsForSuite removes all reports for a given suite.
-	DeleteReportsForSuite(suite string) error
+	DeleteReportsForSuite(ctx context.Context, suite string) error
 }

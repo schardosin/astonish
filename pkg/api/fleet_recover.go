@@ -43,7 +43,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	// fall back to the legacy ResolveWorkspaceDir.
 	var workspaceDir string
 	if sessionStore != nil {
-		if meta, metaErr := sessionStore.GetSessionMeta(cfg.SessionID); metaErr == nil && meta != nil && meta.WorkspaceDir != "" {
+		if meta, metaErr := sessionStore.GetSessionMeta(ctx, cfg.SessionID); metaErr == nil && meta != nil && meta.WorkspaceDir != "" {
 			workspaceDir = meta.WorkspaceDir
 		}
 	} else if fileStore := getFleetFileStore(); fileStore != nil {
@@ -80,7 +80,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 		// Platform mode: read events from PG store.
 		// userID is not needed for PG reads (keyed by sessionID only).
 		var readErr error
-		events, readErr = sessionStore.ReadTranscriptEvents(studioChatAppName, "", cfg.SessionID)
+		events, readErr = sessionStore.ReadTranscriptEvents(ctx, studioChatAppName, "", cfg.SessionID)
 		if readErr != nil {
 			return fmt.Errorf("reading transcript from store: %w", readErr)
 		}

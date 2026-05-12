@@ -28,8 +28,7 @@ func (s *pgMCPServerStore) tableName() string {
 	return pgx.Identifier{s.schema, s.table}.Sanitize()
 }
 
-func (s *pgMCPServerStore) List() ([]store.MCPServer, error) {
-	ctx := context.Background()
+func (s *pgMCPServerStore) List(ctx context.Context) ([]store.MCPServer, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, name, command, args, env, transport, url, enabled, cached_tools, created_by, created_at, updated_at
 		 FROM %s ORDER BY name`, s.tableName()),
@@ -50,8 +49,7 @@ func (s *pgMCPServerStore) List() ([]store.MCPServer, error) {
 	return result, rows.Err()
 }
 
-func (s *pgMCPServerStore) Get(name string) (*store.MCPServer, error) {
-	ctx := context.Background()
+func (s *pgMCPServerStore) Get(ctx context.Context, name string) (*store.MCPServer, error) {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT id, name, command, args, env, transport, url, enabled, cached_tools, created_by, created_at, updated_at
 		 FROM %s WHERE name = $1`, s.tableName()),
@@ -61,9 +59,7 @@ func (s *pgMCPServerStore) Get(name string) (*store.MCPServer, error) {
 	return s.scanSingleRow(row)
 }
 
-func (s *pgMCPServerStore) Save(server *store.MCPServer) error {
-	ctx := context.Background()
-
+func (s *pgMCPServerStore) Save(ctx context.Context, server *store.MCPServer) error {
 	argsJSON, err := json.Marshal(server.Args)
 	if err != nil {
 		argsJSON = []byte("[]")
@@ -119,8 +115,7 @@ func (s *pgMCPServerStore) Save(server *store.MCPServer) error {
 	return err
 }
 
-func (s *pgMCPServerStore) Delete(name string) error {
-	ctx := context.Background()
+func (s *pgMCPServerStore) Delete(ctx context.Context, name string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE name = $1`, s.tableName()),
 		name,
@@ -128,8 +123,7 @@ func (s *pgMCPServerStore) Delete(name string) error {
 	return err
 }
 
-func (s *pgMCPServerStore) UpdateCachedTools(name string, tools json.RawMessage) error {
-	ctx := context.Background()
+func (s *pgMCPServerStore) UpdateCachedTools(ctx context.Context, name string, tools json.RawMessage) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`UPDATE %s SET cached_tools = $1, updated_at = now() WHERE name = $2`, s.tableName()),
 		tools, name,

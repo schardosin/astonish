@@ -118,7 +118,7 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 	// Resolve plan from the provided store (platform mode) or the global registry (personal mode)
 	var plan *fleet.FleetPlan
 	if fleetPlanStore != nil {
-		planAny, ok := fleetPlanStore.GetPlan(planKey)
+		planAny, ok := fleetPlanStore.GetPlan(context.TODO(), planKey)
 		if !ok {
 			return nil, fmt.Errorf("fleet plan %q not found", planKey)
 		}
@@ -372,7 +372,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	// Start from a regular fleet template
 	var cfg *fleet.FleetConfig
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		cfgAny, found := svc.FleetTemplates.GetFleet(req.FleetKey)
+		cfgAny, found := svc.FleetTemplates.GetFleet(r.Context(), req.FleetKey)
 		if !found {
 			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
 			return
@@ -495,7 +495,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 			Repo:         repo,
 			WorkspaceDir: workspaceDir,
 		}
-		if err := sessionStore.AddSessionMeta(meta); err != nil {
+		if err := sessionStore.AddSessionMeta(context.TODO(), meta); err != nil {
 			slog.Warn("could not persist fleet session meta to store", "component", "fleet", "error", err)
 		}
 		return
@@ -531,7 +531,7 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 // If sessionStore is non-nil (platform mode), it updates the PG store.
 func updateFleetSessionMeta(sessionID string, messageCount int, sessionStore store.SessionStore) {
 	if sessionStore != nil {
-		if err := sessionStore.UpdateSessionMeta(sessionID, func(meta *store.SessionMeta) {
+		if err := sessionStore.UpdateSessionMeta(context.TODO(), sessionID, func(meta *store.SessionMeta) {
 			meta.MessageCount = messageCount
 			meta.UpdatedAt = time.Now()
 		}); err != nil {
@@ -601,7 +601,7 @@ func wireFleetTranscriptPG(fs *fleet.FleetSession, sessionStore store.SessionSto
 		// Persist the event via the store's AppendEvent method. This requires
 		// a session object that the store recognizes. For PG stores that need
 		// a *pgSession, we use the raw event insertion path instead.
-		if err := sessionStore.AppendFleetEvent(fs.ID, event); err != nil {
+		if err := sessionStore.AppendFleetEvent(context.TODO(), fs.ID, event); err != nil {
 			slog.Warn("could not persist fleet event to store", "component", "fleet", "session_id", fs.ID, "error", err)
 		}
 
@@ -739,7 +739,7 @@ func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read persisted fleet sessions from the team Sessions store.
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		metas, err := svc.Sessions.ListSessionMetas(studioChatAppName, userID)
+		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
 			return
@@ -1125,7 +1125,7 @@ func getFleetMessages(sessionID, userID string, ctx context.Context, sessionStor
 
 	// Platform mode: read from PG store.
 	if sessionStore != nil {
-		events, err := sessionStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
+		events, err := sessionStore.ReadTranscriptEvents(ctx, studioChatAppName, userID, sessionID)
 		if err != nil {
 			return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
 		}
@@ -1298,7 +1298,7 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 		// Platform mode: build merged config from org + team stores
 		mcpServers = make(map[string]config.MCPServerConfig)
 		if mcpStores.Org != nil {
-			orgServers, err := mcpStores.Org.List()
+			orgServers, err := mcpStores.Org.List(context.TODO())
 			if err == nil {
 				for _, s := range orgServers {
 					mcpServers[s.Name] = config.MCPServerConfig{
@@ -1313,7 +1313,7 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 			}
 		}
 		if mcpStores.Team != nil {
-			teamServers, err := mcpStores.Team.List()
+			teamServers, err := mcpStores.Team.List(context.TODO())
 			if err == nil {
 				for _, s := range teamServers {
 					mcpServers[s.Name] = config.MCPServerConfig{
@@ -1391,13 +1391,13 @@ func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.
 // MCP stores (team first, then org).
 func getPlatformCachedToolsFromStores(mcpStores *store.MCPServerStores, serverName string) []cache.ToolEntry {
 	if mcpStores.Team != nil {
-		srv, err := mcpStores.Team.Get(serverName)
+		srv, err := mcpStores.Team.Get(context.TODO(), serverName)
 		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
 			return parsePlatformCachedTools(srv.CachedTools)
 		}
 	}
 	if mcpStores.Org != nil {
-		srv, err := mcpStores.Org.Get(serverName)
+		srv, err := mcpStores.Org.Get(context.TODO(), serverName)
 		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
 			return parsePlatformCachedTools(srv.CachedTools)
 		}

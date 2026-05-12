@@ -211,7 +211,7 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Personal flows first (user's private flows)
 		if svc.PersonalFlows != nil {
-			for _, f := range svc.PersonalFlows.ListAllFlows() {
+			for _, f := range svc.PersonalFlows.ListAllFlows(r.Context()) {
 				result = append(result, AgentListItem{
 					ID:          f.Name,
 					Name:        f.Name,
@@ -228,7 +228,7 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 			for _, item := range result {
 				personalNames[item.ID] = true
 			}
-			for _, f := range svc.Flows.ListAllFlows() {
+			for _, f := range svc.Flows.ListAllFlows(r.Context()) {
 				// If the same name exists in both personal and team,
 				// include both — they are separate copies.
 				id := f.Name
@@ -348,19 +348,19 @@ func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Explicit scope requested
 		if scope == "team" && svc.Flows != nil {
-			yamlContent, err = svc.Flows.GetFlow(name)
+			yamlContent, err = svc.Flows.GetFlow(r.Context(), name)
 			resolvedScope = "team"
 		} else if scope == "personal" && svc.PersonalFlows != nil {
-			yamlContent, err = svc.PersonalFlows.GetFlow(name)
+			yamlContent, err = svc.PersonalFlows.GetFlow(r.Context(), name)
 			resolvedScope = "personal"
 		} else {
 			// Default: try personal first, then team
 			if svc.PersonalFlows != nil {
-				yamlContent, err = svc.PersonalFlows.GetFlow(name)
+				yamlContent, err = svc.PersonalFlows.GetFlow(r.Context(), name)
 				resolvedScope = "personal"
 			}
 			if err != nil && svc.Flows != nil {
-				yamlContent, err = svc.Flows.GetFlow(name)
+				yamlContent, err = svc.Flows.GetFlow(r.Context(), name)
 				resolvedScope = "team"
 			}
 		}
@@ -454,18 +454,18 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 			if !RequireTeamAdmin(w, r) {
 				return
 			}
-			if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
+			if err := svc.Flows.SaveFlow(r.Context(), name, finalYAML); err != nil {
 				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
 				return
 			}
 		} else if svc.PersonalFlows != nil {
-			if err := svc.PersonalFlows.SaveFlow(name, finalYAML); err != nil {
+			if err := svc.PersonalFlows.SaveFlow(r.Context(), name, finalYAML); err != nil {
 				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
 				return
 			}
 		} else if svc.Flows != nil {
 			// Fallback: no personal store, save to team
-			if err := svc.Flows.SaveFlow(name, finalYAML); err != nil {
+			if err := svc.Flows.SaveFlow(r.Context(), name, finalYAML); err != nil {
 				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
 				return
 			}
@@ -641,16 +641,16 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 			if !RequireTeamAdmin(w, r) {
 				return
 			}
-			err = svc.Flows.DeleteFlow(name)
+			err = svc.Flows.DeleteFlow(r.Context(), name)
 		} else if scope == "personal" && svc.PersonalFlows != nil {
-			err = svc.PersonalFlows.DeleteFlow(name)
+			err = svc.PersonalFlows.DeleteFlow(r.Context(), name)
 		} else {
 			// Default: try personal first, then team
 			if svc.PersonalFlows != nil {
-				err = svc.PersonalFlows.DeleteFlow(name)
+				err = svc.PersonalFlows.DeleteFlow(r.Context(), name)
 			}
 			if err != nil && svc.Flows != nil {
-				err = svc.Flows.DeleteFlow(name)
+				err = svc.Flows.DeleteFlow(r.Context(), name)
 			}
 		}
 		if err != nil {
@@ -703,7 +703,7 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Verify the flow exists in the team's DB
-		if _, err := svc.Flows.GetFlow(flowName); err != nil {
+		if _, err := svc.Flows.GetFlow(r.Context(), flowName); err != nil {
 			respondError(w, http.StatusNotFound, "Flow not found in team database. Install it first.")
 			return
 		}
@@ -845,7 +845,7 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Org-level servers first
 		if svc.MCPServers != nil {
-			orgServers, err := svc.MCPServers.List()
+			orgServers, err := svc.MCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range orgServers {
 					transport := s.Transport
@@ -865,7 +865,7 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 
 		// Team-level servers override org
 		if svc.TeamMCPServers != nil {
-			teamServers, err := svc.TeamMCPServers.List()
+			teamServers, err := svc.TeamMCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range teamServers {
 					transport := s.Transport
@@ -958,14 +958,14 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: toggle in DB store
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		server, err := mcpStore.Get(serverName)
+		server, err := mcpStore.Get(r.Context(), serverName)
 		if err != nil || server == nil {
 			respondError(w, http.StatusNotFound, "Server not found")
 			return
 		}
 		if req.Enabled != nil {
 			server.Enabled = req.Enabled
-			if err := mcpStore.Save(server); err != nil {
+			if err := mcpStore.Save(r.Context(), server); err != nil {
 				respondError(w, http.StatusInternalServerError, "Failed to save MCP server")
 				return
 			}

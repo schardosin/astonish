@@ -1,5 +1,7 @@
 package store
 
+import "context"
+
 // FleetTemplateSummary is a summary of a fleet template.
 type FleetTemplateSummary struct {
 	Key         string   `json:"key"`
@@ -16,22 +18,22 @@ type FleetTemplateSummary struct {
 type FleetTemplateStore interface {
 	// GetFleet returns a fleet config by key.
 	// The returned value is the concrete *fleet.FleetConfig.
-	GetFleet(key string) (any, bool)
+	GetFleet(ctx context.Context, key string) (any, bool)
 
 	// ListFleets returns summaries of all fleet templates.
-	ListFleets() []FleetTemplateSummary
+	ListFleets(ctx context.Context) []FleetTemplateSummary
 
 	// Save persists a fleet template.
-	Save(key string, fleet any) error
+	Save(ctx context.Context, key string, fleet any) error
 
 	// Delete removes a fleet template.
-	Delete(key string) error
+	Delete(ctx context.Context, key string) error
 
 	// Count returns the number of fleet templates.
-	Count() int
+	Count(ctx context.Context) int
 
 	// Reload re-reads fleet templates from the backing store.
-	Reload() error
+	Reload(ctx context.Context) error
 }
 
 // FleetPlanSummary is a summary of a fleet plan.
@@ -52,28 +54,28 @@ type FleetPlanSummary struct {
 type FleetPlanStore interface {
 	// GetPlan returns a fleet plan by key.
 	// The returned value is the concrete *fleet.FleetPlan.
-	GetPlan(key string) (any, bool)
+	GetPlan(ctx context.Context, key string) (any, bool)
 
 	// ListPlans returns summaries of all fleet plans.
-	ListPlans() []FleetPlanSummary
+	ListPlans(ctx context.Context) []FleetPlanSummary
 
 	// Save persists a fleet plan.
-	Save(plan any) error
+	Save(ctx context.Context, plan any) error
 
 	// Delete removes a fleet plan.
-	Delete(key string) error
+	Delete(ctx context.Context, key string) error
 
 	// Count returns the number of fleet plans.
-	Count() int
+	Count(ctx context.Context) int
 
 	// Reload re-reads fleet plans from the backing store.
-	Reload() error
+	Reload(ctx context.Context) error
 
 	// GetPlanYAML returns the raw YAML content for a fleet plan.
 	// Returns the YAML string and nil error, or empty string and error if not found.
-	GetPlanYAML(key string) (string, error)
+	GetPlanYAML(ctx context.Context, key string) (string, error)
 
 	// SavePlanYAML persists a fleet plan from raw YAML content.
 	// The YAML is parsed, validated, and stored.
-	SavePlanYAML(key string, yamlContent string) error
+	SavePlanYAML(ctx context.Context, key string, yamlContent string) error
 }

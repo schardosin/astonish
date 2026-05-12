@@ -156,7 +156,7 @@ func saveDrill(ctx tool.Context, args SaveDrillArgs) (SaveDrillResult, error) {
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
 		var suitePath string
 		if !appendMode {
-			if err := fs.SaveFlow(args.SuiteName, args.SuiteYAML); err != nil {
+			if err := fs.SaveFlow(ctx, args.SuiteName, args.SuiteYAML); err != nil {
 				return SaveDrillResult{
 					Status:  "error",
 					Message: fmt.Sprintf("failed to save suite to store: %v", err),
@@ -167,7 +167,7 @@ func saveDrill(ctx tool.Context, args SaveDrillArgs) (SaveDrillResult, error) {
 
 		var testPaths []string
 		for _, t := range args.Tests {
-			if err := fs.SaveFlow(t.Name, t.YAML); err != nil {
+			if err := fs.SaveFlow(ctx, t.Name, t.YAML); err != nil {
 				return SaveDrillResult{
 					Status:  "error",
 					Message: fmt.Sprintf("failed to save drill %q to store: %v", t.Name, err),
@@ -608,7 +608,7 @@ func deleteDrill(ctx tool.Context, args DeleteDrillArgs) (DeleteDrillResult, err
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
 		// Single drill deletion mode
 		if args.TestName != "" {
-			if err := fs.DeleteFlow(args.TestName); err != nil {
+			if err := fs.DeleteFlow(ctx, args.TestName); err != nil {
 				return DeleteDrillResult{
 					Status:  "error",
 					Message: fmt.Sprintf("Failed to delete drill %q: %v", args.TestName, err),
@@ -632,17 +632,17 @@ func deleteDrill(ctx tool.Context, args DeleteDrillArgs) (DeleteDrillResult, err
 		var deleted []string
 
 		// Delete child drills first
-		drills := fs.ListFlowsByType([]string{"drill", "test"})
+		drills := fs.ListFlowsByType(ctx, []string{"drill", "test"})
 		for _, d := range drills {
 			if d.Suite == args.SuiteName {
-				if err := fs.DeleteFlow(d.Name); err == nil {
+				if err := fs.DeleteFlow(ctx, d.Name); err == nil {
 					deleted = append(deleted, d.Name)
 				}
 			}
 		}
 
 		// Delete the suite itself
-		if err := fs.DeleteFlow(args.SuiteName); err != nil {
+		if err := fs.DeleteFlow(ctx, args.SuiteName); err != nil {
 			return DeleteDrillResult{
 				Status:  "error",
 				Deleted: deleted,
@@ -771,8 +771,8 @@ type DrillInfo struct {
 func listDrills(ctx tool.Context, args ListDrillsArgs) (ListDrillsResult, error) {
 	// Platform mode: list from the team-scoped flow store.
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
-		suiteFlows := fs.ListFlowsByType([]string{"drill_suite", "test_suite"})
-		drillFlows := fs.ListFlowsByType([]string{"drill", "test"})
+		suiteFlows := fs.ListFlowsByType(ctx, []string{"drill_suite", "test_suite"})
+		drillFlows := fs.ListFlowsByType(ctx, []string{"drill", "test"})
 
 		// Build lookup of drills grouped by suite
 		drillsBySuite := make(map[string][]store.FlowSummary)
@@ -785,7 +785,7 @@ func listDrills(ctx tool.Context, args ListDrillsArgs) (ListDrillsResult, error)
 			found := false
 			for _, sf := range suiteFlows {
 				if sf.Name == args.SuiteName {
-					info := buildSuiteInfoFromStore(fs, sf, drillsBySuite[sf.Name])
+					info := buildSuiteInfoFromStore(ctx, fs, sf, drillsBySuite[sf.Name])
 					return ListDrillsResult{
 						Status: "ok",
 						Suites: []DrillSuiteInfo{info},
@@ -809,7 +809,7 @@ func listDrills(ctx tool.Context, args ListDrillsArgs) (ListDrillsResult, error)
 
 		var infos []DrillSuiteInfo
 		for _, sf := range suiteFlows {
-			infos = append(infos, buildSuiteInfoFromStore(fs, sf, drillsBySuite[sf.Name]))
+			infos = append(infos, buildSuiteInfoFromStore(ctx, fs, sf, drillsBySuite[sf.Name]))
 		}
 
 		return ListDrillsResult{
@@ -889,7 +889,7 @@ func buildSuiteInfo(suite *adrill.LoadedSuite) DrillSuiteInfo {
 // buildSuiteInfoFromStore constructs a DrillSuiteInfo from flow store data.
 // It parses suite YAML for description/template and each drill's YAML for
 // step counts and tags.
-func buildSuiteInfoFromStore(fs store.FlowStore, suite store.FlowSummary, drills []store.FlowSummary) DrillSuiteInfo {
+func buildSuiteInfoFromStore(ctx context.Context, fs store.FlowStore, suite store.FlowSummary, drills []store.FlowSummary) DrillSuiteInfo {
 	info := DrillSuiteInfo{
 		Name:        suite.Name,
 		Description: suite.Description,
@@ -897,7 +897,7 @@ func buildSuiteInfoFromStore(fs store.FlowStore, suite store.FlowSummary, drills
 	}
 
 	// Parse suite YAML for template
-	if yamlContent, err := fs.GetFlow(suite.Name); err == nil {
+	if yamlContent, err := fs.GetFlow(ctx, suite.Name); err == nil {
 		var cfg config.AgentConfig
 		if yaml.Unmarshal([]byte(yamlContent), &cfg) == nil && cfg.SuiteConfig != nil {
 			info.Template = cfg.SuiteConfig.Template
@@ -911,7 +911,7 @@ func buildSuiteInfoFromStore(fs store.FlowStore, suite store.FlowSummary, drills
 			Description: d.Description,
 			Tags:        d.Tags,
 		}
-		if yamlContent, err := fs.GetFlow(d.Name); err == nil {
+		if yamlContent, err := fs.GetFlow(ctx, d.Name); err == nil {
 			var cfg config.AgentConfig
 			if yaml.Unmarshal([]byte(yamlContent), &cfg) == nil {
 				di.StepCount = len(cfg.Nodes)
@@ -951,7 +951,7 @@ func readDrill(ctx tool.Context, args ReadDrillArgs) (ReadDrillResult, error) {
 
 	// Platform mode: read from the team-scoped flow store.
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
-		yamlContent, err := fs.GetFlow(name)
+		yamlContent, err := fs.GetFlow(ctx, name)
 		if err != nil {
 			return ReadDrillResult{
 				Status:  "error",
@@ -963,7 +963,7 @@ func readDrill(ctx tool.Context, args ReadDrillArgs) (ReadDrillResult, error) {
 		var cfg config.AgentConfig
 		if parseErr := yaml.Unmarshal([]byte(yamlContent), &cfg); parseErr == nil && cfg.Type == "drill_suite" {
 			// Build a suite overview from store data
-			drillFlows := fs.ListFlowsByType([]string{"drill", "test"})
+			drillFlows := fs.ListFlowsByType(ctx, []string{"drill", "test"})
 			var overview strings.Builder
 			overview.WriteString(fmt.Sprintf("# Suite: %s\n", name))
 			if cfg.Description != "" {
@@ -1097,13 +1097,13 @@ func editDrill(ctx tool.Context, args EditDrillArgs) (EditDrillResult, error) {
 	// Platform mode: save to the team-scoped flow store.
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
 		// Verify drill exists in the store
-		if _, err := fs.GetFlow(name); err != nil {
+		if _, err := fs.GetFlow(ctx, name); err != nil {
 			return EditDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("drill %q not found in team store — use save_drill to create new drills", name),
 			}, nil
 		}
-		if err := fs.SaveFlow(name, args.YAML); err != nil {
+		if err := fs.SaveFlow(ctx, name, args.YAML); err != nil {
 			return EditDrillResult{
 				Status:  "error",
 				Message: fmt.Sprintf("failed to save drill to store: %v", err),

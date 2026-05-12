@@ -101,13 +101,13 @@ type ThreeTierSearcher interface {
 // In personal mode, this wraps the existing memory.Manager directly.
 type MemoryManager interface {
 	// Load returns the contents of the core MEMORY.md file.
-	Load() (string, error)
+	Load(ctx context.Context) (string, error)
 
 	// Append adds content to a memory category (or the core memory file).
-	Append(category, content string, overwrite bool) error
+	Append(ctx context.Context, category, content string, overwrite bool) error
 
 	// EnsureDir creates the memory directory if it doesn't exist.
-	EnsureDir() error
+	EnsureDir(ctx context.Context) error
 
 	// Path returns the base path of the memory directory.
 	MemoryPath() string

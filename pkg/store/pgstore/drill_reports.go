@@ -21,8 +21,7 @@ func (d *pgDrillReportStore) tableName() string {
 	return pgx.Identifier{d.schema, "drill_reports"}.Sanitize()
 }
 
-func (d *pgDrillReportStore) SaveReport(report *store.DrillReport) error {
-	ctx := context.Background()
+func (d *pgDrillReportStore) SaveReport(ctx context.Context, report *store.DrillReport) error {
 	_, err := d.pool.Exec(ctx, fmt.Sprintf(
 		`INSERT INTO %s (suite, status, summary, duration_ms, report_data, started_at, finished_at, created_by, created_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
@@ -33,8 +32,7 @@ func (d *pgDrillReportStore) SaveReport(report *store.DrillReport) error {
 	return err
 }
 
-func (d *pgDrillReportStore) GetLatestReport(suite string) (*store.DrillReport, error) {
-	ctx := context.Background()
+func (d *pgDrillReportStore) GetLatestReport(ctx context.Context, suite string) (*store.DrillReport, error) {
 	row := d.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT id, suite, status, summary, duration_ms, report_data, started_at, finished_at, created_by, created_at
 		 FROM %s WHERE suite = $1 ORDER BY created_at DESC LIMIT 1`,
@@ -44,8 +42,7 @@ func (d *pgDrillReportStore) GetLatestReport(suite string) (*store.DrillReport, 
 	return scanDrillReport(row)
 }
 
-func (d *pgDrillReportStore) ListReports() ([]*store.DrillReport, error) {
-	ctx := context.Background()
+func (d *pgDrillReportStore) ListReports(ctx context.Context) ([]*store.DrillReport, error) {
 	rows, err := d.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, suite, status, summary, duration_ms, report_data, started_at, finished_at, created_by, created_at
 		 FROM %s ORDER BY created_at DESC`,
@@ -67,8 +64,7 @@ func (d *pgDrillReportStore) ListReports() ([]*store.DrillReport, error) {
 	return reports, nil
 }
 
-func (d *pgDrillReportStore) DeleteReportsForSuite(suite string) error {
-	ctx := context.Background()
+func (d *pgDrillReportStore) DeleteReportsForSuite(ctx context.Context, suite string) error {
 	_, err := d.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE suite = $1`, d.tableName()),
 		suite,

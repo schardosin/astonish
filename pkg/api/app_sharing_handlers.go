@@ -76,7 +76,7 @@ func AppPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		personalApps = orgStore.ForUser(pu.ID).Apps()
 	}
-	app, err := personalApps.Load(req.Slug)
+	app, err := personalApps.Load(r.Context(), req.Slug)
 	if err != nil {
 		respondError(w, http.StatusNotFound, fmt.Sprintf("personal app not found: %v", err))
 		return
@@ -87,7 +87,7 @@ func AppPublishToTeamHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusServiceUnavailable, "team app store not available")
 		return
 	}
-	slug, err := svc.Apps.Save(app)
+	slug, err := svc.Apps.Save(r.Context(), app)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to publish app to team: %v", err))
 		return
@@ -146,7 +146,7 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusServiceUnavailable, "team app store not available")
 			return
 		}
-		app, err = svc.Apps.Load(req.Slug)
+		app, err = svc.Apps.Load(r.Context(), req.Slug)
 	} else {
 		if svc.TenantRouter == nil {
 			respondError(w, http.StatusServiceUnavailable, "tenant router not available")
@@ -157,7 +157,7 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, "failed to resolve org store")
 			return
 		}
-		app, err = orgStore.OrgApps().Load(req.Slug)
+		app, err = orgStore.OrgApps().Load(r.Context(), req.Slug)
 	}
 	if err != nil {
 		respondError(w, http.StatusNotFound, fmt.Sprintf("source app not found: %v", err))
@@ -180,7 +180,7 @@ func AppForkToPersonalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		personalApps = orgStore.ForUser(pu.ID).Apps()
 	}
-	slug, err := personalApps.Save(app)
+	slug, err := personalApps.Save(r.Context(), app)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to fork app: %v", err))
 		return
@@ -243,7 +243,7 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Load from team store
 	teamApps := orgStore.ForTeam(req.TeamSlug).Apps()
-	app, err := teamApps.Load(req.Slug)
+	app, err := teamApps.Load(r.Context(), req.Slug)
 	if err != nil {
 		respondError(w, http.StatusNotFound, fmt.Sprintf("team app not found: %v", err))
 		return
@@ -265,7 +265,7 @@ func AppPromoteToOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save to org store
 	orgApps := orgStore.OrgApps()
-	slug, err := orgApps.Save(appMap)
+	slug, err := orgApps.Save(r.Context(), appMap)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to promote app to org: %v", err))
 		return
@@ -304,7 +304,7 @@ func ListOrgAppsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items, err := orgStore.OrgApps().List()
+	items, err := orgStore.OrgApps().List(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to list org apps: %v", err))
 		return
@@ -342,7 +342,7 @@ func DeleteOrgAppHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := orgStore.OrgApps().Delete(name); err != nil {
+	if err := orgStore.OrgApps().Delete(r.Context(), name); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete org app: %v", err))
 		return
 	}

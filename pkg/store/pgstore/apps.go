@@ -23,9 +23,7 @@ func (a *pgAppStore) tableName() string {
 	return pgx.Identifier{a.schema, a.table}.Sanitize()
 }
 
-func (a *pgAppStore) Save(app any) (string, error) {
-	ctx := context.Background()
-
+func (a *pgAppStore) Save(ctx context.Context, app any) (string, error) {
 	// The app parameter is a map or struct. Extract fields via JSON round-trip.
 	data, err := json.Marshal(app)
 	if err != nil {
@@ -73,8 +71,7 @@ func (a *pgAppStore) Save(app any) (string, error) {
 	return slug, nil
 }
 
-func (a *pgAppStore) Load(slug string) (any, error) {
-	ctx := context.Background()
+func (a *pgAppStore) Load(ctx context.Context, slug string) (any, error) {
 	row := a.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT slug, name, description, code, version, session_id, created_at, updated_at
 		 FROM %s WHERE slug = $1`, a.tableName()),
@@ -101,8 +98,7 @@ func (a *pgAppStore) Load(slug string) (any, error) {
 	}, nil
 }
 
-func (a *pgAppStore) Delete(slug string) error {
-	ctx := context.Background()
+func (a *pgAppStore) Delete(ctx context.Context, slug string) error {
 	_, err := a.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE slug = $1`, a.tableName()),
 		slug,
@@ -110,8 +106,7 @@ func (a *pgAppStore) Delete(slug string) error {
 	return err
 }
 
-func (a *pgAppStore) List() ([]store.AppListItem, error) {
-	ctx := context.Background()
+func (a *pgAppStore) List(ctx context.Context) ([]store.AppListItem, error) {
 	rows, err := a.pool.Query(ctx, fmt.Sprintf(
 		`SELECT slug, description, version, updated_at
 		 FROM %s ORDER BY updated_at DESC`, a.tableName()),
@@ -148,8 +143,7 @@ func (s *pgAppStateStore) appsTable() string {
 	return pgx.Identifier{s.schema, "apps"}.Sanitize()
 }
 
-func (s *pgAppStateStore) Get(appSlug, key string) (any, error) {
-	ctx := context.Background()
+func (s *pgAppStateStore) Get(ctx context.Context, appSlug, key string) (any, error) {
 	var row pgx.Row
 	if s.userID != "" {
 		row = s.pool.QueryRow(ctx, fmt.Sprintf(
@@ -178,8 +172,7 @@ func (s *pgAppStateStore) Get(appSlug, key string) (any, error) {
 	return result, nil
 }
 
-func (s *pgAppStateStore) Set(appSlug, key string, value any) error {
-	ctx := context.Background()
+func (s *pgAppStateStore) Set(ctx context.Context, appSlug, key string, value any) error {
 	valueJSON, err := json.Marshal(value)
 	if err != nil {
 		return err
@@ -211,8 +204,7 @@ func (s *pgAppStateStore) Set(appSlug, key string, value any) error {
 	return err
 }
 
-func (s *pgAppStateStore) Delete(appSlug, key string) error {
-	ctx := context.Background()
+func (s *pgAppStateStore) Delete(ctx context.Context, appSlug, key string) error {
 	if s.userID != "" {
 		_, err := s.pool.Exec(ctx, fmt.Sprintf(
 			`DELETE FROM %s WHERE app_id = (
@@ -231,8 +223,7 @@ func (s *pgAppStateStore) Delete(appSlug, key string) error {
 	return err
 }
 
-func (s *pgAppStateStore) List(appSlug string) (map[string]any, error) {
-	ctx := context.Background()
+func (s *pgAppStateStore) List(ctx context.Context, appSlug string) (map[string]any, error) {
 	var rows pgx.Rows
 	var err error
 	if s.userID != "" {

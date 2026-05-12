@@ -23,8 +23,7 @@ func (f *pgFleetTemplateStore) tableName() string {
 	return pgx.Identifier{f.schema, "fleet_templates"}.Sanitize()
 }
 
-func (f *pgFleetTemplateStore) GetFleet(key string) (any, bool) {
-	ctx := context.Background()
+func (f *pgFleetTemplateStore) GetFleet(ctx context.Context, key string) (any, bool) {
 	row := f.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT definition FROM %s WHERE key = $1`, f.tableName()),
 		key,
@@ -42,8 +41,7 @@ func (f *pgFleetTemplateStore) GetFleet(key string) (any, bool) {
 	return &cfg, true
 }
 
-func (f *pgFleetTemplateStore) ListFleets() []store.FleetTemplateSummary {
-	ctx := context.Background()
+func (f *pgFleetTemplateStore) ListFleets(ctx context.Context) []store.FleetTemplateSummary {
 	rows, err := f.pool.Query(ctx, fmt.Sprintf(
 		`SELECT key, name, definition FROM %s ORDER BY name`, f.tableName()),
 	)
@@ -85,8 +83,7 @@ func (f *pgFleetTemplateStore) ListFleets() []store.FleetTemplateSummary {
 	return templates
 }
 
-func (f *pgFleetTemplateStore) Save(key string, fleet any) error {
-	ctx := context.Background()
+func (f *pgFleetTemplateStore) Save(ctx context.Context, key string, fleet any) error {
 	defJSON, err := json.Marshal(fleet)
 	if err != nil {
 		return err
@@ -109,8 +106,7 @@ func (f *pgFleetTemplateStore) Save(key string, fleet any) error {
 	return err
 }
 
-func (f *pgFleetTemplateStore) Delete(key string) error {
-	ctx := context.Background()
+func (f *pgFleetTemplateStore) Delete(ctx context.Context, key string) error {
 	_, err := f.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE key = $1`, f.tableName()),
 		key,
@@ -118,8 +114,7 @@ func (f *pgFleetTemplateStore) Delete(key string) error {
 	return err
 }
 
-func (f *pgFleetTemplateStore) Count() int {
-	ctx := context.Background()
+func (f *pgFleetTemplateStore) Count(ctx context.Context) int {
 	var count int
 	err := f.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT count(*) FROM %s`, f.tableName()),
@@ -130,7 +125,7 @@ func (f *pgFleetTemplateStore) Count() int {
 	return count
 }
 
-func (f *pgFleetTemplateStore) Reload() error {
+func (f *pgFleetTemplateStore) Reload(ctx context.Context) error {
 	// No-op for PG store — data is always read fresh from the database
 	return nil
 }
@@ -146,8 +141,7 @@ func (f *pgFleetPlanStore) tableName() string {
 	return pgx.Identifier{f.schema, "fleet_plans"}.Sanitize()
 }
 
-func (f *pgFleetPlanStore) GetPlan(key string) (any, bool) {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) GetPlan(ctx context.Context, key string) (any, bool) {
 	row := f.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT definition, created_by FROM %s WHERE key = $1`, f.tableName()),
 		key,
@@ -170,8 +164,7 @@ func (f *pgFleetPlanStore) GetPlan(key string) (any, bool) {
 	return &plan, true
 }
 
-func (f *pgFleetPlanStore) ListPlans() []store.FleetPlanSummary {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) ListPlans(ctx context.Context) []store.FleetPlanSummary {
 	rows, err := f.pool.Query(ctx, fmt.Sprintf(
 		`SELECT key, name, active, definition FROM %s ORDER BY name`, f.tableName()),
 	)
@@ -222,8 +215,7 @@ func (f *pgFleetPlanStore) ListPlans() []store.FleetPlanSummary {
 	return plans
 }
 
-func (f *pgFleetPlanStore) Save(plan any) error {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) Save(ctx context.Context, plan any) error {
 	defJSON, err := json.Marshal(plan)
 	if err != nil {
 		return err
@@ -267,8 +259,7 @@ func (f *pgFleetPlanStore) Save(plan any) error {
 	return err
 }
 
-func (f *pgFleetPlanStore) Delete(key string) error {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) Delete(ctx context.Context, key string) error {
 	_, err := f.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE key = $1`, f.tableName()),
 		key,
@@ -276,8 +267,7 @@ func (f *pgFleetPlanStore) Delete(key string) error {
 	return err
 }
 
-func (f *pgFleetPlanStore) Count() int {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) Count(ctx context.Context) int {
 	var count int
 	err := f.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT count(*) FROM %s`, f.tableName()),
@@ -288,13 +278,12 @@ func (f *pgFleetPlanStore) Count() int {
 	return count
 }
 
-func (f *pgFleetPlanStore) Reload() error {
+func (f *pgFleetPlanStore) Reload(ctx context.Context) error {
 	// No-op for PG store — data is always read fresh from the database
 	return nil
 }
 
-func (f *pgFleetPlanStore) GetPlanYAML(key string) (string, error) {
-	ctx := context.Background()
+func (f *pgFleetPlanStore) GetPlanYAML(ctx context.Context, key string) (string, error) {
 	var yamlContent *string
 	var defJSON []byte
 	err := f.pool.QueryRow(ctx, fmt.Sprintf(
@@ -319,9 +308,7 @@ func (f *pgFleetPlanStore) GetPlanYAML(key string) (string, error) {
 	return string(defJSON), nil
 }
 
-func (f *pgFleetPlanStore) SavePlanYAML(key string, yamlContent string) error {
-	ctx := context.Background()
-
+func (f *pgFleetPlanStore) SavePlanYAML(ctx context.Context, key string, yamlContent string) error {
 	// Parse YAML to extract a JSON definition for the JSONB column.
 	defJSON := []byte(`{}`)
 	var parsed map[string]any

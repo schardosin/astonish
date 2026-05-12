@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/schardosin/astonish/pkg/apps"
@@ -16,7 +17,7 @@ func NewAppStore() store.AppStore {
 	return &AppStoreWrapper{}
 }
 
-func (w *AppStoreWrapper) Save(app any) (string, error) {
+func (w *AppStoreWrapper) Save(_ context.Context, app any) (string, error) {
 	va, ok := app.(*apps.VisualApp)
 	if !ok {
 		return "", fmt.Errorf("expected *apps.VisualApp, got %T", app)
@@ -24,15 +25,15 @@ func (w *AppStoreWrapper) Save(app any) (string, error) {
 	return apps.SaveApp(va)
 }
 
-func (w *AppStoreWrapper) Load(slug string) (any, error) {
+func (w *AppStoreWrapper) Load(_ context.Context, slug string) (any, error) {
 	return apps.LoadApp(slug)
 }
 
-func (w *AppStoreWrapper) Delete(slug string) error {
+func (w *AppStoreWrapper) Delete(_ context.Context, slug string) error {
 	return apps.DeleteApp(slug)
 }
 
-func (w *AppStoreWrapper) List() ([]store.AppListItem, error) {
+func (w *AppStoreWrapper) List(_ context.Context) ([]store.AppListItem, error) {
 	items, err := apps.ListApps()
 	if err != nil {
 		return nil, err

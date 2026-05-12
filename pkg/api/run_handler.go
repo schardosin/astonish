@@ -371,7 +371,7 @@ func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers 
 	// Query each store in order (team first, org second).
 	// First match wins — team servers override org servers of the same name.
 	for _, mcpStore := range mcpStores {
-		allServers, err := mcpStore.List()
+		allServers, err := mcpStore.List(context.TODO())
 		if err != nil {
 			slog.Warn("failed to list MCP servers from store for config build", "error", err)
 			continue
@@ -515,7 +515,7 @@ func getRequiredMCPServersFromStore(mcpStores []store.MCPServerStore, toolsNeede
 	serversNeeded := make(map[string]bool)
 
 	for _, mcpStore := range mcpStores {
-		allServers, err := mcpStore.List()
+		allServers, err := mcpStore.List(context.TODO())
 		if err != nil {
 			slog.Warn("failed to list MCP servers from store", "error", err)
 			continue
@@ -666,13 +666,13 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		var yamlContent string
 		var found bool
 		if svc.PersonalFlows != nil {
-			if y, err := svc.PersonalFlows.GetFlow(req.AgentID); err == nil {
+			if y, err := svc.PersonalFlows.GetFlow(r.Context(), req.AgentID); err == nil {
 				yamlContent = y
 				found = true
 			}
 		}
 		if !found && svc.Flows != nil {
-			if y, err := svc.Flows.GetFlow(req.AgentID); err == nil {
+			if y, err := svc.Flows.GetFlow(r.Context(), req.AgentID); err == nil {
 				yamlContent = y
 				found = true
 			}

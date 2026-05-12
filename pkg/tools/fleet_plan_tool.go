@@ -51,11 +51,11 @@ type fleetPlanRegistryStoreAdapter struct {
 	reg *fleet.PlanRegistry
 }
 
-func (a *fleetPlanRegistryStoreAdapter) GetPlan(key string) (any, bool) {
+func (a *fleetPlanRegistryStoreAdapter) GetPlan(_ context.Context, key string) (any, bool) {
 	return a.reg.GetPlan(key)
 }
 
-func (a *fleetPlanRegistryStoreAdapter) ListPlans() []store.FleetPlanSummary {
+func (a *fleetPlanRegistryStoreAdapter) ListPlans(_ context.Context) []store.FleetPlanSummary {
 	plans := a.reg.ListPlans()
 	result := make([]store.FleetPlanSummary, len(plans))
 	for i, p := range plans {
@@ -72,7 +72,7 @@ func (a *fleetPlanRegistryStoreAdapter) ListPlans() []store.FleetPlanSummary {
 	return result
 }
 
-func (a *fleetPlanRegistryStoreAdapter) Save(plan any) error {
+func (a *fleetPlanRegistryStoreAdapter) Save(_ context.Context, plan any) error {
 	p, ok := plan.(*fleet.FleetPlan)
 	if !ok {
 		return fmt.Errorf("expected *fleet.FleetPlan, got %T", plan)
@@ -80,19 +80,19 @@ func (a *fleetPlanRegistryStoreAdapter) Save(plan any) error {
 	return a.reg.Save(p)
 }
 
-func (a *fleetPlanRegistryStoreAdapter) Delete(key string) error {
+func (a *fleetPlanRegistryStoreAdapter) Delete(_ context.Context, key string) error {
 	return a.reg.Delete(key)
 }
 
-func (a *fleetPlanRegistryStoreAdapter) Count() int {
+func (a *fleetPlanRegistryStoreAdapter) Count(_ context.Context) int {
 	return a.reg.Count()
 }
 
-func (a *fleetPlanRegistryStoreAdapter) Reload() error {
+func (a *fleetPlanRegistryStoreAdapter) Reload(_ context.Context) error {
 	return a.reg.Reload()
 }
 
-func (a *fleetPlanRegistryStoreAdapter) GetPlanYAML(key string) (string, error) {
+func (a *fleetPlanRegistryStoreAdapter) GetPlanYAML(_ context.Context, key string) (string, error) {
 	dir := a.reg.Dir()
 	if dir == "" {
 		return "", fmt.Errorf("fleet plan directory not configured")
@@ -105,7 +105,7 @@ func (a *fleetPlanRegistryStoreAdapter) GetPlanYAML(key string) (string, error) 
 	return string(data), nil
 }
 
-func (a *fleetPlanRegistryStoreAdapter) SavePlanYAML(key string, yamlContent string) error {
+func (a *fleetPlanRegistryStoreAdapter) SavePlanYAML(_ context.Context, key string, yamlContent string) error {
 	var plan fleet.FleetPlan
 	if err := yaml.Unmarshal([]byte(yamlContent), &plan); err != nil {
 		return fmt.Errorf("invalid YAML: %w", err)
@@ -242,9 +242,9 @@ func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult
 	}
 
 	// Load the base fleet config
-	baseCfgAny, ok := templateStore.GetFleet(baseKey)
+	baseCfgAny, ok := templateStore.GetFleet(tc, baseKey)
 	if !ok {
-		summaries := templateStore.ListFleets()
+		summaries := templateStore.ListFleets(tc)
 		keys := make([]string, len(summaries))
 		for i, s := range summaries {
 			keys[i] = s.Key
@@ -382,7 +382,7 @@ func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult
 		UpdatedAt: now,
 	}
 
-	if err := planStore.Save(plan); err != nil {
+	if err := planStore.Save(tc, plan); err != nil {
 		return SaveFleetPlanResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to save fleet plan: %v", err),

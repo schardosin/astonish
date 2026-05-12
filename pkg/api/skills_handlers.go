@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -404,7 +405,7 @@ func listSkillsFromStore(skillStore store.SkillStore, scope string) ([]SkillList
 	if skillStore == nil {
 		return []SkillListItem{}, nil
 	}
-	pgSkills, err := skillStore.List()
+	pgSkills, err := skillStore.List(context.TODO())
 	if err != nil {
 		return nil, fmt.Errorf("load %s skills: %w", scope, err)
 	}
@@ -435,7 +436,7 @@ func listSkillsOrgWithBundled(orgStore store.SkillStore) ([]SkillListItem, error
 
 	// Org customs override bundled
 	if orgStore != nil {
-		pgSkills, err := orgStore.List()
+		pgSkills, err := orgStore.List(context.TODO())
 		if err != nil {
 			return nil, fmt.Errorf("load org skills: %w", err)
 		}
@@ -471,7 +472,7 @@ func listSkillsMerged(svc *store.Services) ([]SkillListItem, error) {
 
 	// Org customs override bundled
 	if svc.Skills != nil {
-		pgSkills, err := svc.Skills.List()
+		pgSkills, err := svc.Skills.List(context.TODO())
 		if err != nil {
 			slog.Warn("failed to load org skills", "error", err)
 		} else {
@@ -486,7 +487,7 @@ func listSkillsMerged(svc *store.Services) ([]SkillListItem, error) {
 
 	// Team customs override org and bundled
 	if svc.TeamSkills != nil {
-		teamSkills, err := svc.TeamSkills.List()
+		teamSkills, err := svc.TeamSkills.List(context.TODO())
 		if err != nil {
 			slog.Warn("failed to load team skills", "error", err)
 		} else {
@@ -515,7 +516,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in team", name))
 			return
 		}
-		skill, err := svc.TeamSkills.Get(name)
+		skill, err := svc.TeamSkills.Get(r.Context(), name)
 		if err != nil || skill == nil {
 			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in team", name))
 			return
@@ -535,7 +536,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in org", name))
 			return
 		}
-		skill, err := svc.Skills.Get(name)
+		skill, err := svc.Skills.Get(r.Context(), name)
 		if err != nil || skill == nil {
 			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in org", name))
 			return
@@ -553,7 +554,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 	default:
 		// No scope: try team → org → bundled
 		if svc.TeamSkills != nil {
-			if skill, err := svc.TeamSkills.Get(name); err == nil && skill != nil {
+			if skill, err := svc.TeamSkills.Get(r.Context(), name); err == nil && skill != nil {
 				respondJSON(w, http.StatusOK, SkillContentResponse{
 					Name:        skill.Name,
 					Description: skill.Description,
@@ -568,7 +569,7 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 		}
 
 		if svc.Skills != nil {
-			if skill, err := svc.Skills.Get(name); err == nil && skill != nil {
+			if skill, err := svc.Skills.Get(r.Context(), name); err == nil && skill != nil {
 				respondJSON(w, http.StatusOK, SkillContentResponse{
 					Name:        skill.Name,
 					Description: skill.Description,
@@ -624,7 +625,7 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 		Content:   rawFile,
 		CreatedBy: userID,
 	}
-	if err := targetStore.Save(skill); err != nil {
+	if err := targetStore.Save(r.Context(), skill); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save skill: "+err.Error())
 		return
 	}
@@ -635,7 +636,7 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 // createSkillPlatform creates a new skill in the given store.
 func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore store.SkillStore, name string) {
 	// Check if already exists in this store
-	existing, _ := targetStore.Get(name)
+	existing, _ := targetStore.Get(r.Context(), name)
 	if existing != nil {
 		respondError(w, http.StatusConflict, fmt.Sprintf("Skill %q already exists", name))
 		return
@@ -653,7 +654,7 @@ func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 		CreatedBy: userID,
 	}
 
-	if err := targetStore.Save(skill); err != nil {
+	if err := targetStore.Save(r.Context(), skill); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to create skill: "+err.Error())
 		return
 	}
@@ -664,7 +665,7 @@ func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 // deleteSkillPlatform deletes a skill from the given store.
 func deleteSkillPlatform(w http.ResponseWriter, targetStore store.SkillStore, name, scope string) {
 	// Verify it exists in this store
-	_, err := targetStore.Get(name)
+	_, err := targetStore.Get(context.TODO(), name)
 	if err != nil {
 		// Check if it's a bundled skill
 		bundled, _ := skills.LoadBundledSkills()
@@ -678,7 +679,7 @@ func deleteSkillPlatform(w http.ResponseWriter, targetStore store.SkillStore, na
 		return
 	}
 
-	if err := targetStore.Delete(name); err != nil {
+	if err := targetStore.Delete(context.TODO(), name); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to delete skill: "+err.Error())
 		return
 	}

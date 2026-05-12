@@ -108,7 +108,7 @@ func (e *Executor) executeRoutine(ctx context.Context, job *Job) (string, error)
 	// multi-tenant scheduler tick loop (per-team). This takes priority over
 	// the single-team FlowResolver closure.
 	if fs := store.FlowStoreFromContext(ctx); fs != nil {
-		yamlContent, err := fs.GetFlow(job.Payload.Flow)
+		yamlContent, err := fs.GetFlow(ctx, job.Payload.Flow)
 		if err != nil {
 			return "", fmt.Errorf("flow %q not found in team store: %w", job.Payload.Flow, err)
 		}

@@ -236,7 +236,7 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		CreatedBy: userID,
 	}
 
-	if err := mcpStore.Save(s); err != nil {
+	if err := mcpStore.Save(r.Context(), s); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save standard server: "+err.Error())
 		return
 	}
@@ -263,7 +263,7 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		bgCtx := context.Background()
 		discoveredTools := discoverMCPToolsForPlatform(bgCtx, srv.ID, servers)
 		if discoveredTools != nil {
-			if err := mcpStore.UpdateCachedTools(srv.ID, discoveredTools); err != nil {
+			if err := mcpStore.UpdateCachedTools(bgCtx, srv.ID, discoveredTools); err != nil {
 				slog.Warn("failed to update cached_tools for standard server", "server", srv.ID, "error", err)
 			}
 		}

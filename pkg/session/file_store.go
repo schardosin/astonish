@@ -394,7 +394,7 @@ func (s *FileStore) GetSessionMeta(sessionID string) (*SessionMeta, error) {
 }
 
 // SetSessionTitle updates the title in the index for a given session.
-func (s *FileStore) SetSessionTitle(sessionID, title string) error {
+func (s *FileStore) SetSessionTitle(_ context.Context, sessionID, title string) error {
 	return s.index.Update(sessionID, func(meta *SessionMeta) {
 		meta.Title = title
 	})

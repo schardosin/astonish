@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -65,7 +66,7 @@ func ResolveCredentials(plan *FleetPlan, credStore *credentials.Store) (map[stri
 // ResolveCredentialsPlatform resolves all credential references in a fleet plan
 // from a platform-mode store.CredentialStore (PG-backed). This is the platform
 // equivalent of ResolveCredentials which works with the file-based store.
-func ResolveCredentialsPlatform(plan *FleetPlan, cs store.CredentialStore) (map[string]*ResolvedCredential, error) {
+func ResolveCredentialsPlatform(ctx context.Context, plan *FleetPlan, cs store.CredentialStore) (map[string]*ResolvedCredential, error) {
 	if len(plan.Credentials) == 0 {
 		return nil, nil
 	}
@@ -78,7 +79,7 @@ func ResolveCredentialsPlatform(plan *FleetPlan, cs store.CredentialStore) (map[
 	var missing []string
 
 	for logicalName, storeName := range plan.Credentials {
-		rc := resolveOnePlatform(cs, logicalName, storeName)
+		rc := resolveOnePlatform(ctx, cs, logicalName, storeName)
 		if rc == nil {
 			missing = append(missing, fmt.Sprintf("%s (store: %q)", logicalName, storeName))
 			continue
@@ -143,9 +144,9 @@ func resolveOne(credStore *credentials.Store, logicalName, storeName string) *Re
 }
 
 // resolveOnePlatform attempts to resolve a single credential from a platform-mode store.
-func resolveOnePlatform(cs store.CredentialStore, logicalName, storeName string) *ResolvedCredential {
+func resolveOnePlatform(ctx context.Context, cs store.CredentialStore, logicalName, storeName string) *ResolvedCredential {
 	// Try named credential first
-	cred := cs.Get(storeName)
+	cred := cs.Get(ctx, storeName)
 	if cred != nil {
 		rc := &ResolvedCredential{
 			LogicalName: logicalName,
@@ -177,7 +178,7 @@ func resolveOnePlatform(cs store.CredentialStore, logicalName, storeName string)
 	}
 
 	// Fall back to flat secret
-	secret := cs.GetSecret(storeName)
+	secret := cs.GetSecret(ctx, storeName)
 	if secret != "" {
 		return &ResolvedCredential{
 			LogicalName: logicalName,

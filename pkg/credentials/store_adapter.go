@@ -1,6 +1,10 @@
 package credentials
 
-import "github.com/schardosin/astonish/pkg/store"
+import (
+	"context"
+
+	"github.com/schardosin/astonish/pkg/store"
+)
 
 // StoreAdapter wraps a store.CredentialStore to satisfy CredentialResolver.
 // It converts *store.Credential → *credentials.Credential so the substitution
@@ -18,7 +22,7 @@ func NewStoreAdapter(cs store.CredentialStore) CredentialResolver {
 }
 
 func (a *StoreAdapter) Get(name string) *Credential {
-	sc := a.inner.Get(name)
+	sc := a.inner.Get(context.Background(), name)
 	if sc == nil {
 		return nil
 	}
@@ -26,11 +30,11 @@ func (a *StoreAdapter) Get(name string) *Credential {
 }
 
 func (a *StoreAdapter) Resolve(name string) (headerKey, headerValue string, err error) {
-	return a.inner.Resolve(name)
+	return a.inner.Resolve(context.Background(), name)
 }
 
 func (a *StoreAdapter) Reload() error {
-	return a.inner.Reload()
+	return a.inner.Reload(context.Background())
 }
 
 // Compile-time check.
@@ -71,8 +75,8 @@ func (r *Redactor) HydrateFromStore(cs store.CredentialStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for name := range cs.List() {
-		sc := cs.Get(name)
+	for name := range cs.List(context.Background()) {
+		sc := cs.Get(context.Background(), name)
 		if sc == nil {
 			continue
 		}
@@ -81,8 +85,8 @@ func (r *Redactor) HydrateFromStore(cs store.CredentialStore) {
 	}
 
 	// Also register key-value secrets (provider keys, tokens, etc.)
-	for _, key := range cs.ListSecrets() {
-		val := cs.GetSecret(key)
+	for _, key := range cs.ListSecrets(context.Background()) {
+		val := cs.GetSecret(context.Background(), key)
 		if len(val) >= minSignatureLen {
 			r.addVariantsLocked("secret/"+key, "value", val)
 		}

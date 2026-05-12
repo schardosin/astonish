@@ -132,7 +132,7 @@ func (mts *MultiTenantScheduler) tickOrg(ctx context.Context, orgSlug string) {
 func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, orgStore store.OrgDataStore, teamSlug string) {
 	teamStore := orgStore.ForTeam(teamSlug)
 	schedulerStore := teamStore.ScheduledJobs()
-	jobs := schedulerStore.List()
+	jobs := schedulerStore.List(ctx)
 	now := time.Now()
 
 	for _, job := range jobs {
@@ -229,7 +229,7 @@ func (mts *MultiTenantScheduler) executeJob(
 	result, execErr := mts.executor.Execute(execCtx, job)
 
 	// Update runtime state in the team's store
-	stored := schedulerStore.Get(storeJob.ID)
+	stored := schedulerStore.Get(ctx, storeJob.ID)
 	if stored == nil {
 		return
 	}
@@ -252,7 +252,7 @@ func (mts *MultiTenantScheduler) executeJob(
 	// Compute next run
 	stored.NextRun = scheduler.ComputeNextRun(stored.Schedule.Cron, stored.Schedule.Timezone)
 
-	if err := schedulerStore.Update(stored); err != nil {
+	if err := schedulerStore.Update(ctx, stored); err != nil {
 		mts.logger.Printf("[scheduler] Failed to update job state for %q: %v", stored.Name, err)
 	}
 
@@ -295,7 +295,7 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 		for _, team := range teams {
 			teamStore := orgStore.ForTeam(team.Slug)
 			ss := teamStore.ScheduledJobs()
-			jobs := ss.List()
+			jobs := ss.List(ctx)
 			for _, job := range jobs {
 				if !job.Enabled {
 					continue
@@ -303,7 +303,7 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 				nextRun := scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
 				if nextRun != nil && (job.NextRun == nil || !nextRun.Equal(*job.NextRun)) {
 					job.NextRun = nextRun
-					_ = ss.Update(job)
+					_ = ss.Update(ctx, job)
 					totalJobs++
 				}
 			}
@@ -319,7 +319,7 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 // Used by the LLM tool bridge and API handlers when they need the daemon's
 // multi-tenant scheduler to perform execution.
 func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore store.SchedulerStore, teamStore store.TeamDataStore, jobID string) (string, error) {
-	storeJob := schedulerStore.Get(jobID)
+	storeJob := schedulerStore.Get(ctx, jobID)
 	if storeJob == nil {
 		return "", nil
 	}
@@ -361,7 +361,7 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 		storeJob.ConsecutiveFailures = 0
 	}
 	storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
-	_ = schedulerStore.Update(storeJob)
+	_ = schedulerStore.Update(ctx, storeJob)
 
 	return result, execErr
 }

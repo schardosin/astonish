@@ -405,7 +405,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			// Try store from request first (platform mode), then global registry
 			var wizardFound bool
 			if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-				if cfgAny, ok := svc.FleetTemplates.GetFleet(hint); ok {
+				if cfgAny, ok := svc.FleetTemplates.GetFleet(r.Context(), hint); ok {
 					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
 						eventData["wizard_description"] = cfg.PlanWizard.Description
 						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
@@ -550,9 +550,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				var saveErr error
 				// Platform mode: save to personal store first; personal mode: write to disk
 				if svc := store.FromRequest(r); svc != nil && svc.PersonalApps != nil {
-					savedPath, saveErr = svc.PersonalApps.Save(savedApp)
+					savedPath, saveErr = svc.PersonalApps.Save(r.Context(), savedApp)
 				} else if svc != nil && svc.Apps != nil {
-					savedPath, saveErr = svc.Apps.Save(savedApp)
+					savedPath, saveErr = svc.Apps.Save(r.Context(), savedApp)
 				} else {
 					savedPath, saveErr = apps.SaveApp(savedApp)
 				}
@@ -787,7 +787,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if reqSvc == nil || reqSvc.Scheduler == nil {
 				return "", fmt.Errorf("scheduler store not available")
 			}
-			storeJob := reqSvc.Scheduler.Get(jobID)
+			storeJob := reqSvc.Scheduler.Get(ctx, jobID)
 			if storeJob == nil {
 				return "", fmt.Errorf("job %q not found", jobID)
 			}

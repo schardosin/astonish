@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/schardosin/astonish/pkg/skills"
@@ -24,7 +25,7 @@ func NewSkillStore(userDir string, extraDirs []string, allowlist []string) store
 	}
 }
 
-func (w *SkillStoreWrapper) LoadAll() ([]store.Skill, error) {
+func (w *SkillStoreWrapper) LoadAll(_ context.Context) ([]store.Skill, error) {
 	loaded, err := skills.LoadSkills(w.userDir, w.extraDirs, "", w.allowlist)
 	if err != nil {
 		return nil, err
@@ -32,7 +33,7 @@ func (w *SkillStoreWrapper) LoadAll() ([]store.Skill, error) {
 	return convertSkills(loaded), nil
 }
 
-func (w *SkillStoreWrapper) Get(name string) (*store.Skill, error) {
+func (w *SkillStoreWrapper) Get(_ context.Context, name string) (*store.Skill, error) {
 	loaded, err := skills.LoadSkills(w.userDir, w.extraDirs, "", w.allowlist)
 	if err != nil {
 		return nil, err
@@ -46,19 +47,19 @@ func (w *SkillStoreWrapper) Get(name string) (*store.Skill, error) {
 	return nil, fmt.Errorf("skill %q not found", name)
 }
 
-func (w *SkillStoreWrapper) Save(_ *store.Skill) error {
+func (w *SkillStoreWrapper) Save(_ context.Context, _ *store.Skill) error {
 	// File-based skill saving is handled directly by the skills API handlers.
 	// This will be implemented properly in the PG store.
 	return fmt.Errorf("save not implemented in file store; use skills API handlers directly")
 }
 
-func (w *SkillStoreWrapper) Delete(_ string) error {
+func (w *SkillStoreWrapper) Delete(_ context.Context, _ string) error {
 	// File-based skill deletion is handled directly by the skills API handlers.
 	return fmt.Errorf("delete not implemented in file store; use skills API handlers directly")
 }
 
-func (w *SkillStoreWrapper) List() ([]store.Skill, error) {
-	return w.LoadAll()
+func (w *SkillStoreWrapper) List(_ context.Context) ([]store.Skill, error) {
+	return w.LoadAll(context.Background())
 }
 
 func convertSkills(in []skills.Skill) []store.Skill {

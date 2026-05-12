@@ -22,8 +22,7 @@ func (f *pgFlowStore) tableName() string {
 	return pgx.Identifier{f.schema, "flows"}.Sanitize()
 }
 
-func (f *pgFlowStore) ListAllFlows() []store.FlowSummary {
-	ctx := context.Background()
+func (f *pgFlowStore) ListAllFlows(ctx context.Context) []store.FlowSummary {
 	rows, err := f.pool.Query(ctx, fmt.Sprintf(
 		`SELECT name, type, definition, yaml_content FROM %s WHERE type = '' ORDER BY name`, f.tableName()),
 	)
@@ -57,11 +56,10 @@ func (f *pgFlowStore) ListAllFlows() []store.FlowSummary {
 	return flows
 }
 
-func (f *pgFlowStore) ListFlowsByType(types []string) []store.FlowSummary {
+func (f *pgFlowStore) ListFlowsByType(ctx context.Context, types []string) []store.FlowSummary {
 	if len(types) == 0 {
 		return nil
 	}
-	ctx := context.Background()
 	rows, err := f.pool.Query(ctx, fmt.Sprintf(
 		`SELECT name, type, definition, yaml_content FROM %s WHERE type = ANY($1) ORDER BY name`,
 		f.tableName()),
@@ -110,8 +108,7 @@ func (f *pgFlowStore) ListFlowsByType(types []string) []store.FlowSummary {
 	return flows
 }
 
-func (f *pgFlowStore) GetFlow(name string) (string, error) {
-	ctx := context.Background()
+func (f *pgFlowStore) GetFlow(ctx context.Context, name string) (string, error) {
 	var yamlContent *string
 	var defJSON []byte
 	err := f.pool.QueryRow(ctx, fmt.Sprintf(
@@ -136,9 +133,7 @@ func (f *pgFlowStore) GetFlow(name string) (string, error) {
 	return string(defJSON), nil
 }
 
-func (f *pgFlowStore) SaveFlow(name string, yamlContent string) error {
-	ctx := context.Background()
-
+func (f *pgFlowStore) SaveFlow(ctx context.Context, name string, yamlContent string) error {
 	// Parse YAML to extract type and a JSON definition for the JSONB column.
 	defJSON := []byte(`{}`)
 	flowType := ""
@@ -163,8 +158,7 @@ func (f *pgFlowStore) SaveFlow(name string, yamlContent string) error {
 	return err
 }
 
-func (f *pgFlowStore) DeleteFlow(name string) error {
-	ctx := context.Background()
+func (f *pgFlowStore) DeleteFlow(ctx context.Context, name string) error {
 	tag, err := f.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE name = $1`, f.tableName()),
 		name,
@@ -204,20 +198,20 @@ func (f *pgFlowStore) SaveFlowDefinition(ctx context.Context, name string, defin
 	return err
 }
 
-func (f *pgFlowStore) GetTaps() []store.FlowTap {
+func (f *pgFlowStore) GetTaps(ctx context.Context) []store.FlowTap {
 	// PG mode doesn't use taps — flows are stored directly in the database
 	return nil
 }
 
-func (f *pgFlowStore) AddTap(_ string, _ string) (string, error) {
+func (f *pgFlowStore) AddTap(ctx context.Context, _ string, _ string) (string, error) {
 	return "", fmt.Errorf("taps are not supported in platform mode; flows are stored in the database")
 }
 
-func (f *pgFlowStore) RemoveTap(_ string) error {
+func (f *pgFlowStore) RemoveTap(ctx context.Context, _ string) error {
 	return fmt.Errorf("taps are not supported in platform mode")
 }
 
-func (f *pgFlowStore) GetStoreDir() string {
+func (f *pgFlowStore) GetStoreDir(ctx context.Context) string {
 	// PG mode doesn't use a local store directory
 	return ""
 }

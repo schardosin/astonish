@@ -175,7 +175,7 @@ func saveCredential(ctx tool.Context, args SaveCredentialArgs) (SaveCredentialRe
 		}, nil
 	}
 
-	if err := cs.Set(args.Name, storeCred); err != nil {
+	if err := cs.Set(ctx, args.Name, storeCred); err != nil {
 		return SaveCredentialResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to save: %v", err),
@@ -229,7 +229,7 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 	}
 
 	// Reload to pick up changes made outside this process
-	cs.Reload() //nolint:errcheck
+	cs.Reload(ctx) //nolint:errcheck
 
 	// Check if we have a merged store for scope-aware listing
 	merged, isMerged := cs.(*store.MergedCredentialStore)
@@ -244,13 +244,13 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 		personalSecrets := make(map[string]bool)
 
 		if merged.Personal != nil {
-			personalCreds = merged.Personal.List()
-			for _, k := range merged.Personal.ListSecrets() {
+			personalCreds = merged.Personal.List(ctx)
+			for _, k := range merged.Personal.ListSecrets(ctx) {
 				personalSecrets[k] = true
 			}
 		}
 		if merged.Team != nil {
-			teamCreds = merged.Team.List()
+			teamCreds = merged.Team.List(ctx)
 		}
 
 		// Personal credentials first
@@ -281,7 +281,7 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 
 		// Personal secrets
 		if merged.Personal != nil {
-			for _, key := range merged.Personal.ListSecrets() {
+			for _, key := range merged.Personal.ListSecrets(ctx) {
 				if args.Filter != "" && !strings.Contains(key, args.Filter) {
 					continue
 				}
@@ -291,7 +291,7 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 
 		// Team secrets
 		if merged.Team != nil {
-			for _, key := range merged.Team.ListSecrets() {
+			for _, key := range merged.Team.ListSecrets(ctx) {
 				if args.Filter != "" && !strings.Contains(key, args.Filter) {
 					continue
 				}
@@ -304,7 +304,7 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 		}
 	} else {
 		// Personal mode: single store, no scope labels
-		creds := cs.List()
+		creds := cs.List(ctx)
 		credSummaries = make([]CredentialSummary, 0, len(creds))
 		for name, credType := range creds {
 			if args.Filter != "" && !strings.Contains(name, args.Filter) {
@@ -316,7 +316,7 @@ func listCredentials(ctx tool.Context, args ListCredentialsArgs) (ListCredential
 			})
 		}
 
-		secretKeys := cs.ListSecrets()
+		secretKeys := cs.ListSecrets(ctx)
 		secretSummaries = make([]SecretSummary, 0, len(secretKeys))
 		for _, key := range secretKeys {
 			if args.Filter != "" && !strings.Contains(key, args.Filter) {
@@ -374,7 +374,7 @@ func removeCredential(ctx tool.Context, args RemoveCredentialArgs) (RemoveCreden
 		return RemoveCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	if err := cs.Remove(args.Name); err != nil {
+	if err := cs.Remove(ctx, args.Name); err != nil {
 		return RemoveCredentialResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to remove: %v", err),
@@ -408,7 +408,7 @@ func testCredential(ctx tool.Context, args TestCredentialArgs) (TestCredentialRe
 		return TestCredentialResult{Status: "error", Message: "Name is required"}, nil
 	}
 
-	cred := cs.Get(args.Name)
+	cred := cs.Get(ctx, args.Name)
 	if cred == nil {
 		return TestCredentialResult{
 			Status:  "error",
@@ -419,7 +419,7 @@ func testCredential(ctx tool.Context, args TestCredentialArgs) (TestCredentialRe
 	switch cred.Type {
 	case store.CredOAuthClientCreds:
 		// Actually test the OAuth flow
-		_, _, err := cs.Resolve(args.Name)
+		_, _, err := cs.Resolve(ctx, args.Name)
 		if err != nil {
 			return TestCredentialResult{
 				Status:  "failed",
@@ -433,7 +433,7 @@ func testCredential(ctx tool.Context, args TestCredentialArgs) (TestCredentialRe
 
 	case store.CredOAuthAuthCode:
 		// Test by resolving (which triggers refresh if expired)
-		_, _, err := cs.Resolve(args.Name)
+		_, _, err := cs.Resolve(ctx, args.Name)
 		if err != nil {
 			return TestCredentialResult{
 				Status:  "failed",
@@ -489,9 +489,9 @@ func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCre
 	}
 
 	// Reload to pick up changes made outside this process
-	cs.Reload() //nolint:errcheck
+	cs.Reload(ctx) //nolint:errcheck
 
-	cred := cs.Get(args.Name)
+	cred := cs.Get(ctx, args.Name)
 	if cred == nil {
 		return ResolveCredentialResult{
 			Status:  "error",

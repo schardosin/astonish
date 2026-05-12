@@ -68,7 +68,7 @@ type MCPStatusResponse struct {
 func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: return status from DB store
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		servers, err := mcpStore.List()
+		servers, err := mcpStore.List(r.Context())
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
 			return
@@ -329,7 +329,7 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: refresh by starting the MCP process and discovering tools
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		server, err := mcpStore.Get(serverName)
+		server, err := mcpStore.Get(r.Context(), serverName)
 		if err != nil || server == nil {
 			respondError(w, http.StatusNotFound, "Server not found")
 			return
@@ -351,7 +351,7 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			bgCtx := context.Background()
 			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
 			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
 					slog.Warn("failed to update cached_tools in store", "server", serverName, "error", err)
 				}
 			}
@@ -577,7 +577,7 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 	// Collect servers: org first, team overrides
 	serverMap := make(map[string]json.RawMessage) // name -> cachedTools
 	if svc.MCPServers != nil {
-		orgServers, err := svc.MCPServers.List()
+		orgServers, err := svc.MCPServers.List(r.Context())
 		if err == nil {
 			for _, s := range orgServers {
 				if s.IsEnabled() && len(s.CachedTools) > 0 {
@@ -587,7 +587,7 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 		}
 	}
 	if svc.TeamMCPServers != nil {
-		teamServers, err := svc.TeamMCPServers.List()
+		teamServers, err := svc.TeamMCPServers.List(r.Context())
 		if err == nil {
 			for _, s := range teamServers {
 				if s.IsEnabled() && len(s.CachedTools) > 0 {

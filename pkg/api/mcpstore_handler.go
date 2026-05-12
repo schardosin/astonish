@@ -383,7 +383,7 @@ func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		CreatedBy: userID,
 	}
 
-	if err := mcpStore.Save(s); err != nil {
+	if err := mcpStore.Save(r.Context(), s); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
 		return
 	}
@@ -394,7 +394,7 @@ func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		bgCtx := context.Background()
 		discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
 		if discoveredTools != nil {
-			if err := mcpStore.UpdateCachedTools(serverName, discoveredTools); err != nil {
+			if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
 				slog.Warn("failed to update cached_tools after store install", "server", serverName, "error", err)
 			}
 		}

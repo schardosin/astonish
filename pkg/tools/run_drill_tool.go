@@ -103,7 +103,7 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	if fs := getEffectiveFlowStore(ctx); fs != nil {
 		// Platform mode: load from team-scoped flow store
 		var loadErr error
-		suite, loadErr = loadSuiteFromStore(fs, suiteName)
+		suite, loadErr = loadSuiteFromStore(fs, ctx, suiteName)
 		if loadErr != nil {
 			return RunDrillResult{
 				Status:  "error",
@@ -255,7 +255,7 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	if rptStore := getDrillReportStore(ctx); rptStore != nil {
 		reportJSON, jsonErr := json.Marshal(report)
 		if jsonErr == nil {
-			if storeErr := rptStore.SaveReport(&store.DrillReport{
+			if storeErr := rptStore.SaveReport(ctx, &store.DrillReport{
 				Suite:      suiteName,
 				Status:     report.Status,
 				Summary:    report.Summary,
@@ -279,8 +279,8 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 // loadSuiteFromStore constructs a LoadedSuite from the team-scoped FlowStore.
 // It fetches the suite YAML and all child drills, parsing them into the same
 // data structures used by the filesystem-based discovery path.
-func loadSuiteFromStore(fs store.FlowStore, suiteName string) (*adrill.LoadedSuite, error) {
-	suiteYAML, err := fs.GetFlow(suiteName)
+func loadSuiteFromStore(fs store.FlowStore, ctx context.Context, suiteName string) (*adrill.LoadedSuite, error) {
+	suiteYAML, err := fs.GetFlow(ctx, suiteName)
 	if err != nil {
 		return nil, fmt.Errorf("suite %q not found in store: %w", suiteName, err)
 	}
@@ -300,12 +300,12 @@ func loadSuiteFromStore(fs store.FlowStore, suiteName string) (*adrill.LoadedSui
 	}
 
 	// Find child drills that reference this suite
-	drillFlows := fs.ListFlowsByType([]string{"drill", "test"})
+	drillFlows := fs.ListFlowsByType(ctx, []string{"drill", "test"})
 	for _, d := range drillFlows {
 		if d.Suite != suiteName {
 			continue
 		}
-		drillYAML, dErr := fs.GetFlow(d.Name)
+		drillYAML, dErr := fs.GetFlow(ctx, d.Name)
 		if dErr != nil {
 			continue
 		}

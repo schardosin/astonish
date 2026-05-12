@@ -80,7 +80,7 @@ func ListFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 	// In platform mode, build a set of installed flow names from the team's DB.
 	var dbFlowNames map[string]bool
 	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		dbFlows := svc.Flows.ListAllFlows()
+		dbFlows := svc.Flows.ListAllFlows(r.Context())
 		dbFlowNames = make(map[string]bool, len(dbFlows))
 		for _, f := range dbFlows {
 			dbFlowNames[f.Name] = true
@@ -240,7 +240,7 @@ func InstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := svc.Flows.SaveFlow(flowName, string(content)); err != nil {
+		if err := svc.Flows.SaveFlow(r.Context(), flowName, string(content)); err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to save flow to database: "+err.Error())
 			return
 		}
@@ -278,7 +278,7 @@ func UninstallFlowHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: remove from team's database.
 	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		if err := svc.Flows.DeleteFlow(flowName); err != nil {
+		if err := svc.Flows.DeleteFlow(r.Context(), flowName); err != nil {
 			respondError(w, http.StatusBadRequest, "Failed to uninstall flow: "+err.Error())
 			return
 		}

@@ -120,7 +120,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	// Get the plan — try store from request first (platform mode), then global registry
 	var plan *fleet.FleetPlan
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
-		planAny, found := svc.FleetPlans.GetPlan(key)
+		planAny, found := svc.FleetPlans.GetPlan(r.Context(), key)
 		if !found {
 			http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
 			return

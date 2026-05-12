@@ -213,7 +213,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	if args.Name != "" {
 		var existing *SchedulerJob
 		if ss != nil {
-			if sj := ss.GetByName(args.Name); sj != nil {
+			if sj := ss.GetByName(ctx, args.Name); sj != nil {
 				existing = storeJobToToolJob(sj)
 			}
 		} else {
@@ -260,7 +260,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		if uid := store.UserIDFromContext(ctx); uid != "" {
 			storeJob.OwnerID = uid
 		}
-		if err := ss.Add(storeJob); err != nil {
+		if err := ss.Add(ctx, storeJob); err != nil {
 			return ScheduleJobResult{
 				Status:  "error",
 				Message: fmt.Sprintf("Failed to create job: %v", err),
@@ -270,7 +270,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		// Compute initial NextRun
 		if job.Enabled {
 			storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
-			_ = ss.Update(storeJob)
+			_ = ss.Update(ctx, storeJob)
 		}
 	} else {
 		// Personal mode: use global scheduler access
@@ -351,7 +351,7 @@ func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListSchedu
 	var jobs []*SchedulerJob
 	if ss != nil {
 		// Platform mode: read from context-injected team store
-		storeJobs := ss.List()
+		storeJobs := ss.List(ctx)
 		jobs = make([]*SchedulerJob, len(storeJobs))
 		for i, sj := range storeJobs {
 			jobs[i] = storeJobToToolJob(sj)
@@ -426,7 +426,7 @@ func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveSc
 	if jobID == "" && args.JobName != "" {
 		// Look up by name
 		if ss != nil {
-			if sj := ss.GetByName(args.JobName); sj != nil {
+			if sj := ss.GetByName(ctx, args.JobName); sj != nil {
 				jobID = sj.ID
 			}
 		} else {
@@ -451,7 +451,7 @@ func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveSc
 
 	var err error
 	if ss != nil {
-		err = ss.Remove(jobID)
+		err = ss.Remove(ctx, jobID)
 	} else {
 		err = schedulerAccessVar.RemoveJob(jobID)
 	}
@@ -494,17 +494,17 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 
 	if ss != nil {
 		// Platform mode: use context-injected store
-		return updateScheduledJobFromStore(ss, args)
+		return updateScheduledJobFromStore(ctx, ss, args)
 	}
 	// Personal mode: use global scheduler access
 	return updateScheduledJobFromAccess(args)
 }
 
-func updateScheduledJobFromStore(ss store.SchedulerStore, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
+func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
 	// Try by ID first, then by name
-	job := ss.Get(args.JobID)
+	job := ss.Get(ctx, args.JobID)
 	if job == nil {
-		job = ss.GetByName(args.JobID)
+		job = ss.GetByName(ctx, args.JobID)
 	}
 	if job == nil {
 		return UpdateScheduledJobResult{
@@ -552,7 +552,7 @@ func updateScheduledJobFromStore(ss store.SchedulerStore, args UpdateScheduledJo
 		job.NextRun = scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
 	}
 
-	if err := ss.Update(job); err != nil {
+	if err := ss.Update(ctx, job); err != nil {
 		return UpdateScheduledJobResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to update: %v", err),

@@ -24,20 +24,18 @@ func (a *pgOrgAppStore) tableName() string {
 	return pgx.Identifier{a.schema, "org_apps"}.Sanitize()
 }
 
-func (a *pgOrgAppStore) Save(app any) (string, error) {
-	ctx := context.Background()
-
+func (a *pgOrgAppStore) Save(ctx context.Context, app any) (string, error) {
 	data, err := json.Marshal(app)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal app: %w", err)
 	}
 
 	var fields struct {
-		Name        string    `json:"name"`
-		Description string    `json:"description"`
-		PromotedBy  string    `json:"promotedBy"`
-		PromotedFrom string   `json:"promotedFromTeam"`
-		CreatedAt   time.Time `json:"createdAt"`
+		Name         string    `json:"name"`
+		Description  string    `json:"description"`
+		PromotedBy   string    `json:"promotedBy"`
+		PromotedFrom string    `json:"promotedFromTeam"`
+		CreatedAt    time.Time `json:"createdAt"`
 	}
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return "", fmt.Errorf("failed to extract app fields: %w", err)
@@ -67,8 +65,7 @@ func (a *pgOrgAppStore) Save(app any) (string, error) {
 	return slug, nil
 }
 
-func (a *pgOrgAppStore) Load(slug string) (any, error) {
-	ctx := context.Background()
+func (a *pgOrgAppStore) Load(ctx context.Context, slug string) (any, error) {
 	row := a.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT slug, name, description, definition, promoted_by, promoted_from_team, created_at, updated_at
 		 FROM %s WHERE slug = $1`, a.tableName()),
@@ -112,8 +109,7 @@ func (a *pgOrgAppStore) Load(slug string) (any, error) {
 	return result, nil
 }
 
-func (a *pgOrgAppStore) Delete(slug string) error {
-	ctx := context.Background()
+func (a *pgOrgAppStore) Delete(ctx context.Context, slug string) error {
 	_, err := a.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE slug = $1`, a.tableName()),
 		slug,
@@ -121,8 +117,7 @@ func (a *pgOrgAppStore) Delete(slug string) error {
 	return err
 }
 
-func (a *pgOrgAppStore) List() ([]store.AppListItem, error) {
-	ctx := context.Background()
+func (a *pgOrgAppStore) List(ctx context.Context) ([]store.AppListItem, error) {
 	rows, err := a.pool.Query(ctx, fmt.Sprintf(
 		`SELECT slug, description, 1 AS version, updated_at
 		 FROM %s ORDER BY updated_at DESC`, a.tableName()),

@@ -369,8 +369,7 @@ func (s *pgSessionStore) AppendEvent(ctx context.Context, curSession adksession.
 // Astonish-specific SessionStore methods
 // =========================================================================
 
-func (s *pgSessionStore) ListSessionMetas(appName, userID string) ([]store.SessionMeta, error) {
-	ctx := context.Background()
+func (s *pgSessionStore) ListSessionMetas(ctx context.Context, appName, userID string) ([]store.SessionMeta, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE (parent_id IS NULL OR parent_id = '') ORDER BY updated_at DESC`, s.sessionsTable()),
@@ -393,8 +392,7 @@ func (s *pgSessionStore) ListSessionMetas(appName, userID string) ([]store.Sessi
 	return metas, rows.Err()
 }
 
-func (s *pgSessionStore) GetSessionMeta(sessionID string) (*store.SessionMeta, error) {
-	ctx := context.Background()
+func (s *pgSessionStore) GetSessionMeta(ctx context.Context, sessionID string) (*store.SessionMeta, error) {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
 		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE id = $1`, s.sessionsTable()),
@@ -407,8 +405,7 @@ func (s *pgSessionStore) GetSessionMeta(sessionID string) (*store.SessionMeta, e
 	return &m, nil
 }
 
-func (s *pgSessionStore) SetSessionTitle(sessionID, title string) error {
-	ctx := context.Background()
+func (s *pgSessionStore) SetSessionTitle(ctx context.Context, sessionID, title string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`UPDATE %s SET title = $2, updated_at = now() WHERE id = $1`, s.sessionsTable()),
 		sessionID, title,
@@ -416,8 +413,7 @@ func (s *pgSessionStore) SetSessionTitle(sessionID, title string) error {
 	return err
 }
 
-func (s *pgSessionStore) ListChildren(parentID string) ([]store.SessionMeta, error) {
-	ctx := context.Background()
+func (s *pgSessionStore) ListChildren(ctx context.Context, parentID string) ([]store.SessionMeta, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, title, message_count, parent_id, fleet_key, fleet_name, issue_number, repo, workspace_dir, created_at, updated_at
 		 FROM %s WHERE parent_id = $1 ORDER BY created_at`, s.sessionsTable()),
@@ -439,9 +435,7 @@ func (s *pgSessionStore) ListChildren(parentID string) ([]store.SessionMeta, err
 	return children, rows.Err()
 }
 
-func (s *pgSessionStore) AddSessionMeta(meta store.SessionMeta) error {
-	ctx := context.Background()
-
+func (s *pgSessionStore) AddSessionMeta(ctx context.Context, meta store.SessionMeta) error {
 	// user_id is UUID in PG; pass nil for empty/non-UUID values (system-initiated sessions).
 	var userIDParam interface{}
 	if meta.UserID != "" {
@@ -467,17 +461,16 @@ func (s *pgSessionStore) AddSessionMeta(meta store.SessionMeta) error {
 	return err
 }
 
-func (s *pgSessionStore) UpdateSessionMeta(sessionID string, fn func(*store.SessionMeta)) error {
-	meta, err := s.GetSessionMeta(sessionID)
+func (s *pgSessionStore) UpdateSessionMeta(ctx context.Context, sessionID string, fn func(*store.SessionMeta)) error {
+	meta, err := s.GetSessionMeta(ctx, sessionID)
 	if err != nil {
 		return err
 	}
 	fn(meta)
-	return s.AddSessionMeta(*meta)
+	return s.AddSessionMeta(ctx, *meta)
 }
 
-func (s *pgSessionStore) RemoveSessionMeta(sessionID string) error {
-	ctx := context.Background()
+func (s *pgSessionStore) RemoveSessionMeta(ctx context.Context, sessionID string) error {
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
 		`DELETE FROM %s WHERE id = $1`, s.sessionsTable()),
 		sessionID,
@@ -485,11 +478,10 @@ func (s *pgSessionStore) RemoveSessionMeta(sessionID string) error {
 	return err
 }
 
-func (s *pgSessionStore) AppendFleetEvent(sessionID string, event *adksession.Event) error {
+func (s *pgSessionStore) AppendFleetEvent(ctx context.Context, sessionID string, event *adksession.Event) error {
 	if event == nil {
 		return nil
 	}
-	ctx := context.Background()
 	eventData, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal fleet event: %w", err)
@@ -502,12 +494,11 @@ func (s *pgSessionStore) AppendFleetEvent(sessionID string, event *adksession.Ev
 	return err
 }
 
-func (s *pgSessionStore) ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error) {
-	return s.loadEvents(context.Background(), sessionID)
+func (s *pgSessionStore) ReadTranscriptEvents(ctx context.Context, appName, userID, sessionID string) ([]*adksession.Event, error) {
+	return s.loadEvents(ctx, sessionID)
 }
 
-func (s *pgSessionStore) ResolveSessionID(partial string) (string, error) {
-	ctx := context.Background()
+func (s *pgSessionStore) ResolveSessionID(ctx context.Context, partial string) (string, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id FROM %s WHERE id LIKE $1 || '%%' LIMIT 2`, s.sessionsTable()),
 		partial,
@@ -536,8 +527,7 @@ func (s *pgSessionStore) ResolveSessionID(partial string) (string, error) {
 	}
 }
 
-func (s *pgSessionStore) AllSessionIDs() map[string]bool {
-	ctx := context.Background()
+func (s *pgSessionStore) AllSessionIDs(ctx context.Context) map[string]bool {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`SELECT id FROM %s`, s.sessionsTable()))
 	if err != nil {
 		return nil
@@ -554,8 +544,7 @@ func (s *pgSessionStore) AllSessionIDs() map[string]bool {
 	return ids
 }
 
-func (s *pgSessionStore) CleanupExpiredSessions(maxAgeDays int) []string {
-	ctx := context.Background()
+func (s *pgSessionStore) CleanupExpiredSessions(ctx context.Context, maxAgeDays int) []string {
 	cutoff := time.Now().AddDate(0, 0, -maxAgeDays)
 
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
@@ -577,11 +566,10 @@ func (s *pgSessionStore) CleanupExpiredSessions(maxAgeDays int) []string {
 	return deleted
 }
 
-func (s *pgSessionStore) RedactSession(appName, userID, sessionID string) error {
+func (s *pgSessionStore) RedactSession(ctx context.Context, appName, userID, sessionID string) error {
 	if s.redactFn == nil {
 		return nil
 	}
-	ctx := context.Background()
 
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, event_data FROM %s WHERE session_id = $1`, s.eventsTable()),

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"time"
 
 	adksession "google.golang.org/adk/session"
@@ -34,29 +35,29 @@ type SessionStore interface {
 	adksession.Service
 
 	// Metadata operations.
-	ListSessionMetas(appName, userID string) ([]SessionMeta, error)
-	GetSessionMeta(sessionID string) (*SessionMeta, error)
-	SetSessionTitle(sessionID, title string) error
-	ListChildren(parentID string) ([]SessionMeta, error)
-	AddSessionMeta(meta SessionMeta) error
-	UpdateSessionMeta(sessionID string, fn func(*SessionMeta)) error
-	RemoveSessionMeta(sessionID string) error
+	ListSessionMetas(ctx context.Context, appName, userID string) ([]SessionMeta, error)
+	GetSessionMeta(ctx context.Context, sessionID string) (*SessionMeta, error)
+	SetSessionTitle(ctx context.Context, sessionID, title string) error
+	ListChildren(ctx context.Context, parentID string) ([]SessionMeta, error)
+	AddSessionMeta(ctx context.Context, meta SessionMeta) error
+	UpdateSessionMeta(ctx context.Context, sessionID string, fn func(*SessionMeta)) error
+	RemoveSessionMeta(ctx context.Context, sessionID string) error
 
 	// Transcript access.
-	ReadTranscriptEvents(appName, userID, sessionID string) ([]*adksession.Event, error)
+	ReadTranscriptEvents(ctx context.Context, appName, userID, sessionID string) ([]*adksession.Event, error)
 
 	// AppendFleetEvent persists a fleet message event to a session's transcript
 	// without requiring a full ADK session object. Used by fleet sessions which
 	// manage their own message loop outside the ADK runner.
-	AppendFleetEvent(sessionID string, event *adksession.Event) error
+	AppendFleetEvent(ctx context.Context, sessionID string, event *adksession.Event) error
 
 	// Partial ID resolution.
-	ResolveSessionID(partial string) (string, error)
+	ResolveSessionID(ctx context.Context, partial string) (string, error)
 
 	// Session lifecycle.
-	AllSessionIDs() map[string]bool
-	CleanupExpiredSessions(maxAgeDays int) []string
-	RedactSession(appName, userID, sessionID string) error
+	AllSessionIDs(ctx context.Context) map[string]bool
+	CleanupExpiredSessions(ctx context.Context, maxAgeDays int) []string
+	RedactSession(ctx context.Context, appName, userID, sessionID string) error
 
 	// SetRedactFunc sets the function used to redact sensitive content in session transcripts.
 	SetRedactFunc(fn func(string) string)

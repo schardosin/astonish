@@ -54,13 +54,13 @@ func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLook
 			if ss := store.SkillStoresFromContext(ctx); ss != nil {
 				// Team store takes highest priority
 				if ss.Team != nil {
-					if skill, err := ss.Team.Get(name); err == nil && skill != nil {
+					if skill, err := ss.Team.Get(ctx, name); err == nil && skill != nil {
 						return storeSkillToResult(skill), nil
 					}
 				}
 				// Then org store
 				if ss.Org != nil {
-					if skill, err := ss.Org.Get(name); err == nil && skill != nil {
+					if skill, err := ss.Org.Get(ctx, name); err == nil && skill != nil {
 						return storeSkillToResult(skill), nil
 					}
 				}
@@ -137,14 +137,14 @@ func collectAllSkillNames(bundledIndex map[string]*skills.Skill, ctx tool.Contex
 	if ctx != nil {
 		if ss := store.SkillStoresFromContext(ctx); ss != nil {
 			if ss.Org != nil {
-				if orgSkills, err := ss.Org.List(); err == nil {
+				if orgSkills, err := ss.Org.List(ctx); err == nil {
 					for _, s := range orgSkills {
 						nameSet[s.Name] = struct{}{}
 					}
 				}
 			}
 			if ss.Team != nil {
-				if teamSkills, err := ss.Team.List(); err == nil {
+				if teamSkills, err := ss.Team.List(ctx); err == nil {
 					for _, s := range teamSkills {
 						nameSet[s.Name] = struct{}{}
 					}

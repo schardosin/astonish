@@ -132,7 +132,7 @@ func HttpRequest(ctx tool.Context, args HttpRequestArgs) (HttpRequestResult, err
 		if cs == nil {
 			return HttpRequestResult{}, fmt.Errorf("credential store is not available — cannot resolve credential %q", args.Credential)
 		}
-		headerKey, headerValue, err := cs.Resolve(args.Credential)
+		headerKey, headerValue, err := cs.Resolve(ctx, args.Credential)
 		if err != nil {
 			return HttpRequestResult{}, fmt.Errorf("failed to resolve credential %q: %w", args.Credential, err)
 		}

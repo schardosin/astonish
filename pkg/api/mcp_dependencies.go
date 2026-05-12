@@ -208,7 +208,7 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
 		// Platform mode: check platform, org, and team DB stores
 		if svc.PlatformMCPServers != nil {
-			platformServers, err := svc.PlatformMCPServers.List()
+			platformServers, err := svc.PlatformMCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range platformServers {
 					installedServers[s.Name] = true
@@ -216,7 +216,7 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if svc.MCPServers != nil {
-			orgServers, err := svc.MCPServers.List()
+			orgServers, err := svc.MCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range orgServers {
 					installedServers[s.Name] = true
@@ -224,7 +224,7 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if svc.TeamMCPServers != nil {
-			teamServers, err := svc.TeamMCPServers.List()
+			teamServers, err := svc.TeamMCPServers.List(r.Context())
 			if err == nil {
 				for _, s := range teamServers {
 					installedServers[s.Name] = true

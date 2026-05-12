@@ -24,7 +24,7 @@ func newMockAppStore() *mockAppStore {
 	return &mockAppStore{apps: make(map[string]any)}
 }
 
-func (m *mockAppStore) Save(app any) (string, error) {
+func (m *mockAppStore) Save(_ context.Context, app any) (string, error) {
 	// Extract slug from the map or use a default
 	slug := "test-app"
 	if appMap, ok := app.(map[string]any); ok {
@@ -36,7 +36,7 @@ func (m *mockAppStore) Save(app any) (string, error) {
 	return slug, nil
 }
 
-func (m *mockAppStore) Load(slug string) (any, error) {
+func (m *mockAppStore) Load(_ context.Context, slug string) (any, error) {
 	app, ok := m.apps[slug]
 	if !ok {
 		return nil, &appNotFoundError{slug: slug}
@@ -44,12 +44,12 @@ func (m *mockAppStore) Load(slug string) (any, error) {
 	return app, nil
 }
 
-func (m *mockAppStore) Delete(slug string) error {
+func (m *mockAppStore) Delete(_ context.Context, slug string) error {
 	delete(m.apps, slug)
 	return nil
 }
 
-func (m *mockAppStore) List() ([]store.AppListItem, error) {
+func (m *mockAppStore) List(_ context.Context) ([]store.AppListItem, error) {
 	items := make([]store.AppListItem, 0, len(m.apps))
 	for name := range m.apps {
 		items = append(items, store.AppListItem{Name: name})
@@ -254,7 +254,7 @@ func TestAppPublishToTeam(t *testing.T) {
 	}
 
 	// Verify the app now exists in the team store
-	if _, err := teamApps.Load("weather-app"); err != nil {
+	if _, err := teamApps.Load(context.Background(), "weather-app"); err != nil {
 		t.Errorf("app should exist in team store after publish: %v", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestAppForkFromTeam(t *testing.T) {
 
 	// Verify the app now exists in the user's personal store
 	personalApps := orgStore.ForUser("user-1").(*mockPersonalDataStore).apps
-	if _, err := personalApps.Load("dashboard"); err != nil {
+	if _, err := personalApps.Load(context.Background(), "dashboard"); err != nil {
 		t.Errorf("app should exist in personal store after fork: %v", err)
 	}
 }
@@ -358,7 +358,7 @@ func TestAppForkFromOrg(t *testing.T) {
 
 	// Verify the app now exists in the user's personal store
 	personalApps := orgStore.ForUser("user-2").(*mockPersonalDataStore).apps
-	if _, err := personalApps.Load("company-tools"); err != nil {
+	if _, err := personalApps.Load(context.Background(), "company-tools"); err != nil {
 		t.Errorf("app should exist in personal store after fork: %v", err)
 	}
 }
@@ -425,7 +425,7 @@ func TestAppPromoteToOrg_Admin(t *testing.T) {
 	}
 
 	// Verify the app exists in org store
-	if _, err := orgStore.orgApps.Load("analytics"); err != nil {
+	if _, err := orgStore.orgApps.Load(context.Background(), "analytics"); err != nil {
 		t.Errorf("app should exist in org store after promotion: %v", err)
 	}
 }
@@ -522,7 +522,7 @@ func TestDeleteOrgApp_Admin(t *testing.T) {
 	}
 
 	// Verify deleted
-	if _, err := orgStore.orgApps.Load("old-app"); err == nil {
+	if _, err := orgStore.orgApps.Load(context.Background(), "old-app"); err == nil {
 		t.Error("app should have been deleted from org store")
 	}
 }
@@ -597,7 +597,7 @@ func TestAppSharingFullLifecycle(t *testing.T) {
 
 	// Verify user-2 has a personal copy
 	user2Personal := orgStore.ForUser("user-2").(*mockPersonalDataStore).apps
-	if _, err := user2Personal.Load("my-tool"); err != nil {
+	if _, err := user2Personal.Load(context.Background(), "my-tool"); err != nil {
 		t.Errorf("user-2 should have forked copy: %v", err)
 	}
 
@@ -617,7 +617,7 @@ func TestAppSharingFullLifecycle(t *testing.T) {
 	}
 
 	// Verify the app exists at org level
-	if _, err := orgStore.orgApps.Load("my-tool"); err != nil {
+	if _, err := orgStore.orgApps.Load(context.Background(), "my-tool"); err != nil {
 		t.Errorf("app should exist in org store after promotion: %v", err)
 	}
 
@@ -634,7 +634,7 @@ func TestAppSharingFullLifecycle(t *testing.T) {
 	}
 
 	user3Personal := orgStore.ForUser("user-3").(*mockPersonalDataStore).apps
-	if _, err := user3Personal.Load("my-tool"); err != nil {
+	if _, err := user3Personal.Load(context.Background(), "my-tool"); err != nil {
 		t.Errorf("user-3 should have forked copy from org: %v", err)
 	}
 }

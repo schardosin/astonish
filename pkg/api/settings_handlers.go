@@ -980,6 +980,14 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Having a default_provider explicitly set is a convenience, not a prerequisite.
 	setupRequired := len(configuredProviders) == 0
 
+	// In platform mode, the platform is already bootstrapped (DB connected,
+	// user authenticated). The setup wizard is not needed — providers can be
+	// configured through Settings at platform/org/team level.
+	svc := store.FromRequest(r)
+	if svc != nil && svc.Mode == store.ModePlatform {
+		setupRequired = false
+	}
+
 	respondJSON(w, http.StatusOK, SetupStatusResponse{
 		SetupRequired:       setupRequired,
 		HasDefaultProvider:  hasDefaultProvider,

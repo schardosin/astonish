@@ -559,8 +559,8 @@ func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg c
 	}
 	settings.Providers[instanceName] = provCopy
 	settings.DefaultProvider = instanceName
-	if model, ok := pCfg["model"]; ok && model != "" {
-		settings.DefaultModel = model
+	if cfg.General.DefaultModel != "" {
+		settings.DefaultModel = cfg.General.DefaultModel
 	}
 
 	if err := settingsStore.Save(ctx, settings); err != nil {

@@ -1051,6 +1051,11 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 // store.Middleware, resolving per-request tenant stores based on the
 // TenantContext set by PlatformAuthMiddleware.
 func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore) {
+	// Register health endpoints BEFORE middleware (they must be auth-exempt and fast).
+	router.HandleFunc("/api/healthz", HealthzHandler).Methods("GET")
+	router.HandleFunc("/api/readyz", ReadyzHandler).Methods("GET")
+	SetHealthPGStore(pg)
+
 	// Apply store middleware so every API handler can access Services via context.
 	if svc != nil {
 		router.Use(store.Middleware(svc))

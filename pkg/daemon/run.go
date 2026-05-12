@@ -46,6 +46,9 @@ type RunConfig struct {
 // writes a PID file, handles signals for graceful shutdown, and cleans up on exit.
 // This function blocks until a shutdown signal is received.
 func Run(cfg RunConfig) error {
+	// Determine runtime mode (default/api/worker) from ASTONISH_MODE env var.
+	daemonMode := config.GetDaemonMode()
+
 	// Load app config for provider/MCP setup
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -69,10 +72,23 @@ func Run(cfg RunConfig) error {
 	}
 
 	// Set up logging
+	// In api/worker modes, fall back to stdout if file logging is unavailable
+	// (stateless containers may not have a writable config directory).
 	logDir := appCfg.Daemon.GetLogDir()
-	logger, err := NewLogger(logDir + "/daemon.log")
-	if err != nil {
-		return fmt.Errorf("failed to initialize logger: %w", err)
+	var logger *Logger
+	if daemonMode != config.DaemonModeDefault {
+		var logErr error
+		logger, logErr = NewLogger(logDir + "/daemon.log")
+		if logErr != nil {
+			// Container mode: fall back to stdout (captured by orchestrator)
+			logger = NewStdoutLogger()
+		}
+	} else {
+		var logErr error
+		logger, logErr = NewLogger(logDir + "/daemon.log")
+		if logErr != nil {
+			return fmt.Errorf("failed to initialize logger: %w", logErr)
+		}
 	}
 	defer logger.Close()
 
@@ -80,17 +96,20 @@ func Run(cfg RunConfig) error {
 	log.SetOutput(logger)
 	log.SetFlags(0) // Logger adds its own timestamps
 
-	logger.Printf("Astonish daemon starting (port: %d, pid: %d)", port, os.Getpid())
+	logger.Printf("Astonish daemon starting (port: %d, pid: %d, mode: %s)", port, os.Getpid(), daemonMode)
 
-	// Write PID file
-	pidPath, err := DefaultPIDPath()
-	if err != nil {
-		return fmt.Errorf("failed to resolve PID path: %w", err)
+	// Write PID file (only in default mode — multi-instance modes skip it)
+	var pidPath string
+	if daemonMode == config.DaemonModeDefault {
+		pidPath, err = DefaultPIDPath()
+		if err != nil {
+			return fmt.Errorf("failed to resolve PID path: %w", err)
+		}
+		if err := WritePID(pidPath); err != nil {
+			return fmt.Errorf("failed to write PID file: %w", err)
+		}
+		defer RemovePID(pidPath)
 	}
-	if err := WritePID(pidPath); err != nil {
-		return fmt.Errorf("failed to write PID file: %w", err)
-	}
-	defer RemovePID(pidPath)
 
 	// Set up provider environment variables (credential store → config → env fallback)
 	configDir, err := config.GetConfigDir()
@@ -99,7 +118,13 @@ func Run(cfg RunConfig) error {
 	}
 	var credStore *credentials.Store
 	isPlatformMode := appCfg.Storage.Backend == "postgres"
-	if configDir != "" {
+
+	// In platform container modes (api/worker), skip the file-based credential store
+	// entirely when ASTONISH_MASTER_KEY is set. All secrets come from PG — the file
+	// store would only produce warnings about unwritable filesystem.
+	skipFileCredStore := isPlatformMode && daemonMode != config.DaemonModeDefault && os.Getenv("ASTONISH_MASTER_KEY") != ""
+
+	if configDir != "" && !skipFileCredStore {
 		if cs, csErr := credentials.Open(configDir); csErr == nil {
 			credStore = cs
 			config.SetInstalledSecretGetter(cs.GetSecret)
@@ -240,16 +265,19 @@ func Run(cfg RunConfig) error {
 	// This creates ~/.config/astonish/opencode.json from the current provider
 	// settings so that OpenCode (used as a delegate tool in fleet sessions)
 	// does not need independent configuration.
+	// Skipped in API mode — API pods don't run fleet delegates.
 	getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
-	if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
-		logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
-	} else {
-		tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
-		// Also set fleet project context vars so opencode_init uses the managed config
-		fleet.OpenCodeConfigPath = ocResult.ConfigPath
-		fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
-		fleet.OpenCodeModelFlag = ocResult.FullModelID()
-		logger.Printf("OpenCode config generated (%s, provider: %s, model: %s)", ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID)
+	if daemonMode != config.DaemonModeAPI {
+		if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
+			logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
+		} else {
+			tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
+			// Also set fleet project context vars so opencode_init uses the managed config
+			fleet.OpenCodeConfigPath = ocResult.ConfigPath
+			fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
+			fleet.OpenCodeModelFlag = ocResult.FullModelID()
+			logger.Printf("OpenCode config generated (%s, provider: %s, model: %s)", ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID)
+		}
 	}
 
 	// Initialize tools cache (personal mode only — platform mode reads from DB per-request)
@@ -351,7 +379,7 @@ func Run(cfg RunConfig) error {
 		}
 	}()
 
-	needsChatAgent := appCfg.Channels.IsChannelsEnabled()
+	needsChatAgent := appCfg.Channels.IsChannelsEnabled() && daemonMode != config.DaemonModeAPI
 
 	if needsChatAgent {
 		logger.Printf("Initializing ChatAgent for channels...")
@@ -726,8 +754,14 @@ func Run(cfg RunConfig) error {
 
 	// --- Link code store for code-based channel linking (platform mode) ---
 	// Allows users to link their Telegram/Slack by sending /link <code> to the bot.
+	// In platform mode, use PG-backed store for stateless horizontal scaling.
 	if pgStore != nil && channelMgr != nil {
-		linkStore := api.NewLinkCodeStore()
+		var linkStore api.LinkCodeBackend
+		if pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background()); poolErr == nil {
+			linkStore = api.NewPGLinkCodeBackend(pgstore.NewPGLinkCodeStore(pool))
+		} else {
+			linkStore = api.NewLinkCodeStore()
+		}
 		api.SetLinkCodeStore(linkStore)
 
 		// Set the link handler on the Telegram channel — bridges /link commands
@@ -888,6 +922,7 @@ func Run(cfg RunConfig) error {
 	}
 
 	// --- Initialize scheduler if enabled ---
+	// Skipped in API mode — only default and worker modes run the scheduler.
 	var sched *scheduler.Scheduler
 	var mtSched *MultiTenantScheduler
 	var schedExec *scheduler.Executor
@@ -897,7 +932,7 @@ func Run(cfg RunConfig) error {
 	// fleet session metadata is written to the file-based store instead.
 	var fleetSessionStore store.SessionStore
 
-	if appCfg.Scheduler.IsSchedulerEnabled() {
+	if appCfg.Scheduler.IsSchedulerEnabled() && daemonMode != config.DaemonModeAPI {
 		var jobStore scheduler.JobStore
 
 		if svc.Mode == store.ModePlatform && pgStore != nil {
@@ -994,8 +1029,9 @@ func Run(cfg RunConfig) error {
 	// Requires the scheduler to be initialized.
 	// In personal mode, also requires the plan registry to be initialized.
 	// In platform mode, fleet plans are read from the database.
+	// Skipped in API mode — only default and worker modes run fleet monitors.
 	schedulerAvailable := sched != nil || mtSched != nil
-	if schedulerAvailable {
+	if schedulerAvailable && daemonMode != config.DaemonModeAPI {
 		planRegAvailable := api.GetFleetPlanRegistry() != nil || pgStore != nil
 		if planRegAvailable {
 			// In platform mode without a personal-mode scheduler, create a
@@ -1231,6 +1267,30 @@ func Run(cfg RunConfig) error {
 		defer close(cleanupDone)
 		runPeriodicCleanup(ctx, appCfg, sharedFileStore, logger)
 	}()
+
+	// Start transient table cleanup in platform mode (device_sessions, pending_link_codes).
+	// Runs every 5 minutes — these tables have short TTLs (5-10 min) and expired rows
+	// accumulate if no cleanup runs. Safe to run on any/all pods (DELETE is idempotent).
+	if pgStore != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					bgCtx := context.Background()
+					pool, poolErr := pgStore.PoolManager().PlatformPool(bgCtx)
+					if poolErr != nil {
+						continue
+					}
+					_, _ = pool.Exec(bgCtx, `DELETE FROM device_sessions WHERE expires_at < now()`)
+					_, _ = pool.Exec(bgCtx, `DELETE FROM pending_link_codes WHERE expires_at < now()`)
+				}
+			}
+		}()
+	}
 
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption

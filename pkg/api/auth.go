@@ -254,6 +254,12 @@ func AuthMiddleware(am *AuthManager, next http.Handler) http.Handler {
 
 		path := r.URL.Path
 
+		// Health endpoints are always accessible (K8s probes)
+		if path == "/api/healthz" || path == "/api/readyz" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Auth endpoints are always accessible
 		if strings.HasPrefix(path, "/api/auth/") {
 			next.ServeHTTP(w, r)

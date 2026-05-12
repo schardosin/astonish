@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"strings"
@@ -8,12 +9,12 @@ import (
 	"time"
 )
 
-// LinkCodeStore manages one-time codes for channel linking.
-// Codes are generated when a user requests to link a channel (e.g., Telegram)
-// and consumed when the external channel sends the code back (proving ownership).
-type LinkCodeStore struct {
-	mu    sync.RWMutex
-	codes map[string]*PendingLink
+// LinkCodeBackend abstracts link code storage for channel linking flows.
+// In personal mode (or when PG is unavailable), the in-memory implementation is used.
+// In platform mode, the PG-backed implementation enables stateless horizontal scaling.
+type LinkCodeBackend interface {
+	Generate(ctx context.Context, userID, email, channel string) (string, error)
+	Consume(ctx context.Context, code string) *PendingLink
 }
 
 // PendingLink is a pending channel link request awaiting verification.
@@ -24,6 +25,15 @@ type PendingLink struct {
 	Channel   string // "telegram", "email:<address>"
 	CreatedAt time.Time
 	ExpiresAt time.Time
+}
+
+// LinkCodeStore is the in-memory implementation of LinkCodeBackend.
+// Manages one-time codes for channel linking.
+// Codes are generated when a user requests to link a channel (e.g., Telegram)
+// and consumed when the external channel sends the code back (proving ownership).
+type LinkCodeStore struct {
+	mu    sync.RWMutex
+	codes map[string]*PendingLink
 }
 
 // NewLinkCodeStore creates a new link code store with automatic cleanup.
@@ -44,8 +54,8 @@ func NewLinkCodeStore() *LinkCodeStore {
 
 // Generate creates a new link code for the given user/channel.
 // Returns the 6-character alphanumeric code.
-func (s *LinkCodeStore) Generate(userID, email, channel string) string {
-	code := generateCode()
+func (s *LinkCodeStore) Generate(_ context.Context, userID, email, channel string) (string, error) {
+	code := generateLinkCode()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -65,12 +75,12 @@ func (s *LinkCodeStore) Generate(userID, email, channel string) string {
 		CreatedAt: time.Now(),
 		ExpiresAt: time.Now().Add(5 * time.Minute),
 	}
-	return code
+	return code, nil
 }
 
 // Consume looks up a code, returns the pending link if valid, and removes it.
 // Returns nil if the code is invalid or expired.
-func (s *LinkCodeStore) Consume(code string) *PendingLink {
+func (s *LinkCodeStore) Consume(_ context.Context, code string) *PendingLink {
 	code = strings.ToUpper(strings.TrimSpace(code))
 
 	s.mu.Lock()
@@ -101,9 +111,12 @@ func (s *LinkCodeStore) cleanup() {
 	}
 }
 
-// generateCode creates a 6-character uppercase alphanumeric code.
-func generateCode() string {
+// generateLinkCode creates a 6-character uppercase alphanumeric code.
+func generateLinkCode() string {
 	b := make([]byte, 4) // 4 bytes = 8 hex chars, we take 6
 	_, _ = rand.Read(b)
 	return strings.ToUpper(hex.EncodeToString(b)[:6])
 }
+
+// Compile-time interface check
+var _ LinkCodeBackend = (*LinkCodeStore)(nil)

@@ -164,7 +164,18 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		api.RegisterUserRoutes(router, s.platformAuth)
 
 		// SSO/OIDC endpoints (device flow for CLI, browser redirect for Studio)
-		ssoHandler := api.NewSSOHandler(s.platformAuth)
+		// In platform mode, use PG-backed device sessions for stateless horizontal scaling.
+		var ssoHandler *api.SSOHandler
+		if s.pgStore != nil {
+			pool, poolErr := s.pgStore.PoolManager().PlatformPool(context.Background())
+			if poolErr == nil {
+				backend := api.NewPGDeviceSessionBackend(pgstore.NewPGDeviceSessionStore(pool))
+				ssoHandler = api.NewSSOHandlerWithPG(s.platformAuth, backend)
+			}
+		}
+		if ssoHandler == nil {
+			ssoHandler = api.NewSSOHandler(s.platformAuth)
+		}
 		api.SetPlatformSSOHandler(ssoHandler)
 		api.RegisterSSORoutes(router, ssoHandler)
 	} else if s.Auth != nil {

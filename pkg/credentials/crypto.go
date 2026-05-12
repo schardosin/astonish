@@ -106,11 +106,24 @@ func Decrypt(ciphertext, key []byte) ([]byte, error) {
 }
 
 // loadOrCreateKey reads the encryption key from disk, or generates a new one.
+// If the ASTONISH_MASTER_KEY environment variable is set, it takes precedence
+// over the file-based key (designed for containerized deployments where no
+// persistent volume is available).
 // The key file stores the key as hex-encoded text (64 hex chars = 32 bytes).
 // For backward compatibility, raw binary key files (exactly 32 bytes of
 // non-hex content) are auto-migrated to hex format on first load.
 // The key file is created with 0600 permissions (owner read/write only).
 func loadOrCreateKey(configDir string) ([]byte, error) {
+	// Priority 1: environment variable (for K8s / stateless containers)
+	if envKey := os.Getenv("ASTONISH_MASTER_KEY"); envKey != "" {
+		decoded, err := hex.DecodeString(strings.TrimSpace(envKey))
+		if err != nil || len(decoded) != keySize {
+			return nil, fmt.Errorf("ASTONISH_MASTER_KEY must be %d hex characters (got %d chars)", keySize*2, len(strings.TrimSpace(envKey)))
+		}
+		return decoded, nil
+	}
+
+	// Priority 2: file-based key
 	keyPath := filepath.Join(configDir, keyFileName)
 
 	data, err := os.ReadFile(keyPath)

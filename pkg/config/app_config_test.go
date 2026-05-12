@@ -144,3 +144,56 @@ func TestGetProviderType_KnownProviderTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestGetDaemonMode(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		expected string
+	}{
+		{"unset returns default", "", DaemonModeDefault},
+		{"explicit default", "default", DaemonModeDefault},
+		{"api mode", "api", DaemonModeAPI},
+		{"worker mode", "worker", DaemonModeWorker},
+		{"invalid returns default", "invalid", DaemonModeDefault},
+		{"empty string returns default", "", DaemonModeDefault},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envValue != "" {
+				t.Setenv("ASTONISH_MODE", tt.envValue)
+			} else {
+				t.Setenv("ASTONISH_MODE", "")
+			}
+			result := GetDaemonMode()
+			if result != tt.expected {
+				t.Errorf("GetDaemonMode() = %q, expected %q (env=%q)", result, tt.expected, tt.envValue)
+			}
+		})
+	}
+}
+
+func TestIsDaemonModeAPI(t *testing.T) {
+	t.Setenv("ASTONISH_MODE", "api")
+	if !IsDaemonModeAPI() {
+		t.Error("IsDaemonModeAPI() should return true when ASTONISH_MODE=api")
+	}
+
+	t.Setenv("ASTONISH_MODE", "worker")
+	if IsDaemonModeAPI() {
+		t.Error("IsDaemonModeAPI() should return false when ASTONISH_MODE=worker")
+	}
+}
+
+func TestIsDaemonModeWorker(t *testing.T) {
+	t.Setenv("ASTONISH_MODE", "worker")
+	if !IsDaemonModeWorker() {
+		t.Error("IsDaemonModeWorker() should return true when ASTONISH_MODE=worker")
+	}
+
+	t.Setenv("ASTONISH_MODE", "api")
+	if IsDaemonModeWorker() {
+		t.Error("IsDaemonModeWorker() should return false when ASTONISH_MODE=api")
+	}
+}

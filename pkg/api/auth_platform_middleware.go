@@ -86,6 +86,10 @@ func isAuthExemptPath(path string) bool {
 	if !strings.HasPrefix(path, "/api/") {
 		return true
 	}
+	// Health check endpoints — needed for Kubernetes probes (no auth).
+	if path == "/api/healthz" || path == "/api/readyz" {
+		return true
+	}
 	// Auth endpoints (register, login, refresh, setup-status, etc.)
 	if strings.HasPrefix(path, "/api/auth/") {
 		return true

@@ -21,7 +21,7 @@ import (
 )
 
 // --------------------------------------------------------------------------
-// Device session management (in-memory, TTL-based)
+// Device session management — interface + in-memory implementation
 // --------------------------------------------------------------------------
 
 // ssoPageBaseCSS is the shared CSS foundation for all server-rendered SSO pages.
@@ -88,9 +88,23 @@ type deviceSession struct {
 	CreatedAt time.Time
 }
 
-// deviceSessionStore is a thread-safe in-memory store for device sessions.
+// DeviceSessionBackend abstracts device session storage for SSO flows.
+// In personal mode (or when PG is unavailable), the in-memory implementation is used.
+// In platform mode, the PG-backed implementation enables stateless horizontal scaling.
+type DeviceSessionBackend interface {
+	Create(ctx context.Context, sess *deviceSession) error
+	GetByCode(ctx context.Context, code string) *deviceSession
+	GetByState(ctx context.Context, state string) *deviceSession
+	Complete(ctx context.Context, code string, sess *deviceSession) error
+}
+
+// --------------------------------------------------------------------------
+// In-memory device session store (default, personal mode)
+// --------------------------------------------------------------------------
+
+// memoryDeviceSessionStore is a thread-safe in-memory store for device sessions.
 // Sessions expire after 10 minutes.
-type deviceSessionStore struct {
+type memoryDeviceSessionStore struct {
 	mu       sync.RWMutex
 	sessions map[string]*deviceSession // keyed by device_code
 	byState  map[string]string         // state -> device_code mapping
@@ -98,8 +112,8 @@ type deviceSessionStore struct {
 
 const deviceSessionTTL = 10 * time.Minute
 
-func newDeviceSessionStore() *deviceSessionStore {
-	s := &deviceSessionStore{
+func newMemoryDeviceSessionStore() *memoryDeviceSessionStore {
+	s := &memoryDeviceSessionStore{
 		sessions: make(map[string]*deviceSession),
 		byState:  make(map[string]string),
 	}
@@ -108,14 +122,15 @@ func newDeviceSessionStore() *deviceSessionStore {
 	return s
 }
 
-func (s *deviceSessionStore) Create(sess *deviceSession) {
+func (s *memoryDeviceSessionStore) Create(_ context.Context, sess *deviceSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[sess.DeviceCode] = sess
 	s.byState[sess.State] = sess.DeviceCode
+	return nil
 }
 
-func (s *deviceSessionStore) GetByCode(code string) *deviceSession {
+func (s *memoryDeviceSessionStore) GetByCode(_ context.Context, code string) *deviceSession {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sess := s.sessions[code]
@@ -125,23 +140,24 @@ func (s *deviceSessionStore) GetByCode(code string) *deviceSession {
 	return sess
 }
 
-func (s *deviceSessionStore) GetByState(state string) *deviceSession {
+func (s *memoryDeviceSessionStore) GetByState(_ context.Context, state string) *deviceSession {
 	s.mu.RLock()
 	code, ok := s.byState[state]
 	s.mu.RUnlock()
 	if !ok {
 		return nil
 	}
-	return s.GetByCode(code)
+	return s.GetByCode(context.Background(), code)
 }
 
-func (s *deviceSessionStore) Complete(code string, sess *deviceSession) {
+func (s *memoryDeviceSessionStore) Complete(_ context.Context, code string, sess *deviceSession) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[code] = sess
+	return nil
 }
 
-func (s *deviceSessionStore) cleanup() {
+func (s *memoryDeviceSessionStore) cleanup() {
 	ticker := time.NewTicker(2 * time.Minute)
 	defer ticker.Stop()
 	for range ticker.C {
@@ -164,14 +180,24 @@ func (s *deviceSessionStore) cleanup() {
 // SSOHandler manages the SSO/OIDC endpoints.
 type SSOHandler struct {
 	pa             *PlatformAuth
-	deviceSessions *deviceSessionStore
+	deviceSessions DeviceSessionBackend
 }
 
 // NewSSOHandler creates a new SSO handler.
+// If pgPool is non-nil, uses PG-backed device sessions for stateless scaling.
+// Otherwise falls back to in-memory store.
 func NewSSOHandler(pa *PlatformAuth) *SSOHandler {
 	return &SSOHandler{
 		pa:             pa,
-		deviceSessions: newDeviceSessionStore(),
+		deviceSessions: newMemoryDeviceSessionStore(),
+	}
+}
+
+// NewSSOHandlerWithPG creates a new SSO handler with PG-backed device sessions.
+func NewSSOHandlerWithPG(pa *PlatformAuth, backend DeviceSessionBackend) *SSOHandler {
+	return &SSOHandler{
+		pa:             pa,
+		deviceSessions: backend,
 	}
 }
 
@@ -252,7 +278,10 @@ func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 		Status:     deviceStatusPending,
 		CreatedAt:  time.Now(),
 	}
-	h.deviceSessions.Create(sess)
+	if err := h.deviceSessions.Create(ctx, sess); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create device session")
+		return
+	}
 
 	// Build the verify URL (the URL the user opens in their browser)
 	scheme := "https"
@@ -280,7 +309,7 @@ func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 func (h *SSOHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	deviceCode := mux.Vars(r)["device_code"]
 
-	sess := h.deviceSessions.GetByCode(deviceCode)
+	sess := h.deviceSessions.GetByCode(r.Context(), deviceCode)
 	if sess == nil {
 		respondError(w, http.StatusBadRequest, "Invalid or expired device code. Please restart the login process.")
 		return
@@ -338,7 +367,7 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Look up device session by state
-	sess := h.deviceSessions.GetByState(state)
+	sess := h.deviceSessions.GetByState(ctx, state)
 	if sess == nil {
 		h.renderCallbackError(w, "Invalid or expired login session. Please restart the login process.")
 		return
@@ -598,7 +627,7 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	sess.TeamSlug = teamSlug
 	sess.AvailableOrgs = availableOrgs
 	sess.AvailableTeams = availableTeams
-	h.deviceSessions.Complete(sess.DeviceCode, sess)
+	_ = h.deviceSessions.Complete(ctx, sess.DeviceCode, sess)
 
 	// Web UI flow: set session cookies and redirect to the app
 	if sess.ClientType == "web" {
@@ -627,7 +656,7 @@ func (h *SSOHandler) handlePoll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess := h.deviceSessions.GetByCode(req.DeviceCode)
+	sess := h.deviceSessions.GetByCode(r.Context(), req.DeviceCode)
 	if sess == nil {
 		respondError(w, http.StatusGone, "device session expired or not found")
 		return
@@ -766,7 +795,7 @@ func (h *SSOHandler) discoverOIDCProvider(provider *store.OIDCProvider) (*oidc.P
 func (h *SSOHandler) failDeviceSession(sess *deviceSession, msg string) {
 	sess.Status = deviceStatusFailed
 	sess.ErrorMessage = msg
-	h.deviceSessions.Complete(sess.DeviceCode, sess)
+	_ = h.deviceSessions.Complete(context.Background(), sess.DeviceCode, sess)
 }
 
 // renderSSOBounce renders a tiny HTML page that performs a same-origin redirect to "/".

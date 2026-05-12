@@ -17,12 +17,12 @@ import (
 // the channel manager's allowlist.
 func buildTelegramLinkHandler(
 	pgStore *pgstore.PGStore,
-	linkStore *api.LinkCodeStore,
+	linkStore api.LinkCodeBackend,
 	channelMgr *channels.ChannelManager,
 ) func(ctx context.Context, senderID, senderUsername, code string) (bool, string) {
 	return func(ctx context.Context, senderID, senderUsername, code string) (bool, string) {
 		// Consume the code from the store
-		pending := linkStore.Consume(code)
+		pending := linkStore.Consume(ctx, code)
 		if pending == nil {
 			return false, "Invalid or expired code. Please generate a new one from Settings → Connected Channels."
 		}
@@ -81,12 +81,12 @@ func buildTelegramLinkHandler(
 // the channel manager's allowlist.
 func buildSlackLinkHandler(
 	pgStore *pgstore.PGStore,
-	linkStore *api.LinkCodeStore,
+	linkStore api.LinkCodeBackend,
 	channelMgr *channels.ChannelManager,
 ) func(ctx context.Context, senderID, senderName, code string) (bool, string) {
 	return func(ctx context.Context, senderID, senderName, code string) (bool, string) {
 		// Consume the code from the store
-		pending := linkStore.Consume(code)
+		pending := linkStore.Consume(ctx, code)
 		if pending == nil {
 			return false, "Invalid or expired code. Please generate a new one from Settings → Connected Channels."
 		}

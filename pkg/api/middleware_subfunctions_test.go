@@ -31,6 +31,10 @@ func TestIsAuthExemptPath(t *testing.T) {
 		{"/api/platform/init", true},
 		{"/api/platform/init/status", true},
 
+		// Health endpoints — exempt
+		{"/api/healthz", true},
+		{"/api/readyz", true},
+
 		// Migration endpoints — exempt
 		{"/api/migration/status", true},
 		{"/api/migration/run", true},

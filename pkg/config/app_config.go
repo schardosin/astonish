@@ -644,6 +644,47 @@ func (c *SchedulerConfig) IsSchedulerEnabled() bool {
 	return *c.Enabled
 }
 
+// Daemon mode constants control the runtime role of the binary.
+// ASTONISH_MODE env var selects which subsystems are active.
+const (
+	// DaemonModeDefault runs everything: HTTP + scheduler + channels + fleet.
+	// This is the standard single-instance mode (personal or platform).
+	DaemonModeDefault = "default"
+
+	// DaemonModeAPI runs only the HTTP server and chat execution.
+	// No scheduler, no channels, no fleet monitors, no PID file.
+	// Designed for horizontally-scaled Kubernetes API pods.
+	DaemonModeAPI = "api"
+
+	// DaemonModeWorker runs scheduler + channels + fleet monitors.
+	// HTTP is still active (health probes, internal APIs) but not externally exposed.
+	// Single replica. No PID file.
+	DaemonModeWorker = "worker"
+)
+
+// GetDaemonMode returns the runtime mode from the ASTONISH_MODE env var.
+// Returns DaemonModeDefault if unset or empty.
+// Valid values: "default", "api", "worker".
+func GetDaemonMode() string {
+	mode := os.Getenv("ASTONISH_MODE")
+	switch mode {
+	case DaemonModeAPI, DaemonModeWorker:
+		return mode
+	default:
+		return DaemonModeDefault
+	}
+}
+
+// IsDaemonModeAPI returns true when running in API-only mode (no background workers).
+func IsDaemonModeAPI() bool {
+	return GetDaemonMode() == DaemonModeAPI
+}
+
+// IsDaemonModeWorker returns true when running in worker mode (background processing).
+func IsDaemonModeWorker() bool {
+	return GetDaemonMode() == DaemonModeWorker
+}
+
 // BrowserAppConfig controls the built-in browser automation module.
 // All fields are optional — defaults are applied by browser.DefaultConfig().
 type BrowserAppConfig struct {

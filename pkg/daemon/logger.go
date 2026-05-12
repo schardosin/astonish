@@ -48,12 +48,23 @@ func NewLogger(logPath string) (*Logger, error) {
 	}, nil
 }
 
+// NewStdoutLogger creates a logger that writes to stdout.
+// Used in containerized modes (api/worker) where file-based logging may not be
+// available or desirable (container orchestrators capture stdout natively).
+func NewStdoutLogger() *Logger {
+	return &Logger{
+		file:     os.Stdout,
+		filePath: "", // no file rotation for stdout
+	}
+}
+
 // Write implements io.Writer for use with log.SetOutput or as stdout/stderr redirect.
 func (l *Logger) Write(p []byte) (n int, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.size >= maxLogSize {
+	// Skip rotation for stdout logger (no file path = no rotation)
+	if l.filePath != "" && l.size >= maxLogSize {
 		l.rotate()
 	}
 
@@ -69,11 +80,11 @@ func (l *Logger) Printf(format string, args ...any) {
 	fmt.Fprintf(l, "[%s] %s\n", timestamp, msg)
 }
 
-// Close closes the log file.
+// Close closes the log file. No-op for stdout logger.
 func (l *Logger) Close() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.file != nil {
+	if l.file != nil && l.filePath != "" {
 		return l.file.Close()
 	}
 	return nil

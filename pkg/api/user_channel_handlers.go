@@ -18,18 +18,18 @@ import (
 
 var (
 	linkCodeStoreMu sync.RWMutex
-	linkCodeStore   *LinkCodeStore
+	linkCodeStore   LinkCodeBackend
 )
 
 // SetLinkCodeStore registers the link code store for API handlers.
-func SetLinkCodeStore(s *LinkCodeStore) {
+func SetLinkCodeStore(s LinkCodeBackend) {
 	linkCodeStoreMu.Lock()
 	defer linkCodeStoreMu.Unlock()
 	linkCodeStore = s
 }
 
 // GetLinkCodeStore returns the active link code store.
-func GetLinkCodeStore() *LinkCodeStore {
+func GetLinkCodeStore() LinkCodeBackend {
 	linkCodeStoreMu.RLock()
 	defer linkCodeStoreMu.RUnlock()
 	return linkCodeStore
@@ -310,7 +310,11 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 	switch req.ChannelType {
 	case "telegram":
 		// Generate the code
-		code := store.Generate(user.ID, user.Email, "telegram")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, "telegram")
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to generate link code")
+			return
+		}
 
 		// Get bot username from channel manager
 		botUsername := ""
@@ -339,7 +343,11 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Generate the code
-		code := store.Generate(user.ID, user.Email, "email:"+emailAddr)
+		code, err := store.Generate(r.Context(), user.ID, user.Email, "email:"+emailAddr)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to generate link code")
+			return
+		}
 
 		// Send verification email
 		if err := mailer.Send(r.Context(), mailer.VerificationCode{
@@ -358,7 +366,11 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 
 	case "slack":
 		// Generate the code
-		code := store.Generate(user.ID, user.Email, "slack")
+		code, err := store.Generate(r.Context(), user.ID, user.Email, "slack")
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to generate link code")
+			return
+		}
 
 		// Get bot user ID from channel manager
 		botUserID := ""
@@ -408,7 +420,7 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Consume the code
-	pending := linkStore.Consume(code)
+	pending := linkStore.Consume(r.Context(), code)
 	if pending == nil {
 		respondError(w, http.StatusBadRequest, "invalid or expired code")
 		return

@@ -55,7 +55,6 @@ const StudioChat = lazy(() => import('./components/StudioChat'))
 const FleetView = lazy(() => import('./components/FleetView'))
 const DrillView = lazy(() => import('./components/DrillView'))
 const AppsView = lazy(() => import('./components/AppsView'))
-const CredentialsView = lazy(() => import('./components/CredentialsView'))
 
 function App() {
   const { theme, toggleTheme } = useTheme()
@@ -637,7 +636,9 @@ function App() {
     } else if (path.view === 'settings') {
       setView('settings')
     } else if (path.view === 'credentials') {
-      setView('credentials')
+      // Redirect legacy credentials route to settings/credentials
+      setView('settings')
+      replaceHash('/settings/credentials')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -1653,10 +1654,6 @@ layout:
               teamTab={settingsTeamTab}
               subsection={settingsSubsection}
             />
-            </Suspense>
-          ) : view === 'credentials' ? (
-            <Suspense fallback={null}>
-            <CredentialsView isPlatform={isPlatformMode} key={activeTeam || 'personal'} />
             </Suspense>
           ) : !selectedAgent ? (
              <div className="flex-1 flex items-center justify-center p-8 text-center" style={{ color: 'var(--text-muted)' }}>

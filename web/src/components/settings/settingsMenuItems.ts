@@ -1,7 +1,7 @@
 import {
   Settings, Key, Server, MessageSquare, Globe, Radio, Database,
   Brain, GitFork, Terminal, Wand2, Clock, Shield, Box,
-  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2
+  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound
 } from 'lucide-react'
 
 export interface SettingsMenuItem {
@@ -10,15 +10,19 @@ export interface SettingsMenuItem {
   icon: any
 }
 
-// User preferences — personal to each user
-export const PREFERENCE_ITEMS: SettingsMenuItem[] = [
+// Personal — visible to every user regardless of role
+export const PERSONAL_ITEMS: SettingsMenuItem[] = [
   { id: 'channels', label: 'Channels', icon: Radio },
+  { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
+  { id: 'credentials', label: 'Credentials', icon: KeyRound },
 ]
+
+// Legacy alias for backward compatibility
+export const PREFERENCE_ITEMS = PERSONAL_ITEMS
 
 // Team resources — shared within a team (platform mode)
 export const TEAM_ITEMS: SettingsMenuItem[] = [
   { id: 'team-members', label: 'Members', icon: Users },
-  { id: 'team-knowledge', label: 'Knowledge', icon: BookOpen },
   { id: 'team-providers', label: 'Providers', icon: Key },
   { id: 'team-skills', label: 'Skills', icon: Wand2 },
   { id: 'team-mcp', label: 'MCP Servers', icon: Server },
@@ -75,7 +79,7 @@ export const ADMIN_ITEMS = SYSTEM_ITEMS
 
 // All items combined (for personal mode settings page)
 export const ALL_MENU_ITEMS: SettingsMenuItem[] = [
-  ...PREFERENCE_ITEMS,
+  ...PERSONAL_ITEMS,
   ...RESOURCE_ITEMS,
   ...SYSTEM_ITEMS,
 ]

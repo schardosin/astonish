@@ -131,7 +131,11 @@ function parseHash(hash: string): RouterPath {
   }
 
   if (view === 'credentials') {
-    return { view: 'credentials', params: {} }
+    return { view: 'settings', params: { section: 'credentials' } }
+  }
+
+  if (view === 'knowledge') {
+    return { view: 'settings', params: { section: 'knowledge' } }
   }
 
   // Legacy: redirect team-mgmt URLs to new settings paths
@@ -212,10 +216,6 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
         return `/apps/${encodeURIComponent(params.subKey)}`
       }
       return '/apps'
-    case 'credentials':
-      return '/credentials'
-    case 'knowledge':
-      return '/knowledge'
     default:
       return '/chat'
   }

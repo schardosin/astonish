@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, lazy, Suspense, type FormEvent } from 'react'
 import { ChevronRight, Download, Plus, Trash2, UserPlus, AlertCircle, Loader2, Key } from 'lucide-react'
 import SettingsContent from './settings/SettingsContent'
-import { PREFERENCE_ITEMS, RESOURCE_ITEMS, TEAM_ITEMS, ORG_ITEMS, PLATFORM_ITEMS, SYSTEM_ITEMS } from './settings/settingsMenuItems'
+import { PERSONAL_ITEMS, RESOURCE_ITEMS, TEAM_ITEMS, ORG_ITEMS, PLATFORM_ITEMS, SYSTEM_ITEMS } from './settings/settingsMenuItems'
 import type { SettingsMenuItem } from './settings/settingsMenuItems'
 import { useSettingsData } from '../hooks/useSettingsData'
 import type { UpdateInfo, MCPServerConfig, SettingsData, ProviderInfo } from './settings/settingsApi'
@@ -1159,18 +1159,18 @@ export default function SettingsPage({
   const categories: MenuCategory[] = isPlatformMode
     ? isAdmin
       ? [
-          { label: 'Preferences', items: PREFERENCE_ITEMS },
+          { label: 'Personal', items: PERSONAL_ITEMS },
           { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: TEAM_ITEMS },
           { label: 'Organization', items: ORG_ITEMS },
           ...(isSuperadmin ? [{ label: 'Platform', items: PLATFORM_ITEMS }] : []),
           { label: 'System', items: platformSystemItems },
         ]
       : [
-          { label: 'Preferences', items: PREFERENCE_ITEMS },
+          { label: 'Personal', items: PERSONAL_ITEMS },
           { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: memberTeamItems },
         ]
     : [
-        { label: 'Preferences', items: PREFERENCE_ITEMS },
+        { label: 'Personal', items: PERSONAL_ITEMS },
         { label: 'Resources', items: RESOURCE_ITEMS },
         { label: 'System', items: SYSTEM_ITEMS },
       ]
@@ -1331,7 +1331,7 @@ export default function SettingsPage({
         </div>
 
         {/* Content */}
-        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
+        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' || activeSection === 'knowledge' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
           {/* Team sections */}
           {activeSection.startsWith('team-') && resolvedTeamSlug && selectedTeam && user && (
             <TeamContent
@@ -1414,7 +1414,7 @@ export default function SettingsPage({
 
           {/* System / preferences sections (delegated to SettingsContent) */}
           {isSystemSection && (
-            <div className={activeSection === 'mcp' ? 'h-full' : 'p-6'}>
+            <div className={activeSection === 'mcp' || activeSection === 'knowledge' ? 'h-full flex flex-col' : 'p-6'}>
               <SettingsContent
                 activeSection={activeSection}
                 settings={data.settings}
@@ -1431,6 +1431,8 @@ export default function SettingsPage({
                 theme={theme}
                 isPlatformMode={isPlatformMode}
                 isOrgAdmin={isAdmin}
+                user={user || undefined}
+                activeTeam={activeTeam}
               />
             </div>
           )}

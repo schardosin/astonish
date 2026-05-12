@@ -21,7 +21,9 @@ import GeneralSettings from './GeneralSettings'
 import ProvidersSettings from './ProvidersSettings'
 import MCPServersSettings from './MCPServersSettings'
 import TapsSettings from './TapsSettings'
-import { useState } from 'react'
+import { useState, lazy, Suspense } from 'react'
+
+const KnowledgeBrowser = lazy(() => import('../KnowledgeBrowser'))
 
 interface SettingsContentProps {
   activeSection: string
@@ -44,6 +46,9 @@ interface SettingsContentProps {
   // Platform mode flags
   isPlatformMode?: boolean
   isOrgAdmin?: boolean
+  // User context (for Knowledge browser)
+  user?: { id: string; email: string; display_name: string; role: string }
+  activeTeam?: string | null
 }
 
 /**
@@ -66,6 +71,8 @@ export default function SettingsContent({
   theme = 'dark',
   isPlatformMode = false,
   isOrgAdmin = false,
+  user,
+  activeTeam,
 }: SettingsContentProps) {
   const [saving, setSaving] = useState(false)
   const [, setSaveSuccess] = useState(false)
@@ -251,6 +258,14 @@ export default function SettingsContent({
       )}
       {activeSection === 'open_code' && fullConfig && (
         <OpenCodeSettings config={fullConfig.open_code} onSaved={onSaved} />
+      )}
+
+      {activeSection === 'knowledge' && user && (
+        <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+          <div className="flex-1 overflow-hidden p-6 flex flex-col">
+            <KnowledgeBrowser theme={theme as 'dark' | 'light'} user={user} activeTeam={activeTeam} />
+          </div>
+        </Suspense>
       )}
 
       {activeSection === 'credentials' && <CredentialsSettings isPlatform={isPlatformMode} />}

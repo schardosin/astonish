@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, KeyRound, User, Users } from 'lucide-react'
+import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, ShieldAlert, Crosshair, AppWindow, ChevronDown, LogOut, MoreHorizontal, Menu, X, User, Users } from 'lucide-react'
 
 interface SandboxStatus {
   sandboxEnabled: boolean
@@ -61,7 +61,6 @@ const secondaryNavItems: NavItem[] = [
   { view: 'fleet', label: 'Fleet', Icon: Rocket, gradient: 'linear-gradient(135deg, #06b6d4 0%, #0891b2 100%)' },
   { view: 'drill', label: 'Drill', Icon: Crosshair, gradient: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' },
   { view: 'apps', label: 'Apps', Icon: AppWindow, gradient: 'linear-gradient(135deg, #10b981 0%, #059669 100%)' },
-  { view: 'credentials', label: 'Credentials', Icon: KeyRound, gradient: 'linear-gradient(135deg, #8b5cf6 0%, #6d28d9 100%)' },
 ]
 
 // All core items combined (for mobile drawer — includes settings which lives in the icon area on desktop)

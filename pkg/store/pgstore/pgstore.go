@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -313,13 +314,15 @@ func (s *PGStore) DecommissionOrg(ctx context.Context, orgSlug string) error {
 	defer conn.Close(ctx)
 
 	dbName := OrgDBName(s.pgCfg.InstanceSuffix, orgSlug)
-	// Force disconnect all sessions before dropping
-	_, _ = conn.Exec(ctx, fmt.Sprintf(
-		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s'`,
-		dbName,
-	))
+	sanitizedName := pgx.Identifier{dbName}.Sanitize()
 
-	sql := fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, fmt.Sprintf(`"%s"`, dbName))
+	// Force disconnect all sessions before dropping
+	_, _ = conn.Exec(ctx,
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`,
+		dbName,
+	)
+
+	sql := fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, sanitizedName)
 	_, err = conn.Exec(ctx, sql)
 	return err
 }

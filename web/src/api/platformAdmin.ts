@@ -14,6 +14,14 @@ async function adminFetch(input: string, init?: Parameters<typeof fetch>[1]): Pr
   return fetch(input, { credentials: 'include', ...init, headers })
 }
 
+// Throw a descriptive error if the response is not ok.
+// Attempts to parse a JSON error body; falls back to the provided message.
+async function throwIfNotOk(res: Response, fallbackMsg: string): Promise<void> {
+  if (res.ok) return
+  const body = await res.json().catch(() => ({})) as Record<string, unknown>
+  throw new Error((body.error as string) || fallbackMsg)
+}
+
 // --- Types ---
 
 export interface AdminOrg {
@@ -75,10 +83,7 @@ export interface AdminUser {
 
 export async function listOrgs(): Promise<AdminOrg[]> {
   const res = await adminFetch(`${ADMIN_BASE}/orgs`, { credentials: 'include' })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to list organizations')
-  }
+  await throwIfNotOk(res, 'Failed to list organizations')
   const data = await res.json()
   return data.organizations
 }
@@ -94,10 +99,7 @@ export async function createOrg(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to create organization')
-  }
+  await throwIfNotOk(res, 'Failed to create organization')
   return res.json()
 }
 
@@ -105,10 +107,7 @@ export async function getOrg(slug: string): Promise<AdminOrgDetail> {
   const res = await adminFetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(slug)}`, {
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Organization not found')
-  }
+  await throwIfNotOk(res, 'Organization not found')
   return res.json()
 }
 
@@ -122,10 +121,7 @@ export async function updateOrg(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to update organization')
-  }
+  await throwIfNotOk(res, 'Failed to update organization')
   return res.json()
 }
 
@@ -134,20 +130,14 @@ export async function deleteOrg(slug: string): Promise<void> {
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete organization')
-  }
+  await throwIfNotOk(res, 'Failed to delete organization')
 }
 
 // --- User API ---
 
 export async function listUsers(): Promise<AdminUser[]> {
   const res = await adminFetch(`${ADMIN_BASE}/users`, { credentials: 'include' })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to list users')
-  }
+  await throwIfNotOk(res, 'Failed to list users')
   const data = await res.json()
   return data.users
 }
@@ -163,10 +153,7 @@ export async function createUser(params: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to create user')
-  }
+  await throwIfNotOk(res, 'Failed to create user')
   return res.json()
 }
 
@@ -174,10 +161,7 @@ export async function getUser(id: string): Promise<{ user: AdminUser; orgs: OrgM
   const res = await adminFetch(`${ADMIN_BASE}/users/${encodeURIComponent(id)}`, {
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'User not found')
-  }
+  await throwIfNotOk(res, 'User not found')
   return res.json()
 }
 
@@ -196,10 +180,7 @@ export async function updateUser(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to update user')
-  }
+  await throwIfNotOk(res, 'Failed to update user')
   return res.json()
 }
 
@@ -208,10 +189,7 @@ export async function deleteUser(id: string): Promise<void> {
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete user')
-  }
+  await throwIfNotOk(res, 'Failed to delete user')
 }
 
 export async function addUserToOrg(
@@ -224,10 +202,7 @@ export async function addUserToOrg(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(params),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to add user to org')
-  }
+  await throwIfNotOk(res, 'Failed to add user to org')
 }
 
 export async function removeUserFromOrg(userId: string, orgSlug: string): Promise<void> {
@@ -235,10 +210,7 @@ export async function removeUserFromOrg(userId: string, orgSlug: string): Promis
     `${ADMIN_BASE}/users/${encodeURIComponent(userId)}/orgs/${encodeURIComponent(orgSlug)}`,
     { method: 'DELETE', credentials: 'include' }
   )
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to remove user from org')
-  }
+  await throwIfNotOk(res, 'Failed to remove user from org')
 }
 
 // --- Channel Configuration Management ---
@@ -260,10 +232,7 @@ export interface ChannelFullInfo {
 
 export async function listChannels(): Promise<ChannelFullInfo[]> {
   const res = await adminFetch(`${ADMIN_BASE}/channels`, { credentials: 'include' })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to list channels')
-  }
+  await throwIfNotOk(res, 'Failed to list channels')
   return res.json()
 }
 
@@ -277,10 +246,7 @@ export async function saveChannel(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to save channel configuration')
-  }
+  await throwIfNotOk(res, 'Failed to save channel configuration')
   return res.json()
 }
 
@@ -289,10 +255,7 @@ export async function deleteChannel(channelType: string): Promise<{ message: str
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete channel')
-  }
+  await throwIfNotOk(res, 'Failed to delete channel')
   return res.json()
 }
 
@@ -309,10 +272,7 @@ export interface WebServiceInfo {
 
 export async function listWebServices(): Promise<WebServiceInfo[]> {
   const res = await adminFetch(`${ADMIN_BASE}/web-services`, { credentials: 'include' })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to list web services')
-  }
+  await throwIfNotOk(res, 'Failed to list web services')
   return res.json()
 }
 
@@ -326,10 +286,7 @@ export async function setWebServiceKey(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ api_key: apiKey }),
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to save web service key')
-  }
+  await throwIfNotOk(res, 'Failed to save web service key')
   return res.json()
 }
 
@@ -338,8 +295,5 @@ export async function deleteWebService(id: string): Promise<void> {
     method: 'DELETE',
     credentials: 'include',
   })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete web service')
-  }
+  await throwIfNotOk(res, 'Failed to delete web service')
 }

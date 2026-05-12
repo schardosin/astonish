@@ -23,6 +23,12 @@ import (
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
+// orgResolver is the subset of PGStore used for resolving org data stores.
+// Extracted as an interface to allow unit testing of team access checks.
+type orgResolver interface {
+	ForOrg(orgSlug string) (store.OrgDataStore, error)
+}
+
 // PlatformAuth manages authentication for platform (multi-tenant) mode.
 // It handles user registration, login, JWT token lifecycle, and automated
 // org/team provisioning for the first user.
@@ -31,16 +37,18 @@ type PlatformAuth struct {
 	authCfg      config.PlatformAuthConfig
 	pgStore      *pgstore.PGStore
 	storeCfg     config.StorageConfig
+	orgResolver  orgResolver // defaults to pgStore; override in tests
 }
 
 // NewPlatformAuth creates a new platform auth manager.
 func NewPlatformAuth(authCfg config.PlatformAuthConfig, pgStore *pgstore.PGStore, storeCfg config.StorageConfig) *PlatformAuth {
 	jwtSecret := authCfg.GetJWTSecret()
 	return &PlatformAuth{
-		jwt:      NewJWTIssuer(jwtSecret, authCfg.GetAccessTokenTTL(), authCfg.GetRefreshTokenTTL()),
-		authCfg:  authCfg,
-		pgStore:  pgStore,
-		storeCfg: storeCfg,
+		jwt:         NewJWTIssuer(jwtSecret, authCfg.GetAccessTokenTTL(), authCfg.GetRefreshTokenTTL()),
+		authCfg:     authCfg,
+		pgStore:     pgStore,
+		storeCfg:    storeCfg,
+		orgResolver: pgStore,
 	}
 }
 

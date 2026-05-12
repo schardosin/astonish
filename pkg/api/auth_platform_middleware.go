@@ -156,7 +156,7 @@ func (pa *PlatformAuth) checkTeamAccess(ctx context.Context, claims *PlatformCla
 	if teamSlug == "" || claims.Role == "owner" || claims.Role == "admin" {
 		return nil
 	}
-	orgDS, err := pa.pgStore.ForOrg(claims.OrgSlug)
+	orgDS, err := pa.orgResolver.ForOrg(claims.OrgSlug)
 	if err != nil {
 		slog.Warn("team membership check: failed to access org", "org", claims.OrgSlug, "err", err)
 		return fmt.Errorf("failed to verify team membership")

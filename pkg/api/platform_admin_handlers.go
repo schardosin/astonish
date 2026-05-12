@@ -15,17 +15,27 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// platformAdminGuard checks platform admin auth and resolves the PGStore.
+// Returns (admin, pgStore) or writes an HTTP error and returns (nil, nil).
+func platformAdminGuard(w http.ResponseWriter, r *http.Request) (*PlatformUser, *pgstore.PGStore) {
+	admin := RequirePlatformAdmin(w, r)
+	if admin == nil {
+		return nil, nil
+	}
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		respondError(w, http.StatusInternalServerError, "platform store not available")
+		return nil, nil
+	}
+	return admin, pgStore
+}
+
 // --- Organization Endpoints ---
 
 // PlatformAdminListOrgsHandler handles GET /api/platform/admin/orgs
 func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
-		return
-	}
-
-	pgStore := getPlatformPGStore()
+	_, pgStore := platformAdminGuard(w, r)
 	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -74,7 +84,8 @@ func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateOrgHandler handles POST /api/platform/admin/orgs
 func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -98,12 +109,6 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isValidOrgSlug(req.Slug) {
 		respondError(w, http.StatusBadRequest, "slug must contain only lowercase letters, numbers, hyphens, or underscores")
-		return
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -179,16 +184,12 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetOrgHandler handles GET /api/platform/admin/orgs/{slug}
 func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
 	slug := mux.Vars(r)["slug"]
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
-		return
-	}
 
 	ctx := r.Context()
 	org, err := pgStore.Organizations().GetBySlug(ctx, slug)
@@ -215,7 +216,8 @@ func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateOrgHandler handles PATCH /api/platform/admin/orgs/{slug}
 func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -226,12 +228,6 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -266,16 +262,12 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 // PlatformAdminDeleteOrgHandler handles DELETE /api/platform/admin/orgs/{slug}
 // Permanently deletes an org — only allowed if status is 'suspended'.
 func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
 	slug := mux.Vars(r)["slug"]
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
-		return
-	}
 
 	ctx := r.Context()
 	org, err := pgStore.Organizations().GetBySlug(ctx, slug)
@@ -308,13 +300,8 @@ func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminListUsersHandler handles GET /api/platform/admin/users
 func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
-		return
-	}
-
-	pgStore := getPlatformPGStore()
+	_, pgStore := platformAdminGuard(w, r)
 	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -356,7 +343,8 @@ func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateUserHandler handles POST /api/platform/admin/users
 func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -372,12 +360,6 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.Email == "" || req.DisplayName == "" {
 		respondError(w, http.StatusBadRequest, "email and display_name are required")
-		return
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -422,16 +404,12 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetUserHandler handles GET /api/platform/admin/users/{id}
 func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
 	userID := mux.Vars(r)["id"]
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
-		return
-	}
 
 	ctx := r.Context()
 	user, err := pgStore.Users().GetByID(ctx, userID)
@@ -450,8 +428,8 @@ func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateUserHandler handles PATCH /api/platform/admin/users/{id}
 func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
-	admin := RequirePlatformAdmin(w, r)
-	if admin == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -464,12 +442,6 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -527,8 +499,8 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminDeleteUserHandler handles DELETE /api/platform/admin/users/{id}
 func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
-	admin := RequirePlatformAdmin(w, r)
-	if admin == nil {
+	admin, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -537,12 +509,6 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	// Cannot delete yourself
 	if userID == admin.ID {
 		respondError(w, http.StatusBadRequest, "cannot delete your own account")
-		return
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
@@ -575,7 +541,8 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminAddUserToOrgHandler handles POST /api/platform/admin/users/{id}/orgs
 func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
@@ -596,12 +563,6 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Role == "" {
 		req.Role = "member"
-	}
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
-		return
 	}
 
 	ctx := r.Context()
@@ -652,19 +613,14 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminRemoveUserFromOrgHandler handles DELETE /api/platform/admin/users/{id}/orgs/{slug}
 func PlatformAdminRemoveUserFromOrgHandler(w http.ResponseWriter, r *http.Request) {
-	if RequirePlatformAdmin(w, r) == nil {
+	_, pgStore := platformAdminGuard(w, r)
+	if pgStore == nil {
 		return
 	}
 
 	vars := mux.Vars(r)
 	userID := vars["id"]
 	orgSlug := vars["slug"]
-
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
-		return
-	}
 
 	ctx := r.Context()
 	org, err := pgStore.Organizations().GetBySlug(ctx, orgSlug)

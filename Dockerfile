@@ -32,7 +32,8 @@ RUN rm -rf ./web/dist
 COPY --from=web-builder /app/web/dist ./web/dist
 
 # Build with embedded UI (CGO disabled for static binary)
-RUN CGO_ENABLED=0 go build -o astonish .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION}" -o astonish .
 
 # Stage 3: Final minimal image
 FROM alpine:3.19

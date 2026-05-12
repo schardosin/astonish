@@ -1,0 +1,164 @@
+name: Docker Images
+
+on:
+  # Manual trigger: build dev images from any branch for K8s testing
+  workflow_dispatch:
+
+  # Automatic trigger: fires after the Release workflow completes a version tag
+  workflow_run:
+    workflows: ["Release"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Determine context: dev (manual) vs release (automatic)
+  # --------------------------------------------------------------------------
+  prepare:
+    name: Determine build context
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'schardosin/astonish' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'v')))
+    outputs:
+      is_release: ${{ steps.ctx.outputs.is_release }}
+      version_tag: ${{ steps.ctx.outputs.version_tag }}
+      astonish_tags: ${{ steps.ctx.outputs.astonish_tags }}
+      incus_tags: ${{ steps.ctx.outputs.incus_tags }}
+    steps:
+      - name: Determine context
+        id: ctx
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+            echo "version_tag=dev" >> "$GITHUB_OUTPUT"
+            echo "astonish_tags=schardosin/astonish:dev" >> "$GITHUB_OUTPUT"
+            echo "incus_tags=schardosin/astonish-incus:dev" >> "$GITHUB_OUTPUT"
+          else
+            TAG="$WORKFLOW_HEAD_BRANCH"
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "version_tag=$TAG" >> "$GITHUB_OUTPUT"
+            ASTONISH_TAGS="schardosin/astonish:${TAG}"
+            ASTONISH_TAGS="${ASTONISH_TAGS},schardosin/astonish:latest"
+            echo "astonish_tags=$ASTONISH_TAGS" >> "$GITHUB_OUTPUT"
+            INCUS_TAGS="schardosin/astonish-incus:${TAG}"
+            INCUS_TAGS="${INCUS_TAGS},schardosin/astonish-incus:latest"
+            echo "incus_tags=$INCUS_TAGS" >> "$GITHUB_OUTPUT"
+          fi
+
+  # --------------------------------------------------------------------------
+  # Build and push schardosin/astonish (multi-arch)
+  # Uses the multi-stage Dockerfile which handles cross-compilation internally
+  # --------------------------------------------------------------------------
+  build-astonish:
+    name: Build and push astonish
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ needs.prepare.outputs.astonish_tags }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # --------------------------------------------------------------------------
+  # Build and push schardosin/astonish-incus (multi-arch)
+  # Cross-compiles Go binaries on the runner, then builds the Ubuntu-based image
+  # --------------------------------------------------------------------------
+  build-incus:
+    name: Build and push astonish-incus
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cross-compile Linux binaries
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          touch web/embed.go
+          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+
+          echo "Building linux/amd64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
+
+          echo "Building linux/arm64..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-arm64 .
+
+          ls -la astonish-linux-*
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: Dockerfile.incus
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ needs.prepare.outputs.incus_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

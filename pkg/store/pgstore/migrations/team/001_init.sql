@@ -1,7 +1,11 @@
--- Team schema initialization
+-- Team schema initialization (v1.0)
 -- Applied to: astonish_org_{slug} database, team_{team_slug} schema
 -- Contains: all team-scoped data tables
 -- Note: {{schema}} is replaced with the actual schema name at migration time
+
+-- ============================================================================
+-- Sessions and events
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS {{schema}}.sessions (
     id              TEXT PRIMARY KEY,
@@ -29,6 +33,10 @@ CREATE TABLE IF NOT EXISTS {{schema}}.session_events (
 CREATE INDEX IF NOT EXISTS idx_session_events_session
     ON {{schema}}.session_events(session_id);
 
+-- ============================================================================
+-- Memories (vector + BM25 hybrid search)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS {{schema}}.memories (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     created_by      UUID,
@@ -38,6 +46,7 @@ CREATE TABLE IF NOT EXISTS {{schema}}.memories (
     category        TEXT,
     source_path     TEXT,
     metadata        JSONB,
+    session_id      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -47,6 +56,9 @@ CREATE INDEX IF NOT EXISTS idx_memories_embedding
 
 CREATE INDEX IF NOT EXISTS idx_team_memories_tsv
     ON {{schema}}.memories USING GIN (tsv);
+
+CREATE INDEX IF NOT EXISTS idx_memories_session_id
+    ON {{schema}}.memories (session_id) WHERE session_id IS NOT NULL;
 
 -- Auto-update tsvector on INSERT/UPDATE
 CREATE OR REPLACE FUNCTION {{schema}}.memories_tsv_trigger() RETURNS trigger AS $$
@@ -61,6 +73,10 @@ CREATE TRIGGER trg_memories_tsv
     BEFORE INSERT OR UPDATE OF chunk_text ON {{schema}}.memories
     FOR EACH ROW EXECUTE FUNCTION {{schema}}.memories_tsv_trigger();
 
+-- ============================================================================
+-- Credentials (encrypted at rest)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS {{schema}}.credentials (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL UNIQUE,
@@ -70,6 +86,10 @@ CREATE TABLE IF NOT EXISTS {{schema}}.credentials (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================================
+-- Apps and app state
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS {{schema}}.apps (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -93,6 +113,10 @@ CREATE TABLE IF NOT EXISTS {{schema}}.app_state (
     PRIMARY KEY (app_id, user_id, key)
 );
 
+-- ============================================================================
+-- Flows (agent definitions / YAML workflows)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS {{schema}}.flows (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name            TEXT NOT NULL UNIQUE,
@@ -103,6 +127,10 @@ CREATE TABLE IF NOT EXISTS {{schema}}.flows (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================================
+-- Scheduled jobs
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS {{schema}}.scheduled_jobs (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -115,13 +143,17 @@ CREATE TABLE IF NOT EXISTS {{schema}}.scheduled_jobs (
                     CHECK (status IN ('active', 'paused', 'completed', 'failed')),
     last_run_at     TIMESTAMPTZ,
     next_run_at     TIMESTAMPTZ,
-    last_status     TEXT NOT NULL DEFAULT 'pending',  -- execution result: pending, success, failed
+    last_status     TEXT NOT NULL DEFAULT 'pending',
     last_error      TEXT NOT NULL DEFAULT '',
     consecutive_failures INT NOT NULL DEFAULT 0,
     created_by      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ============================================================================
+-- Fleet templates and plans
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS {{schema}}.fleet_templates (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -145,6 +177,16 @@ CREATE TABLE IF NOT EXISTS {{schema}}.fleet_plans (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS {{schema}}.fleet_monitor_state (
+    plan_key    TEXT PRIMARY KEY,
+    state       JSONB NOT NULL DEFAULT '{}',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ============================================================================
+-- Audit log, drill reports, skills, MCP servers
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS {{schema}}.team_audit_log (
     id              BIGSERIAL PRIMARY KEY,
     timestamp       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -161,7 +203,7 @@ CREATE TABLE IF NOT EXISTS {{schema}}.drill_reports (
     status          TEXT NOT NULL,
     summary         TEXT DEFAULT '',
     duration_ms     BIGINT DEFAULT 0,
-    report_data     JSONB NOT NULL,      -- full SuiteReport JSON
+    report_data     JSONB NOT NULL,
     started_at      TIMESTAMPTZ NOT NULL,
     finished_at     TIMESTAMPTZ NOT NULL,
     created_by      UUID,
@@ -193,7 +235,10 @@ CREATE TABLE IF NOT EXISTS {{schema}}.mcp_servers (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============================================================================
 -- Indexes
+-- ============================================================================
+
 CREATE INDEX IF NOT EXISTS idx_sessions_parent
     ON {{schema}}.sessions(parent_id) WHERE parent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_sessions_fleet

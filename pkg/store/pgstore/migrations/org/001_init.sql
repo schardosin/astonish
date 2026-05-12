@@ -1,9 +1,13 @@
--- Org database initialization (public schema)
+-- Org database initialization (v1.0)
 -- Applied to: astonish_org_{slug} database, public schema
--- Contains: org-wide shared tables — teams, shared memories, skills, apps, audit
+-- Contains: org-wide shared tables — teams, memories, skills, apps, audit
 
 -- Enable pgvector for embedding storage
 CREATE EXTENSION IF NOT EXISTS vector;
+
+-- ============================================================================
+-- Teams and memberships
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS teams (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -37,6 +41,10 @@ CREATE POLICY tm_isolation ON team_memberships
         )
     );
 
+-- ============================================================================
+-- Org-wide memories (promoted from team/personal)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS org_memories (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     chunk_text      TEXT NOT NULL,
@@ -47,6 +55,7 @@ CREATE TABLE IF NOT EXISTS org_memories (
     metadata        JSONB,
     promoted_by     UUID NOT NULL,
     promoted_from_team TEXT,
+    session_id      UUID,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -56,6 +65,9 @@ CREATE INDEX IF NOT EXISTS idx_org_memories_embedding
 
 CREATE INDEX IF NOT EXISTS idx_org_memories_tsv
     ON org_memories USING GIN (tsv);
+
+CREATE INDEX IF NOT EXISTS idx_org_memories_session_id
+    ON org_memories (session_id) WHERE session_id IS NOT NULL;
 
 -- Auto-update tsvector on INSERT/UPDATE
 CREATE OR REPLACE FUNCTION org_memories_tsv_trigger() RETURNS trigger AS $$
@@ -69,6 +81,10 @@ DROP TRIGGER IF EXISTS trg_org_memories_tsv ON org_memories;
 CREATE TRIGGER trg_org_memories_tsv
     BEFORE INSERT OR UPDATE OF chunk_text ON org_memories
     FOR EACH ROW EXECUTE FUNCTION org_memories_tsv_trigger();
+
+-- ============================================================================
+-- Org-wide skills, MCP servers, apps
+-- ============================================================================
 
 CREATE TABLE IF NOT EXISTS org_skills (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -107,6 +123,10 @@ CREATE TABLE IF NOT EXISTS org_apps (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============================================================================
+-- Audit log (append-only)
+-- ============================================================================
+
 CREATE TABLE IF NOT EXISTS org_audit_log (
     id          BIGSERIAL PRIMARY KEY,
     timestamp   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -119,11 +139,10 @@ CREATE TABLE IF NOT EXISTS org_audit_log (
     session_id  TEXT
 );
 
--- Audit log is append-only: the app role gets INSERT only (no UPDATE/DELETE).
--- This is enforced at the GRANT level in provision.go.
+-- ============================================================================
+-- Encryption keys (envelope encryption for credentials)
+-- ============================================================================
 
--- Encryption keys for envelope encryption of credentials.
--- Each org has a data encryption key (DEK) encrypted by a master key from env.
 CREATE TABLE IF NOT EXISTS org_encryption_keys (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     key_name    TEXT NOT NULL UNIQUE,          -- e.g., 'credential_key'
@@ -131,7 +150,10 @@ CREATE TABLE IF NOT EXISTS org_encryption_keys (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ============================================================================
 -- Indexes
+-- ============================================================================
+
 CREATE INDEX IF NOT EXISTS idx_team_memberships_team ON team_memberships(team_id);
 CREATE INDEX IF NOT EXISTS idx_team_memberships_user ON team_memberships(user_id);
 CREATE INDEX IF NOT EXISTS idx_org_audit_log_user ON org_audit_log(user_id);

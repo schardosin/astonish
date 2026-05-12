@@ -532,6 +532,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       console.error('Failed to load session history:', err)
       setMessages([])
       setSessionArtifacts([])
+      // Redirect to clean chat when session is invalid or deleted
+      changeSession(null)
     } finally {
       setIsLoadingHistory(false)
     }

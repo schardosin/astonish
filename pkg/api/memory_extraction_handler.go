@@ -59,13 +59,13 @@ type MemoryExtractionResponse struct {
 func MemoryExtractHandler(w http.ResponseWriter, r *http.Request) {
 	pu := GetPlatformUser(r)
 	if pu == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		respondError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
 
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session id required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session id required")
 		return
 	}
 
@@ -80,7 +80,7 @@ func MemoryExtractHandler(w http.ResponseWriter, r *http.Request) {
 
 	svc := store.FromRequest(r)
 	if svc == nil {
-		http.Error(w, "services not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "services not available")
 		return
 	}
 
@@ -116,12 +116,12 @@ func MemoryExtractHandler(w http.ResponseWriter, r *http.Request) {
 	// Get LLM from ChatManager
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, "LLM not available: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "LLM not available: "+err.Error())
 		return
 	}
 	llm := cm.components.LLM
 	if llm == nil {
-		http.Error(w, "LLM not configured", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "LLM not configured")
 		return
 	}
 
@@ -184,7 +184,7 @@ func MemoryExtractHandler(w http.ResponseWriter, r *http.Request) {
 	resp, err := callLLMForExtraction(r, llm, llmReq)
 	if err != nil {
 		slog.Error("memory extraction LLM call failed", "error", err, "session_id", sessionID)
-		http.Error(w, "LLM extraction failed: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "LLM extraction failed: "+err.Error())
 		return
 	}
 

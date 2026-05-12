@@ -299,7 +299,7 @@ func (cm *ChatManager) fileStore() *persistentsession.FileStore {
 func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	var req StudioChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -307,7 +307,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -319,7 +319,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -825,14 +825,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 
 	registry := getChatRunnerRegistry()
 	runner := registry.Get(sessionID)
 	if runner == nil {
-		http.Error(w, "no active runner for session", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "no active runner for session")
 		return
 	}
 
@@ -844,7 +844,7 @@ func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -856,7 +856,7 @@ func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 func StudioChatStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 

@@ -179,7 +179,7 @@ func (c *pgCredentialStore) SetSecret(ctx context.Context, key, value string) er
 		 VALUES ($1, 'secret', $2, $3, now())
 		 ON CONFLICT (name) DO UPDATE SET encrypted = $2, updated_at = now()`,
 		c.tableName()),
-		key, encrypted, nullableUserID(c.userID),
+		key, encrypted, nullableString(c.userID),
 	)
 	return err
 }
@@ -253,12 +253,4 @@ func (c *pgCredentialStore) ListSecrets(ctx context.Context) []string {
 func (c *pgCredentialStore) Reload(ctx context.Context) error {
 	// No-op for PG store — data is always read fresh from the database
 	return nil
-}
-
-// nullableUserID returns nil if s is empty, otherwise returns s for use as a nullable UUID parameter.
-func nullableUserID(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

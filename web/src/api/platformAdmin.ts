@@ -297,3 +297,70 @@ export async function deleteWebService(id: string): Promise<void> {
   })
   await throwIfNotOk(res, 'Failed to delete web service')
 }
+
+// --- OIDC Provider API ---
+
+export interface OIDCProvider {
+  id: string
+  org_id?: string
+  name: string
+  issuer_url: string
+  discovery_url?: string
+  client_id: string
+  client_secret?: string
+  scopes: string[]
+  team_claim?: string
+  enabled: boolean
+  created_at: string
+}
+
+export async function listOIDCProviders(): Promise<OIDCProvider[]> {
+  const res = await adminFetch(`${ADMIN_BASE}/oidc-providers`, { credentials: 'include' })
+  await throwIfNotOk(res, 'Failed to fetch OIDC providers')
+  const data = await res.json()
+  return data.providers || []
+}
+
+export async function createOIDCProvider(params: {
+  name: string
+  issuer_url: string
+  discovery_url?: string
+  client_id: string
+  client_secret: string
+  scopes?: string[]
+  team_claim?: string
+  enabled?: boolean
+}): Promise<OIDCProvider> {
+  const res = await adminFetch(`${ADMIN_BASE}/oidc-providers`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  await throwIfNotOk(res, 'Failed to create OIDC provider')
+  const data = await res.json()
+  return data.provider
+}
+
+export async function updateOIDCProvider(
+  id: string,
+  params: Partial<Omit<OIDCProvider, 'id' | 'created_at'>>
+): Promise<OIDCProvider> {
+  const res = await adminFetch(`${ADMIN_BASE}/oidc-providers/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  await throwIfNotOk(res, 'Failed to update OIDC provider')
+  const data = await res.json()
+  return data.provider
+}
+
+export async function deleteOIDCProvider(id: string): Promise<void> {
+  const res = await adminFetch(`${ADMIN_BASE}/oidc-providers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  })
+  await throwIfNotOk(res, 'Failed to delete OIDC provider')
+}

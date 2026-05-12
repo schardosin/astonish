@@ -29,13 +29,13 @@ func GetPlanActivator() *fleet.PlanActivator {
 // ActivateFleetPlanHandler handles POST /api/fleet-plans/{key}/activate.
 func ActivateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	if planActivatorVar == nil {
-		http.Error(w, "Plan activation system not initialized (requires daemon mode with scheduler)", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Plan activation system not initialized (requires daemon mode with scheduler)")
 		return
 	}
 
 	key := mux.Vars(r)["key"]
 	if err := planActivatorVar.Activate(r.Context(), key); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -49,13 +49,13 @@ func ActivateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 // DeactivateFleetPlanHandler handles POST /api/fleet-plans/{key}/deactivate.
 func DeactivateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	if planActivatorVar == nil {
-		http.Error(w, "Plan activation system not initialized (requires daemon mode with scheduler)", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Plan activation system not initialized (requires daemon mode with scheduler)")
 		return
 	}
 
 	key := mux.Vars(r)["key"]
 	if err := planActivatorVar.Deactivate(r.Context(), key); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -69,14 +69,14 @@ func DeactivateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 // FleetPlanStatusHandler handles GET /api/fleet-plans/{key}/status.
 func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 	if planActivatorVar == nil {
-		http.Error(w, "Plan activation system not initialized (requires daemon mode with scheduler)", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Plan activation system not initialized (requires daemon mode with scheduler)")
 		return
 	}
 
 	key := mux.Vars(r)["key"]
 	status, err := planActivatorVar.Status(key)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -105,7 +105,7 @@ func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 // left off.
 func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	if planActivatorVar == nil {
-		http.Error(w, "Plan activation system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Plan activation system not initialized")
 		return
 	}
 
@@ -113,7 +113,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	issueNumStr := mux.Vars(r)["issueNumber"]
 	issueNum, parseErr := strconv.Atoi(issueNumStr)
 	if parseErr != nil {
-		http.Error(w, "Invalid issue number", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid issue number")
 		return
 	}
 
@@ -122,24 +122,24 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		planAny, found := svc.FleetPlans.GetPlan(r.Context(), key)
 		if !found {
-			http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet plan %q not found", key))
 			return
 		}
 		var ok bool
 		plan, ok = planAny.(*fleet.FleetPlan)
 		if !ok {
-			http.Error(w, fmt.Sprintf("Fleet plan %q has unexpected type", key), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Fleet plan %q has unexpected type", key))
 			return
 		}
 	} else {
 		if fleetPlanRegistryVar == nil {
-			http.Error(w, "Fleet plan registry not available", http.StatusServiceUnavailable)
+			respondError(w, http.StatusServiceUnavailable, "Fleet plan registry not available")
 			return
 		}
 		var ok bool
 		plan, ok = fleetPlanRegistryVar.GetPlan(key)
 		if !ok {
-			http.Error(w, fmt.Sprintf("Fleet plan %q not found", key), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet plan %q not found", key))
 			return
 		}
 	}
@@ -147,14 +147,14 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset the retry count so the issue can be picked up again
 	monitor, err := planActivatorVar.RetryFailedIssue(key, issueNum)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	// Find the session ID from the monitor state
 	issueState := monitor.GetIssueState(issueNum)
 	if issueState == nil || issueState.SessionID == "" {
-		http.Error(w, "Could not find session ID for the issue", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Could not find session ID for the issue")
 		return
 	}
 	sessionID := issueState.SessionID
@@ -198,7 +198,7 @@ func RetryFleetIssueHandler(w http.ResponseWriter, r *http.Request) {
 	if recoverErr := RecoverFleetSession(context.Background(), recoverCfg, retrySessionStore, retryFleetStores); recoverErr != nil {
 		// Recovery failed; increment retry count
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("retry recovery failed: %v", recoverErr))
-		http.Error(w, fmt.Sprintf("Recovery failed: %v", recoverErr), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Recovery failed: %v", recoverErr))
 		return
 	}
 

@@ -34,19 +34,19 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 	proxyPath := "/" + vars["path"]
 
 	if containerName == "" {
-		http.Error(w, "container name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "container name is required")
 		return
 	}
 
 	// Connect to sandbox to verify container connectivity
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, "failed to connect to sandbox: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to connect to sandbox: "+err.Error())
 		return
 	}
 
 	if _, err := getCachedIP(client, containerName); err != nil {
-		http.Error(w, "failed to resolve container IP: "+err.Error(), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, "failed to resolve container IP: "+err.Error())
 		return
 	}
 
@@ -147,29 +147,29 @@ func BrowserVNCInfoHandler(w http.ResponseWriter, r *http.Request) {
 	containerName := vars["container"]
 
 	if containerName == "" {
-		http.Error(w, "container name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "container name is required")
 		return
 	}
 
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, "failed to connect to sandbox: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "failed to connect to sandbox: "+err.Error())
 		return
 	}
 
 	if !client.InstanceExists(containerName) {
-		http.Error(w, "container not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "container not found")
 		return
 	}
 
 	if !client.IsRunning(containerName) {
-		http.Error(w, "container is not running", http.StatusConflict)
+		respondError(w, http.StatusConflict, "container is not running")
 		return
 	}
 
 	ip, err := getCachedIP(client, containerName)
 	if err != nil {
-		http.Error(w, "failed to resolve container IP: "+err.Error(), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, "failed to resolve container IP: "+err.Error())
 		return
 	}
 

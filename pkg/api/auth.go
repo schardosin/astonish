@@ -198,7 +198,7 @@ func (am *AuthManager) handleGetCode(w http.ResponseWriter, r *http.Request) {
 func (am *AuthManager) handleCheckStatus(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	if code == "" {
-		http.Error(w, `{"error":"missing code parameter"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, `{"error":"missing code parameter"}`)
 		return
 	}
 
@@ -231,7 +231,7 @@ func (am *AuthManager) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		Code string `json:"code"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, `{"error":"invalid request body"}`)
 		return
 	}
 	msg, ok := am.AuthorizeCode(req.Code)

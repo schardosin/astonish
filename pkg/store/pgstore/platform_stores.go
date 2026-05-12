@@ -487,9 +487,3 @@ func scanOrg(row scannable) (*store.Organization, error) {
 	return o, nil
 }
 
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}

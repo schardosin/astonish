@@ -59,7 +59,7 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
 		metas, err := svc.PersonalSessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -78,7 +78,7 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -91,7 +91,7 @@ func StudioSessionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	metas, err := fs.ListSessionMetas(studioChatAppName, userID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -131,13 +131,13 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 		// Resolve which store has this session: personal first, then team.
 		sessionStore := resolveSessionStore(svc, sessionID)
 		if sessionStore == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
 
 		meta, err := sessionStore.GetSessionMeta(r.Context(), sessionID)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Session not found: %v", err))
 			return
 		}
 
@@ -165,7 +165,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 			SessionID: sessionID,
 		})
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to load session: %v", err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load session: %v", err))
 			return
 		}
 
@@ -187,20 +187,20 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	fs := cm.fileStore()
 	if fs == nil {
-		http.Error(w, "File store not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "File store not available")
 		return
 	}
 
 	// Get session metadata
 	meta, err := fs.GetSessionMeta(sessionID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, fmt.Sprintf("Session not found: %v", err))
 		return
 	}
 
@@ -242,7 +242,7 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID,
 	})
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to load session: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load session: %v", err))
 		return
 	}
 
@@ -308,19 +308,19 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil {
 		sessionStore := resolveSessionStore(svc, sessionID)
 		if sessionStore == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
 
 		meta, err := sessionStore.GetSessionMeta(r.Context(), sessionID)
 		if err != nil || meta == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
 
 		events, err := sessionStore.ReadTranscriptEvents(r.Context(), meta.AppName, meta.UserID, sessionID)
 		if err != nil {
-			http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to read transcript: "+err.Error())
 			return
 		}
 
@@ -361,19 +361,19 @@ func StudioSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode: read from file store.
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
-		http.Error(w, "Session storage not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Session storage not available")
 		return
 	}
 
 	meta, err := fileStore.GetSessionMeta(sessionID)
 	if err != nil || meta == nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Session not found")
 		return
 	}
 
 	events, err := fileStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
 	if err != nil {
-		http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to read transcript: "+err.Error())
 		return
 	}
 
@@ -424,7 +424,7 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	taskName := r.URL.Query().Get("task_name")
 	if taskName == "" {
-		http.Error(w, "task_name query parameter is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "task_name query parameter is required")
 		return
 	}
 
@@ -489,13 +489,13 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil {
 		sessionStore := resolveSessionStore(svc, sessionID)
 		if sessionStore == nil {
-			http.Error(w, "Session not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Session not found")
 			return
 		}
 
 		children, err := sessionStore.ListChildren(r.Context(), sessionID)
 		if err != nil {
-			http.Error(w, "Failed to list child sessions: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to list child sessions: "+err.Error())
 			return
 		}
 
@@ -532,19 +532,19 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	fs := cm.fileStore()
 	if fs == nil {
-		http.Error(w, "File store not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "File store not available")
 		return
 	}
 
 	children, err := fs.ListChildren(sessionID)
 	if err != nil {
-		http.Error(w, "Failed to list child sessions: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to list child sessions: "+err.Error())
 		return
 	}
 
@@ -582,7 +582,7 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if !validSessionID.MatchString(sessionID) {
-		http.Error(w, "invalid session ID", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid session ID")
 		return
 	}
 	userID := effectiveUserID(r)
@@ -619,7 +619,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			SessionID: sessionID,
 		})
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to delete session: %v", err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete session: %v", err))
 			return
 		}
 		sandbox.TryDestroySessionContainer(sessionID)
@@ -640,7 +640,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode: use ChatManager's file store.
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -660,7 +660,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID,
 	})
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to delete session: %v", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete session: %v", err))
 		return
 	}
 
@@ -717,14 +717,14 @@ func validateArtifactPath(rawPath string) (string, error) {
 func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
-		http.Error(w, "missing 'path' query parameter", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing 'path' query parameter")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("session")
 	cleanPath, err := validateArtifactPath(filePath)
 	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 	fileName := filepath.Base(cleanPath)
@@ -765,7 +765,7 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, "file not found", http.StatusNotFound)
+	respondError(w, http.StatusNotFound, "file not found")
 }
 
 // serveArtifactDownload writes content as a downloadable file response with
@@ -792,14 +792,14 @@ func serveArtifactDownload(w http.ResponseWriter, fileName string, content []byt
 func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
-		http.Error(w, "missing 'path' query parameter", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing 'path' query parameter")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("session")
 	cleanPath, err := validateArtifactPath(filePath)
 	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 
@@ -843,7 +843,7 @@ func StudioArtifactContentHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, "file not found", http.StatusNotFound)
+	respondError(w, http.StatusNotFound, "file not found")
 }
 
 // readFromSandboxContainer attempts to read a file from a sandbox container
@@ -898,14 +898,14 @@ func readFromSandboxContainer(sessionID, filePath string) ([]byte, bool) {
 func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	filePath := r.URL.Query().Get("path")
 	if filePath == "" {
-		http.Error(w, "missing 'path' query parameter", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing 'path' query parameter")
 		return
 	}
 
 	sessionID := r.URL.Query().Get("session")
 	cleanPath, err := validateArtifactPath(filePath)
 	if err != nil {
-		http.Error(w, "invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid path")
 		return
 	}
 
@@ -947,7 +947,7 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if mdContent == nil {
-		http.Error(w, "file not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "file not found")
 		return
 	}
 
@@ -974,13 +974,13 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 	case result := <-ch:
 		if result.err != nil {
 			slog.Error("PDF generation failed", "path", cleanPath, "error", result.err)
-			http.Error(w, fmt.Sprintf("PDF generation failed: %v", result.err), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("PDF generation failed: %v", result.err))
 			return
 		}
 		pdfData = result.data
 	case <-time.After(30 * time.Second):
 		slog.Error("PDF generation timed out after 30s", "path", cleanPath, "sessionID", sessionID)
-		http.Error(w, "PDF generation timed out", http.StatusGatewayTimeout)
+		respondError(w, http.StatusGatewayTimeout, "PDF generation timed out")
 		return
 	}
 	slog.Info("PDF generated via Chrome", "path", cleanPath, "size", len(pdfData))

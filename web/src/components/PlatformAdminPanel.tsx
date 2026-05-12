@@ -15,8 +15,14 @@ function TabFallback() {
   )
 }
 
-export default function PlatformAdminPanel({ theme, activeTab: externalTab, onTabChange: externalOnTabChange = undefined }) {
-  const [internalTab, setInternalTab] = useState('orgs')
+interface PlatformAdminPanelProps {
+  theme?: string
+  activeTab?: string
+  onTabChange?: (tab: string) => void
+}
+
+export default function PlatformAdminPanel({ theme, activeTab: externalTab, onTabChange: externalOnTabChange }: PlatformAdminPanelProps) {
+  const [internalTab, setInternalTab] = useState<string>('orgs')
   const activeTab = externalTab || internalTab
   const onTabChange = externalOnTabChange || setInternalTab
 

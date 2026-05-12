@@ -84,7 +84,7 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -137,7 +137,7 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -149,7 +149,7 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if server == nil {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
@@ -169,7 +169,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -181,12 +181,12 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if server == nil {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
 	if server.Config == nil {
-		http.Error(w, "Server has no configuration available", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server has no configuration available")
 		return
 	}
 
@@ -194,7 +194,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	var installReq MCPStoreInstallRequest
 	if r.Body != nil && r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&installReq); err != nil {
-			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 			return
 		}
 	}
@@ -247,7 +247,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Load current MCP config
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
-		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
 		return
 	}
 
@@ -261,7 +261,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save config
 	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
 		return
 	}
 
@@ -417,7 +417,7 @@ func GetMCPStoreTagsHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 

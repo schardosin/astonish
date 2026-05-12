@@ -46,16 +46,14 @@ type DistillFlowArgs struct {
 }
 
 type DistillFlowResult struct {
-	Status   string `json:"status"`
+	ToolResult
 	FlowName string `json:"flow_name,omitempty"`
-	Message  string `json:"message"`
 }
 
 func distillFlow(ctx tool.Context, args DistillFlowArgs) (DistillFlowResult, error) {
 	if distillAccessVar == nil {
 		return DistillFlowResult{
-			Status:  "error",
-			Message: "Flow distillation is not available.",
+			ToolResult: toolError("Flow distillation is not available."),
 		}, nil
 	}
 
@@ -70,8 +68,7 @@ func distillFlow(ctx tool.Context, args DistillFlowArgs) (DistillFlowResult, err
 	description, err := distillAccessVar.PreviewDistill(ctx, ds)
 	if err != nil {
 		return DistillFlowResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Nothing to distill: %v", err),
+			ToolResult: toolError("Nothing to distill: %v", err),
 		}, nil
 	}
 
@@ -82,8 +79,7 @@ func distillFlow(ctx tool.Context, args DistillFlowArgs) (DistillFlowResult, err
 	})
 	if distillErr != nil {
 		return DistillFlowResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Distillation failed: %v. Task identified: %s", distillErr, description),
+			ToolResult: toolError("Distillation failed: %v. Task identified: %s", distillErr, description),
 		}, nil
 	}
 
@@ -91,9 +87,8 @@ func distillFlow(ctx tool.Context, args DistillFlowArgs) (DistillFlowResult, err
 	flowName := extractFlowName(output.String())
 
 	return DistillFlowResult{
-		Status:   "success",
-		FlowName: flowName,
-		Message:  output.String(),
+		ToolResult: toolSuccess("%s", output.String()),
+		FlowName:   flowName,
 	}, nil
 }
 

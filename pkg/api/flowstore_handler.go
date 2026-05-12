@@ -121,7 +121,7 @@ func ListFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 func ListTapsHandler(w http.ResponseWriter, r *http.Request) {
 	store, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
@@ -148,12 +148,12 @@ func AddTapHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req AddTapRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	if req.URL == "" {
-		http.Error(w, "URL is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "URL is required")
 		return
 	}
 
@@ -161,19 +161,19 @@ func AddTapHandler(w http.ResponseWriter, r *http.Request) {
 	cleanURL := strings.TrimPrefix(strings.TrimPrefix(req.URL, "https://"), "http://")
 	cleanURL = strings.TrimSuffix(strings.TrimSuffix(cleanURL, ".git"), "/")
 	if !validTapURL.MatchString(cleanURL) {
-		http.Error(w, "Invalid tap URL format: must be a GitHub repository (e.g. owner/repo or github.com/owner/repo)", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid tap URL format: must be a GitHub repository (e.g. owner/repo or github.com/owner/repo)")
 		return
 	}
 
 	store, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
 	tapName, err := store.AddTap(cleanURL, req.Alias)
 	if err != nil {
-		http.Error(w, "Failed to add tap: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Failed to add tap: "+err.Error())
 		return
 	}
 
@@ -196,12 +196,12 @@ func RemoveTapHandler(w http.ResponseWriter, r *http.Request) {
 
 	store, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
 	if err := store.RemoveTap(name); err != nil {
-		http.Error(w, "Failed to remove tap: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Failed to remove tap: "+err.Error())
 		return
 	}
 
@@ -317,13 +317,13 @@ func UpdateFlowStoreHandler(w http.ResponseWriter, r *http.Request) {
 
 	store, err := flowstore.NewStore()
 	if err != nil {
-		http.Error(w, "Failed to initialize flow store: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to initialize flow store: "+err.Error())
 		return
 	}
 
 	// Force refresh ignoring cache
 	if err := store.ForceRefreshAllManifests(); err != nil {
-		http.Error(w, "Failed to refresh manifests: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to refresh manifests: "+err.Error())
 		return
 	}
 

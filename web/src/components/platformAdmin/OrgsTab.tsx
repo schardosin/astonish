@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } from 'react'
 import { Plus, Trash2, Loader2, Pause, Play, Search } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
+import type { AdminOrg } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, StatusBadge, gradientAmber, inputStyle } from './shared'
 
 // ---------------------------------------------------------------------------
@@ -8,12 +9,12 @@ import { InlineError, InlineSuccess, StatusBadge, gradientAmber, inputStyle } fr
 // ---------------------------------------------------------------------------
 
 export default function OrgsTab() {
-  const [orgs, setOrgs] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [showCreate, setShowCreate] = useState(false)
-  const [filter, setFilter] = useState('')
+  const [orgs, setOrgs] = useState<AdminOrg[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string>('')
+  const [success, setSuccess] = useState<string>('')
+  const [showCreate, setShowCreate] = useState<boolean>(false)
+  const [filter, setFilter] = useState<string>('')
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -21,7 +22,7 @@ export default function OrgsTab() {
       const data = await adminApi.listOrgs()
       setOrgs(data)
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     } finally {
       setLoading(false)
     }
@@ -44,30 +45,30 @@ export default function OrgsTab() {
     o.slug.toLowerCase().includes(filter.toLowerCase())
   )
 
-  const handleSuspend = async (slug) => {
+  const handleSuspend = async (slug: string) => {
     if (!confirm(`Suspend organization "${slug}"? Members will lose access.`)) return
     try {
       await adminApi.updateOrg(slug, { status: 'suspended' })
       setSuccess(`Organization "${slug}" suspended`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
-  const handleReactivate = async (slug) => {
+  const handleReactivate = async (slug: string) => {
     try {
       await adminApi.updateOrg(slug, { status: 'active' })
       setSuccess(`Organization "${slug}" reactivated`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
-  const handleDelete = async (slug) => {
+  const handleDelete = async (slug: string) => {
     if (!confirm(`PERMANENTLY DELETE organization "${slug}"? This cannot be undone.`)) return
     try {
       await adminApi.deleteOrg(slug)
       setSuccess(`Organization "${slug}" deleted`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
   return (
@@ -90,7 +91,7 @@ export default function OrgsTab() {
               type="text"
               placeholder="Filter organizations..."
               value={filter}
-              onChange={e => setFilter(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFilter(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-xl text-sm outline-none"
               style={inputStyle}
             />
@@ -181,14 +182,21 @@ export default function OrgsTab() {
 // Create Org Modal
 // ---------------------------------------------------------------------------
 
-function CreateOrgModal({ onCreated, onCancel, onError, onSuccess }) {
-  const [name, setName] = useState('')
-  const [slug, setSlug] = useState('')
-  const [ownerEmail, setOwnerEmail] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [localError, setLocalError] = useState('')
+interface CreateOrgModalProps {
+  onCreated: () => void
+  onCancel: () => void
+  onError: (msg: string) => void
+  onSuccess: (msg: string) => void
+}
 
-  const handleSubmit = async (e) => {
+function CreateOrgModal({ onCreated, onCancel, onError, onSuccess }: CreateOrgModalProps) {
+  const [name, setName] = useState<string>('')
+  const [slug, setSlug] = useState<string>('')
+  const [ownerEmail, setOwnerEmail] = useState<string>('')
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  const [localError, setLocalError] = useState<string>('')
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!name.trim()) { setLocalError('Name is required'); return }
     setSubmitting(true); setLocalError('')
@@ -197,7 +205,7 @@ function CreateOrgModal({ onCreated, onCancel, onError, onSuccess }) {
       onSuccess(result.message)
       onCreated()
     } catch (e) {
-      setLocalError(e.message)
+      setLocalError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -215,15 +223,15 @@ function CreateOrgModal({ onCreated, onCancel, onError, onSuccess }) {
           <InlineError msg={localError} />
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Name *</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Acme Corp" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+            <input type="text" value={name} onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)} placeholder="Acme Corp" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Slug <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(auto-generated if empty)</span></label>
-            <input type="text" value={slug} onChange={e => setSlug(e.target.value)} placeholder="acme-corp" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="text" value={slug} onChange={(e: ChangeEvent<HTMLInputElement>) => setSlug(e.target.value)} placeholder="acme-corp" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Owner Email <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="email" value={ownerEmail} onChange={e => setOwnerEmail(e.target.value)} placeholder="admin@acme.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="email" value={ownerEmail} onChange={(e: ChangeEvent<HTMLInputElement>) => setOwnerEmail(e.target.value)} placeholder="admin@acme.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onCancel} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>

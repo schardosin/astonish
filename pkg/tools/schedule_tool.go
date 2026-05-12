@@ -409,16 +409,14 @@ type RemoveScheduledJobArgs struct {
 }
 
 type RemoveScheduledJobResult struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	ToolResult
 }
 
 func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveScheduledJobResult, error) {
 	ss := getEffectiveSchedulerStore(ctx)
 	if ss == nil && schedulerAccessVar == nil {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: "Scheduler is not available",
+			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
@@ -436,16 +434,14 @@ func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveSc
 		}
 		if jobID == "" {
 			return RemoveScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("No job found with name %q", args.JobName),
+				ToolResult: toolError("No job found with name %q", args.JobName),
 			}, nil
 		}
 	}
 
 	if jobID == "" {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: "Either job_id or job_name is required",
+			ToolResult: toolError("Either job_id or job_name is required"),
 		}, nil
 	}
 
@@ -457,14 +453,12 @@ func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveSc
 	}
 	if err != nil {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to remove job: %v", err),
+			ToolResult: toolError("Failed to remove job: %v", err),
 		}, nil
 	}
 
 	return RemoveScheduledJobResult{
-		Status:  "removed",
-		Message: "Job removed successfully",
+		ToolResult: ToolResult{Status: "removed", Message: "Job removed successfully"},
 	}, nil
 }
 
@@ -479,16 +473,14 @@ type UpdateScheduledJobArgs struct {
 }
 
 type UpdateScheduledJobResult struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	ToolResult
 }
 
 func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
 	ss := getEffectiveSchedulerStore(ctx)
 	if ss == nil && schedulerAccessVar == nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: "Scheduler is not available",
+			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
@@ -508,8 +500,7 @@ func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, a
 	}
 	if job == nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Job %q not found", args.JobID),
+			ToolResult: toolError("Job %q not found", args.JobID),
 		}, nil
 	}
 
@@ -525,8 +516,7 @@ func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, a
 	if args.Schedule != "" {
 		if err := scheduler.ValidateCron(args.Schedule); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid cron: %v", err),
+				ToolResult: toolError("Invalid cron: %v", err),
 			}, nil
 		}
 		job.Schedule.Cron = args.Schedule
@@ -535,8 +525,7 @@ func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, a
 	if args.Timezone != "" {
 		if _, err := time.LoadLocation(args.Timezone); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid timezone: %v", err),
+				ToolResult: toolError("Invalid timezone: %v", err),
 			}, nil
 		}
 		job.Schedule.Timezone = args.Timezone
@@ -554,8 +543,7 @@ func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, a
 
 	if err := ss.Update(ctx, job); err != nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to update: %v", err),
+			ToolResult: toolError("Failed to update: %v", err),
 		}, nil
 	}
 
@@ -565,8 +553,7 @@ func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, a
 	}
 
 	return UpdateScheduledJobResult{
-		Status:  "updated",
-		Message: msg,
+		ToolResult: ToolResult{Status: "updated", Message: msg},
 	}, nil
 }
 
@@ -589,8 +576,7 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 	}
 	if job == nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Job %q not found", args.JobID),
+			ToolResult: toolError("Job %q not found", args.JobID),
 		}, nil
 	}
 
@@ -606,8 +592,7 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 	if args.Schedule != "" {
 		if err := scheduler.ValidateCron(args.Schedule); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid cron: %v", err),
+				ToolResult: toolError("Invalid cron: %v", err),
 			}, nil
 		}
 		job.Cron = args.Schedule
@@ -616,8 +601,7 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 	if args.Timezone != "" {
 		if _, err := time.LoadLocation(args.Timezone); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid timezone: %v", err),
+				ToolResult: toolError("Invalid timezone: %v", err),
 			}, nil
 		}
 		job.Timezone = args.Timezone
@@ -630,8 +614,7 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 
 	if err := schedulerAccessVar.UpdateJob(job); err != nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to update: %v", err),
+			ToolResult: toolError("Failed to update: %v", err),
 		}, nil
 	}
 
@@ -641,8 +624,7 @@ func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJ
 	}
 
 	return UpdateScheduledJobResult{
-		Status:  "updated",
-		Message: msg,
+		ToolResult: ToolResult{Status: "updated", Message: msg},
 	}, nil
 }
 

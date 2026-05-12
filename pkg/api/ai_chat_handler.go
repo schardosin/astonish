@@ -19,7 +19,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Parse request
 	var req AIChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 

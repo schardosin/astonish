@@ -430,7 +430,7 @@ func HandleStopSession(w http.ResponseWriter, r *http.Request) {
 	// Expected format: /api/session/{sessionId}/stop
 	parts := strings.Split(path, "/")
 	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
 	sessionID := parts[3] // /api/session/{id}/stop
@@ -451,7 +451,7 @@ func HandleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
 	// Expected format: /api/session/{sessionId}/keepalive
 	parts := strings.Split(path, "/")
 	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
 	sessionID := parts[3] // /api/session/{id}/keepalive
@@ -618,12 +618,12 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Error("failed to decode chat request", "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.AgentID == "" {
-		http.Error(w, "AgentID is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "AgentID is required")
 		return
 	}
 
@@ -639,7 +639,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 

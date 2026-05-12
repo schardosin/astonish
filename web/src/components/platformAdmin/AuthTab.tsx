@@ -1,84 +1,29 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } from 'react'
 import { Plus, Trash2, Loader2, Edit2, Shield, ToggleLeft, ToggleRight, Globe, Eye, EyeOff } from 'lucide-react'
+import * as adminApi from '../../api/platformAdmin'
+import type { OIDCProvider } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, gradientAmber, inputStyle } from './shared'
-
-// ---------------------------------------------------------------------------
-// OIDC API functions (inline, not moved to API layer)
-// ---------------------------------------------------------------------------
-
-const ADMIN_BASE = '/api/platform/admin'
-
-async function fetchOIDCProviders() {
-  const res = await fetch(`${ADMIN_BASE}/oidc-providers`, { credentials: 'include' })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to fetch OIDC providers')
-  }
-  const data = await res.json()
-  return data.providers || []
-}
-
-async function createOIDCProvider(params) {
-  const res = await fetch(`${ADMIN_BASE}/oidc-providers`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to create OIDC provider')
-  }
-  const data = await res.json()
-  return data.provider
-}
-
-async function updateOIDCProvider(id, params) {
-  const res = await fetch(`${ADMIN_BASE}/oidc-providers/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to update OIDC provider')
-  }
-  const data = await res.json()
-  return data.provider
-}
-
-async function deleteOIDCProvider(id) {
-  const res = await fetch(`${ADMIN_BASE}/oidc-providers/${encodeURIComponent(id)}`, {
-    method: 'DELETE',
-    credentials: 'include',
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error(err.error || 'Failed to delete OIDC provider')
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Authentication Tab
 // ---------------------------------------------------------------------------
 
 export default function AuthTab() {
-  const [providers, setProviders] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [showCreate, setShowCreate] = useState(false)
-  const [editingProvider, setEditingProvider] = useState(null)
-  const [togglingId, setTogglingId] = useState(null)
+  const [providers, setProviders] = useState<OIDCProvider[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string>('')
+  const [success, setSuccess] = useState<string>('')
+  const [showCreate, setShowCreate] = useState<boolean>(false)
+  const [editingProvider, setEditingProvider] = useState<OIDCProvider | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
-      const data = await fetchOIDCProviders()
+      const data = await adminApi.listOIDCProviders()
       setProviders(data)
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     } finally {
       setLoading(false)
     }
@@ -94,27 +39,27 @@ export default function AuthTab() {
     if (error) { const t = setTimeout(() => setError(''), 5000); return () => clearTimeout(t) }
   }, [error])
 
-  const handleToggleEnabled = async (provider) => {
+  const handleToggleEnabled = async (provider: OIDCProvider) => {
     setTogglingId(provider.id)
     try {
-      await updateOIDCProvider(provider.id, { enabled: !provider.enabled })
+      await adminApi.updateOIDCProvider(provider.id, { enabled: !provider.enabled })
       setSuccess(`Provider "${provider.name}" ${provider.enabled ? 'disabled' : 'enabled'}`)
       load()
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     } finally {
       setTogglingId(null)
     }
   }
 
-  const handleDelete = async (provider) => {
+  const handleDelete = async (provider: OIDCProvider) => {
     if (!confirm(`Delete OIDC provider "${provider.name}"? Users linked via this provider will no longer be able to sign in with SSO.`)) return
     try {
-      await deleteOIDCProvider(provider.id)
+      await adminApi.deleteOIDCProvider(provider.id)
       setSuccess(`Provider "${provider.name}" deleted`)
       load()
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     }
   }
 
@@ -285,19 +230,26 @@ export default function AuthTab() {
 // Create OIDC Provider Modal
 // ---------------------------------------------------------------------------
 
-function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
-  const [name, setName] = useState('')
-  const [issuerUrl, setIssuerUrl] = useState('')
-  const [discoveryUrl, setDiscoveryUrl] = useState('')
-  const [clientId, setClientId] = useState('')
-  const [clientSecret, setClientSecret] = useState('')
-  const [scopes, setScopes] = useState('openid email profile')
-  const [teamClaim, setTeamClaim] = useState('')
-  const [showSecret, setShowSecret] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [localError, setLocalError] = useState('')
+interface CreateOIDCProviderModalProps {
+  onCreated: () => void
+  onCancel: () => void
+  onError: (msg: string) => void
+  onSuccess: (msg: string) => void
+}
 
-  const handleSubmit = async (e) => {
+function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }: CreateOIDCProviderModalProps) {
+  const [name, setName] = useState<string>('')
+  const [issuerUrl, setIssuerUrl] = useState<string>('')
+  const [discoveryUrl, setDiscoveryUrl] = useState<string>('')
+  const [clientId, setClientId] = useState<string>('')
+  const [clientSecret, setClientSecret] = useState<string>('')
+  const [scopes, setScopes] = useState<string>('openid email profile')
+  const [teamClaim, setTeamClaim] = useState<string>('')
+  const [showSecret, setShowSecret] = useState<boolean>(false)
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  const [localError, setLocalError] = useState<string>('')
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!issuerUrl.trim()) { setLocalError('Issuer URL is required'); return }
     if (!clientId.trim()) { setLocalError('Client ID is required'); return }
@@ -305,7 +257,7 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
     setSubmitting(true); setLocalError('')
     try {
       const scopeList = scopes.trim().split(/[\s,]+/).filter(Boolean)
-      const result = await createOIDCProvider({
+      const result = await adminApi.createOIDCProvider({
         name: name.trim() || issuerUrl.trim(),
         issuer_url: issuerUrl.trim(),
         discovery_url: discoveryUrl.trim() || undefined,
@@ -318,7 +270,7 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
       onSuccess(`Provider "${result.name}" created`)
       onCreated()
     } catch (e) {
-      setLocalError(e.message)
+      setLocalError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -336,26 +288,26 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
           <InlineError msg={localError} />
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Display Name <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(shown on login button)</span></label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. SAP IAS, Azure AD, Okta" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+            <input type="text" value={name} onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)} placeholder="e.g. SAP IAS, Azure AD, Okta" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Issuer URL *</label>
-            <input type="url" value={issuerUrl} onChange={e => setIssuerUrl(e.target.value)} placeholder="https://tenant.accounts.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="url" value={issuerUrl} onChange={(e: ChangeEvent<HTMLInputElement>) => setIssuerUrl(e.target.value)} placeholder="https://tenant.accounts.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>The OIDC issuer URL. Must serve <code>.well-known/openid-configuration</code>.</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Discovery URL <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)} placeholder="https://subdomain.authentication.region.hana.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="url" value={discoveryUrl} onChange={(e: ChangeEvent<HTMLInputElement>) => setDiscoveryUrl(e.target.value)} placeholder="https://subdomain.authentication.region.hana.ondemand.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Only needed if the discovery endpoint differs from the issuer (e.g. SAP BTP XSUAA).</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client ID *</label>
-            <input type="text" value={clientId} onChange={e => setClientId(e.target.value)} placeholder="your-client-id" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="text" value={clientId} onChange={(e: ChangeEvent<HTMLInputElement>) => setClientId(e.target.value)} placeholder="your-client-id" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client Secret *</label>
             <div className="relative">
-              <input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder="your-client-secret" className="w-full px-4 py-2.5 pr-10 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+              <input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={(e: ChangeEvent<HTMLInputElement>) => setClientSecret(e.target.value)} placeholder="your-client-secret" className="w-full px-4 py-2.5 pr-10 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
               <button type="button" onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-1/2 -translate-y-1/2 p-1" style={{ color: 'var(--text-muted)' }}>
                 {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -363,12 +315,12 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Scopes</label>
-            <input type="text" value={scopes} onChange={e => setScopes(e.target.value)} placeholder="openid email profile" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="text" value={scopes} onChange={(e: ChangeEvent<HTMLInputElement>) => setScopes(e.target.value)} placeholder="openid email profile" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Space or comma separated. Default: openid email profile</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Team Claim <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="text" value={teamClaim} onChange={e => setTeamClaim(e.target.value)} placeholder="e.g. groups" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="text" value={teamClaim} onChange={(e: ChangeEvent<HTMLInputElement>) => setTeamClaim(e.target.value)} placeholder="e.g. groups" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>JWT claim containing team/group info for automatic team mapping.</p>
           </div>
           <div className="flex gap-3 pt-2">
@@ -387,25 +339,33 @@ function CreateOIDCProviderModal({ onCreated, onCancel, onError, onSuccess }) {
 // Edit OIDC Provider Modal
 // ---------------------------------------------------------------------------
 
-function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess }) {
-  const [name, setName] = useState(provider.name)
-  const [issuerUrl, setIssuerUrl] = useState(provider.issuer_url)
-  const [discoveryUrl, setDiscoveryUrl] = useState(provider.discovery_url || '')
-  const [clientId, setClientId] = useState(provider.client_id)
-  const [clientSecret, setClientSecret] = useState('')
-  const [scopes, setScopes] = useState((provider.scopes || []).join(' '))
-  const [teamClaim, setTeamClaim] = useState(provider.team_claim || '')
-  const [showSecret, setShowSecret] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const [localError, setLocalError] = useState('')
+interface EditOIDCProviderModalProps {
+  provider: OIDCProvider
+  onSaved: () => void
+  onCancel: () => void
+  onError: (msg: string) => void
+  onSuccess: (msg: string) => void
+}
 
-  const handleSubmit = async (e) => {
+function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess }: EditOIDCProviderModalProps) {
+  const [name, setName] = useState<string>(provider.name)
+  const [issuerUrl, setIssuerUrl] = useState<string>(provider.issuer_url)
+  const [discoveryUrl, setDiscoveryUrl] = useState<string>(provider.discovery_url || '')
+  const [clientId, setClientId] = useState<string>(provider.client_id)
+  const [clientSecret, setClientSecret] = useState<string>('')
+  const [scopes, setScopes] = useState<string>((provider.scopes || []).join(' '))
+  const [teamClaim, setTeamClaim] = useState<string>(provider.team_claim || '')
+  const [showSecret, setShowSecret] = useState<boolean>(false)
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  const [localError, setLocalError] = useState<string>('')
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!issuerUrl.trim()) { setLocalError('Issuer URL is required'); return }
     if (!clientId.trim()) { setLocalError('Client ID is required'); return }
     setSubmitting(true); setLocalError('')
     try {
-      const params = {}
+      const params: Record<string, unknown> = {}
       if (name.trim() !== provider.name) params.name = name.trim()
       if (issuerUrl.trim() !== provider.issuer_url) params.issuer_url = issuerUrl.trim()
       if (discoveryUrl.trim() !== (provider.discovery_url || '')) params.discovery_url = discoveryUrl.trim()
@@ -418,11 +378,11 @@ function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess
 
       if (Object.keys(params).length === 0) { onCancel(); return }
 
-      await updateOIDCProvider(provider.id, params)
+      await adminApi.updateOIDCProvider(provider.id, params as Partial<Omit<OIDCProvider, 'id' | 'created_at'>>)
       onSuccess(`Provider "${name || provider.name}" updated`)
       onSaved()
     } catch (e) {
-      setLocalError(e.message)
+      setLocalError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -440,25 +400,25 @@ function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess
           <InlineError msg={localError} />
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Display Name</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+            <input type="text" value={name} onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Issuer URL *</label>
-            <input type="url" value={issuerUrl} onChange={e => setIssuerUrl(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="url" value={issuerUrl} onChange={(e: ChangeEvent<HTMLInputElement>) => setIssuerUrl(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Discovery URL <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="url" value={discoveryUrl} onChange={e => setDiscoveryUrl(e.target.value)} placeholder="Leave empty for standard providers" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="url" value={discoveryUrl} onChange={(e: ChangeEvent<HTMLInputElement>) => setDiscoveryUrl(e.target.value)} placeholder="Leave empty for standard providers" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Only needed if discovery endpoint differs from issuer (e.g. SAP BTP XSUAA).</p>
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client ID *</label>
-            <input type="text" value={clientId} onChange={e => setClientId(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="text" value={clientId} onChange={(e: ChangeEvent<HTMLInputElement>) => setClientId(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Client Secret <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(leave blank to keep current)</span></label>
             <div className="relative">
-              <input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={e => setClientSecret(e.target.value)} placeholder="Leave blank to keep existing" className="w-full px-4 py-2.5 pr-10 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+              <input type={showSecret ? 'text' : 'password'} value={clientSecret} onChange={(e: ChangeEvent<HTMLInputElement>) => setClientSecret(e.target.value)} placeholder="Leave blank to keep existing" className="w-full px-4 py-2.5 pr-10 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
               <button type="button" onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-1/2 -translate-y-1/2 p-1" style={{ color: 'var(--text-muted)' }}>
                 {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -466,11 +426,11 @@ function EditOIDCProviderModal({ provider, onSaved, onCancel, onError, onSuccess
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Scopes</label>
-            <input type="text" value={scopes} onChange={e => setScopes(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="text" value={scopes} onChange={(e: ChangeEvent<HTMLInputElement>) => setScopes(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Team Claim <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="text" value={teamClaim} onChange={e => setTeamClaim(e.target.value)} placeholder="e.g. groups" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
+            <input type="text" value={teamClaim} onChange={(e: ChangeEvent<HTMLInputElement>) => setTeamClaim(e.target.value)} placeholder="e.g. groups" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none font-mono" style={inputStyle} />
           </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onCancel} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>

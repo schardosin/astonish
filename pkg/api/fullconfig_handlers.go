@@ -412,7 +412,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var req FullConfigUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
@@ -436,7 +436,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -646,13 +646,13 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
-			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Invalid sandbox config: "+err.Error())
 			return
 		}
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
-		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save config: "+err.Error())
 		return
 	}
 

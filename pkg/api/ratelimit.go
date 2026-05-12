@@ -189,14 +189,14 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 				if !cfg.Auth.Allow(ip) {
 					slog.Warn("rate limit exceeded on auth endpoint", "ip", ip, "path", path)
 					w.Header().Set("Retry-After", "60")
-					http.Error(w, "Too many requests", http.StatusTooManyRequests)
+					respondError(w, http.StatusTooManyRequests, "Too many requests")
 					return
 				}
 			} else {
 				if !cfg.API.Allow(ip) {
 					slog.Warn("rate limit exceeded on API endpoint", "ip", ip, "path", path)
 					w.Header().Set("Retry-After", "60")
-					http.Error(w, "Too many requests", http.StatusTooManyRequests)
+					respondError(w, http.StatusTooManyRequests, "Too many requests")
 					return
 				}
 			}
@@ -208,7 +208,7 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 		if !cfg.API.Allow(ip) {
 			slog.Warn("rate limit exceeded on API endpoint", "ip", ip, "path", path)
 			w.Header().Set("Retry-After", "60")
-			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			respondError(w, http.StatusTooManyRequests, "Too many requests")
 			return
 		}
 

@@ -87,7 +87,7 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req ToolSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -100,7 +100,7 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps (only installable ones)
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -475,7 +475,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req InternetSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -574,7 +574,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req URLExtractRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -910,7 +910,7 @@ type InternetMCPInstallResponse struct {
 func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 	var req InternetMCPInstallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 

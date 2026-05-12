@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } from 'react'
 import { Trash2, Loader2, Crown, UserPlus, Search, Edit2, CheckCircle2, Ban } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
+import type { AdminUser } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, StatusBadge, RoleBadge, gradientAmber, inputStyle } from './shared'
 
 // ---------------------------------------------------------------------------
@@ -8,13 +9,13 @@ import { InlineError, InlineSuccess, StatusBadge, RoleBadge, gradientAmber, inpu
 // ---------------------------------------------------------------------------
 
 export default function UsersTab() {
-  const [users, setUsers] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [showCreate, setShowCreate] = useState(false)
-  const [filter, setFilter] = useState('')
-  const [editingUser, setEditingUser] = useState(null)
+  const [users, setUsers] = useState<AdminUser[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string>('')
+  const [success, setSuccess] = useState<string>('')
+  const [showCreate, setShowCreate] = useState<boolean>(false)
+  const [filter, setFilter] = useState<string>('')
+  const [editingUser, setEditingUser] = useState<AdminUser | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -22,7 +23,7 @@ export default function UsersTab() {
       const data = await adminApi.listUsers()
       setUsers(data)
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     } finally {
       setLoading(false)
     }
@@ -43,16 +44,16 @@ export default function UsersTab() {
     u.display_name.toLowerCase().includes(filter.toLowerCase())
   )
 
-  const handleDelete = async (user) => {
+  const handleDelete = async (user: AdminUser) => {
     if (!confirm(`Delete user "${user.email}"? This action cannot be undone.`)) return
     try {
       await adminApi.deleteUser(user.id)
       setSuccess(`User "${user.email}" deleted`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
-  const handleToggleSuperadmin = async (user) => {
+  const handleToggleSuperadmin = async (user: AdminUser) => {
     const newRole = user.platform_role === 'superadmin' ? '' : 'superadmin'
     const action = newRole === 'superadmin' ? 'Promote' : 'Demote'
     if (!confirm(`${action} "${user.email}" ${newRole ? 'to' : 'from'} platform superadmin?`)) return
@@ -60,16 +61,16 @@ export default function UsersTab() {
       await adminApi.updateUser(user.id, { platform_role: newRole })
       setSuccess(`User "${user.email}" ${action.toLowerCase()}d`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
-  const handleToggleStatus = async (user) => {
+  const handleToggleStatus = async (user: AdminUser) => {
     const newStatus = user.status === 'active' ? 'suspended' : 'active'
     try {
       await adminApi.updateUser(user.id, { status: newStatus })
       setSuccess(`User "${user.email}" ${newStatus === 'active' ? 'reactivated' : 'suspended'}`)
       load()
-    } catch (e) { setError(e.message) }
+    } catch (e) { setError((e as Error).message) }
   }
 
   return (
@@ -92,7 +93,7 @@ export default function UsersTab() {
               type="text"
               placeholder="Filter users..."
               value={filter}
-              onChange={e => setFilter(e.target.value)}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setFilter(e.target.value)}
               className="w-full pl-9 pr-3 py-2 rounded-xl text-sm outline-none"
               style={inputStyle}
             />
@@ -205,14 +206,21 @@ export default function UsersTab() {
 // Create User Modal
 // ---------------------------------------------------------------------------
 
-function CreateUserModal({ onCreated, onCancel, onError, onSuccess }) {
-  const [email, setEmail] = useState('')
-  const [displayName, setDisplayName] = useState('')
-  const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [localError, setLocalError] = useState('')
+interface CreateUserModalProps {
+  onCreated: () => void
+  onCancel: () => void
+  onError: (msg: string) => void
+  onSuccess: (msg: string) => void
+}
 
-  const handleSubmit = async (e) => {
+function CreateUserModal({ onCreated, onCancel, onError, onSuccess }: CreateUserModalProps) {
+  const [email, setEmail] = useState<string>('')
+  const [displayName, setDisplayName] = useState<string>('')
+  const [password, setPassword] = useState<string>('')
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  const [localError, setLocalError] = useState<string>('')
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!email.trim() || !displayName.trim()) {
       setLocalError('Email and display name are required')
@@ -228,7 +236,7 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }) {
       onSuccess(result.message)
       onCreated()
     } catch (e) {
-      setLocalError(e.message)
+      setLocalError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -246,15 +254,15 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }) {
           <InlineError msg={localError} />
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Email *</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="alice@acme.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+            <input type="email" value={email} onChange={(e: ChangeEvent<HTMLInputElement>) => setEmail(e.target.value)} placeholder="alice@acme.com" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Display Name *</label>
-            <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Alice Smith" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="text" value={displayName} onChange={(e: ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)} placeholder="Alice Smith" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Password <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(optional)</span></label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Leave empty for SSO-only users" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="password" value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)} placeholder="Leave empty for SSO-only users" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
             <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>If empty, user can only log in via configured SSO provider.</p>
           </div>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>To assign the user to an organization, go to the org's user management page after creation.</p>
@@ -274,17 +282,25 @@ function CreateUserModal({ onCreated, onCancel, onError, onSuccess }) {
 // Edit User Modal
 // ---------------------------------------------------------------------------
 
-function EditUserModal({ user, onSaved, onCancel, onError, onSuccess }) {
-  const [displayName, setDisplayName] = useState(user.display_name)
-  const [password, setPassword] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [localError, setLocalError] = useState('')
+interface EditUserModalProps {
+  user: AdminUser
+  onSaved: () => void
+  onCancel: () => void
+  onError: (msg: string) => void
+  onSuccess: (msg: string) => void
+}
 
-  const handleSubmit = async (e) => {
+function EditUserModal({ user, onSaved, onCancel, onError, onSuccess }: EditUserModalProps) {
+  const [displayName, setDisplayName] = useState<string>(user.display_name)
+  const [password, setPassword] = useState<string>('')
+  const [submitting, setSubmitting] = useState<boolean>(false)
+  const [localError, setLocalError] = useState<string>('')
+
+  const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     setSubmitting(true); setLocalError('')
     try {
-      const params = {}
+      const params: { display_name?: string; password?: string } = {}
       if (displayName !== user.display_name) params.display_name = displayName
       if (password) params.password = password
       if (Object.keys(params).length === 0) { onCancel(); return }
@@ -292,7 +308,7 @@ function EditUserModal({ user, onSaved, onCancel, onError, onSuccess }) {
       onSuccess(`User "${user.email}" updated`)
       onSaved()
     } catch (e) {
-      setLocalError(e.message)
+      setLocalError((e as Error).message)
     } finally {
       setSubmitting(false)
     }
@@ -310,11 +326,11 @@ function EditUserModal({ user, onSaved, onCancel, onError, onSuccess }) {
           <InlineError msg={localError} />
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Display Name</label>
-            <input type="text" value={displayName} onChange={e => setDisplayName(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+            <input type="text" value={displayName} onChange={(e: ChangeEvent<HTMLInputElement>) => setDisplayName(e.target.value)} className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
           </div>
           <div>
             <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>New Password <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(leave blank to keep current)</span></label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Minimum 8 characters" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+            <input type="password" value={password} onChange={(e: ChangeEvent<HTMLInputElement>) => setPassword(e.target.value)} placeholder="Minimum 8 characters" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
           </div>
           <div className="flex gap-3 pt-2">
             <button type="button" onClick={onCancel} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>

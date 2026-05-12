@@ -308,12 +308,12 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	var req FleetStartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.FleetKey == "" && req.PlanKey == "" {
-		http.Error(w, "fleet_key or plan_key is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "fleet_key or plan_key is required")
 		return
 	}
 
@@ -355,7 +355,7 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate, handlerFleetPlanStore, handlerFleetStores)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -374,32 +374,32 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		cfgAny, found := svc.FleetTemplates.GetFleet(r.Context(), req.FleetKey)
 		if !found {
-			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet %q not found", req.FleetKey))
 			return
 		}
 		var cfgOk bool
 		cfg, cfgOk = cfgAny.(*fleet.FleetConfig)
 		if !cfgOk {
-			http.Error(w, fmt.Sprintf("Fleet %q has unexpected type", req.FleetKey), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Fleet %q has unexpected type", req.FleetKey))
 			return
 		}
 	} else {
 		fleetReg := GetFleetRegistry()
 		if fleetReg == nil {
-			http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+			respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 			return
 		}
 		var found bool
 		cfg, found = fleetReg.GetFleet(req.FleetKey)
 		if !found {
-			http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet %q not found", req.FleetKey))
 			return
 		}
 	}
 
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
-		http.Error(w, "Sub-agent system not initialized (sub-agents must be enabled)", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Sub-agent system not initialized (sub-agents must be enabled)")
 		return
 	}
 
@@ -662,18 +662,18 @@ func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req FleetMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.Message == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "message is required")
 		return
 	}
 
 	registry := getFleetSessionRegistry()
 	if err := registry.PostHumanMessage(sessionID, req.Message); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -691,7 +691,7 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
 	}
 
@@ -700,7 +700,7 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Get thread history
 	thread, err := fs.Channel.GetThread(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to get thread: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to get thread: "+err.Error())
 		return
 	}
 
@@ -816,7 +816,7 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
 	}
 
@@ -840,7 +840,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
 	}
 
@@ -859,7 +859,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -997,7 +997,7 @@ func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -1087,7 +1087,7 @@ func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 

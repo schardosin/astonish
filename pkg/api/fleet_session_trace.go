@@ -52,13 +52,13 @@ func FleetSessionTraceHandler(w http.ResponseWriter, r *http.Request) {
 func serveTraceFromStore(w http.ResponseWriter, ss store.SessionStore, sessionID, agentFilter string, opts session.TraceOpts) {
 	meta, err := ss.GetSessionMeta(context.TODO(), sessionID)
 	if err != nil || meta == nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Session not found")
 		return
 	}
 
 	events, err := ss.ReadTranscriptEvents(context.TODO(), meta.AppName, meta.UserID, sessionID)
 	if err != nil {
-		http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to read transcript: "+err.Error())
 		return
 	}
 
@@ -108,19 +108,19 @@ func serveTraceFromStore(w http.ResponseWriter, ss store.SessionStore, sessionID
 func serveTraceFromFileStore(w http.ResponseWriter, sessionID, agentFilter string, opts session.TraceOpts) {
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
-		http.Error(w, "Session storage not available", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Session storage not available")
 		return
 	}
 
 	meta, err := fileStore.GetSessionMeta(sessionID)
 	if err != nil || meta == nil {
-		http.Error(w, "Session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Session not found")
 		return
 	}
 
 	events, err := fileStore.ReadTranscriptEvents(meta.AppName, meta.UserID, sessionID)
 	if err != nil {
-		http.Error(w, "Failed to read transcript: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to read transcript: "+err.Error())
 		return
 	}
 

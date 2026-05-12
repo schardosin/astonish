@@ -1070,6 +1070,11 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// authenticated user and tenant context.
 	router.Use(AuditMiddleware)
 
+	// Body size limiter to prevent oversized payloads (DoS mitigation).
+	// Must run after auth (so 401 returns before reading the body) but before
+	// route handlers that decode JSON request bodies.
+	router.Use(MaxBodySizeMiddleware)
+
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")

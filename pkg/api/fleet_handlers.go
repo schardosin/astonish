@@ -68,7 +68,7 @@ func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fallback: direct registry access (personal mode).
 	if fleetRegistryVar == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 		return
 	}
 
@@ -95,7 +95,7 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		f, ok := svc.FleetTemplates.GetFleet(r.Context(), key)
 		if !ok {
-			http.Error(w, "Fleet not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Fleet not found")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -104,13 +104,13 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fleetRegistryVar == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 		return
 	}
 
 	f, ok := fleetRegistryVar.GetFleet(key)
 	if !ok {
-		http.Error(w, "Fleet not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet not found")
 		return
 	}
 
@@ -124,18 +124,18 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	var f fleet.FleetConfig
 	if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
 	if err := f.Validate(); err != nil {
-		http.Error(w, "Validation error: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Validation error: "+err.Error())
 		return
 	}
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		if err := svc.FleetTemplates.Save(r.Context(), key, &f); err != nil {
-			http.Error(w, "Failed to save fleet: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to save fleet: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -144,12 +144,12 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fleetRegistryVar == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 		return
 	}
 
 	if err := fleetRegistryVar.Save(key, &f); err != nil {
-		http.Error(w, "Failed to save fleet: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save fleet: "+err.Error())
 		return
 	}
 
@@ -163,7 +163,7 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		if err := svc.FleetTemplates.Delete(r.Context(), key); err != nil {
-			http.Error(w, "Failed to delete fleet: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to delete fleet: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -172,12 +172,12 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if fleetRegistryVar == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 		return
 	}
 
 	if err := fleetRegistryVar.Delete(key); err != nil {
-		http.Error(w, "Failed to delete fleet: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to delete fleet: "+err.Error())
 		return
 	}
 

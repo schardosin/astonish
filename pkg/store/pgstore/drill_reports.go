@@ -27,7 +27,7 @@ func (d *pgDrillReportStore) SaveReport(ctx context.Context, report *store.Drill
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())`,
 		d.tableName()),
 		report.Suite, report.Status, report.Summary, report.DurationMs,
-		report.ReportData, report.StartedAt, report.FinishedAt, nilIfEmptyStr(report.CreatedBy),
+		report.ReportData, report.StartedAt, report.FinishedAt, nilIfEmpty(report.CreatedBy),
 	)
 	return err
 }

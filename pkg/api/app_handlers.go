@@ -57,7 +57,7 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
 		items, err := svc.Apps.List(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 		if items == nil {
@@ -71,7 +71,7 @@ func ListAppsHandler(w http.ResponseWriter, r *http.Request) {
 	// Legacy fallback: filesystem.
 	items, err := apps.ListApps()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -105,7 +105,7 @@ func GetAppHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -116,7 +116,7 @@ func GetAppHandler(w http.ResponseWriter, r *http.Request) {
 	// Personal mode fallback: filesystem.
 	app, err := apps.LoadApp(name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -140,12 +140,12 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req saveAppRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if req.Code == "" {
-		http.Error(w, "code is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "code is required")
 		return
 	}
 
@@ -177,7 +177,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 
 		path, err := targetStore.Save(r.Context(), app)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -207,7 +207,7 @@ func SaveAppHandler(w http.ResponseWriter, r *http.Request) {
 
 	path, err := apps.SaveApp(app)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -245,7 +245,7 @@ func DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			respondError(w, http.StatusNotFound, err.Error())
 			return
 		}
 
@@ -264,7 +264,7 @@ func DeleteAppHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback: filesystem.
 	if err := apps.DeleteApp(name); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 

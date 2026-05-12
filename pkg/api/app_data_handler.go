@@ -212,14 +212,14 @@ func AppStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.URL.Query().Get("sourceId")
 
 	if sourceID == "" {
-		http.Error(w, "sourceId query parameter is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "sourceId query parameter is required")
 		return
 	}
 
 	// Load the app to get data source config (for interval)
 	app, err := apps.LoadApp(name)
 	if err != nil {
-		http.Error(w, "app not found: "+err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "app not found: "+err.Error())
 		return
 	}
 
@@ -249,7 +249,7 @@ func AppStreamHandler(w http.ResponseWriter, r *http.Request) {
 	// Set up SSE
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 

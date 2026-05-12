@@ -323,7 +323,7 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["name"] // "name" to match definition in handlers.go
 	if serverName == "" {
-		http.Error(w, "Server name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server name is required")
 		return
 	}
 

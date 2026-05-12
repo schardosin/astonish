@@ -1,19 +1,40 @@
 import { AlertCircle, CheckCircle2 } from 'lucide-react'
+import type { CSSProperties } from 'react'
 
 // ---------------------------------------------------------------------------
 // Style constants (matching UserManagement)
 // ---------------------------------------------------------------------------
 
-export const gradientAmber = { background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }
-export const inputStyle = { background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }
-export const errorBg = { background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid rgba(239, 68, 68, 0.2)' }
-export const successBg = { background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }
+export const gradientAmber: CSSProperties = { background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }
+export const inputStyle: CSSProperties = { background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }
+export const errorBg: CSSProperties = { background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid rgba(239, 68, 68, 0.2)' }
+export const successBg: CSSProperties = { background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e', border: '1px solid rgba(34, 197, 94, 0.2)' }
+
+// ---------------------------------------------------------------------------
+// Shared prop interfaces
+// ---------------------------------------------------------------------------
+
+export interface InlineErrorProps {
+  msg: string
+}
+
+export interface InlineSuccessProps {
+  msg: string
+}
+
+export interface StatusBadgeProps {
+  status: string
+}
+
+export interface RoleBadgeProps {
+  role: string
+}
 
 // ---------------------------------------------------------------------------
 // Shared UI components
 // ---------------------------------------------------------------------------
 
-export function InlineError({ msg }) {
+export function InlineError({ msg }: InlineErrorProps) {
   if (!msg) return null
   return (
     <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={errorBg}>
@@ -22,7 +43,7 @@ export function InlineError({ msg }) {
   )
 }
 
-export function InlineSuccess({ msg }) {
+export function InlineSuccess({ msg }: InlineSuccessProps) {
   if (!msg) return null
   return (
     <div className="flex items-center gap-2 p-3 rounded-lg text-sm" style={successBg}>
@@ -31,7 +52,7 @@ export function InlineSuccess({ msg }) {
   )
 }
 
-export function StatusBadge({ status }) {
+export function StatusBadge({ status }: StatusBadgeProps) {
   const isActive = status === 'active'
   const isSuspended = status === 'suspended'
   const color = isActive ? '#22c55e' : isSuspended ? '#f59e0b' : '#ef4444'
@@ -46,8 +67,8 @@ export function StatusBadge({ status }) {
   )
 }
 
-export function RoleBadge({ role }) {
-  const colors = {
+export function RoleBadge({ role }: RoleBadgeProps) {
+  const colors: Record<string, { bg: string; fg: string }> = {
     superadmin: { bg: 'rgba(234, 179, 8, 0.15)', fg: '#eab308' },
     owner: { bg: 'rgba(168, 85, 247, 0.15)', fg: '#a855f7' },
     admin: { bg: 'rgba(59, 130, 246, 0.15)', fg: '#3b82f6' },

@@ -77,13 +77,13 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	srv := config.GetStandardServer(serverID)
 	if srv == nil {
-		http.Error(w, "Unknown standard server: "+serverID, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Unknown standard server: "+serverID)
 		return
 	}
 
 	var req InstallStandardServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
@@ -112,7 +112,7 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Install to config.yaml (web tool settings; key excluded if stored in credential store)
 	if err := config.InstallStandardServer(serverID, req.Env, storeKeyInConfig); err != nil {
-		http.Error(w, "Failed to install server: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Failed to install server: "+err.Error())
 		return
 	}
 
@@ -291,13 +291,13 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	srv := config.GetStandardServer(serverID)
 	if srv == nil {
-		http.Error(w, "Unknown standard server: "+serverID, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Unknown standard server: "+serverID)
 		return
 	}
 
 	// Keyless servers cannot be uninstalled
 	if len(srv.EnvVars) == 0 {
-		http.Error(w, "Server does not require configuration", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server does not require configuration")
 		return
 	}
 
@@ -311,7 +311,7 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Remove from config.yaml (web_servers entry + web tool references)
 	if err := config.UninstallStandardServer(serverID); err != nil {
-		http.Error(w, "Failed to uninstall server: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to uninstall server: "+err.Error())
 		return
 	}
 

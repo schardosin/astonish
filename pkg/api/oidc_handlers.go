@@ -282,24 +282,24 @@ func (h *SSOHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 
 	sess := h.deviceSessions.GetByCode(deviceCode)
 	if sess == nil {
-		http.Error(w, "Invalid or expired device code. Please restart the login process.", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid or expired device code. Please restart the login process.")
 		return
 	}
 	if sess.Status != deviceStatusPending {
-		http.Error(w, "This login session has already been used.", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "This login session has already been used.")
 		return
 	}
 
 	// Load the OIDC provider
 	pgStore := getPlatformPGStore()
 	if pgStore == nil {
-		http.Error(w, "Platform store not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Platform store not available")
 		return
 	}
 
 	provider, err := pgStore.OIDCProviders().GetByID(r.Context(), sess.ProviderID)
 	if err != nil || !provider.Enabled {
-		http.Error(w, "OIDC provider not available", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "OIDC provider not available")
 		return
 	}
 

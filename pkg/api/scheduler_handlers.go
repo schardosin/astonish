@@ -76,7 +76,7 @@ func SchedulerJobsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		handleCreateJob(w, r, svc.Scheduler)
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -211,7 +211,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"status": "removed"})
 
 	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -220,7 +220,7 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 // POST /api/scheduler/jobs/{id}/run
 func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -491,7 +491,7 @@ func split(s string, sep byte) []string {
 func TeamMemberChannelsHandler(pa *PlatformAuth) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 			return
 		}
 

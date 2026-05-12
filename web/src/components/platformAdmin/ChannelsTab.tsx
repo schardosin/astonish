@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type ChangeEvent } from 'react'
 import { Trash2, Loader2, ToggleLeft, ToggleRight } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
+import type { ChannelFullInfo } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, inputStyle } from './shared'
 
 // ---------------------------------------------------------------------------
@@ -8,11 +9,11 @@ import { InlineError, InlineSuccess, inputStyle } from './shared'
 // ---------------------------------------------------------------------------
 
 export default function ChannelsTab() {
-  const [channels, setChannels] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [expandedChannel, setExpandedChannel] = useState(null)
+  const [channels, setChannels] = useState<ChannelFullInfo[]>([])
+  const [loading, setLoading] = useState<boolean>(true)
+  const [error, setError] = useState<string>('')
+  const [success, setSuccess] = useState<string>('')
+  const [expandedChannel, setExpandedChannel] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -21,7 +22,7 @@ export default function ChannelsTab() {
       const data = await adminApi.listChannels()
       setChannels(data || [])
     } catch (e) {
-      setError(e.message)
+      setError((e as Error).message)
     } finally {
       setLoading(false)
     }
@@ -52,9 +53,9 @@ export default function ChannelsTab() {
             channel={ch}
             expanded={expandedChannel === ch.type}
             onToggle={() => setExpandedChannel(expandedChannel === ch.type ? null : ch.type)}
-            onSaved={(msg) => { setSuccess(msg); setError(''); load() }}
-            onError={(msg) => { setError(msg); setSuccess('') }}
-            onDeleted={(msg) => { setSuccess(msg); setError(''); load() }}
+            onSaved={(msg: string) => { setSuccess(msg); setError(''); load() }}
+            onError={(msg: string) => { setError(msg); setSuccess('') }}
+            onDeleted={(msg: string) => { setSuccess(msg); setError(''); load() }}
           />
         ))}
       </div>
@@ -66,11 +67,20 @@ export default function ChannelsTab() {
 // Channel Card
 // ---------------------------------------------------------------------------
 
-function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted }) {
-  const [form, setForm] = useState({})
-  const [secrets, setSecrets] = useState({})
-  const [enabled, setEnabled] = useState(channel.enabled)
-  const [saving, setSaving] = useState(false)
+interface ChannelCardProps {
+  channel: ChannelFullInfo
+  expanded: boolean
+  onToggle: () => void
+  onSaved: (msg: string) => void
+  onError: (msg: string) => void
+  onDeleted: (msg: string) => void
+}
+
+function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted }: ChannelCardProps) {
+  const [form, setForm] = useState<Record<string, any>>({})
+  const [secrets, setSecrets] = useState<Record<string, string>>({})
+  const [enabled, setEnabled] = useState<boolean>(channel.enabled)
+  const [saving, setSaving] = useState<boolean>(false)
 
   useEffect(() => {
     setForm({ ...channel.config })
@@ -88,7 +98,7 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
       })
       onSaved(result.message)
     } catch (e) {
-      onError(e.message)
+      onError((e as Error).message)
     } finally {
       setSaving(false)
     }
@@ -100,7 +110,7 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
       const result = await adminApi.deleteChannel(channel.type)
       onDeleted(result.message)
     } catch (e) {
-      onError(e.message)
+      onError((e as Error).message)
     }
   }
 
@@ -168,7 +178,7 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
                   <input
                     type="password"
                     value={secrets[s.key] || ''}
-                    onChange={e => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
                     placeholder={s.configured ? '(set -- leave blank to keep)' : 'Enter value...'}
                     className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
                     style={inputStyle}
@@ -206,8 +216,13 @@ function TelegramConfigFields() {
   )
 }
 
-function EmailConfigFields({ form, setForm }) {
-  const update = (key, value) => setForm({ ...form, [key]: value })
+interface EmailConfigFieldsProps {
+  form: Record<string, any>
+  setForm: (form: Record<string, any>) => void
+}
+
+function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
+  const update = (key: string, value: string | number | boolean) => setForm({ ...form, [key]: value })
 
   return (
     <div className="space-y-3">
@@ -217,7 +232,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="text"
             value={form.imap_server || ''}
-            onChange={e => update('imap_server', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('imap_server', e.target.value)}
             placeholder="imap.gmail.com:993"
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
@@ -228,7 +243,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="text"
             value={form.smtp_server || ''}
-            onChange={e => update('smtp_server', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('smtp_server', e.target.value)}
             placeholder="smtp.gmail.com:587"
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
@@ -241,7 +256,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="text"
             value={form.address || ''}
-            onChange={e => update('address', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('address', e.target.value)}
             placeholder="agent@example.com"
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
@@ -252,7 +267,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="text"
             value={form.username || ''}
-            onChange={e => update('username', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('username', e.target.value)}
             placeholder="(defaults to address)"
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
@@ -264,7 +279,7 @@ function EmailConfigFields({ form, setForm }) {
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider</label>
           <select
             value={form.provider || 'imap'}
-            onChange={e => update('provider', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLSelectElement>) => update('provider', e.target.value)}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
           >
@@ -277,7 +292,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="number"
             value={form.poll_interval || 30}
-            onChange={e => update('poll_interval', parseInt(e.target.value) || 30)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('poll_interval', parseInt(e.target.value) || 30)}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
           />
@@ -287,7 +302,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="text"
             value={form.folder || 'INBOX'}
-            onChange={e => update('folder', e.target.value)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('folder', e.target.value)}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
           />
@@ -309,7 +324,7 @@ function EmailConfigFields({ form, setForm }) {
           <input
             type="number"
             value={form.max_body_chars || 50000}
-            onChange={e => update('max_body_chars', parseInt(e.target.value) || 50000)}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('max_body_chars', parseInt(e.target.value) || 50000)}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none"
             style={inputStyle}
           />
@@ -319,14 +334,19 @@ function EmailConfigFields({ form, setForm }) {
   )
 }
 
-function SlackConfigFields({ form, setForm }) {
+interface SlackConfigFieldsProps {
+  form: Record<string, any>
+  setForm: (form: Record<string, any>) => void
+}
+
+function SlackConfigFields({ form, setForm }: SlackConfigFieldsProps) {
   return (
     <div className="space-y-3">
       <div>
         <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Mode</label>
         <select
           value={form.mode || 'socket'}
-          onChange={e => setForm({ ...form, mode: e.target.value })}
+          onChange={(e: ChangeEvent<HTMLSelectElement>) => setForm({ ...form, mode: e.target.value })}
           className="w-full px-3 py-2 rounded-lg text-xs outline-none"
           style={inputStyle}
         >

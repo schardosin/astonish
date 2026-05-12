@@ -40,7 +40,7 @@ type FlowRunRequest struct {
 //	event: done   data: {"result": "ok"}
 func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -48,7 +48,7 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	parts := splitPath(r.URL.Path)
 	// Expected: ["api", "agents", "{name}", "run"]
 	if len(parts) < 4 {
-		http.Error(w, "missing agent name", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "missing agent name")
 		return
 	}
 	agentName := parts[2] // agents/{name}/run
@@ -57,7 +57,7 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	var req FlowRunRequest
 	if r.Body != nil {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 			return
 		}
 	}
@@ -70,7 +70,7 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
 

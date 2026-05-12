@@ -92,7 +92,7 @@ func GetFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		plan, ok := svc.FleetPlans.GetPlan(r.Context(), key)
 		if !ok {
-			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Fleet plan not found")
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -105,13 +105,13 @@ func GetFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
 	plan, ok := fleetPlanRegistryVar.GetPlan(key)
 	if !ok {
-		http.Error(w, "Fleet plan not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet plan not found")
 		return
 	}
 
@@ -130,7 +130,7 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		var planData map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&planData); err != nil {
-			http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 			return
 		}
 		planData["key"] = key
@@ -140,7 +140,7 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 			planData["created_by"] = user.ID
 		}
 		if err := svc.FleetPlans.Save(r.Context(), planData); err != nil {
-			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to save fleet plan: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -153,19 +153,19 @@ func SaveFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
 	var plan fleet.FleetPlan
 	if err := json.NewDecoder(r.Body).Decode(&plan); err != nil {
-		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
 		return
 	}
 
 	plan.Key = key
 	if err := fleetPlanRegistryVar.Save(&plan); err != nil {
-		http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save fleet plan: "+err.Error())
 		return
 	}
 
@@ -187,7 +187,7 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 			planActivatorVar.ForceCleanup(key)
 		}
 		if err := svc.FleetPlans.Delete(r.Context(), key); err != nil {
-			http.Error(w, "Failed to delete fleet plan: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to delete fleet plan: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -200,7 +200,7 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
@@ -211,7 +211,7 @@ func DeleteFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := fleetPlanRegistryVar.Delete(key); err != nil {
-		http.Error(w, "Failed to delete fleet plan: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to delete fleet plan: "+err.Error())
 		return
 	}
 
@@ -232,7 +232,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		// Get the original plan as raw YAML, modify the key/name, re-save.
 		yamlContent, err := svc.FleetPlans.GetPlanYAML(r.Context(), key)
 		if err != nil {
-			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Fleet plan not found")
 			return
 		}
 
@@ -248,7 +248,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 		// Parse and modify
 		var planMap map[string]any
 		if err := yaml.Unmarshal([]byte(yamlContent), &planMap); err != nil {
-			http.Error(w, "Failed to parse plan: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to parse plan: "+err.Error())
 			return
 		}
 		planMap["key"] = newKey
@@ -261,7 +261,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 		modifiedYAML, _ := yaml.Marshal(planMap)
 		if err := svc.FleetPlans.SavePlanYAML(r.Context(), newKey, string(modifiedYAML)); err != nil {
-			http.Error(w, "Failed to save duplicate: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to save duplicate: "+err.Error())
 			return
 		}
 
@@ -275,13 +275,13 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
 	original, ok := fleetPlanRegistryVar.GetPlan(key)
 	if !ok {
-		http.Error(w, "Fleet plan not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet plan not found")
 		return
 	}
 
@@ -308,7 +308,7 @@ func DuplicateFleetPlanHandler(w http.ResponseWriter, r *http.Request) {
 	duplicate.UpdatedAt = original.UpdatedAt
 
 	if err := fleetPlanRegistryVar.Save(duplicate); err != nil {
-		http.Error(w, "Failed to save duplicate: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save duplicate: "+err.Error())
 		return
 	}
 
@@ -422,7 +422,7 @@ func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		yamlContent, err := svc.FleetPlans.GetPlanYAML(r.Context(), key)
 		if err != nil {
-			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Fleet plan not found")
 			return
 		}
 		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
@@ -432,7 +432,7 @@ func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
@@ -440,9 +440,9 @@ func GetFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 	data, err := os.ReadFile(yamlPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			http.Error(w, "Fleet plan not found", http.StatusNotFound)
+			respondError(w, http.StatusNotFound, "Fleet plan not found")
 		} else {
-			http.Error(w, "Failed to read plan file: "+err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, "Failed to read plan file: "+err.Error())
 		}
 		return
 	}
@@ -458,14 +458,14 @@ func SaveFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Failed to read request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Failed to read request body: "+err.Error())
 		return
 	}
 
 	// Platform mode: use the team-scoped fleet plan store.
 	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
 		if err := svc.FleetPlans.SavePlanYAML(r.Context(), key, string(body)); err != nil {
-			http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Failed to save fleet plan: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -478,19 +478,19 @@ func SaveFleetPlanYAMLHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Personal mode fallback.
 	if fleetPlanRegistryVar == nil {
-		http.Error(w, "Fleet plan system not initialized", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan system not initialized")
 		return
 	}
 
 	var plan fleet.FleetPlan
 	if err := yaml.Unmarshal(body, &plan); err != nil {
-		http.Error(w, "Invalid YAML: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
 		return
 	}
 
 	plan.Key = key
 	if err := fleetPlanRegistryVar.Save(&plan); err != nil {
-		http.Error(w, "Failed to save fleet plan: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save fleet plan: "+err.Error())
 		return
 	}
 

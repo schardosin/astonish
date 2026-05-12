@@ -86,7 +86,7 @@ func (s *pgSchedulerStore) Add(ctx context.Context, job *store.ScheduledJob) err
 		s.tableName()),
 		job.ID, job.Name, job.Schedule.Cron, job.Mode, combinedJSON,
 		enabledStatusStr(job.Enabled), job.LastStatus, job.LastError, job.ConsecutiveFailures,
-		nullableUUID(job.OwnerID), job.CreatedAt,
+		nullableString(job.OwnerID), job.CreatedAt,
 	)
 	return err
 }
@@ -186,13 +186,4 @@ func enabledStatusStr(enabled bool) string {
 
 func nilTimePtrField(t *time.Time) *time.Time {
 	return t
-}
-
-// nullableUUID returns nil (SQL NULL) if the string is empty, otherwise the string.
-// Used for uuid columns that allow NULL but reject empty strings.
-func nullableUUID(s string) any {
-	if s == "" {
-		return nil
-	}
-	return s
 }

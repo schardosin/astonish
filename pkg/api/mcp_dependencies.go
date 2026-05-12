@@ -198,7 +198,7 @@ type CheckMCPDependenciesResponse struct {
 func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 	var req CheckMCPDependenciesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 

@@ -167,7 +167,7 @@ func ChannelsReloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	reload := getChannelReloadFunc()
 	if reload == nil {
-		http.Error(w, `{"error":"reload not available"}`, http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, `{"error":"reload not available"}`)
 		return
 	}
 

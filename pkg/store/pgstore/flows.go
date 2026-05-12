@@ -193,7 +193,7 @@ func (f *pgFlowStore) SaveFlowDefinition(ctx context.Context, name string, defin
 		 VALUES ($1, $2, $3, $4, now(), now())
 		 ON CONFLICT (name) DO UPDATE SET type = $2, definition = $3, yaml_content = $4, updated_at = now()`,
 		f.tableName()),
-		name, flowType, defJSON, nilIfEmptyStr(yamlContent),
+		name, flowType, defJSON, nilIfEmpty(yamlContent),
 	)
 	return err
 }
@@ -214,11 +214,4 @@ func (f *pgFlowStore) RemoveTap(ctx context.Context, _ string) error {
 func (f *pgFlowStore) GetStoreDir(ctx context.Context) string {
 	// PG mode doesn't use a local store directory
 	return ""
-}
-
-func nilIfEmptyStr(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
 }

@@ -2,6 +2,9 @@
 -- Applied to: astonish_platform database, public schema
 -- Contains: cross-org authentication, organization registry, channel links, settings
 
+-- Enable pgvector for embedding storage (used by tool_index)
+CREATE EXTENSION IF NOT EXISTS vector;
+
 -- ============================================================================
 -- Core tables: organizations, users, memberships
 -- ============================================================================

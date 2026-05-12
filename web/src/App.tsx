@@ -1573,6 +1573,7 @@ layout:
               pendingChatMessage={pendingChatMessage}
               onPendingChatMessageConsumed={() => setPendingChatMessage(null)}
               onSessionChange={(sid: string | null) => {
+                if (path.view !== 'chat') return
                 if (sid) {
                   replaceHash(buildPath('chat', { sessionId: sid }))
                 } else {

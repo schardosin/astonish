@@ -334,6 +334,16 @@ SaveConfig:
 	// Set as default provider
 	cfg.General.DefaultProvider = selectedInstance
 
+	// In platform mode, save provider config to the platform database.
+	// This must happen BEFORE saveProviderSecretsToStore, which scrubs secrets from pCfg.
+	// The platform settings store has its own secret extraction/encryption pipeline.
+	if cfg.Storage.Backend == "postgres" && cfg.Storage.Postgres.PlatformDSN != "" {
+		if err := saveProviderToPlatformDB(cfg, selectedInstance, pCfg); err != nil {
+			fmt.Printf("Warning: Failed to save provider to platform database: %v\n", err)
+			fmt.Println("You may need to configure the provider via Studio settings.")
+		}
+	}
+
 	// Save secrets to encrypted credential store (instead of plaintext config.yaml)
 	if err := saveProviderSecretsToStore(selectedInstance, selectedProviderID, pCfg); err != nil {
 		fmt.Printf("Warning: Failed to save secrets to credential store: %v\n", err)
@@ -511,6 +521,53 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 	pCfg["auth_url"] = authURL
 	pCfg["base_url"] = baseURL
 	pCfg["resource_group"] = resourceGroup
+}
+
+// saveProviderToPlatformDB saves the provider configuration to the platform
+// database's platform_settings table. This is used in platform mode so that
+// the daemon (which reads providers exclusively from the DB) can find them.
+// The platform settings store handles its own secret extraction/encryption.
+func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg config.ProviderConfig) error {
+	ctx := context.Background()
+
+	poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
+	defer poolMgr.Close()
+
+	pool, err := poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to platform DB: %w", err)
+	}
+
+	secrets := pgstore.NewPlatformSecretStore(poolMgr)
+	settingsStore := pgstore.NewPGPlatformSettingsStore(pool, secrets)
+
+	// Load existing settings (preserve any already-configured providers).
+	settings, err := settingsStore.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("load platform settings: %w", err)
+	}
+
+	// Merge the new provider into existing settings.
+	if settings.Providers == nil {
+		settings.Providers = make(map[string]map[string]string)
+	}
+
+	// Copy pCfg so we don't affect the caller's map.
+	provCopy := make(map[string]string, len(pCfg))
+	for k, v := range pCfg {
+		provCopy[k] = v
+	}
+	settings.Providers[instanceName] = provCopy
+	settings.DefaultProvider = instanceName
+	if model, ok := pCfg["model"]; ok && model != "" {
+		settings.DefaultModel = model
+	}
+
+	if err := settingsStore.Save(ctx, settings); err != nil {
+		return fmt.Errorf("save platform settings: %w", err)
+	}
+
+	return nil
 }
 
 // saveProviderSecretsToStore saves sensitive fields from a provider config

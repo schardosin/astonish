@@ -2023,7 +2023,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               <Loader size={24} className="animate-spin text-purple-400" />
             </div>
           ) : messages.length === 0 ? (
-            <HomePage />
+            <HomePage onSuggestionClick={(text) => { setInput(text); inputRef.current?.focus() }} />
           ) : (
             messages.map((msg, index) => {
               if (msg.type === 'user') {

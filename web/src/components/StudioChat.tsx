@@ -390,6 +390,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     init()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // React to URL-driven session changes after mount (e.g., user edits URL,
+  // navigates to a deleted session, or session is removed from sidebar).
+  const mountedRef = useRef(false)
+  useEffect(() => {
+    if (!mountedRef.current) {
+      mountedRef.current = true
+      return // Skip on mount — handled by the init effect above
+    }
+    const sid = initialSessionId || null
+    if (sid === activeSessionId) return // No change
+
+    if (!sid) {
+      // URL changed to /#/chat (no session) — reset to new chat
+      changeSession(null)
+      setMessages([])
+      return
+    }
+
+    // URL changed to a different session — try to load it
+    loadSessionHistory(sid)
+  }, [initialSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-scroll on new messages — only if user is near the bottom
   useEffect(() => {
     if (scrollRef.current && isNearBottomRef.current) {

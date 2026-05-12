@@ -34,7 +34,7 @@ spec:
         - name: astonish
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          args: ["studio"]
+          args: ["daemon", "run"]
           ports:
             - name: http
               containerPort: 9393

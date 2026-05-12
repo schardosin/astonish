@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: astonish:latest
+    command: ["studio"]
     ports:
       - "9393:9393"
     volumes:

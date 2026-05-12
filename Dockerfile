@@ -52,4 +52,4 @@ EXPOSE 9393
 
 # Set default entrypoint
 ENTRYPOINT ["astonish"]
-CMD ["studio"]
+CMD ["daemon", "run"]

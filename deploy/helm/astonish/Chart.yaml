@@ -1,0 +1,13 @@
+apiVersion: v2
+name: astonish
+description: Astonish AI Operations Platform - multi-tenant deployment with API and Worker components
+type: application
+version: 0.1.0
+appVersion: "dev"
+keywords:
+  - ai
+  - agent
+  - platform
+  - multi-tenant
+maintainers:
+  - name: schardosin

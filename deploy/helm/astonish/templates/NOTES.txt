@@ -1,0 +1,27 @@
+Astonish has been deployed!
+
+Components:
+  - API:    {{ .Values.api.replicaCount }} replica(s) (ASTONISH_MODE=api)
+  - Worker: {{ .Values.worker.replicaCount }} replica(s) (ASTONISH_MODE=worker)
+
+{{- if .Values.ingress.enabled }}
+
+Ingress:
+{{- range .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+
+To access the API locally:
+  kubectl port-forward svc/{{ include "astonish.fullname" . }}-api {{ .Values.service.port }}:{{ .Values.service.port }}
+  Then open: http://localhost:{{ .Values.service.port }}
+{{- end }}
+
+Check pod status:
+  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+
+View API logs:
+  kubectl logs -l app.kubernetes.io/component=api -f
+
+View Worker logs:
+  kubectl logs -l app.kubernetes.io/component=worker -f

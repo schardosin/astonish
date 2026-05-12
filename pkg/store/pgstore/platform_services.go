@@ -16,7 +16,7 @@ import (
 // TenantMiddleware, which reads the authenticated user's org/team from the
 // request context and populates a request-scoped Services clone.
 func NewPlatformServices(ctx context.Context, cfg config.PostgresConfig) (*store.Services, *PGStore, error) {
-	pgStore, err := New(ctx, cfg.PlatformDSN, cfg)
+	pgStore, err := New(ctx, cfg.GetPlatformDSN(), cfg)
 	if err != nil {
 		return nil, nil, err
 	}

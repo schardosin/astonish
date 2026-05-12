@@ -133,6 +133,17 @@ func (c *StorageConfig) IsFile() bool {
 	return c.Backend == "" || c.Backend == "file"
 }
 
+// GetPlatformDSN returns the platform database connection string, falling back
+// to the ASTONISH_PLATFORM_DSN environment variable if the config field is empty.
+// This allows K8s deployments to inject the DSN via a Secret without putting
+// credentials in the ConfigMap.
+func (c *PostgresConfig) GetPlatformDSN() string {
+	if c.PlatformDSN != "" {
+		return c.PlatformDSN
+	}
+	return os.Getenv("ASTONISH_PLATFORM_DSN")
+}
+
 // GetMaxOpenConns returns the max open connections with a sensible default.
 func (c *PostgresConfig) GetMaxOpenConns() int {
 	if c.MaxOpenConns <= 0 {

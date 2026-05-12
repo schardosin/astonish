@@ -197,3 +197,38 @@ func TestIsDaemonModeWorker(t *testing.T) {
 		t.Error("IsDaemonModeWorker() should return false when ASTONISH_MODE=api")
 	}
 }
+
+func TestGetPlatformDSN_FromConfig(t *testing.T) {
+	cfg := &PostgresConfig{PlatformDSN: "postgres://config-host:5432/db"}
+	got := cfg.GetPlatformDSN()
+	if got != "postgres://config-host:5432/db" {
+		t.Errorf("GetPlatformDSN() = %q, want config value", got)
+	}
+}
+
+func TestGetPlatformDSN_FallbackToEnv(t *testing.T) {
+	cfg := &PostgresConfig{PlatformDSN: ""}
+	t.Setenv("ASTONISH_PLATFORM_DSN", "postgres://env-host:5432/db")
+	got := cfg.GetPlatformDSN()
+	if got != "postgres://env-host:5432/db" {
+		t.Errorf("GetPlatformDSN() = %q, want env value", got)
+	}
+}
+
+func TestGetPlatformDSN_ConfigPrecedence(t *testing.T) {
+	cfg := &PostgresConfig{PlatformDSN: "postgres://config-host:5432/db"}
+	t.Setenv("ASTONISH_PLATFORM_DSN", "postgres://env-host:5432/db")
+	got := cfg.GetPlatformDSN()
+	if got != "postgres://config-host:5432/db" {
+		t.Errorf("GetPlatformDSN() = %q, want config value (should take precedence over env)", got)
+	}
+}
+
+func TestGetPlatformDSN_Empty(t *testing.T) {
+	t.Setenv("ASTONISH_PLATFORM_DSN", "")
+	cfg := &PostgresConfig{PlatformDSN: ""}
+	got := cfg.GetPlatformDSN()
+	if got != "" {
+		t.Errorf("GetPlatformDSN() = %q, want empty", got)
+	}
+}

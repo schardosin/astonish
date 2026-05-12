@@ -1,0 +1,101 @@
+# Astonish Helm Chart - Default Values
+# Override secrets in values-dev.yaml (not committed to git)
+
+# -- Container image settings
+image:
+  repository: schardosin/astonish
+  tag: dev
+  pullPolicy: Always
+
+# -- API Deployment (stateless, horizontally scalable)
+# Handles HTTP requests, SSE streaming, chat execution
+api:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# -- Worker Deployment (single replica, background tasks)
+# Runs scheduler, channel integrations, fleet monitors
+worker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# -- Astonish configuration (rendered into config.yaml ConfigMap)
+# Only non-sensitive settings belong here. Secrets go in the secrets section below.
+config:
+  storage:
+    backend: postgres
+    postgres:
+      instanceSuffix: ""
+      maxOpenConns: 25
+      maxIdleConns: 5
+      connMaxLifetimeMinutes: 30
+  auth:
+    mode: builtin
+    allowRegistration: true
+    defaultOrgName: ""
+    defaultOrgSlug: ""
+    accessTokenTTLMinutes: 15
+    refreshTokenTTLDays: 90
+
+# -- Secrets (set in values-dev.yaml, NEVER commit real values here)
+secrets:
+  # ASTONISH_MASTER_KEY: 64 hex characters (32 bytes AES-256 key)
+  # Used for encrypting credentials at rest in the platform database.
+  masterKey: ""
+  # ASTONISH_JWT_SECRET: signing key for access/refresh tokens.
+  # If empty, tokens won't survive pod restarts.
+  jwtSecret: ""
+  # ASTONISH_PLATFORM_DSN: PostgreSQL connection string for the platform database.
+  # Format: postgres://user:pass@host:port/dbname?sslmode=disable
+  platformDSN: ""
+
+# -- Service configuration (API pods only)
+service:
+  type: ClusterIP
+  port: 9393
+
+# -- Ingress configuration
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    # Sticky sessions for SSE affinity (required until Phase 2 PG event polling)
+    nginx.ingress.kubernetes.io/affinity: cookie
+    nginx.ingress.kubernetes.io/session-cookie-name: astonish-sticky
+    nginx.ingress.kubernetes.io/session-cookie-max-age: "3600"
+    # SSE / long-lived connections
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  hosts: []
+  #  - host: astonish.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: astonish-tls
+  #    hosts:
+  #      - astonish.example.com
+
+# -- Horizontal Pod Autoscaler (API pods only)
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# -- Pod scheduling constraints
+nodeSelector: {}
+tolerations: []
+affinity: {}

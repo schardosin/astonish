@@ -2,7 +2,7 @@
 # Provides a clean, standalone container
 
 # Stage 1: Build web UI first
-FROM node:20-alpine AS web-builder
+FROM node:22-alpine AS web-builder
 
 WORKDIR /app/web
 COPY web/package*.json ./
@@ -12,7 +12,7 @@ COPY web/ ./
 RUN rm -rf ./dist && npm run build
 
 # Stage 2: Build Go binary with embedded UI
-FROM golang:1.24-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
 

@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/apps"
+	"github.com/schardosin/astonish/pkg/store"
 
 	_ "modernc.org/sqlite"
 )
@@ -268,6 +271,86 @@ func CleanupOrphanAppDBs(maxAge time.Duration) int {
 	return cleaned
 }
 
+// ── SQLite → PostgreSQL Dialect Translation ──────────────────────────
+
+// sqliteToPostgres translates common SQLite SQL dialect differences to
+// PostgreSQL equivalents. This allows apps written for SQLite to run
+// unmodified against per-app PostgreSQL schemas.
+//
+// Translations performed:
+//   - ? parameter placeholders → $1, $2, ... (positional)
+//   - AUTOINCREMENT → GENERATED ALWAYS AS IDENTITY
+//   - INTEGER PRIMARY KEY AUTOINCREMENT → INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY
+//   - DATETIME DEFAULT CURRENT_TIMESTAMP → TIMESTAMPTZ DEFAULT now()
+//   - PRAGMA statements → no-op (returns original SQL unchanged, caller handles)
+//   - EXPLAIN → passed through (PG supports it natively)
+func sqliteToPostgres(sql string) string {
+	trimmed := strings.TrimSpace(strings.ToUpper(sql))
+
+	// PRAGMA statements are SQLite-specific and have no PG equivalent.
+	// Return empty string as a signal to the caller to return a no-op result.
+	if strings.HasPrefix(trimmed, "PRAGMA") {
+		return ""
+	}
+
+	result := sql
+
+	// Replace ? placeholders with $N positional params.
+	// We must be careful not to replace ? inside string literals.
+	result = replaceQuestionMarks(result)
+
+	// AUTOINCREMENT → GENERATED ALWAYS AS IDENTITY
+	// Match: INTEGER PRIMARY KEY AUTOINCREMENT
+	reAutoInc := regexp.MustCompile(`(?i)\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b`)
+	result = reAutoInc.ReplaceAllString(result, "INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY")
+
+	// Standalone AUTOINCREMENT (shouldn't normally appear, but just in case)
+	reAutoIncStandalone := regexp.MustCompile(`(?i)\bAUTOINCREMENT\b`)
+	result = reAutoIncStandalone.ReplaceAllString(result, "GENERATED ALWAYS AS IDENTITY")
+
+	// DATETIME DEFAULT CURRENT_TIMESTAMP → TIMESTAMPTZ DEFAULT now()
+	reDatetime := regexp.MustCompile(`(?i)\bDATETIME\s+DEFAULT\s+CURRENT_TIMESTAMP\b`)
+	result = reDatetime.ReplaceAllString(result, "TIMESTAMPTZ DEFAULT now()")
+
+	// Standalone DATETIME type → TIMESTAMPTZ
+	reDatetimeType := regexp.MustCompile(`(?i)\bDATETIME\b`)
+	result = reDatetimeType.ReplaceAllString(result, "TIMESTAMPTZ")
+
+	return result
+}
+
+// replaceQuestionMarks replaces ? placeholders with $1, $2, etc.,
+// while preserving ? characters inside string literals.
+func replaceQuestionMarks(sql string) string {
+	var buf strings.Builder
+	buf.Grow(len(sql) + 20)
+
+	paramIndex := 0
+	inSingle := false
+	inDouble := false
+
+	for i := 0; i < len(sql); i++ {
+		c := sql[i]
+
+		switch {
+		case c == '\'' && !inDouble:
+			inSingle = !inSingle
+			buf.WriteByte(c)
+		case c == '"' && !inSingle:
+			inDouble = !inDouble
+			buf.WriteByte(c)
+		case c == '?' && !inSingle && !inDouble:
+			paramIndex++
+			buf.WriteByte('$')
+			buf.WriteString(strconv.Itoa(paramIndex))
+		default:
+			buf.WriteByte(c)
+		}
+	}
+
+	return buf.String()
+}
+
 // ── Request/Response Types ───────────────────────────────────────────
 
 type appStateRequest struct {
@@ -328,6 +411,38 @@ func AppStateQueryHandler(w http.ResponseWriter, r *http.Request) {
 
 	slog.Debug("app state query", "app", req.AppName, "requestId", req.RequestID, "sql", truncateSQL(req.SQL))
 
+	slug := apps.Slugify(req.AppName)
+
+	// ── Platform mode: route to PostgreSQL via AppStateSQLStore ──
+	if svc := store.FromRequest(r); svc != nil && svc.AppStateSQL != nil {
+		pgSQL := sqliteToPostgres(req.SQL)
+
+		// PRAGMA → no-op in PG; return empty result set
+		if pgSQL == "" {
+			respondJSON(w, http.StatusOK, appStateResponse{
+				RequestID: req.RequestID,
+				Data:      []map[string]any{},
+			})
+			return
+		}
+
+		rows, err := svc.AppStateSQL.Query(r.Context(), slug, pgSQL, req.Params...)
+		if err != nil {
+			respondJSON(w, http.StatusOK, appStateResponse{
+				RequestID: req.RequestID,
+				Error:     fmt.Sprintf("query error: %v", err),
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, appStateResponse{
+			RequestID: req.RequestID,
+			Data:      rows,
+		})
+		return
+	}
+
+	// ── Personal mode: SQLite ──
 	db, err := getAppDB(req.AppName)
 	if err != nil {
 		respondJSON(w, http.StatusOK, appStateResponse{
@@ -393,6 +508,44 @@ func AppStateExecHandler(w http.ResponseWriter, r *http.Request) {
 
 	slog.Debug("app state exec", "app", req.AppName, "requestId", req.RequestID, "sql", truncateSQL(req.SQL))
 
+	slug := apps.Slugify(req.AppName)
+
+	// ── Platform mode: route to PostgreSQL via AppStateSQLStore ──
+	if svc := store.FromRequest(r); svc != nil && svc.AppStateSQL != nil {
+		pgSQL := sqliteToPostgres(req.SQL)
+
+		// PRAGMA → no-op in PG; return success with zero rows affected
+		if pgSQL == "" {
+			respondJSON(w, http.StatusOK, appStateResponse{
+				RequestID: req.RequestID,
+				Data: map[string]any{
+					"rowsAffected": int64(0),
+					"lastInsertId": int64(0),
+				},
+			})
+			return
+		}
+
+		rowsAffected, lastInsertID, err := svc.AppStateSQL.Exec(r.Context(), slug, pgSQL, req.Params...)
+		if err != nil {
+			respondJSON(w, http.StatusOK, appStateResponse{
+				RequestID: req.RequestID,
+				Error:     fmt.Sprintf("exec error: %v", err),
+			})
+			return
+		}
+
+		respondJSON(w, http.StatusOK, appStateResponse{
+			RequestID: req.RequestID,
+			Data: map[string]any{
+				"rowsAffected": rowsAffected,
+				"lastInsertId": lastInsertID,
+			},
+		})
+		return
+	}
+
+	// ── Personal mode: SQLite ──
 	db, err := getAppDB(req.AppName)
 	if err != nil {
 		respondJSON(w, http.StatusOK, appStateResponse{

@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Rocket } from 'lucide-react'
 import {
-  fetchFleetPlans, fetchFleets,
+  fetchFleetPlans, fetchFleets, fetchFleetSessionsHistory,
 } from '../api/fleetChat'
 import type {
   FleetDefinition, FleetPlanSummary,
 } from '../api/fleetChat'
-import { fetchSessions, deleteSession } from '../api/studioChat'
-import type { ChatSession } from '../api/studioChat'
+import { deleteSession } from '../api/studioChat'
 import { buildPath } from '../hooks/useHashRouter'
 import type { RouterPath } from '../hooks/useHashRouter'
 import type { FleetChatSession, SelectedItem } from './fleet/fleetUtils'
@@ -67,13 +66,13 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }: Fle
       const [planData, fleetData, sessionData] = await Promise.all([
         fetchFleetPlans().catch(() => ({ plans: [] as FleetPlanSummary[] })),
         fetchFleets().catch(() => ({ fleets: [] as FleetDefinition[] })),
-        fetchSessions().catch(() => [] as ChatSession[]),
+        fetchFleetSessionsHistory().catch(() => [] as FleetChatSession[]),
       ])
       setPlans(planData.plans || [])
       setTemplates(fleetData.fleets || [])
-      // Filter sessions to fleet sessions only
+      // Fleet sessions endpoint already returns only fleet sessions.
       const allSessions: FleetChatSession[] = Array.isArray(sessionData) ? sessionData as FleetChatSession[] : []
-      setSessions(allSessions.filter(s => s.fleetKey))
+      setSessions(allSessions)
     } catch (err: any) {
       console.error('Failed to load fleet data:', err)
     } finally {

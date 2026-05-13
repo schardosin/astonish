@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/genai"
@@ -51,7 +52,7 @@ func getFlowCreationTools() []*genai.Tool {
 }
 
 // executeFlowCreationTool executes a tool call from the AI and returns the result
-func executeFlowCreationTool(ctx context.Context, toolName string, args map[string]interface{}) (string, interface{}, error) {
+func executeFlowCreationTool(ctx context.Context, toolName string, args map[string]interface{}, appCfg *config.AppConfig) (string, interface{}, error) {
 	switch toolName {
 	case "search_mcp_store":
 		query, _ := args["query"].(string)
@@ -80,7 +81,7 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 		}
 
 		// Use the same AI search logic
-		matchingTools := findToolsWithAI(ctx, query, toolSummaries, installableServers)
+		matchingTools := findToolsWithAI(ctx, query, toolSummaries, installableServers, appCfg)
 
 		if len(matchingTools) == 0 {
 			return fmt.Sprintf("No MCP servers found in the store matching '%s'. Try search_mcp_internet to search online.", query), nil, nil
@@ -102,13 +103,13 @@ func executeFlowCreationTool(ctx context.Context, toolName string, args map[stri
 		}
 
 		// Check if web search is configured
-		webSearchConfigured, serverName, toolName := IsWebSearchConfigured()
+		webSearchConfigured, serverName, toolName := isWebSearchConfiguredWith(appCfg)
 		if !webSearchConfigured {
 			return "Internet search is not configured. Tell the user to configure a web search tool (like Tavily) in Settings.", nil, nil
 		}
 
 		// Use the internet search function
-		results, err := searchInternetForMCPServers(ctx, serverName, toolName, query+" MCP server github npm")
+		results, err := searchInternetForMCPServers(ctx, serverName, toolName, query+" MCP server github npm", appCfg)
 		if err != nil {
 			return fmt.Sprintf("Search error: %s", err.Error()), nil, nil
 		}

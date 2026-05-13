@@ -12,7 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -36,7 +37,8 @@ type ChatEvent struct {
 // independently and results are delivered asynchronously.
 type ChatRunner struct {
 	SessionID string
-	IsNew     bool // whether this is a newly created session
+	UserID    string // effective user ID (platform user ID or "studio_user")
+	IsNew     bool   // whether this is a newly created session
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -66,16 +68,154 @@ type ChatRunner struct {
 // titleWaitTimeout controls how long to wait for the title goroutine
 // after the "done" event before closing subscribers. Zero means close
 // immediately (used in tests).
-func newChatRunner(sessionID string, isNew bool) *ChatRunner {
+func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 	ctx, cancel := context.WithCancel(context.Background())
+	// Inject session ID into context so tool functions (e.g., memory_save)
+	// can tag entries with the session that created them.
+	ctx = store.WithSessionID(ctx, sessionID)
 	return &ChatRunner{
 		SessionID:   sessionID,
+		UserID:      userID,
 		IsNew:       isNew,
 		ctx:         ctx,
 		cancel:      cancel,
 		subscribers: make(map[string]chan ChatEvent),
 		titleDone:   make(chan struct{}),
 	}
+}
+
+// InjectCredentialStore adds a tenant-scoped credential store to the runner's
+// context so that tool functions can retrieve it via store.CredentialStoreFromContext.
+// Must be called before Run().
+func (cr *ChatRunner) InjectCredentialStore(cs store.CredentialStore) {
+	cr.ctx = store.WithCredentialStore(cr.ctx, cs)
+}
+
+// InjectMemoryStores adds tenant-scoped memory stores to the runner's context.
+// memStore is the team-scoped PG memory store (for saves and single-tier search).
+// searcher is the three-tier searcher (personal + team + org) for cross-tier search.
+// Tool functions and knowledge callbacks retrieve these via store.*FromContext.
+// Must be called before Run().
+func (cr *ChatRunner) InjectMemoryStores(memStore store.MemoryStore, searcher store.ThreeTierSearcher) {
+	if memStore != nil {
+		cr.ctx = store.WithMemoryStore(cr.ctx, memStore)
+	}
+	if searcher != nil {
+		cr.ctx = store.WithThreeTierSearcher(cr.ctx, searcher)
+	}
+}
+
+// InjectMemorySaveOrMerge adds a cross-session memory merge function to the
+// runner's context. When set, the memory_save tool will use this function
+// instead of a raw insert, enabling deduplication across sessions via LLM merge.
+// Must be called before Run().
+func (cr *ChatRunner) InjectMemorySaveOrMerge(fn store.MemorySaveOrMergeFunc) {
+	if fn != nil {
+		cr.ctx = store.WithMemorySaveOrMerge(cr.ctx, fn)
+	}
+}
+
+// InjectFlowStore adds a tenant-scoped flow store to the runner's context
+// so that drill tools (save_drill, delete_drill, list_drills, read_drill,
+// edit_drill) and the run_drill tool can read/write flows from the database
+// rather than the local filesystem in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
+	cr.ctx = store.WithFlowStore(cr.ctx, fs)
+}
+
+// InjectSkillStores adds tenant-scoped skill stores to the runner's context
+// so that the skill_lookup tool can resolve skills dynamically per-request
+// from the org and team stores (in addition to bundled skills).
+// Must be called before Run().
+func (cr *ChatRunner) InjectSkillStores(org, team store.SkillStore) {
+	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Org: org, Team: team})
+}
+
+// InjectSchedulerStore adds a tenant-scoped scheduler store to the runner's context
+// so that the schedule_job and list_scheduled_jobs tools can operate on the
+// correct team's jobs in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectSchedulerStore(ss store.SchedulerStore) {
+	cr.ctx = store.WithSchedulerStore(cr.ctx, ss)
+}
+
+// InjectDrillReportStore adds a tenant-scoped drill report store to the runner's
+// context so that the run_drill tool can persist execution results to the database
+// in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectDrillReportStore(rs store.DrillReportStore) {
+	cr.ctx = store.WithDrillReportStore(cr.ctx, rs)
+}
+
+// InjectMCPServerStores adds tenant-scoped MCP server stores to the runner's context
+// so that the chat agent can resolve MCP server configurations from the database
+// in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectMCPServerStores(org, team store.MCPServerStore) {
+	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{Org: org, Team: team})
+}
+
+// InjectFleetStores adds tenant-scoped fleet template and plan stores to the
+// runner's context so that fleet tools (save_fleet_plan, list_fleets) can
+// read/write from the database in platform mode. Must be called before Run().
+func (cr *ChatRunner) InjectFleetStores(templates store.FleetTemplateStore, plans store.FleetPlanStore) {
+	if templates != nil {
+		cr.ctx = store.WithFleetTemplateStore(cr.ctx, templates)
+	}
+	if plans != nil {
+		cr.ctx = store.WithFleetPlanStore(cr.ctx, plans)
+	}
+}
+
+// InjectSandboxTemplate adds the team's custom sandbox template name to the
+// runner's context. NodeTool reads this at container creation time so that chat
+// sessions use the team's pre-configured container image rather than @base.
+// Must be called before Run().
+func (cr *ChatRunner) InjectSandboxTemplate(tpl string) {
+	cr.ctx = store.WithSandboxTemplate(cr.ctx, tpl)
+}
+
+// InjectSessionService adds a tenant-scoped session store to the runner's context
+// so that sub-agents (delegate_tasks) create child sessions in the correct store
+// (e.g., pgstore PersonalSessions) rather than the factory-time default (FileStore).
+// Must be called before Run().
+func (cr *ChatRunner) InjectSessionService(ss store.SessionStore) {
+	cr.ctx = store.WithSessionService(cr.ctx, ss)
+}
+
+// InjectUserID adds the effective user ID to the runner's context so that
+// sub-agents (delegate_tasks) create child sessions with the correct user_id.
+// In platform mode, the pgstore user_id column is UUID-typed, so this must be
+// the platform user's UUID rather than the factory default ("console_user").
+// Must be called before Run().
+func (cr *ChatRunner) InjectUserID(id string) {
+	cr.ctx = store.WithUserID(cr.ctx, id)
+}
+
+// InjectRedactor adds the session's Redactor to the runner's context so that
+// tool functions (e.g., memory_save) can call Placeholderize() to replace raw
+// credential values with {{CREDENTIAL:name:field}} tokens before persisting.
+// Must be called before Run().
+func (cr *ChatRunner) InjectRedactor(r *credentials.Redactor) {
+	cr.ctx = credentials.WithRedactor(cr.ctx, r)
+}
+
+// InjectDisabledTools adds per-team tool restrictions to the runner's context.
+// Tools in this list will be filtered from the LLM request and system prompt.
+func (cr *ChatRunner) InjectDisabledTools(names []string) {
+	cr.ctx = store.WithDisabledTools(cr.ctx, names)
+}
+
+// InjectTenantSlugs propagates org/team identity into the runner's context so
+// that tools (e.g., list_team_members) can resolve team membership and user
+// channels without importing pgstore directly.
+func (cr *ChatRunner) InjectTenantSlugs(orgSlug, teamSlug string) {
+	cr.ctx = store.WithOrgSlug(cr.ctx, orgSlug)
+	cr.ctx = store.WithTeamSlug(cr.ctx, teamSlug)
+}
+
+// InjectRunJobFunc adds a scheduler test-execution function to the runner's
+// context. This allows the schedule_job tool to execute a dry-run in platform
+// mode without going through the unauthenticated HTTP bridge.
+func (cr *ChatRunner) InjectRunJobFunc(fn store.RunJobFunc) {
+	cr.ctx = store.WithRunJobFunc(cr.ctx, fn)
 }
 
 // Run executes the agent in the background. It creates the ADK runner,
@@ -85,7 +225,7 @@ func (cr *ChatRunner) Run(
 	chatAgent *agent.ChatAgent,
 	sessionService session.Service,
 	llm model.LLM,
-	fileStore *persistentsession.FileStore,
+	titleSetter SessionTitleSetter,
 	userMsg *genai.Content,
 	msg string,
 	autoApprove bool,
@@ -152,10 +292,12 @@ func (cr *ChatRunner) Run(
 	// Set auto-approve for this request
 	chatAgent.AutoApprove = autoApprove
 
-	// Inject per-turn session context
+	// Inject per-turn session context via context overrides (thread-safe).
+	// Run() clones the SystemPromptBuilder and applies these on the clone.
 	if systemContext != "" {
-		chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(systemContext)
-		defer func() { chatAgent.SystemPrompt.SessionContext = "" }()
+		cr.ctx = agent.WithPromptOverrides(cr.ctx, &agent.PromptOverrides{
+			SessionContext: agent.EscapeCurlyPlaceholders(systemContext),
+		})
 	}
 
 	// Wire transparent sub-agent streaming
@@ -285,6 +427,17 @@ func (cr *ChatRunner) Run(
 				}
 			}
 		}
+
+		// Emit memory_saved when a sub-agent saves a memory
+		if evt.Type == "task_tool_result" && evt.ToolName == "memory_save" {
+			if resultMap, ok := evt.ToolResult.(map[string]any); ok {
+				if saved, ok := resultMap["saved"]; ok && saved == true {
+					cr.emitEvent("memory_saved", map[string]any{
+						"session_id": cr.SessionID,
+					})
+				}
+			}
+		}
 	}
 	defer func() { chatAgent.SubTaskProgressCallback = nil }()
 
@@ -294,7 +447,7 @@ func (cr *ChatRunner) Run(
 	var lastRunErr error
 	hasContent := false // true if any non-partial text or tool call was emitted
 
-	for event, runErr := range rnr.Run(cr.ctx, studioChatUserID, cr.SessionID, userMsg, adkagent.RunConfig{
+	for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
 		if cr.ctx.Err() != nil {
@@ -304,7 +457,7 @@ func (cr *ChatRunner) Run(
 		if runErr != nil {
 			lastRunErr = runErr
 			cr.emitEvent("error", map[string]any{"error": runErr.Error()})
-			persistRunError(cr.ctx, sessionService, cr.SessionID, runErr)
+			persistRunError(cr.ctx, sessionService, cr.UserID, cr.SessionID, runErr)
 			break
 		}
 
@@ -361,6 +514,15 @@ func (cr *ChatRunner) Run(
 						"result": summarizeToolResult(resp),
 					})
 					cr.drainImagesAndFlowOutput(chatAgent)
+
+					// Emit memory_saved SSE event when memory_save tool succeeds
+					if part.FunctionResponse.Name == "memory_save" && resp != nil {
+						if saved, ok := resp["saved"]; ok && saved == true {
+							cr.emitEvent("memory_saved", map[string]any{
+								"session_id": cr.SessionID,
+							})
+						}
+					}
 				}
 			}
 		}
@@ -401,7 +563,7 @@ func (cr *ChatRunner) Run(
 		}
 
 		seenPartialText = false
-		for event, runErr := range rnr.Run(cr.ctx, studioChatUserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
+		for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
 			if cr.ctx.Err() != nil {
@@ -409,7 +571,7 @@ func (cr *ChatRunner) Run(
 			}
 			if runErr != nil {
 				cr.emitEvent("error", map[string]any{"error": fmt.Sprintf("Retry also failed: %v", runErr)})
-				persistRunError(cr.ctx, sessionService, cr.SessionID, runErr)
+				persistRunError(cr.ctx, sessionService, cr.UserID, cr.SessionID, runErr)
 				break
 			}
 			if event.Actions.StateDelta != nil {
@@ -480,10 +642,10 @@ func (cr *ChatRunner) Run(
 	// UI isn't blocked. The defer block waits on cr.titleDone (up to
 	// titleWaitTimeout) before closing subscribers, so the session_title
 	// SSE event reaches the browser if the LLM responds in time.
-	if cr.IsNew && msg != "" && fileStore != nil {
+	if cr.IsNew && msg != "" && titleSetter != nil {
 		go func() {
 			defer close(cr.titleDone)
-			generateStudioSessionTitle(llm, fileStore, cr.SessionID, msg, func(title string) {
+			generateStudioSessionTitle(llm, titleSetter, cr.SessionID, msg, func(title string) {
 				cr.emitEvent("session_title", map[string]any{"title": title})
 			})
 		}()
@@ -657,7 +819,7 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 		})
 
 		// Persist to session transcript
-		persistAppPreview(cr.ctx, sessionService, cr.SessionID, cleanCode, title, version, appID)
+		persistAppPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, cleanCode, title, version, appID)
 
 		// Update active app state for cross-turn refinement
 		chatAgent.SetActiveApp(cr.SessionID, existingApp)

@@ -2,6 +2,8 @@
  * API client for Studio Chat
  */
 
+import { teamFetch } from './teamContext'
+
 const API_BASE = '/api/studio'
 
 // --- Types ---
@@ -56,7 +58,7 @@ export interface ConnectChatParams {
 // --- API Functions ---
 
 export async function fetchSessions(): Promise<ChatSession[]> {
-  const response = await fetch(`${API_BASE}/sessions`)
+  const response = await teamFetch(`${API_BASE}/sessions`)
   if (!response.ok) {
     throw new Error(`Failed to fetch sessions: ${response.statusText}`)
   }
@@ -64,7 +66,7 @@ export async function fetchSessions(): Promise<ChatSession[]> {
 }
 
 export async function fetchSessionHistory(id: string): Promise<SessionHistory> {
-  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch session: ${response.statusText}`)
   }
@@ -72,12 +74,30 @@ export async function fetchSessionHistory(id: string): Promise<SessionHistory> {
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`, {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
     throw new Error(`Failed to delete session: ${response.statusText}`)
   }
+}
+
+export interface SubtaskEventItem {
+  type: string
+  tool_name?: string
+  tool_args?: unknown
+  tool_result?: unknown
+  text?: string
+}
+
+export async function fetchSubtaskEvents(sessionId: string, taskName: string): Promise<SubtaskEventItem[]> {
+  const params = new URLSearchParams({ task_name: taskName })
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/subtask-events?${params}`)
+  if (!response.ok) {
+    return []
+  }
+  const data = await response.json()
+  return data.events || []
 }
 
 export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
@@ -93,7 +113,7 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
       if (systemContext) {
         body.systemContext = systemContext
       }
-      const response = await fetch(`${API_BASE}/chat`, {
+      const response = await teamFetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -158,7 +178,7 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
 
 export async function stopChat(sessionId: string): Promise<void> {
   try {
-    await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
       method: 'POST',
     })
   } catch (err) {
@@ -170,7 +190,7 @@ export async function stopChat(sessionId: string): Promise<void> {
  * Check if a session has an active background runner.
  */
 export async function fetchSessionStatus(sessionId: string): Promise<{ sessionId: string; running: boolean; eventCount?: number }> {
-  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/status`)
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/status`)
   if (!response.ok) {
     throw new Error(`Failed to fetch session status: ${response.statusText}`)
   }
@@ -191,7 +211,7 @@ export function connectChatStream({ sessionId, onEvent, onError, onDone }: {
 
   const run = async () => {
     try {
-      const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
+      const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
         method: 'GET',
         signal: controller.signal,
       })
@@ -258,7 +278,7 @@ export function connectChatStream({ sessionId, onEvent, onError, onDone }: {
 export async function fetchArtifactContent(path: string, sessionId?: string): Promise<string> {
   let url = `${API_BASE}/artifacts/content?path=${encodeURIComponent(path)}`
   if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
-  const resp = await fetch(url)
+  const resp = await teamFetch(url)
   if (!resp.ok) throw new Error(`Failed to fetch artifact content: ${resp.status}`)
   return resp.text()
 }

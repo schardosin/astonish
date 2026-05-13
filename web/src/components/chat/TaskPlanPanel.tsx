@@ -1,9 +1,10 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { ChevronDown, Loader, Check, Wrench, ListTodo, RotateCcw, Code, Globe, GitFork, FileUp } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './markdownComponents'
 import type { SubTaskExecutionMessage, SubTaskEvent } from './chatTypes'
+import { fetchSubtaskEvents } from '../../api/studioChat'
 
 // Task status derived from events
 interface TaskState {
@@ -46,9 +47,41 @@ function stepIcon(task: TaskState) {
 // Connected vertical timeline panel showing real-time progress of delegate_tasks sub-agents.
 // Perplexity-inspired: continuous vertical line, circular status dots, per-step icons,
 // timestamps on hover, click to expand details.
-export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage }) {
+export default function TaskPlanPanel({ data, sessionId }: { data: SubTaskExecutionMessage; sessionId?: string }) {
   const [expandedTasks, setExpandedTasks] = useState<Record<string, boolean>>({})
   const [expandedContent, setExpandedContent] = useState<Set<string>>(new Set())
+  // Lazy-loaded tool events for tasks that only have summary after page refresh
+  const [fetchedEvents, setFetchedEvents] = useState<Record<string, SubTaskEvent[]>>({})
+  const [loadingTasks, setLoadingTasks] = useState<Set<string>>(new Set())
+
+  // Lazy-fetch tool events for a task when it's expanded and has no tool detail.
+  // This happens after page refresh — only the summary text is available from the
+  // delegate_tasks response, but the full child session has all tool calls.
+  const loadTaskEvents = useCallback(async (taskName: string) => {
+    if (!sessionId || fetchedEvents[taskName] || loadingTasks.has(taskName)) return
+    setLoadingTasks(prev => new Set(prev).add(taskName))
+    try {
+      const events = await fetchSubtaskEvents(sessionId, taskName)
+      // Convert API response to SubTaskEvent format
+      const mapped: SubTaskEvent[] = events.map(e => ({
+        type: e.type,
+        task_name: taskName,
+        tool_name: e.tool_name,
+        tool_args: e.tool_args,
+        tool_result: e.tool_result,
+        text: e.text,
+      }))
+      setFetchedEvents(prev => ({ ...prev, [taskName]: mapped }))
+    } catch {
+      // Silently fail — the summary text is still visible
+    } finally {
+      setLoadingTasks(prev => {
+        const next = new Set(prev)
+        next.delete(taskName)
+        return next
+      })
+    }
+  }, [sessionId, fetchedEvents, loadingTasks])
 
   // Derive task states from the event stream
   const taskStates = useMemo(() => {
@@ -113,7 +146,15 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
   const allDone = data.status !== 'running'
 
   const toggleTask = (name: string) => {
-    setExpandedTasks(prev => ({ ...prev, [name]: !prev[name] }))
+    const willExpand = !expandedTasks[name]
+    setExpandedTasks(prev => ({ ...prev, [name]: willExpand }))
+    // Lazy-load detail if expanding a task that has no tool events (post-refresh)
+    if (willExpand) {
+      const task = taskStates.find(t => t.name === name)
+      if (task && !task.events.some(e => e.type === 'task_tool_call' || e.type === 'task_tool_result')) {
+        loadTaskEvents(name)
+      }
+    }
   }
 
   const toggleContent = (eventKey: string) => {
@@ -380,7 +421,22 @@ export default function TaskPlanPanel({ data }: { data: SubTaskExecutionMessage 
                   {task.events.length === 0 && task.status === 'pending' && (
                     <div className="text-xs py-1" style={{ color: 'var(--text-muted)' }}>Waiting to start...</div>
                   )}
-                  {task.events.map((evt, evtIdx) => renderTaskEvent(evt, taskIdx, evtIdx))}
+                  {/* Show loading indicator while fetching child session events */}
+                  {loadingTasks.has(task.name) && (
+                    <div className="flex items-center gap-2 text-xs py-2" style={{ color: 'var(--text-muted)' }}>
+                      <Loader size={10} className="animate-spin" />
+                      <span>Loading execution detail...</span>
+                    </div>
+                  )}
+                  {/* Render lazy-fetched events (tool calls from child session) */}
+                  {fetchedEvents[task.name] && fetchedEvents[task.name].map((evt, evtIdx) =>
+                    renderTaskEvent(evt, taskIdx, evtIdx)
+                  )}
+                  {/* Render inline events — suppress task_text when fetched events are available
+                      (the fetched events already include the full output, avoiding duplication) */}
+                  {task.events
+                    .filter(evt => !(fetchedEvents[task.name] && evt.type === 'task_text'))
+                    .map((evt, evtIdx) => renderTaskEvent(evt, taskIdx, evtIdx + (fetchedEvents[task.name]?.length || 0)))}
                 </div>
               )}
             </div>

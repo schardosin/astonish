@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Search, X, Loader2, DollarSign, Database, Zap, Check } from 'lucide-react'
+import { teamFetch } from '../api/teamContext'
 
 interface ModelPricing {
   prompt?: string
@@ -49,7 +50,7 @@ export default function ProviderModelSelector({ isOpen, onClose, onSelect, curre
     setLoading(true)
     setError(null)
     try {
-      const res = await fetch(`/api/providers/${provider}/models-metadata`)
+      const res = await teamFetch(`/api/providers/${provider}/models-metadata`)
       if (!res.ok) throw new Error('Failed to fetch models')
       const data = await res.json() as { models?: Model[] }
       setModels(data.models || [])

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -103,18 +102,18 @@ type GitHubMonitorState struct {
 // source of truth: every poll cycle fetches open labeled issues and checks for
 // customer replies.
 type GitHubMonitor struct {
-	PlanKey  string
-	Repo     string
-	Labels   []string // filter: only issues with these labels
-	StateDir string   // directory for persisting seen-issue state
-	GHToken  string   // optional: injected as GH_TOKEN for gh CLI auth
+	PlanKey string
+	Repo    string
+	Labels  []string          // filter: only issues with these labels
+	Store   MonitorStateStore // persistence backend for monitor state
+	GHToken string            // optional: injected as GH_TOKEN for gh CLI auth
 
 	mu    sync.Mutex
 	state GitHubMonitorState
 }
 
 // NewGitHubMonitor creates a monitor for a fleet plan's GitHub Issues channel.
-func NewGitHubMonitor(planKey string, channelConfig map[string]any, stateDir string) *GitHubMonitor {
+func NewGitHubMonitor(planKey string, channelConfig map[string]any, store MonitorStateStore) *GitHubMonitor {
 	repo := GetConfigString(channelConfig, "repo")
 	labels := getConfigStringSlice(channelConfig, "labels")
 	if len(labels) == 0 {
@@ -123,43 +122,37 @@ func NewGitHubMonitor(planKey string, channelConfig map[string]any, stateDir str
 	}
 
 	return &GitHubMonitor{
-		PlanKey:  planKey,
-		Repo:     repo,
-		Labels:   labels,
-		StateDir: stateDir,
+		PlanKey: planKey,
+		Repo:    repo,
+		Labels:  labels,
+		Store:   store,
 		state: GitHubMonitorState{
 			SeenIssues: make(map[int]*SeenIssueState),
 		},
 	}
 }
 
-// LoadState loads the persisted state from disk.
+// LoadState loads the persisted state from the backing store.
 func (m *GitHubMonitor) LoadState() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	path := m.statePath()
-	data, err := os.ReadFile(path)
+	state, err := m.Store.LoadState(m.PlanKey)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // no state yet, start fresh
+		return err
+	}
+	if state == nil {
+		// No state yet, start fresh
+		m.state = GitHubMonitorState{
+			SeenIssues: make(map[int]*SeenIssueState),
 		}
-		return fmt.Errorf("reading monitor state: %w", err)
+		return nil
 	}
-
-	var state GitHubMonitorState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("parsing monitor state: %w", err)
-	}
-
-	if state.SeenIssues == nil {
-		state.SeenIssues = make(map[int]*SeenIssueState)
-	}
-	m.state = state
+	m.state = *state
 	return nil
 }
 
-// SaveState persists the current state to disk.
+// SaveState persists the current state to the backing store.
 func (m *GitHubMonitor) SaveState() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -168,34 +161,7 @@ func (m *GitHubMonitor) SaveState() error {
 }
 
 func (m *GitHubMonitor) saveStateLocked() error {
-	path := m.statePath()
-
-	// Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("creating state directory: %w", err)
-	}
-
-	data, err := json.MarshalIndent(m.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshalling monitor state: %w", err)
-	}
-
-	// Atomic write via temp file
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("writing monitor state: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath) // best-effort cleanup
-		return fmt.Errorf("renaming monitor state: %w", err)
-	}
-
-	return nil
-}
-
-func (m *GitHubMonitor) statePath() string {
-	return filepath.Join(m.StateDir, ".state", m.PlanKey+".json")
+	return m.Store.SaveState(m.PlanKey, &m.state)
 }
 
 // CheckForWork is the unified poll function. On each call it fetches all open
@@ -577,13 +543,9 @@ func (m *GitHubMonitor) MarkAllCurrentAsSeen() error {
 	return m.saveStateLocked()
 }
 
-// ClearState removes the persisted state file.
+// ClearState removes the persisted state.
 func (m *GitHubMonitor) ClearState() error {
-	path := m.statePath()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return nil
+	return m.Store.DeleteState(m.PlanKey)
 }
 
 // FormatIssueContext builds a human-readable context string from a GitHub issue

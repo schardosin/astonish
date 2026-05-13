@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
@@ -73,6 +74,55 @@ type ChannelManager struct {
 	// These allow fleet commands to access the fleet registries and session management
 	// without the channels package importing pkg/api.
 	fleetDeps *FleetDeps
+
+	// PlatformResolver resolves an external channel identity to a platform user
+	// context. In platform mode, this is used to inject team-scoped stores into
+	// the execution context for inbound channel messages. When nil, the channel
+	// operates in personal mode (no team context injection).
+	platformResolver PlatformResolver
+}
+
+// PlatformResolver resolves an external channel identity (e.g., Telegram user ID)
+// to a platform user and their preferred team context. The returned context should
+// have team-scoped stores injected (credentials, flows, skills, MCP, memories).
+type PlatformResolver interface {
+	// ResolveChannelUser looks up a channel identity and returns:
+	// - ctx with team-scoped stores injected
+	// - the platform user ID (for session scoping)
+	// - the display name
+	// - an error if the user is not linked/provisioned
+	ResolveChannelUser(ctx context.Context, channelType, externalID string) (enrichedCtx context.Context, userID, displayName string, err error)
+
+	// ResolveChannelUserWithHint is like ResolveChannelUser but accepts an
+	// optional per-message routing hint (from email plus-addressing, etc.).
+	// If hint is nil, behaves identically to ResolveChannelUser.
+	ResolveChannelUserWithHint(ctx context.Context, channelType, externalID string, hint *RoutingHint) (enrichedCtx context.Context, userID, displayName string, err error)
+
+	// SetRoutingPref stores a persistent routing preference for a channel identity.
+	// Used by /org and /team commands to change the user's default routing.
+	SetRoutingPref(channelType, externalID, orgSlug, teamSlug string)
+
+	// GetRoutingPref returns the current routing preference for a channel identity,
+	// or nil if no preference has been set.
+	GetRoutingPref(channelType, externalID string) *RoutingPref
+
+	// ListUserRoutes returns the available orgs and teams for a channel identity.
+	// Used by /context to show what the user can route to.
+	ListUserRoutes(ctx context.Context, channelType, externalID string) ([]RouteOption, error)
+}
+
+// RoutingPref stores a user's persistent org/team routing preference for a channel.
+type RoutingPref struct {
+	OrgSlug  string
+	TeamSlug string
+}
+
+// RouteOption describes an available org/team combination for routing.
+type RouteOption struct {
+	OrgSlug  string
+	OrgName  string
+	TeamSlug string
+	TeamName string
 }
 
 // FleetDeps holds fleet-related dependencies injected into the ChannelManager.
@@ -231,6 +281,101 @@ func (m *ChannelManager) SetFleetDeps(deps *FleetDeps) {
 	// Re-register bot commands with channels that support it (e.g., Telegram)
 	// so the new fleet commands appear in the "/" autocomplete menu.
 	m.refreshChannelCommands()
+}
+
+// SetPlatformResolver sets the platform resolver for inbound channel messages.
+// When set, inbound messages will have team-scoped context injected based on
+// the sender's linked channel identity.
+func (m *ChannelManager) SetPlatformResolver(resolver PlatformResolver) {
+	m.platformResolver = resolver
+}
+
+// GetPlatformResolver returns the platform resolver, or nil if not set.
+// Used by routing commands (/org, /team, /context) to set routing preferences.
+func (m *ChannelManager) GetPlatformResolver() PlatformResolver {
+	return m.platformResolver
+}
+
+// BotUsernameProvider is implemented by channel adapters that expose a bot username.
+type BotUsernameProvider interface {
+	BotUsername() string
+}
+
+// LinkHandlerSetter is implemented by channel adapters that support code-based linking.
+type LinkHandlerSetter interface {
+	SetLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string))
+}
+
+// GetTelegramBotUsername returns the connected Telegram bot's username, or empty
+// string if Telegram is not configured or not connected.
+func (m *ChannelManager) GetTelegramBotUsername() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["telegram"]
+	if !ok {
+		return ""
+	}
+	if provider, ok := ch.(BotUsernameProvider); ok {
+		return provider.BotUsername()
+	}
+	return ""
+}
+
+// GetSlackBotUserID returns the connected Slack bot's user ID, or empty
+// string if Slack is not configured or not connected.
+func (m *ChannelManager) GetSlackBotUserID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["slack"]
+	if !ok {
+		return ""
+	}
+	if provider, ok := ch.(BotUsernameProvider); ok {
+		return provider.BotUsername()
+	}
+	return ""
+}
+
+// GetEmailAddress returns the connected email channel's address, or empty
+// string if email is not configured or not connected.
+func (m *ChannelManager) GetEmailAddress() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels["email"]
+	if !ok {
+		return ""
+	}
+	// The email channel's AccountID from Status() contains the address
+	status := ch.Status()
+	return status.AccountID
+}
+
+// SetTelegramLinkHandler sets the link handler on the Telegram channel adapter.
+// The handler is called when a user sends /link <code> to the bot.
+func (m *ChannelManager) SetTelegramLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.setLinkHandlerForChannel("telegram", fn)
+}
+
+// SetSlackLinkHandler sets the link handler on the Slack channel adapter.
+// The handler is called when a user sends /link <code> to the bot.
+func (m *ChannelManager) SetSlackLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.setLinkHandlerForChannel("slack", fn)
+}
+
+// setLinkHandlerForChannel sets the link handler on a specific channel adapter.
+func (m *ChannelManager) setLinkHandlerForChannel(channelID string, fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	ch, ok := m.channels[channelID]
+	if !ok {
+		return
+	}
+	type linkHandlerChannel interface {
+		SetLinkHandler(func(ctx context.Context, senderID, senderUsername, code string) (bool, string))
+	}
+	if lh, ok := ch.(linkHandlerChannel); ok {
+		lh.SetLinkHandler(fn)
+	}
 }
 
 // refreshChannelCommands tells all running channels to re-register their
@@ -408,24 +553,47 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	userID := fmt.Sprintf("channel_%s_%s", msg.ChannelID, msg.SenderID)
 	appName := "astonish"
 
+	// Platform mode: resolve the channel sender to a platform user and inject
+	// team-scoped stores into the context. This gives the agent access to the
+	// user's team credentials, flows, skills, and MCP servers.
+	if m.platformResolver != nil {
+		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUserWithHint(ctx, msg.ChannelID, msg.SenderID, msg.RoutingHint)
+		if resolveErr != nil {
+			m.logger.Printf("[channels] Platform resolver failed for %s/%s: %v", msg.ChannelID, msg.SenderID, resolveErr)
+			// Continue with unenriched context — agent will run without team stores
+		} else {
+			ctx = enrichedCtx
+			userID = platformUserID
+
+			// Hydrate the shared Redactor from the resolved credential store
+			// so tool output redaction catches PG-backed credentials.
+			if m.redactor != nil {
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					m.redactor.HydrateFromStore(cs)
+				}
+			}
+		}
+	}
+
+	// Inject Redactor into context so memory_save can Placeholderize()
+	if m.redactor != nil {
+		ctx = credentials.WithRedactor(ctx, m.redactor)
+	}
+
 	sess, err := m.getOrCreateSession(ctx, appName, userID, route.SessionKey)
 	if err != nil {
 		return fmt.Errorf("session error: %w", err)
 	}
 
-	// Set channel-specific output hints on the prompt builder for this turn.
-	// This guides the LLM to produce channel-appropriate output (e.g., no tables
-	// for Telegram, shorter responses for chat).
-	if m.agent.SystemPrompt != nil {
-		m.agent.SystemPrompt.ChannelHints = channelHints(msg.ChannelID)
-		defer func() { m.agent.SystemPrompt.ChannelHints = "" }()
+	// Set channel-specific output hints and session context via context overrides
+	// (thread-safe). Run() clones the SystemPromptBuilder and applies these.
+	overrides := &agent.PromptOverrides{
+		ChannelHints: channelHints(msg.ChannelID),
 	}
-
-	// Inject one-shot session context if pending (e.g., fleet plan wizard prompt).
-	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" && m.agent.SystemPrompt != nil {
-		m.agent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
-		defer func() { m.agent.SystemPrompt.SessionContext = "" }()
+	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" {
+		overrides.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
 	}
+	ctx = agent.WithPromptOverrides(ctx, overrides)
 
 	// Create ADK agent wrapper for this turn
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -437,11 +605,18 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		return fmt.Errorf("failed to create ADK agent: %w", err)
 	}
 
-	// Create runner for this turn
+	// Create runner for this turn.
+	// Use the context-injected session service (PG in platform mode) if available,
+	// so the runner looks up sessions in the same store where getOrCreateSession put them.
+	runnerSessSvc := m.sessSvc
+	if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+		runnerSessSvc = ctxSvc
+	}
+
 	r, err := runner.New(runner.Config{
 		AppName:        appName,
 		Agent:          adkAgent,
-		SessionService: m.sessSvc,
+		SessionService: runnerSessSvc,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create runner: %w", err)
@@ -669,6 +844,22 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, route RouteResult) error {
 	userID := fmt.Sprintf("channel_%s_%s", msg.ChannelID, msg.SenderID)
 	appName := "astonish"
+	sessSvc := m.sessSvc
+
+	// Platform mode: resolve user and inject team-scoped stores (same as handleInbound).
+	// This ensures /new deletes from the correct store (PG) with the correct user ID.
+	if m.platformResolver != nil {
+		enrichedCtx, platformUserID, _, resolveErr := m.platformResolver.ResolveChannelUserWithHint(ctx, msg.ChannelID, msg.SenderID, msg.RoutingHint)
+		if resolveErr != nil {
+			m.logger.Printf("[channels] Platform resolver failed for command %s/%s: %v", msg.ChannelID, msg.SenderID, resolveErr)
+		} else {
+			ctx = enrichedCtx
+			userID = platformUserID
+			if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+				sessSvc = ctxSvc
+			}
+		}
+	}
 
 	cc := CommandContext{
 		ChannelID:      msg.ChannelID,
@@ -678,7 +869,7 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		SessionKey:     route.SessionKey,
 		UserID:         userID,
 		AppName:        appName,
-		SessionService: m.sessSvc,
+		SessionService: sessSvc,
 		ProviderName:   m.providerName,
 		ModelName:      m.modelName,
 		ToolCount:      m.toolCount,
@@ -783,8 +974,15 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 // getOrCreateSession retrieves an existing session by key or creates a new one.
 // Session keys are used as session IDs for deterministic mapping.
 func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID, sessionKey string) (session.Session, error) {
+	// In platform mode, the context carries a per-tenant session service
+	// injected by the platform resolver. Prefer it over the factory default.
+	svc := m.sessSvc
+	if ctxSvc := sessionServiceFromContext(ctx); ctxSvc != nil {
+		svc = ctxSvc
+	}
+
 	// Try to get existing session
-	getResp, err := m.sessSvc.Get(ctx, &session.GetRequest{
+	getResp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionKey,
@@ -794,7 +992,7 @@ func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID
 	}
 
 	// Create new session with the key as ID
-	createResp, err := m.sessSvc.Create(ctx, &session.CreateRequest{
+	createResp, err := svc.Create(ctx, &session.CreateRequest{
 		AppName:   appName,
 		UserID:    userID,
 		SessionID: sessionKey,
@@ -803,6 +1001,16 @@ func (m *ChannelManager) getOrCreateSession(ctx context.Context, appName, userID
 		return nil, err
 	}
 	return createResp.Session, nil
+}
+
+// sessionServiceFromContext extracts a session.Service from context if one
+// was injected by the platform resolver. Returns nil in personal mode.
+func sessionServiceFromContext(ctx context.Context) session.Service {
+	ss := store.SessionServiceFromContext(ctx)
+	if ss == nil {
+		return nil
+	}
+	return ss
 }
 
 // getChannel returns a registered channel by ID.
@@ -859,6 +1067,14 @@ func channelHints(channelID string) string {
 - Use simple formatting only: **bold**, *italic*, ` + "`code`" + `, and fenced code blocks
 - Break long responses into short paragraphs
 - Be conversational — this is a chat, not a terminal`
+	case "slack":
+		return `You are responding via Slack.
+- Keep responses concise (under 300 words when possible)
+- Use Slack-compatible formatting: **bold**, ~~strikethrough~~, ` + "`code`" + `, and fenced code blocks
+- NEVER use markdown tables — use bullet lists instead
+- Break long responses into short paragraphs
+- Be conversational — this is a chat, not a terminal
+- Use [text](url) for links (they will be auto-converted to Slack format)`
 	case "email":
 		return `You are responding via email.
 - Produce ONE comprehensive reply — do not narrate intermediate steps

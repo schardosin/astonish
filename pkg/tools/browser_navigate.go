@@ -38,7 +38,9 @@ func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(
 			return BrowserNavigateResult{}, fmt.Errorf("failed to get browser page: %w", err)
 		}
 
-		if err := pg.Navigate(args.URL); err != nil {
+		// Use navigation timeout for the Navigate() call itself to prevent
+		// indefinite blocking when CDP connection dies or page hangs.
+		if err := pg.Timeout(mgr.NavigationTimeout()).Navigate(args.URL); err != nil {
 			return BrowserNavigateResult{}, fmt.Errorf("navigation failed: %w", err)
 		}
 
@@ -71,7 +73,7 @@ func BrowserNavigateBack(mgr *browser.Manager) func(tool.Context, BrowserNavigat
 			return BrowserNavigateResult{}, fmt.Errorf("failed to get browser page: %w", err)
 		}
 
-		if err := pg.NavigateBack(); err != nil {
+		if err := pg.Timeout(mgr.NavigationTimeout()).NavigateBack(); err != nil {
 			return BrowserNavigateResult{}, fmt.Errorf("navigate back failed: %w", err)
 		}
 

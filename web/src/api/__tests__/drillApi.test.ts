@@ -22,6 +22,11 @@ function mockFetchJson(data: unknown, ok = true, statusText = 'OK') {
   })
 }
 
+// Helper to extract headers from the fetch mock call
+function getCallHeaders(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0): Headers {
+  return fetchMock.mock.calls[callIndex][1]?.headers as Headers
+}
+
 describe('drillApi', () => {
   const originalFetch = globalThis.fetch
 
@@ -36,7 +41,7 @@ describe('drillApi', () => {
 
       const result = await fetchDrillSuites()
       expect(result).toEqual(suites)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('throws on error', async () => {
@@ -49,7 +54,7 @@ describe('drillApi', () => {
     it('calls GET /api/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ name: 's', drills: [] })
       await fetchDrillSuite('my-suite')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my-suite')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my-suite', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -57,13 +62,13 @@ describe('drillApi', () => {
     it('calls GET /api/drills/:suite/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ name: 'd', suite: 's' })
       await fetchDrill('suite1', 'drill1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1/drills/drill1')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1/drills/drill1', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('encodes special characters', async () => {
       globalThis.fetch = mockFetchJson({})
       await fetchDrill('my suite', 'my drill')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my%20suite/drills/my%20drill')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/my%20suite/drills/my%20drill', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -71,7 +76,7 @@ describe('drillApi', () => {
     it('calls DELETE /api/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ status: 'ok', deleted: [] })
       await deleteDrillSuite('suite1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1', { method: 'DELETE' })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/suite1', expect.objectContaining({ method: 'DELETE' }))
     })
   })
 
@@ -79,7 +84,7 @@ describe('drillApi', () => {
     it('calls DELETE /api/drills/:suite/drills/:name', async () => {
       globalThis.fetch = mockFetchJson({ status: 'ok', deleted: [], suite: 's' })
       await deleteDrill('s', 'd')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d', { method: 'DELETE' })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d', expect.objectContaining({ method: 'DELETE' }))
     })
   })
 
@@ -87,7 +92,7 @@ describe('drillApi', () => {
     it('calls GET /api/drill-reports', async () => {
       globalThis.fetch = mockFetchJson([])
       await fetchDrillReports()
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -95,7 +100,7 @@ describe('drillApi', () => {
     it('calls GET /api/drill-reports/:suite', async () => {
       globalThis.fetch = mockFetchJson({ suite: 's' })
       await fetchDrillReport('suite1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports/suite1')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drill-reports/suite1', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -107,7 +112,7 @@ describe('drillApi', () => {
       })
       const result = await fetchDrillYaml('s', 'd')
       expect(result).toBe('name: test')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -115,11 +120,12 @@ describe('drillApi', () => {
     it('calls PUT with text/yaml content type', async () => {
       globalThis.fetch = mockFetchJson({ status: 'ok', suite: 's', drill: 'd' })
       await saveDrillYaml('s', 'd', 'name: test')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/drills/d/yaml', expect.objectContaining({
         method: 'PUT',
-        headers: { 'Content-Type': 'text/yaml' },
         body: 'name: test',
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('text/yaml')
     })
 
     it('throws error text on failure', async () => {
@@ -147,11 +153,12 @@ describe('drillApi', () => {
     it('calls PUT with text/yaml content type', async () => {
       globalThis.fetch = mockFetchJson({ status: 'ok', suite: 's' })
       await saveSuiteYaml('s', 'content')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/yaml', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/drills/s/yaml', expect.objectContaining({
         method: 'PUT',
-        headers: { 'Content-Type': 'text/yaml' },
         body: 'content',
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('text/yaml')
     })
   })
 })

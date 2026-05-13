@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
-import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCircle, Plus, Folder, Search, Globe, Monitor, Shield, ShieldAlert, ExternalLink } from 'lucide-react'
+import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCircle, Plus, Folder, Search, Globe, Monitor, Shield, ShieldAlert, ExternalLink, Server, Database } from 'lucide-react'
 import { fetchStandardServers, installStandardServer, StandardServer, McpInstallResult } from '../api/agents'
 import { fetchSandboxStatus, fetchOptionalTools, initSandbox, SandboxStatus, OptionalTool } from '../api/sandbox'
+import { initializePlatform, getDeploymentMode } from '../api/platform'
 
 // --- Local types ---
 
@@ -81,7 +82,7 @@ const BROWSER_ENGINES: BrowserEngine[] = [
   { id: 'remote', name: 'Remote Browser', description: 'Connect to Chrome running on another machine via CDP.' },
 ]
 
-const TOTAL_STEPS = 9
+const TOTAL_STEPS = 10
 
 const fetchSettings = async (): Promise<Settings> => {
   const res = await fetch('/api/settings/config')
@@ -142,7 +143,21 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [error, setError] = useState<string | null>(null)
   const [testSuccess, setTestSuccess] = useState(false)
 
-  // Step 5: Web Search state
+  // Step 1: Deployment Mode state
+  const [deploymentMode, setDeploymentMode] = useState<'personal' | 'platform' | null>(null)
+  const [pgHost, setPgHost] = useState('localhost')
+  const [pgPort, setPgPort] = useState('5432')
+  const [pgUser, setPgUser] = useState('postgres')
+  const [pgPassword, setPgPassword] = useState('')
+  const [pgSSLMode, setPgSSLMode] = useState('prefer')
+  const [orgName, setOrgName] = useState('My Organization')
+  const [orgSlug, setOrgSlug] = useState('my-org')
+  const [platformInitializing, setPlatformInitializing] = useState(false)
+  const [platformInitDone, setPlatformInitDone] = useState(false)
+  const [platformError, setPlatformError] = useState<string | null>(null)
+  const [restartRequired, setRestartRequired] = useState(false)
+
+  // Step 6: Web Search state
   const [standardServers, setStandardServers] = useState<StandardServerExt[]>([])
   const [selectedWebServer, setSelectedWebServer] = useState<string | null>(null)
   const [webApiKey, setWebApiKey] = useState('')
@@ -216,7 +231,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     finally { setIsLoading(false) }
   }
 
-  const handleAddNewProvider = () => { setIsNewProvider(true); setSelectedInstance(null); setSelectedProvider(null); setInstanceName(''); setCredentials({}); setTestSuccess(false); setStep(1) }
+  const handleAddNewProvider = () => { setIsNewProvider(true); setSelectedInstance(null); setSelectedProvider(null); setInstanceName(''); setCredentials({}); setTestSuccess(false); setStep(2) }
 
   const handleSelectExisting = (instName: string) => {
     setIsNewProvider(false)
@@ -233,7 +248,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     }
     setCredentials(existingCredentials)
     setTestSuccess(!!providerData?.configured)
-    setStep(2)
+    setStep(3)
   }
 
   const handleProviderTypeSelect = (providerId: string) => { setSelectedProvider(providerId); setCredentials({}); setTestSuccess(false) }
@@ -265,12 +280,12 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     setError(null)
     try {
       await saveProviderInstance()
-      setStep(3)
+      setStep(4)
     } catch (err: any) { setError(err.message || 'Failed to save provider') }
     finally { setIsLoading(false) }
   }
 
-  // Step 5: Load standard servers on entering web search step
+  // Step 6: Load standard servers on entering web search step
   const loadStandardServers = async () => {
     setIsLoading(true)
     try {
@@ -407,20 +422,21 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const canProceed = () => {
     switch (step) {
       case 0: return true
-      case 1: return selectedProvider !== null
-      case 2: return Object.values(credentials).some(v => v)
-      case 3: return instanceName.trim() !== ''
-      case 4: return selectedModel !== ''
-      case 5: return webInstalled || webSkipped
-      case 6: return browserSaved || browserEngine === 'default'
-      case 7: return sandboxDone || sandboxSkipped || (sandboxStatus as any)?.baseTemplateExists
+      case 1: return deploymentMode === 'personal' || platformInitDone || restartRequired
+      case 2: return selectedProvider !== null
+      case 3: return Object.values(credentials).some(v => v)
+      case 4: return instanceName.trim() !== ''
+      case 5: return selectedModel !== ''
+      case 6: return webInstalled || webSkipped
+      case 7: return browserSaved || browserEngine === 'default'
+      case 8: return sandboxDone || sandboxSkipped || (sandboxStatus as any)?.baseTemplateExists
       default: return true
     }
   }
 
   const goNext = async () => {
     if (!canProceed()) return
-    if (step === 3) {
+    if (step === 4) {
       try {
         await saveProviderInstance()
       } catch (err: any) {
@@ -428,13 +444,15 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
         return
       }
     }
+    // If restart is required (platform mode configured), the user needs to restart.
+    // They can still proceed through provider setup, but show a note.
     const nextStep = step + 1
     setStep(nextStep)
     setError(null)
 
     // Trigger data loads for upcoming steps
-    if (nextStep === 5) loadStandardServers()
-    if (nextStep === 7) loadSandboxStatus()
+    if (nextStep === 6) loadStandardServers()
+    if (nextStep === 8) loadSandboxStatus()
   }
   const goBack = () => { if (step > 0) { setStep(step - 1); setError(null) } }
 
@@ -455,13 +473,160 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <h1 className="text-3xl font-bold mb-4" style={{ color: 'var(--text-primary)' }}>Welcome to Astonish Studio</h1>
             <p className="text-lg mb-6 max-w-md mx-auto" style={{ color: 'var(--text-muted)' }}>Build powerful AI agents visually. Let's get you set up in just a few steps.</p>
             <div className="flex flex-col gap-3 max-w-sm mx-auto text-left p-4 rounded-lg" style={{ background: 'var(--bg-tertiary)' }}>
-              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">1</div><span style={{ color: 'var(--text-secondary)' }}>Connect an AI provider</span></div>
-              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">2</div><span style={{ color: 'var(--text-secondary)' }}>Configure web search</span></div>
-              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">3</div><span style={{ color: 'var(--text-secondary)' }}>Set up browser & sandbox</span></div>
+              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">1</div><span style={{ color: 'var(--text-secondary)' }}>Choose deployment mode</span></div>
+              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">2</div><span style={{ color: 'var(--text-secondary)' }}>Connect an AI provider</span></div>
+              <div className="flex items-center gap-3"><div className="w-6 h-6 rounded-full bg-purple-500/20 flex items-center justify-center text-purple-400 text-sm">3</div><span style={{ color: 'var(--text-secondary)' }}>Configure web search & tools</span></div>
             </div>
           </div>
         )
+
+      // Step 1: Deployment Mode
       case 1:
+        return (
+          <div>
+            <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Deployment Mode</h2>
+            <p className="text-center mb-6" style={{ color: 'var(--text-muted)' }}>How would you like to run Astonish?</p>
+
+            <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6">
+              <button
+                onClick={() => { setDeploymentMode('personal'); setPlatformError(null) }}
+                className={`p-6 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'personal' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
+                style={{ background: deploymentMode === 'personal' ? undefined : 'var(--bg-tertiary)' }}
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <Monitor size={28} className="text-blue-400" />
+                  <span className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Personal</span>
+                </div>
+                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  Single user, local file storage. No database needed. Best for individual use.
+                </p>
+              </button>
+
+              <button
+                onClick={() => { setDeploymentMode('platform'); setPlatformError(null) }}
+                className={`p-6 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'platform' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
+                style={{ background: deploymentMode === 'platform' ? undefined : 'var(--bg-tertiary)' }}
+              >
+                <div className="flex items-center gap-3 mb-3">
+                  <Database size={28} className="text-green-400" />
+                  <span className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Platform</span>
+                </div>
+                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  Multi-user with teams, shared knowledge, and authentication. Requires PostgreSQL.
+                </p>
+              </button>
+            </div>
+
+            {deploymentMode === 'platform' && !platformInitDone && !restartRequired && (
+              <div className="max-w-xl mx-auto mt-4 p-6 rounded-xl" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                  <Server size={18} className="text-purple-400" />
+                  PostgreSQL Connection
+                </h3>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Host</label>
+                    <input type="text" value={pgHost} onChange={e => setPgHost(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Port</label>
+                    <input type="text" value={pgPort} onChange={e => setPgPort(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
+                    <input type="text" value={pgUser} onChange={e => setPgUser(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Password</label>
+                    <input type="password" value={pgPassword} onChange={e => setPgPassword(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                </div>
+                <div className="mb-4">
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>SSL Mode</label>
+                  <select value={pgSSLMode} onChange={e => setPgSSLMode(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}>
+                    <option value="disable">disable</option>
+                    <option value="prefer">prefer (recommended)</option>
+                    <option value="require">require</option>
+                  </select>
+                </div>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Organization Name</label>
+                    <input type="text" value={orgName} onChange={e => setOrgName(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Organization Slug</label>
+                    <input type="text" value={orgSlug} onChange={e => setOrgSlug(e.target.value)} placeholder="lowercase-with-hyphens" className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                </div>
+
+                {platformError && (
+                  <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center gap-2">
+                    <AlertCircle size={18} className="text-red-400 shrink-0" />
+                    <span className="text-sm text-red-400">{platformError}</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={async () => {
+                    setPlatformInitializing(true)
+                    setPlatformError(null)
+                    try {
+                      const result = await initializePlatform({
+                        host: pgHost,
+                        port: parseInt(pgPort) || 5432,
+                        user: pgUser,
+                        password: pgPassword,
+                        ssl_mode: pgSSLMode,
+                        org_name: orgName,
+                        org_slug: orgSlug,
+                      })
+                      if (result.success) {
+                        setPlatformInitDone(true)
+                        if (result.restart_required) {
+                          setRestartRequired(true)
+                        }
+                      }
+                    } catch (err: any) {
+                      setPlatformError(err.message || 'Failed to initialize platform')
+                    } finally {
+                      setPlatformInitializing(false)
+                    }
+                  }}
+                  disabled={platformInitializing || !pgUser || !pgPassword}
+                  className="w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  style={{ background: 'linear-gradient(to right, #9333ea, #3b82f6)', color: 'white' }}
+                >
+                  {platformInitializing ? (
+                    <><Loader2 size={18} className="animate-spin" />Initializing Platform...</>
+                  ) : (
+                    <><Database size={18} />Initialize Platform</>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {platformInitDone && restartRequired && (
+              <div className="max-w-xl mx-auto mt-4 p-6 rounded-xl bg-green-500/5 border border-green-500/30">
+                <div className="flex items-center gap-3 mb-3">
+                  <Check size={24} className="text-green-400" />
+                  <span className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Platform Initialized</span>
+                </div>
+                <p className="text-sm mb-3" style={{ color: 'var(--text-muted)' }}>
+                  The platform database has been created and configured. You can continue setting up your AI provider now.
+                </p>
+                <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                  <p className="text-sm font-medium text-yellow-400">Restart Required</p>
+                  <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                    After completing setup, restart Astonish to activate platform mode with authentication and teams.
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        )
+
+      case 2:
         return (
           <div>
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Select Provider</h2>
@@ -491,7 +656,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             </div>
           </div>
         )
-      case 2: {
+      case 3: {
         const provider = getProviderInfo(selectedProvider)
         return (
           <div className="max-w-md mx-auto">
@@ -515,7 +680,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           </div>
         )
       }
-      case 3:
+      case 4:
         return (
           <div className="max-w-md mx-auto">
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Provider Instance Name</h2>
@@ -530,7 +695,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             </button>
           </div>
         )
-      case 4:
+      case 5:
         return (
           <div className="max-w-md mx-auto">
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Select Default Model</h2>
@@ -545,8 +710,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           </div>
         )
 
-      // Step 5: Web Search
-      case 5:
+      // Step 6: Web Search
+      case 6:
         return (
           <div className="max-w-2xl mx-auto">
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Web Search Tools</h2>
@@ -641,8 +806,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           </div>
         )
 
-      // Step 6: Browser Engine
-      case 6:
+      // Step 7: Browser Engine
+      case 7:
         return (
           <div className="max-w-2xl mx-auto">
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Browser Engine</h2>
@@ -735,8 +900,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           </div>
         )
 
-      // Step 7: Sandbox
-      case 7:
+      // Step 8: Sandbox
+      case 8:
         return (
           <div className="max-w-2xl mx-auto">
             <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Sandbox</h2>
@@ -893,8 +1058,8 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
           </div>
         )
 
-      // Step 8: All Set
-      case 8: {
+      // Step 9: All Set
+      case 9: {
         const finalProvider = getProviderInfo(selectedProvider)
         return (
           <div className="text-center">
@@ -902,6 +1067,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <h2 className="text-2xl font-bold mb-4" style={{ color: 'var(--text-primary)' }}>You're All Set!</h2>
             <p className="text-lg mb-6" style={{ color: 'var(--text-muted)' }}>Astonish Studio is ready to use.</p>
             <div className="inline-block text-left p-4 rounded-lg space-y-3 min-w-[280px]" style={{ background: 'var(--bg-tertiary)' }}>
+              {deploymentMode === 'platform' && (
+                <div className="flex items-center gap-2 text-xs pb-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
+                  <Database size={14} className="text-green-400" />
+                  <span style={{ color: 'var(--text-secondary)' }}>Mode:</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Platform (multi-user)</span>
+                  {restartRequired && <span className="text-yellow-400 text-[10px] px-1.5 py-0.5 bg-yellow-500/10 rounded">Restart needed</span>}
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <span className="text-2xl">{finalProvider.icon}</span>
                 <div><div className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{instanceName}</div><div className="text-xs" style={{ color: 'var(--text-muted)' }}>{selectedModel}</div></div>

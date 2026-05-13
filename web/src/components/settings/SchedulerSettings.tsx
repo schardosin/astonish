@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Play, Trash2, Clock, Loader2, CheckCircle, XCircle, Pause, ChevronRight, ChevronDown, X, AlertTriangle } from 'lucide-react'
+import { Save, AlertCircle, Check, Play, Trash2, Clock, Loader2, CheckCircle, XCircle, Pause, ChevronRight, ChevronDown, X, AlertTriangle, Users, Mail, MessageSquare, Hash } from 'lucide-react'
 import { saveFullConfigSection, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 // --- Types ---
 
@@ -19,7 +20,12 @@ interface SchedulerJob {
   delivery?: {
     channel?: string
     target?: string
+    mode?: string
+    member_ids?: string[]
+    channel_filter?: string[]
+    member_channels?: Record<string, string[]>
   }
+  owner_id?: string
   consecutive_failures?: number
   payload?: {
     instructions?: string
@@ -30,6 +36,14 @@ interface SchedulerJob {
   [key: string]: unknown
 }
 
+interface TeamMember {
+  user_id: string
+  display_name: string
+  email: string
+  role: string
+  linked_channels: string[]
+}
+
 interface SchedulerConfig {
   enabled?: boolean
   [key: string]: unknown
@@ -38,21 +52,23 @@ interface SchedulerConfig {
 interface SchedulerSettingsProps {
   config: SchedulerConfig | null
   onSaved?: () => void
+  /** Explicit team slug — overrides global active team for API calls */
+  teamSlug?: string
 }
 
 // API helpers
-const fetchJobs = async (): Promise<{ jobs?: SchedulerJob[] }> => {
-  const res = await fetch('/api/scheduler/jobs')
+const fetchJobs = async (teamSlug?: string): Promise<{ jobs?: SchedulerJob[] }> => {
+  const res = await teamFetch('/api/scheduler/jobs', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch jobs')
   return res.json()
 }
 
-const updateJob = async (id: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
+const updateJob = async (id: string, data: Record<string, unknown>, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to update job')
@@ -60,10 +76,10 @@ const updateJob = async (id: string, data: Record<string, unknown>): Promise<Rec
   return res.json()
 }
 
-const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
+const deleteJob = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}`, {
     method: 'DELETE'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to delete job')
@@ -71,10 +87,10 @@ const deleteJob = async (id: string): Promise<Record<string, unknown>> => {
   return res.json()
 }
 
-const runJobNow = async (id: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/scheduler/jobs/${encodeURIComponent(id)}/run`, {
+const runJobNow = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch(`/api/scheduler/jobs/${encodeURIComponent(id)}/run`, {
     method: 'POST'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to run job')
@@ -136,7 +152,34 @@ function ModeBadge({ mode }: { mode: string }) {
   )
 }
 
-export default function SchedulerSettings({ config, onSaved }: SchedulerSettingsProps) {
+const deliveryModeLabels: Record<string, string> = {
+  owner: 'Owner Only',
+  team: 'All Team Members',
+  members: 'Specific Members',
+  target: 'Direct Target',
+}
+
+const deliveryModeColors: Record<string, string> = {
+  owner: '#8b5cf6',
+  team: '#3b82f6',
+  members: '#f59e0b',
+  target: '#6b7280',
+}
+
+function DeliveryModeBadge({ mode }: { mode: string }) {
+  const label = deliveryModeLabels[mode] || mode
+  const color = deliveryModeColors[mode] || 'var(--text-muted)'
+  return (
+    <span className="text-xs px-1.5 py-0.5 rounded inline-flex items-center gap-1" style={{
+      background: `${color}20`,
+      color: color,
+    }}>
+      {label}
+    </span>
+  )
+}
+
+export default function SchedulerSettings({ config, onSaved, teamSlug }: SchedulerSettingsProps) {
   const [enabled, setEnabled] = useState(true)
   const [jobs, setJobs] = useState<SchedulerJob[]>([])
   const [jobsLoading, setJobsLoading] = useState(false)
@@ -145,6 +188,8 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
   const [runningJob, setRunningJob] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<SchedulerJob | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
+  const [membersLoading, setMembersLoading] = useState(false)
 
   // Config save state
   const [saving, setSaving] = useState(false)
@@ -161,18 +206,41 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
     setJobsLoading(true)
     setJobsError(null)
     try {
-      const data = await fetchJobs()
+      const data = await fetchJobs(teamSlug)
       setJobs(data.jobs || [])
     } catch (err: any) {
       setJobsError(err.message)
     } finally {
       setJobsLoading(false)
     }
-  }, [])
+  }, [teamSlug])
 
   useEffect(() => {
     loadJobs()
   }, [loadJobs])
+
+  // Load team members when a job is expanded (for delivery configuration)
+  const loadTeamMembers = useCallback(async () => {
+    if (teamMembers.length > 0) return // already loaded
+    setMembersLoading(true)
+    try {
+      const res = await teamFetch('/api/team/members/channels', undefined, teamSlug)
+      if (res.ok) {
+        const data = await res.json()
+        setTeamMembers(data.members || [])
+      }
+    } catch {
+      // Non-critical — member picker won't show
+    } finally {
+      setMembersLoading(false)
+    }
+  }, [teamSlug, teamMembers.length])
+
+  useEffect(() => {
+    if (expandedJob) {
+      loadTeamMembers()
+    }
+  }, [expandedJob, loadTeamMembers])
 
   const handleSaveConfig = async () => {
     setSaving(true)
@@ -193,7 +261,7 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
   const handleToggleJob = async (job: SchedulerJob) => {
     setActionError(null)
     try {
-      await updateJob(job.id, { ...job, enabled: !job.enabled })
+      await updateJob(job.id, { ...job, enabled: !job.enabled }, teamSlug)
       loadJobs()
     } catch (err: any) {
       setActionError(err.message)
@@ -204,7 +272,7 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
     setRunningJob(job.id)
     setActionError(null)
     try {
-      await runJobNow(job.id)
+      await runJobNow(job.id, teamSlug)
       // Reload after a brief delay to show updated status
       setTimeout(() => loadJobs(), 1000)
     } catch (err: any) {
@@ -217,9 +285,80 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
   const handleDeleteJob = async (id: string) => {
     setActionError(null)
     try {
-      await deleteJob(id)
+      await deleteJob(id, teamSlug)
       setDeleteConfirm(null)
       if (expandedJob === id) setExpandedJob(null)
+      loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    }
+  }
+
+  const handleChangeDeliveryMode = async (job: SchedulerJob, newMode: string) => {
+    setActionError(null)
+    try {
+      const updatedDelivery = { ...(job.delivery || {}), mode: newMode }
+      await updateJob(job.id, { delivery: updatedDelivery }, teamSlug)
+      loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    }
+  }
+
+  const handleToggleChannelFilter = async (job: SchedulerJob, channelType: string) => {
+    setActionError(null)
+    try {
+      const currentFilter = job.delivery?.channel_filter || []
+      let newFilter: string[]
+      if (currentFilter.includes(channelType)) {
+        newFilter = currentFilter.filter(c => c !== channelType)
+      } else {
+        newFilter = [...currentFilter, channelType]
+      }
+      const updatedDelivery = { ...(job.delivery || {}), channel_filter: newFilter }
+      await updateJob(job.id, { delivery: updatedDelivery }, teamSlug)
+      loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    }
+  }
+
+  const handleToggleMember = async (job: SchedulerJob, memberID: string) => {
+    setActionError(null)
+    try {
+      const currentMembers = job.delivery?.member_ids || []
+      let newMembers: string[]
+      if (currentMembers.includes(memberID)) {
+        newMembers = currentMembers.filter(m => m !== memberID)
+      } else {
+        newMembers = [...currentMembers, memberID]
+      }
+      const updatedDelivery = { ...(job.delivery || {}), member_ids: newMembers }
+      await updateJob(job.id, { delivery: updatedDelivery }, teamSlug)
+      loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    }
+  }
+
+  const handleToggleMemberChannel = async (job: SchedulerJob, memberID: string, channelType: string) => {
+    setActionError(null)
+    try {
+      const currentMemberChannels = { ...(job.delivery?.member_channels || {}) }
+      const memberChannels = currentMemberChannels[memberID] || []
+      let newChannels: string[]
+      if (memberChannels.includes(channelType)) {
+        newChannels = memberChannels.filter(c => c !== channelType)
+      } else {
+        newChannels = [...memberChannels, channelType]
+      }
+      if (newChannels.length === 0) {
+        delete currentMemberChannels[memberID]
+      } else {
+        currentMemberChannels[memberID] = newChannels
+      }
+      const updatedDelivery = { ...(job.delivery || {}), member_channels: currentMemberChannels }
+      await updateJob(job.id, { delivery: updatedDelivery }, teamSlug)
       loadJobs()
     } catch (err: any) {
       setActionError(err.message)
@@ -446,6 +585,22 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
                           </div>
                         </div>
                       )}
+                      {job.delivery?.mode && (
+                        <div>
+                          <div className="font-medium mb-1" style={hintStyle}>Delivery Mode</div>
+                          <div style={{ color: 'var(--text-primary)' }}>
+                            <DeliveryModeBadge mode={job.delivery.mode} />
+                          </div>
+                        </div>
+                      )}
+                      {job.owner_id && (
+                        <div>
+                          <div className="font-medium mb-1" style={hintStyle}>Owner</div>
+                          <div className="font-mono text-xs truncate" style={{ color: 'var(--text-primary)' }}>
+                            {job.owner_id}
+                          </div>
+                        </div>
+                      )}
                       {(job.consecutive_failures ?? 0) > 0 && (
                         <div>
                           <div className="font-medium mb-1" style={hintStyle}>Failures</div>
@@ -486,6 +641,161 @@ export default function SchedulerSettings({ config, onSaved }: SchedulerSettings
                         </div>
                       </div>
                     )}
+
+                    {/* Delivery Configuration */}
+                    <div className="border-t pt-3 space-y-3" style={sectionBorderStyle}>
+                      {/* Delivery Mode */}
+                      <div>
+                        <div className="text-xs font-medium mb-2" style={hintStyle}>Delivery Mode</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {['owner', 'team', 'members', 'target'].map(mode => (
+                            <button
+                              key={mode}
+                              onClick={() => handleChangeDeliveryMode(job, mode)}
+                              className="text-xs px-2.5 py-1 rounded-lg transition-all"
+                              style={{
+                                background: (job.delivery?.mode || '') === mode
+                                  ? `${deliveryModeColors[mode]}30`
+                                  : 'var(--bg-tertiary)',
+                                color: (job.delivery?.mode || '') === mode
+                                  ? deliveryModeColors[mode]
+                                  : 'var(--text-muted)',
+                                border: `1px solid ${(job.delivery?.mode || '') === mode
+                                  ? deliveryModeColors[mode]
+                                  : 'var(--border-color)'}`,
+                              }}
+                            >
+                              {deliveryModeLabels[mode]}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Channel Filter — show for owner/team/members modes */}
+                      {job.delivery?.mode && job.delivery.mode !== 'target' && (
+                        <div>
+                          <div className="text-xs font-medium mb-2 flex items-center gap-1" style={hintStyle}>
+                            <Hash size={11} /> Delivery Channels
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {['telegram', 'email', 'slack'].map(ch => {
+                              const isActive = !job.delivery?.channel_filter?.length || job.delivery.channel_filter.includes(ch)
+                              const channelIcons: Record<string, any> = { telegram: MessageSquare, email: Mail, slack: Hash }
+                              const Icon = channelIcons[ch] || Hash
+                              return (
+                                <button
+                                  key={ch}
+                                  onClick={() => handleToggleChannelFilter(job, ch)}
+                                  className="text-xs px-2.5 py-1 rounded-lg transition-all flex items-center gap-1"
+                                  style={{
+                                    background: isActive ? 'rgba(34, 197, 94, 0.15)' : 'var(--bg-tertiary)',
+                                    color: isActive ? '#22c55e' : 'var(--text-muted)',
+                                    border: `1px solid ${isActive ? '#22c55e' : 'var(--border-color)'}`,
+                                  }}
+                                >
+                                  <Icon size={11} /> {ch}
+                                </button>
+                              )
+                            })}
+                          </div>
+                          <p className="text-xs mt-1" style={hintStyle}>
+                            {!job.delivery?.channel_filter?.length
+                              ? 'All linked channels (no filter)'
+                              : `Only: ${job.delivery.channel_filter.join(', ')}`}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Member Selector — show for "members" mode */}
+                      {job.delivery?.mode === 'members' && (
+                        <div>
+                          <div className="text-xs font-medium mb-2 flex items-center gap-1" style={hintStyle}>
+                            <Users size={11} /> Recipients
+                          </div>
+                          {membersLoading ? (
+                            <div className="flex items-center gap-2 py-2">
+                              <Loader2 size={12} className="animate-spin" style={{ color: 'var(--accent)' }} />
+                              <span className="text-xs" style={hintStyle}>Loading team members...</span>
+                            </div>
+                          ) : teamMembers.length === 0 ? (
+                            <p className="text-xs" style={hintStyle}>No team members found.</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {teamMembers.map(member => {
+                                const isSelected = (job.delivery?.member_ids || []).includes(member.user_id)
+                                const memberChannelOverrides = job.delivery?.member_channels?.[member.user_id] || []
+                                return (
+                                  <div key={member.user_id} className="rounded-lg p-2" style={{
+                                    background: isSelected ? 'rgba(168, 85, 247, 0.08)' : 'transparent',
+                                    border: `1px solid ${isSelected ? 'rgba(168, 85, 247, 0.3)' : 'var(--border-color)'}`,
+                                  }}>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => handleToggleMember(job, member.user_id)}
+                                        className="flex-shrink-0 w-4 h-4 rounded border flex items-center justify-center"
+                                        style={{
+                                          borderColor: isSelected ? '#a855f7' : 'var(--border-color)',
+                                          background: isSelected ? '#a855f7' : 'transparent',
+                                        }}
+                                      >
+                                        {isSelected && <Check size={10} color="white" />}
+                                      </button>
+                                      <div className="flex-1 min-w-0">
+                                        <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+                                          {member.display_name || member.email}
+                                        </span>
+                                        {member.display_name && (
+                                          <span className="text-xs ml-1.5" style={hintStyle}>{member.email}</span>
+                                        )}
+                                      </div>
+                                      {/* Show linked channel badges */}
+                                      <div className="flex gap-1 flex-shrink-0">
+                                        {(member.linked_channels || []).map(ch => (
+                                          <span key={ch} className="text-xs px-1 py-0.5 rounded" style={{
+                                            background: 'rgba(100,100,100,0.15)',
+                                            color: 'var(--text-muted)',
+                                            fontSize: '10px',
+                                          }}>
+                                            {ch}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    {/* Per-member channel selection (only when selected) */}
+                                    {isSelected && (member.linked_channels || []).length > 1 && (
+                                      <div className="mt-1.5 ml-6 flex items-center gap-1.5">
+                                        <span className="text-xs" style={{ ...hintStyle, fontSize: '10px' }}>via:</span>
+                                        {(member.linked_channels || []).map(ch => {
+                                          const isChActive = memberChannelOverrides.length === 0 || memberChannelOverrides.includes(ch)
+                                          return (
+                                            <button
+                                              key={ch}
+                                              onClick={() => handleToggleMemberChannel(job, member.user_id, ch)}
+                                              className="text-xs px-1.5 py-0.5 rounded transition-all"
+                                              style={{
+                                                background: isChActive ? 'rgba(34, 197, 94, 0.15)' : 'rgba(100,100,100,0.1)',
+                                                color: isChActive ? '#22c55e' : 'var(--text-muted)',
+                                                border: `1px solid ${isChActive ? 'rgba(34, 197, 94, 0.4)' : 'transparent'}`,
+                                                fontSize: '10px',
+                                              }}
+                                            >
+                                              {ch}
+                                            </button>
+                                          )
+                                        })}
+                                        {memberChannelOverrides.length === 0 && (
+                                          <span className="text-xs" style={{ ...hintStyle, fontSize: '10px' }}>(all)</span>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
 
                     <div className="text-xs font-mono pt-1" style={{ color: 'var(--text-muted)', opacity: 0.5 }}>
                       ID: {job.id}

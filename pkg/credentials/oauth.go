@@ -55,7 +55,7 @@ func (tc *tokenCache) GetOrRefresh(name string, cred *Credential, redactor *Reda
 	tc.mu.RUnlock()
 
 	// Token expired or not cached — acquire a new one
-	token, expiresIn, err := fetchOAuthToken(cred)
+	token, expiresIn, err := FetchOAuthToken(cred)
 	if err != nil {
 		return "", err
 	}
@@ -90,11 +90,11 @@ type oauthTokenResponse struct {
 	ErrorDesc   string `json:"error_description"`
 }
 
-// fetchOAuthToken performs the OAuth2 client_credentials flow.
+// FetchOAuthToken performs the OAuth2 client_credentials flow.
 // Client credentials are sent via HTTP Basic Auth (RFC 6749 §2.3.1), which is
 // more widely supported than sending them in the POST body. Many providers
 // (e.g., SAP XSUAA/UAA, some Okta configs) reject POST-body credentials.
-func fetchOAuthToken(cred *Credential) (token string, expiresIn int, err error) {
+func FetchOAuthToken(cred *Credential) (token string, expiresIn int, err error) {
 	if cred.AuthURL == "" {
 		return "", 0, fmt.Errorf("auth_url is required for OAuth credentials")
 	}

@@ -179,7 +179,7 @@ func parseCommandName(text string) string {
 }
 
 // DefaultCommands creates a CommandRegistry pre-loaded with the standard
-// cross-channel commands: /status, /new, /distill, /jobs, /help.
+// cross-channel commands: /status, /new, /distill, /jobs, /org, /team, /context, /help.
 func DefaultCommands() *CommandRegistry {
 	r := NewCommandRegistry()
 	r.Register(statusCommand())
@@ -187,6 +187,7 @@ func DefaultCommands() *CommandRegistry {
 	r.Register(distillCommand())
 	r.Register(jobsCommand())
 	r.Register(authorizeCommand())
+	RegisterRoutingCommands(r)
 	r.Register(helpCommand(r))
 	return r
 }

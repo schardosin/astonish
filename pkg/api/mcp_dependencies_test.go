@@ -180,7 +180,7 @@ func TestResolveMCPDependencies_ExactNameMatching(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			deps := ResolveMCPDependencies(tt.toolsSelection, tt.cachedTools, tt.storeServers, tt.existingDeps)
+			deps := ResolveMCPDependencies(tt.toolsSelection, tt.cachedTools, tt.storeServers, tt.existingDeps, nil)
 
 			if tt.expectedDeps == nil {
 				if len(deps) != 0 {

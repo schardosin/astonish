@@ -169,6 +169,57 @@ func TestLoadOrCreateKey_BinaryMigration(t *testing.T) {
 	}
 }
 
+func TestLoadOrCreateKey_EnvVarPrecedence(t *testing.T) {
+	dir := t.TempDir()
+
+	// Generate a known key as hex
+	knownKey := make([]byte, keySize)
+	for i := range knownKey {
+		knownKey[i] = byte(i + 100)
+	}
+	hexKey := hex.EncodeToString(knownKey)
+
+	// Set ASTONISH_MASTER_KEY env var
+	t.Setenv("ASTONISH_MASTER_KEY", hexKey)
+
+	// loadOrCreateKey should return the env var key (not create a file)
+	key, err := loadOrCreateKey(dir)
+	if err != nil {
+		t.Fatalf("loadOrCreateKey with env var: %v", err)
+	}
+	if string(key) != string(knownKey) {
+		t.Error("key should match ASTONISH_MASTER_KEY env var")
+	}
+
+	// No file should have been created
+	if _, err := os.Stat(filepath.Join(dir, keyFileName)); !os.IsNotExist(err) {
+		t.Error("key file should NOT be created when ASTONISH_MASTER_KEY is set")
+	}
+}
+
+func TestLoadOrCreateKey_EnvVarInvalidHex(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("ASTONISH_MASTER_KEY", "not-valid-hex")
+
+	_, err := loadOrCreateKey(dir)
+	if err == nil {
+		t.Error("expected error for invalid hex in ASTONISH_MASTER_KEY")
+	}
+}
+
+func TestLoadOrCreateKey_EnvVarWrongLength(t *testing.T) {
+	dir := t.TempDir()
+
+	// 16 bytes (32 hex chars) instead of 32 bytes (64 hex chars)
+	t.Setenv("ASTONISH_MASTER_KEY", "abcdef0123456789abcdef0123456789")
+
+	_, err := loadOrCreateKey(dir)
+	if err == nil {
+		t.Error("expected error for wrong-length ASTONISH_MASTER_KEY")
+	}
+}
+
 func TestStoreKeyRedactionWithHexFormat(t *testing.T) {
 	dir := t.TempDir()
 

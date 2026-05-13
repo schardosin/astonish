@@ -442,7 +442,7 @@ func TestFileStore_SetSessionTitle(t *testing.T) {
 	store := newTestStore(t)
 	sess := createTestSession(t, store, "myapp", "user1")
 
-	if err := store.SetSessionTitle(sess.ID(), "My Title"); err != nil {
+	if err := store.SetSessionTitle(context.Background(), sess.ID(), "My Title"); err != nil {
 		t.Fatalf("SetSessionTitle() error = %v", err)
 	}
 

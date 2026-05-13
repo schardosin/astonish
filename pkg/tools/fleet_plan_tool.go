@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
+	"gopkg.in/yaml.v3"
 )
 
 // fleetPlanRegistryVar holds the plan registry for the save_fleet_plan tool.
@@ -25,6 +28,90 @@ func SetFleetPlanRegistry(reg *fleet.PlanRegistry) {
 // GetFleetPlanRegistry returns the plan registry (for use by other packages).
 func GetFleetPlanRegistry() *fleet.PlanRegistry {
 	return fleetPlanRegistryVar
+}
+
+// getEffectiveFleetPlanStore returns the FleetPlanStore from context (platform mode)
+// or wraps the file-based registry (personal mode).
+func getEffectiveFleetPlanStore(ctx context.Context) store.FleetPlanStore {
+	if ctx != nil {
+		if fs := store.FleetPlanStoreFromContext(ctx); fs != nil {
+			return fs
+		}
+	}
+	// Personal mode fallback: wrap the file-based registry
+	if fleetPlanRegistryVar != nil {
+		return &fleetPlanRegistryStoreAdapter{reg: fleetPlanRegistryVar}
+	}
+	return nil
+}
+
+// fleetPlanRegistryStoreAdapter adapts *fleet.PlanRegistry to store.FleetPlanStore
+// for use in personal mode fallback within tools.
+type fleetPlanRegistryStoreAdapter struct {
+	reg *fleet.PlanRegistry
+}
+
+func (a *fleetPlanRegistryStoreAdapter) GetPlan(_ context.Context, key string) (any, bool) {
+	return a.reg.GetPlan(key)
+}
+
+func (a *fleetPlanRegistryStoreAdapter) ListPlans(_ context.Context) []store.FleetPlanSummary {
+	plans := a.reg.ListPlans()
+	result := make([]store.FleetPlanSummary, len(plans))
+	for i, p := range plans {
+		result[i] = store.FleetPlanSummary{
+			Key:         p.Key,
+			Name:        p.Name,
+			Description: p.Description,
+			CreatedFrom: p.CreatedFrom,
+			ChannelType: p.ChannelType,
+			AgentCount:  p.AgentCount,
+			AgentNames:  p.AgentNames,
+		}
+	}
+	return result
+}
+
+func (a *fleetPlanRegistryStoreAdapter) Save(_ context.Context, plan any) error {
+	p, ok := plan.(*fleet.FleetPlan)
+	if !ok {
+		return fmt.Errorf("expected *fleet.FleetPlan, got %T", plan)
+	}
+	return a.reg.Save(p)
+}
+
+func (a *fleetPlanRegistryStoreAdapter) Delete(_ context.Context, key string) error {
+	return a.reg.Delete(key)
+}
+
+func (a *fleetPlanRegistryStoreAdapter) Count(_ context.Context) int {
+	return a.reg.Count()
+}
+
+func (a *fleetPlanRegistryStoreAdapter) Reload(_ context.Context) error {
+	return a.reg.Reload()
+}
+
+func (a *fleetPlanRegistryStoreAdapter) GetPlanYAML(_ context.Context, key string) (string, error) {
+	dir := a.reg.Dir()
+	if dir == "" {
+		return "", fmt.Errorf("fleet plan directory not configured")
+	}
+	yamlPath := dir + "/" + key + ".yaml"
+	data, err := os.ReadFile(yamlPath)
+	if err != nil {
+		return "", fmt.Errorf("fleet plan %q not found: %w", key, err)
+	}
+	return string(data), nil
+}
+
+func (a *fleetPlanRegistryStoreAdapter) SavePlanYAML(_ context.Context, key string, yamlContent string) error {
+	var plan fleet.FleetPlan
+	if err := yaml.Unmarshal([]byte(yamlContent), &plan); err != nil {
+		return fmt.Errorf("invalid YAML: %w", err)
+	}
+	plan.Key = key
+	return a.reg.Save(&plan)
 }
 
 // PlanActivatorFunc is a function that activates a fleet plan by creating
@@ -113,15 +200,18 @@ type SaveFleetPlanResult struct {
 	Message string `json:"message"`
 }
 
-func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult, error) {
-	if fleetPlanRegistryVar == nil {
+func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult, error) {
+	// Resolve effective stores from context (platform mode) or globals (personal mode)
+	planStore := getEffectiveFleetPlanStore(tc)
+	if planStore == nil {
 		return SaveFleetPlanResult{
 			Status:  "error",
 			Message: "Fleet plan system is not initialized.",
 		}, nil
 	}
 
-	if fleetRegistryVar == nil {
+	templateStore := getEffectiveFleetTemplateStore(tc)
+	if templateStore == nil {
 		return SaveFleetPlanResult{
 			Status:  "error",
 			Message: "Fleet system is not initialized.",
@@ -152,9 +242,9 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 	}
 
 	// Load the base fleet config
-	baseCfg, ok := fleetRegistryVar.GetFleet(baseKey)
+	baseCfgAny, ok := templateStore.GetFleet(tc, baseKey)
 	if !ok {
-		summaries := fleetRegistryVar.ListFleets()
+		summaries := templateStore.ListFleets(tc)
 		keys := make([]string, len(summaries))
 		for i, s := range summaries {
 			keys[i] = s.Key
@@ -162,6 +252,13 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		return SaveFleetPlanResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Fleet %q not found. Available fleets: %s", baseKey, strings.Join(keys, ", ")),
+		}, nil
+	}
+	baseCfg, ok := baseCfgAny.(*fleet.FleetConfig)
+	if !ok {
+		return SaveFleetPlanResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Fleet %q has an unexpected type: %T", baseKey, baseCfgAny),
 		}, nil
 	}
 
@@ -285,7 +382,7 @@ func saveFleetPlan(_ tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult,
 		UpdatedAt: now,
 	}
 
-	if err := fleetPlanRegistryVar.Save(plan); err != nil {
+	if err := planStore.Save(tc, plan); err != nil {
 		return SaveFleetPlanResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Failed to save fleet plan: %v", err),

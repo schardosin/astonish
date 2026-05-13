@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -28,6 +29,7 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -44,6 +46,11 @@ type ChatFactoryConfig struct {
 	WorkspaceDir string
 	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
 
+	// PlatformMode indicates multi-tenant platform mode. When true, skill loading
+	// is restricted to bundled skills only — org/team skills are resolved per-request
+	// from context-injected stores. The filesystem user skill directory is NOT read.
+	PlatformMode bool
+
 	// SessionStore is an optional pre-created FileStore for session persistence.
 	// When set, the factory reuses this store instead of creating a new one.
 	// This ensures a single FileStore instance across the daemon process,
@@ -55,6 +62,16 @@ type ChatFactoryConfig struct {
 	// When set, the factory reuses it instead of creating a new store/indexer,
 	// avoiding double-indexing and duplicate file watchers.
 	DaemonIndexer *memory.DaemonIndexerResult
+
+	// PlatformToolVectorStore is the vector store for tool discovery in platform mode.
+	// When set, it's used instead of the chromem-go backed store (personal mode).
+	// Callers should create this via pgstore.NewPGToolVectorStore().
+	PlatformToolVectorStore agent.ToolVectorStore
+
+	// PlatformEmbedFunc is the embedding function for platform mode tool discovery.
+	// Required when PlatformToolVectorStore is set (used to embed query strings
+	// before vector search). Typically the same Hugot-based embedder used for memory.
+	PlatformEmbedFunc agent.EmbedFunc
 }
 
 // ChatFactoryResult holds everything produced by the factory.
@@ -118,8 +135,12 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			credStore = cs
 			tools.SetCredentialStore(cs)
 
-			// Wire credential store into config package for standard server lookups
-			config.SetInstalledSecretGetter(cs.GetSecret)
+			// Wire credential store into config package for standard server lookups.
+			// In platform mode, the daemon sets this to the DB-backed getter after
+			// factory init, so we only set the file-based one in personal mode.
+			if !cfg.PlatformMode {
+				config.SetInstalledSecretGetter(cs.GetSecret)
+			}
 
 			// Wire credential store into API handlers
 			api.SetAPICredentialStore(cs)
@@ -190,10 +211,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 2b. Initialize memory manager ---
-	memMgr, memErr := memory.NewManager("", cfg.DebugMode)
-	if memErr != nil {
-		if cfg.DebugMode {
-			slog.Warn("failed to initialize memory manager", "error", memErr)
+	// In platform mode, memory is fully managed by PostgreSQL (per-team pgvector
+	// tables). The file-based MEMORY.md manager and chromem-go vector store are
+	// only needed in personal mode.
+	var memMgr *memory.Manager
+	if !cfg.PlatformMode {
+		var memErr error
+		memMgr, memErr = memory.NewManager("", cfg.DebugMode)
+		if memErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to initialize memory manager", "error", memErr)
+			}
 		}
 	}
 
@@ -205,8 +233,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	indexingDone := make(chan struct{})
 	var indexingErr error
 
-	// If the daemon already started the indexer, reuse it.
-	if cfg.DaemonIndexer != nil {
+	if cfg.PlatformMode {
+		// Platform mode: memory search is always available (via PG context stores).
+		// No filesystem directories or chromem-go stores needed.
+		memorySearchAvailable = true
+		close(indexingDone)
+	} else if cfg.DaemonIndexer != nil {
+		// If the daemon already started the indexer, reuse it.
 		memStore = cfg.DaemonIndexer.Store
 		memIndexer = cfg.DaemonIndexer.Indexer
 		memEmbeddingFunc = cfg.DaemonIndexer.EmbeddingFunc
@@ -316,7 +349,21 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// Create memory tools → core category (always available)
-	if memMgr != nil {
+	if cfg.PlatformMode {
+		// Platform mode: create memory tools with nil backing stores.
+		// At runtime, they detect PG stores from request context (injected by
+		// TenantMiddleware / ChatRunner.InjectMemoryStores) and route there.
+		// memory_get is omitted — it reads filesystem .md files which don't exist
+		// in platform mode (memory content lives in PG rows).
+		memorySaveTool, msErr := tools.NewMemorySaveTool(nil, nil)
+		if msErr == nil {
+			coreTools = append(coreTools, memorySaveTool)
+		}
+		searchTool, searchErr := tools.NewMemorySearchTool(nil)
+		if searchErr == nil {
+			coreTools = append(coreTools, searchTool)
+		}
+	} else if memMgr != nil {
 		var saveStore tools.MemorySaveStore
 		if memStore != nil {
 			saveStore = memStore
@@ -331,7 +378,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
-	if memorySearchAvailable && memStore != nil {
+	if !cfg.PlatformMode && memorySearchAvailable && memStore != nil {
 		searchTool, searchErr := tools.NewMemorySearchTool(memStore)
 		if searchErr != nil {
 			if cfg.DebugMode {
@@ -489,33 +536,42 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var skillToolSlice []tool.Tool
 	var skillLookupTool tool.Tool // hoisted for SubAgentManager wiring
 	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
-		skillsCfg := &cfg.AppConfig.Skills
-		workDir := cfg.WorkspaceDir
-		if workDir == "" {
-			if wd, wdErr := os.Getwd(); wdErr != nil {
-				slog.Warn("failed to get working directory for deferred skills", "error", wdErr)
-			} else {
-				workDir = wd
+		var skillErr error
+
+		if cfg.PlatformMode {
+			// Platform mode: only bundled (embedded) skills in the static index.
+			// Org/team skills are resolved per-request from context-injected stores.
+			// The filesystem user skill directory is NOT read — no data leakage.
+			loadedSkills, skillErr = skills.LoadBundledSkills()
+		} else {
+			// Personal mode: load from filesystem (bundled + user dir + extra dirs + workspace)
+			skillsCfg := &cfg.AppConfig.Skills
+			workDir := cfg.WorkspaceDir
+			if workDir == "" {
+				if wd, wdErr := os.Getwd(); wdErr != nil {
+					slog.Warn("failed to get working directory for deferred skills", "error", wdErr)
+				} else {
+					workDir = wd
+				}
 			}
+			loadedSkills, skillErr = skills.LoadSkills(
+				skillsCfg.GetUserSkillsDir(),
+				skillsCfg.ExtraDirs,
+				workDir,
+				skillsCfg.Allowlist,
+			)
 		}
 
-		var skillErr error
-		loadedSkills, skillErr = skills.LoadSkills(
-			skillsCfg.GetUserSkillsDir(),
-			skillsCfg.ExtraDirs,
-			workDir,
-			skillsCfg.Allowlist,
-		)
 		if skillErr != nil {
 			if cfg.DebugMode {
 				slog.Warn("failed to load skills", "error", skillErr)
 			}
 		} else {
 			if len(loadedSkills) > 0 {
-				// Build lightweight index for system prompt (includes all skills)
+				// Build lightweight index for system prompt (includes bundled skills only in platform mode)
 				skillIndex = skills.BuildSkillIndex(loadedSkills)
 
-				// Create skill_lookup tool (serves all installed skills)
+				// Create skill_lookup tool (bundled index; platform mode also checks context stores at runtime)
 				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
 				if stErr != nil {
 					if cfg.DebugMode {
@@ -528,22 +584,25 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			if cfg.DebugMode {
 				eligible := skills.FilterEligible(loadedSkills)
-				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible))
+				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible), "platform", cfg.PlatformMode)
 			}
 		}
 	}
 
 	// --- 3. Load MCP tools from cache (lazy) ---
-	mcpCfg, err := config.LoadMCPConfig()
+	mcpCfg, err := loadMCPConfig(ctx, cfg.PlatformMode)
 	if err != nil {
 		slog.Warn("failed to load MCP config", "error", err)
 	}
 	var lazyToolsets []*agent.LazyMCPToolset
 
 	if mcpCfg != nil && len(mcpCfg.MCPServers) > 0 {
-		if _, loadErr := cache.LoadCache(); loadErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load tools cache", "error", loadErr)
+		if !cfg.PlatformMode {
+			// Personal mode: use file-based cache
+			if _, loadErr := cache.LoadCache(); loadErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load tools cache", "error", loadErr)
+				}
 			}
 		}
 
@@ -551,7 +610,36 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if !serverCfg.IsEnabled() {
 				continue
 			}
-			cachedTools := cache.GetToolsForServer(name)
+
+			var cachedTools []cache.ToolEntry
+			if cfg.PlatformMode {
+				// Platform mode: tools are stored in the MCPConfig extensions
+				cachedTools = getPlatformCachedTools(ctx, name)
+				// Fallback for standard servers (tavily, brave, firecrawl):
+				// credentials come from platform_secrets (DB), but their tool
+				// schemas are cached in the local file-based cache (populated
+				// on first successful MCP connection). This avoids requiring
+				// standard servers to be stored as DB MCP server entries.
+				if len(cachedTools) == 0 && config.IsStandardServerInstalled(name) {
+					cachedTools = cache.GetToolsForServer(name)
+				}
+			} else {
+				// Personal mode: tools from file-based cache
+				cachedTools = cache.GetToolsForServer(name)
+			}
+
+			// Filter out excluded tools for standard servers (e.g., tavily_research
+			// is expensive and redundant with Astonish's delegation-based approach).
+			if excluded := config.GetExcludedTools(name); excluded != nil {
+				filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+				for _, t := range cachedTools {
+					if !excluded[t.Name] {
+						filtered = append(filtered, t)
+					}
+				}
+				cachedTools = filtered
+			}
+
 			if len(cachedTools) == 0 {
 				if cfg.DebugMode {
 					slog.Debug("MCP server has no cached tools", "component", "lazy-mcp", "server", name)
@@ -686,6 +774,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					dialer := &sandbox.ContainerDialer{Client: client}
 					return dialer.Dial(containerName, port)
 				}
+
+				// ActivityTouchFunc: reset the sandbox idle timer on every browser
+				// tool call. Browser tools communicate with Chromium via CDP, bypassing
+				// the node process — without this, the idle watchdog would kill
+				// containers with active browser sessions after 10 minutes.
+				pool := nodePool // capture for closure
+				browserMgr.ActivityTouchFunc = func(sessionID string) {
+					pool.TouchActivity(sessionID)
+				}
 			}
 		}
 
@@ -704,32 +801,36 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 		// Auto-prune stale session containers from previous daemon runs.
 		// Only destroy containers whose sessions no longer exist in the store.
-		existingSessionIDs := make(map[string]bool)
-		if cfg.SessionStore != nil {
-			// Preferred: use the shared store's index (daemon/studio path).
-			if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
-				for id := range indexData.Sessions {
-					existingSessionIDs[id] = true
-				}
-			}
-		} else if cfg.AppConfig != nil {
-			// Fallback: read the index file directly (console/CLI path).
-			// Without this, existingSessionIDs is empty and prune would
-			// destroy every stopped container — even valid ones.
-			var sessCfg *config.SessionConfig
-			sessCfg = &cfg.AppConfig.Sessions
-			if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
-				idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
-				if indexData, err := idx.Load(); err == nil {
+		// In platform mode, session IDs live in PG across many team schemas;
+		// startup pruning is skipped — use scheduled cleanup instead.
+		if !cfg.PlatformMode {
+			existingSessionIDs := make(map[string]bool)
+			if cfg.SessionStore != nil {
+				// Preferred: use the shared store's index (daemon/studio path).
+				if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
 					for id := range indexData.Sessions {
 						existingSessionIDs[id] = true
 					}
 				}
+			} else if cfg.AppConfig != nil {
+				// Fallback: read the index file directly (console/CLI path).
+				// Without this, existingSessionIDs is empty and prune would
+				// destroy every stopped container — even valid ones.
+				var sessCfg *config.SessionConfig
+				sessCfg = &cfg.AppConfig.Sessions
+				if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
+					idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
+					if indexData, err := idx.Load(); err == nil {
+						for id := range indexData.Sessions {
+							existingSessionIDs[id] = true
+						}
+					}
+				}
 			}
-		}
-		if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
-			startupNotices = append(startupNotices,
-				fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+			if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
+				startupNotices = append(startupNotices,
+					fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
+			}
 		}
 
 		// Start idle watchdog: stops containers that have been inactive for the
@@ -757,6 +858,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		sessionService = cfg.SessionStore
 		if cfg.DebugMode {
 			slog.Debug("session storage: file (shared store)", "component", "chat-factory")
+		}
+	} else if cfg.PlatformMode {
+		// Platform mode: sessions are persisted in PostgreSQL per-request.
+		// Use in-memory as the factory-level default; actual persistence is
+		// handled by context-injected PG stores at the API/channel layer.
+		sessionService = session.InMemoryService()
+		if cfg.DebugMode {
+			slog.Debug("session storage: in-memory (platform mode, PG per-request)", "component", "chat-factory")
 		}
 	} else if cfg.AppConfig != nil && cfg.AppConfig.Sessions.Storage == "memory" {
 		sessionService = session.InMemoryService()
@@ -883,7 +992,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if len(browserToolsSlice) > 0 {
 		toolGroups["browser"] = &agent.ToolGroup{
 			Name:        "browser",
-			Description: "Web automation, screenshots, form filling, page interaction",
+			Description: "Browse and research websites, get live/current data, take screenshots, fill forms, interact with web pages",
 			Tools:       browserToolsSlice,
 		}
 	}
@@ -1040,38 +1149,43 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		promptBuilder.SkillIndex = skillIndex
 	}
 
-	// Load INSTRUCTIONS.md
+	// Load INSTRUCTIONS.md and generate SELF.md (personal mode only).
+	// In platform mode, custom instructions are stored per-team in PostgreSQL
+	// and injected via the request context. SELF.md and guidance docs are
+	// filesystem artifacts for vector indexing which doesn't apply to PG mode.
 	var memDir string
-	if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
-		var err error
-		memDir, err = config.GetMemoryDir(&cfg.AppConfig.Memory)
-		if err != nil {
-			slog.Warn("failed to get memory directory from config", "error", err)
-		}
-	}
-	if memDir == "" {
-		var err error
-		memDir, err = config.GetMemoryDir(nil)
-		if err != nil {
-			slog.Warn("failed to get default memory directory", "error", err)
-		}
-	}
-	if memDir != "" {
-		created, ensErr := memory.EnsureInstructions(memDir)
-		if ensErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
+	if !cfg.PlatformMode {
+		if cfg.AppConfig != nil && cfg.AppConfig.Memory.IsMemoryEnabled() {
+			var err error
+			memDir, err = config.GetMemoryDir(&cfg.AppConfig.Memory)
+			if err != nil {
+				slog.Warn("failed to get memory directory from config", "error", err)
 			}
-		} else if created && cfg.DebugMode {
-			slog.Debug("created default INSTRUCTIONS.md", "component", "chat-factory", "dir", memDir)
 		}
-		instrContent, instrErr := memory.LoadInstructions(memDir)
-		if instrErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load INSTRUCTIONS.md", "error", instrErr)
+		if memDir == "" {
+			var err error
+			memDir, err = config.GetMemoryDir(nil)
+			if err != nil {
+				slog.Warn("failed to get default memory directory", "error", err)
 			}
-		} else if instrContent != "" {
-			promptBuilder.InstructionsContent = instrContent
+		}
+		if memDir != "" {
+			created, ensErr := memory.EnsureInstructions(memDir)
+			if ensErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to ensure INSTRUCTIONS.md", "error", ensErr)
+				}
+			} else if created && cfg.DebugMode {
+				slog.Debug("created default INSTRUCTIONS.md", "component", "chat-factory", "dir", memDir)
+			}
+			instrContent, instrErr := memory.LoadInstructions(memDir)
+			if instrErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load INSTRUCTIONS.md", "error", instrErr)
+				}
+			} else if instrContent != "" {
+				promptBuilder.InstructionsContent = instrContent
+			}
 		}
 	}
 
@@ -1112,158 +1226,176 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 5b. Initialize fleet registry ---
-	fleetsDir, flErr := config.GetFleetsDir()
-	if flErr == nil {
-		// Ensure bundled fleets exist on disk
-		fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
-		if fEnsErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
-			}
-		} else if fWritten > 0 && cfg.DebugMode {
-			slog.Debug("bootstrapped bundled fleets", "count", fWritten, "dir", fleetsDir)
-		}
-
-		fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
-		if fRegErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to load fleet registry", "error", fRegErr)
-			}
-		} else {
-			// Wire fleet registry to API handlers
-			api.SetFleetRegistry(fleetReg)
-
-			// Wire registry to fleet execution tool
-			tools.SetFleetRegistry(fleetReg)
-
-			// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
-			// This must happen before any fleet tool runs so the delegate subprocess inherits them.
-			delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
-			if len(delegateEnvNames) > 0 {
-				var getSecret config.SecretGetter
-				if credStore != nil {
-					getSecret = credStore.GetSecret
+	// In platform mode, fleet data lives in the database (per-team).
+	// File-based fleet initialization is only needed for personal mode.
+	if !cfg.PlatformMode {
+		fleetsDir, flErr := config.GetFleetsDir()
+		if flErr == nil {
+			// Ensure bundled fleets exist on disk
+			fWritten, fEnsErr := fleet.EnsureBundled(fleetsDir)
+			if fEnsErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to bootstrap bundled fleets", "error", fEnsErr)
 				}
-				config.SetupDelegateEnv(delegateEnvNames, getSecret)
+			} else if fWritten > 0 && cfg.DebugMode {
+				slog.Debug("bootstrapped bundled fleets", "count", fWritten, "dir", fleetsDir)
 			}
 
-			// Register fleet tools (requires sub-agents to be enabled)
-			if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-				// Build fleet-only tools (opencode delegate). These are NOT added to
-				// internalTools (so the main agent can't call them). Instead they go
-				// on SubAgentManager.FleetTools, accessible only to fleet
-				// worker agents via their explicit tool filter.
-				var ftErr error
-				fleetOnlyTools, ftErr = tools.GetFleetTools()
-				if ftErr != nil {
+			fleetReg, fRegErr := fleet.NewRegistry(fleetsDir)
+			if fRegErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to load fleet registry", "error", fRegErr)
+				}
+			} else {
+				// Wire fleet registry to API handlers
+				api.SetFleetRegistry(fleetReg)
+
+				// Wire registry to fleet execution tool
+				tools.SetFleetRegistry(fleetReg)
+
+				// Set up env vars declared by delegate configs (e.g. BIFROST_API_KEY for OpenCode).
+				// This must happen before any fleet tool runs so the delegate subprocess inherits them.
+				delegateEnvNames := fleet.CollectDelegateEnvVars(fleetReg.AllFleets())
+				if len(delegateEnvNames) > 0 {
+					var getSecret config.SecretGetter
+					if credStore != nil {
+						getSecret = credStore.GetSecret
+					}
+					config.SetupDelegateEnv(delegateEnvNames, getSecret)
+				}
+
+				// Register fleet tools (requires sub-agents to be enabled)
+				if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+					// Build fleet-only tools (opencode delegate). These are NOT added to
+					// internalTools (so the main agent can't call them). Instead they go
+					// on SubAgentManager.FleetTools, accessible only to fleet
+					// worker agents via their explicit tool filter.
+					var ftErr error
+					fleetOnlyTools, ftErr = tools.GetFleetTools()
+					if ftErr != nil {
+						if cfg.DebugMode {
+							slog.Warn("failed to create fleet internal tools", "error", ftErr)
+						}
+					}
+				}
+
+				// Build fleet awareness section for system prompt
+				if fleetReg.Count() > 0 {
+					summaries := fleetReg.ListFleets()
+					promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
+						summaries,
+						func(key string) (*fleet.FleetConfig, bool) {
+							return fleetReg.GetFleet(key)
+						},
+					)
 					if cfg.DebugMode {
-						slog.Warn("failed to create fleet internal tools", "error", ftErr)
+						slog.Debug("fleet awareness", "fleets", fleetReg.Count())
 					}
 				}
 			}
 
-			// Build fleet awareness section for system prompt
-			if fleetReg.Count() > 0 {
-				summaries := fleetReg.ListFleets()
-				promptBuilder.FleetSection = fleet.BuildSystemPromptSection(
-					summaries,
-					func(key string) (*fleet.FleetConfig, bool) {
-						return fleetReg.GetFleet(key)
-					},
-				)
-				if cfg.DebugMode {
-					slog.Debug("fleet awareness", "fleets", fleetReg.Count())
+			// Initialize fleet plan registry
+			fleetPlansDir, fpErr := config.GetFleetPlansDir()
+			if fpErr == nil {
+				planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
+				if prErr != nil {
+					if cfg.DebugMode {
+						slog.Warn("failed to load fleet plan registry", "error", prErr)
+					}
+				} else {
+					// Wire plan registry to API handlers
+					api.SetFleetPlanRegistry(planReg)
+					// Wire plan registry to the save_fleet_plan tool
+					tools.SetFleetPlanRegistry(planReg)
+					if cfg.DebugMode {
+						slog.Debug("fleet plans loaded", "count", planReg.Count(), "dir", fleetPlansDir)
+					}
 				}
 			}
 		}
-
-		// Initialize fleet plan registry
-		fleetPlansDir, fpErr := config.GetFleetPlansDir()
-		if fpErr == nil {
-			planReg, prErr := fleet.NewPlanRegistry(fleetPlansDir)
-			if prErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to load fleet plan registry", "error", prErr)
-				}
-			} else {
-				// Wire plan registry to API handlers
-				api.SetFleetPlanRegistry(planReg)
-				// Wire plan registry to the save_fleet_plan tool
-				tools.SetFleetPlanRegistry(planReg)
-				if cfg.DebugMode {
-					slog.Debug("fleet plans loaded", "count", planReg.Count(), "dir", fleetPlansDir)
-				}
-			}
-		}
-
-		// Fleet plan tools → deferred category
-		var fleetToolsSlice []tool.Tool
-		fleetPlanTools, fptErr := tools.GetFleetPlanTools()
-		if fptErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create fleet plan tools", "error", fptErr)
-			}
-		} else {
-			fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
-		}
-
-		fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
-		if fpvErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create fleet plan validate tools", "error", fpvErr)
-			}
-		} else {
-			fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
-		}
-
-		if len(fleetToolsSlice) > 0 {
-			toolGroups["fleet"] = &agent.ToolGroup{
-				Name:        "fleet",
-				Description: "Create and validate fleet plans",
-				Tools:       fleetToolsSlice,
-			}
-		}
-
-		// opencode tool → add to main thread tools
+	} else {
+		// Platform mode: Fleet data is in the DB.
+		// Still register fleet tools (they use context-based stores at runtime)
+		// and fleet-only tools for sub-agents.
 		if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-			ocTool, ocErr := tools.NewOpenCodeTool()
-			if ocErr != nil {
+			var ftErr error
+			fleetOnlyTools, ftErr = tools.GetFleetTools()
+			if ftErr != nil {
 				if cfg.DebugMode {
-					slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
-				}
-			} else {
-				mainThreadTools = append(mainThreadTools, ocTool)
-				// Also add to core group for sub-agents
-				if g, ok := toolGroups["core"]; ok {
-					g.Tools = append(g.Tools, ocTool)
+					slog.Warn("failed to create fleet internal tools", "error", ftErr)
 				}
 			}
 		}
+	}
 
-		// Sandbox template tools → deferred category
-		if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
-			var sandboxTplTools []tool.Tool
-			tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
-			if tplErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to create save_sandbox_template tool", "error", tplErr)
-				}
-			} else {
-				sandboxTplTools = append(sandboxTplTools, tplTool)
+	// Fleet plan tools → deferred category (available in both modes)
+	var fleetToolsSlice []tool.Tool
+	fleetPlanTools, fptErr := tools.GetFleetPlanTools()
+	if fptErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet plan tools", "error", fptErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetPlanTools...)
+	}
+
+	fleetPlanValidateTools, fpvErr := tools.GetFleetPlanValidateTools()
+	if fpvErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet plan validate tools", "error", fpvErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
+	}
+
+	if len(fleetToolsSlice) > 0 {
+		toolGroups["fleet"] = &agent.ToolGroup{
+			Name:        "fleet",
+			Description: "Create and validate fleet plans",
+			Tools:       fleetToolsSlice,
+		}
+	}
+
+	// opencode tool → add to main thread tools (available in both modes)
+	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
+		ocTool, ocErr := tools.NewOpenCodeTool()
+		if ocErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
 			}
-
-			listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
-			if listErr != nil {
-				if cfg.DebugMode {
-					slog.Warn("failed to create list_sandbox_templates tool", "error", listErr)
-				}
-			} else {
-				sandboxTplTools = append(sandboxTplTools, listTplTool)
+		} else {
+			mainThreadTools = append(mainThreadTools, ocTool)
+			// Also add to core group for sub-agents
+			if g, ok := toolGroups["core"]; ok {
+				g.Tools = append(g.Tools, ocTool)
 			}
+		}
+	}
 
-			useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
-			if useErr != nil {
-				if cfg.DebugMode {
+	// Sandbox template tools → deferred category
+	if sandboxNodePool != nil && sandboxIncusClient != nil && sandboxTplRegistry != nil {
+		var sandboxTplTools []tool.Tool
+		tplTool, tplErr := tools.NewSaveSandboxTemplateTool(sandboxNodePool, sandboxIncusClient, sandboxTplRegistry, sandboxSessRegistry)
+		if tplErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create save_sandbox_template tool", "error", tplErr)
+			}
+		} else {
+			sandboxTplTools = append(sandboxTplTools, tplTool)
+		}
+
+		listTplTool, listErr := tools.NewListSandboxTemplatesTool(sandboxTplRegistry)
+		if listErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create list_sandbox_templates tool", "error", listErr)
+			}
+		} else {
+			sandboxTplTools = append(sandboxTplTools, listTplTool)
+		}
+
+		useTplTool, useErr := tools.NewUseSandboxTemplateTool(sandboxNodePool, sandboxTplRegistry)
+		if useErr != nil {
+			if cfg.DebugMode {
 					slog.Warn("failed to create use_sandbox_template tool", "error", useErr)
 				}
 			} else {
@@ -1275,7 +1407,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					Name:        "sandbox_templates",
 					Description: "Save, list, and use sandbox container templates",
 					Tools:       sandboxTplTools,
-				}
 			}
 		}
 	}
@@ -1311,10 +1442,33 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Create the dedicated tool index for retrieval-based tool discovery.
 	// One document per tool (name + description) enables accurate semantic
 	// search without the chunking problems of the general memory store.
+	//
+	// Personal mode: uses chromem-go backed vector store (shared with memory).
+	// Platform mode: uses pgvector backed vector store (shared platform DB).
 	var toolIndex *agent.ToolIndex
-	if memStore != nil && memEmbeddingFunc != nil {
+	var vectorStore agent.ToolVectorStore
+	var toolEmbedFunc agent.EmbedFunc
+
+	if cfg.PlatformToolVectorStore != nil && cfg.PlatformEmbedFunc != nil {
+		// Platform mode: use pre-created pgvector store
+		vectorStore = cfg.PlatformToolVectorStore
+		toolEmbedFunc = cfg.PlatformEmbedFunc
+	} else if memStore != nil && memEmbeddingFunc != nil {
+		// Personal mode: create chromem-backed vector store
+		var vsErr error
+		vectorStore, vsErr = agent.NewChromemToolVectorStore(memStore.DB(), memEmbeddingFunc)
+		if vsErr != nil {
+			if cfg.DebugMode {
+				slog.Warn("failed to create chromem tool vector store", "error", vsErr)
+			}
+		} else {
+			toolEmbedFunc = agent.EmbedFunc(memEmbeddingFunc)
+		}
+	}
+
+	if vectorStore != nil && toolEmbedFunc != nil {
 		var tiErr error
-		toolIndex, tiErr = agent.NewToolIndex(memStore.DB(), memEmbeddingFunc)
+		toolIndex, tiErr = agent.NewToolIndex(vectorStore, toolEmbedFunc)
 		if tiErr != nil {
 			if cfg.DebugMode {
 				slog.Warn("failed to create tool index", "error", tiErr)
@@ -1380,31 +1534,38 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		chatAgent.ToolIndex = toolIndex
 	}
 
-	// Wire credential redactor to ChatAgent, session service, and sub-agents
+	// Wire credential redactor to ChatAgent, session service, and sub-agents.
+	// The Redactor is a security boundary — it MUST always exist (never nil),
+	// even when the file-based credential store fails (platform mode with
+	// regenerated .store_key). In platform mode, it gets hydrated per-request
+	// from the PG-backed credential store in chat_handlers.go.
+	redactor := credentials.NewRedactor()
 	if credStore != nil {
-		redactor := credStore.Redactor()
-		chatAgent.Redactor = redactor
+		redactor = credStore.Redactor()
 		chatAgent.CredentialStore = credStore
-		// Create per-session PendingVault for <<<SECRET_N>>> token resolution.
-		// The vault extracts raw secrets from user messages before the LLM sees
-		// them, and registers them with the redactor as a safety net.
-		chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
-		// Attach proactive secret scanner if enabled (default: true).
-		// Scans user messages for untagged secrets using keyword, entropy,
-		// and structural analysis before they reach the LLM provider.
-		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
-			scanner := credentials.NewSecretScanner()
-			if cfg.AppConfig != nil {
-				sc := cfg.AppConfig.Security.SecretScanner
-				if sc.EntropyThreshold > 0 {
-					scanner.EntropyThreshold = sc.EntropyThreshold
-				}
-				if sc.MinTokenLength > 0 {
-					scanner.MinTokenLength = sc.MinTokenLength
-				}
+	}
+	chatAgent.Redactor = redactor
+	// Create per-session PendingVault for <<<SECRET_N>>> token resolution.
+	// The vault extracts raw secrets from user messages before the LLM sees
+	// them, and registers them with the redactor as a safety net.
+	chatAgent.PendingSecrets = credentials.NewPendingVault(redactor)
+	// Attach proactive secret scanner if enabled (default: true).
+	// Scans user messages for untagged secrets using keyword, entropy,
+	// and structural analysis before they reach the LLM provider.
+	if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
+		scanner := credentials.NewSecretScanner()
+		if cfg.AppConfig != nil {
+			sc := cfg.AppConfig.Security.SecretScanner
+			if sc.EntropyThreshold > 0 {
+				scanner.EntropyThreshold = sc.EntropyThreshold
 			}
-			chatAgent.PendingSecrets.Scanner = scanner
+			if sc.MinTokenLength > 0 {
+				scanner.MinTokenLength = sc.MinTokenLength
+			}
 		}
+		chatAgent.PendingSecrets.Scanner = scanner
+	}
+	if credStore != nil {
 		// Also wire to file-based session store for transcript redaction
 		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
 			fs.RedactFunc = redactor.Redact
@@ -1476,7 +1637,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
 
 		subAgentMgr.AppName = "astonish"
-		subAgentMgr.UserID = "console_user"
+		// In platform mode, use SystemUserID as the fallback for child sessions.
+		// The per-request user ID from context (store.UserIDFromContext) takes
+		// precedence in sub_agent.go — this is only the factory-time default.
+		// In personal mode, keep "console_user" (file store accepts any string).
+		if cfg.PlatformMode {
+			subAgentMgr.UserID = store.SystemUserID
+		} else {
+			subAgentMgr.UserID = "console_user"
+		}
 
 		// Wire plan tools: announce_plan emits events through
 		// the same ChatAgent.SubTaskProgressCallback pipeline.
@@ -1510,6 +1679,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 		if skillIndex != "" {
 			subAgentMgr.SkillIndex = skillIndex
+		}
+		// Wire web search/extract tool names so sub-agents get proper guidance
+		// preferring dedicated search over web_fetch.
+		if promptBuilder.WebSearchAvailable && promptBuilder.WebSearchToolName != "" {
+			// Normalize hyphens → underscores to match actual MCP tool names
+			subAgentMgr.WebSearchToolName = strings.ReplaceAll(promptBuilder.WebSearchToolName, "-", "_")
+		}
+		if promptBuilder.WebExtractAvailable && promptBuilder.WebExtractToolName != "" {
+			subAgentMgr.WebExtractToolName = strings.ReplaceAll(promptBuilder.WebExtractToolName, "-", "_")
 		}
 		// Alias sub-agent sessions to the parent's sandbox container so they
 		// share the same container instead of each creating a new one.
@@ -1557,8 +1735,41 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	tools.SetFlowRunnerAccess(flowRunner)
 
 	// --- 6b2. Wire knowledge search callbacks ---
-	if memorySearchAvailable && memStore != nil {
+	// These callbacks are context-aware: in platform mode, they check the
+	// invocation context for a PG-backed ThreeTierSearcher (injected by
+	// ChatRunner.InjectMemoryStores) and use it for cross-tier search.
+	// In personal mode (or when no PG searcher is available), they fall
+	// back to the file-based chromem-go store.
+	if memorySearchAvailable {
 		chatAgent.KnowledgeSearch = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64) ([]agent.KnowledgeSearchResult, error) {
+			// Platform mode: prefer PG three-tier searcher from context.
+			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
+				// Use bm25Query (conversation-context-enriched) for keyword matching
+				// when available; the tsvector OR search benefits from extra terms.
+				searchQuery := query
+				if bm25Query != "" {
+					searchQuery = bm25Query
+				}
+				pgResults, err := searcher.SearchAllTiers(ctx, searchQuery, maxResults, minScore)
+				if err != nil {
+					return nil, err
+				}
+				var knowledgeResults []agent.KnowledgeSearchResult
+				for _, r := range pgResults {
+					knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+						Path:     r.Path,
+						Score:    r.Score,
+						Snippet:  r.Snippet,
+						Category: r.Category,
+					})
+				}
+				return knowledgeResults, nil
+			}
+
+			// Personal mode fallback: file-based chromem-go.
+			if memStore == nil {
+				return nil, nil
+			}
 			results, err := memStore.SearchHybridWithContext(ctx, query, bm25Query, maxResults, minScore)
 			if err != nil {
 				return nil, err
@@ -1576,6 +1787,32 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 
 		chatAgent.KnowledgeSearchByCategory = func(ctx context.Context, query string, bm25Query string, maxResults int, minScore float64, category string) ([]agent.KnowledgeSearchResult, error) {
+			// Platform mode: prefer PG three-tier searcher from context.
+			if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
+				searchQuery := query
+				if bm25Query != "" {
+					searchQuery = bm25Query
+				}
+				pgResults, err := searcher.SearchAllTiersByCategory(ctx, searchQuery, maxResults, minScore, category)
+				if err != nil {
+					return nil, err
+				}
+				var knowledgeResults []agent.KnowledgeSearchResult
+				for _, r := range pgResults {
+					knowledgeResults = append(knowledgeResults, agent.KnowledgeSearchResult{
+						Path:     r.Path,
+						Score:    r.Score,
+						Snippet:  r.Snippet,
+						Category: r.Category,
+					})
+				}
+				return knowledgeResults, nil
+			}
+
+			// Personal mode fallback: file-based chromem-go.
+			if memStore == nil {
+				return nil, nil
+			}
 			results, err := memStore.SearchHybridByCategoryWithContext(ctx, query, bm25Query, maxResults, minScore, category)
 			if err != nil {
 				return nil, err
@@ -1676,6 +1913,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			reflector.MemoryStore = memStore
 		}
 		chatAgent.MemoryReflector = reflector
+	} else if cfg.PlatformMode {
+		// Platform mode: use PlatformReflector which writes to PG team memory
+		// store via context injection. It also runs extraction/consolidation
+		// after each turn to keep session memories well-organized.
+		chatAgent.PlatformReflector = &agent.PlatformReflector{
+			LLM:       llm,
+			DebugMode: cfg.DebugMode,
+		}
 	}
 
 	// Build ShutdownSandbox callback (nil when sandbox is not enabled)
@@ -1924,4 +2169,149 @@ func isDaemonRunning() bool {
 		return false
 	}
 	return isProcessRunning(pid)
+}
+
+// loadMCPConfig loads MCP server configurations based on deployment mode.
+// In personal mode, reads from the local mcp_config.json file.
+// In platform mode, reads from the context's org+team MCP server stores
+// and builds a config.MCPConfig with the merged (team overrides org) view.
+func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, error) {
+	if !platformMode {
+		return config.LoadMCPConfig()
+	}
+
+	// Platform mode: build MCPConfig from context stores.
+	// First try the dedicated MCPServerStores context key (set by InjectMCPServerStores).
+	mcpStores := store.MCPServerStoresFromContext(ctx)
+
+	// If not set, extract from the Services in context (set by TenantMiddleware).
+	if mcpStores == nil {
+		svc := store.FromContext(ctx)
+		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			mcpStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
+	}
+
+	if mcpStores == nil {
+		// No stores available — return empty config
+		return &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}, nil
+	}
+
+	merged := make(map[string]config.MCPServerConfig)
+
+	// 1. Load org-level servers as base
+	if mcpStores.Org != nil {
+		orgServers, err := mcpStores.Org.List(ctx)
+		if err != nil {
+			slog.Warn("failed to load org MCP servers", "error", err)
+		} else {
+			for _, s := range orgServers {
+				merged[s.Name] = storeMCPServerToConfig(&s)
+			}
+		}
+	}
+
+	// 2. Team servers override org by name
+	if mcpStores.Team != nil {
+		teamServers, err := mcpStores.Team.List(ctx)
+		if err != nil {
+			slog.Warn("failed to load team MCP servers", "error", err)
+		} else {
+			for _, s := range teamServers {
+				merged[s.Name] = storeMCPServerToConfig(&s)
+			}
+		}
+	}
+
+	cfg := &config.MCPConfig{MCPServers: merged}
+
+	// 3. Merge standard servers (Tavily, Brave, etc.) that are configured via
+	// config.yaml / credential store. These are never stored in the DB but
+	// should be available in platform mode just as they are in personal mode.
+	config.MergeStandardServers(cfg)
+
+	return cfg, nil
+}
+
+// storeMCPServerToConfig converts a store.MCPServer to config.MCPServerConfig.
+func storeMCPServerToConfig(s *store.MCPServer) config.MCPServerConfig {
+	return config.MCPServerConfig{
+		Command:   s.Command,
+		Args:      s.Args,
+		Env:       s.Env,
+		Transport: s.Transport,
+		URL:       s.URL,
+		Enabled:   s.Enabled,
+	}
+}
+
+// getPlatformCachedTools extracts cached tool declarations from the platform
+// MCP server stores in the context. It checks both team and org stores
+// (team takes priority by name, matching the override semantics).
+func getPlatformCachedTools(ctx context.Context, serverName string) []cache.ToolEntry {
+	mcpStores := store.MCPServerStoresFromContext(ctx)
+
+	// If not set via dedicated key, try Services from context
+	if mcpStores == nil {
+		svc := store.FromContext(ctx)
+		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			mcpStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
+	}
+
+	if mcpStores == nil {
+		return nil
+	}
+
+	// Try team first (since it overrides org)
+	if mcpStores.Team != nil {
+		srv, err := mcpStores.Team.Get(ctx, serverName)
+		if err == nil && len(srv.CachedTools) > 0 {
+			return parseCachedToolsJSON(srv.CachedTools)
+		}
+	}
+
+	// Fall back to org
+	if mcpStores.Org != nil {
+		srv, err := mcpStores.Org.Get(ctx, serverName)
+		if err == nil && len(srv.CachedTools) > 0 {
+			return parseCachedToolsJSON(srv.CachedTools)
+		}
+	}
+
+	return nil
+}
+
+// parseCachedToolsJSON parses the cached_tools JSONB column into cache.ToolEntry slice.
+func parseCachedToolsJSON(data []byte) []cache.ToolEntry {
+	// The cached_tools column stores an array of tool declarations
+	// compatible with the MCPDiscoveredTool struct from the API:
+	// [{"name": "...", "description": "...", "inputSchema": {...}}, ...]
+	type discoveredTool struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	}
+
+	var tools []discoveredTool
+	if err := json.Unmarshal(data, &tools); err != nil {
+		slog.Warn("failed to parse cached MCP tools", "error", err)
+		return nil
+	}
+
+	entries := make([]cache.ToolEntry, 0, len(tools))
+	for _, t := range tools {
+		entries = append(entries, cache.ToolEntry{
+			Name:        t.Name,
+			Description: t.Description,
+			InputSchema: t.InputSchema,
+		})
+	}
+	return entries
 }

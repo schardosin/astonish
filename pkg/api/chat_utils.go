@@ -13,10 +13,18 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )
+
+// SessionTitleSetter is a minimal interface for setting a session's title.
+// Both *persistentsession.FileStore and store.SessionStore (pgSessionStore)
+// satisfy this interface.
+type SessionTitleSetter interface {
+	SetSessionTitle(ctx context.Context, sessionID, title string) error
+}
 
 // titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
 // title-generation responses.
@@ -537,17 +545,23 @@ func extractFilePath(toolName string, args map[string]any) string {
 	if args == nil {
 		return ""
 	}
+	var p string
 	switch toolName {
 	case "write_file":
-		if p, ok := args["file_path"].(string); ok {
-			return p
-		}
+		p, _ = args["file_path"].(string)
 	case "edit_file":
-		if p, ok := args["path"].(string); ok {
-			return p
+		p, _ = args["path"].(string)
+	}
+	if p == "" {
+		return ""
+	}
+	// Ensure path is absolute for consistent artifact resolution
+	if !filepath.IsAbs(p) {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
 		}
 	}
-	return ""
+	return p
 }
 
 // fileTypeFromExt returns a human-readable file type from a file extension.
@@ -700,7 +714,7 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 // generateStudioSessionTitle calls the LLM to produce a short session title.
 // The optional onTitle callback is invoked with the generated title so callers
 // can push a real-time SSE event to connected browsers.
-func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string, onTitle func(string)) {
+func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, sessionID, userMessage string, onTitle func(string)) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 
@@ -751,7 +765,7 @@ func generateStudioSessionTitle(llm model.LLM, store *persistentsession.FileStor
 		title = title[:77] + "..."
 	}
 
-	if err := store.SetSessionTitle(sessionID, title); err != nil {
+	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
 		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
 	} else if onTitle != nil {
 		onTitle(title)
@@ -776,10 +790,10 @@ func toInt(v interface{}) int {
 // returns an error. Without this, errors are only sent as transient SSE events
 // and disappear on page reload — the user sees their message but no indication
 // that the model failed.
-func persistRunError(ctx context.Context, svc session.Service, sessionID string, runErr error) {
+func persistRunError(ctx context.Context, svc session.Service, userID, sessionID string, runErr error) {
 	resp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -807,13 +821,13 @@ func persistRunError(ctx context.Context, svc session.Service, sessionID string,
 // persistSessionMessage appends a user or model text message to the session.
 // This is used for interactions that bypass runner.Run() (like slash commands)
 // so they appear in the persisted session history.
-func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, role, text string) {
+func persistSessionMessage(ctx context.Context, svc session.Service, userID, sessionID, role, text string) {
 	if svc == nil || sessionID == "" || text == "" {
 		return
 	}
 	resp, err := svc.Get(ctx, &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -848,14 +862,14 @@ func persistSessionMessage(ctx context.Context, svc session.Service, sessionID, 
 // returns the content argument. This is used as a fallback when the actual
 // file no longer exists on disk (e.g., written to /tmp, or inside a sandbox
 // container that is stopped).
-func readArtifactContentFromSession(fs *persistentsession.FileStore, sessionID, filePath string) (string, bool) {
+func readArtifactContentFromSession(fs *persistentsession.FileStore, userID, sessionID, filePath string) (string, bool) {
 	if fs == nil {
 		return "", false
 	}
 
 	getResp, err := fs.Get(context.Background(), &session.GetRequest{
 		AppName:   studioChatAppName,
-		UserID:    studioChatUserID,
+		UserID:    userID,
 		SessionID: sessionID,
 	})
 	if err != nil {
@@ -868,6 +882,53 @@ func readArtifactContentFromSession(fs *persistentsession.FileStore, sessionID, 
 	// Scan from the end to find the most recent write to this path
 	for i := events.Len() - 1; i >= 0; i-- {
 		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall == nil {
+				continue
+			}
+			if part.FunctionCall.Name != "write_file" {
+				continue
+			}
+			args := part.FunctionCall.Args
+			if args == nil {
+				continue
+			}
+			p, _ := args["file_path"].(string)
+			if filepath.Clean(p) != cleanTarget {
+				continue
+			}
+			content, _ := args["content"].(string)
+			if content != "" {
+				return content, true
+			}
+		}
+	}
+	return "", false
+}
+
+// readArtifactContentFromSessionStore is the platform-mode equivalent of
+// readArtifactContentFromSession. It accepts a store.SessionStore (which may
+// be backed by PostgreSQL) and uses ReadTranscriptEvents to load events, then
+// scans them for a write_file FunctionCall whose file_path matches the
+// requested path.
+func readArtifactContentFromSessionStore(ss store.SessionStore, appName, userID, sessionID, filePath string) (string, bool) {
+	if ss == nil {
+		return "", false
+	}
+
+	events, err := ss.ReadTranscriptEvents(context.TODO(), appName, userID, sessionID)
+	if err != nil {
+		return "", false
+	}
+
+	cleanTarget := filepath.Clean(filePath)
+
+	// Scan from the end to find the most recent write to this path
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
 		if event.LLMResponse.Content == nil {
 			continue
 		}
@@ -922,7 +983,7 @@ type distillSavedPayload struct {
 }
 
 // persistDistillPreview serializes a DistillReview as a structured text event.
-func persistDistillPreview(ctx context.Context, svc session.Service, sessionID string, review *agent.DistillReview) {
+func persistDistillPreview(ctx context.Context, svc session.Service, userID, sessionID string, review *agent.DistillReview) {
 	if svc == nil || sessionID == "" || review == nil {
 		return
 	}
@@ -938,11 +999,11 @@ func persistDistillPreview(ctx context.Context, svc session.Service, sessionID s
 		slog.Error("failed to marshal distill preview", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", distillPreviewPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", distillPreviewPrefix+string(data))
 }
 
 // persistDistillSaved serializes a distill-saved result as a structured text event.
-func persistDistillSaved(ctx context.Context, svc session.Service, sessionID, filePath, runCmd string) {
+func persistDistillSaved(ctx context.Context, svc session.Service, userID, sessionID, filePath, runCmd string) {
 	if svc == nil || sessionID == "" {
 		return
 	}
@@ -955,7 +1016,7 @@ func persistDistillSaved(ctx context.Context, svc session.Service, sessionID, fi
 		slog.Error("failed to marshal distill saved", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", distillSavedPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", distillSavedPrefix+string(data))
 }
 
 // tryParseDistillMessage checks if a text starts with a distill marker prefix
@@ -1008,7 +1069,7 @@ type appPreviewPayload struct {
 }
 
 // persistAppPreview serializes an app preview as a structured text event.
-func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code, title string, version int, appID string) {
+func persistAppPreview(ctx context.Context, svc session.Service, userID, sessionID, code, title string, version int, appID string) {
 	if svc == nil || sessionID == "" || code == "" {
 		return
 	}
@@ -1023,7 +1084,7 @@ func persistAppPreview(ctx context.Context, svc session.Service, sessionID, code
 		slog.Error("failed to marshal app preview", "error", err)
 		return
 	}
-	persistSessionMessage(ctx, svc, sessionID, "model", appPreviewPrefix+string(data))
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", appPreviewPrefix+string(data))
 }
 
 // tryParseAppPreviewMessage checks if a text starts with the app_preview marker prefix

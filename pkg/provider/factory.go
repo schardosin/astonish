@@ -488,3 +488,116 @@ func ListModelsForProvider(ctx context.Context, providerID string, cfg *config.A
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}
 }
+
+// TestProviderConnection validates provider credentials by attempting to list
+// available models. Accepts raw credentials (not from config) so it can be
+// used by the API test endpoint before credentials are persisted.
+// Returns the list of available models on success, or an error describing
+// the connectivity/authentication failure.
+func TestProviderConnection(ctx context.Context, providerType string, params map[string]string) ([]string, error) {
+	switch providerType {
+	case "anthropic":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return anthropic.ListModels(ctx, apiKey)
+
+	case "google_genai", "gemini":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return google.ListModels(ctx, apiKey)
+
+	case "openai":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return openai_provider.ListModels(ctx, apiKey)
+
+	case "groq":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return groq.ListModels(ctx, apiKey)
+
+	case "xai":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return xai.ListModels(ctx, apiKey)
+
+	case "ollama":
+		baseURL := params["base_url"]
+		if baseURL == "" {
+			baseURL = "http://localhost:11434"
+		}
+		return ollama.ListModels(ctx, baseURL)
+
+	case "lm_studio":
+		baseURL := params["base_url"]
+		if baseURL == "" {
+			baseURL = "http://localhost:1234/v1"
+		}
+		return lmstudio.ListModels(ctx, baseURL)
+
+	case "litellm":
+		apiKey := params["api_key"]
+		baseURL := params["base_url"]
+		if baseURL == "" {
+			baseURL = "http://localhost:4000/v1"
+		}
+		return litellm.ListModels(ctx, apiKey, baseURL)
+
+	case "openrouter":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		models, err := openrouter.ListModels(apiKey)
+		if err != nil {
+			return nil, err
+		}
+		var modelNames []string
+		for _, m := range models {
+			modelNames = append(modelNames, m.ID)
+		}
+		return modelNames, nil
+
+	case "poe":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		return poe.ListModels(ctx, apiKey)
+
+	case "sap_ai_core":
+		clientID := params["client_id"]
+		clientSecret := params["client_secret"]
+		authURL := params["auth_url"]
+		baseURL := params["base_url"]
+		resourceGroup := params["resource_group"]
+		if clientID == "" || clientSecret == "" || authURL == "" || baseURL == "" {
+			return nil, fmt.Errorf("client_id, client_secret, auth_url, and base_url are required")
+		}
+		return sap.ListModels(ctx, clientID, clientSecret, authURL, baseURL, resourceGroup)
+
+	case "openai_compat":
+		apiKey := params["api_key"]
+		if apiKey == "" {
+			return nil, fmt.Errorf("api_key is required")
+		}
+		baseURL := params["base_url"]
+		if baseURL == "" {
+			return nil, fmt.Errorf("base_url is required for OpenAI Compatible providers")
+		}
+		return openai_compat.ListModels(ctx, apiKey, baseURL)
+
+	default:
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
+	}
+}

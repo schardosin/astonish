@@ -57,3 +57,6 @@ mcp_servers/
 
 # opencode workspace
 .opencode
+
+# Helm secret values (contains credentials, never commit)
+deploy/helm/astonish/values-dev.yaml

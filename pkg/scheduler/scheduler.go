@@ -29,7 +29,7 @@ type DeliverFunc func(ctx context.Context, job *Job, result string, err error) e
 
 // Scheduler manages the lifecycle and execution of scheduled jobs.
 type Scheduler struct {
-	store   *Store
+	store   JobStore
 	execute ExecuteFunc
 	deliver DeliverFunc
 	logger  *log.Logger
@@ -44,7 +44,7 @@ type Scheduler struct {
 }
 
 // New creates a new Scheduler.
-func New(store *Store, execute ExecuteFunc, deliver DeliverFunc, logger *log.Logger) *Scheduler {
+func New(store JobStore, execute ExecuteFunc, deliver DeliverFunc, logger *log.Logger) *Scheduler {
 	if logger == nil {
 		logger = log.Default()
 	}
@@ -82,7 +82,7 @@ func (s *Scheduler) Stop() {
 }
 
 // Store returns the underlying job store (for tools/API access).
-func (s *Scheduler) Store() *Store {
+func (s *Scheduler) Store() JobStore {
 	return s.store
 }
 
@@ -299,4 +299,27 @@ func ValidateCron(expr string) error {
 		return fmt.Errorf("invalid cron expression %q: %w", expr, err)
 	}
 	return nil
+}
+
+// ComputeNextRun calculates the next run time for a cron expression and timezone.
+// This is a pure function usable without a Scheduler instance — used by API handlers
+// and the multi-tenant scheduler to compute NextRun after create/update operations.
+// Returns nil if the cron expression or timezone is invalid.
+func ComputeNextRun(cronExpr, timezone string) *time.Time {
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(cronExpr)
+	if err != nil {
+		return nil
+	}
+
+	loc := time.Local
+	if timezone != "" {
+		if parsed, err := time.LoadLocation(timezone); err == nil {
+			loc = parsed
+		}
+	}
+
+	next := schedule.Next(time.Now().In(loc))
+	nextUTC := next.UTC()
+	return &nextUTC
 }

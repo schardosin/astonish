@@ -2,6 +2,8 @@
  * API client for Fleet Sessions (fleet v2: autonomous agent team)
  */
 
+import { teamFetch } from './teamContext'
+
 const API_BASE = '/api/studio/fleet'
 const FLEET_API = '/api/fleets'
 const FLEET_PLANS_API = '/api/fleet-plans'
@@ -121,7 +123,7 @@ export interface FetchFleetMessagesOpts {
 // --- API Functions ---
 
 export async function fetchFleets(): Promise<{ fleets: FleetDefinition[] }> {
-  const response = await fetch(FLEET_API)
+  const response = await teamFetch(FLEET_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleets: ${response.statusText}`)
   }
@@ -129,7 +131,7 @@ export async function fetchFleets(): Promise<{ fleets: FleetDefinition[] }> {
 }
 
 export async function fetchFleet(key: string): Promise<{ key: string; fleet: Record<string, unknown> }> {
-  const response = await fetch(`${FLEET_API}/${encodeURIComponent(key)}`)
+  const response = await teamFetch(`${FLEET_API}/${encodeURIComponent(key)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet: ${response.statusText}`)
   }
@@ -137,15 +139,36 @@ export async function fetchFleet(key: string): Promise<{ key: string; fleet: Rec
 }
 
 export async function fetchFleetPlans(): Promise<{ plans: FleetPlanSummary[] }> {
-  const response = await fetch(FLEET_PLANS_API)
+  const response = await teamFetch(FLEET_PLANS_API)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet plans: ${response.statusText}`)
   }
   return response.json()
 }
 
+/** Persisted fleet session metadata (same shape as ChatSession + fleet fields). */
+export interface FleetSessionMeta {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+  fleetKey?: string
+  fleetName?: string
+  issueNumber?: number
+  repo?: string
+}
+
+export async function fetchFleetSessionsHistory(): Promise<FleetSessionMeta[]> {
+  const response = await teamFetch(`${API_BASE}/sessions/history`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet sessions history: ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function fetchFleetSessions(): Promise<{ sessions: FleetSession[] }> {
-  const response = await fetch(`${API_BASE}/sessions`)
+  const response = await teamFetch(`${API_BASE}/sessions`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet sessions: ${response.statusText}`)
   }
@@ -153,7 +176,7 @@ export async function fetchFleetSessions(): Promise<{ sessions: FleetSession[] }
 }
 
 export async function fetchFleetSession(id: string): Promise<FleetSessionDetail> {
-  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(id)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet session: ${response.statusText}`)
   }
@@ -168,7 +191,7 @@ export async function startFleetSession({ fleetKey, planKey, message }: StartFle
     body.fleet_key = fleetKey
   }
 
-  const response = await fetch(`${API_BASE}/start`, {
+  const response = await teamFetch(`${API_BASE}/start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -187,7 +210,7 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }: Conn
 
   const run = async () => {
     try {
-      const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
+      const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stream`, {
         signal: controller.signal,
       })
 
@@ -248,7 +271,7 @@ export function connectFleetStream({ sessionId, onEvent, onError, onDone }: Conn
 }
 
 export async function sendFleetMessage(sessionId: string, message: string): Promise<Record<string, unknown>> {
-  const response = await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/message`, {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/message`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
@@ -262,7 +285,7 @@ export async function sendFleetMessage(sessionId: string, message: string): Prom
 
 export async function stopFleetSession(sessionId: string): Promise<void> {
   try {
-    await fetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/stop`, {
       method: 'POST',
     })
   } catch (err) {
@@ -271,7 +294,7 @@ export async function stopFleetSession(sessionId: string): Promise<void> {
 }
 
 export async function activateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/activate`, {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/activate`, {
     method: 'POST',
   })
   if (!response.ok) {
@@ -282,7 +305,7 @@ export async function activateFleetPlan(planKey: string): Promise<{ status: stri
 }
 
 export async function deactivateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/deactivate`, {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/deactivate`, {
     method: 'POST',
   })
   if (!response.ok) {
@@ -293,7 +316,7 @@ export async function deactivateFleetPlan(planKey: string): Promise<{ status: st
 }
 
 export async function getFleetPlanStatus(planKey: string): Promise<FleetPlanStatus> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/status`)
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/status`)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -308,7 +331,7 @@ export async function fetchFleetTrace(sessionId: string, opts: FetchFleetTraceOp
   if (opts.agent) params.set('agent', opts.agent)
   const qs = params.toString()
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/trace${qs ? '?' + qs : ''}`
-  const response = await fetch(url)
+  const response = await teamFetch(url)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -318,7 +341,7 @@ export async function fetchFleetTrace(sessionId: string, opts: FetchFleetTraceOp
 
 export async function fetchFleetThreads(sessionId: string): Promise<{ threads: FleetThread[] }> {
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/threads`
-  const response = await fetch(url)
+  const response = await teamFetch(url)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -331,7 +354,7 @@ export async function fetchFleetMessages(sessionId: string, opts: FetchFleetMess
   if (opts.agent) params.set('agent', opts.agent)
   const qs = params.toString()
   const url = `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/messages${qs ? '?' + qs : ''}`
-  const response = await fetch(url)
+  const response = await teamFetch(url)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -340,7 +363,7 @@ export async function fetchFleetMessages(sessionId: string, opts: FetchFleetMess
 }
 
 export async function duplicateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/duplicate`, {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/duplicate`, {
     method: 'POST',
   })
   if (!response.ok) {
@@ -351,7 +374,7 @@ export async function duplicateFleetPlan(planKey: string): Promise<{ status: str
 }
 
 export async function fetchFleetPlanYaml(planKey: string): Promise<string> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`)
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -360,7 +383,7 @@ export async function fetchFleetPlanYaml(planKey: string): Promise<string> {
 }
 
 export async function saveFleetPlanYaml(planKey: string, yamlContent: string): Promise<{ status: string; key: string }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`, {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/yaml`, {
     method: 'PUT',
     headers: { 'Content-Type': 'text/yaml' },
     body: yamlContent,
@@ -373,7 +396,7 @@ export async function saveFleetPlanYaml(planKey: string, yamlContent: string): P
 }
 
 export async function deleteFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`, {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
@@ -384,7 +407,7 @@ export async function deleteFleetPlan(planKey: string): Promise<{ status: string
 }
 
 export async function fetchFleetPlan(planKey: string): Promise<{ key: string; plan: Record<string, unknown> }> {
-  const response = await fetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`)
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`)
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)
@@ -393,7 +416,7 @@ export async function fetchFleetPlan(planKey: string): Promise<{ key: string; pl
 }
 
 export async function retryFleetIssue(planKey: string, issueNumber: number): Promise<{ status: string; session_id: string; issue: number }> {
-  const response = await fetch(
+  const response = await teamFetch(
     `${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/retry/${issueNumber}`,
     { method: 'POST' }
   )

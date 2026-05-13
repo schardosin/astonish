@@ -12,11 +12,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/filestore"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
@@ -26,7 +29,11 @@ type StudioServer struct {
 	server        *http.Server
 	listener      net.Listener
 	port          int
-	Auth          *api.AuthManager // nil means no auth (direct CLI mode)
+	Auth          *api.AuthManager    // nil means no auth (direct CLI mode)
+	platformAuth  *api.PlatformAuth   // non-nil in platform mode
+	pgStore       *pgstore.PGStore    // non-nil in platform mode
+	configDir     string              // personal-mode config dir
+	services      *store.Services
 	sessionStore  *persistentsession.FileStore
 	daemonIndexer *memory.DaemonIndexerResult
 }
@@ -54,6 +61,30 @@ func WithDaemonIndexer(di *memory.DaemonIndexerResult) StudioOption {
 	return func(s *StudioServer) { s.daemonIndexer = di }
 }
 
+// WithServices injects the store.Services dependency container into the Studio server.
+// When set, every HTTP request will have Services available via store.FromRequest(r),
+// enabling handlers to access stores through the context rather than package-level globals.
+func WithServices(svc *store.Services) StudioOption {
+	return func(s *StudioServer) { s.services = svc }
+}
+
+// WithPlatformAuth enables JWT-based authentication for platform (multi-tenant) mode.
+// When set, the platform auth middleware replaces the device auth middleware,
+// and platform-specific routes (register, login, teams) are registered.
+func WithPlatformAuth(pa *api.PlatformAuth, pg *pgstore.PGStore) StudioOption {
+	return func(s *StudioServer) {
+		s.platformAuth = pa
+		s.pgStore = pg
+	}
+}
+
+// WithConfigDir sets the personal-mode config directory path.
+func WithConfigDir(dir string) StudioOption {
+	return func(s *StudioServer) {
+		s.configDir = dir
+	}
+}
+
 // NewStudioServer creates a configured Studio server without starting it.
 func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	s := &StudioServer{port: port}
@@ -62,15 +93,14 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Wire Studio Chat initialization (lazy, runs on first chat request)
-	sharedStore := s.sessionStore    // capture for closure
-	sharedIndexer := s.daemonIndexer // capture for closure
+	sharedStore := s.sessionStore      // capture for closure
+	sharedIndexer := s.daemonIndexer   // capture for closure
+	isPlatform := s.platformAuth != nil // capture for closure
+	pgStoreRef := s.pgStore            // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
-		appCfg, err := config.LoadAppConfig()
-		if err != nil {
-			return nil, fmt.Errorf("failed to load config: %w", err)
-		}
+		appCfg := api.EffectiveAppConfigFromContext(ctx, isPlatform)
 
-		result, err := NewWiredChatAgent(ctx, &ChatFactoryConfig{
+		factoryCfg := &ChatFactoryConfig{
 			AppConfig:     appCfg,
 			ProviderName:  appCfg.General.DefaultProvider,
 			ModelName:     appCfg.General.DefaultModel,
@@ -78,9 +108,26 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			AutoApprove:   false,
 			WorkspaceDir:  "",
 			IsDaemon:      false,
+			PlatformMode:  isPlatform,
 			SessionStore:  sharedStore,
 			DaemonIndexer: sharedIndexer,
-		})
+		}
+
+		// In platform mode, create pgvector-backed ToolIndex for dynamic tool discovery.
+		if isPlatform && pgStoreRef != nil {
+			if embedFunc := pgStoreRef.GetEmbedFunc(); embedFunc != nil {
+				pool, poolErr := pgStoreRef.PoolManager().PlatformPool(ctx)
+				if poolErr == nil {
+					vs, vsErr := pgstore.NewPGToolVectorStore(pool, embedFunc)
+					if vsErr == nil {
+						factoryCfg.PlatformToolVectorStore = vs
+						factoryCfg.PlatformEmbedFunc = agent.EmbedFunc(embedFunc)
+					}
+				}
+			}
+		}
+
+		result, err := NewWiredChatAgent(ctx, factoryCfg)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)
 		}
@@ -99,7 +146,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			ModelName:         result.ModelName,
 			Compactor:         result.Compactor,
 			InternalToolCount: len(result.InternalTools),
-			MemoryActive:      result.MemoryManager != nil,
+			MemoryActive:      result.MemoryManager != nil || result.MemorySearchAvailable,
 			SandboxEnabled:    sandbox.IsSandboxEnabled(&appCfg.Sandbox),
 			StartupNotices:    result.StartupNotices,
 			ShutdownSandbox:   result.ShutdownSandbox,
@@ -110,12 +157,34 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	router := mux.NewRouter()
 
 	// Register auth endpoints first (they are always accessible)
-	if s.Auth != nil {
+	if s.platformAuth != nil {
+		// Platform mode: JWT-based auth with register/login/refresh
+		api.RegisterPlatformAuthRoutes(router, s.platformAuth)
+		api.RegisterTeamRoutes(router, s.platformAuth)
+		api.RegisterUserRoutes(router, s.platformAuth)
+
+		// SSO/OIDC endpoints (device flow for CLI, browser redirect for Studio)
+		// In platform mode, use PG-backed device sessions for stateless horizontal scaling.
+		var ssoHandler *api.SSOHandler
+		if s.pgStore != nil {
+			pool, poolErr := s.pgStore.PoolManager().PlatformPool(context.Background())
+			if poolErr == nil {
+				backend := api.NewPGDeviceSessionBackend(pgstore.NewPGDeviceSessionStore(pool))
+				ssoHandler = api.NewSSOHandlerWithPG(s.platformAuth, backend)
+			}
+		}
+		if ssoHandler == nil {
+			ssoHandler = api.NewSSOHandler(s.platformAuth)
+		}
+		api.SetPlatformSSOHandler(ssoHandler)
+		api.RegisterSSORoutes(router, ssoHandler)
+	} else if s.Auth != nil {
+		// Personal mode: device authorization flow
 		api.RegisterAuthRoutes(router, s.Auth)
 	}
 
-	// Register API routes
-	api.RegisterRoutes(router)
+	// Register API routes (passes pgStore for platform-mode TenantMiddleware)
+	api.RegisterRoutes(router, s.services, s.pgStore)
 
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
@@ -147,7 +216,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Apply auth middleware if enabled (wraps both API and SPA)
-	if s.Auth != nil {
+	if s.platformAuth != nil {
+		// Platform mode: JWT auth (TenantMiddleware is inside the router via RegisterRoutes)
+		handler = api.PlatformAuthMiddleware(s.platformAuth, handler)
+	} else if s.Auth != nil {
+		// Personal mode: device authorization
 		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
@@ -209,7 +282,10 @@ func (s *StudioServer) Shutdown(ctx context.Context) error {
 
 // RunStudio starts the Studio web server (blocking, for CLI use).
 func RunStudio(port int) error {
-	studio, err := NewStudioServer(port)
+	// Create minimal Services for standalone mode.
+	// Stores are populated incrementally by the lazy chat init.
+	svc := filestore.NewPersonalServices()
+	studio, err := NewStudioServer(port, WithServices(svc))
 	if err != nil {
 		fmt.Printf("\n")
 		fmt.Printf("  Failed to start Astonish Studio\n")

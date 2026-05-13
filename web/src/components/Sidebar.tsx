@@ -1,5 +1,5 @@
 import { useState, useMemo, type ReactNode } from 'react'
-import { Plus, Trash2, Store, Search, ChevronDown, ChevronRight, FolderOpen } from 'lucide-react'
+import { Plus, Trash2, Store, Search, ChevronDown, ChevronRight, FolderOpen, Upload, GitFork, User, Users } from 'lucide-react'
 import { snakeToTitleCase } from '../utils/formatters'
 
 interface Agent {
@@ -7,6 +7,7 @@ interface Agent {
   name: string
   description?: string
   source: string
+  scope?: string // "personal" | "team" (platform mode only)
   tapName?: string
 }
 
@@ -16,10 +17,14 @@ interface SidebarProps {
   onAgentSelect: (agent: Agent) => void
   onCreateNew: () => void
   onDeleteAgent: (agent: Agent) => void
+  onPublishFlow?: (agent: Agent) => void
+  onForkFlow?: (agent: Agent) => void
   isLoading: boolean
 }
 
 interface GroupedAgents {
+  personal: Agent[]
+  team: Agent[]
   local: Agent[]
   official: Agent[]
   taps: Record<string, Agent[]>
@@ -31,21 +36,25 @@ export default function Sidebar({
   onAgentSelect,
   onCreateNew,
   onDeleteAgent,
+  onPublishFlow,
+  onForkFlow,
   isLoading
 }: SidebarProps) {
   const [searchQuery, setSearchQuery] = useState('')
   const [sourceFilter, setSourceFilter] = useState('all') // 'all', 'local', 'official', or tap name
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({})
 
+  // Detect if we're in platform mode (agents have scope annotations)
+  const isPlatformMode = useMemo(() => agents.some(a => a.scope), [agents])
+
   // Get unique sources for filter dropdown
   const sources = useMemo(() => {
     const srcSet = new Set<string>()
     agents.forEach(a => {
-      if (a.source === 'store') {
-        srcSet.add(a.tapName || 'official')
-      } else {
-        srcSet.add('local')
-      }
+      if (a.scope === 'personal') srcSet.add('personal')
+      else if (a.scope === 'team') srcSet.add('team')
+      else if (a.source === 'store') srcSet.add(a.tapName || 'official')
+      else srcSet.add('local')
     })
     return Array.from(srcSet)
   }, [agents])
@@ -61,7 +70,9 @@ export default function Sidebar({
     // Then filter by source
     if (sourceFilter !== 'all') {
       filtered = filtered.filter(a => {
-        if (sourceFilter === 'local') return a.source !== 'store'
+        if (sourceFilter === 'personal') return a.scope === 'personal'
+        if (sourceFilter === 'team') return a.scope === 'team'
+        if (sourceFilter === 'local') return !a.scope && a.source !== 'store'
         if (sourceFilter === 'official') return a.source === 'store' && a.tapName === 'official'
         return a.source === 'store' && a.tapName === sourceFilter
       })
@@ -69,13 +80,19 @@ export default function Sidebar({
 
     // Group by source
     const groups: GroupedAgents = {
+      personal: [],
+      team: [],
       local: [],
       official: [],
       taps: {}
     }
 
     filtered.forEach(a => {
-      if (a.source !== 'store') {
+      if (a.scope === 'personal') {
+        groups.personal.push(a)
+      } else if (a.scope === 'team') {
+        groups.team.push(a)
+      } else if (a.source !== 'store') {
         groups.local.push(a)
       } else if (a.tapName === 'official') {
         groups.official.push(a)
@@ -126,6 +143,31 @@ export default function Sidebar({
               </div>
             )}
           </button>
+          {/* Scope action buttons (platform mode) */}
+          {agent.scope === 'personal' && onPublishFlow && (
+            <button
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation()
+                onPublishFlow(agent)
+              }}
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-blue-500/20 transition-all shrink-0"
+              title="Publish to Team"
+            >
+              <Upload size={14} className="text-blue-400" />
+            </button>
+          )}
+          {agent.scope === 'team' && onForkFlow && (
+            <button
+              onClick={(e: React.MouseEvent) => {
+                e.stopPropagation()
+                onForkFlow(agent)
+              }}
+              className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-green-500/20 transition-all shrink-0"
+              title="Fork to Personal"
+            >
+              <GitFork size={14} className="text-green-400" />
+            </button>
+          )}
           {agent.source === 'store' ? (
             <button
               onClick={(e: React.MouseEvent) => {
@@ -212,9 +254,11 @@ export default function Sidebar({
           style={{ border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}
         >
           <option value="all">All Sources</option>
-          <option value="local">Local</option>
+          {isPlatformMode && <option value="personal">Personal</option>}
+          {isPlatformMode && <option value="team">Team</option>}
+          {!isPlatformMode && <option value="local">Local</option>}
           <option value="official">Official Store</option>
-          {sources.filter(s => s !== 'local' && s !== 'official').map(tap => (
+          {sources.filter(s => !['local', 'official', 'personal', 'team'].includes(s)).map(tap => (
             <option key={tap} value={tap}>{tap}</option>
           ))}
         </select>
@@ -228,8 +272,26 @@ export default function Sidebar({
           </div>
         ) : (
           <>
-            {/* Local Section */}
-            {renderSection(
+            {/* Platform mode: Personal Section */}
+            {isPlatformMode && renderSection(
+              'Personal',
+              groupedAgents.personal,
+              <User size={12} />,
+              'personal',
+              '#a855f7'
+            )}
+
+            {/* Platform mode: Team Section */}
+            {isPlatformMode && renderSection(
+              'Team',
+              groupedAgents.team,
+              <Users size={12} />,
+              'team',
+              '#3B82F6'
+            )}
+
+            {/* Local Section (personal mode only) */}
+            {!isPlatformMode && renderSection(
               'Local',
               groupedAgents.local,
               <FolderOpen size={12} />,
@@ -260,7 +322,9 @@ export default function Sidebar({
             ))}
 
             {/* Empty state */}
-            {groupedAgents.local.length === 0 &&
+            {groupedAgents.personal.length === 0 &&
+             groupedAgents.team.length === 0 &&
+             groupedAgents.local.length === 0 &&
              groupedAgents.official.length === 0 &&
              Object.keys(groupedAgents.taps).length === 0 && (
               <div className="text-center py-8" style={{ color: 'var(--text-muted)' }}>

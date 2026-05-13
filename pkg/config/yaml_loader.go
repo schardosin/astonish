@@ -212,10 +212,14 @@ func LoadAgent(path string) (*AgentConfig, error) {
 		return nil, err
 	}
 
+	return LoadAgentFromBytes(data)
+}
+
+// LoadAgentFromBytes parses an AgentConfig from raw YAML bytes.
+func LoadAgentFromBytes(data []byte) (*AgentConfig, error) {
 	var config AgentConfig
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
-
 	return &config, nil
 }

@@ -1,0 +1,32 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "astonish.fullname" . }}-config
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    storage:
+      backend: {{ .Values.config.storage.backend }}
+      postgres:
+        instance_suffix: {{ .Values.config.storage.postgres.instanceSuffix | quote }}
+        max_open_conns: {{ .Values.config.storage.postgres.maxOpenConns }}
+        max_idle_conns: {{ .Values.config.storage.postgres.maxIdleConns }}
+        conn_max_lifetime_minutes: {{ .Values.config.storage.postgres.connMaxLifetimeMinutes }}
+      auth:
+        mode: {{ .Values.config.auth.mode }}
+        {{- if .Values.config.auth.accessTokenTTLMinutes }}
+        access_token_ttl_minutes: {{ .Values.config.auth.accessTokenTTLMinutes }}
+        {{- end }}
+        {{- if .Values.config.auth.refreshTokenTTLDays }}
+        refresh_token_ttl_days: {{ .Values.config.auth.refreshTokenTTLDays }}
+        {{- end }}
+        {{- if not (kindIs "invalid" .Values.config.auth.allowRegistration) }}
+        allow_registration: {{ .Values.config.auth.allowRegistration }}
+        {{- end }}
+        {{- if .Values.config.auth.defaultOrgName }}
+        default_org_name: {{ .Values.config.auth.defaultOrgName | quote }}
+        {{- end }}
+        {{- if .Values.config.auth.defaultOrgSlug }}
+        default_org_slug: {{ .Values.config.auth.defaultOrgSlug | quote }}
+        {{- end }}

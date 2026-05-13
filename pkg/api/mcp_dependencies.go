@@ -9,6 +9,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // ResolveMCPDependencies analyzes tools used in a flow and resolves them to MCP server dependencies.
@@ -21,7 +22,7 @@ import (
 // - store: official MCP store (or custom tap in the store)
 // - tap: a tapped repository
 // - inline: user's locally configured server (fallback)
-func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server, existingDeps []config.MCPDependency) []config.MCPDependency {
+func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, storeServers []mcpstore.Server, existingDeps []config.MCPDependency, mcpConfig *config.MCPConfig) []config.MCPDependency {
 	if len(toolsSelection) == 0 {
 		return nil
 	}
@@ -41,12 +42,6 @@ func ResolveMCPDependencies(toolsSelection []string, cachedTools []ToolInfo, sto
 				toolToServer[toolName] = dep.Server
 			}
 		}
-	}
-
-	// Load user's MCP config
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("failed to load MCP config", "error", err)
 	}
 
 	// Group tools by their server source
@@ -197,18 +192,61 @@ type CheckMCPDependenciesResponse struct {
 }
 
 // CheckMCPDependenciesHandler handles POST /api/mcp-dependencies/check
-// Checks which MCP servers from the dependency list are installed
+// Checks which MCP servers from the dependency list are installed.
+// In platform mode, checks both org and team DB stores.
+// In personal mode, checks the filesystem config.
 func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 	var req CheckMCPDependenciesRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
-	// Load user's MCP config to check installed servers
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		mcpConfig = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+	// Determine installed servers based on mode
+	installedServers := make(map[string]bool)
+
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		// Platform mode: check platform, org, and team DB stores
+		if svc.PlatformMCPServers != nil {
+			platformServers, err := svc.PlatformMCPServers.List(r.Context())
+			if err == nil {
+				for _, s := range platformServers {
+					installedServers[s.Name] = true
+				}
+			}
+		}
+		if svc.MCPServers != nil {
+			orgServers, err := svc.MCPServers.List(r.Context())
+			if err == nil {
+				for _, s := range orgServers {
+					installedServers[s.Name] = true
+				}
+			}
+		}
+		if svc.TeamMCPServers != nil {
+			teamServers, err := svc.TeamMCPServers.List(r.Context())
+			if err == nil {
+				for _, s := range teamServers {
+					installedServers[s.Name] = true
+				}
+			}
+		}
+		// Also include standard servers (Tavily, Brave, etc.) that are configured
+		// via config.yaml / credential store. These are never stored in the DB
+		// but are always available at runtime via mergeStandardServers().
+		stdCfg := &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
+		config.MergeStandardServers(stdCfg)
+		for name := range stdCfg.MCPServers {
+			installedServers[name] = true
+		}
+	} else {
+		// Personal mode: check filesystem config
+		mcpConfig, err := config.LoadMCPConfig()
+		if err == nil && mcpConfig != nil {
+			for name := range mcpConfig.MCPServers {
+				installedServers[name] = true
+			}
+		}
 	}
 
 	// Load store servers for resolving store_id if missing
@@ -242,9 +280,8 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Check if server is installed
-		_, installed := mcpConfig.MCPServers[dep.Server]
-		status.Installed = installed
-		if !installed {
+		status.Installed = installedServers[dep.Server]
+		if !status.Installed {
 			missing++
 		}
 

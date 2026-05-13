@@ -55,6 +55,35 @@ func (r *SessionRegistry) List() []FleetSessionInfo {
 			FleetName:   fs.FleetConfig.Name,
 			State:       string(state),
 			ActiveAgent: activeAgent,
+			TeamSlug:    fs.TeamSlug,
+		})
+	}
+	return infos
+}
+
+// ListForTeam returns metadata for active fleet sessions belonging to the given team.
+// If teamSlug is empty, returns all sessions (personal mode).
+func (r *SessionRegistry) ListForTeam(teamSlug string) []FleetSessionInfo {
+	if teamSlug == "" {
+		return r.List()
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	infos := make([]FleetSessionInfo, 0, len(r.sessions))
+	for _, fs := range r.sessions {
+		if fs.TeamSlug != teamSlug {
+			continue
+		}
+		state, activeAgent := fs.GetState()
+		infos = append(infos, FleetSessionInfo{
+			ID:          fs.ID,
+			FleetKey:    fs.FleetKey,
+			FleetName:   fs.FleetConfig.Name,
+			State:       string(state),
+			ActiveAgent: activeAgent,
+			TeamSlug:    fs.TeamSlug,
 		})
 	}
 	return infos
@@ -106,4 +135,5 @@ type FleetSessionInfo struct {
 	FleetName   string `json:"fleet_name"`
 	State       string `json:"state"`
 	ActiveAgent string `json:"active_agent,omitempty"`
+	TeamSlug    string `json:"team_slug,omitempty"`
 }

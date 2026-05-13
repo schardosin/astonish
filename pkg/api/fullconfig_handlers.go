@@ -9,6 +9,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -322,11 +323,7 @@ type SandboxUpdateRequest struct {
 
 // GetFullConfigHandler handles GET /api/settings/full
 func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+	cfg := effectiveAppConfig(r)
 
 	store := getAPICredentialStore()
 
@@ -415,13 +412,31 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var req FullConfigUpdateRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
+	}
+
+	// In platform mode, only org admins/owners or superadmins can modify daemon config.
+	// System-level settings (channels, browser, daemon, sandbox, etc.) live in config.yaml
+	// and are shared across all teams — they require admin privileges.
+	// Loopback requests (CLI) are allowed without auth (backward compatibility).
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		if !isLoopbackRequest(r) {
+			user := GetPlatformUser(r)
+			if user == nil {
+				respondError(w, http.StatusUnauthorized, "authentication required")
+				return
+			}
+			if !CanManageOrg(user) && !IsPlatformAdmin(user) {
+				respondError(w, http.StatusForbidden, "Only org admins can modify system settings in platform mode.")
+				return
+			}
+		}
 	}
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
-		http.Error(w, "Failed to load config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
 		return
 	}
 
@@ -631,13 +646,13 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := sandbox.ValidateSandboxConfig(&cfg.Sandbox); err != nil {
-			http.Error(w, "Invalid sandbox config: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Invalid sandbox config: "+err.Error())
 			return
 		}
 	}
 
 	if err := config.SaveAppConfig(cfg); err != nil {
-		http.Error(w, "Failed to save config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save config: "+err.Error())
 		return
 	}
 

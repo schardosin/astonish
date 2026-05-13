@@ -86,7 +86,7 @@ func TestCredentialSuffixParsing(t *testing.T) {
 func TestResolveHTTPSource_NoCredential(t *testing.T) {
 	// Test that a basic request without credential still works.
 	// We use a known-good public endpoint.
-	data, err := resolveHTTPSource("GET:https://httpbin.org/get", nil)
+	data, err := resolveHTTPSource(nil, "GET:https://httpbin.org/get", nil)
 	if err != nil {
 		t.Skipf("skipping external HTTP test: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestResolveHTTPSource_SSRFBlocked(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := resolveHTTPSource(tt.spec, nil)
+			_, err := resolveHTTPSource(nil, tt.spec, nil)
 			if err == nil {
 				t.Error("expected SSRF error, got nil")
 			} else if !strings.Contains(err.Error(), "private/internal") {

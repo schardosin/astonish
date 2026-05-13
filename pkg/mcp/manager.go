@@ -52,6 +52,19 @@ func NewManager() (*Manager, error) {
 	}, nil
 }
 
+// NewManagerFromConfig creates a new MCP manager with an explicit config.
+// Used in platform mode where MCP server configs come from the database
+// rather than the local filesystem.
+func NewManagerFromConfig(cfg *config.MCPConfig) *Manager {
+	return &Manager{
+		config:        cfg,
+		toolsets:      make([]tool.Toolset, 0),
+		namedToolsets: make([]NamedToolset, 0),
+		transports:    make([]mcp.Transport, 0),
+		initResults:   make([]InitResult, 0),
+	}
+}
+
 // InitializeToolsets creates ADK mcptoolset instances for all configured servers
 func (m *Manager) InitializeToolsets(ctx context.Context) error {
 	if len(m.config.MCPServers) == 0 {

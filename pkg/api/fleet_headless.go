@@ -7,7 +7,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -16,10 +18,14 @@ import (
 // The session runs in a background goroutine and is registered in the session
 // registry so it appears in the Studio UI if open.
 //
+// sessionStore is the PG-backed session store for platform mode (nil for personal mode).
+// When non-nil, session metadata and transcript events are persisted to PostgreSQL
+// instead of the file-based session store.
+//
 // For github_issues plans, the session uses a GitHubIssueChannel that posts
 // every agent message as a comment on the issue and polls for human replies.
 // For chat plans, it falls back to the in-memory ChatChannel.
-func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfig) (string, error) {
+func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfig, sessionStore store.SessionStore, fleetStores *FleetStores) (string, error) {
 	plan := cfg.Plan
 	if plan == nil {
 		return "", fmt.Errorf("plan is required")
@@ -41,10 +47,9 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	}
 
 	var workspaceDir string
-	fileStore := getFleetFileStore()
-	if fileStore != nil {
+	if wsDir, wsErr := config.GetWorkspacesDir(); wsErr == nil {
 		workspaceDir = fleet.ResolveSessionWorkspaceDir(
-			fileStore.BaseDir(), "", taskSlug)
+			wsDir, "", taskSlug)
 		if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
 			slog.Warn("could not set up workspace", "component", "fleet-headless", "workspace", workspaceDir, "error", err)
 			workspaceDir = "" // fall back to legacy behavior
@@ -84,9 +89,10 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.Headless = true
 	fleetSession.TaskSlug = taskSlug
 	fleetSession.WorkspaceDir = workspaceDir
+	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
-	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil, ""); err != nil {
 		return "", fmt.Errorf("cannot start headless fleet session: %w", err)
 	}
 
@@ -100,11 +106,23 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
 
-	// Persist to the session index
-	persistFleetSessionMeta(fleetSession, fleetCfg, cfg.IssueNumber, cfg.Repo)
+	// Determine user ID. In platform mode (sessionStore != nil), use the
+	// plan creator's identity so the session has access to their credentials.
+	// Falls back to SystemUserID for legacy plans without a creator.
+	// In personal mode, fall back to the default studio user string
+	// (file store doesn't require UUID format).
+	userID := cfg.UserID
+	if userID == "" && sessionStore != nil {
+		userID = store.SystemUserID
+	} else if userID == "" && sessionStore == nil {
+		userID = studioChatUserID
+	}
 
-	// Create JSONL transcript
-	wireFleetTranscript(fleetSession)
+	// Persist to the session index
+	persistFleetSessionMeta(fleetSession, fleetCfg, userID, cfg.IssueNumber, cfg.Repo, sessionStore)
+
+	// Create transcript (JSONL for personal mode, PG events for platform mode)
+	wireFleetTranscript(fleetSession, userID, sessionStore)
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
@@ -124,14 +142,26 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 		}
 	}
 
-	// Start the fleet message loop in a background goroutine
+	// Start the fleet message loop in a background goroutine.
+	// Enrich the context with the session store so child sub-agent sessions
+	// are persisted to PostgreSQL (making tool executions visible in traces).
+	runCtx := context.Background()
+	if sessionStore != nil {
+		runCtx = store.WithSessionService(runCtx, sessionStore)
+		runCtx = store.WithUserID(runCtx, userID)
+	}
+	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
+	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
+	// and other platform-mode resources during execution.
+	runCtx = fleetStores.InjectIntoContext(runCtx)
+
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet-headless", "session_id", fleetSession.ID)
 		}()
 
-		if err := fleetSession.Run(context.Background()); err != nil {
+		if err := fleetSession.Run(runCtx); err != nil {
 			slog.Error("session error", "component", "fleet-headless", "session_id", fleetSession.ID, "error", err)
 		}
 	}()

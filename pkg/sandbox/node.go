@@ -313,6 +313,12 @@ type LazyNodeClient struct {
 	containerReady chan struct{}
 	containerErr   error
 
+	// OrgSlug and TeamSlug scope the container to an org's isolated network.
+	// Set by NodeClientPool.GetOrCreate when the pool has org context.
+	// When empty, personal-mode naming and default network are used.
+	OrgSlug  string
+	TeamSlug string
+
 	// initDone is created by BindSession and closed when background init completes
 	// (both container creation AND node startup). Call() waits on this channel
 	// before forwarding to the NodeClient.
@@ -376,8 +382,15 @@ func (lnc *LazyNodeClient) BindSession(sessionID string) {
 func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	defer close(lnc.initDone)
 
-	// Phase 1: Create or get the session container
-	containerName, err := EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits)
+	// Phase 1: Create or get the session container.
+	// Use org-scoped lifecycle if org context is set (platform mode).
+	var containerName string
+	var err error
+	if lnc.OrgSlug != "" {
+		containerName, err = EnsureOrgSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits, lnc.OrgSlug, lnc.TeamSlug)
+	} else {
+		containerName, err = EnsureSessionContainer(lnc.incusClient, lnc.sessRegistry, lnc.tplRegistry, sessionID, lnc.template, lnc.limits)
+	}
 	if err != nil {
 		lnc.mu.Lock()
 		lnc.containerErr = fmt.Errorf("failed to create session container: %w", err)
@@ -784,6 +797,14 @@ func (lnc *LazyNodeClient) LastActivity() time.Time {
 	return time.Unix(ts, 0)
 }
 
+// TouchActivity updates the last activity timestamp without making a tool call.
+// Used by browser tools which communicate directly with Chromium inside the
+// container via CDP, bypassing the node process and thus never calling Call().
+// Without this, the idle watchdog would kill containers with active browser sessions.
+func (lnc *LazyNodeClient) TouchActivity() {
+	lnc.lastActivity.Store(time.Now().Unix())
+}
+
 // EnsureContainerReady blocks until the container is created and running,
 // but does NOT wait for the astonish node process to start. Returns the
 // container name and the Incus client.
@@ -865,10 +886,12 @@ type NodeClientPool struct {
 	template     string
 	limits       *config.SandboxLimits
 
-	mu      sync.Mutex
-	clients map[string]*LazyNodeClient
-	env     map[string]string
-	closed  bool
+	mu       sync.Mutex
+	clients  map[string]*LazyNodeClient
+	env      map[string]string
+	closed   bool
+	orgSlug  string // org slug for container naming/networking (platform mode)
+	teamSlug string // team slug for container naming (platform mode)
 }
 
 // NewNodeClientPool creates a pool that will create per-session LazyNodeClients
@@ -894,6 +917,24 @@ func (p *NodeClientPool) SetEnv(env map[string]string) {
 	p.env = env
 }
 
+// SetOrgContext sets the org and team slugs for platform mode.
+// When set, container names include the org/team slugs and containers
+// are attached to the org-specific bridge network for isolation.
+// Must be called before any GetOrCreate calls.
+func (p *NodeClientPool) SetOrgContext(orgSlug, teamSlug string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.orgSlug = orgSlug
+	p.teamSlug = teamSlug
+}
+
+// OrgSlug returns the org slug set via SetOrgContext.
+func (p *NodeClientPool) OrgSlug() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.orgSlug
+}
+
 // GetOrCreate returns the LazyNodeClient for the given session ID, creating
 // one if it doesn't exist yet. Thread-safe.
 //
@@ -904,6 +945,14 @@ func (p *NodeClientPool) SetEnv(env map[string]string) {
 // without this check, every subsequent Call() for that session would return
 // the same stale error forever.
 func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
+	return p.GetOrCreateWithTemplate(sessionID, "")
+}
+
+// GetOrCreateWithTemplate returns an existing client for the session, or
+// creates a new one using the given template override. If template is empty,
+// the pool's default template is used (which itself defaults to @base).
+// This allows per-request template injection (e.g., team containers in chat).
+func (p *NodeClientPool) GetOrCreateWithTemplate(sessionID, template string) *LazyNodeClient {
 	if sessionID == "" {
 		return nil
 	}
@@ -934,9 +983,17 @@ func (p *NodeClientPool) GetOrCreate(sessionID string) *LazyNodeClient {
 		}
 	}
 
+	// Use override template if non-empty, otherwise fall back to pool default
+	tpl := p.template
+	if template != "" {
+		tpl = template
+	}
+
 	// Create a new LazyNodeClient for this session
-	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, p.template, p.limits)
+	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, tpl, p.limits)
 	client.Env = p.env
+	client.OrgSlug = p.orgSlug
+	client.TeamSlug = p.teamSlug
 	p.clients[sessionID] = client
 	return client
 }
@@ -964,6 +1021,20 @@ func (p *NodeClientPool) Alias(childSessionID, parentSessionID string) {
 	}
 
 	p.clients[childSessionID] = parent
+}
+
+// TouchActivity updates the last activity timestamp for a session's container
+// without making a tool call. This prevents the idle watchdog from killing
+// containers that are actively being used by browser tools (which communicate
+// via CDP, bypassing the node process).
+func (p *NodeClientPool) TouchActivity(sessionID string) {
+	p.mu.Lock()
+	client, ok := p.clients[sessionID]
+	p.mu.Unlock()
+
+	if ok && client != nil {
+		client.TouchActivity()
+	}
 }
 
 // Remove stops the node for a session and removes it from the pool.
@@ -1066,8 +1137,13 @@ func (p *NodeClientPool) RestartNode(sessionID string) error {
 // be left pointing at the destroyed client while only the sub-agent gets the
 // new one (resulting in "lazy node client is closed" errors on the parent).
 func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
-	// Remove existing client and find all aliases sharing the same pointer.
 	p.mu.Lock()
+
+	if p.closed {
+		p.mu.Unlock()
+		return fmt.Errorf("pool is closed")
+	}
+
 	existing, hadExisting := p.clients[sessionID]
 
 	// Collect ALL session IDs that point to the same LazyNodeClient.
@@ -1077,29 +1153,18 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 		for id, client := range p.clients {
 			if client == existing {
 				aliasedIDs = append(aliasedIDs, id)
-				delete(p.clients, id)
 			}
 		}
-	} else {
-		delete(p.clients, sessionID)
-	}
-	p.mu.Unlock()
-
-	// Tear down existing client — waits for init, destroys container + registry entry
-	if hadExisting && existing != nil {
-		existing.Cleanup()
 	}
 
-	// Create new client with the specified template
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if p.closed {
-		return fmt.Errorf("pool is closed")
-	}
-
+	// Create new client with the specified template and register it
+	// BEFORE releasing the lock. This eliminates the race window where
+	// concurrent GetOrCreate calls could find no client and create a
+	// default (@base) one.
 	client := NewLazyNodeClient(p.incusClient, p.sessRegistry, p.tplRegistry, template, p.limits)
 	client.Env = p.env
+	client.OrgSlug = p.orgSlug
+	client.TeamSlug = p.teamSlug
 
 	// Point ALL previously-aliased session IDs to the new client.
 	// This ensures both the sub-agent AND the parent get the new container.
@@ -1109,6 +1174,15 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 			p.clients[id] = client
 		}
 	}
+
+	p.mu.Unlock()
+
+	// Tear down existing client AFTER the new one is visible in the pool.
+	// This waits for init, destroys the old container + registry entry.
+	if hadExisting && existing != nil {
+		existing.Cleanup()
+	}
+
 	return nil
 }
 

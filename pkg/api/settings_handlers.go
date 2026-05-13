@@ -28,6 +28,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/poe"
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/version"
 )
 
@@ -157,11 +158,7 @@ type UpdateAppSettingsRequest struct {
 
 // GetSettingsHandler handles GET /api/settings/config
 func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
 
 	// Build response with all provider instances
 	providers := []ProviderSettings{}
@@ -215,9 +212,21 @@ func GetSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSettingsHandler handles PUT /api/settings/config
 func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can modify settings.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	var req UpdateAppSettingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	// Platform mode: persist settings to team DB instead of filesystem
+	svc := store.FromRequest(r)
+	if svc != nil && svc.Mode == store.ModePlatform && svc.Settings != nil {
+		updateSettingsPlatform(w, r, svc, req)
 		return
 	}
 
@@ -326,10 +335,85 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Regenerate the managed OpenCode config since provider/model may have changed.
 	// Reload config from disk to get the clean version (secrets were scrubbed above).
-	if freshCfg, loadErr := config.LoadAppConfig(); loadErr == nil {
+	if freshCfg := effectiveAppConfig(r); freshCfg != nil {
 		regenerateOpenCodeConfig(freshCfg)
-	} else {
-		slog.Warn("failed to reload config for OpenCode regeneration", "error", loadErr)
+	}
+
+	// Reset the Studio chat agent so the next request picks up fresh config.
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// updateSettingsPlatform handles the PUT in platform mode, persisting settings
+// to the team's database record instead of the host filesystem.
+func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.Services, req UpdateAppSettingsRequest) {
+	settings, err := svc.Settings.Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load team settings: "+err.Error())
+		return
+	}
+	if settings == nil {
+		settings = &store.TeamSettings{}
+	}
+
+	// Update general settings if provided
+	if req.General != nil {
+		settings.DefaultProvider = req.General.DefaultProvider
+		settings.DefaultModel = req.General.DefaultModel
+		settings.WebSearchTool = req.General.WebSearchTool
+		settings.WebExtractTool = req.General.WebExtractTool
+		if req.General.ContextLength > 0 {
+			settings.ContextLength = req.General.ContextLength
+		}
+	}
+
+	// Update provider settings if provided
+	if req.Providers != nil {
+		if len(req.Providers) > 0 {
+			firstKey := ""
+			for k := range req.Providers {
+				firstKey = k
+				break
+			}
+			if firstKey == "__replace_all__" {
+				var newProviders []map[string]string
+				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
+					newProvidersMap := make(map[string]map[string]string)
+					for _, p := range newProviders {
+						name := p["name"]
+						if name != "" {
+							newProvidersMap[name] = make(map[string]string)
+							for k, v := range p {
+								if k != "name" {
+									newProvidersMap[name][k] = v
+								}
+							}
+						}
+					}
+					settings.Providers = newProvidersMap
+				}
+			} else {
+				if settings.Providers == nil {
+					settings.Providers = make(map[string]map[string]string)
+				}
+				for providerName, providerFields := range req.Providers {
+					if settings.Providers[providerName] == nil {
+						settings.Providers[providerName] = make(map[string]string)
+					}
+					for key, value := range providerFields {
+						if value != "" && !isMaskedValue(value) {
+							settings.Providers[providerName][key] = value
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if err := svc.Settings.Save(r.Context(), settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save team settings: "+err.Error())
+		return
 	}
 
 	// Reset the Studio chat agent so the next request picks up fresh config.
@@ -345,6 +429,30 @@ func isMaskedValue(val string) bool {
 
 // GetMCPSettingsHandler handles GET /api/settings/mcp
 func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: read from DB store (org or team based on ?scope=)
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		servers, err := mcpStore.List(r.Context())
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
+			return
+		}
+		// Convert store.MCPServer list to config.MCPConfig map format for frontend
+		cfg := config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig, len(servers))}
+		for _, s := range servers {
+			cfg.MCPServers[s.Name] = config.MCPServerConfig{
+				Command:   s.Command,
+				Args:      s.Args,
+				Env:       s.Env,
+				Transport: s.Transport,
+				URL:       s.URL,
+				Enabled:   s.Enabled,
+			}
+		}
+		respondJSON(w, http.StatusOK, cfg)
+		return
+	}
+
+	// Personal mode: read from filesystem
 	cfg, err := config.LoadMCPConfigRaw()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
@@ -356,12 +464,92 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
 func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can modify MCP settings.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	var newCfg config.MCPConfig
 	if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
 		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
+	// Platform mode: write to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		updateMCPSettingsPlatform(w, r, mcpStore, newCfg)
+		return
+	}
+
+	// Personal mode: file-based (original logic)
+	updateMCPSettingsPersonal(w, r, newCfg)
+}
+
+// updateMCPSettingsPlatform handles the PUT in platform mode (DB store).
+func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, newCfg config.MCPConfig) {
+	userID := effectiveUserID(r)
+
+	// Set default transport to "stdio" if not specified
+	for name, server := range newCfg.MCPServers {
+		if server.Transport == "" {
+			server.Transport = "stdio"
+			newCfg.MCPServers[name] = server
+		}
+	}
+
+	// Load existing servers from store
+	existing, err := mcpStore.List(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load existing MCP servers: "+err.Error())
+		return
+	}
+	existingMap := make(map[string]*store.MCPServer, len(existing))
+	for i := range existing {
+		existingMap[existing[i].Name] = &existing[i]
+	}
+
+	// Delete removed servers
+	for name := range existingMap {
+		if _, exists := newCfg.MCPServers[name]; !exists {
+			if err := mcpStore.Delete(r.Context(), name); err != nil {
+				slog.Warn("failed to delete MCP server from store", "name", name, "error", err)
+			}
+		}
+	}
+
+	// Save new/changed servers
+	for name, serverCfg := range newCfg.MCPServers {
+		s := &store.MCPServer{
+			Name:      name,
+			Command:   serverCfg.Command,
+			Args:      serverCfg.Args,
+			Env:       serverCfg.Env,
+			Transport: serverCfg.Transport,
+			URL:       serverCfg.URL,
+			Enabled:   serverCfg.Enabled,
+			CreatedBy: userID,
+		}
+		if err := mcpStore.Save(r.Context(), s); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+			return
+		}
+
+		// Trigger async tool discovery for new or changed servers
+		// (skip if the server already has cached_tools and config hasn't changed)
+		existing := existingMap[name]
+		if existing == nil || !mcpServerConfigUnchanged(existing, s) {
+			go refreshMCPPlatformServer(mcpStore, s)
+		}
+	}
+
+	// Reset the Studio chat agent so the next request picks up fresh MCP config.
+	GetChatManager().Reset()
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// updateMCPSettingsPersonal handles the PUT in personal mode (filesystem).
+func updateMCPSettingsPersonal(w http.ResponseWriter, r *http.Request, newCfg config.MCPConfig) {
 	// Load existing config to detect added/removed servers
 	oldCfg, err := config.LoadMCPConfig()
 	if err != nil {
@@ -475,15 +663,65 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Set default transport
+	if req.Config.Transport == "" {
+		req.Config.Transport = "stdio"
+	}
+
+	// Platform mode: save directly to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		// Team-scoped install requires team admin privileges
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
+		userID := effectiveUserID(r)
+		s := &store.MCPServer{
+			Name:      req.ServerName,
+			Command:   req.Config.Command,
+			Args:      req.Config.Args,
+			Env:       req.Config.Env,
+			Transport: req.Config.Transport,
+			URL:       req.Config.URL,
+			Enabled:   req.Config.Enabled,
+			CreatedBy: userID,
+		}
+		if err := mcpStore.Save(r.Context(), s); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+			return
+		}
+
+		// Discover tools in background
+		servers := map[string]config.MCPServerConfig{req.ServerName: req.Config}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, req.ServerName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, req.ServerName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools after install", "server", req.ServerName, "error", err)
+				}
+			}
+		}()
+
+		GetChatManager().Reset()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":     "installed",
+			"serverName": req.ServerName,
+		})
+		return
+	}
+
+	// Personal mode: file-based install
+	installInlineMCPServerPersonal(w, r, req)
+}
+
+// installInlineMCPServerPersonal handles the install in personal mode (filesystem).
+func installInlineMCPServerPersonal(w http.ResponseWriter, r *http.Request, req InstallInlineMCPServerRequest) {
 	// Load current MCP config
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
 		mcpCfg = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
-	}
-
-	// Set default transport
-	if req.Config.Transport == "" {
-		req.Config.Transport = "stdio"
 	}
 
 	// Initialize map if nil
@@ -670,11 +908,8 @@ func ListProviderModelsHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	providerID := vars["providerId"]
 
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Resolve secrets from credential store into the provider config so that
 	// ListModelsForProvider sees the actual API key (secrets are scrubbed from
@@ -714,17 +949,8 @@ type SetupStatusResponse struct {
 
 // GetSetupStatusHandler handles GET /api/settings/status
 func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		// If config doesn't exist, setup is definitely required
-		respondJSON(w, http.StatusOK, SetupStatusResponse{
-			SetupRequired:       true,
-			HasDefaultProvider:  false,
-			HasDefaultModel:     false,
-			ConfiguredProviders: []string{},
-		})
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Check for configured providers
 	// For multi-instance support, check all provider instances in config
@@ -750,8 +976,17 @@ func GetSetupStatusHandler(w http.ResponseWriter, r *http.Request) {
 	hasDefaultProvider := cfg.General.DefaultProvider != ""
 	hasDefaultModel := cfg.General.DefaultModel != ""
 
-	// Setup is required if no default provider OR no configured providers
-	setupRequired := !hasDefaultProvider || len(configuredProviders) == 0
+	// Setup is required only if there are no configured providers at all.
+	// Having a default_provider explicitly set is a convenience, not a prerequisite.
+	setupRequired := len(configuredProviders) == 0
+
+	// In platform mode, the platform is already bootstrapped (DB connected,
+	// user authenticated). The setup wizard is not needed — providers can be
+	// configured through Settings at platform/org/team level.
+	svc := store.FromRequest(r)
+	if svc != nil && svc.Mode == store.ModePlatform {
+		setupRequired = false
+	}
 
 	respondJSON(w, http.StatusOK, SetupStatusResponse{
 		SetupRequired:       setupRequired,
@@ -767,11 +1002,8 @@ func ListProviderModelsWithMetadataHandler(w http.ResponseWriter, r *http.Reques
 	vars := mux.Vars(r)
 	providerID := vars["providerId"]
 
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
-		return
-	}
+	cfg := effectiveAppConfig(r)
+
 
 	// Resolve provider instance config and type. The providerID is the instance
 	// name (e.g. "SAP AI Core"), not necessarily the type slug ("sap_ai_core").

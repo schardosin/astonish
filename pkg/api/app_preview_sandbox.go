@@ -678,7 +678,7 @@ func AppPreviewRuntimeHandler(w http.ResponseWriter, r *http.Request) {
 		sandboxRuntimeJS = web.GetSandboxRuntime()
 	})
 	if sandboxRuntimeJS == nil {
-		http.Error(w, "sandbox runtime not found — run 'npm run build' in web/", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "sandbox runtime not found — run 'npm run build' in web/")
 		return
 	}
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
@@ -699,7 +699,7 @@ func AppPreviewTailwindHandler(w http.ResponseWriter, r *http.Request) {
 		tailwindBrowserJS = web.GetTailwindBrowser()
 	})
 	if tailwindBrowserJS == nil {
-		http.Error(w, "tailwind browser runtime not found — run 'npm run build' in web/", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "tailwind browser runtime not found — run 'npm run build' in web/")
 		return
 	}
 	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")

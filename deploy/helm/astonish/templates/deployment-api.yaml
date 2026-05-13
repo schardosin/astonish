@@ -1,0 +1,90 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "astonish.fullname" . }}-api
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "astonish.apiSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "astonish.apiSelectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: astonish
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["daemon", "run"]
+          ports:
+            - name: http
+              containerPort: 9393
+              protocol: TCP
+          env:
+            - name: ASTONISH_MODE
+              value: "api"
+            - name: ASTONISH_HOST
+              value: "0.0.0.0"
+            {{- if .Values.secrets.masterKey }}
+            - name: ASTONISH_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "astonish.fullname" . }}-secrets
+                  key: master-key
+            {{- end }}
+            {{- if .Values.secrets.jwtSecret }}
+            - name: ASTONISH_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "astonish.fullname" . }}-secrets
+                  key: jwt-secret
+            {{- end }}
+            {{- if .Values.secrets.platformDSN }}
+            - name: ASTONISH_PLATFORM_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "astonish.fullname" . }}-secrets
+                  key: platform-dsn
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /root/.config/astonish/config.yaml
+              subPath: config.yaml
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /api/healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /api/readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "astonish.fullname" . }}-config

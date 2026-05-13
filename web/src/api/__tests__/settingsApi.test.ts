@@ -22,7 +22,7 @@ describe('settingsApi', () => {
 
       const result = await fetchFullConfig()
       expect(result).toEqual(config)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('throws on error', async () => {
@@ -38,11 +38,12 @@ describe('settingsApi', () => {
 
       const result = await saveFullConfigSection('general', { theme: 'light' })
       expect(result).toEqual(response)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/settings/full', expect.objectContaining({
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ general: { theme: 'light' } }),
-      })
+      }))
+      const headers = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]?.headers as Headers
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
 
     it('throws on error', async () => {

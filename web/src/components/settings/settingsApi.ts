@@ -1,5 +1,6 @@
 // Shared API and UI utilities for settings components
 import type { CSSProperties } from 'react'
+import { teamFetch } from '../../api/teamContext'
 
 // --- Types ---
 
@@ -92,13 +93,13 @@ export interface ProviderFieldDef {
 // --- API Functions ---
 
 export const fetchFullConfig = async (): Promise<FullConfig> => {
-  const res = await fetch('/api/settings/full')
+  const res = await teamFetch('/api/settings/full')
   if (!res.ok) throw new Error('Failed to fetch config')
   return res.json()
 }
 
 export const saveFullConfigSection = async (sectionKey: string, data: Record<string, unknown>): Promise<Record<string, unknown>> => {
-  const res = await fetch('/api/settings/full', {
+  const res = await teamFetch('/api/settings/full', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ [sectionKey]: data })
@@ -108,13 +109,13 @@ export const saveFullConfigSection = async (sectionKey: string, data: Record<str
 }
 
 export const fetchSettings = async (): Promise<SettingsData> => {
-  const res = await fetch('/api/settings/config')
+  const res = await teamFetch('/api/settings/config')
   if (!res.ok) throw new Error('Failed to fetch settings')
   return res.json()
 }
 
 export const saveSettings = async (data: Record<string, unknown>): Promise<unknown> => {
-  const res = await fetch('/api/settings/config', {
+  const res = await teamFetch('/api/settings/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
@@ -124,7 +125,7 @@ export const saveSettings = async (data: Record<string, unknown>): Promise<unkno
 }
 
 export const replaceAllProviders = async (providers: Record<string, unknown>[]): Promise<unknown> => {
-  const res = await fetch('/api/settings/config', {
+  const res = await teamFetch('/api/settings/config', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ providers: { '__replace_all__': { '__array__': JSON.stringify(providers) } } })
@@ -133,48 +134,52 @@ export const replaceAllProviders = async (providers: Record<string, unknown>[]):
   return res.json()
 }
 
-export const fetchMCPConfig = async (): Promise<MCPConfigData> => {
-  const res = await fetch('/api/settings/mcp')
+export const fetchMCPConfig = async (teamSlug?: string, scope?: string): Promise<MCPConfigData> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/settings/mcp?scope=${effectiveScope}` : '/api/settings/mcp'
+  const res = await teamFetch(url, undefined, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP config')
   return res.json()
 }
 
-export const saveMCPConfig = async (data: Record<string, unknown>): Promise<unknown> => {
-  const res = await fetch('/api/settings/mcp', {
+export const saveMCPConfig = async (data: Record<string, unknown>, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/settings/mcp?scope=${effectiveScope}` : '/api/settings/mcp'
+  const res = await teamFetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
-  })
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to save MCP config')
   return res.json()
 }
 
 export const fetchProviderModels = async (providerId: string): Promise<{ models: string[] }> => {
-  const res = await fetch(`/api/providers/${providerId}/models`)
+  const res = await teamFetch(`/api/providers/${providerId}/models`)
   if (!res.ok) throw new Error('Failed to fetch models')
   return res.json()
 }
 
 // Fetch tools that have 'websearch' or 'webextract' in their name
 export const fetchWebCapableTools = async (): Promise<WebCapableTools> => {
-  const res = await fetch('/api/tools/web-capable')
+  const res = await teamFetch('/api/tools/web-capable')
   if (!res.ok) throw new Error('Failed to fetch web-capable tools')
   return res.json()
 }
 
 // Taps API functions
-export const fetchTaps = async (): Promise<{ taps: TapEntry[] }> => {
-  const res = await fetch('/api/taps')
+export const fetchTaps = async (teamSlug?: string): Promise<{ taps: TapEntry[] }> => {
+  const res = await teamFetch('/api/taps', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch taps')
   return res.json()
 }
 
-export const addTap = async (url: string, alias: string = ''): Promise<unknown> => {
-  const res = await fetch('/api/taps', {
+export const addTap = async (url: string, alias: string = '', teamSlug?: string): Promise<unknown> => {
+  const res = await teamFetch('/api/taps', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, alias })
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to add tap')
@@ -182,10 +187,10 @@ export const addTap = async (url: string, alias: string = ''): Promise<unknown> 
   return res.json()
 }
 
-export const removeTap = async (name: string): Promise<unknown> => {
-  const res = await fetch(`/api/taps/${encodeURIComponent(name)}`, {
+export const removeTap = async (name: string, teamSlug?: string): Promise<unknown> => {
+  const res = await teamFetch(`/api/taps/${encodeURIComponent(name)}`, {
     method: 'DELETE'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to remove tap')
@@ -194,31 +199,126 @@ export const removeTap = async (name: string): Promise<unknown> => {
 }
 
 // Fetch MCP server status
-export const fetchMCPStatus = async (): Promise<{ servers: MCPServerStatusEntry[] }> => {
-  const res = await fetch('/api/mcp/status')
+export const fetchMCPStatus = async (teamSlug?: string, scope?: string): Promise<{ servers: MCPServerStatusEntry[] }> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope ? `/api/mcp/status?scope=${effectiveScope}` : '/api/mcp/status'
+  const res = await teamFetch(url, undefined, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to fetch MCP status')
   return res.json()
 }
 
 // Toggle MCP server enabled/disabled
-export const toggleMCPServer = async (name: string, enabled: boolean): Promise<unknown> => {
-  const res = await fetch(`/api/mcp/servers/${encodeURIComponent(name)}`, {
+export const toggleMCPServer = async (name: string, enabled: boolean, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope
+    ? `/api/mcp/servers/${encodeURIComponent(name)}?scope=${effectiveScope}`
+    : `/api/mcp/servers/${encodeURIComponent(name)}`
+  const res = await teamFetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled })
-  })
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) throw new Error('Failed to toggle server')
   return res.json()
 }
 
-export const refreshMCPServer = async (serverName: string): Promise<unknown> => {
-  const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/refresh`, {
+export const refreshMCPServer = async (serverName: string, teamSlug?: string, scope?: string): Promise<unknown> => {
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const url = effectiveScope
+    ? `/api/mcp/${encodeURIComponent(serverName)}/refresh?scope=${effectiveScope}`
+    : `/api/mcp/${encodeURIComponent(serverName)}/refresh`
+  const res = await teamFetch(url, {
     method: 'POST'
-  })
+  }, scope === 'platform' ? undefined : teamSlug)
   if (!res.ok) {
     const text = await res.text()
     throw new Error(text || 'Failed to refresh server')
   }
+  return res.json()
+}
+
+// --- Provider Settings (multi-level: platform / org / team) ---
+
+export interface LevelProviderData {
+  providers: Record<string, Record<string, string>> | null
+  default_provider: string
+  default_model: string
+}
+
+export const fetchPlatformProviders = async (): Promise<LevelProviderData> => {
+  const res = await teamFetch('/api/settings/platform/providers')
+  if (!res.ok) throw new Error('Failed to fetch platform providers')
+  return res.json()
+}
+
+export const savePlatformProviders = async (data: {
+  providers?: Record<string, Record<string, string>>
+  default_provider?: string
+  default_model?: string
+}): Promise<unknown> => {
+  const res = await teamFetch('/api/settings/platform/providers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('Failed to save platform providers')
+  return res.json()
+}
+
+export const fetchOrgProviders = async (): Promise<LevelProviderData> => {
+  const res = await teamFetch('/api/settings/org/providers')
+  if (!res.ok) throw new Error('Failed to fetch org providers')
+  return res.json()
+}
+
+export const saveOrgProviders = async (data: {
+  providers?: Record<string, Record<string, string>>
+  default_provider?: string
+  default_model?: string
+}): Promise<unknown> => {
+  const res = await teamFetch('/api/settings/org/providers', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  if (!res.ok) throw new Error('Failed to save org providers')
+  return res.json()
+}
+
+export const fetchTeamProviders = async (): Promise<LevelProviderData> => {
+  const res = await teamFetch('/api/settings/team/providers')
+  if (!res.ok) throw new Error('Failed to fetch team providers')
+  return res.json()
+}
+
+export const fetchEffectiveProviders = async (): Promise<LevelProviderData> => {
+  const res = await teamFetch('/api/settings/providers/effective')
+  if (!res.ok) throw new Error('Failed to fetch effective providers')
+  return res.json()
+}
+
+export const deleteProviderAtLevel = async (level: string, name: string): Promise<unknown> => {
+  const res = await teamFetch(`/api/settings/${level}/providers/${encodeURIComponent(name)}`, {
+    method: 'DELETE'
+  })
+  if (!res.ok) throw new Error('Failed to delete provider')
+  return res.json()
+}
+
+export interface ProviderTestResult {
+  success: boolean
+  error?: string
+  model_count?: number
+  models?: string[]
+}
+
+export const testProviderConnection = async (type: string, params: Record<string, string>): Promise<ProviderTestResult> => {
+  const res = await teamFetch('/api/settings/providers/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, params })
+  })
+  if (!res.ok) throw new Error('Failed to test provider connection')
   return res.json()
 }
 

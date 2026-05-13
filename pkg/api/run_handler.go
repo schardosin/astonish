@@ -14,11 +14,14 @@ import (
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/schardosin/astonish/pkg/cache"
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -35,6 +38,7 @@ type ChatRequest struct {
 	Provider    string `json:"provider,omitempty"`
 	Model       string `json:"model,omitempty"`
 	AutoApprove bool   `json:"autoApprove,omitempty"` // Global auto-approve flag
+	CLIMode     bool   `json:"cliMode,omitempty"`     // When true, renders ANSI output (tool boxes etc.)
 }
 
 // SessionManager manages active sessions
@@ -303,7 +307,7 @@ func (sm *SessionManager) TouchSession(sessionID string) {
 }
 
 // GetOrCreateMCPManager returns the MCP manager for a session, creating if needed
-func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID string, requiredServers []string) (*mcp.Manager, []tool.Toolset) {
+func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID string, requiredServers []string, mcpStores ...store.MCPServerStore) (*mcp.Manager, []tool.Toolset) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -320,11 +324,26 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 		return nil, nil
 	}
 
-	// Create new MCP manager for this session
-	mgr, err := mcp.NewManager()
-	if err != nil {
-		slog.Warn("failed to create mcp manager", "error", err)
-		return nil, nil
+	var mgr *mcp.Manager
+
+	// Platform mode: build config from DB stores
+	var validStores []store.MCPServerStore
+	for _, s := range mcpStores {
+		if s != nil {
+			validStores = append(validStores, s)
+		}
+	}
+	if len(validStores) > 0 {
+		mcpCfg := buildMCPConfigFromStores(validStores, requiredServers)
+		mgr = mcp.NewManagerFromConfig(mcpCfg)
+	} else {
+		// Personal mode: load from filesystem
+		var err error
+		mgr, err = mcp.NewManager()
+		if err != nil {
+			slog.Warn("failed to create mcp manager", "error", err)
+			return nil, nil
+		}
 	}
 
 	if err := mgr.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
@@ -334,6 +353,57 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 
 	sm.mcpManagers[sessionID] = mgr
 	return mgr, mgr.GetToolsets()
+}
+
+// buildMCPConfigFromStores creates an MCPConfig from multiple platform DB stores
+// (typically team + org) for the specified server names. Team store is queried first
+// so that team-level server configs override org-level ones of the same name.
+func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers []string) *config.MCPConfig {
+	cfg := &config.MCPConfig{
+		MCPServers: make(map[string]config.MCPServerConfig),
+	}
+
+	needed := make(map[string]bool, len(requiredServers))
+	for _, name := range requiredServers {
+		needed[name] = true
+	}
+
+	// Query each store in order (team first, org second).
+	// First match wins — team servers override org servers of the same name.
+	for _, mcpStore := range mcpStores {
+		allServers, err := mcpStore.List(context.TODO())
+		if err != nil {
+			slog.Warn("failed to list MCP servers from store for config build", "error", err)
+			continue
+		}
+
+		for _, srv := range allServers {
+			if !needed[srv.Name] {
+				continue
+			}
+			// Skip if already found in a higher-priority store
+			if _, exists := cfg.MCPServers[srv.Name]; exists {
+				continue
+			}
+			serverCfg := config.MCPServerConfig{
+				Command:   srv.Command,
+				Args:      srv.Args,
+				Env:       srv.Env,
+				Transport: srv.Transport,
+				URL:       srv.URL,
+				Enabled:   srv.Enabled,
+			}
+			cfg.MCPServers[srv.Name] = serverCfg
+		}
+	}
+
+	// Merge installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// This injects their full config (command, args, env with API key) from
+	// the filesystem credential store, so they can be launched even if they
+	// are not in the team DB store.
+	config.MergeStandardServers(cfg)
+
+	return cfg
 }
 
 // CleanupSession removes a session and its MCP manager
@@ -360,7 +430,7 @@ func HandleStopSession(w http.ResponseWriter, r *http.Request) {
 	// Expected format: /api/session/{sessionId}/stop
 	parts := strings.Split(path, "/")
 	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
 	sessionID := parts[3] // /api/session/{id}/stop
@@ -381,7 +451,7 @@ func HandleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
 	// Expected format: /api/session/{sessionId}/keepalive
 	parts := strings.Split(path, "/")
 	if len(parts) < 4 {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid path")
 		return
 	}
 	sessionID := parts[3] // /api/session/{id}/keepalive
@@ -396,7 +466,7 @@ func HandleSessionKeepalive(w http.ResponseWriter, r *http.Request) {
 
 // getRequiredMCPServers extracts the list of MCP server names needed for this flow
 // It maps tool names from nodes' ToolsSelection to their source MCP server names
-func getRequiredMCPServers(cfg *config.AgentConfig) []string {
+func getRequiredMCPServers(cfg *config.AgentConfig, mcpStores ...store.MCPServerStore) []string {
 	// Collect all required tools from the flow
 	toolsNeeded := make(map[string]bool)
 	for _, node := range cfg.Nodes {
@@ -409,7 +479,19 @@ func getRequiredMCPServers(cfg *config.AgentConfig) []string {
 		return nil
 	}
 
-	// Map tool names to MCP server names using cached tool info
+	// Platform mode: query the DB stores for tool→server mappings
+	// Filter out nil stores
+	var validStores []store.MCPServerStore
+	for _, s := range mcpStores {
+		if s != nil {
+			validStores = append(validStores, s)
+		}
+	}
+	if len(validStores) > 0 {
+		return getRequiredMCPServersFromStore(validStores, toolsNeeded)
+	}
+
+	// Personal mode: use file-based cache
 	cachedTools := GetCachedTools()
 	serversNeeded := make(map[string]bool)
 	for _, t := range cachedTools {
@@ -419,6 +501,92 @@ func getRequiredMCPServers(cfg *config.AgentConfig) []string {
 	}
 
 	// Convert to slice
+	var servers []string
+	for server := range serversNeeded {
+		servers = append(servers, server)
+	}
+	return servers
+}
+
+// getRequiredMCPServersFromStore queries multiple platform MCP stores' cached_tools
+// to find which servers provide the needed tools. Stores are queried in order
+// (typically team first, then org) so that team-level servers take precedence.
+func getRequiredMCPServersFromStore(mcpStores []store.MCPServerStore, toolsNeeded map[string]bool) []string {
+	serversNeeded := make(map[string]bool)
+
+	for _, mcpStore := range mcpStores {
+		allServers, err := mcpStore.List(context.TODO())
+		if err != nil {
+			slog.Warn("failed to list MCP servers from store", "error", err)
+			continue
+		}
+
+		for _, srv := range allServers {
+			if !srv.IsEnabled() {
+				continue
+			}
+			// Check cached_tools to see if this server provides any needed tools
+			if len(srv.CachedTools) > 0 {
+				var tools []struct {
+					Name string `json:"name"`
+				}
+				if err := json.Unmarshal(srv.CachedTools, &tools); err == nil {
+					for _, t := range tools {
+						if toolsNeeded[t.Name] {
+							serversNeeded[srv.Name] = true
+							break
+						}
+					}
+				}
+			}
+			// Also check if the server name itself is in the tool list
+			// (some flows reference server names directly)
+			if toolsNeeded[srv.Name] {
+				serversNeeded[srv.Name] = true
+			}
+		}
+	}
+
+	// Also check installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// that are NOT already in the DB stores. These are configured via the
+	// filesystem credential store and may not have been explicitly installed
+	// into the team DB.
+	for _, srv := range config.GetStandardServers() {
+		if serversNeeded[srv.ID] {
+			continue // Already found in DB stores
+		}
+		if !config.IsStandardServerInstalled(srv.ID) {
+			continue // Not installed
+		}
+		// Check if this standard server provides any needed tools
+		// First try the persistent file-based cache
+		cachedEntries := cache.GetToolsForServer(srv.ID)
+		if len(cachedEntries) > 0 {
+			for _, e := range cachedEntries {
+				if toolsNeeded[e.Name] {
+					serversNeeded[srv.ID] = true
+					break
+				}
+			}
+		} else {
+			// Fallback: check the known web tool names from the definition
+			if srv.WebSearchTool != "" {
+				if parts := strings.SplitN(srv.WebSearchTool, ":", 2); len(parts) == 2 {
+					if toolsNeeded[parts[1]] {
+						serversNeeded[srv.ID] = true
+					}
+				}
+			}
+			if srv.WebExtractTool != "" && !serversNeeded[srv.ID] {
+				if parts := strings.SplitN(srv.WebExtractTool, ":", 2); len(parts) == 2 {
+					if toolsNeeded[parts[1]] {
+						serversNeeded[srv.ID] = true
+					}
+				}
+			}
+		}
+	}
+
 	var servers []string
 	for server := range serversNeeded {
 		servers = append(servers, server)
@@ -450,12 +618,12 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	var req ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		slog.Error("failed to decode chat request", "error", err)
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.AgentID == "" {
-		http.Error(w, "AgentID is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "AgentID is required")
 		return
 	}
 
@@ -471,7 +639,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -485,24 +653,55 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	sm.TouchSession(req.SessionID)
 
 	// 1. Load Agent Config
-	agentPath, _, err := findAgentPath(req.AgentID)
-	if err != nil {
-		SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
-		return
+	// Strip "team:" prefix used by frontend for React key uniqueness.
+	if strings.HasPrefix(req.AgentID, "team:") {
+		req.AgentID = strings.TrimPrefix(req.AgentID, "team:")
 	}
 
-	cfg, err := config.LoadAgent(agentPath)
-	if err != nil {
-		SendErrorSSE(w, flusher, fmt.Sprintf("Failed to load configuration: %v", err))
-		return
+	var cfg *config.AgentConfig
+	var cfgErr error
+
+	// Platform mode: load from flow store (personal-first, team fallback).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		var yamlContent string
+		var found bool
+		if svc.PersonalFlows != nil {
+			if y, err := svc.PersonalFlows.GetFlow(r.Context(), req.AgentID); err == nil {
+				yamlContent = y
+				found = true
+			}
+		}
+		if !found && svc.Flows != nil {
+			if y, err := svc.Flows.GetFlow(r.Context(), req.AgentID); err == nil {
+				yamlContent = y
+				found = true
+			}
+		}
+		if !found {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
+			return
+		}
+		cfg, cfgErr = config.LoadAgentFromBytes([]byte(yamlContent))
+		if cfgErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to parse agent config: %v", cfgErr))
+			return
+		}
+	} else {
+		// Personal mode: load from filesystem.
+		agentPath, _, findErr := findAgentPath(req.AgentID)
+		if findErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Agent not found: %s", req.AgentID))
+			return
+		}
+		cfg, cfgErr = config.LoadAgent(agentPath)
+		if cfgErr != nil {
+			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to load configuration: %v", cfgErr))
+			return
+		}
 	}
 
 	// 2. Determine Provider/Model
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		slog.Warn("failed to load app config", "error", err)
-		appCfg = &config.AppConfig{}
-	}
+	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
 
 	providerName := req.Provider
@@ -580,19 +779,27 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Initialize MCP - per-session, only servers needed for this flow
-	requiredServers := getRequiredMCPServers(cfg)
-	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers)
+	// In platform mode, query both team and org MCP stores for server configs
+	var teamMCPStore, orgMCPStore store.MCPServerStore
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		teamMCPStore = svc.TeamMCPServers
+		orgMCPStore = svc.MCPServers
+	}
+	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore)
+	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers, teamMCPStore, orgMCPStore)
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
-	astonishAgent.DebugMode = false // Disable verbose debug output
-	astonishAgent.IsWebMode = true  // Enable Web mode for UI (disables ANSI colors)
+	astonishAgent.DebugMode = false     // Disable verbose debug output
+	astonishAgent.IsWebMode = !req.CLIMode // CLI mode renders ANSI tool boxes; web mode uses markdown
 	astonishAgent.SessionService = sm.service
 	astonishAgent.AutoApprove = req.AutoApprove
 
 	// Wire credential redactor so secrets are masked in SSE output
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		// Inject Redactor into context so memory_save can Placeholderize()
+		ctx = credentials.WithRedactor(ctx, cs.Redactor())
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

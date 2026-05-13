@@ -48,6 +48,15 @@ type TelegramChannel struct {
 	// allowSet is built from config.AllowFrom for fast lookup.
 	allowMu  sync.RWMutex
 	allowSet map[string]bool
+
+	// LinkHandler is called when a user sends /link <code> to the bot.
+	// It is set by the ChannelManager after construction to bridge the
+	// Telegram channel with the link code store. The handler should:
+	//   1. Validate the code
+	//   2. Create/verify the user_channel link
+	//   3. Return (success bool, replyMessage string)
+	// When nil, /link commands are ignored.
+	LinkHandler func(ctx context.Context, senderID, senderUsername string, code string) (bool, string)
 }
 
 // New creates a new Telegram channel adapter.
@@ -73,6 +82,24 @@ func (t *TelegramChannel) ID() string { return "telegram" }
 
 // Name returns a human-readable name.
 func (t *TelegramChannel) Name() string { return "Telegram Bot" }
+
+// BotUsername returns the Telegram bot's @username (without the @ prefix).
+// Returns empty string if the bot is not yet connected.
+func (t *TelegramChannel) BotUsername() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.botAPI == nil {
+		return ""
+	}
+	return t.botAPI.Self.UserName
+}
+
+// SetLinkHandler sets the callback for /link <code> commands.
+func (t *TelegramChannel) SetLinkHandler(fn func(ctx context.Context, senderID, senderUsername, code string) (bool, string)) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.LinkHandler = fn
+}
 
 // Start connects to Telegram via long polling and begins processing updates.
 // It calls handler for each normalized inbound message. Blocks until ctx
@@ -358,6 +385,13 @@ func (t *TelegramChannel) processUpdate(ctx context.Context, update tgbotapi.Upd
 	}
 
 	senderID := strconv.FormatInt(msg.From.ID, 10)
+
+	// Handle /link command BEFORE allowlist check — users trying to link
+	// their account are not yet in the allowlist.
+	if msg.IsCommand() && msg.Command() == "link" {
+		t.handleLinkCommand(ctx, msg, senderID)
+		return
+	}
 
 	// Allowlist check — only explicitly allowed senders can interact.
 	// An empty allowlist blocks everyone (safe default for a bot with tool access).
@@ -692,3 +726,53 @@ func StripHTMLTags(text string) string {
 	text = htmlTagRe.ReplaceAllString(text, "")
 	return html.UnescapeString(text)
 }
+
+// handleLinkCommand processes the /link <code> command from a user.
+// This is called BEFORE the allowlist check so unlinked users can link their account.
+func (t *TelegramChannel) handleLinkCommand(ctx context.Context, msg *tgbotapi.Message, senderID string) {
+	t.mu.RLock()
+	bot := t.botAPI
+	t.mu.RUnlock()
+	if bot == nil {
+		return
+	}
+
+	chatID := msg.Chat.ID
+
+	// Extract code from command arguments
+	code := strings.TrimSpace(msg.CommandArguments())
+	if code == "" {
+		reply := tgbotapi.NewMessage(chatID,
+			"To link your account, use: /link <code>\n\n"+
+				"Get your link code from the web UI:\n"+
+				"Settings → Connected Channels → Link Telegram")
+		reply.ParseMode = ""
+		_, _ = bot.Send(reply)
+		return
+	}
+
+	// Check if LinkHandler is set
+	if t.LinkHandler == nil {
+		reply := tgbotapi.NewMessage(chatID,
+			"Account linking is not available. Please contact your administrator.")
+		_, _ = bot.Send(reply)
+		return
+	}
+
+	// Call the link handler
+	senderUsername := msg.From.UserName
+	success, replyText := t.LinkHandler(ctx, senderID, senderUsername, code)
+
+	if success {
+		t.logger.Printf("[telegram] Account linked: TG user %s (%s)", senderID, senderUsername)
+		// Add the sender to the allowlist immediately so they can start chatting
+		t.allowMu.Lock()
+		t.allowSet[senderID] = true
+		t.allowMu.Unlock()
+	}
+
+	reply := tgbotapi.NewMessage(chatID, replyText)
+	reply.ParseMode = ""
+	_, _ = bot.Send(reply)
+}
+

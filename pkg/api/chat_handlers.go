@@ -18,6 +18,9 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -296,13 +299,15 @@ func (cm *ChatManager) fileStore() *persistentsession.FileStore {
 func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	var req StudioChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
+	userID := effectiveUserID(r)
+
 	cm := GetChatManager()
 	if err := cm.ensureReady(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -314,13 +319,30 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
 	comp := cm.components
 	chatAgent := comp.ChatAgent
-	sessionService := comp.SessionService
+
+	// Resolve session service per-request:
+	// Platform mode: regular chat uses personal sessions (private-first);
+	// fleet sub-sessions use team sessions (shared).
+	// Personal mode falls back to the singleton file-based session service.
+	var sessionService session.Service
+	var titleSetter SessionTitleSetter
+	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
+		sessionService = svc.PersonalSessions
+		titleSetter = svc.PersonalSessions
+	} else if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		// Fallback: if personal sessions not wired (shouldn't happen), use team
+		sessionService = svc.Sessions
+		titleSetter = svc.Sessions
+	} else {
+		sessionService = comp.SessionService
+		titleSetter = cm.fileStore() // may be nil in edge cases
+	}
 
 	// Handle slash commands server-side (these are lightweight, no background runner needed)
 	msg := strings.TrimSpace(req.Message)
@@ -380,10 +402,23 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// If the hint is a fleet template key, look up the wizard config
 		if hint != "" {
-			if reg := GetFleetRegistry(); reg != nil {
-				if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
-					eventData["wizard_description"] = cfg.PlanWizard.Description
-					eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+			// Try store from request first (platform mode), then global registry
+			var wizardFound bool
+			if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+				if cfgAny, ok := svc.FleetTemplates.GetFleet(r.Context(), hint); ok {
+					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
+						eventData["wizard_description"] = cfg.PlanWizard.Description
+						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+						wizardFound = true
+					}
+				}
+			}
+			if !wizardFound {
+				if reg := GetFleetRegistry(); reg != nil {
+					if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
+						eventData["wizard_description"] = cfg.PlanWizard.Description
+						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+					}
 				}
 			}
 		}
@@ -394,7 +429,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(msg, "/") {
 		// Use r.Context() for slash commands since they're lightweight
-		handleSlashCommand(r.Context(), w, flusher, cm, msg, req.SessionID)
+		handleSlashCommand(r.Context(), w, flusher, cm, sessionService, msg, userID, req.SessionID)
 		return
 	}
 
@@ -409,39 +444,47 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if msg == "__distill_save__" {
 				userText = "Save Flow"
 			}
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
-			filePath, runCmd, err := chatAgent.SaveDistillReview(r.Context(), req.SessionID)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
+
+			// Enrich context with FlowStore so SaveDistillReview can persist
+			// to PG in platform mode (no disk write).
+			saveCtx := r.Context()
+			if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+				saveCtx = store.WithFlowStore(saveCtx, svc.Flows)
+			}
+
+			filePath, runCmd, err := chatAgent.SaveDistillReview(saveCtx, req.SessionID)
 			if err != nil {
 				errText := fmt.Sprintf("Failed to save flow: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+				persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", errText)
 			} else {
 				SendSSE(w, flusher, "distill_saved", map[string]interface{}{
 					"filePath":   filePath,
 					"runCommand": runCmd,
 				})
-				persistDistillSaved(r.Context(), sessionService, req.SessionID, filePath, runCmd)
+				persistDistillSaved(r.Context(), sessionService, userID, req.SessionID, filePath, runCmd)
 			}
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
 		case agent.DistillIntentCancel:
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", msg)
 			chatAgent.CancelDistillReview(req.SessionID)
 			responseText := "Distill review cancelled."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
 		default: // DistillIntentModify
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", msg)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", msg)
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Modifying flow...\n"})
 			review, err := chatAgent.ModifyDistillReview(r.Context(), req.SessionID, msg)
 			if err != nil {
 				errText := fmt.Sprintf("Failed to modify flow: %v\nYou can try another change, type `save` to save as-is, or `cancel` to abort.", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-				persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", errText)
+				persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", errText)
 			} else {
 				SendSSE(w, flusher, "distill_preview", map[string]interface{}{
 					"yaml":        review.YAML,
@@ -450,7 +493,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					"tags":        review.Tags,
 					"explanation": review.Explanation,
 				})
-				persistDistillPreview(r.Context(), sessionService, req.SessionID, review)
+				persistDistillPreview(r.Context(), sessionService, userID, req.SessionID, review)
 			}
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
@@ -462,7 +505,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID != "" && !chatAgent.HasActiveApp(req.SessionID) {
 		getResp, err := sessionService.Get(r.Context(), &session.GetRequest{
 			AppName:   studioChatAppName,
-			UserID:    studioChatUserID,
+			UserID:    userID,
 			SessionID: req.SessionID,
 		})
 		if err == nil && getResp != nil && getResp.Session != nil {
@@ -487,7 +530,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if msg == "__app_save__" || msg == "__app_done__" || strings.HasPrefix(msg, "__app_save__:") {
 				userText = "Save"
 			}
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "user", userText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 
 			// Save the app to disk
 			var savedPath, savedName string
@@ -505,7 +548,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					SessionID:   req.SessionID,
 				}
 				var saveErr error
-				savedPath, saveErr = apps.SaveApp(savedApp)
+				// Platform mode: save to personal store first; personal mode: write to disk
+				if svc := store.FromRequest(r); svc != nil && svc.PersonalApps != nil {
+					savedPath, saveErr = svc.PersonalApps.Save(r.Context(), savedApp)
+				} else if svc != nil && svc.Apps != nil {
+					savedPath, saveErr = svc.Apps.Save(r.Context(), savedApp)
+				} else {
+					savedPath, saveErr = apps.SaveApp(savedApp)
+				}
 				if saveErr != nil {
 					slog.Error("failed to save app", "error", saveErr)
 				}
@@ -523,7 +573,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				"name": savedName,
 				"path": savedPath,
 			})
-			persistSessionMessage(r.Context(), sessionService, req.SessionID, "model", responseText)
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", responseText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
@@ -557,7 +607,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	if sessionID == "" {
 		resp, err := sessionService.Create(r.Context(), &session.CreateRequest{
 			AppName: studioChatAppName,
-			UserID:  studioChatUserID,
+			UserID:  userID,
 		})
 		if err != nil {
 			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create session: %v", err))
@@ -587,7 +637,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				Version:  1,
 			}
 			chatAgent.SetActiveApp(sessionID, activeApp)
-			persistAppPreview(r.Context(), sessionService, sessionID, code, title, 1, appID)
+			persistAppPreview(r.Context(), sessionService, userID, sessionID, code, title, 1, appID)
 			seededAppPreview = map[string]any{
 				"code":    code,
 				"title":   title,
@@ -598,8 +648,153 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Launch background runner — the agent runs independently of this HTTP request.
-	runner := newChatRunner(sessionID, isNew)
+	runner := newChatRunner(sessionID, userID, isNew)
 	runner.titleWaitTimeout = 30 * time.Second // wait for title goroutine before closing SSE
+
+	// Inject tenant-scoped credential store into the runner context so that
+	// credential tools (list_credentials, resolve_credential, etc.) can access
+	// the correct store for this team/org in platform mode.
+	// The BeforeToolCallback in chat_agent_run.go also checks this context value
+	// for credential placeholder substitution ({{CREDENTIAL:...}} tokens),
+	// falling back to the agent's file-based CredentialStore field.
+	//
+	// In platform mode, we inject a merged store (personal-first, team-fallback)
+	// so the LLM resolves the user's personal credentials first, then team creds.
+	// Writes from chat always go to the personal store.
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.PersonalCredentials != nil || svc.Credentials != nil {
+			merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+			runner.InjectCredentialStore(merged)
+
+			// Hydrate the shared Redactor from the PG-backed credential store.
+			// This ensures the Redactor knows about all credential values for
+			// this user's session — critical for tool output redaction and
+			// preventing secret leakage into session history.
+			if chatAgent.Redactor != nil {
+				chatAgent.Redactor.HydrateFromStore(merged)
+			}
+		}
+	}
+
+	// Inject the Redactor into the runner context so that memory_save can
+	// call Placeholderize() to replace raw credential values with actionable
+	// {{CREDENTIAL:name:field}} tokens before persisting to memory.
+	if chatAgent.Redactor != nil {
+		runner.InjectRedactor(chatAgent.Redactor)
+	}
+
+	// Inject tenant-scoped memory stores into the runner context so that
+	// memory_search, memory_save tools, and the KnowledgeSearch callback can
+	// use the PG-backed stores (team + three-tier) in platform mode.
+	if svc := store.FromRequest(r); svc != nil {
+		memStore := svc.Memory
+		// If personal memory mode is active, the memory_save tool should
+		// write to the user's personal store instead of team.
+		// The ThreeTierSearcher remains unchanged (always searches all tiers).
+		if r.Header.Get("X-Astonish-Memory-Mode") == "personal" && svc.TenantRouter != nil {
+			if pu := GetPlatformUser(r); pu != nil {
+				if orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug); err == nil {
+					memStore = orgStore.ForUser(pu.ID).Memories()
+				}
+			}
+		}
+		runner.InjectMemoryStores(memStore, svc.MemorySearcher)
+
+		// Inject the cross-session memory merge function so that memory_save
+		// performs dedup/merge instead of blind inserts. This requires the
+		// PlatformReflector (which provides the LLM for merge calls).
+		if chatAgent.PlatformReflector != nil {
+			runner.InjectMemorySaveOrMerge(chatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+		}
+	}
+
+	// Inject tenant-scoped flow store into the runner context so that
+	// drill tools (save_drill, list_drills, read_drill, edit_drill, delete_drill)
+	// and run_drill can read/write flows from the database in platform mode.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		runner.InjectFlowStore(svc.Flows)
+	}
+
+	// Inject tenant-scoped drill report store into the runner context so that
+	// the run_drill tool can persist execution results to the database.
+	if svc := store.FromRequest(r); svc != nil && svc.DrillReports != nil {
+		runner.InjectDrillReportStore(svc.DrillReports)
+	}
+
+	// Inject tenant-scoped skill stores into the runner context so that
+	// the skill_lookup tool can resolve skills from org and team stores
+	// in addition to bundled skills.
+	if svc := store.FromRequest(r); svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		runner.InjectSkillStores(svc.Skills, svc.TeamSkills)
+	}
+
+	// Inject tenant-scoped MCP server stores into the runner context so that
+	// the chat agent can resolve MCP server configs from org and team stores.
+	if svc := store.FromRequest(r); svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		runner.InjectMCPServerStores(svc.MCPServers, svc.TeamMCPServers)
+	}
+
+	// Inject tenant-scoped scheduler store into the runner context so that
+	// the schedule_job and list_scheduled_jobs tools operate on the correct team.
+	if svc := store.FromRequest(r); svc != nil && svc.Scheduler != nil {
+		runner.InjectSchedulerStore(svc.Scheduler)
+	}
+
+	// Inject tenant-scoped fleet stores into the runner context so that
+	// fleet tools (save_fleet_plan, list_fleets) can read/write from the DB.
+	if svc := store.FromRequest(r); svc != nil && (svc.FleetTemplates != nil || svc.FleetPlans != nil) {
+		runner.InjectFleetStores(svc.FleetTemplates, svc.FleetPlans)
+	}
+
+	// Inject the team's custom sandbox template so that chat containers use
+	// the team's pre-configured image rather than always falling back to @base.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings.TemplateName != "" {
+			runner.InjectSandboxTemplate(settings.TemplateName)
+		}
+	}
+
+	// Inject per-team disabled tool list so the agent filters them out.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && len(settings.DisabledTools) > 0 {
+			runner.InjectDisabledTools(settings.DisabledTools)
+		}
+	}
+
+	// Inject the per-request session service so that sub-agents (delegate_tasks)
+	// create child sessions in the correct store (pgstore PersonalSessions in
+	// platform mode) rather than the factory-time default (FileStore).
+	if svc := store.FromRequest(r); svc != nil && svc.PersonalSessions != nil {
+		runner.InjectSessionService(svc.PersonalSessions)
+	}
+
+	// Inject the effective user ID so sub-agents create child sessions with the
+	// correct user_id (UUID in platform mode). Without this, the SubAgentManager
+	// would use its factory-time default ("console_user") which fails pgstore's
+	// UUID column constraint.
+	runner.InjectUserID(userID)
+
+	// Inject org/team slugs so tools can resolve team membership in platform mode.
+	if tc := pgstore.TenantContextFrom(r.Context()); tc != nil {
+		runner.InjectTenantSlugs(tc.OrgSlug, tc.TeamSlug)
+	}
+
+	// Inject RunJobFunc so schedule_job test execution works in platform mode
+	// (bypasses the unauthenticated HTTP bridge which can't pass auth middleware).
+	if exec := GetExecutor(); exec != nil {
+		reqSvc := store.FromRequest(r)
+		runner.InjectRunJobFunc(func(ctx context.Context, jobID string) (string, error) {
+			if reqSvc == nil || reqSvc.Scheduler == nil {
+				return "", fmt.Errorf("scheduler store not available")
+			}
+			storeJob := reqSvc.Scheduler.Get(ctx, jobID)
+			if storeJob == nil {
+				return "", fmt.Errorf("job %q not found", jobID)
+			}
+			job := storeJobToSchedulerJob(storeJob)
+			return exec.Execute(ctx, job)
+		})
+	}
 
 	// If we seeded an app preview, emit it through the runner so the frontend
 	// shows the AppPreviewCard immediately (before the LLM responds).
@@ -617,7 +812,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer registry.Unregister(sessionID)
 		defer cm.unregisterStream(sessionID)
-		runner.Run(chatAgent, sessionService, comp.LLM, cm.fileStore(), userMsg, msg, req.AutoApprove, req.SystemContext)
+		runner.Run(chatAgent, sessionService, comp.LLM, titleSetter, userMsg, msg, req.AutoApprove, req.SystemContext)
 	}()
 
 	// Become an SSE viewer: subscribe to the runner and forward events to the browser.
@@ -630,14 +825,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 
 	registry := getChatRunnerRegistry()
 	runner := registry.Get(sessionID)
 	if runner == nil {
-		http.Error(w, "no active runner for session", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "no active runner for session")
 		return
 	}
 
@@ -649,7 +844,7 @@ func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -661,7 +856,7 @@ func StudioChatStreamHandler(w http.ResponseWriter, r *http.Request) {
 func StudioChatStatusHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 	if sessionID == "" {
-		http.Error(w, "session ID required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "session ID required")
 		return
 	}
 
@@ -725,10 +920,9 @@ func streamRunnerEvents(w http.ResponseWriter, flusher http.Flusher, httpCtx con
 }
 
 // handleSlashCommand processes slash commands and sends results as SSE events.
-func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, cmd, sessionID string) {
+func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
 	comp := cm.components
 	chatAgent := comp.ChatAgent
-	sessionService := comp.SessionService
 
 	switch {
 	case cmd == "/help":
@@ -793,7 +987,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 	case cmd == "/new":
 		resp, err := sessionService.Create(ctx, &session.CreateRequest{
 			AppName: studioChatAppName,
-			UserID:  studioChatUserID,
+			UserID:  userID,
 		})
 		if err != nil {
 			SendErrorSSE(w, flusher, fmt.Sprintf("Failed to create session: %v", err))
@@ -805,33 +999,46 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 
 	case cmd == "/distill":
 		// Persist the user's /distill command to the session
-		persistSessionMessage(ctx, sessionService, sessionID, "user", "/distill")
+		persistSessionMessage(ctx, sessionService, userID, sessionID, "user", "/distill")
 
 		if sessionID == "" {
 			responseText := "No active session to distill."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-			persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
+			persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 		} else {
+			// Enrich context with SessionService and FlowStore so that
+			// PreviewDistill can reconstruct traces from PG (platform mode)
+			// and DistillToReview/SaveDistillReview can save to PG FlowStore.
+			distillCtx := ctx
+			if svc := store.FromContext(ctx); svc != nil {
+				if svc.PersonalSessions != nil {
+					distillCtx = store.WithSessionService(distillCtx, svc.PersonalSessions)
+				}
+				if svc.Flows != nil {
+					distillCtx = store.WithFlowStore(distillCtx, svc.Flows)
+				}
+			}
+
 			ds := agent.DistillSession{
 				SessionID: sessionID,
 				AppName:   studioChatAppName,
-				UserID:    studioChatUserID,
+				UserID:    userID,
 			}
 			// Identify traces and immediately run distillation (no confirmation step)
-			_, err := chatAgent.PreviewDistill(ctx, ds)
+			_, err := chatAgent.PreviewDistill(distillCtx, ds)
 			if err != nil {
 				responseText := fmt.Sprintf("Cannot distill: %v", err)
 				SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
-				persistSessionMessage(ctx, sessionService, sessionID, "model", responseText)
+				persistSessionMessage(ctx, sessionService, userID, sessionID, "model", responseText)
 			} else {
 				// Run distillation and send preview directly
-				review, distillErr := chatAgent.DistillToReview(ctx, ds, func(text string) {
+				review, distillErr := chatAgent.DistillToReview(distillCtx, ds, func(text string) {
 					SendSSE(w, flusher, "text", map[string]interface{}{"text": text})
 				})
 				if distillErr != nil {
 					errText := fmt.Sprintf("Distillation failed: %v", distillErr)
 					SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
-					persistSessionMessage(ctx, sessionService, sessionID, "model", errText)
+					persistSessionMessage(ctx, sessionService, userID, sessionID, "model", errText)
 				} else {
 					SendSSE(w, flusher, "distill_preview", map[string]interface{}{
 						"yaml":        review.YAML,
@@ -840,7 +1047,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 						"tags":        review.Tags,
 						"explanation": review.Explanation,
 					})
-					persistDistillPreview(ctx, sessionService, sessionID, review)
+					persistDistillPreview(ctx, sessionService, userID, sessionID, review)
 				}
 			}
 		}

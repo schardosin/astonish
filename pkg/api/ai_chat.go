@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
@@ -55,7 +54,7 @@ func IntentClassifyHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req IntentClassifyRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -69,14 +68,7 @@ func IntentClassifyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get LLM provider
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(IntentClassifyResponse{
-			Error: "Failed to load config: " + err.Error(),
-		})
-		return
-	}
+	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
 
 	providerName := appCfg.General.DefaultProvider

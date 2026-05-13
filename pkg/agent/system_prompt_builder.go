@@ -59,6 +59,42 @@ type SystemPromptBuilder struct {
 	RelevantKnowledge     string         // Per-turn auto-retrieved knowledge from vector store (empty = none)
 	RelevantTools         string         // Per-turn auto-retrieved tool matches from tool index (empty = none)
 	Catalog               []*ToolGroup   // Tool groups available for delegation via delegate_tasks (nil = no delegation)
+	MCPAccessFilter       func(serverName string) bool // Per-turn filter for MCP groups in catalog (nil = allow all)
+}
+
+// Clone creates a shallow copy of the SystemPromptBuilder suitable for
+// per-request mutation. Static fields (Tools, Toolsets, Catalog, etc.) are
+// shared read-only with the original — only per-turn fields should be
+// modified on the clone.
+func (b *SystemPromptBuilder) Clone() *SystemPromptBuilder {
+	if b == nil {
+		return nil
+	}
+	clone := *b // shallow copy — all fields are value types, strings, slices (shared read-only), or func
+	return &clone
+}
+
+// PromptOverrides carries per-turn system prompt field overrides that are
+// injected into the context by callers (scheduler, channel manager, API runner)
+// and applied to the cloned SystemPromptBuilder inside Run().
+// This eliminates shared mutable state across concurrent requests.
+type PromptOverrides struct {
+	ChannelHints   string // Channel-specific output constraints
+	SchedulerHints string // Scheduler-specific output constraints
+	SessionContext string // Per-turn session context (fleet wizard, etc.)
+}
+
+type promptOverridesKey struct{}
+
+// WithPromptOverrides attaches PromptOverrides to a context.
+func WithPromptOverrides(ctx context.Context, po *PromptOverrides) context.Context {
+	return context.WithValue(ctx, promptOverridesKey{}, po)
+}
+
+// PromptOverridesFromContext retrieves PromptOverrides from the context, if set.
+func PromptOverridesFromContext(ctx context.Context) *PromptOverrides {
+	po, _ := ctx.Value(promptOverridesKey{}).(*PromptOverrides)
+	return po
 }
 
 // Build constructs the full system prompt.
@@ -193,7 +229,7 @@ func (b *SystemPromptBuilder) Build() string {
 	// 6a2. Web search/extract tool hints — tell the LLM the exact tool names
 	// so it doesn't fall back to web_fetch when a dedicated search tool is configured.
 	if b.WebSearchAvailable && b.WebSearchToolName != "" {
-		sb.WriteString(fmt.Sprintf("\n**Web search tool:** `%s` — use this tool for web searches. Do NOT use `web_fetch` for search queries.\n", b.WebSearchToolName))
+		sb.WriteString(fmt.Sprintf("\n**Web search tool:** `%s` — for quick inline lookups (definitions, facts, finding URLs). For research tasks that require gathering, comparing, or analyzing information from the web, use `delegate_tasks` with appropriate tool groups (web, browser) instead. Search indexes may be stale — when you need live/current data from a specific website, delegate with browser tools to navigate the site directly.\n", b.WebSearchToolName))
 	}
 	if b.WebExtractAvailable && b.WebExtractToolName != "" {
 		sb.WriteString(fmt.Sprintf("**Web extract tool:** `%s` — use this tool to extract content from URLs when `web_fetch` fails.\n", b.WebExtractToolName))
@@ -208,8 +244,16 @@ func (b *SystemPromptBuilder) Build() string {
 	if len(b.Catalog) > 0 {
 		sb.WriteString("\n## Task Delegation\n\n")
 		sb.WriteString("`delegate_tasks` runs tasks in isolated sub-agents with their own sessions. ")
-		sb.WriteString("Use it for: parallel execution of independent tasks, long-running operations, or tasks requiring isolation. ")
-		sb.WriteString("Do NOT use it just to access tools — relevant tools are injected automatically and can be called directly.\n\n")
+		sb.WriteString("Benefits: parallel execution, context isolation (only concise summaries enter your context, not raw search results), and independent timeouts.\n\n")
+
+		sb.WriteString("**Prefer delegation when:**\n")
+		sb.WriteString("- The request involves 2+ independent information-gathering tasks (e.g., \"research X and Y\", \"compare A vs B\") — each topic becomes a parallel sub-task\n")
+		sb.WriteString("- A task will produce large raw output (web research, multi-page fetches, API exploration)\n")
+		sb.WriteString("- Tasks can meaningfully run in parallel\n\n")
+
+		sb.WriteString("**Call tools directly when:**\n")
+		sb.WriteString("- It's a single quick lookup or one-off fetch\n")
+		sb.WriteString("- You need the result immediately to decide your next step\n\n")
 
 		sb.WriteString("**Planning strategy:**\n")
 		sb.WriteString("1. For multi-step tasks, call `announce_plan` first to show the user your approach as a visible checklist.\n")
@@ -224,6 +268,13 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("**Available tool groups (for delegation):**\n")
 		ctx := &minimalReadonlyContext{Context: context.Background()}
 		for _, g := range b.Catalog {
+			// MCP tool access control: skip groups for inaccessible MCP servers
+			if serverName, isMCP := mcpServerNameFromGroup(g.Name); isMCP {
+				if b.MCPAccessFilter != nil && !b.MCPAccessFilter(serverName) {
+					continue
+				}
+			}
+
 			toolCount := len(g.Tools)
 			for _, ts := range g.Toolsets {
 				if mcpTools, err := ts.Tools(ctx); err == nil {

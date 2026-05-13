@@ -11,14 +11,19 @@ import CreateAgentModal from './components/CreateAgentModal'
 import ConfirmDeleteModal from './components/ConfirmDeleteModal'
 import AIChatPanel from './components/AIChatPanel'
 import SetupWizard from './components/SetupWizard'
+import LoginPage from './components/LoginPage'
 import MCPDependenciesPanel from './components/MCPDependenciesPanel'
 import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
+import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
+import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected, teamFetch, setPersonalMemoryMode as setPersonalMemoryModeContext } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
-import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer } from './api/agents'
+import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer, publishFlowToTeam, forkFlowToPersonal } from './api/agents'
 import type { Agent, Tool, McpDependencyCheckResult } from './api/agents'
+import { publishAppToTeam, forkAppToPersonal } from './api/apps'
+import type { AppListItem } from './api/apps'
 import { fetchSandboxStatus } from './api/sandbox'
 import type { SandboxStatus } from './api/sandbox'
 import { snakeToTitleCase } from './utils/formatters'
@@ -54,6 +59,126 @@ const AppsView = lazy(() => import('./components/AppsView'))
 function App() {
   const { theme, toggleTheme } = useTheme()
   const { path, navigate, replaceHash } = useHashRouter()
+
+  // Platform mode detection: check if the platform auth endpoint exists.
+  // In personal mode (file backend), this endpoint doesn't exist (404).
+  // In platform mode (postgres backend), it returns setup status.
+  const [isPlatformMode, setIsPlatformMode] = useState(false)
+  const [isPlatformChecked, setIsPlatformChecked] = useState(false)
+  // Personal memory mode: when true, the agent saves memories to personal scope by default
+  const [personalMemoryMode, setPersonalMemoryMode] = useState(() => {
+    try { return localStorage.getItem('astonish_personal_memory_mode') === 'true' } catch { return false }
+  })
+  const togglePersonalMemoryMode = useCallback(() => {
+    setPersonalMemoryMode(prev => {
+      const next = !prev
+      try { localStorage.setItem('astonish_personal_memory_mode', String(next)) } catch { /* ignore */ }
+      setPersonalMemoryModeContext(next)
+      return next
+    })
+  }, [])
+  useEffect(() => {
+    fetch('/api/auth/setup-status')
+      .then(async res => {
+        if (res.ok) {
+          setIsPlatformMode(true)
+        }
+      })
+      .catch(() => {})
+      .finally(() => setIsPlatformChecked(true))
+  }, [])
+
+  // Auth hook (only active in platform mode)
+  const auth = useAuth(isPlatformMode && isPlatformChecked ? true : false)
+
+  // Platform team list — loaded once after authentication
+  const [platformTeams, setPlatformTeams] = useState<{ slug: string; name: string }[] | null>(null)
+  const [activeTeam, setActiveTeam] = useState<string | null>(getStoredTeam)
+  useEffect(() => {
+    if (!isPlatformMode || !auth.isAuthenticated) return
+    // Set initial active team: prefer localStorage, fall back to JWT default
+    if (!activeTeam && auth.team) {
+      setActiveTeam(auth.team)
+      setActiveTeamContext(auth.team)
+    }
+    // Fetch team list
+    import('./api/platform').then(mod => {
+      mod.fetchTeams().then(teams => {
+        const mapped = teams.map((t: any) => ({ slug: t.slug, name: t.name }))
+        setPlatformTeams(mapped)
+        // If no team is active yet (e.g. first login, or auth.team was null),
+        // default to the first available team.
+        if (!activeTeam && !auth.team && mapped.length > 0) {
+          setActiveTeam(mapped[0].slug)
+          setActiveTeamContext(mapped[0].slug)
+        }
+      }).catch(() => {})
+    })
+  }, [isPlatformMode, auth.isAuthenticated, auth.team])
+
+  const handleTeamChange = useCallback((teamSlug: string) => {
+    setActiveTeam(teamSlug)
+    setActiveTeamContext(teamSlug)
+
+    // Clear the selected flow — it belongs to the previous team.
+    setSelectedAgent(null)
+    setYamlContent(defaultYaml)
+
+    // If viewing a specific agent, navigate back to the flows home.
+    if (path.view === 'agent') {
+      navigate(buildPath('canvas'))
+    }
+
+    // If on a team-scoped settings page, update the URL to the new team
+    if (path.view === 'settings' && path.params.section === 'team') {
+      const tab = path.params.teamTab || 'members'
+      replaceHash(buildPath('settings', { section: `team/${teamSlug}/${tab}` }))
+    }
+  }, [path.view, path.params, navigate, replaceHash])
+
+  // Switch to a different organization — tokens are re-issued, teams reload.
+  const handleOrgSwitch = useCallback(async (orgSlug: string) => {
+    try {
+      await auth.switchOrg(orgSlug)
+      // Reset team state — new org has different teams
+      setActiveTeam(null)
+      setActiveTeamContext(null)
+      setPlatformTeams(null)
+      setSelectedAgent(null)
+      setYamlContent(defaultYaml)
+      // Reload teams for the new org
+      import('./api/platform').then(mod => {
+        mod.fetchTeams().then(teams => {
+          const mapped = teams.map((t: any) => ({ slug: t.slug, name: t.name }))
+          setPlatformTeams(mapped)
+          // Auto-select first team (or use the JWT default which auth.switchOrg resets to null)
+          if (mapped.length > 0) {
+            setActiveTeam(mapped[0].slug)
+            setActiveTeamContext(mapped[0].slug)
+          }
+        }).catch(() => {})
+      })
+      // Navigate to chat view to avoid stale content from previous org
+      navigate(buildPath('chat'))
+    } catch (err: any) {
+      setToast({ message: err.message || 'Failed to switch organization', type: 'error' })
+    }
+  }, [auth, navigate])
+
+  // Handle middleware team rejection (user removed from a team while active).
+  useEffect(() => {
+    onTeamRejected((rejectedSlug) => {
+      setActiveTeam(null)
+      setToast({ message: `You are no longer a member of team "${rejectedSlug}". Switched to personal scope.`, type: 'error' })
+      // Re-fetch teams to update the dropdown.
+      import('./api/platform').then(mod => {
+        mod.fetchTeams().then(teams => {
+          setPlatformTeams(teams.map(t => ({ slug: t.slug, name: t.name })))
+        }).catch(() => {})
+      })
+    })
+  }, [])
+
   const [agents, setAgents] = useState<Agent[]>([])
   const [isLoadingAgents, setIsLoadingAgents] = useState(true)
   const [selectedAgent, setSelectedAgent] = useState<AppAgent | null>(null)
@@ -109,9 +234,11 @@ function App() {
   const [historyIndex, setHistoryIndex] = useState(-1)
   const MAX_HISTORY = 100
 
-  // Derive showSettings from path
-  const showSettings = path.view === 'settings'
-  const settingsSection = path.params.section || 'general'
+  // Derive settings params from path
+  const settingsSection = path.params.section || 'chat'
+  const settingsTeamSlug = path.params.teamSlug || ''
+  const settingsTeamTab = path.params.teamTab || 'members'
+  const settingsSubsection = path.params.subsection || ''
 
   // Extract available variables from all nodes' output_model and raw_tool_output, grouped by node
   const availableVariables = useMemo(() => {
@@ -157,7 +284,7 @@ function App() {
   const checkSetupStatus = async () => {
     try {
       setIsCheckingSetup(true)
-      const res = await fetch('/api/settings/status')
+      const res = await teamFetch('/api/settings/status')
       if (res.ok) {
         const data = await res.json()
         setShowSetupWizard(data.setupRequired)
@@ -171,12 +298,16 @@ function App() {
     }
   }
 
-  // Fetch sandbox status on mount (for security badge in top bar)
+  // Fetch sandbox status (for security badge in top bar).
+  // In platform mode, this endpoint requires auth — wait until authenticated.
+  // In personal mode, fetch immediately (no auth required).
+  const sandboxAuthReady = !isPlatformMode || auth.isAuthenticated
   useEffect(() => {
+    if (!sandboxAuthReady) return
     fetchSandboxStatus()
       .then((status) => setSandboxStatus(status))
       .catch(() => setSandboxStatus(null))
-  }, [])
+  }, [sandboxAuthReady])
 
   // Load app version from backend (always runs)
   const loadAppVersion = async () => {
@@ -259,14 +390,14 @@ function App() {
     }
   }
 
-  // Load agents, tools, and settings from API on mount
+  // Load agents, tools, and settings from API on mount and when team changes
   useEffect(() => {
     if (!showSetupWizard && !isCheckingSetup) {
       loadAgents()
       loadTools()
       loadSettings()
     }
-  }, [showSetupWizard, isCheckingSetup])
+  }, [showSetupWizard, isCheckingSetup, activeTeam])
 
   // Check for updates on mount
   useEffect(() => {
@@ -311,7 +442,7 @@ function App() {
 
   const loadSettings = async () => {
     try {
-      const res = await fetch('/api/settings/config')
+      const res = await teamFetch('/api/settings/config')
       if (res.ok) {
         const data = await res.json()
         // Use display name from API for proper formatting
@@ -406,7 +537,7 @@ function App() {
       try {
         // Save the user's YAML as-is (no reformatting)
         // Layout is saved separately via handleLayoutSave when canvas changes
-        const result = await saveAgent(selectedAgent.id, newYaml) as any
+        const result = await saveAgent(selectedAgent.name, newYaml, selectedAgent.scope) as any
         
         // If server returned YAML with NEW content (like mcp_dependencies), update local state
         // Compare parsed content to avoid triggering on format-only differences
@@ -502,6 +633,12 @@ function App() {
       setView('drill')
     } else if (path.view === 'apps') {
       setView('apps')
+    } else if (path.view === 'settings') {
+      setView('settings')
+    } else if (path.view === 'credentials') {
+      // Redirect legacy credentials route to settings/credentials
+      setView('settings')
+      replaceHash('/settings/credentials')
     }
   }, [path, agents]) // Re-run when path or agents list changes
 
@@ -559,7 +696,7 @@ function App() {
     
     // Load agent YAML from API
     try {
-      const data = await fetchAgent(agent.id)
+      const data = await fetchAgent(agent.name, agent.scope)
       const loadedYaml = data.yaml || defaultYaml
       setYamlContent(loadedYaml)
       // Initialize history with loaded state
@@ -629,7 +766,7 @@ layout:
     
     // Save immediately so it appears in the left menu
     try {
-      await saveAgent(id, newYaml)
+      await saveAgent(id, newYaml, 'personal')
       await loadAgents()
     } catch (err: any) {
       console.error('Failed to save new agent:', err)
@@ -646,12 +783,12 @@ layout:
       const controller = new AbortController()
       abortControllerRef.current = controller
 
-      const response = await fetch('/api/chat', {
+      const response = await teamFetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          agentId: selectedAgent!.id,
+          agentId: selectedAgent!.name,
           message: message,
           sessionId: currentSessionId,
           provider: defaultProvider,
@@ -808,7 +945,7 @@ layout:
     }
     // Cleanup MCP on server side
     if (sessionId) {
-      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+      teamFetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
     }
     setSessionId(null) // Clear session to re-enable auto-approve toggle
   }, [isWaitingForInput, sessionId])
@@ -819,7 +956,7 @@ layout:
     }
     // Cleanup MCP on server side
     if (sessionId) {
-      fetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
+      teamFetch(`/api/session/${sessionId}/stop`, { method: 'POST' }).catch(() => {})
     }
     setIsRunning(false)
     setRunningNodeId(null)
@@ -833,7 +970,7 @@ layout:
     if (!sessionId || !isRunning) return
 
     const keepaliveInterval = setInterval(() => {
-      fetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
+      teamFetch(`/api/session/${sessionId}/keepalive`, { method: 'POST' })
         .catch(err => console.warn('Keepalive ping failed:', err))
     }, 30000) // 30 seconds
 
@@ -1182,7 +1319,7 @@ layout:
         noRefs: true, 
         sortKeys: false 
       })
-      await saveAgent(selectedAgent.id, updatedYaml)
+      await saveAgent(selectedAgent.name, updatedYaml, selectedAgent.scope)
       setYamlContent(updatedYaml)
     } catch (err: any) {
       console.error('Layout save failed:', err)
@@ -1210,7 +1347,7 @@ layout:
       
       // Also save to disk
       if (selectedAgent && selectedAgent.source !== 'store') {
-        saveAgent(selectedAgent.id, newYaml).catch(err => {
+        saveAgent(selectedAgent.name, newYaml, selectedAgent.scope).catch(err => {
           console.error('Failed to save after auto layout:', err)
         })
       }
@@ -1241,10 +1378,52 @@ layout:
     setTimeout(() => setToast(null), 4000) // Auto-dismiss after 4 seconds
   }, [])
 
+  // Publish a personal flow to the team
+  const handlePublishFlow = useCallback(async (agent: Agent) => {
+    try {
+      await publishFlowToTeam(agent.name)
+      showToast(`Flow "${agent.name}" published to team`, 'success')
+      loadAgents()
+    } catch (err) {
+      showToast(`Failed to publish flow: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fork a team flow to personal
+  const handleForkFlow = useCallback(async (agent: Agent) => {
+    try {
+      await forkFlowToPersonal(agent.name)
+      showToast(`Flow "${agent.name}" forked to personal`, 'success')
+      loadAgents()
+    } catch (err) {
+      showToast(`Failed to fork flow: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Publish a personal app to the team
+  const handlePublishApp = useCallback(async (app: AppListItem) => {
+    try {
+      await publishAppToTeam(app.name)
+      showToast(`App "${app.name}" published to team`, 'success')
+    } catch (err) {
+      showToast(`Failed to publish app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast])
+
+  // Fork a team app to personal
+  const handleForkApp = useCallback(async (app: AppListItem) => {
+    try {
+      await forkAppToPersonal(app.name)
+      showToast(`App "${app.name}" forked to personal`, 'success')
+    } catch (err) {
+      showToast(`Failed to fork app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
+    }
+  }, [showToast])
+
   // Copy store agent to local
   const handleCopyToLocal = useCallback(async (agent: AppAgent) => {
     try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(agent.id)}/copy-to-local`, {
+      const res = await teamFetch(`/api/agents/${encodeURIComponent(agent.name)}/copy-to-local`, {
         method: 'POST'
       })
       if (!res.ok) {
@@ -1270,7 +1449,7 @@ layout:
         const parts = deleteTarget.id.split(':')
         if (parts.length === 3) {
           const [, tapName, flowName] = parts
-          const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+          const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
             method: 'DELETE'
           })
           if (!res.ok) {
@@ -1282,7 +1461,7 @@ layout:
         }
       } else {
         // Delete local agent
-        await deleteAgent(deleteTarget.id)
+        await deleteAgent(deleteTarget.name, deleteTarget.scope)
       }
       // Refresh agent list
       loadAgents()
@@ -1301,8 +1480,26 @@ layout:
 
   return (
     <>
-      {/* Setup Wizard */}
-      {showSetupWizard && !isCheckingSetup && (
+      {/* Platform Auth Gate — only in platform mode */}
+      {isPlatformMode && !auth.isAuthenticated && !auth.isLoading && isPlatformChecked && (
+        <LoginPage
+          onLogin={async (email, password) => { await auth.login(email, password) }}
+          onRegister={async (email, password, displayName) => { await auth.register(email, password, displayName) }}
+        />
+      )}
+
+      {/* Loading state while checking platform mode or auth */}
+      {(!isPlatformChecked || (isPlatformMode && auth.isLoading)) && (
+        <div
+          className="flex flex-col h-screen items-center justify-center"
+          style={{ background: 'var(--bg-primary)' }}
+        >
+          <div className="animate-pulse text-purple-400 text-lg">Loading...</div>
+        </div>
+      )}
+
+      {/* Setup Wizard (personal mode only, or after platform auth) */}
+      {showSetupWizard && !isCheckingSetup && (!isPlatformMode || auth.isAuthenticated) && (
         <SetupWizard
           onComplete={() => {
             setShowSetupWizard(false)
@@ -1313,8 +1510,8 @@ layout:
         />
       )}
 
-      {/* Loading state while checking setup */}
-      {isCheckingSetup && (
+      {/* Loading state while checking setup (personal mode) */}
+      {isCheckingSetup && isPlatformChecked && (!isPlatformMode || auth.isAuthenticated) && (
         <div 
           className="flex flex-col h-screen items-center justify-center"
           style={{ background: 'var(--bg-primary)' }}
@@ -1323,20 +1520,30 @@ layout:
         </div>
       )}
 
-      {/* Main App (only show when not in setup wizard and not checking) */}
-      {!showSetupWizard && !isCheckingSetup && (
+      {/* Main App (only show when not in setup wizard and not checking, and authenticated if platform) */}
+      {!showSetupWizard && !isCheckingSetup && (!isPlatformMode || auth.isAuthenticated) && (
       <div className="flex flex-col h-screen" style={{ background: 'var(--bg-primary)' }}>
         {/* Top Bar */}
         <TopBar 
           theme={theme} 
           onToggleTheme={toggleTheme}
-          onOpenSettings={() => navigate(buildPath('settings', { section: 'general' }))}
           onOpenSandbox={() => navigate(buildPath('settings', { section: 'sandbox' }))}
           defaultProvider={defaultProvider}
           defaultModel={defaultModel}
           currentView={view}
           onNavigate={(v: string) => navigate(buildPath(v))}
           sandboxStatus={sandboxStatus as any}
+          isPlatformMode={isPlatformMode}
+          user={auth.user}
+          org={auth.org}
+          orgs={auth.orgs}
+          onOrgSwitch={handleOrgSwitch}
+          activeTeam={activeTeam}
+          teams={platformTeams}
+          onTeamChange={handleTeamChange}
+          onLogout={async () => { await auth.logout(); navigate(buildPath('chat')) }}
+          personalMemoryMode={personalMemoryMode}
+          onTogglePersonalMemoryMode={togglePersonalMemoryMode}
         />
 
         {/* Main Content Area */}
@@ -1349,6 +1556,8 @@ layout:
               onAgentSelect={(agent: any) => { handleAgentSelect(agent) }}
               onCreateNew={handleCreateNew}
               onDeleteAgent={(agent: any) => { handleDeleteAgent(agent) }}
+              onPublishFlow={(agent: any) => { handlePublishFlow(agent) }}
+              onForkFlow={(agent: any) => { handleForkFlow(agent) }}
               isLoading={isLoadingAgents}
             />
           )}
@@ -1358,11 +1567,13 @@ layout:
           {view === 'chat' ? (
             <Suspense fallback={null}>
             <StudioChat
+              key={activeTeam || 'personal'}
               theme={theme}
               initialSessionId={path.view === 'chat' ? path.params.sessionId : ''}
               pendingChatMessage={pendingChatMessage}
               onPendingChatMessageConsumed={() => setPendingChatMessage(null)}
               onSessionChange={(sid: string | null) => {
+                if (path.view !== 'chat') return
                 if (sid) {
                   replaceHash(buildPath('chat', { sessionId: sid }))
                 } else {
@@ -1374,6 +1585,7 @@ layout:
           ) : view === 'fleet' ? (
             <Suspense fallback={null}>
             <FleetView
+              key={activeTeam || 'personal'}
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
@@ -1386,6 +1598,7 @@ layout:
           ) : view === 'drill' ? (
             <Suspense fallback={null}>
             <DrillView
+              key={activeTeam || 'personal'}
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
@@ -1406,13 +1619,41 @@ layout:
           ) : view === 'apps' ? (
             <Suspense fallback={null}>
             <AppsView
+              key={activeTeam || 'personal'}
               theme={theme}
+              isPlatformMode={isPlatformMode}
               appName={path.view === 'apps' ? path.params.appName : ''}
               onNavigate={(hashPath: string) => navigate(hashPath)}
               onImproveApp={(message: string, systemContext: string) => {
                 setPendingChatMessage({ message, systemContext })
                 navigate(buildPath('chat'))
               }}
+              onPublishApp={isPlatformMode ? handlePublishApp : undefined}
+              onForkApp={isPlatformMode ? handleForkApp : undefined}
+            />
+            </Suspense>
+          ) : view === 'settings' ? (
+            <Suspense fallback={null}>
+            <SettingsPage
+              key={activeTeam || 'personal'}
+              activeSection={settingsSection}
+              onSectionChange={(section: string) => replaceHash(buildPath('settings', { section }))}
+              theme={theme}
+              onToolsRefresh={loadTools}
+              onSettingsSaved={loadSettings}
+              updateAvailable={updateAvailable as any}
+              onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
+              appVersion={appVersion}
+              isPlatformMode={isPlatformMode}
+              userRole={auth.user?.role}
+              platformRole={auth.user?.platform_role}
+              user={auth.user}
+              org={auth.org}
+              activeTeam={activeTeam}
+              teams={platformTeams}
+              teamSlug={settingsTeamSlug}
+              teamTab={settingsTeamTab}
+              subsection={settingsSubsection}
             />
             </Suspense>
           ) : !selectedAgent ? (
@@ -1721,7 +1962,7 @@ layout:
           pushToHistory(newYaml)
           // Auto-save after applying (skip for store flows)
           if (selectedAgent && selectedAgent.source !== 'store') {
-            saveAgent(selectedAgent.id, newYaml).then(() => {
+            saveAgent(selectedAgent.name, newYaml, selectedAgent.scope).then(() => {
             }).catch(err => {
               console.error('Failed to auto-save:', err)
             })
@@ -1747,29 +1988,6 @@ layout:
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
           </svg>
         </button>
-      )}
-
-      {/* Settings Page */}
-      {showSettings && (
-        <Suspense fallback={null}>
-        <SettingsPage
-          onClose={() => {
-            if (selectedAgent) {
-              navigate(buildPath('agent', { agentName: selectedAgent.id }))
-            } else {
-              navigate('/')
-            }
-          }}
-          activeSection={settingsSection}
-          onSectionChange={(section: string) => replaceHash(buildPath('settings', { section }))}
-          theme={theme}
-          onToolsRefresh={loadTools}
-          onSettingsSaved={loadSettings}
-          updateAvailable={updateAvailable as any}
-          onUpdateClick={() => setShowUpgradeDialog(updateAvailable)}
-          appVersion={appVersion}
-        />
-        </Suspense>
       )}
 
       {/* Toast Notification */}

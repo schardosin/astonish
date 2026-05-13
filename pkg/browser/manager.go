@@ -233,6 +233,13 @@ type Manager struct {
 	// routable from the host.
 	ContainerDialFunc func(containerName string, port int) (net.Conn, error)
 
+	// ActivityTouchFunc, when set, is called on every browser tool execution
+	// to signal that the session's container is actively being used. This
+	// prevents the sandbox idle watchdog from killing containers that are
+	// busy with browser automation (which bypasses the node process and thus
+	// never triggers Call()-based activity tracking).
+	ActivityTouchFunc func(sessionID string)
+
 	// SandboxEnabled is set to true by the launcher when sandbox is available.
 	// When true, the browser runs inside the session container instead of locally.
 	SandboxEnabled bool
@@ -273,6 +280,16 @@ func (m *Manager) SetSessionID(id string) {
 // to the parent session. Called from browser tools on every invocation.
 // When the session changes (e.g. new chat session), the browser connection
 // is reset so GetOrLaunch re-resolves the container for the new session.
+// Also touches the sandbox idle timer to prevent container eviction during
+// long browser automation sequences.
+//
+// Concurrency safety: when parallel browser tool calls hit this method
+// simultaneously (ADK dispatches tool calls in goroutines), we must not
+// destructively reset the browser if it's already active. The check is:
+// only close the browser if the resolved session genuinely differs from
+// the current one. Sub-agent aliases that haven't been registered yet
+// (race window between OnChildSession and first tool call) are handled
+// by keeping the existing session if a browser is already connected.
 func (m *Manager) EnsureSessionID(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -280,19 +297,41 @@ func (m *Manager) EnsureSessionID(id string) {
 		return
 	}
 	// Resolve alias: delegate sub-agents map to their parent session.
+	resolved := id
 	if alias, ok := m.sessionAliases[id]; ok {
-		id = alias
+		resolved = alias
 	}
-	if m.sessionID == id {
-		return // no change
+
+	// Touch sandbox activity on every browser tool call to prevent idle eviction.
+	if m.ActivityTouchFunc != nil && (m.sessionID != "" || resolved != "") {
+		touchID := m.sessionID
+		if touchID == "" {
+			touchID = resolved
+		}
+		m.ActivityTouchFunc(touchID)
 	}
-	// Session changed — reset browser connection so GetOrLaunch
+
+	if m.sessionID == resolved {
+		return // no change — most common path for parallel tool calls
+	}
+
+	// If the browser is already connected and the resolved ID is unaliased
+	// (i.e., the raw child session ID that didn't match any alias), this is
+	// likely a sub-agent whose alias hasn't been registered yet. Keep the
+	// existing session to avoid destructively closing the browser mid-operation.
+	if m.browser != nil && m.sessionID != "" && resolved == id {
+		// No alias found for this ID. If we already have an active browser,
+		// assume this is a sub-agent race condition — don't reset.
+		return
+	}
+
+	// Session genuinely changed — reset browser connection so GetOrLaunch
 	// re-resolves the container for the new session.
 	if m.browser != nil {
 		_ = m.browser.Close()
 		m.browser = nil
 	}
-	m.sessionID = id
+	m.sessionID = resolved
 	m.containerName = ""
 	m.containerIP = ""
 	m.config.RemoteCDPURL = ""
@@ -899,6 +938,12 @@ func (m *Manager) SignalHandoffDone() {
 
 // CurrentPage returns the most recently active page, creating one if none exists.
 func (m *Manager) CurrentPage() (*rod.Page, error) {
+	// Touch sandbox activity on every browser tool call to prevent the idle
+	// watchdog from killing the container during browser automation.
+	if m.ActivityTouchFunc != nil && m.sessionID != "" {
+		m.ActivityTouchFunc(m.sessionID)
+	}
+
 	b, err := m.GetOrLaunch()
 	if err != nil {
 		return nil, err

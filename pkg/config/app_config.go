@@ -1,9 +1,13 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"math/big"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -16,6 +20,7 @@ type AppConfig struct {
 	Chat          ChatConfig                 `yaml:"chat,omitempty"`
 	Sessions      SessionConfig              `yaml:"sessions,omitempty"`
 	Memory        MemoryConfig               `yaml:"memory,omitempty"`
+	Storage       StorageConfig              `yaml:"storage,omitempty"`
 	Daemon        DaemonConfig               `yaml:"daemon,omitempty"`
 	Channels      ChannelsConfig             `yaml:"channels,omitempty"`
 	Scheduler     SchedulerConfig            `yaml:"scheduler,omitempty"`
@@ -59,6 +64,312 @@ func (c *SecurityConfig) IsSecretScannerEnabled() bool {
 		return true
 	}
 	return *c.SecretScanner.Enabled
+}
+
+// StorageConfig controls the data storage backend.
+//
+// When backend is "file" (the default, or when unset), all data is stored on
+// the local filesystem using the existing file-based stores. This is the
+// single-user "personal mode" that requires zero external dependencies.
+//
+// When backend is "postgres", data is stored in PostgreSQL with full
+// multi-tenant isolation (database-per-org, schema-per-team). This enables
+// the platform mode with organizations, teams, and shared knowledge.
+type StorageConfig struct {
+	// Backend selects the storage implementation: "file" (default) or "postgres".
+	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
+
+	// Postgres holds connection settings for the platform database.
+	// Only used when backend is "postgres".
+	Postgres PostgresConfig `yaml:"postgres,omitempty" json:"postgres,omitempty"`
+
+	// Auth configures authentication for platform mode (backend: postgres).
+	// In personal mode (backend: file), this is ignored — device auth is used instead.
+	Auth PlatformAuthConfig `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+// PostgresConfig holds PostgreSQL connection parameters for platform mode.
+type PostgresConfig struct {
+	// PlatformDSN is the connection string for the platform database.
+	// This database stores cross-org data: users, organizations, OIDC
+	// providers, and login sessions.
+	//
+	// The user in this DSN must have CREATEDB privilege to provision
+	// per-org databases, or org databases must be pre-created.
+	//
+	// Format: "postgres://user:pass@host:port/astonish_{suffix}_platform?sslmode=require"
+	PlatformDSN string `yaml:"platform_dsn,omitempty" json:"platform_dsn,omitempty"`
+
+	// InstanceSuffix is a unique 6-character alphanumeric identifier for this
+	// Astonish instance. It namespaces all databases on the PostgreSQL host:
+	//   - Platform DB: astonish_{suffix}_platform
+	//   - Org DBs:     astonish_{suffix}_{org_slug}
+	//
+	// Generated automatically on first setup. Multiple Astonish instances can
+	// share the same PostgreSQL host by having different suffixes.
+	// Empty string means legacy naming (astonish_platform, astonish_org_{slug}).
+	InstanceSuffix string `yaml:"instance_suffix,omitempty" json:"instance_suffix,omitempty"`
+
+	// MaxOpenConns is the maximum number of open connections per org pool.
+	// Default: 25. Set to 0 for unlimited (not recommended).
+	MaxOpenConns int `yaml:"max_open_conns,omitempty" json:"max_open_conns,omitempty"`
+
+	// MaxIdleConns is the maximum number of idle connections per org pool.
+	// Default: 5.
+	MaxIdleConns int `yaml:"max_idle_conns,omitempty" json:"max_idle_conns,omitempty"`
+
+	// ConnMaxLifetimeMinutes is the maximum lifetime of a connection in minutes.
+	// Default: 30. Set to 0 for unlimited.
+	ConnMaxLifetimeMinutes int `yaml:"conn_max_lifetime_minutes,omitempty" json:"conn_max_lifetime_minutes,omitempty"`
+}
+
+// IsPostgres returns true if the storage backend is PostgreSQL.
+func (c *StorageConfig) IsPostgres() bool {
+	return c.Backend == "postgres"
+}
+
+// IsFile returns true if the storage backend is file-based (default).
+func (c *StorageConfig) IsFile() bool {
+	return c.Backend == "" || c.Backend == "file"
+}
+
+// GetPlatformDSN returns the platform database connection string, falling back
+// to the ASTONISH_PLATFORM_DSN environment variable if the config field is empty.
+// This allows K8s deployments to inject the DSN via a Secret without putting
+// credentials in the ConfigMap.
+func (c *PostgresConfig) GetPlatformDSN() string {
+	if c.PlatformDSN != "" {
+		return c.PlatformDSN
+	}
+	return os.Getenv("ASTONISH_PLATFORM_DSN")
+}
+
+// GetMaxOpenConns returns the max open connections with a sensible default.
+func (c *PostgresConfig) GetMaxOpenConns() int {
+	if c.MaxOpenConns <= 0 {
+		return 25
+	}
+	return c.MaxOpenConns
+}
+
+// GetMaxIdleConns returns the max idle connections with a sensible default.
+func (c *PostgresConfig) GetMaxIdleConns() int {
+	if c.MaxIdleConns <= 0 {
+		return 5
+	}
+	return c.MaxIdleConns
+}
+
+// GetConnMaxLifetime returns the connection max lifetime with a sensible default.
+func (c *PostgresConfig) GetConnMaxLifetime() time.Duration {
+	if c.ConnMaxLifetimeMinutes <= 0 {
+		return 30 * time.Minute
+	}
+	return time.Duration(c.ConnMaxLifetimeMinutes) * time.Minute
+}
+
+// GenerateInstanceSuffix creates a random 6-character lowercase alphanumeric
+// suffix used to namespace all databases for this Astonish instance.
+func GenerateInstanceSuffix() string {
+	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 6)
+	for i := range b {
+		n, _ := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		b[i] = charset[n.Int64()]
+	}
+	return string(b)
+}
+
+// PlatformDBName returns the database name for the platform database.
+// If suffix is empty (legacy), returns "astonish_platform".
+// Otherwise returns "astonish_{suffix}_platform".
+func PlatformDBName(suffix string) string {
+	if suffix == "" {
+		return "astonish_platform"
+	}
+	return "astonish_" + suffix + "_platform"
+}
+
+// OrgDBName returns the database name for an organization.
+// If suffix is empty (legacy), returns "astonish_org_{slug}".
+// Otherwise returns "astonish_{suffix}_{slug}".
+func OrgDBName(suffix, orgSlug string) string {
+	slug := sanitizeDBSlug(orgSlug)
+	if suffix == "" {
+		return "astonish_org_" + slug
+	}
+	return "astonish_" + suffix + "_" + slug
+}
+
+// sanitizeDBSlug removes any characters that aren't lowercase alphanumeric or underscore.
+func sanitizeDBSlug(s string) string {
+	// Convert hyphens to underscores, strip everything else
+	var b strings.Builder
+	for _, r := range s {
+		if r == '-' {
+			b.WriteRune('_')
+		} else if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// PlatformAuthConfig controls authentication in platform (multi-tenant) mode.
+//
+// Two modes are supported:
+//   - "builtin" (default): Email/password registration with bcrypt hashing.
+//     JWT tokens are issued as httpOnly cookies. This mode requires no external
+//     identity provider and works out of the box.
+//   - "oidc": Delegates authentication to an external OpenID Connect provider
+//     (SAP IAS, Azure AD, Okta, etc.). Users are auto-created on first login.
+//     Team memberships can be auto-mapped from OIDC group claims.
+//
+// Both modes use JWT for session management. The JWT contains user ID, org slug,
+// and default team slug as claims. A separate X-Astonish-Team header allows
+// switching team context within the same org.
+type PlatformAuthConfig struct {
+	// Mode selects the authentication strategy: "builtin" (default) or "oidc".
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+
+	// JWTSecret is the HMAC-SHA256 signing key for access and refresh tokens.
+	// Required in platform mode. If empty, a random 32-byte key is generated
+	// at startup (tokens won't survive daemon restarts).
+	// Can be set via ASTONISH_JWT_SECRET environment variable.
+	JWTSecret string `yaml:"jwt_secret,omitempty" json:"jwt_secret,omitempty"`
+
+	// AccessTokenTTLMinutes controls the access token lifetime.
+	// Default: 15 minutes. Short-lived for security.
+	AccessTokenTTLMinutes int `yaml:"access_token_ttl_minutes,omitempty" json:"access_token_ttl_minutes,omitempty"`
+
+	// RefreshTokenTTLDays controls the refresh token lifetime.
+	// Default: 90 days. Used to obtain new access tokens without re-login.
+	RefreshTokenTTLDays int `yaml:"refresh_token_ttl_days,omitempty" json:"refresh_token_ttl_days,omitempty"`
+
+	// AllowRegistration controls whether new users can self-register.
+	// Default: true. Set to false to require invitations.
+	AllowRegistration *bool `yaml:"allow_registration,omitempty" json:"allow_registration,omitempty"`
+
+	// DefaultOrgName is used when the first user registers and auto-creates an org.
+	// Default: "Default Organization".
+	DefaultOrgName string `yaml:"default_org_name,omitempty" json:"default_org_name,omitempty"`
+
+	// DefaultOrgSlug is the URL-safe slug for the auto-created org.
+	// Default: "default". Must be lowercase alphanumeric with hyphens.
+	DefaultOrgSlug string `yaml:"default_org_slug,omitempty" json:"default_org_slug,omitempty"`
+
+	// OIDC holds OpenID Connect provider settings. Only used when mode is "oidc".
+	OIDC OIDCConfig `yaml:"oidc,omitempty" json:"oidc,omitempty"`
+
+	// LoopbackBypass controls how requests from 127.0.0.1/::1 are authenticated.
+	// Values:
+	//   "always"     — loopback requests pass without any token (personal mode default)
+	//   "with_token" — loopback requests must carry a valid JWT (platform mode default)
+	//   "never"      — loopback requests go through full auth like remote requests
+	// Default: "with_token" in platform mode, "always" in personal mode.
+	LoopbackBypass string `yaml:"loopback_bypass,omitempty" json:"loopback_bypass,omitempty"`
+}
+
+// OIDCConfig holds settings for an external OpenID Connect identity provider.
+type OIDCConfig struct {
+	// IssuerURL is the OIDC discovery endpoint (e.g., "https://accounts.sap.com").
+	// The .well-known/openid-configuration is appended automatically.
+	IssuerURL string `yaml:"issuer_url,omitempty" json:"issuer_url,omitempty"`
+
+	// ClientID is the OAuth 2.0 client ID registered with the provider.
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
+
+	// ClientSecret is the OAuth 2.0 client secret.
+	// Can be stored in the credential store as "oidc.client_secret".
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+
+	// RedirectURL is the callback URL registered with the provider.
+	// Default: auto-detected from the request (http(s)://host:port/api/auth/oidc/callback).
+	RedirectURL string `yaml:"redirect_url,omitempty" json:"redirect_url,omitempty"`
+
+	// Scopes to request. Default: ["openid", "profile", "email"].
+	Scopes []string `yaml:"scopes,omitempty" json:"scopes,omitempty"`
+
+	// GroupsClaim is the JWT claim containing group memberships for team auto-mapping.
+	// Common values: "groups" (Azure AD), "xs.groups" (SAP IAS), "cognito:groups" (AWS).
+	// If empty, no automatic team mapping is performed.
+	GroupsClaim string `yaml:"groups_claim,omitempty" json:"groups_claim,omitempty"`
+
+	// TeamMapping maps OIDC group names to Astonish team slugs.
+	// Example: {"engineering": "eng-team", "product": "product-team"}
+	// Groups not in this map are ignored.
+	TeamMapping map[string]string `yaml:"team_mapping,omitempty" json:"team_mapping,omitempty"`
+}
+
+// IsBuiltinAuth returns true if platform auth uses the built-in email/password mode.
+func (c *PlatformAuthConfig) IsBuiltinAuth() bool {
+	return c.Mode == "" || c.Mode == "builtin"
+}
+
+// IsOIDCAuth returns true if platform auth delegates to an OIDC provider.
+func (c *PlatformAuthConfig) IsOIDCAuth() bool {
+	return c.Mode == "oidc"
+}
+
+// GetAccessTokenTTL returns the access token TTL with a sensible default.
+func (c *PlatformAuthConfig) GetAccessTokenTTL() time.Duration {
+	if c.AccessTokenTTLMinutes > 0 {
+		return time.Duration(c.AccessTokenTTLMinutes) * time.Minute
+	}
+	return 15 * time.Minute
+}
+
+// GetRefreshTokenTTL returns the refresh token TTL with a sensible default.
+func (c *PlatformAuthConfig) GetRefreshTokenTTL() time.Duration {
+	if c.RefreshTokenTTLDays > 0 {
+		return time.Duration(c.RefreshTokenTTLDays) * 24 * time.Hour
+	}
+	return 90 * 24 * time.Hour
+}
+
+// IsRegistrationAllowed returns true if new users can self-register.
+// Default: true (nil means allowed).
+func (c *PlatformAuthConfig) IsRegistrationAllowed() bool {
+	if c.AllowRegistration == nil {
+		return true
+	}
+	return *c.AllowRegistration
+}
+
+// GetDefaultOrgName returns the name for the auto-provisioned org.
+func (c *PlatformAuthConfig) GetDefaultOrgName() string {
+	if c.DefaultOrgName != "" {
+		return c.DefaultOrgName
+	}
+	return "Default Organization"
+}
+
+// GetDefaultOrgSlug returns the slug for the auto-provisioned org.
+func (c *PlatformAuthConfig) GetDefaultOrgSlug() string {
+	if c.DefaultOrgSlug != "" {
+		return c.DefaultOrgSlug
+	}
+	return "default"
+}
+
+// GetJWTSecret returns the JWT signing key, falling back to environment variable.
+func (c *PlatformAuthConfig) GetJWTSecret() string {
+	if c.JWTSecret != "" {
+		return c.JWTSecret
+	}
+	return os.Getenv("ASTONISH_JWT_SECRET")
+}
+
+// GenerateJWTSecret creates a cryptographically secure random JWT signing key.
+// Returns a 64-character hex string (32 random bytes).
+func GenerateJWTSecret() string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand.Read never returns an error on supported platforms,
+		// but handle it defensively.
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
 }
 
 // SandboxLimits defines resource limits for session containers.
@@ -320,6 +631,7 @@ type ChannelsConfig struct {
 	Enabled  *bool          `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Telegram TelegramConfig `yaml:"telegram,omitempty" json:"telegram,omitempty"`
 	Email    EmailConfig    `yaml:"email,omitempty" json:"email,omitempty"`
+	Slack    SlackConfig    `yaml:"slack,omitempty" json:"slack,omitempty"`
 }
 
 // IsChannelsEnabled returns true if channels are explicitly enabled.
@@ -341,6 +653,47 @@ func (c *SchedulerConfig) IsSchedulerEnabled() bool {
 		return true
 	}
 	return *c.Enabled
+}
+
+// Daemon mode constants control the runtime role of the binary.
+// ASTONISH_MODE env var selects which subsystems are active.
+const (
+	// DaemonModeDefault runs everything: HTTP + scheduler + channels + fleet.
+	// This is the standard single-instance mode (personal or platform).
+	DaemonModeDefault = "default"
+
+	// DaemonModeAPI runs only the HTTP server and chat execution.
+	// No scheduler, no channels, no fleet monitors, no PID file.
+	// Designed for horizontally-scaled Kubernetes API pods.
+	DaemonModeAPI = "api"
+
+	// DaemonModeWorker runs scheduler + channels + fleet monitors.
+	// HTTP is still active (health probes, internal APIs) but not externally exposed.
+	// Single replica. No PID file.
+	DaemonModeWorker = "worker"
+)
+
+// GetDaemonMode returns the runtime mode from the ASTONISH_MODE env var.
+// Returns DaemonModeDefault if unset or empty.
+// Valid values: "default", "api", "worker".
+func GetDaemonMode() string {
+	mode := os.Getenv("ASTONISH_MODE")
+	switch mode {
+	case DaemonModeAPI, DaemonModeWorker:
+		return mode
+	default:
+		return DaemonModeDefault
+	}
+}
+
+// IsDaemonModeAPI returns true when running in API-only mode (no background workers).
+func IsDaemonModeAPI() bool {
+	return GetDaemonMode() == DaemonModeAPI
+}
+
+// IsDaemonModeWorker returns true when running in worker mode (background processing).
+func IsDaemonModeWorker() bool {
+	return GetDaemonMode() == DaemonModeWorker
 }
 
 // BrowserAppConfig controls the built-in browser automation module.
@@ -560,6 +913,44 @@ func (c *EmailConfig) GetPollInterval() int {
 	return c.PollInterval
 }
 
+// SlackConfig holds configuration for the Slack channel adapter.
+type SlackConfig struct {
+	// Enabled controls whether the Slack adapter is active. Default: false (nil means false).
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Mode selects the transport: "socket" (default) or "events".
+	// Socket Mode uses a WebSocket connection (no public URL needed).
+	// Events API uses HTTP webhooks (requires public URL, more scalable).
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// BotToken is the bot token (xoxb-...) for the primary workspace.
+	// In multi-workspace mode (OAuth), additional tokens are stored per workspace.
+	BotToken string `yaml:"bot_token,omitempty" json:"bot_token,omitempty"`
+	// AppToken is the app-level token (xapp-...) for Socket Mode.
+	// Required only when Mode == "socket".
+	AppToken string `yaml:"app_token,omitempty" json:"app_token,omitempty"`
+	// SigningSecret is used to verify incoming HTTP requests in Events API mode.
+	SigningSecret string `yaml:"signing_secret,omitempty" json:"signing_secret,omitempty"`
+	// ClientID is the Slack App's client ID (for OAuth multi-workspace installs).
+	ClientID string `yaml:"client_id,omitempty" json:"client_id,omitempty"`
+	// ClientSecret is the Slack App's client secret (for OAuth multi-workspace installs).
+	ClientSecret string `yaml:"client_secret,omitempty" json:"client_secret,omitempty"`
+	// AllowFrom is a list of allowed Slack user IDs. Empty blocks all (safe default).
+	// In platform mode, this is dynamically refreshed from user_channels.
+	AllowFrom []string `yaml:"allow_from,omitempty" json:"allow_from,omitempty"`
+}
+
+// IsSlackEnabled returns true if the Slack channel is explicitly enabled.
+func (c *SlackConfig) IsSlackEnabled() bool {
+	return c.Enabled != nil && *c.Enabled
+}
+
+// GetMode returns the configured transport mode, defaulting to "socket".
+func (c *SlackConfig) GetMode() string {
+	if c.Mode == "" {
+		return "socket"
+	}
+	return c.Mode
+}
+
 type ProviderConfig map[string]string
 
 // GetProviderType returns the provider type for a given provider instance.
@@ -678,6 +1069,17 @@ func GetSessionsDir(cfg *SessionConfig) (string, error) {
 		return "", err
 	}
 	return filepath.Join(configDir, "sessions"), nil
+}
+
+// GetWorkspacesDir returns the directory for per-session fleet workspaces.
+// Fleet sessions create isolated git clones here (one per session).
+// Defaults to ~/.config/astonish/workspaces/.
+func GetWorkspacesDir() (string, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, "workspaces"), nil
 }
 
 func LoadAppConfig() (*AppConfig, error) {

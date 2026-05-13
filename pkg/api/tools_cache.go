@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -65,6 +66,40 @@ type MCPStatusResponse struct {
 
 // MCPStatusHandler handles GET /api/mcp/status
 func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: return status from DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		servers, err := mcpStore.List(r.Context())
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to load MCP servers: "+err.Error())
+			return
+		}
+		statuses := make([]cache.ServerStatus, 0, len(servers))
+		for _, s := range servers {
+			status := "configured"
+			if !s.IsEnabled() {
+				status = "disabled"
+			}
+			toolCount := 0
+			if s.CachedTools != nil && len(s.CachedTools) > 2 { // not empty "[]" or "null"
+				// Count tools from cached_tools JSON array
+				var tools []json.RawMessage
+				if json.Unmarshal(s.CachedTools, &tools) == nil {
+					toolCount = len(tools)
+				}
+			}
+			statuses = append(statuses, cache.ServerStatus{
+				Name:      s.Name,
+				Status:    status,
+				ToolCount: toolCount,
+			})
+		}
+		response := MCPStatusResponse{Servers: statuses}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Personal mode: return from in-memory status cache
 	statuses := GetServerStatus()
 
 	response := MCPStatusResponse{
@@ -78,21 +113,16 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 // loadToolsInternal does the actual work of loading tools (must NOT hold the lock)
 func loadToolsInternal(ctx context.Context) []ToolInfo {
 	slog.Info("starting to load tools")
-	var allTools []ToolInfo
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	// Get internal tools
-	internalTools, err := tools.GetInternalTools()
-	if err != nil {
-		slog.Warn("failed to get internal tools", "error", err)
-	} else {
-		for _, t := range internalTools {
-			allTools = append(allTools, ToolInfo{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      "internal",
-			})
-		}
+	// Start with all built-in tools (internal + all category tools)
+	var allTools []ToolInfo
+	for _, decl := range tools.GetAllFlowToolDeclarations() {
+		allTools = append(allTools, ToolInfo{
+			Name:        decl.Name,
+			Description: decl.Description,
+			Source:      decl.Category,
+		})
 	}
 
 	// Get MCP tools
@@ -191,49 +221,29 @@ func InitToolsCache(ctx context.Context) {
 	if err == nil && len(persistentCache.Tools) > 0 {
 		slog.Info("loading tools from persistent cache", "count", len(persistentCache.Tools))
 
-		// Convert cache.ToolEntry to api.ToolInfo
+		// Start with all built-in tool declarations (always authoritative)
+		builtinDecls := tools.GetAllFlowToolDeclarations()
+		builtinNames := make(map[string]bool, len(builtinDecls))
 		var allTools []ToolInfo
-		hasInternalTools := false
+		for _, decl := range builtinDecls {
+			allTools = append(allTools, ToolInfo{
+				Name:        decl.Name,
+				Description: decl.Description,
+				Source:      decl.Category,
+			})
+			builtinNames[decl.Name] = true
+		}
+
+		// Add MCP tools from persistent cache (skip built-in tools already added)
 		for _, t := range persistentCache.Tools {
-			if t.Source == "internal" {
-				hasInternalTools = true
+			if builtinNames[t.Name] {
+				continue
 			}
 			allTools = append(allTools, ToolInfo{
 				Name:        t.Name,
 				Description: t.Description,
 				Source:      t.Source,
 			})
-		}
-
-		// If persistent cache doesn't have internal tools (old cache format),
-		// add them now and update the cache
-		if !hasInternalTools {
-			slog.Info("adding internal tools to cache")
-			internalTools, err := tools.GetInternalTools()
-			if err == nil {
-				for _, t := range internalTools {
-					allTools = append(allTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      "internal",
-					})
-				}
-				// Update persistent cache with internal tools
-				go func() {
-					internalEntries := make([]cache.ToolEntry, 0, len(internalTools))
-					for _, t := range internalTools {
-						internalEntries = append(internalEntries, cache.ToolEntry{
-							Name:        t.Name(),
-							Description: t.Description(),
-							Source:      "internal",
-							InputSchema: common.ExtractToolInputSchema(t),
-						})
-					}
-					cache.AddServerTools("internal", internalEntries, "internal-tools-v1")
-					cache.SaveCache()
-					slog.Info("added internal tools to persistent cache", "component", "cache", "count", len(internalEntries))
-				}()
-			}
 		}
 
 		globalToolsCache.mu.Lock()
@@ -313,10 +323,45 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["name"] // "name" to match definition in handlers.go
 	if serverName == "" {
-		http.Error(w, "Server name is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server name is required")
 		return
 	}
 
+	// Platform mode: refresh by starting the MCP process and discovering tools
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		server, err := mcpStore.Get(r.Context(), serverName)
+		if err != nil || server == nil {
+			respondError(w, http.StatusNotFound, "Server not found")
+			return
+		}
+
+		// Build a config.MCPServerConfig and use the bridge to discover tools
+		serverCfg := config.MCPServerConfig{
+			Command:   server.Command,
+			Args:      server.Args,
+			Env:       server.Env,
+			Transport: server.Transport,
+			URL:       server.URL,
+			Enabled:   server.Enabled,
+		}
+
+		// Run tool discovery using the existing mechanism
+		servers := map[string]config.MCPServerConfig{serverName: serverCfg}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools in store", "server", serverName, "error", err)
+				}
+			}
+		}()
+
+		respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
+		return
+	}
+
+	// Personal mode: original logic
 	// Update status to loading
 	SetServerStatus(serverName, cache.ServerStatus{
 		Name:      serverName,
@@ -343,13 +388,61 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	} else {
 		response["success"] = true
-		// RefreshSingleServer updates status to healthy on success
-		// But let's verify if we need to do anything else.
-		// It updates cache status.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
+}
+
+// discoverMCPToolsForPlatform starts an MCP server, discovers its tools, and
+// returns the tool declarations as JSON. Returns nil on error (logged).
+func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig) json.RawMessage {
+	cfg := &config.MCPConfig{MCPServers: servers}
+	mgr := mcp.NewManagerFromConfig(cfg)
+	defer mgr.Cleanup()
+
+	if err := mgr.InitializeToolsets(ctx); err != nil {
+		slog.Warn("platform MCP refresh: failed to initialize", "server", serverName, "error", err)
+		return nil
+	}
+
+	// Get the tool declarations from the named toolsets
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	var toolEntries []toolEntry
+
+	minimalCtx := &minimalReadonlyContext{Context: ctx}
+	for _, namedToolset := range mgr.GetNamedToolsets() {
+		if namedToolset.Name != serverName {
+			continue
+		}
+		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
+		if err != nil {
+			slog.Warn("platform MCP refresh: failed to get tools", "server", serverName, "error", err)
+			return nil
+		}
+		for _, t := range mcpTools {
+			toolEntries = append(toolEntries, toolEntry{
+				Name:        t.Name(),
+				Description: t.Description(),
+			})
+		}
+	}
+
+	if toolEntries == nil {
+		toolEntries = []toolEntry{} // ensure valid JSON "[]"
+	}
+
+	data, err := json.Marshal(toolEntries)
+	if err != nil {
+		slog.Warn("platform MCP refresh: failed to marshal tools", "server", serverName, "error", err)
+		return nil
+	}
+
+	slog.Info("platform MCP refresh: discovered tools", "server", serverName, "count", len(toolEntries))
+	return data
 }
 
 // validateAndRefreshChangedServers compares the current MCP config checksums
@@ -450,7 +543,8 @@ func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cach
 	}
 }
 
-// GetCachedTools returns the cached tools list
+// GetCachedTools returns the cached tools list (personal mode only).
+// For request-scoped tool lists that respect platform mode, use GetCachedToolsForRequest.
 func GetCachedTools() []ToolInfo {
 	globalToolsCache.mu.RLock()
 	defer globalToolsCache.mu.RUnlock()
@@ -462,6 +556,118 @@ func GetCachedTools() []ToolInfo {
 	// Return a copy to avoid race conditions
 	result := make([]ToolInfo, len(globalToolsCache.tools))
 	copy(result, globalToolsCache.tools)
+	return result
+}
+
+// GetCachedToolsForRequest returns the cached tools appropriate for the request context.
+// In platform mode, it reads from the org+team DB stores' CachedTools.
+// In personal mode, it returns from the global in-memory cache.
+func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.Mode != store.ModePlatform {
+		return GetCachedTools()
+	}
+
+	// Platform mode: build merged tool list from DB stores (team overrides org by name)
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+
+	// Collect servers: org first, team overrides
+	serverMap := make(map[string]json.RawMessage) // name -> cachedTools
+	if svc.MCPServers != nil {
+		orgServers, err := svc.MCPServers.List(r.Context())
+		if err == nil {
+			for _, s := range orgServers {
+				if s.IsEnabled() && len(s.CachedTools) > 0 {
+					serverMap[s.Name] = s.CachedTools
+				}
+			}
+		}
+	}
+	if svc.TeamMCPServers != nil {
+		teamServers, err := svc.TeamMCPServers.List(r.Context())
+		if err == nil {
+			for _, s := range teamServers {
+				if s.IsEnabled() && len(s.CachedTools) > 0 {
+					serverMap[s.Name] = s.CachedTools
+				} else {
+					// Team disabled server overrides org enabled
+					delete(serverMap, s.Name)
+				}
+			}
+		}
+	}
+
+	var result []ToolInfo
+	// Add all built-in tools (internal + all category tools)
+	for _, decl := range tools.GetAllFlowToolDeclarations() {
+		result = append(result, ToolInfo{
+			Name:        decl.Name,
+			Description: decl.Description,
+			Source:      decl.Category,
+		})
+	}
+
+	// Parse each server's cached tools from DB
+	for serverName, cachedData := range serverMap {
+		var entries []toolEntry
+		if json.Unmarshal(cachedData, &entries) == nil {
+			for _, e := range entries {
+				result = append(result, ToolInfo{
+					Name:        e.Name,
+					Description: e.Description,
+					Source:      serverName,
+				})
+			}
+		}
+	}
+
+	// Include installed standard servers (Tavily, Brave, Firecrawl, etc.)
+	// that are NOT already in the DB stores. These are configured via the
+	// filesystem credential store + config.yaml and may not have been
+	// explicitly installed into the team DB.
+	for _, srv := range config.GetStandardServers() {
+		if serverMap[srv.ID] != nil {
+			continue // Already in DB stores — skip
+		}
+		if !config.IsStandardServerInstalled(srv.ID) {
+			continue // Not installed — skip
+		}
+		// Try to get tool info from the persistent file-based cache
+		cachedEntries := cache.GetToolsForServer(srv.ID)
+		if len(cachedEntries) > 0 {
+			for _, e := range cachedEntries {
+				result = append(result, ToolInfo{
+					Name:        e.Name,
+					Description: e.Description,
+					Source:      srv.ID,
+				})
+			}
+		} else {
+			// Fallback: use the known web tool names from the standard server definition
+			if srv.WebSearchTool != "" {
+				if parts := strings.SplitN(srv.WebSearchTool, ":", 2); len(parts) == 2 {
+					result = append(result, ToolInfo{
+						Name:        parts[1],
+						Description: srv.DisplayName + " web search",
+						Source:      srv.ID,
+					})
+				}
+			}
+			if srv.WebExtractTool != "" {
+				if parts := strings.SplitN(srv.WebExtractTool, ":", 2); len(parts) == 2 {
+					result = append(result, ToolInfo{
+						Name:        parts[1],
+						Description: srv.DisplayName + " content extraction",
+						Source:      srv.ID,
+					})
+				}
+			}
+		}
+	}
+
 	return result
 }
 

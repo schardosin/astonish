@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"
@@ -86,7 +87,7 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req ToolSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -99,7 +100,7 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps (only installable ones)
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -124,7 +125,7 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Use AI to find matching tools
-	matchingTools := findToolsWithAI(ctx, req.Requirement, toolSummaries, installableServers)
+	matchingTools := findToolsWithAI(ctx, req.Requirement, toolSummaries, installableServers, effectiveAppConfig(r))
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(ToolSearchResponse{
@@ -134,10 +135,8 @@ func AIToolSearchHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // findToolsWithAI uses the LLM to semantically match tools to requirements
-func findToolsWithAI(ctx context.Context, requirement string, toolSummaries []string, servers []mcpstore.Server) []ToolSearchResult {
-	// Load config for LLM access
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
+func findToolsWithAI(ctx context.Context, requirement string, toolSummaries []string, servers []mcpstore.Server, appCfg *config.AppConfig) []ToolSearchResult {
+	if appCfg == nil {
 		return nil
 	}
 	injectProviderSecrets(appCfg)
@@ -418,15 +417,21 @@ type URLExtractResponse struct {
 	URL       string             `json:"url"`
 }
 
-// IsWebSearchConfigured checks if a web search tool is configured in settings
-// Returns (configured, serverName, toolName)
-// The setting value format is "serverName:toolName" to uniquely identify tools
+// IsWebSearchConfigured checks if a web search tool is configured in settings.
+// Returns (configured, serverName, toolName).
+// The setting value format is "serverName:toolName" to uniquely identify tools.
+// Uses host filesystem config — prefer isWebSearchConfiguredWith(appCfg) when request is available.
 func IsWebSearchConfigured() (bool, string, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return false, "", ""
 	}
-	if appCfg.General.WebSearchTool == "" {
+	return isWebSearchConfiguredWith(appCfg)
+}
+
+// isWebSearchConfiguredWith checks web search config using a pre-loaded AppConfig.
+func isWebSearchConfiguredWith(appCfg *config.AppConfig) (bool, string, string) {
+	if appCfg == nil || appCfg.General.WebSearchTool == "" {
 		return false, "", ""
 	}
 	// Parse the format "serverName:toolName"
@@ -438,15 +443,21 @@ func IsWebSearchConfigured() (bool, string, string) {
 	return true, parts[0], ""
 }
 
-// IsWebExtractConfigured checks if a web extract tool is configured in settings
-// Returns (configured, serverName, toolName)
-// The setting value format is "serverName:toolName" to uniquely identify tools
+// IsWebExtractConfigured checks if a web extract tool is configured in settings.
+// Returns (configured, serverName, toolName).
+// The setting value format is "serverName:toolName" to uniquely identify tools.
+// Uses host filesystem config — prefer isWebExtractConfiguredWith(appCfg) when request is available.
 func IsWebExtractConfigured() (bool, string, string) {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return false, "", ""
 	}
-	if appCfg.General.WebExtractTool == "" {
+	return isWebExtractConfiguredWith(appCfg)
+}
+
+// isWebExtractConfiguredWith checks web extract config using a pre-loaded AppConfig.
+func isWebExtractConfiguredWith(appCfg *config.AppConfig) (bool, string, string) {
+	if appCfg == nil || appCfg.General.WebExtractTool == "" {
 		return false, "", ""
 	}
 	// Parse the format "serverName:toolName"
@@ -464,12 +475,12 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req InternetSearchRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
 	// Check if web search tool is configured
-	configured, serverName, searchToolName := IsWebSearchConfigured()
+	configured, serverName, searchToolName := isWebSearchConfiguredWith(effectiveAppConfig(r))
 	slog.Debug("web search tool configuration", "component", "internet-search", "configured", configured, "server", serverName, "tool", searchToolName)
 	if !configured {
 		w.Header().Set("Content-Type", "application/json")
@@ -534,7 +545,7 @@ func AIToolSearchInternetHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("internet search query", "component", "internet-search", "query", searchQuery)
 
 	// Search the internet using the configured MCP tool
-	results, err := searchInternetForMCPServers(ctx, serverName, searchToolName, searchQuery)
+	results, err := searchInternetForMCPServers(ctx, serverName, searchToolName, searchQuery, effectiveAppConfig(r))
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(InternetSearchResponse{
@@ -563,7 +574,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req URLExtractRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -580,11 +591,12 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("starting url extraction", "component", "url-extract", "url", req.URL)
 
 	// Check if web extract tool is configured
-	configured, serverName, extractToolName := IsWebExtractConfigured()
+	// Check if web extract tool is configured
+	configured, serverName, extractToolName := isWebExtractConfiguredWith(effectiveAppConfig(r))
 	if !configured {
 		// Fall back to web search tool
 		var searchConfigured bool
-		searchConfigured, serverName, _ = IsWebSearchConfigured()
+		searchConfigured, serverName, _ = isWebSearchConfiguredWith(effectiveAppConfig(r))
 		extractToolName = "" // No specific tool name, will fallback to "extract" search
 		configured = searchConfigured
 	}
@@ -602,7 +614,7 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 	slog.Debug("using extract tool", "component", "url-extract", "server", serverName, "extractTool", extractToolName)
 
 	// Extract content from URL
-	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, serverName, extractToolName)
+	mcpServer, err := extractMCPServerFromURL(ctx, req.URL, serverName, extractToolName, effectiveAppConfig(r))
 	if err != nil {
 		slog.Error("url extraction failed", "component", "url-extract", "error", err)
 		w.Header().Set("Content-Type", "application/json")
@@ -637,11 +649,9 @@ func URLExtractHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // extractMCPServerFromURL uses the configured MCP tool to extract content and parse for MCP server config
-func extractMCPServerFromURL(ctx context.Context, url string, serverName string, extractToolName string) (*InternetMCPResult, error) {
-	// Load app configuration
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+func extractMCPServerFromURL(ctx context.Context, url string, serverName string, extractToolName string, appCfg *config.AppConfig) (*InternetMCPResult, error) {
+	if appCfg == nil {
+		return nil, fmt.Errorf("no app config available")
 	}
 	injectProviderSecrets(appCfg)
 
@@ -900,7 +910,7 @@ type InternetMCPInstallResponse struct {
 func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 	var req InternetMCPInstallRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
 
@@ -920,6 +930,61 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		serverName = "internet-mcp-server"
 	}
 
+	// Platform mode: save to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		// Check if server already exists
+		existing, _ := mcpStore.Get(r.Context(), serverName)
+		if existing != nil {
+			serverName = serverName + "-2"
+		}
+
+		newConfig := config.MCPServerConfig{
+			Command:   req.Command,
+			Args:      req.Args,
+			Env:       req.Env,
+			Transport: "stdio",
+		}
+
+		s := &store.MCPServer{
+			Name:      serverName,
+			Command:   newConfig.Command,
+			Args:      newConfig.Args,
+			Env:       newConfig.Env,
+			Transport: newConfig.Transport,
+			CreatedBy: effectiveUserID(r),
+		}
+
+		if err := mcpStore.Save(r.Context(), s); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+				Status: "error",
+				Error:  fmt.Sprintf("Failed to save MCP server: %v", err),
+			})
+			return
+		}
+
+		// Discover tools in background
+		servers := map[string]config.MCPServerConfig{serverName: newConfig}
+		go func() {
+			bgCtx := context.Background()
+			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+			if discoveredTools != nil {
+				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
+					slog.Warn("failed to update cached_tools after internet install", "server", serverName, "error", err)
+				}
+			}
+		}()
+
+		GetChatManager().Reset()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+			Status: "ok",
+		})
+		return
+	}
+
+	// Personal mode: file-based
 	// Load current MCP config
 	mcpCfg, err := config.LoadMCPConfig()
 	if err != nil {
@@ -978,13 +1043,11 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // searchInternetForMCPServers uses the configured MCP web search tool to find MCP servers
-func searchInternetForMCPServers(ctx context.Context, serverName string, searchToolName string, searchQuery string) ([]InternetMCPResult, error) {
+func searchInternetForMCPServers(ctx context.Context, serverName string, searchToolName string, searchQuery string, appCfg *config.AppConfig) ([]InternetMCPResult, error) {
 	slog.Debug("starting internet search for mcp servers", "component", "internet-search", "server", serverName, "tool", searchToolName, "query", searchQuery)
 
-	// Load app configuration
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load config: %w", err)
+	if appCfg == nil {
+		return nil, fmt.Errorf("no app config available")
 	}
 	injectProviderSecrets(appCfg)
 

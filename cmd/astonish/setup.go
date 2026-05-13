@@ -27,6 +27,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 func handleSetupCommand() error {
@@ -52,6 +53,19 @@ func handleSetupCommand() error {
 		cfg = &config.AppConfig{
 			Providers: make(map[string]config.ProviderConfig),
 			General:   config.GeneralConfig{},
+		}
+	}
+
+	// --- DEPLOYMENT MODE STEP ---
+	// Ask whether the user wants personal (file-based) or platform (PostgreSQL) mode.
+	// Only show this if the backend isn't already configured.
+	if cfg.Storage.Backend == "" {
+		if err := handleDeploymentModeSetup(cfg); err != nil {
+			if isUserAborted(err) {
+				fmt.Println("Setup aborted by user; no changes were saved.")
+				return nil
+			}
+			return err
 		}
 	}
 
@@ -320,6 +334,16 @@ SaveConfig:
 	// Set as default provider
 	cfg.General.DefaultProvider = selectedInstance
 
+	// In platform mode, save provider config to the platform database.
+	// This must happen BEFORE saveProviderSecretsToStore, which scrubs secrets from pCfg.
+	// The platform settings store has its own secret extraction/encryption pipeline.
+	if cfg.Storage.Backend == "postgres" && cfg.Storage.Postgres.PlatformDSN != "" {
+		if err := saveProviderToPlatformDB(cfg, selectedInstance, pCfg); err != nil {
+			fmt.Printf("Warning: Failed to save provider to platform database: %v\n", err)
+			fmt.Println("You may need to configure the provider via Studio settings.")
+		}
+	}
+
 	// Save secrets to encrypted credential store (instead of plaintext config.yaml)
 	if err := saveProviderSecretsToStore(selectedInstance, selectedProviderID, pCfg); err != nil {
 		fmt.Printf("Warning: Failed to save secrets to credential store: %v\n", err)
@@ -497,6 +521,53 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 	pCfg["auth_url"] = authURL
 	pCfg["base_url"] = baseURL
 	pCfg["resource_group"] = resourceGroup
+}
+
+// saveProviderToPlatformDB saves the provider configuration to the platform
+// database's platform_settings table. This is used in platform mode so that
+// the daemon (which reads providers exclusively from the DB) can find them.
+// The platform settings store handles its own secret extraction/encryption.
+func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg config.ProviderConfig) error {
+	ctx := context.Background()
+
+	poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
+	defer poolMgr.Close()
+
+	pool, err := poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return fmt.Errorf("connect to platform DB: %w", err)
+	}
+
+	secrets := pgstore.NewPlatformSecretStore(poolMgr)
+	settingsStore := pgstore.NewPGPlatformSettingsStore(pool, secrets)
+
+	// Load existing settings (preserve any already-configured providers).
+	settings, err := settingsStore.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("load platform settings: %w", err)
+	}
+
+	// Merge the new provider into existing settings.
+	if settings.Providers == nil {
+		settings.Providers = make(map[string]map[string]string)
+	}
+
+	// Copy pCfg so we don't affect the caller's map.
+	provCopy := make(map[string]string, len(pCfg))
+	for k, v := range pCfg {
+		provCopy[k] = v
+	}
+	settings.Providers[instanceName] = provCopy
+	settings.DefaultProvider = instanceName
+	if cfg.General.DefaultModel != "" {
+		settings.DefaultModel = cfg.General.DefaultModel
+	}
+
+	if err := settingsStore.Save(ctx, settings); err != nil {
+		return fmt.Errorf("save platform settings: %w", err)
+	}
+
+	return nil
 }
 
 // saveProviderSecretsToStore saves sensitive fields from a provider config
@@ -1426,4 +1497,197 @@ func handleSandboxSetup() error {
 		printSuccess("Sandbox initialized! AI tools will run inside isolated containers.")
 		return nil
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Deployment Mode Setup
+// ---------------------------------------------------------------------------
+
+// handleDeploymentModeSetup asks the user to choose between personal and
+// platform mode. If platform is selected, it collects PostgreSQL connection
+// details, bootstraps the database, and configures the storage section.
+func handleDeploymentModeSetup(cfg *config.AppConfig) error {
+	clearScreen()
+
+	var mode string
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("How would you like to run Astonish?").
+				Description("Choose a deployment mode. You can change this later.").
+				Options(
+					huh.NewOption("Personal — Single user, local file storage, zero infrastructure", "personal"),
+					huh.NewOption("Platform — Multi-user with PostgreSQL, teams, and authentication", "platform"),
+				).
+				Value(&mode),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	if mode == "personal" {
+		// Nothing to configure — file-based storage is the default.
+		clearScreen()
+		fmt.Println()
+		fmt.Println("  Personal mode selected. Data will be stored locally on this machine.")
+		fmt.Println()
+		return nil
+	}
+
+	// Platform mode: collect PostgreSQL connection details.
+	return handlePlatformModeSetup(cfg)
+}
+
+// handlePlatformModeSetup collects PostgreSQL connection parameters and
+// bootstraps the platform database.
+func handlePlatformModeSetup(cfg *config.AppConfig) error {
+	clearScreen()
+
+	pgHost := "localhost"
+	pgPort := "5432"
+	pgUser := "postgres"
+	pgPassword := ""
+	pgSSLMode := "prefer"
+	orgName := "My Organization"
+	orgSlug := "my-org"
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("PostgreSQL Host").
+				Description("Hostname or IP address of the PostgreSQL server").
+				Value(&pgHost),
+			huh.NewInput().
+				Title("PostgreSQL Port").
+				Value(&pgPort),
+			huh.NewInput().
+				Title("PostgreSQL Username").
+				Description("Must have CREATEDB privilege to provision organization databases").
+				Value(&pgUser),
+			huh.NewInput().
+				Title("PostgreSQL Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&pgPassword),
+			huh.NewSelect[string]().
+				Title("SSL Mode").
+				Options(
+					huh.NewOption("disable", "disable"),
+					huh.NewOption("prefer (recommended)", "prefer"),
+					huh.NewOption("require", "require"),
+				).
+				Value(&pgSSLMode),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Organization Name").
+				Description("Display name for the auto-created organization").
+				Value(&orgName),
+			huh.NewInput().
+				Title("Organization Slug").
+				Description("URL-safe identifier (lowercase, hyphens allowed)").
+				Value(&orgSlug).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("slug cannot be empty")
+					}
+					for _, ch := range s {
+						if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+							return fmt.Errorf("must be lowercase alphanumeric with hyphens/underscores")
+						}
+					}
+					return nil
+				}),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	// Validate
+	if pgPassword == "" {
+		return fmt.Errorf("PostgreSQL password is required")
+	}
+
+	// Parse port
+	port := 5432
+	if pgPort != "" {
+		if _, scanErr := fmt.Sscanf(pgPort, "%d", &port); scanErr != nil {
+			return fmt.Errorf("invalid port: %s", pgPort)
+		}
+	}
+
+	// Generate a unique instance suffix for this deployment.
+	suffix := config.GenerateInstanceSuffix()
+
+	// Build a temporary DSN to check for collisions.
+	tempDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
+
+	// Check for suffix collision (extremely unlikely).
+	ctx := context.Background()
+	for attempts := 0; attempts < 5; attempts++ {
+		exists, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		if checkErr != nil {
+			return fmt.Errorf("failed to check database existence: %w", checkErr)
+		}
+		if !exists {
+			break
+		}
+		suffix = config.GenerateInstanceSuffix()
+	}
+
+	// Build DSN with the actual platform DB name.
+	platformDBName := config.PlatformDBName(suffix)
+	platformDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, platformDBName, pgSSLMode)
+
+	clearScreen()
+	fmt.Println()
+	fmt.Printf("  Connecting to PostgreSQL at %s:%d...\n", pgHost, port)
+
+	// Bootstrap the platform database.
+	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
+		fmt.Println()
+		fmt.Printf("  ✗ Failed: %v\n", err)
+		fmt.Println()
+
+		// Offer to retry or abort.
+		var retry bool
+		retryErr := huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Would you like to try again with different settings?").
+					Affirmative("Yes, try again").
+					Negative("No, skip platform setup").
+					Value(&retry),
+			),
+		).Run()
+		if retryErr != nil {
+			return retryErr
+		}
+		if retry {
+			return handlePlatformModeSetup(cfg)
+		}
+		// User chose to skip — stay in personal mode.
+		return nil
+	}
+
+	fmt.Println("  ✓ Platform database initialized")
+	fmt.Println()
+
+	// Generate JWT secret and save to config.
+	jwtSecret := config.GenerateJWTSecret()
+
+	cfg.Storage.Backend = "postgres"
+	cfg.Storage.Postgres.PlatformDSN = platformDSN
+	cfg.Storage.Postgres.InstanceSuffix = suffix
+	cfg.Storage.Auth.Mode = "builtin"
+	cfg.Storage.Auth.JWTSecret = jwtSecret
+	cfg.Storage.Auth.DefaultOrgName = orgName
+	cfg.Storage.Auth.DefaultOrgSlug = orgSlug
+
+	fmt.Println("  Platform mode configured. The first user to register via Studio")
+	fmt.Println("  will become the organization owner with full admin access.")
+	fmt.Println()
+
+	return nil
 }

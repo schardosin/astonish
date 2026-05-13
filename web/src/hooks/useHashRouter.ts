@@ -20,6 +20,12 @@ export interface BuildPathParams {
   subView?: string
   subKey?: string
   subKey2?: string
+  tab?: string
+  tabSection?: string
+  /** Settings: team slug for team-scoped sections */
+  teamSlug?: string
+  /** Settings: tab within team detail */
+  teamTab?: string
 }
 
 // --- Hook ---
@@ -65,10 +71,34 @@ function parseHash(hash: string): RouterPath {
   }
 
   if (view === 'settings') {
-    return { 
-      view: 'settings', 
-      params: { section: parts[1] || 'general' }
+    // Routes:
+    //   #/settings                        → section='chat' (first item)
+    //   #/settings/general                → section='general'
+    //   #/settings/team/members           → section='team', teamTab='members' (active team)
+    //   #/settings/team/engineering/skills → section='team', teamSlug='engineering', teamTab='skills'
+    //   #/settings/org/users              → section='org', subsection='users'
+    //   #/settings/platform/orgs          → section='platform', subsection='orgs'
+    const section = parts[1] || 'chat'
+
+    if (section === 'team') {
+      // 2 parts after 'team' → slug + tab; 1 part → just tab (use active team)
+      if (parts.length >= 4) {
+        // #/settings/team/:slug/:tab
+        return { view: 'settings', params: { section: 'team', teamSlug: decodeURIComponent(parts[2]), teamTab: parts[3] || 'members' } }
+      }
+      // #/settings/team/:tab
+      return { view: 'settings', params: { section: 'team', teamSlug: '', teamTab: parts[2] || 'members' } }
     }
+
+    if (section === 'org') {
+      return { view: 'settings', params: { section: 'org', subsection: parts[2] || 'users' } }
+    }
+
+    if (section === 'platform') {
+      return { view: 'settings', params: { section: 'platform', subsection: parts[2] || 'orgs' } }
+    }
+
+    return { view: 'settings', params: { section } }
   }
 
   if (view === 'chat') {
@@ -100,6 +130,35 @@ function parseHash(hash: string): RouterPath {
     return { view: 'chat', params: {} }
   }
 
+  if (view === 'credentials') {
+    return { view: 'settings', params: { section: 'credentials' } }
+  }
+
+  if (view === 'knowledge') {
+    return { view: 'settings', params: { section: 'knowledge' } }
+  }
+
+  // Legacy: redirect team-mgmt URLs to new settings paths
+  if (view === 'team-mgmt') {
+    const mgmtSection = parts[1] || 'teams'
+    if (mgmtSection === 'users') return { view: 'settings', params: { section: 'org', subsection: 'users' } }
+    if (mgmtSection === 'audit') return { view: 'settings', params: { section: 'org', subsection: 'audit' } }
+    if (mgmtSection === 'platform') return { view: 'settings', params: { section: 'platform', subsection: 'orgs' } }
+    if (mgmtSection === 'teams' && parts[2]) {
+      const teamSlug = parts[2]
+      const teamTab = parts[3] || 'members'
+      return { view: 'settings', params: { section: 'team', teamSlug, teamTab } }
+    }
+    // Default: go to team members
+    return { view: 'settings', params: { section: 'team', teamSlug: '', teamTab: 'members' } }
+  }
+
+  if (view === 'platform-admin') {
+    // Legacy: redirect to new settings/platform path
+    const tab = parts[1] || 'orgs'
+    return { view: 'settings', params: { section: 'platform', subsection: tab } }
+  }
+
   return { view, params: {} }
 }
 
@@ -107,8 +166,31 @@ export function buildPath(view: string, params: BuildPathParams = {}): string {
   switch (view) {
     case 'agent':
       return `/agent/${encodeURIComponent(params.agentName || '')}`
-    case 'settings':
-      return `/settings/${params.section || 'general'}`
+    case 'settings': {
+      const section = params.section || 'chat'
+
+      if (section === 'team') {
+        const tab = params.teamTab || 'members'
+        if (params.teamSlug) {
+          if (tab !== 'members') return `/settings/team/${encodeURIComponent(params.teamSlug)}/${tab}`
+          return `/settings/team/${encodeURIComponent(params.teamSlug)}/members`
+        }
+        // No slug — use active team (just tab in URL)
+        return `/settings/team/${tab}`
+      }
+
+      if (section === 'org') {
+        const sub = params.subView || 'users'
+        return `/settings/org/${sub}`
+      }
+
+      if (section === 'platform') {
+        const sub = params.subView || 'orgs'
+        return `/settings/platform/${sub}`
+      }
+
+      return `/settings/${section}`
+    }
     case 'chat':
       if (params.sessionId) {
         return `/chat/${encodeURIComponent(params.sessionId)}`

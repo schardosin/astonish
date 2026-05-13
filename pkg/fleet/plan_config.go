@@ -51,6 +51,7 @@ type FleetPlan struct {
 	// Creation metadata
 	CreatedAt time.Time `yaml:"created_at,omitempty" json:"created_at,omitempty"`
 	UpdatedAt time.Time `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
+	CreatedBy string    `yaml:"-" json:"created_by,omitempty"` // platform user UUID who created this plan
 
 	// WorkspaceBaseDir overrides the base directory for the project workspace.
 	// Deprecated: Per-session workspaces are now used instead. This field is

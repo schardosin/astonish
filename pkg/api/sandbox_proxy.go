@@ -76,20 +76,20 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	portStr := vars["port"]
 
 	if containerName == "" || portStr == "" {
-		http.Error(w, `{"error":"missing container or port"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, `{"error":"missing container or port"}`)
 		return
 	}
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
-		http.Error(w, `{"error":"invalid port number"}`, http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, `{"error":"invalid port number"}`)
 		return
 	}
 
 	// Check that the port is explicitly exposed
 	sessRegistry, err := sandbox.NewSessionRegistry()
 	if err != nil {
-		http.Error(w, `{"error":"failed to load session registry"}`, http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, `{"error":"failed to load session registry"}`)
 		return
 	}
 
@@ -104,7 +104,7 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Verify container exists and is running
 	client, err := sandboxConnect()
 	if err != nil {
-		http.Error(w, `{"error":"sandbox unavailable"}`, http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, `{"error":"sandbox unavailable"}`)
 		return
 	}
 
@@ -143,7 +143,7 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	dialer := &sandbox.ContainerDialer{Client: client}
 	target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("invalid proxy target URL: %s", err))
 		return
 	}
 	proxy := &httputil.ReverseProxy{
@@ -289,7 +289,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 
 		currentTarget, err := url.Parse(tunnelTarget)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
+			respondError(w, http.StatusBadGateway, fmt.Sprintf("invalid proxy target URL: %s", err))
 			return
 		}
 		proxy := &httputil.ReverseProxy{
@@ -313,7 +313,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 			},
 			Transport: dialer.HTTPTransport(containerName, containerPort),
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+				respondError(w, http.StatusBadGateway, fmt.Sprintf("proxy error: %s", err))
 			},
 		}
 		proxy.ServeHTTP(w, r)
@@ -568,13 +568,13 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 	sr := GetSubdomainRouter()
 	client, err := sr.getClient()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("sandbox unavailable: %s", err), http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, fmt.Sprintf("sandbox unavailable: %s", err))
 		return
 	}
 
 	// Verify container is reachable
 	if _, err := getCachedIP(client, containerName); err != nil {
-		http.Error(w, fmt.Sprintf("cannot resolve container IP: %s", err), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("cannot resolve container IP: %s", err))
 		return
 	}
 
@@ -589,7 +589,7 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 
 	currentTarget, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", containerPort))
 	if err != nil {
-		http.Error(w, fmt.Sprintf("invalid proxy target URL: %s", err), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("invalid proxy target URL: %s", err))
 		return
 	}
 	proxy := &httputil.ReverseProxy{
@@ -612,7 +612,7 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 		},
 		Transport: dialer.HTTPTransport(containerName, containerPort),
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-			http.Error(w, fmt.Sprintf("proxy error: %s", err), http.StatusBadGateway)
+			respondError(w, http.StatusBadGateway, fmt.Sprintf("proxy error: %s", err))
 		},
 	}
 	proxy.ServeHTTP(w, r)
@@ -653,7 +653,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, dialFunc func() (net
 	// Dial the backend via the provided dial function (exec tunnel)
 	backendConn, err := dialFunc()
 	if err != nil {
-		http.Error(w, fmt.Sprintf("WebSocket backend dial failed: %s", err), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("WebSocket backend dial failed: %s", err))
 		return
 	}
 
@@ -687,7 +687,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, dialFunc func() (net
 
 	if _, err := backendConn.Write([]byte(reqBuf.String())); err != nil {
 		backendConn.Close()
-		http.Error(w, fmt.Sprintf("WebSocket backend write failed: %s", err), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("WebSocket backend write failed: %s", err))
 		return
 	}
 
@@ -696,13 +696,13 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, dialFunc func() (net
 	resp, err := http.ReadResponse(backendBuf, r)
 	if err != nil {
 		backendConn.Close()
-		http.Error(w, fmt.Sprintf("WebSocket backend response read failed: %s", err), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("WebSocket backend response read failed: %s", err))
 		return
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		backendConn.Close()
-		http.Error(w, fmt.Sprintf("WebSocket backend returned %d, expected 101", resp.StatusCode), http.StatusBadGateway)
+		respondError(w, http.StatusBadGateway, fmt.Sprintf("WebSocket backend returned %d, expected 101", resp.StatusCode))
 		return
 	}
 
@@ -710,7 +710,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, dialFunc func() (net
 	hijacker, ok := w.(http.Hijacker)
 	if !ok {
 		backendConn.Close()
-		http.Error(w, "WebSocket hijack not supported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "WebSocket hijack not supported")
 		return
 	}
 

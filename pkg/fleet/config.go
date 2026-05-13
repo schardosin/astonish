@@ -1,6 +1,7 @@
 package fleet
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -109,6 +110,55 @@ func (tc ToolsConfig) MarshalYAML() (interface{}, error) {
 		return tc.Names, nil
 	}
 	return nil, nil
+}
+
+// MarshalJSON implements custom JSON marshalling for the polymorphic tools field.
+func (tc ToolsConfig) MarshalJSON() ([]byte, error) {
+	if tc.All {
+		return json.Marshal(true)
+	}
+	if len(tc.Names) > 0 {
+		return json.Marshal(tc.Names)
+	}
+	return []byte("null"), nil
+}
+
+// UnmarshalJSON implements custom JSON unmarshalling for the polymorphic tools field.
+// Handles: true (all tools), ["tool1", "tool2"] (specific tools), null (no tools),
+// or the struct form {"All": true, "Names": [...]} for backward compat.
+func (tc *ToolsConfig) UnmarshalJSON(data []byte) error {
+	// Handle null
+	if string(data) == "null" {
+		return nil
+	}
+
+	// Try boolean first
+	var b bool
+	if err := json.Unmarshal(data, &b); err == nil {
+		tc.All = b
+		return nil
+	}
+
+	// Try string list
+	var names []string
+	if err := json.Unmarshal(data, &names); err == nil {
+		tc.Names = names
+		return nil
+	}
+
+	// Try struct form (backward compat with default Go JSON encoder output)
+	type toolsConfigRaw struct {
+		All   bool     `json:"All"`
+		Names []string `json:"Names"`
+	}
+	var raw toolsConfigRaw
+	if err := json.Unmarshal(data, &raw); err == nil {
+		tc.All = raw.All
+		tc.Names = raw.Names
+		return nil
+	}
+
+	return fmt.Errorf("tools must be a boolean or a list of strings, got: %s", string(data))
 }
 
 // IsEmpty returns true if no tools are configured.

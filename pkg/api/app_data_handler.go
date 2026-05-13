@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // maxResponseBodySize is the maximum number of bytes the HTTP data proxy will
@@ -211,14 +212,14 @@ func AppStreamHandler(w http.ResponseWriter, r *http.Request) {
 	sourceID := r.URL.Query().Get("sourceId")
 
 	if sourceID == "" {
-		http.Error(w, "sourceId query parameter is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "sourceId query parameter is required")
 		return
 	}
 
 	// Load the app to get data source config (for interval)
 	app, err := apps.LoadApp(name)
 	if err != nil {
-		http.Error(w, "app not found: "+err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "app not found: "+err.Error())
 		return
 	}
 
@@ -248,7 +249,7 @@ func AppStreamHandler(w http.ResponseWriter, r *http.Request) {
 	// Set up SSE
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -308,7 +309,7 @@ func resolveDataSource(r *http.Request, sourceID string, args map[string]any, ap
 		return resolveMCPSource(r.Context(), sourceID[4:], args)
 	}
 	if strings.HasPrefix(sourceID, "http:") {
-		return resolveHTTPSource(sourceID[5:], args)
+		return resolveHTTPSource(r, sourceID[5:], args)
 	}
 	if strings.HasPrefix(sourceID, "static:") {
 		return resolveStaticSource(sourceID[7:], appName)
@@ -427,7 +428,7 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 // spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
 // When a @credential-name suffix is present, the named credential is resolved
 // from the credential store and its auth header is injected into the request.
-func resolveHTTPSource(spec string, args map[string]any) (any, error) {
+func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, error) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("invalid HTTP source format: expected 'METHOD:url', got %q", spec)
@@ -471,11 +472,14 @@ func resolveHTTPSource(spec string, args map[string]any) (any, error) {
 
 	// Resolve and inject credential (after custom headers — credential takes precedence for auth)
 	if credentialName != "" {
-		store := getAPICredentialStore()
-		if store == nil {
+		var credStore store.CredentialStore
+		if r != nil {
+			credStore = effectiveCredentialStore(r)
+		}
+		if credStore == nil {
 			return nil, fmt.Errorf("credential store is not available — cannot resolve credential %q", credentialName)
 		}
-		headerKey, headerValue, err := store.Resolve(credentialName)
+		headerKey, headerValue, err := credStore.Resolve(r.Context(), credentialName)
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
 		}
@@ -586,7 +590,7 @@ func resolveAppDataSource(r *http.Request, sourceID string, args map[string]any,
 				if method == "" {
 					method = "GET"
 				}
-				return resolveHTTPSource(method+":"+urlStr, mergedArgs)
+				return resolveHTTPSource(r, method+":"+urlStr, mergedArgs)
 
 			case "static":
 				return ds.Config, nil

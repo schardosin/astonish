@@ -907,7 +907,11 @@ func handleToolsSearchCommand(args []string) error {
 	}
 
 	// --- Create tool index on the shared DB ---
-	toolIndex, err := agent.NewToolIndex(store.DB(), embResult.EmbeddingFunc)
+	vectorStore, vsErr := agent.NewChromemToolVectorStore(store.DB(), embResult.EmbeddingFunc)
+	if vsErr != nil {
+		return fmt.Errorf("failed to create tool vector store: %w", vsErr)
+	}
+	toolIndex, err := agent.NewToolIndex(vectorStore, agent.EmbedFunc(embResult.EmbeddingFunc))
 	if err != nil {
 		return fmt.Errorf("failed to create tool index: %w", err)
 	}

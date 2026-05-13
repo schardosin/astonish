@@ -293,7 +293,11 @@ func (m searchToolsMockTool) IsLongRunning() bool { return false }
 func testToolIndex(t *testing.T) *agent.ToolIndex {
 	t.Helper()
 	db := chromem.NewDB()
-	idx, err := agent.NewToolIndex(db, testToolEmbeddingFunc())
+	vs, err := agent.NewChromemToolVectorStore(db, testToolEmbeddingFunc())
+	if err != nil {
+		t.Fatalf("NewChromemToolVectorStore: %v", err)
+	}
+	idx, err := agent.NewToolIndex(vs, agent.EmbedFunc(testToolEmbeddingFunc()))
 	if err != nil {
 		t.Fatalf("NewToolIndex: %v", err)
 	}
@@ -390,7 +394,11 @@ func TestSearchTools_AccessField(t *testing.T) {
 
 func TestSearchTools_NoResults(t *testing.T) {
 	db := chromem.NewDB()
-	idx, err := agent.NewToolIndex(db, testToolEmbeddingFunc())
+	vs, vsErr := agent.NewChromemToolVectorStore(db, testToolEmbeddingFunc())
+	if vsErr != nil {
+		t.Fatalf("NewChromemToolVectorStore: %v", vsErr)
+	}
+	idx, err := agent.NewToolIndex(vs, agent.EmbedFunc(testToolEmbeddingFunc()))
 	if err != nil {
 		t.Fatalf("NewToolIndex: %v", err)
 	}

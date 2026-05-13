@@ -336,6 +336,14 @@ func addTarDir(tw *tar.Writer, name string, mode int64) error {
 // The container is NOT started — caller should start it after this returns.
 // Pass registry=nil when the template is @base (no registry lookup needed).
 func CreateOverlayContainer(client *IncusClient, containerName, templateName string, registry *TemplateRegistry, limits *config.SandboxLimits) error {
+	return CreateOverlayContainerWithProfiles(client, containerName, templateName, registry, limits, nil)
+}
+
+// CreateOverlayContainerWithProfiles creates an overlay container with optional
+// Incus profile overrides. If profiles is nil or empty, the default profile is
+// used. In platform mode, pass the org profile to attach the container to the
+// org's isolated bridge network.
+func CreateOverlayContainerWithProfiles(client *IncusClient, containerName, templateName string, registry *TemplateRegistry, limits *config.SandboxLimits, profiles []string) error {
 	// Resolve the storage pool and paths
 	poolName, err := GetPoolForProfile(client)
 	if err != nil {
@@ -391,6 +399,7 @@ func CreateOverlayContainer(client *IncusClient, containerName, templateName str
 		InstancePut: api.InstancePut{
 			Architecture: arch,
 			Config:       containerConfig,
+			Profiles:     profiles,
 		},
 		Source: api.InstanceSource{
 			Type:  "image",

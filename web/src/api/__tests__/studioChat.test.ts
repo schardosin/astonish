@@ -30,7 +30,7 @@ describe('studioChat API', () => {
 
       const result = await fetchSessions()
       expect(result).toEqual(sessions)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('throws on error', async () => {
@@ -46,7 +46,7 @@ describe('studioChat API', () => {
 
       const result = await fetchSessionHistory('abc')
       expect(result).toEqual(history)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -55,7 +55,7 @@ describe('studioChat API', () => {
       globalThis.fetch = vi.fn().mockResolvedValue({ ok: true })
 
       await deleteSession('abc')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc', { method: 'DELETE' })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/abc', expect.objectContaining({ method: 'DELETE' }))
     })
 
     it('throws on error', async () => {
@@ -109,8 +109,9 @@ describe('studioChat API', () => {
 
       expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/chat', expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
       }))
+      const headers = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1]?.headers as Headers
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
 
     it('handles chunked SSE data split across reads', async () => {
@@ -208,7 +209,7 @@ describe('studioChat API', () => {
     it('calls POST to stop endpoint', async () => {
       globalThis.fetch = vi.fn().mockResolvedValue({ ok: true })
       await stopChat('sess1')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/sess1/stop', { method: 'POST' })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/studio/sessions/sess1/stop', expect.objectContaining({ method: 'POST' }))
     })
 
     it('does not throw on failure', async () => {

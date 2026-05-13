@@ -184,6 +184,60 @@ func FleetContainerName(planKey, agentKey, taskSlug string) string {
 	return name
 }
 
+// OrgSessionContainerName returns the container name scoped to an org/team.
+// Format: astn-sess-{org}-{team}-{session}
+// Falls back to SessionContainerName if orgSlug is empty (personal mode).
+func OrgSessionContainerName(orgSlug, teamSlug, sessionID string) string {
+	if orgSlug == "" {
+		return SessionContainerName(sessionID)
+	}
+	org := sanitizeInstanceName(orgSlug)
+	team := sanitizeInstanceName(teamSlug)
+	sess := sanitizeInstanceName(sessionID)
+
+	// Budget: prefix(10) + org(8) + dash(1) + team(8) + dash(1) + session(rest)
+	// Max Incus name = 63 chars
+	if len(org) > 8 {
+		org = org[:8]
+	}
+	if len(team) > 8 {
+		team = team[:8]
+	}
+	remaining := 63 - len(SessionPrefix) - len(org) - len(team) - 2 // 2 dashes
+	if remaining < 8 {
+		remaining = 8
+	}
+	if len(sess) > remaining {
+		sess = sess[:remaining]
+	}
+
+	name := SessionPrefix + org + "-" + team + "-" + sess
+	name = strings.TrimRight(name, "-")
+	return name
+}
+
+// OrgFleetContainerName returns the fleet container name scoped to an org.
+// Format: astn-fleet-{org}-{plan}-{agent}[-{task}]
+// Falls back to FleetContainerName if orgSlug is empty (personal mode).
+func OrgFleetContainerName(orgSlug, planKey, agentKey, taskSlug string) string {
+	if orgSlug == "" {
+		return FleetContainerName(planKey, agentKey, taskSlug)
+	}
+	org := sanitizeInstanceName(orgSlug)
+	if len(org) > 8 {
+		org = org[:8]
+	}
+	name := FleetPrefix + org + "-" + sanitizeInstanceName(planKey) + "-" + sanitizeInstanceName(agentKey)
+	if taskSlug != "" {
+		name += "-" + sanitizeInstanceName(taskSlug)
+	}
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	name = strings.TrimRight(name, "-")
+	return name
+}
+
 // safeShortID truncates a session ID for display purposes without panicking
 // on short strings. Used in log messages where the full ID list is unavailable.
 func safeShortID(id string, maxLen int) string {

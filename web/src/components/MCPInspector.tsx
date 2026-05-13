@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { X, Play, Search, ChevronRight, Loader2, AlertCircle, CheckCircle, Clock } from 'lucide-react'
+import { teamFetch } from '../api/teamContext'
 
 // --- Types ---
 
@@ -27,28 +28,31 @@ interface ToolRunResult {
 
 interface MCPInspectorProps {
   serverName: string
+  teamSlug?: string
   onClose: () => void
 }
 
 // Fetch tools for a specific MCP server
-const fetchServerTools = async (serverName: string): Promise<{ tools?: MCPTool[]; error?: string }> => {
-  const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/tools`)
+const fetchServerTools = async (serverName: string, teamSlug?: string): Promise<{ tools?: MCPTool[]; error?: string }> => {
+  const scope = teamSlug ? '?scope=team' : ''
+  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools${scope}`, undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch tools')
   return res.json()
 }
 
 // Run a tool on a specific MCP server
-const runServerTool = async (serverName: string, toolName: string, params: Record<string, any>): Promise<ToolRunResult> => {
-  const res = await fetch(`/api/mcp/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/run`, {
+const runServerTool = async (serverName: string, toolName: string, params: Record<string, any>, teamSlug?: string): Promise<ToolRunResult> => {
+  const scope = teamSlug ? '?scope=team' : ''
+  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/run${scope}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ params })
-  })
+  }, teamSlug)
   if (!res.ok) throw new Error('Failed to run tool')
   return res.json()
 }
 
-export default function MCPInspector({ serverName, onClose }: MCPInspectorProps) {
+export default function MCPInspector({ serverName, teamSlug, onClose }: MCPInspectorProps) {
   const [tools, setTools] = useState<MCPTool[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -63,7 +67,7 @@ export default function MCPInspector({ serverName, onClose }: MCPInspectorProps)
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetchServerTools(serverName)
+    fetchServerTools(serverName, teamSlug)
       .then(data => {
         if (data.error) {
           setError(data.error)
@@ -102,7 +106,7 @@ export default function MCPInspector({ serverName, onClose }: MCPInspectorProps)
     setResult(null)
     setResultError(null)
     try {
-      const res = await runServerTool(serverName, selectedTool.name, params)
+      const res = await runServerTool(serverName, selectedTool.name, params, teamSlug)
       if (res.success) {
         setResult(res)
       } else {

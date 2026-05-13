@@ -20,6 +20,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // SubAgentConfig holds configuration for the sub-agent system.
@@ -147,9 +148,9 @@ type SubAgentManager struct {
 	SessionService  adksession.Service           // Session persistence
 	MemoryManager   *memory.Manager              // Memory manager for context injection (nil = disabled)
 	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
-	Redactor        *credentials.Redactor        // Redacts credential values from tool outputs (nil = disabled)
-	CredentialStore *credentials.Store           // Credential store for placeholder substitution (nil = disabled)
-	PendingSecrets  *credentials.PendingVault    // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
+	Redactor        *credentials.Redactor          // Redacts credential values from tool outputs (nil = disabled)
+	CredentialStore credentials.CredentialResolver // Credential store for placeholder substitution (nil = disabled)
+	PendingSecrets  *credentials.PendingVault      // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
 	AppName         string                       // Application name for sessions
 	UserID          string                       // User ID for sessions
 
@@ -204,6 +205,14 @@ type SubAgentManager struct {
 	// injected into sub-agent system prompts so they know which skills
 	// exist and can call skill_lookup to load them.
 	SkillIndex string
+
+	// WebSearchToolName is the configured web search tool (e.g., "tavily_search").
+	// Injected into sub-agent prompts so they prefer dedicated search over web_fetch.
+	WebSearchToolName string
+
+	// WebExtractToolName is the configured web extract tool (e.g., "tavily_extract").
+	// Injected into sub-agent prompts so they use it as fallback when web_fetch fails.
+	WebExtractToolName string
 
 	// Internal
 	sem          chan struct{}     // concurrency semaphore
@@ -470,7 +479,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				toolFilter = discoveredGroups
 			}
 		}
-		childTools, childToolsets, resolveWarnings = m.resolveTools(toolFilter)
+		childTools, childToolsets, resolveWarnings = m.resolveTools(taskCtx, toolFilter)
 	}
 
 	// --- Dynamic tool injection for sub-agents ---
@@ -488,6 +497,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 			context.Background(), task.Description, 8, 0.005,
 		)
 		if err == nil && len(matches) > 0 {
+			// Filter out MCP tools the user's team doesn't have access to
+			matches = FilterAccessibleToolMatches(taskCtx, matches)
 			childDynamicMatches = matches
 		}
 	}
@@ -530,7 +541,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if task.CustomPrompt && task.Instructions != "" {
 		childPrompt = task.Instructions
 	} else {
-		childPrompt = m.buildChildPrompt(task)
+		childPrompt = m.buildChildPrompt(taskCtx, task)
 	}
 
 	// Append dynamically discovered tools to the prompt so the LLM knows
@@ -542,7 +553,22 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		}
 	}
 
-	// Create child session linked to parent
+	// Create child session linked to parent.
+	// Prefer the per-request session service from context (e.g., pgstore in
+	// platform mode) over the factory-time default (m.SessionService).
+	sessionSvc := m.SessionService
+	if ctxSvc := store.SessionServiceFromContext(ctx); ctxSvc != nil {
+		sessionSvc = ctxSvc
+	}
+
+	// Prefer the per-request user ID from context (e.g., platform user UUID)
+	// over the factory-time default (m.UserID = "console_user"). The pgstore
+	// user_id column is UUID-typed and rejects non-UUID strings.
+	userID := m.UserID
+	if ctxUID := store.UserIDFromContext(ctx); ctxUID != "" {
+		userID = ctxUID
+	}
+
 	childSessionID := uuid.NewString()
 	createState := map[string]any{}
 	if task.ParentID != "" {
@@ -553,9 +579,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		createState[k] = v
 	}
 
-	_, err := m.SessionService.Create(taskCtx, &adksession.CreateRequest{
+	_, err := sessionSvc.Create(taskCtx, &adksession.CreateRequest{
 		AppName:   m.AppName,
-		UserID:    m.UserID,
+		UserID:    userID,
 		SessionID: childSessionID,
 		State:     createState,
 	})
@@ -571,8 +597,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 
 	// Persist the task name as the session title so fleet reconstruction
 	// can derive phase/agent info from titles like "fleet-<fleet>-<phase>".
-	if fs, ok := m.SessionService.(*persistentsession.FileStore); ok {
-		if err := fs.SetSessionTitle(childSessionID, task.Name); err != nil {
+	if titleSetter, ok := sessionSvc.(interface{ SetSessionTitle(string, string) error }); ok {
+		if err := titleSetter.SetSessionTitle(childSessionID, task.Name); err != nil {
 			slog.Warn("failed to set sub-agent session title", "session_id", childSessionID, "title", task.Name, "error", err)
 		}
 	}
@@ -598,7 +624,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// discoveries (childSearchToolsResults) are injected into every LLM call.
 	if m.ToolIndex != nil {
 		toolIndex := m.ToolIndex // capture for closure
-		beforeModelCallbacks = append(beforeModelCallbacks, func(_ adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+		beforeModelCallbacks = append(beforeModelCallbacks, func(cbCtx adkagent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
 			toolsToInject := make(map[string]bool)
 
 			// Source 1: automatic hybrid search matches on task description
@@ -630,6 +656,12 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				entry := toolIndex.GetToolEntry(toolName)
 				if entry == nil || entry.Tool == nil {
 					continue
+				}
+				// MCP tool access control: skip tools from inaccessible servers
+				if serverName, isMCP := mcpServerNameFromGroup(entry.GroupName); isMCP {
+					if !isMCPServerAccessible(cbCtx, serverName) {
+						continue
+					}
 				}
 				packToolIntoRequest(req, entry.Tool)
 			}
@@ -695,10 +727,23 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// Wire credential placeholder substitution so sub-agents can use
 	// {{CREDENTIAL:...}} tokens in tool args.
 	var beforeToolCallbacks []llmagent.BeforeToolCallback
-	if m.CredentialStore != nil {
-		store := m.CredentialStore
+	{
+		agentResolver := m.CredentialStore // may be nil if file-based store failed
 		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-			credRestore := credentials.SubstituteAndRestore(args, store)
+			// In platform mode, prefer the tenant-scoped PG credential store
+			// injected into the context. Fall back to agent-level store.
+			var resolver credentials.CredentialResolver
+			if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+				resolver = credentials.NewStoreAdapter(cs)
+			} else if agentResolver != nil {
+				resolver = agentResolver
+			}
+
+			if resolver == nil {
+				return nil, nil // no credential store available at all
+			}
+
+			credRestore := credentials.SubstituteAndRestore(args, resolver)
 			callID := ctx.FunctionCallID()
 			if prev, loaded := restoreFuncs.Load(callID); loaded {
 				prevFn := prev.(func())
@@ -751,7 +796,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	r, err := runner.New(runner.Config{
 		AppName:        m.AppName,
 		Agent:          childAgent,
-		SessionService: m.SessionService,
+		SessionService: sessionSvc,
 	})
 	if err != nil {
 		result = TaskResult{
@@ -772,7 +817,7 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	var outputParts []string
 	var toolCallCount int
 
-	for event, runErr := range r.Run(taskCtx, m.UserID, childSessionID, userMsg, adkagent.RunConfig{}) {
+	for event, runErr := range r.Run(taskCtx, userID, childSessionID, userMsg, adkagent.RunConfig{}) {
 		if runErr != nil {
 			trace.Finalize()
 			result = TaskResult{
@@ -894,7 +939,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 // If the request is empty, the sub-agent gets ZERO tools (callers must be explicit).
 // Excluded tools (delegate_tasks, memory_save, etc.) are always removed unless
 // the tool comes from FleetTools via explicit allow-list.
-func (m *SubAgentManager) resolveTools(request []string) ([]tool.Tool, []tool.Toolset, []string) {
+// In platform mode, MCP groups are filtered by the user's team/org access (via ctx).
+func (m *SubAgentManager) resolveTools(ctx context.Context, request []string) ([]tool.Tool, []tool.Toolset, []string) {
 	if len(request) == 0 {
 		return nil, nil, nil
 	}
@@ -917,6 +963,15 @@ func (m *SubAgentManager) resolveTools(request []string) ([]tool.Tool, []tool.To
 	var resultToolsets []tool.Toolset
 
 	for _, gName := range groupNames {
+		// MCP tool access control: skip groups for MCP servers the user
+		// doesn't have access to in platform mode.
+		if serverName, isMCP := mcpServerNameFromGroup(gName); isMCP {
+			if !isMCPServerAccessible(ctx, serverName) {
+				unknownGroups = append(unknownGroups, gName)
+				continue
+			}
+		}
+
 		g := m.ToolGroups[gName]
 		for _, t := range g.Tools {
 			name := t.Name()
@@ -1017,7 +1072,7 @@ func (m *SubAgentManager) AvailableGroups() []*ToolGroup {
 }
 
 // buildChildPrompt constructs the system prompt for a sub-agent.
-func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
+func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTask) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("You are %q, a focused sub-agent working on a specific task.\n\n", task.Name))
@@ -1040,9 +1095,12 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 	sb.WriteString("- Do NOT attempt to save to memory or schedule jobs — you don't have those capabilities.\n")
 	sb.WriteString("- Do NOT write scripts or code unless explicitly asked — use your tools directly.\n")
 	sb.WriteString("- If you encounter an error, report it clearly in your response.\n")
+	if len(task.ToolFilter) > 0 {
+		sb.WriteString(fmt.Sprintf("- Your assigned tools (%s) are your PRIMARY tools — use them first. Additional tools may be available via `search_tools`, but use them only if your primary tools are genuinely insufficient to complete the task (e.g., all primary tools are failing or the task requires a capability they don't have).\n", strings.Join(task.ToolFilter, ", ")))
+	}
 
 	// Tool-specific operational guidance based on what tools the child actually has
-	resolvedTools, _, resolveWarnings := m.resolveTools(task.ToolFilter)
+	resolvedTools, _, resolveWarnings := m.resolveTools(ctx, task.ToolFilter)
 	if len(resolveWarnings) > 0 {
 		slog.Warn("failed to resolve tools for sub-agent", "tool_filter", task.ToolFilter, "warnings", resolveWarnings)
 	}
@@ -1064,6 +1122,19 @@ func (m *SubAgentManager) buildChildPrompt(task SubAgentTask) string {
 		sb.WriteString("- Use `resolve_credential` to get raw credential fields (username, password) for non-HTTP use.\n")
 		sb.WriteString("- Use `list_credentials` to discover available credentials.\n")
 		sb.WriteString("- You cannot create or modify credentials — only read existing ones.\n")
+	}
+
+	// Web tool guidance: help sub-agents choose between search, fetch, and browser
+	if childToolSet["web_fetch"] && m.WebSearchToolName != "" {
+		sb.WriteString("\n## Web Tools\n")
+		sb.WriteString(fmt.Sprintf("- `%s` — for quick factual lookups and discovering URLs/resources. Returns search-engine-indexed results (may be hours/days stale).\n", m.WebSearchToolName))
+		sb.WriteString("- `web_fetch` — for fetching content from a specific known URL.\n")
+		if m.WebExtractToolName != "" {
+			sb.WriteString(fmt.Sprintf("- `%s` — fallback for extracting content from URLs when `web_fetch` returns empty or broken content.\n", m.WebExtractToolName))
+		}
+		if childToolSet["browser_navigate"] {
+			sb.WriteString("- **Browser tools** (`browser_navigate`, `browser_snapshot`, etc.) — for navigating websites to get live/current data (prices, availability, dynamic content). Prefer browser when the task requires what a site shows *right now*, not what was indexed days ago.\n")
+		}
 	}
 
 	// Load and inject memory content if available

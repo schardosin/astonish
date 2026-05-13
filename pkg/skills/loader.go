@@ -268,8 +268,28 @@ func LoadSkills(userDir string, extraDirs []string, _ string, allowlist []string
 	return result, nil
 }
 
+// LoadBundledSkills returns only the skills embedded in the binary.
+// Used by platform mode to overlay bundled skills on top of PG-stored custom skills.
+func LoadBundledSkills() ([]Skill, error) {
+	byName := make(map[string]*Skill)
+	if err := loadBundledSkills(byName); err != nil {
+		return nil, err
+	}
+	var result []Skill
+	for _, s := range byName {
+		result = append(result, *s)
+	}
+	sortSkills(result)
+	return result, nil
+}
+
 // loadBundledSkills loads skills from the embedded filesystem.
 func loadBundledSkills(byName map[string]*Skill) error {
+	return loadBundledSkillsInto(byName)
+}
+
+// loadBundledSkillsInto is the shared implementation for loading bundled skills.
+func loadBundledSkillsInto(byName map[string]*Skill) error {
 	dirs, err := fs.ReadDir(bundledSkills, "bundled")
 	if err != nil {
 		return err

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // MCPStoreListResponse is the response for GET /api/mcp-store
@@ -82,7 +84,7 @@ func ListMCPStoreHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -135,7 +137,7 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -147,7 +149,7 @@ func GetMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if server == nil {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
@@ -167,7 +169,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 
@@ -179,12 +181,12 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if server == nil {
-		http.Error(w, "Server not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Server not found")
 		return
 	}
 
 	if server.Config == nil {
-		http.Error(w, "Server has no configuration available", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server has no configuration available")
 		return
 	}
 
@@ -192,16 +194,9 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	var installReq MCPStoreInstallRequest
 	if r.Body != nil && r.ContentLength > 0 {
 		if err := json.NewDecoder(r.Body).Decode(&installReq); err != nil {
-			http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+			respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 			return
 		}
-	}
-
-	// Load current MCP config
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		http.Error(w, "Failed to load MCP config: "+err.Error(), http.StatusInternalServerError)
-		return
 	}
 
 	// Determine server name
@@ -238,6 +233,24 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		newConfig.URL = server.Config.URL
 	}
 
+	// Platform mode: save to DB store, discover tools async
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		// Team-scoped install requires team admin privileges
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
+		installMCPStoreServerPlatform(w, r, mcpStore, serverName, newConfig)
+		return
+	}
+
+	// Personal mode: save to filesystem
+	// Load current MCP config
+	mcpCfg, err := config.LoadMCPConfig()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
+		return
+	}
+
 	// Initialize map if nil
 	if mcpCfg.MCPServers == nil {
 		mcpCfg.MCPServers = make(map[string]config.MCPServerConfig)
@@ -248,7 +261,7 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save config
 	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		http.Error(w, "Failed to save MCP config: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
 		return
 	}
 
@@ -354,12 +367,57 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// installMCPStoreServerPlatform handles MCP Store server installation in platform mode.
+// Saves the server config to the DB store and discovers tools in the background.
+func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, serverName string, newConfig config.MCPServerConfig) {
+	userID := effectiveUserID(r)
+
+	s := &store.MCPServer{
+		Name:      serverName,
+		Command:   newConfig.Command,
+		Args:      newConfig.Args,
+		Env:       newConfig.Env,
+		Transport: newConfig.Transport,
+		URL:       newConfig.URL,
+		Enabled:   newConfig.Enabled,
+		CreatedBy: userID,
+	}
+
+	if err := mcpStore.Save(r.Context(), s); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save MCP server: "+err.Error())
+		return
+	}
+
+	// Discover tools in background
+	servers := map[string]config.MCPServerConfig{serverName: newConfig}
+	go func() {
+		bgCtx := context.Background()
+		discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
+		if discoveredTools != nil {
+			if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
+				slog.Warn("failed to update cached_tools after store install", "server", serverName, "error", err)
+			}
+		}
+	}()
+
+	// Reset the Studio chat agent so the next request picks up the new MCP server.
+	GetChatManager().Reset()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":      "ok",
+		"serverName":  serverName,
+		"message":     "Server installed successfully",
+		"toolsLoaded": 0, // tools discovered async
+	})
+}
+
 // GetMCPStoreTagsHandler handles GET /api/mcp-store/tags
 func GetMCPStoreTagsHandler(w http.ResponseWriter, r *http.Request) {
 	// Load all servers from taps
 	servers, err := loadAllServersFromTaps()
 	if err != nil {
-		http.Error(w, "Failed to load servers: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to load servers: "+err.Error())
 		return
 	}
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -355,7 +356,9 @@ func (a *AstonishAgent) executeLLMNode(ctx agent.InvocationContext, node *config
 func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node *config.Node, nodeName string, state session.State, yield func(*session.Event, error) bool) (bool, error) {
 	// Apply per-node timeout to prevent indefinite hangs on stalled LLM calls.
 	// The timeout covers the entire attempt (LLM call + tool calls + processing).
-	const nodeTimeout = 5 * time.Minute
+	// 10 minutes allows research-heavy tasks (e.g., browser automation with many
+	// page visits) to complete without being prematurely killed.
+	const nodeTimeout = 10 * time.Minute
 	timeoutCtx, cancel := context.WithTimeout(ctx, nodeTimeout)
 	defer cancel()
 	ctx = ctx.WithContext(timeoutCtx)
@@ -707,10 +710,23 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		// Per-call restore functions keyed by FunctionCallID so parallel
 		// tool calls don't clobber each other's restore closures.
 		var restoreFuncs sync.Map // map[string]func()
-		if a.CredentialStore != nil {
-			store := a.CredentialStore
+		{
+			agentResolver := a.CredentialStore // may be nil if file-based store failed
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credRestore := credentials.SubstituteAndRestore(args, store)
+				// In platform mode, prefer the tenant-scoped PG credential store
+				// injected into the context. Fall back to agent-level store.
+				var resolver credentials.CredentialResolver
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					resolver = credentials.NewStoreAdapter(cs)
+				} else if agentResolver != nil {
+					resolver = agentResolver
+				}
+
+				if resolver == nil {
+					return nil, nil // no credential store available at all
+				}
+
+				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				if prev, loaded := restoreFuncs.Load(callID); loaded {
 					prevFn := prev.(func())

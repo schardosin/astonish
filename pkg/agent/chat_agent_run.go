@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -96,7 +98,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 1: Guidance docs (how-to instructions for capabilities)
 				if c.KnowledgeSearchByCategory != nil {
-					guidanceResults, err := c.KnowledgeSearchByCategory(context.Background(), searchQuery, bm25Query, 3, 0.3, "guidance")
+					guidanceResults, err := c.KnowledgeSearchByCategory(ctx, searchQuery, bm25Query, 3, 0.3, "guidance")
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("guidance search failed", "component", "chat", "error", err)
@@ -108,7 +110,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 2: Everything else (memory, skills, flows, knowledge)
 				if c.KnowledgeSearch != nil {
-					knowledgeResults, err := c.KnowledgeSearch(context.Background(), searchQuery, bm25Query, 5, 0.3)
+					knowledgeResults, err := c.KnowledgeSearch(ctx, searchQuery, bm25Query, 5, 0.3)
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("knowledge search failed", "component", "chat", "error", err)
@@ -176,6 +178,8 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						slog.Debug("tool index search failed", "component", "chat", "error", err)
 					}
 				} else {
+					// Filter out MCP tools the user's team doesn't have access to
+					matches = FilterAccessibleToolMatches(ctx, matches)
 					toolMatches = matches
 					if len(matches) > 0 {
 						relevantTools = FormatToolMatchesForPrompt(matches)
@@ -195,12 +199,63 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		c.searchToolsResults = nil
 		c.searchToolsMu.Unlock()
 
-		// Set per-turn dynamic fields on the system prompt builder, then build.
+		// Clone the SystemPromptBuilder for this request to avoid races with
+		// concurrent callers (scheduler jobs, channel messages, Studio chat).
+		// Per-turn dynamic fields are set on the clone, which is then discarded.
+		promptBuilder := c.SystemPrompt.Clone()
+		if promptBuilder == nil {
+			yield(nil, fmt.Errorf("SystemPrompt builder is nil"))
+			return
+		}
+
+		// Apply per-turn overrides injected by callers via context
+		if po := PromptOverridesFromContext(ctx); po != nil {
+			if po.ChannelHints != "" {
+				promptBuilder.ChannelHints = po.ChannelHints
+			}
+			if po.SchedulerHints != "" {
+				promptBuilder.SchedulerHints = po.SchedulerHints
+			}
+			if po.SessionContext != "" {
+				promptBuilder.SessionContext = po.SessionContext
+			}
+		}
+
+		// Per-team tool restrictions: filter disabled tools from the prompt builder
+		// so the LLM doesn't see them in the system prompt's capabilities list.
+		if disabledTools := store.DisabledToolsFromContext(ctx); len(disabledTools) > 0 {
+			disabledSet := make(map[string]bool, len(disabledTools))
+			for _, name := range disabledTools {
+				disabledSet[name] = true
+			}
+			filtered := make([]tool.Tool, 0, len(promptBuilder.Tools))
+			for _, t := range promptBuilder.Tools {
+				if disabledSet[t.Name()] {
+					continue
+				}
+				filtered = append(filtered, t)
+			}
+			promptBuilder.Tools = filtered
+		}
+
+		// Set per-turn dynamic fields on the cloned builder, then build.
 		// These are appended at the end of the system prompt so the static prefix
 		// remains cacheable by providers.
-		c.SystemPrompt.RelevantKnowledge = relevantKnowledge
-		c.SystemPrompt.RelevantTools = relevantTools
-		instruction := c.SystemPrompt.Build()
+		promptBuilder.RelevantKnowledge = relevantKnowledge
+		promptBuilder.RelevantTools = relevantTools
+
+		// Per-turn MCP access filter: in platform mode, only show MCP groups
+		// the current user's team/org has access to in the delegation catalog.
+		mcpStores := store.MCPServerStoresFromContext(ctx)
+		if mcpStores != nil {
+			promptBuilder.MCPAccessFilter = func(serverName string) bool {
+				return isMCPServerAccessible(ctx, serverName)
+			}
+		} else {
+			promptBuilder.MCPAccessFilter = nil // personal mode — no filtering
+		}
+
+		instruction := promptBuilder.Build()
 
 		// Capture session identity for use in AfterToolCallback closure.
 		sessionID := ctx.Session().ID()
@@ -237,18 +292,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
 
-			// Capture file artifacts from write_file and edit_file tool calls.
-			// The file path is extracted from input args and stashed for UI delivery.
-			switch t.Name() {
-			case "write_file":
-				if path, ok := input["file_path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(path, t.Name())
-				}
-			case "edit_file":
-				if path, ok := input["path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(path, t.Name())
-				}
+		// Capture file artifacts from write_file and edit_file tool calls.
+		// The file path is extracted from input args and stashed for UI delivery.
+		switch t.Name() {
+		case "write_file":
+			if path, ok := input["file_path"].(string); ok && path != "" {
+				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
 			}
+		case "edit_file":
+			if path, ok := input["path"].(string); ok && path != "" {
+				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+			}
+		}
 
 			// Strip large flow output from run_flow results. The full output
 			// is stashed for direct delivery to the user (via SSE or channel),
@@ -308,10 +363,28 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// shares the same args map by reference) never persists real secrets.
 		var beforeToolCallbacks []llmagent.BeforeToolCallback
 
-		if c.CredentialStore != nil {
-			store := c.CredentialStore
+		// Always register credential substitution callback. In platform mode,
+		// the PG-backed credential store is injected into the context per-request
+		// (even if the file-based store failed to open). The callback checks both
+		// the context store and the agent-level fallback.
+		{
+			agentResolver := c.CredentialStore // may be nil if file-based store failed
 			beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
-				credRestore := credentials.SubstituteAndRestore(args, store)
+				// In platform mode, prefer the tenant-scoped PG credential store
+				// injected into the context by chat_handlers.go. Fall back to the
+				// agent-level file-based store for personal mode.
+				var resolver credentials.CredentialResolver
+				if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+					resolver = credentials.NewStoreAdapter(cs)
+				} else if agentResolver != nil {
+					resolver = agentResolver
+				}
+
+				if resolver == nil {
+					return nil, nil // no credential store available at all
+				}
+
+				credRestore := credentials.SubstituteAndRestore(args, resolver)
 				callID := ctx.FunctionCallID()
 				// Chain with any existing restore (e.g. pending secrets added later).
 				if prev, loaded := restoreFuncs.Load(callID); loaded {
@@ -377,6 +450,21 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Truncate oversized tool responses before they reach the model
 		beforeModelCallbacks = append(beforeModelCallbacks, TruncateToolResponsesCallback())
+
+		// Per-team tool restrictions: remove disabled tools from the LLM request.
+		// This ensures the LLM cannot see or call tools the team admin has disabled.
+		if disabledTools := store.DisabledToolsFromContext(ctx); len(disabledTools) > 0 {
+			disabledSet := make(map[string]bool, len(disabledTools))
+			for _, name := range disabledTools {
+				disabledSet[name] = true
+			}
+			beforeModelCallbacks = append(beforeModelCallbacks, func(_ agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+				for name := range disabledSet {
+					delete(req.Tools, name)
+				}
+				return nil, nil
+			})
+		}
 
 		// Dynamically inject relevant tools into each LLM request.
 		// Fires on every LLM API call (including after tool results), adding
@@ -594,6 +682,24 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				defer reflectCancel()
 				reflector.Reflect(reflectCtx, trace, events)
 			}()
+		} else if c.PlatformReflector != nil {
+			// Platform mode: the reflector needs the runner context (which has
+			// MemoryStore, SessionID, UserID injected by ChatRunner). We derive
+			// a new context from the invocation context (which IS the runner ctx)
+			// with a timeout so it can't hang indefinitely.
+			events := ctx.Session().Events()
+			platformReflector := c.PlatformReflector
+			// Propagate store values from invocation context to a detached ctx
+			// so the goroutine survives after the ADK Run returns.
+			reflectCtx := context.Background()
+			reflectCtx = store.WithMemoryStore(reflectCtx, store.MemoryStoreFromContext(ctx))
+			reflectCtx = store.WithSessionID(reflectCtx, store.SessionIDFromContext(ctx))
+			reflectCtx = store.WithUserID(reflectCtx, store.UserIDFromContext(ctx))
+			go func() {
+				tCtx, tCancel := context.WithTimeout(reflectCtx, 120*time.Second)
+				defer tCancel()
+				platformReflector.Reflect(tCtx, trace, events)
+			}()
 		}
 
 		// Store the trace keyed by session ID for on-demand /distill
@@ -605,4 +711,17 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 		c.traceMu.Unlock()
 	}
+}
+
+// resolveAbsPath ensures a file path is absolute. If the path is relative,
+// it is resolved against the current working directory. Used when capturing
+// file artifacts to ensure consistent absolute paths for later retrieval.
+func resolveAbsPath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }

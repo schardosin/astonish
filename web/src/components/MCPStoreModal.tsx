@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { X, Search, Star, ExternalLink, Download, Check, AlertCircle, Loader2, Tag, Package } from 'lucide-react'
+import { teamFetch } from '../api/teamContext'
 
 // --- Types ---
 
@@ -24,23 +25,27 @@ interface MCPStoreModalProps {
   isOpen: boolean
   onClose: () => void
   onInstall?: (server: MCPServer) => void
+  teamSlug?: string
 }
 
 // API functions for MCP Store
 const fetchMCPStore = async (query = ''): Promise<{ servers: MCPServer[]; sources: string[] }> => {
   const url = query ? `/api/mcp-store?q=${encodeURIComponent(query)}` : '/api/mcp-store'
-  const res = await fetch(url)
+  const res = await teamFetch(url)
   if (!res.ok) throw new Error('Failed to fetch MCP store')
   return res.json()
 }
 
-const installMCPServer = async (mcpId: string, env: Record<string, string> = {}): Promise<Record<string, unknown>> => {
+const installMCPServer = async (mcpId: string, env: Record<string, string> = {}, teamSlug?: string): Promise<Record<string, unknown>> => {
   const encodedId = encodeURIComponent(mcpId).replace(/%2F/g, '/')
-  const res = await fetch(`/api/mcp-store/${encodedId}/install`, {
+  const url = teamSlug
+    ? `/api/mcp-store/${encodedId}/install?scope=team`
+    : `/api/mcp-store/${encodedId}/install`
+  const res = await teamFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ env })
-  })
+  }, teamSlug)
   if (!res.ok) {
     // Try to get error message from response body
     const errorText = await res.text()
@@ -49,7 +54,7 @@ const installMCPServer = async (mcpId: string, env: Record<string, string> = {})
   return res.json()
 }
 
-export default function MCPStoreModal({ isOpen, onClose, onInstall }: MCPStoreModalProps) {
+export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug }: MCPStoreModalProps) {
   const [servers, setServers] = useState<MCPServer[]>([])
   const [sources, setSources] = useState<string[]>([]) // Available sources for dropdown
   const [selectedSource, setSelectedSource] = useState('all') // Current source filter
@@ -92,7 +97,7 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }: MCPStoreMo
       if (source && source !== 'all') params.set('source', source)
       const url = params.toString() ? `/api/mcp-store?${params}` : '/api/mcp-store'
       
-      const res = await fetch(url)
+      const res = await teamFetch(url)
       if (!res.ok) throw new Error('Failed to fetch MCP store')
       const data = await res.json()
       
@@ -110,7 +115,7 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall }: MCPStoreMo
     setInstallSuccess(null)
     try {
       const envToSend = { ...envOverrides }
-      await installMCPServer(server.mcpId, envToSend)
+      await installMCPServer(server.mcpId, envToSend, teamSlug)
       setInstallSuccess(server.mcpId)
       setEnvOverrides({})
       if (onInstall) onInstall(server)

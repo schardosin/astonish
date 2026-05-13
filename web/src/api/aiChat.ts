@@ -1,10 +1,11 @@
 // API functions for AI Chat panel
 
 import type { InternetResult } from '../components/AIChatToolCards'
+import { teamFetch } from './teamContext'
 
 // API function to chat with AI
 export async function sendChatMessage(message: string, context: string, currentYaml: string, selectedNodes: any[], history: Array<{role: string; content: string}>) {
-  const response = await fetch('/api/ai/chat', {
+  const response = await teamFetch('/api/ai/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -20,7 +21,7 @@ export async function sendChatMessage(message: string, context: string, currentY
 
 // API function to chat with AI using streaming (Server-Sent Events)
 export async function sendChatMessageStream(message: string, context: string, currentYaml: string, selectedNodes: any[], history: Array<{role: string; content: string}>, onEvent: (eventType: string, data: Record<string, any>) => void) {
-  const response = await fetch('/api/ai/chat', {
+  const response = await teamFetch('/api/ai/chat', {
     method: 'POST',
     headers: { 
       'Content-Type': 'application/json',
@@ -76,7 +77,7 @@ export async function sendChatMessageStream(message: string, context: string, cu
 
 // API function to search for tools in the store using AI semantic search
 export async function searchToolsInStore(requirement: string) {
-  const response = await fetch('/api/ai/tool-search', {
+  const response = await teamFetch('/api/ai/tool-search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requirement }),
@@ -86,7 +87,7 @@ export async function searchToolsInStore(requirement: string) {
 
 // API function to search for MCP servers on the internet (uses AI knowledge)
 export async function searchToolsOnInternet(requirement: string) {
-  const response = await fetch('/api/ai/tool-search-internet', {
+  const response = await teamFetch('/api/ai/tool-search-internet', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ requirement }),
@@ -96,7 +97,7 @@ export async function searchToolsOnInternet(requirement: string) {
 
 // API function to classify user intent using LLM
 export async function classifyIntent(message: string, tools: Array<{ name: string; [key: string]: any }> = []) {
-  const response = await fetch('/api/ai/classify-intent', {
+  const response = await teamFetch('/api/ai/classify-intent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ 
@@ -109,7 +110,7 @@ export async function classifyIntent(message: string, tools: Array<{ name: strin
 
 // API function to extract MCP server info from a URL (uses tavily-extract)
 export async function extractMCPServerFromURL(url: string) {
-  const response = await fetch('/api/ai/url-extract', {
+  const response = await teamFetch('/api/ai/url-extract', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
@@ -119,7 +120,7 @@ export async function extractMCPServerFromURL(url: string) {
 
 // API function to install a tool from the store
 export async function installToolFromStore(toolId: string, serverName: string, env: Record<string, string> = {}) {
-  const response = await fetch(`/api/mcp-store/${encodeURIComponent(toolId)}/install`, {
+  const response = await teamFetch(`/api/mcp-store/${encodeURIComponent(toolId)}/install`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ serverName, env }),
@@ -129,7 +130,7 @@ export async function installToolFromStore(toolId: string, serverName: string, e
 
 // API function to install MCP server from internet search result
 export async function installInternetMCP(result: InternetResult, env: Record<string, string> = {}) {
-  const response = await fetch('/api/mcp-internet-install', {
+  const response = await teamFetch('/api/mcp-internet-install', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

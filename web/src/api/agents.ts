@@ -2,6 +2,8 @@
  * API client for Astonish Studio
  */
 
+import { teamFetch } from './teamContext'
+
 const API_BASE = '/api'
 
 // --- Types ---
@@ -11,11 +13,13 @@ export interface Agent {
   name: string
   description: string
   source: string
+  scope?: string // "personal" | "team" (platform mode only)
 }
 
 export interface AgentDetail {
   name: string
   source: string
+  scope?: string // "personal" | "team" (platform mode only)
   yaml: string
   config: Record<string, unknown>
 }
@@ -58,23 +62,25 @@ export interface StandardServer {
 // --- API Functions ---
 
 export async function fetchAgents(): Promise<{ agents: Agent[] }> {
-  const response = await fetch(`${API_BASE}/agents`)
+  const response = await teamFetch(`${API_BASE}/agents`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agents: ${response.statusText}`)
   }
   return response.json()
 }
 
-export async function fetchAgent(name: string): Promise<AgentDetail> {
-  const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`)
+export async function fetchAgent(name: string, scope?: string): Promise<AgentDetail> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch agent: ${response.statusText}`)
   }
   return response.json()
 }
 
-export async function saveAgent(name: string, yaml: string): Promise<{ status: string; path: string }> {
-  const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
+export async function saveAgent(name: string, yaml: string, scope?: string): Promise<{ status: string; path: string }> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -87,8 +93,9 @@ export async function saveAgent(name: string, yaml: string): Promise<{ status: s
   return response.json()
 }
 
-export async function deleteAgent(name: string): Promise<{ status: string; deleted: string }> {
-  const response = await fetch(`${API_BASE}/agents/${encodeURIComponent(name)}`, {
+export async function deleteAgent(name: string, scope?: string): Promise<{ status: string; deleted: string }> {
+  const params = scope ? `?scope=${encodeURIComponent(scope)}` : ''
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}${params}`, {
     method: 'DELETE',
   })
   if (!response.ok) {
@@ -97,8 +104,28 @@ export async function deleteAgent(name: string): Promise<{ status: string; delet
   return response.json()
 }
 
+export async function publishFlowToTeam(name: string): Promise<{ published: boolean; name: string }> {
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/publish`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to publish flow: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function forkFlowToPersonal(name: string): Promise<{ forked: boolean; name: string }> {
+  const response = await teamFetch(`${API_BASE}/agents/${encodeURIComponent(name)}/fork`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to fork flow: ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function fetchTools(): Promise<{ tools: Tool[] }> {
-  const response = await fetch(`${API_BASE}/tools`)
+  const response = await teamFetch(`${API_BASE}/tools`)
   if (!response.ok) {
     throw new Error(`Failed to fetch tools: ${response.statusText}`)
   }
@@ -106,7 +133,7 @@ export async function fetchTools(): Promise<{ tools: Tool[] }> {
 }
 
 export async function checkMcpDependencies(dependencies: McpDependency[]): Promise<McpDependencyCheckResult> {
-  const response = await fetch(`${API_BASE}/mcp-dependencies/check`, {
+  const response = await teamFetch(`${API_BASE}/mcp-dependencies/check`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -121,7 +148,7 @@ export async function checkMcpDependencies(dependencies: McpDependency[]): Promi
 
 export async function getMcpStoreServer(storeId: string): Promise<Record<string, unknown>> {
   const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
-  const response = await fetch(`${API_BASE}/mcp-store/${encodedId}`)
+  const response = await teamFetch(`${API_BASE}/mcp-store/${encodedId}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch server details (${response.status})`)
   }
@@ -130,7 +157,7 @@ export async function getMcpStoreServer(storeId: string): Promise<Record<string,
 
 export async function installMcpServer(storeId: string, env: Record<string, string> = {}): Promise<McpInstallResult> {
   const encodedId = encodeURIComponent(storeId).replace(/%2F/g, '/')
-  const response = await fetch(`${API_BASE}/mcp-store/${encodedId}/install`, {
+  const response = await teamFetch(`${API_BASE}/mcp-store/${encodedId}/install?scope=team`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -148,7 +175,7 @@ export async function installInlineMcpServer(
   serverName: string,
   config: Record<string, unknown>
 ): Promise<{ status: string; serverName: string }> {
-  const response = await fetch(`${API_BASE}/mcp/install-inline`, {
+  const response = await teamFetch(`${API_BASE}/mcp/install-inline?scope=team`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -163,7 +190,7 @@ export async function installInlineMcpServer(
 }
 
 export async function fetchStandardServers(): Promise<{ servers: StandardServer[] }> {
-  const response = await fetch(`${API_BASE}/standard-servers`)
+  const response = await teamFetch(`${API_BASE}/standard-servers`)
   if (!response.ok) {
     throw new Error(`Failed to fetch standard servers: ${response.statusText}`)
   }
@@ -171,7 +198,7 @@ export async function fetchStandardServers(): Promise<{ servers: StandardServer[
 }
 
 export async function installStandardServer(id: string, env: Record<string, string> = {}): Promise<McpInstallResult> {
-  const response = await fetch(`${API_BASE}/standard-servers/${encodeURIComponent(id)}/install`, {
+  const response = await teamFetch(`${API_BASE}/standard-servers/${encodeURIComponent(id)}/install`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

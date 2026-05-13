@@ -10,6 +10,22 @@ import (
 	chromem "github.com/philippgille/chromem-go"
 )
 
+// newTestToolIndex creates a ToolIndex backed by an in-memory chromem store.
+// This is the standard way to create a ToolIndex in tests.
+func newTestToolIndex(t *testing.T, ef chromem.EmbeddingFunc) *ToolIndex {
+	t.Helper()
+	db := chromem.NewDB()
+	vs, err := NewChromemToolVectorStore(db, ef)
+	if err != nil {
+		t.Fatalf("NewChromemToolVectorStore: %v", err)
+	}
+	idx, err := NewToolIndex(vs, EmbedFunc(ef))
+	if err != nil {
+		t.Fatalf("NewToolIndex: %v", err)
+	}
+	return idx
+}
+
 // testEmbeddingFunc creates a deterministic embedding function for tests.
 // It uses SHA-256 of the text to produce a 384-dim vector. This doesn't
 // capture semantic similarity but allows testing the index mechanics.
@@ -89,12 +105,7 @@ func splitWords(s string) []string {
 }
 
 func TestToolIndex_NewToolIndex(t *testing.T) {
-	db := chromem.NewDB()
-
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 	if idx == nil {
 		t.Fatal("NewToolIndex returned nil")
 	}
@@ -104,24 +115,21 @@ func TestToolIndex_NewToolIndex(t *testing.T) {
 }
 
 func TestToolIndex_NewToolIndex_Errors(t *testing.T) {
-	_, err := NewToolIndex(nil, testEmbeddingFunc())
+	_, err := NewToolIndex(nil, EmbedFunc(testEmbeddingFunc()))
 	if err == nil {
-		t.Error("expected error for nil DB")
+		t.Error("expected error for nil vector store")
 	}
 
 	db := chromem.NewDB()
-	_, err = NewToolIndex(db, nil)
+	vs, _ := NewChromemToolVectorStore(db, testEmbeddingFunc())
+	_, err = NewToolIndex(vs, nil)
 	if err == nil {
 		t.Error("expected error for nil embedding func")
 	}
 }
 
 func TestToolIndex_SyncTools(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	mainTools := mockTools("read_file", "write_file", "grep_search")
 	groups := []*ToolGroup{
@@ -137,7 +145,7 @@ func TestToolIndex_SyncTools(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mainTools, groups)
+	err := idx.SyncTools(context.Background(), mainTools, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -172,11 +180,7 @@ func TestToolIndex_SyncTools(t *testing.T) {
 }
 
 func TestToolIndex_SyncTools_Idempotent(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	groups := []*ToolGroup{
 		{
@@ -186,7 +190,7 @@ func TestToolIndex_SyncTools_Idempotent(t *testing.T) {
 	}
 
 	// Sync twice — should be idempotent
-	err = idx.SyncTools(context.Background(), nil, groups)
+	err := idx.SyncTools(context.Background(), nil, groups)
 	if err != nil {
 		t.Fatalf("first SyncTools: %v", err)
 	}
@@ -204,12 +208,8 @@ func TestToolIndex_SyncTools_Idempotent(t *testing.T) {
 }
 
 func TestToolIndex_Search(t *testing.T) {
-	db := chromem.NewDB()
 	// Use the semantic embedding function so word overlap produces similarity
-	idx, err := NewToolIndex(db, testSemanticEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testSemanticEmbeddingFunc())
 
 	groups := []*ToolGroup{
 		{
@@ -229,7 +229,7 @@ func TestToolIndex_Search(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), nil, groups)
+	err := idx.SyncTools(context.Background(), nil, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -259,11 +259,7 @@ func TestToolIndex_Search(t *testing.T) {
 }
 
 func TestToolIndex_SearchGroups(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testSemanticEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testSemanticEmbeddingFunc())
 
 	mainTools := mockTools("read_file")
 	groups := []*ToolGroup{
@@ -277,7 +273,7 @@ func TestToolIndex_SearchGroups(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mainTools, groups)
+	err := idx.SyncTools(context.Background(), mainTools, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -297,11 +293,7 @@ func TestToolIndex_SearchGroups(t *testing.T) {
 }
 
 func TestToolIndex_LookupGroup(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	groups := []*ToolGroup{
 		{
@@ -310,7 +302,7 @@ func TestToolIndex_LookupGroup(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mockTools("read_file"), groups)
+	err := idx.SyncTools(context.Background(), mockTools("read_file"), groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -327,11 +319,7 @@ func TestToolIndex_LookupGroup(t *testing.T) {
 }
 
 func TestToolIndex_Dedup(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	// read_file appears in both main tools and core group — should be deduped
 	mainTools := mockTools("read_file")
@@ -342,7 +330,7 @@ func TestToolIndex_Dedup(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mainTools, groups)
+	err := idx.SyncTools(context.Background(), mainTools, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -398,11 +386,7 @@ func TestFormatToolMatchesForPrompt_Empty(t *testing.T) {
 }
 
 func TestToolIndex_SearchEmpty(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	// Search on empty index should return nil, not error
 	matches, err := idx.Search(context.Background(), "anything", 5, 0.0)
@@ -415,11 +399,7 @@ func TestToolIndex_SearchEmpty(t *testing.T) {
 }
 
 func TestToolIndex_ListAll(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	mainTools := mockTools("read_file", "write_file")
 	groups := []*ToolGroup{
@@ -435,7 +415,7 @@ func TestToolIndex_ListAll(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mainTools, groups)
+	err := idx.SyncTools(context.Background(), mainTools, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -483,11 +463,7 @@ func TestToolIndex_ListAll(t *testing.T) {
 }
 
 func TestToolIndex_ListAll_Empty(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	all := idx.ListAll()
 	if len(all) != 0 {
@@ -535,7 +511,7 @@ func TestTokenize(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBuildBM25Index(t *testing.T) {
-	docs := []chromem.Document{
+	docs := []ToolVectorDoc{
 		{ID: "g1:tool_a", Content: "tool_a: Activate a sandbox container", Metadata: map[string]string{"tool_name": "tool_a", "group_name": "g1", "is_main": "false"}},
 		{ID: "g1:tool_b", Content: "tool_b: Take a screenshot of the browser", Metadata: map[string]string{"tool_name": "tool_b", "group_name": "g1", "is_main": "false"}},
 		{ID: "g2:tool_c", Content: "tool_c: Send an HTTP request to a web API", Metadata: map[string]string{"tool_name": "tool_c", "group_name": "g2", "is_main": "true"}},
@@ -569,14 +545,14 @@ func TestBuildBM25Index_Empty(t *testing.T) {
 	if idx != nil {
 		t.Error("buildBM25Index(nil) should return nil")
 	}
-	idx = buildBM25Index([]chromem.Document{})
+	idx = buildBM25Index([]ToolVectorDoc{})
 	if idx != nil {
 		t.Error("buildBM25Index([]) should return nil")
 	}
 }
 
 func TestBM25Search_BasicKeywordMatch(t *testing.T) {
-	docs := []chromem.Document{
+	docs := []ToolVectorDoc{
 		{ID: "sandbox:use_sandbox_template", Content: "use_sandbox_template: Activate a sandbox container from a template", Metadata: map[string]string{"tool_name": "use_sandbox_template", "group_name": "sandbox_templates", "is_main": "false"}},
 		{ID: "browser:browser_navigate", Content: "browser_navigate: Navigate the browser to a URL", Metadata: map[string]string{"tool_name": "browser_navigate", "group_name": "browser", "is_main": "false"}},
 		{ID: "web:http_request", Content: "http_request: Make an HTTP request to a web API endpoint", Metadata: map[string]string{"tool_name": "http_request", "group_name": "web", "is_main": "false"}},
@@ -601,7 +577,7 @@ func TestBM25Search_BasicKeywordMatch(t *testing.T) {
 func TestBM25Search_ProperNounDilution(t *testing.T) {
 	// This is the core test: "activate the container juicytrade" should still
 	// match use_sandbox_template via BM25 even though "juicytrade" is noise.
-	docs := []chromem.Document{
+	docs := []ToolVectorDoc{
 		{ID: "sandbox:use_sandbox_template", Content: "use_sandbox_template: Activate a sandbox container from a template", Metadata: map[string]string{"tool_name": "use_sandbox_template", "group_name": "sandbox_templates", "is_main": "false"}},
 		{ID: "browser:browser_navigate", Content: "browser_navigate: Navigate the browser to a URL", Metadata: map[string]string{"tool_name": "browser_navigate", "group_name": "browser", "is_main": "false"}},
 		{ID: "web:http_request", Content: "http_request: Make an HTTP request to a web API endpoint", Metadata: map[string]string{"tool_name": "http_request", "group_name": "web", "is_main": "false"}},
@@ -631,7 +607,7 @@ func TestBM25Search_ProperNounDilution(t *testing.T) {
 }
 
 func TestBM25Search_NoMatch(t *testing.T) {
-	docs := []chromem.Document{
+	docs := []ToolVectorDoc{
 		{ID: "a:tool_a", Content: "tool_a: Do something specific", Metadata: map[string]string{"tool_name": "tool_a", "group_name": "a", "is_main": "false"}},
 	}
 
@@ -656,11 +632,7 @@ func TestBM25Search_Empty(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestToolIndex_SearchHybrid(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testSemanticEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testSemanticEmbeddingFunc())
 
 	groups := []*ToolGroup{
 		{
@@ -680,7 +652,7 @@ func TestToolIndex_SearchHybrid(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), nil, groups)
+	err := idx.SyncTools(context.Background(), nil, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -714,11 +686,7 @@ func TestToolIndex_SearchHybrid(t *testing.T) {
 }
 
 func TestToolIndex_SearchHybrid_Empty(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc())
 
 	matches, err := idx.SearchHybrid(context.Background(), "anything", 5, 0)
 	if err != nil {
@@ -730,11 +698,7 @@ func TestToolIndex_SearchHybrid_Empty(t *testing.T) {
 }
 
 func TestToolIndex_SearchGroupsHybrid(t *testing.T) {
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testSemanticEmbeddingFunc())
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testSemanticEmbeddingFunc())
 
 	mainTools := mockTools("read_file")
 	groups := []*ToolGroup{
@@ -748,7 +712,7 @@ func TestToolIndex_SearchGroupsHybrid(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), mainTools, groups)
+	err := idx.SyncTools(context.Background(), mainTools, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}
@@ -768,11 +732,7 @@ func TestToolIndex_SearchHybrid_BM25BoostsWeakVector(t *testing.T) {
 	// in vector search. We use the deterministic (non-semantic) hash embedding
 	// which gives essentially random similarity. BM25 keyword matching should
 	// still surface the right tool via RRF fusion.
-	db := chromem.NewDB()
-	idx, err := NewToolIndex(db, testEmbeddingFunc()) // hash-based, NOT semantic
-	if err != nil {
-		t.Fatalf("NewToolIndex: %v", err)
-	}
+	idx := newTestToolIndex(t, testEmbeddingFunc()) // hash-based, NOT semantic
 
 	groups := []*ToolGroup{
 		{
@@ -787,7 +747,7 @@ func TestToolIndex_SearchHybrid_BM25BoostsWeakVector(t *testing.T) {
 		},
 	}
 
-	err = idx.SyncTools(context.Background(), nil, groups)
+	err := idx.SyncTools(context.Background(), nil, groups)
 	if err != nil {
 		t.Fatalf("SyncTools: %v", err)
 	}

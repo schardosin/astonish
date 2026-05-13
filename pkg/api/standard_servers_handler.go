@@ -13,6 +13,7 @@ import (
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // StandardServerResponse represents a standard server in the API response.
@@ -76,16 +77,23 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	srv := config.GetStandardServer(serverID)
 	if srv == nil {
-		http.Error(w, "Unknown standard server: "+serverID, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Unknown standard server: "+serverID)
 		return
 	}
 
 	var req InstallStandardServerRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
 		return
 	}
 
+	// Platform mode: save to DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		installStandardServerPlatform(w, r, mcpStore, srv, req)
+		return
+	}
+
+	// Personal mode: save to filesystem
 	// Save API key to the shared credential store so that the in-memory
 	// cache is updated immediately (mergeStandardServers uses the same
 	// instance via getInstalledSecretGetter to resolve keys at load time).
@@ -104,7 +112,7 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Install to config.yaml (web tool settings; key excluded if stored in credential store)
 	if err := config.InstallStandardServer(serverID, req.Env, storeKeyInConfig); err != nil {
-		http.Error(w, "Failed to install server: "+err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Failed to install server: "+err.Error())
 		return
 	}
 
@@ -207,6 +215,74 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// installStandardServerPlatform handles standard server install in platform mode.
+func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, srv *config.StandardMCPServer, req InstallStandardServerRequest) {
+	userID := effectiveUserID(r)
+
+	// Build the server config from the standard server definition
+	newConfig := config.MCPServerConfig{
+		Command:   srv.Command,
+		Args:      srv.Args,
+		Transport: "stdio",
+		Env:       req.Env,
+	}
+
+	s := &store.MCPServer{
+		Name:      srv.ID,
+		Command:   newConfig.Command,
+		Args:      newConfig.Args,
+		Env:       newConfig.Env,
+		Transport: newConfig.Transport,
+		CreatedBy: userID,
+	}
+
+	if err := mcpStore.Save(r.Context(), s); err != nil {
+		respondError(w, http.StatusInternalServerError, "Failed to save standard server: "+err.Error())
+		return
+	}
+
+	// Write the API key to platform_secrets so that IsStandardServerInstalled()
+	// and MergeStandardServers() can resolve it via the registered SecretGetter.
+	// This is the critical bridge between DB MCP config and the credential resolution path.
+	if pgStore := getPlatformPGStore(); pgStore != nil {
+		for _, ev := range srv.EnvVars {
+			if val, ok := req.Env[ev.Name]; ok && val != "" {
+				storeKey := "web_servers." + srv.ID + ".api_key"
+				if err := pgStore.PlatformSecrets().SetSecret(storeKey, val); err != nil {
+					slog.Warn("failed to write standard server API key to platform_secrets",
+						"server", srv.ID, "key", storeKey, "error", err)
+				}
+				break
+			}
+		}
+	}
+
+	// Discover tools in background
+	servers := map[string]config.MCPServerConfig{srv.ID: newConfig}
+	go func() {
+		bgCtx := context.Background()
+		discoveredTools := discoverMCPToolsForPlatform(bgCtx, srv.ID, servers)
+		if discoveredTools != nil {
+			if err := mcpStore.UpdateCachedTools(bgCtx, srv.ID, discoveredTools); err != nil {
+				slog.Warn("failed to update cached_tools for standard server", "server", srv.ID, "error", err)
+			}
+		}
+	}()
+
+	GetChatManager().Reset()
+
+	slog.Info("installed standard server (platform)", "server", srv.ID, "displayName", srv.DisplayName)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":         "installed",
+		"serverName":     srv.ID,
+		"toolsLoaded":    0, // async discovery
+		"webSearchTool":  srv.WebSearchTool,
+		"webExtractTool": srv.WebExtractTool,
+	})
+}
+
 // UninstallStandardServerHandler handles DELETE /api/standard-servers/{id}
 // Removes a standard MCP server's configuration, credentials, and cached tools.
 func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -215,13 +291,13 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	srv := config.GetStandardServer(serverID)
 	if srv == nil {
-		http.Error(w, "Unknown standard server: "+serverID, http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Unknown standard server: "+serverID)
 		return
 	}
 
 	// Keyless servers cannot be uninstalled
 	if len(srv.EnvVars) == 0 {
-		http.Error(w, "Server does not require configuration", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "Server does not require configuration")
 		return
 	}
 
@@ -235,7 +311,7 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Remove from config.yaml (web_servers entry + web tool references)
 	if err := config.UninstallStandardServer(serverID); err != nil {
-		http.Error(w, "Failed to uninstall server: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to uninstall server: "+err.Error())
 		return
 	}
 

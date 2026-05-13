@@ -8,6 +8,7 @@ import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/sea
 import { keymap, EditorView } from '@codemirror/view'
 import { saveMCPConfig, refreshMCPServer, toggleMCPServer, fetchMCPStatus } from './settingsApi'
 import type { MCPServerConfig, MCPServerStatusEntry, StandardServer } from './settingsApi'
+import { teamFetch } from '../../api/teamContext'
 
 interface MCPServersSettingsProps {
   mcpServers: Record<string, MCPServerConfig>
@@ -26,6 +27,8 @@ interface MCPServersSettingsProps {
   loadData: () => void
   setGeneralForm: (fn: (prev: any) => any) => void
   theme?: string
+  teamSlug?: string
+  scope?: 'team' | 'org' | 'platform'  // explicit scope override; when set, teamSlug is ignored for URL routing
 }
 
 export default function MCPServersSettings({
@@ -44,8 +47,14 @@ export default function MCPServersSettings({
   onToolsRefresh,
   loadData,
   setGeneralForm,
-  theme = 'dark'
+  theme = 'dark',
+  teamSlug,
+  scope
 }: MCPServersSettingsProps) {
+  // Resolve the effective scope: explicit scope prop overrides teamSlug inference
+  const effectiveScope = scope || (teamSlug ? 'team' : undefined)
+  const scopeQuery = effectiveScope ? `?scope=${effectiveScope}` : ''
+  const effectiveTeamSlug = scope === 'platform' ? undefined : teamSlug
   const [mcpViewMode, setMcpViewMode] = useState<'editor' | 'source'>('editor')
   const [mcpSourceText, setMcpSourceText] = useState('')
   const [mcpSourceError, setMcpSourceError] = useState<string | null>(null)
@@ -63,7 +72,7 @@ export default function MCPServersSettings({
 
   const loadMcpServerStatus = async () => {
     try {
-      const data = await fetchMCPStatus()
+      const data = await fetchMCPStatus(effectiveTeamSlug, effectiveScope)
       const statusMap: Record<string, MCPServerStatusEntry> = {}
       for (const server of (data.servers || [])) {
         statusMap[server.name] = server
@@ -97,7 +106,7 @@ export default function MCPServersSettings({
     }))
     
     try {
-      await refreshMCPServer(serverName)
+      await refreshMCPServer(serverName, effectiveTeamSlug, effectiveScope)
       loadMcpServerStatus()
       if (onToolsRefresh) onToolsRefresh()
     } catch (err: any) {
@@ -118,7 +127,7 @@ export default function MCPServersSettings({
     })
     
     try {
-      await toggleMCPServer(serverName, newEnabled)
+      await toggleMCPServer(serverName, newEnabled, effectiveTeamSlug, effectiveScope)
       if (onToolsRefresh) onToolsRefresh()
       loadMcpServerStatus()
     } catch (err: any) {
@@ -153,7 +162,7 @@ export default function MCPServersSettings({
           args: argsString.split(',').map(s => s.trim()).filter(Boolean)
         }
       })
-      await saveMCPConfig({ mcpServers: finalServers })
+      await saveMCPConfig({ mcpServers: finalServers }, effectiveTeamSlug, effectiveScope)
       if (onToolsRefresh) onToolsRefresh()
     } catch (err: any) {
       setError(err.message)
@@ -172,7 +181,7 @@ export default function MCPServersSettings({
           args: argsString.split(',').map(s => s.trim()).filter(Boolean)
         }
       })
-      await saveMCPConfig({ mcpServers: finalServers })
+      await saveMCPConfig({ mcpServers: finalServers }, effectiveTeamSlug, effectiveScope)
       setMcpHasChanges(false)
       if (onToolsRefresh) onToolsRefresh()
       loadMcpServerStatus()
@@ -290,11 +299,14 @@ export default function MCPServersSettings({
                                 setSetupLoading(true)
                                 setSetupError(null)
                                 try {
-                                  const res = await fetch(`/api/standard-servers/${srv.id}/install`, {
+                                  const url = effectiveScope
+                                    ? `/api/standard-servers/${srv.id}/install?scope=${effectiveScope}`
+                                    : `/api/standard-servers/${srv.id}/install`
+                                  const res = await teamFetch(url, {
                                     method: 'POST',
                                     headers: { 'Content-Type': 'application/json' },
                                     body: JSON.stringify({ env: setupEnv })
-                                  })
+                                  }, effectiveTeamSlug)
                                   if (!res.ok) {
                                     const text = await res.text()
                                     throw new Error(text)
@@ -347,7 +359,7 @@ export default function MCPServersSettings({
                             <button
                               onClick={async () => {
                                 try {
-                                  const res = await fetch(`/api/standard-servers/${srv.id}`, { method: 'DELETE' })
+                                  const res = await teamFetch(`/api/standard-servers/${srv.id}${scopeQuery}`, { method: 'DELETE' }, effectiveTeamSlug)
                                   if (!res.ok) throw new Error('Failed to remove server')
                                   await loadData()
                                   if (onToolsRefresh) onToolsRefresh()
@@ -841,7 +853,7 @@ export default function MCPServersSettings({
                     const parsed = JSON.parse(mcpSourceText)
                     if (parsed.mcpServers && typeof parsed.mcpServers === 'object') {
                       setSaving(true)
-                      await saveMCPConfig({ mcpServers: parsed.mcpServers })
+                      await saveMCPConfig({ mcpServers: parsed.mcpServers }, effectiveTeamSlug, effectiveScope)
                       setMcpServers(parsed.mcpServers)
                       const names: Record<string, string> = {}
                       const args: Record<string, string> = {}
@@ -887,12 +899,14 @@ export default function MCPServersSettings({
           loadMcpServerStatus()
           if (onToolsRefresh) onToolsRefresh()
         }}
+        teamSlug={effectiveTeamSlug}
       />
 
       {/* MCP Inspector Modal */}
       {inspectServer && (
         <MCPInspector
           serverName={inspectServer}
+          teamSlug={effectiveTeamSlug}
           onClose={() => setInspectServer(null)}
         />
       )}

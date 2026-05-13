@@ -27,6 +27,7 @@ type StandardMCPServer struct {
 	WebSearchTool  string           `json:"webSearchTool,omitempty"`  // "serverName:toolName"
 	WebExtractTool string           `json:"webExtractTool,omitempty"` // "serverName:toolName" or empty
 	IsDefault      bool             `json:"isDefault"`
+	ExcludedTools  []string         `json:"excludedTools,omitempty"` // Tools to filter out (expensive/redundant)
 }
 
 // standardServers is the hardcoded registry of supported standard MCP servers.
@@ -41,9 +42,10 @@ var standardServers = []StandardMCPServer{
 		EnvVars: []StandardEnvVar{
 			{Name: "TAVILY_API_KEY", Required: true, Description: "Your Tavily API key (get one at tavily.com)"},
 		},
-		WebSearchTool:  "tavily:tavily-search",
-		WebExtractTool: "tavily:tavily-extract",
+		WebSearchTool:  "tavily:tavily_search",
+		WebExtractTool: "tavily:tavily_extract",
 		IsDefault:      true,
+		ExcludedTools:  []string{"tavily_research", "tavily_crawl"},
 	},
 	{
 		ID:          "brave-search",
@@ -254,4 +256,21 @@ type StandardServerError struct {
 
 func (e *StandardServerError) Error() string {
 	return "standard server " + e.ID + ": " + e.Message
+}
+
+// GetExcludedTools returns the list of tool names that should be filtered out
+// for a standard server. Returns nil for non-standard servers or servers with
+// no exclusions. This ensures expensive/redundant tools like tavily_research
+// are not exposed when using the standard server configuration.
+// Users who want all tools can add the MCP server manually (non-standard).
+func GetExcludedTools(serverName string) map[string]bool {
+	srv := GetStandardServer(serverName)
+	if srv == nil || len(srv.ExcludedTools) == 0 {
+		return nil
+	}
+	excluded := make(map[string]bool, len(srv.ExcludedTools))
+	for _, name := range srv.ExcludedTools {
+		excluded[name] = true
+	}
+	return excluded
 }

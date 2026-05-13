@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, getMcpStoreServer, installMcpServer, installInlineMcpServer, fetchStandardServers, installStandardServer } from '../../api/agents'
 
 // Helper to mock fetch
@@ -10,6 +10,11 @@ function mockFetch(data: unknown, ok = true, statusText = 'OK', status = 200) {
     json: () => Promise.resolve(data),
     text: () => Promise.resolve(typeof data === 'string' ? data : JSON.stringify(data)),
   })
+}
+
+// Helper to extract headers from the fetch mock call
+function getCallHeaders(fetchMock: ReturnType<typeof vi.fn>, callIndex = 0): Headers {
+  return fetchMock.mock.calls[callIndex][1]?.headers as Headers
 }
 
 describe('agents API', () => {
@@ -26,7 +31,7 @@ describe('agents API', () => {
 
       const result = await fetchAgents()
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('throws on non-ok response', async () => {
@@ -42,13 +47,13 @@ describe('agents API', () => {
 
       const result = await fetchAgent('test')
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', expect.objectContaining({ headers: expect.any(Headers) }))
     })
 
     it('encodes agent name', async () => {
       globalThis.fetch = mockFetch({})
       await fetchAgent('my agent')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/my%20agent')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/my%20agent', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -59,11 +64,12 @@ describe('agents API', () => {
 
       const result = await saveAgent('test', 'yaml: content')
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', expect.objectContaining({
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ yaml: 'yaml: content' }),
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
   })
 
@@ -74,7 +80,7 @@ describe('agents API', () => {
 
       const result = await deleteAgent('test')
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', { method: 'DELETE' })
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/agents/test', expect.objectContaining({ method: 'DELETE' }))
     })
   })
 
@@ -85,7 +91,7 @@ describe('agents API', () => {
 
       const result = await fetchTools()
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/tools')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/tools', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -97,11 +103,12 @@ describe('agents API', () => {
 
       const result = await checkMcpDependencies(deps)
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-dependencies/check', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-dependencies/check', expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dependencies: deps }),
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
   })
 
@@ -109,7 +116,7 @@ describe('agents API', () => {
     it('preserves forward slashes in store ID', async () => {
       globalThis.fetch = mockFetch({})
       await getMcpStoreServer('org/repo')
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo')
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo', expect.objectContaining({ headers: expect.any(Headers) }))
     })
   })
 
@@ -120,11 +127,12 @@ describe('agents API', () => {
 
       const result = await installMcpServer('org/repo', { KEY: 'val' })
       expect(result).toEqual(expected)
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo/install', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp-store/org/repo/install?scope=team', expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ env: { KEY: 'val' } }),
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
 
     it('throws error text on failure', async () => {
@@ -143,11 +151,12 @@ describe('agents API', () => {
       globalThis.fetch = mockFetch(expected)
 
       await installInlineMcpServer('my-server', { cmd: 'echo' })
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/install-inline', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/mcp/install-inline?scope=team', expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ serverName: 'my-server', config: { cmd: 'echo' } }),
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
   })
 
@@ -166,11 +175,12 @@ describe('agents API', () => {
       globalThis.fetch = mockFetch({ status: 'ok', serverName: 's', toolsLoaded: 1 })
 
       await installStandardServer('my-id', { API_KEY: 'abc' })
-      expect(globalThis.fetch).toHaveBeenCalledWith('/api/standard-servers/my-id/install', {
+      expect(globalThis.fetch).toHaveBeenCalledWith('/api/standard-servers/my-id/install', expect.objectContaining({
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ env: { API_KEY: 'abc' } }),
-      })
+      }))
+      const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
+      expect(headers.get('Content-Type')).toBe('application/json')
     })
   })
 })

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/scheduler"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -40,6 +42,12 @@ type SchedulerJob struct {
 	Enabled   bool              `json:"enabled"`
 	TestFirst bool              `json:"test_first,omitempty"`
 
+	// Delivery configuration
+	DeliveryMode   string              `json:"delivery_mode,omitempty"`    // owner, team, members, target
+	MemberIDs      []string            `json:"member_ids,omitempty"`      // for "members" mode
+	ChannelFilter  []string            `json:"channel_filter,omitempty"`  // restrict to these channel types
+	MemberChannels map[string][]string `json:"member_channels,omitempty"` // per-member channel overrides
+
 	// Runtime state (populated on list)
 	LastRun    *time.Time `json:"last_run,omitempty"`
 	LastStatus string     `json:"last_status,omitempty"`
@@ -58,6 +66,73 @@ func SetSchedulerAccess(sa SchedulerAccess) {
 	schedulerAccessVar = sa
 }
 
+// getEffectiveSchedulerStore returns the tenant-scoped SchedulerStore from the
+// context (platform mode) or nil (personal mode uses schedulerAccessVar instead).
+func getEffectiveSchedulerStore(ctx context.Context) store.SchedulerStore {
+	if ctx == nil {
+		return nil
+	}
+	return store.SchedulerStoreFromContext(ctx)
+}
+
+// storeJobToToolJob converts a store.ScheduledJob to a tools.SchedulerJob.
+func storeJobToToolJob(sj *store.ScheduledJob) *SchedulerJob {
+	return &SchedulerJob{
+		ID:             sj.ID,
+		Name:           sj.Name,
+		Mode:           sj.Mode,
+		Cron:           sj.Schedule.Cron,
+		Timezone:       sj.Schedule.Timezone,
+		Flow:           sj.Payload.Flow,
+		Params:         sj.Payload.Params,
+		Instr:          sj.Payload.Instructions,
+		Channel:        sj.Delivery.Channel,
+		Target:         sj.Delivery.Target,
+		DeliveryMode:   sj.Delivery.Mode,
+		MemberIDs:      sj.Delivery.MemberIDs,
+		ChannelFilter:  sj.Delivery.ChannelFilter,
+		MemberChannels: sj.Delivery.MemberChannels,
+		Enabled:        sj.Enabled,
+		LastRun:        sj.LastRun,
+		LastStatus:     sj.LastStatus,
+		NextRun:        sj.NextRun,
+		Failures:       sj.ConsecutiveFailures,
+		CreatedAt:      sj.CreatedAt,
+	}
+}
+
+// toolJobToStoreJob converts a tools.SchedulerJob to a store.ScheduledJob.
+func toolJobToStoreJob(tj *SchedulerJob) *store.ScheduledJob {
+	return &store.ScheduledJob{
+		ID:   tj.ID,
+		Name: tj.Name,
+		Mode: tj.Mode,
+		Schedule: store.JobSchedule{
+			Cron:     tj.Cron,
+			Timezone: tj.Timezone,
+		},
+		Payload: store.JobPayload{
+			Flow:         tj.Flow,
+			Params:       tj.Params,
+			Instructions: tj.Instr,
+		},
+		Delivery: store.JobDelivery{
+			Channel:        tj.Channel,
+			Target:         tj.Target,
+			Mode:           tj.DeliveryMode,
+			MemberIDs:      tj.MemberIDs,
+			ChannelFilter:  tj.ChannelFilter,
+			MemberChannels: tj.MemberChannels,
+		},
+		Enabled:             tj.Enabled,
+		CreatedAt:           tj.CreatedAt,
+		LastRun:             tj.LastRun,
+		LastStatus:          tj.LastStatus,
+		NextRun:             tj.NextRun,
+		ConsecutiveFailures: tj.Failures,
+	}
+}
+
 // --- schedule_job tool ---
 
 type ScheduleJobArgs struct {
@@ -68,9 +143,16 @@ type ScheduleJobArgs struct {
 	Flow         string            `json:"flow,omitempty" jsonschema:"Flow name to execute (required for routine mode)"`
 	Params       map[string]string `json:"params,omitempty" jsonschema:"Flow parameters as key-value pairs (for routine mode)"`
 	Instructions string            `json:"instructions,omitempty" jsonschema:"Task instructions for the AI agent (required for adaptive mode). Be specific and detailed. MUST include the exact output format the user last saw, with a concrete example copied from the conversation."`
-	Channel      string            `json:"channel,omitempty" jsonschema:"Optional label for delivery channel (e.g. 'telegram'). Results are broadcast to all active channels automatically."`
-	Target       string            `json:"target,omitempty" jsonschema:"Optional target ID. Results are broadcast to all active channels automatically — you do NOT need to provide this."`
 	TestFirst    bool              `json:"test_first,omitempty" jsonschema:"If true, execute immediately to test, then ask user to confirm before enabling. Only set this AFTER the user has approved the test plan."`
+
+	// Delivery configuration — ASK the user about these before scheduling
+	DeliveryMode     string   `json:"delivery_mode,omitempty" jsonschema:"Who receives the results: 'owner' (only you), 'team' (all team members), 'members' (specific people). Default is 'owner'. ALWAYS ask the user who should receive the scheduled results before creating the job."`
+	DeliveryChannels []string `json:"delivery_channels,omitempty" jsonschema:"Which channels to deliver through (e.g. ['telegram', 'email', 'slack']). If empty, all linked channels are used. Ask the user which channel(s) they prefer for delivery."`
+	DeliveryMembers  []string `json:"delivery_members,omitempty" jsonschema:"User IDs for 'members' delivery mode. Use list_team_members first to get available members and their linked channels, then ask the user which members should receive results."`
+
+	// Legacy fields (prefer delivery_mode instead)
+	Channel string `json:"channel,omitempty" jsonschema:"DEPRECATED: Use delivery_mode instead. Legacy label for delivery channel."`
+	Target  string `json:"target,omitempty" jsonschema:"DEPRECATED: Use delivery_mode instead. Legacy target ID for direct delivery."`
 }
 
 type ScheduleJobResult struct {
@@ -81,7 +163,9 @@ type ScheduleJobResult struct {
 }
 
 func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, error) {
-	if schedulerAccessVar == nil {
+	// Try context-injected store first (platform multi-tenant), then global (personal mode)
+	ss := getEffectiveSchedulerStore(ctx)
+	if ss == nil && schedulerAccessVar == nil {
 		return ScheduleJobResult{}, fmt.Errorf("scheduler is not available — the daemon must be running with scheduler enabled")
 	}
 
@@ -108,7 +192,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	}
 
 	// Validate cron expression
-	if err := schedulerAccessVar.ValidateCron(args.Schedule); err != nil {
+	if err := scheduler.ValidateCron(args.Schedule); err != nil {
 		return ScheduleJobResult{
 			Status:  "error",
 			Message: fmt.Sprintf("Invalid cron expression: %v. Use 5-field format: minute hour day-of-month month day-of-week", err),
@@ -125,12 +209,17 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		}
 	}
 
-	// Reject duplicate names — if a job with this name already exists,
-	// the LLM should use update_scheduled_job to modify it instead of
-	// creating a new one. This prevents the test_first → enable flow
-	// from accidentally creating a second job.
+	// Reject duplicate names
 	if args.Name != "" {
-		if existing := schedulerAccessVar.GetJobByName(args.Name); existing != nil {
+		var existing *SchedulerJob
+		if ss != nil {
+			if sj := ss.GetByName(ctx, args.Name); sj != nil {
+				existing = storeJobToToolJob(sj)
+			}
+		} else {
+			existing = schedulerAccessVar.GetJobByName(args.Name)
+		}
+		if existing != nil {
 			return ScheduleJobResult{
 				Status:  "error",
 				Message: fmt.Sprintf("A job named %q already exists (ID: %s). Use update_scheduled_job to modify or enable it instead of creating a duplicate.", args.Name, existing.ID),
@@ -139,33 +228,71 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	}
 
 	// Create job
-	// Note: channel and target are stored but delivery is broadcast-based —
-	// results go to all active channel targets regardless of these values.
 	job := &SchedulerJob{
-		Name:      args.Name,
-		Mode:      args.Mode,
-		Cron:      args.Schedule,
-		Timezone:  args.Timezone,
-		Flow:      args.Flow,
-		Params:    args.Params,
-		Instr:     args.Instructions,
-		Channel:   args.Channel,
-		Target:    args.Target,
-		Enabled:   !args.TestFirst, // Disabled if test_first, enabled otherwise
-		TestFirst: args.TestFirst,
+		Name:           args.Name,
+		Mode:           args.Mode,
+		Cron:           args.Schedule,
+		Timezone:       args.Timezone,
+		Flow:           args.Flow,
+		Params:         args.Params,
+		Instr:          args.Instructions,
+		Channel:        args.Channel,
+		Target:         args.Target,
+		Enabled:        !args.TestFirst,
+		TestFirst:      args.TestFirst,
+		DeliveryMode:   args.DeliveryMode,
+		MemberIDs:      args.DeliveryMembers,
+		ChannelFilter:  args.DeliveryChannels,
+	}
+
+	// Default delivery mode to "owner" if not specified
+	if job.DeliveryMode == "" && job.Channel == "" && job.Target == "" {
+		job.DeliveryMode = "owner"
 	}
 
 	// Add job to store
-	if err := schedulerAccessVar.AddJob(job); err != nil {
-		return ScheduleJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to create job: %v", err),
-		}, nil
+	if ss != nil {
+		// Platform mode: use context-injected store
+		storeJob := toolJobToStoreJob(job)
+		storeJob.CreatedAt = time.Now()
+		storeJob.LastStatus = "pending"
+		// Set owner from context so delivery mode "owner" knows who to deliver to
+		if uid := store.UserIDFromContext(ctx); uid != "" {
+			storeJob.OwnerID = uid
+		}
+		if err := ss.Add(ctx, storeJob); err != nil {
+			return ScheduleJobResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Failed to create job: %v", err),
+			}, nil
+		}
+		job.ID = storeJob.ID
+		// Compute initial NextRun
+		if job.Enabled {
+			storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
+			_ = ss.Update(ctx, storeJob)
+		}
+	} else {
+		// Personal mode: use global scheduler access
+		if err := schedulerAccessVar.AddJob(job); err != nil {
+			return ScheduleJobResult{
+				Status:  "error",
+				Message: fmt.Sprintf("Failed to create job: %v", err),
+			}, nil
+		}
 	}
 
 	// If test_first, execute immediately and return result
 	if args.TestFirst {
-		result, execErr := schedulerAccessVar.RunNow(ctx, job.ID)
+		var result string
+		var execErr error
+		// Platform mode: use context-injected executor (bypasses auth)
+		if runJob := store.RunJobFuncFromContext(ctx); runJob != nil {
+			result, execErr = runJob(ctx, job.ID)
+		} else if schedulerAccessVar != nil {
+			// Personal mode: use HTTP bridge
+			result, execErr = schedulerAccessVar.RunNow(ctx, job.ID)
+		}
 		status := "test_complete"
 		msg := fmt.Sprintf("Job %q created and tested. The job is currently DISABLED — ask the user if the test result looks good, and if so, call update_scheduled_job to enable it.", args.Name)
 		if execErr != nil {
@@ -214,13 +341,25 @@ type JobSummary struct {
 }
 
 func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListScheduledJobsResult, error) {
-	if schedulerAccessVar == nil {
+	ss := getEffectiveSchedulerStore(ctx)
+	if ss == nil && schedulerAccessVar == nil {
 		return ListScheduledJobsResult{
 			Message: "Scheduler is not available — the daemon must be running with scheduler enabled",
 		}, nil
 	}
 
-	jobs := schedulerAccessVar.ListJobs()
+	var jobs []*SchedulerJob
+	if ss != nil {
+		// Platform mode: read from context-injected team store
+		storeJobs := ss.List(ctx)
+		jobs = make([]*SchedulerJob, len(storeJobs))
+		for i, sj := range storeJobs {
+			jobs[i] = storeJobToToolJob(sj)
+		}
+	} else {
+		// Personal mode: use global scheduler access
+		jobs = schedulerAccessVar.ListJobs()
+	}
 	summaries := make([]JobSummary, 0, len(jobs))
 	for _, j := range jobs {
 		if args.Filter != "" && !strings.Contains(j.Name, args.Filter) && !strings.Contains(j.Mode, args.Filter) {
@@ -270,48 +409,56 @@ type RemoveScheduledJobArgs struct {
 }
 
 type RemoveScheduledJobResult struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	ToolResult
 }
 
 func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveScheduledJobResult, error) {
-	if schedulerAccessVar == nil {
+	ss := getEffectiveSchedulerStore(ctx)
+	if ss == nil && schedulerAccessVar == nil {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: "Scheduler is not available",
+			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
 	jobID := args.JobID
 	if jobID == "" && args.JobName != "" {
 		// Look up by name
-		job := schedulerAccessVar.GetJobByName(args.JobName)
-		if job == nil {
+		if ss != nil {
+			if sj := ss.GetByName(ctx, args.JobName); sj != nil {
+				jobID = sj.ID
+			}
+		} else {
+			if job := schedulerAccessVar.GetJobByName(args.JobName); job != nil {
+				jobID = job.ID
+			}
+		}
+		if jobID == "" {
 			return RemoveScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("No job found with name %q", args.JobName),
+				ToolResult: toolError("No job found with name %q", args.JobName),
 			}, nil
 		}
-		jobID = job.ID
 	}
 
 	if jobID == "" {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: "Either job_id or job_name is required",
+			ToolResult: toolError("Either job_id or job_name is required"),
 		}, nil
 	}
 
-	if err := schedulerAccessVar.RemoveJob(jobID); err != nil {
+	var err error
+	if ss != nil {
+		err = ss.Remove(ctx, jobID)
+	} else {
+		err = schedulerAccessVar.RemoveJob(jobID)
+	}
+	if err != nil {
 		return RemoveScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to remove job: %v", err),
+			ToolResult: toolError("Failed to remove job: %v", err),
 		}, nil
 	}
 
 	return RemoveScheduledJobResult{
-		Status:  "removed",
-		Message: "Job removed successfully",
+		ToolResult: ToolResult{Status: "removed", Message: "Job removed successfully"},
 	}, nil
 }
 
@@ -326,44 +473,37 @@ type UpdateScheduledJobArgs struct {
 }
 
 type UpdateScheduledJobResult struct {
-	Status  string `json:"status"`
-	Message string `json:"message"`
+	ToolResult
 }
 
 func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
-	if schedulerAccessVar == nil {
+	ss := getEffectiveSchedulerStore(ctx)
+	if ss == nil && schedulerAccessVar == nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: "Scheduler is not available",
+			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
-	jobs := schedulerAccessVar.ListJobs()
-	var job *SchedulerJob
-	for _, j := range jobs {
-		if j.ID == args.JobID {
-			job = j
-			break
-		}
+	if ss != nil {
+		// Platform mode: use context-injected store
+		return updateScheduledJobFromStore(ctx, ss, args)
 	}
-	// Fallback: try matching by name if ID lookup failed.
-	// The LLM sometimes passes the job name instead of the UUID.
+	// Personal mode: use global scheduler access
+	return updateScheduledJobFromAccess(args)
+}
+
+func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
+	// Try by ID first, then by name
+	job := ss.Get(ctx, args.JobID)
 	if job == nil {
-		for _, j := range jobs {
-			if j.Name == args.JobID {
-				job = j
-				break
-			}
-		}
+		job = ss.GetByName(ctx, args.JobID)
 	}
 	if job == nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Job %q not found", args.JobID),
+			ToolResult: toolError("Job %q not found", args.JobID),
 		}, nil
 	}
 
-	// Apply updates
 	changes := []string{}
 	if args.Enabled != nil {
 		job.Enabled = *args.Enabled
@@ -374,10 +514,85 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 		}
 	}
 	if args.Schedule != "" {
-		if err := schedulerAccessVar.ValidateCron(args.Schedule); err != nil {
+		if err := scheduler.ValidateCron(args.Schedule); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid cron: %v", err),
+				ToolResult: toolError("Invalid cron: %v", err),
+			}, nil
+		}
+		job.Schedule.Cron = args.Schedule
+		changes = append(changes, "schedule updated")
+	}
+	if args.Timezone != "" {
+		if _, err := time.LoadLocation(args.Timezone); err != nil {
+			return UpdateScheduledJobResult{
+				ToolResult: toolError("Invalid timezone: %v", err),
+			}, nil
+		}
+		job.Schedule.Timezone = args.Timezone
+		changes = append(changes, "timezone updated")
+	}
+	if args.Name != "" {
+		job.Name = args.Name
+		changes = append(changes, "renamed")
+	}
+
+	// Recompute NextRun if schedule changed or job was enabled
+	if job.Enabled {
+		job.NextRun = scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
+	}
+
+	if err := ss.Update(ctx, job); err != nil {
+		return UpdateScheduledJobResult{
+			ToolResult: toolError("Failed to update: %v", err),
+		}, nil
+	}
+
+	msg := fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", "))
+	if job.Mode == "fleet_poll" && args.Schedule != "" {
+		msg += ". Note: for fleet_poll jobs, consider deactivating and reactivating the fleet plan to keep the plan config in sync."
+	}
+
+	return UpdateScheduledJobResult{
+		ToolResult: ToolResult{Status: "updated", Message: msg},
+	}, nil
+}
+
+func updateScheduledJobFromAccess(args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
+	jobs := schedulerAccessVar.ListJobs()
+	var job *SchedulerJob
+	for _, j := range jobs {
+		if j.ID == args.JobID {
+			job = j
+			break
+		}
+	}
+	if job == nil {
+		for _, j := range jobs {
+			if j.Name == args.JobID {
+				job = j
+				break
+			}
+		}
+	}
+	if job == nil {
+		return UpdateScheduledJobResult{
+			ToolResult: toolError("Job %q not found", args.JobID),
+		}, nil
+	}
+
+	changes := []string{}
+	if args.Enabled != nil {
+		job.Enabled = *args.Enabled
+		if *args.Enabled {
+			changes = append(changes, "enabled")
+		} else {
+			changes = append(changes, "disabled")
+		}
+	}
+	if args.Schedule != "" {
+		if err := scheduler.ValidateCron(args.Schedule); err != nil {
+			return UpdateScheduledJobResult{
+				ToolResult: toolError("Invalid cron: %v", err),
 			}, nil
 		}
 		job.Cron = args.Schedule
@@ -386,8 +601,7 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 	if args.Timezone != "" {
 		if _, err := time.LoadLocation(args.Timezone); err != nil {
 			return UpdateScheduledJobResult{
-				Status:  "error",
-				Message: fmt.Sprintf("Invalid timezone: %v", err),
+				ToolResult: toolError("Invalid timezone: %v", err),
 			}, nil
 		}
 		job.Timezone = args.Timezone
@@ -400,21 +614,17 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 
 	if err := schedulerAccessVar.UpdateJob(job); err != nil {
 		return UpdateScheduledJobResult{
-			Status:  "error",
-			Message: fmt.Sprintf("Failed to update: %v", err),
+			ToolResult: toolError("Failed to update: %v", err),
 		}, nil
 	}
 
 	msg := fmt.Sprintf("Job %q updated: %s", job.Name, strings.Join(changes, ", "))
-	// Add a note for fleet_poll jobs that schedule changes should ideally
-	// be done through deactivate/reactivate to stay in sync with the plan.
 	if job.Mode == "fleet_poll" && args.Schedule != "" {
 		msg += ". Note: for fleet_poll jobs, consider deactivating and reactivating the fleet plan to keep the plan config in sync."
 	}
 
 	return UpdateScheduledJobResult{
-		Status:  "updated",
-		Message: msg,
+		ToolResult: ToolResult{Status: "updated", Message: msg},
 	}, nil
 }
 
@@ -423,8 +633,34 @@ func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateSc
 // NewScheduleJobTool creates the schedule_job tool.
 func NewScheduleJobTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
-		Name:        "schedule_job",
-		Description: `Create a scheduled job on a cron schedule. Modes: "routine" (run a saved flow with fixed params) or "adaptive" (LLM-driven agentic execution with instructions). Uses 5-field cron syntax. Set test_first=true to test before enabling. Results broadcast to all active channels automatically. Only call after user approval.`,
+		Name: "schedule_job",
+		Description: `Create a scheduled job on a cron schedule. Uses 5-field cron syntax.
+
+CRITICAL RULES:
+- NEVER change the mode from what the user requested. If user says "routine", use "routine". If the flow doesn't exist yet, use distill_flow to create it FIRST, then come back to scheduling.
+- NEVER silently switch from "routine" to "adaptive" or vice versa. If there's a problem with the chosen mode, EXPLAIN the issue to the user and ask how to proceed.
+- NEVER call this tool without completing ALL workflow steps below.
+
+WORKFLOW — Follow these steps IN ORDER, one at a time:
+
+1. MODE SELECTION — Present BOTH options and wait for the user's explicit choice:
+   - "routine": Runs a saved flow with fixed parameters. Best for repeatable, deterministic tasks. Requires an existing flow (use distill_flow to create one if needed).
+   - "adaptive": An AI agent executes free-form instructions each run. Best for tasks needing web searches, analysis, or dynamic reasoning.
+   You MUST wait for the user to explicitly choose. Do NOT pre-select or suggest a default.
+
+2. SCHEDULE — Ask when and how often. Confirm the cron expression and timezone with the user before proceeding.
+
+3. DELIVERY — You MUST ask about delivery preferences:
+   - "Who should receive the results?" → delivery_mode: "owner" (just you), "team" (everyone), or "members" (specific people)
+   - "Via which channel(s)?" → delivery_channels: ["telegram"], ["email"], etc. If not specified, all linked channels are used.
+   - If "members" mode: call list_team_members first to show available members, then ask which should receive results.
+   Do NOT skip this step. Do NOT assume "owner" without asking.
+
+4. TEST — ALWAYS set test_first=true on the first creation. This runs the job immediately as a dry-run without enabling the schedule. Show the test results to the user and ask if the output looks good.
+
+5. CONFIRM — After the user approves the test output, call update_scheduled_job to enable it.
+
+Each step requires a separate user interaction. Never combine multiple steps into one message.`,
 	}, scheduleJob)
 }
 
@@ -480,6 +716,12 @@ func GetSchedulerTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("update_scheduled_job: %w", err)
 	}
 	tools = append(tools, updateTool)
+
+	membersTool, err := NewListTeamMembersTool()
+	if err != nil {
+		return nil, fmt.Errorf("list_team_members: %w", err)
+	}
+	tools = append(tools, membersTool)
 
 	return tools, nil
 }

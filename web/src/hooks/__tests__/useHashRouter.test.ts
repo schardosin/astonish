@@ -14,7 +14,7 @@ describe('buildPath', () => {
   })
 
   it('builds settings path with default section', () => {
-    expect(buildPath('settings')).toBe('/settings/general')
+    expect(buildPath('settings')).toBe('/settings/chat')
   })
 
   it('builds settings path with specific section', () => {

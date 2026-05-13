@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Search, Download, Check, AlertCircle, Loader2, Package, RefreshCw, X, Tag, Trash2 } from 'lucide-react'
+import { teamFetch } from '../api/teamContext'
 
 // --- Types ---
 
@@ -24,17 +25,17 @@ interface FlowStoreData {
 }
 
 // API functions for Flow Store
-const fetchFlowStore = async (): Promise<FlowStoreData> => {
-  const res = await fetch('/api/flow-store')
+const fetchFlowStore = async (teamSlug?: string): Promise<FlowStoreData> => {
+  const res = await teamFetch('/api/flow-store', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch flow store')
   return res.json()
 }
 
 
-const installFlow = async (tapName: string, flowName: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}/install`, {
+const installFlow = async (tapName: string, flowName: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}/install`, {
     method: 'POST'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const errorText = await res.text()
     throw new Error(errorText || 'Failed to install flow')
@@ -42,10 +43,10 @@ const installFlow = async (tapName: string, flowName: string): Promise<Record<st
   return res.json()
 }
 
-const uninstallFlow = async (tapName: string, flowName: string): Promise<Record<string, unknown>> => {
-  const res = await fetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
+const uninstallFlow = async (tapName: string, flowName: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch(`/api/flow-store/${encodeURIComponent(tapName)}/${encodeURIComponent(flowName)}`, {
     method: 'DELETE'
-  })
+  }, teamSlug)
   if (!res.ok) {
     const errorText = await res.text()
     throw new Error(errorText || 'Failed to uninstall flow')
@@ -53,13 +54,13 @@ const uninstallFlow = async (tapName: string, flowName: string): Promise<Record<
   return res.json()
 }
 
-const updateStore = async (): Promise<Record<string, unknown>> => {
-  const res = await fetch('/api/flow-store/update', { method: 'POST' })
+const updateStore = async (teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch('/api/flow-store/update', { method: 'POST' }, teamSlug)
   if (!res.ok) throw new Error('Failed to update store')
   return res.json()
 }
 
-export default function FlowStorePanel() {
+export default function FlowStorePanel({ teamSlug, canManage = true }: { teamSlug?: string; canManage?: boolean }) {
   const [taps, setTaps] = useState<Tap[]>([])
   const [flows, setFlows] = useState<Flow[]>([])
   const [loading, setLoading] = useState(true)
@@ -81,15 +82,11 @@ export default function FlowStorePanel() {
     return Array.from(tagSet).sort()
   }, [flows])
 
-  useEffect(() => {
-    loadStore()
-  }, [])
-
   const loadStore = async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await fetchFlowStore()
+      const data = await fetchFlowStore(teamSlug)
       setTaps(data.taps || [])
       setFlows(data.flows || [])
     } catch (err) {
@@ -99,11 +96,15 @@ export default function FlowStorePanel() {
     }
   }
 
+  useEffect(() => {
+    loadStore()
+  }, [teamSlug]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleInstall = async (flow: Flow) => {
     setInstalling(flow.fullName)
     setError(null)
     try {
-      await installFlow(flow.tapName, flow.name)
+      await installFlow(flow.tapName, flow.name, teamSlug)
       setInstallSuccess(flow.fullName)
       await loadStore()
       setTimeout(() => setInstallSuccess(null), 3000)
@@ -118,7 +119,7 @@ export default function FlowStorePanel() {
     setInstalling(flow.fullName)
     setError(null)
     try {
-      await uninstallFlow(flow.tapName, flow.name)
+      await uninstallFlow(flow.tapName, flow.name, teamSlug)
       await loadStore()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -131,7 +132,7 @@ export default function FlowStorePanel() {
     setLoading(true)
     setError(null)
     try {
-      await updateStore()
+      await updateStore(teamSlug)
       await loadStore()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -178,6 +179,7 @@ export default function FlowStorePanel() {
           </span>
         </div>
         
+        {canManage && (
         <button
           onClick={handleRefresh}
           disabled={loading}
@@ -187,6 +189,7 @@ export default function FlowStorePanel() {
         >
           <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
         </button>
+        )}
       </div>
 
       {/* Error Banner */}
@@ -333,7 +336,7 @@ export default function FlowStorePanel() {
                           )}
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
-                          {flow.installed ? (
+                          {canManage && (flow.installed ? (
                             <button
                               onClick={() => handleUninstall(flow)}
                               disabled={installing === flow.fullName}
@@ -369,6 +372,11 @@ export default function FlowStorePanel() {
                                 </>
                               )}
                             </button>
+                          ))}
+                          {!canManage && flow.installed && (
+                            <span className="px-3 py-1.5 rounded-lg text-sm font-medium bg-green-500/20 text-green-400">
+                              Installed
+                            </span>
                           )}
                         </div>
                       </div>

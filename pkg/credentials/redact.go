@@ -22,20 +22,28 @@ const (
 	storeKeyRedactName = "store-encryption-key"
 )
 
+// credRef identifies a credential field: which credential and which field
+// the secret value belongs to. Used by Placeholderize to produce
+// {{CREDENTIAL:name:field}} tokens.
+type credRef struct {
+	name  string // credential name (e.g., "proxmox")
+	field string // field name (e.g., "value", "token", "password")
+}
+
 // Redactor scans text for known credential values and replaces them with
 // redaction markers. It tracks multiple encodings of each secret (raw,
 // base64, URL-encoded) to catch common transformation attempts.
 type Redactor struct {
 	mu sync.RWMutex
-	// signatures maps secret value variants to their credential name.
-	// Multiple entries may map to the same name (raw, base64, url-encoded).
-	signatures map[string]string
+	// signatures maps secret value variants to their credential reference.
+	// Multiple entries may map to the same credential (raw, base64, url-encoded).
+	signatures map[string]credRef
 }
 
 // NewRedactor creates an empty Redactor.
 func NewRedactor() *Redactor {
 	return &Redactor{
-		signatures: make(map[string]string),
+		signatures: make(map[string]credRef),
 	}
 }
 
@@ -46,10 +54,10 @@ func (r *Redactor) UpdateFromCredentials(creds map[string]*Credential) {
 	defer r.mu.Unlock()
 
 	// Preserve non-credential signatures (like the store key and OAuth tokens)
-	preserved := make(map[string]string)
-	for sig, name := range r.signatures {
-		if strings.HasSuffix(name, "/token") || name == storeKeyRedactName {
-			preserved[sig] = name
+	preserved := make(map[string]credRef)
+	for sig, ref := range r.signatures {
+		if strings.HasSuffix(ref.name, "/token") || ref.name == storeKeyRedactName {
+			preserved[sig] = ref
 		}
 	}
 
@@ -68,7 +76,7 @@ func (r *Redactor) AddSecret(name, value string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.addVariantsLocked(name, value)
+	r.addVariantsLocked(name, "token", value)
 }
 
 // AddTransientSecret registers a secret value for redaction without a
@@ -81,7 +89,7 @@ func (r *Redactor) AddTransientSecret(value string) {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.addVariantsLocked("pending-secret", value)
+	r.addVariantsLocked("pending-secret", "value", value)
 }
 
 // RemoveByName removes all signatures associated with a credential name.
@@ -89,8 +97,8 @@ func (r *Redactor) RemoveByName(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for sig, n := range r.signatures {
-		if n == name || strings.HasPrefix(n, name+"/") {
+	for sig, ref := range r.signatures {
+		if ref.name == name || strings.HasPrefix(ref.name, name+"/") {
 			delete(r.signatures, sig)
 		}
 	}
@@ -106,12 +114,34 @@ func (r *Redactor) Redact(text string) string {
 		return text
 	}
 
-	for sig, name := range r.signatures {
+	for sig, ref := range r.signatures {
 		if strings.Contains(text, sig) {
-			text = strings.ReplaceAll(text, sig, fmt.Sprintf("%s%s%s", redactedPrefix, name, redactedSuffix))
+			text = strings.ReplaceAll(text, sig, fmt.Sprintf("%s%s%s", redactedPrefix, ref.name, redactedSuffix))
 		}
 	}
 	return text
+}
+
+// Placeholderize scans text for any known credential values and replaces them
+// with {{CREDENTIAL:name:field}} tokens. Unlike Redact() which produces opaque
+// markers, this method produces actionable placeholders that document exactly
+// how to use the credential. This is intended for memory notes and other
+// contexts where the placeholder should be self-documenting.
+func (r *Redactor) Placeholderize(text string) (result string, count int) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	if len(r.signatures) == 0 {
+		return text, 0
+	}
+
+	for sig, ref := range r.signatures {
+		if strings.Contains(text, sig) {
+			text = strings.ReplaceAll(text, sig, FormatPlaceholder(ref.name, ref.field))
+			count++
+		}
+	}
+	return text, count
 }
 
 // RedactMap deep-walks a map and redacts all string values. Returns a new map
@@ -157,51 +187,53 @@ func (r *Redactor) redactValue(v any) any {
 func (r *Redactor) addSecretFieldsLocked(name string, cred *Credential) {
 	switch cred.Type {
 	case CredAPIKey:
-		r.addVariantsLocked(name, cred.Value)
+		r.addVariantsLocked(name, "value", cred.Value)
 	case CredBearer:
-		r.addVariantsLocked(name, cred.Token)
+		r.addVariantsLocked(name, "token", cred.Token)
 	case CredBasic:
-		r.addVariantsLocked(name, cred.Password)
+		r.addVariantsLocked(name, "password", cred.Password)
 		// Also track the base64-encoded "user:pass" since that's what goes on the wire
 		basicAuth := cred.Username + ":" + cred.Password
 		if len(basicAuth) >= minSignatureLen {
 			b64 := base64.StdEncoding.EncodeToString([]byte(basicAuth))
-			r.signatures[b64] = name
+			r.signatures[b64] = credRef{name: name, field: "password"}
 		}
 	case CredPassword:
-		r.addVariantsLocked(name, cred.Password)
+		r.addVariantsLocked(name, "password", cred.Password)
 	case CredOAuthClientCreds:
-		r.addVariantsLocked(name, cred.ClientSecret)
+		r.addVariantsLocked(name, "client_secret", cred.ClientSecret)
 		// Client ID is often semi-public but let's protect it too
-		r.addVariantsLocked(name, cred.ClientID)
+		r.addVariantsLocked(name, "client_id", cred.ClientID)
 	case CredOAuthAuthCode:
-		r.addVariantsLocked(name, cred.ClientSecret)
-		r.addVariantsLocked(name, cred.ClientID)
-		r.addVariantsLocked(name, cred.AccessToken)
-		r.addVariantsLocked(name, cred.RefreshToken)
+		r.addVariantsLocked(name, "client_secret", cred.ClientSecret)
+		r.addVariantsLocked(name, "client_id", cred.ClientID)
+		r.addVariantsLocked(name, "access_token", cred.AccessToken)
+		r.addVariantsLocked(name, "refresh_token", cred.RefreshToken)
 	}
 }
 
 // addVariantsLocked adds a secret value and its common encodings to the
 // signature list. Must be called with mu held.
-func (r *Redactor) addVariantsLocked(name, value string) {
+func (r *Redactor) addVariantsLocked(name, field, value string) {
 	if len(value) < minSignatureLen {
 		return
 	}
 
+	ref := credRef{name: name, field: field}
+
 	// Raw value
-	r.signatures[value] = name
+	r.signatures[value] = ref
 
 	// Base64-encoded (common in headers, JSON payloads)
 	b64 := base64.StdEncoding.EncodeToString([]byte(value))
 	if b64 != value && len(b64) >= minSignatureLen {
-		r.signatures[b64] = name
+		r.signatures[b64] = ref
 	}
 
 	// URL-encoded (common in query strings, form bodies)
 	urlEnc := url.QueryEscape(value)
 	if urlEnc != value && len(urlEnc) >= minSignatureLen {
-		r.signatures[urlEnc] = name
+		r.signatures[urlEnc] = ref
 	}
 }
 

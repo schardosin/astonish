@@ -15,6 +15,8 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -25,7 +27,8 @@ type AgentListItem struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
-	Source       string `json:"source"` // "system", "local", or "store"
+	Source       string `json:"source"`              // "system", "local", or "store"
+	Scope        string `json:"scope,omitempty"`     // "personal" or "team" (platform mode only)
 	HasError     bool   `json:"hasError,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	IsReadOnly   bool   `json:"isReadOnly,omitempty"` // True for store flows
@@ -41,6 +44,7 @@ type AgentListResponse struct {
 type AgentDetailResponse struct {
 	Name   string              `json:"name"`
 	Source string              `json:"source"`
+	Scope  string              `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 	YAML   string              `json:"yaml"`
 	Config *config.AgentConfig `json:"config,omitempty"`
 }
@@ -201,6 +205,52 @@ func splitFirst(s, sep string) []string {
 
 // ListAgentsHandler handles GET /api/agents
 func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: merge personal + team flows (private-first ownership).
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		result := make([]AgentListItem, 0)
+
+		// Personal flows first (user's private flows)
+		if svc.PersonalFlows != nil {
+			for _, f := range svc.PersonalFlows.ListAllFlows(r.Context()) {
+				result = append(result, AgentListItem{
+					ID:          f.Name,
+					Name:        f.Name,
+					Description: f.Description,
+					Source:      "system",
+					Scope:       "personal",
+				})
+			}
+		}
+
+		// Team flows (shared/published flows)
+		if svc.Flows != nil {
+			personalNames := make(map[string]bool, len(result))
+			for _, item := range result {
+				personalNames[item.ID] = true
+			}
+			for _, f := range svc.Flows.ListAllFlows(r.Context()) {
+				// If the same name exists in both personal and team,
+				// include both — they are separate copies.
+				id := f.Name
+				if personalNames[id] {
+					id = "team:" + f.Name
+				}
+				result = append(result, AgentListItem{
+					ID:          id,
+					Name:        f.Name,
+					Description: f.Description,
+					Source:      "system",
+					Scope:       "team",
+				})
+			}
+		}
+
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+		respondJSON(w, http.StatusOK, AgentListResponse{Agents: result})
+		return
+	}
+
+	// Personal mode: scan filesystem directories.
 	agents := make(map[string]AgentListItem)
 
 	// Scan system directory first (has priority)
@@ -217,10 +267,9 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add installed store flows
-	if store, err := flowstore.NewStore(); err == nil {
-		for _, tap := range store.GetAllTaps() {
-			// Scan the tap's store directory for installed flows
-			storeDir := store.GetStoreDir()
+	if fs, err := flowstore.NewStore(); err == nil {
+		for _, tap := range fs.GetAllTaps() {
+			storeDir := fs.GetStoreDir()
 			tapDir := filepath.Join(storeDir, tap.Name)
 			entries, err := os.ReadDir(tapDir)
 			if err != nil {
@@ -231,17 +280,15 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				if entry.Name() == "manifest.yaml" {
-					continue // Skip manifest
+					continue
 				}
 				name := entry.Name()[:len(entry.Name())-5]
 
-				// Build display name: tap/flow for community, just flow for official
 				displayName := name
 				if tap.Name != flowstore.OfficialStoreName {
 					displayName = tap.Name + "/" + name
 				}
 
-				// Use source-prefixed ID to avoid conflicts with local copies
 				storeID := "store:" + tap.Name + ":" + name
 
 				path := filepath.Join(tapDir, entry.Name())
@@ -282,7 +329,65 @@ func ListAgentsHandler(w http.ResponseWriter, r *http.Request) {
 func GetAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
+	scope := r.URL.Query().Get("scope") // optional: "personal" or "team"
 
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	// If the name had a "team:" prefix, force scope to "team" unless explicitly overridden.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+		if scope == "" {
+			scope = "team"
+		}
+	}
+
+	// Platform mode: use scope-aware flow resolution.
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		var yamlContent string
+		var resolvedScope string
+		var err error
+
+		// Explicit scope requested
+		if scope == "team" && svc.Flows != nil {
+			yamlContent, err = svc.Flows.GetFlow(r.Context(), name)
+			resolvedScope = "team"
+		} else if scope == "personal" && svc.PersonalFlows != nil {
+			yamlContent, err = svc.PersonalFlows.GetFlow(r.Context(), name)
+			resolvedScope = "personal"
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalFlows != nil {
+				yamlContent, err = svc.PersonalFlows.GetFlow(r.Context(), name)
+				resolvedScope = "personal"
+			}
+			if err != nil && svc.Flows != nil {
+				yamlContent, err = svc.Flows.GetFlow(r.Context(), name)
+				resolvedScope = "team"
+			}
+		}
+
+		if err != nil {
+			respondError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+
+		// Parse config from YAML content
+		var cfg *config.AgentConfig
+		tmpCfg, parseErr := config.LoadAgentFromBytes([]byte(yamlContent))
+		if parseErr == nil {
+			cfg = tmpCfg
+		}
+
+		respondJSON(w, http.StatusOK, AgentDetailResponse{
+			Name:   name,
+			Source: "system",
+			Scope:  resolvedScope,
+			YAML:   yamlContent,
+			Config: cfg,
+		})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	path, source, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -318,6 +423,11 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+	}
+
 	var request struct {
 		YAML string `json:"yaml"`
 	}
@@ -331,117 +441,43 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	finalYAML := request.YAML
 	var agentConfig config.AgentConfig
 	if err := yaml.Unmarshal([]byte(request.YAML), &agentConfig); err == nil {
-		// Collect all tools used in the flow
-		tools := CollectToolsFromNodes(agentConfig.Nodes)
-
-		if len(tools) > 0 {
-			// Get cached tools and store servers for resolution
-			cachedTools := GetCachedTools()
-
-			// Get MCP store servers (from all taps)
-			storeServers, storeErr := loadAllServersFromTaps()
-			if storeErr != nil {
-				slog.Warn("failed to load MCP store servers", "error", storeErr)
-			}
-
-			// Resolve dependencies
-			deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies)
-
-			// Check if mcp_dependencies section already exists
-			hasMcpDeps := len(agentConfig.MCPDependencies) > 0
-
-			// Only add deps if we have them AND section doesn't exist yet
-			// (Avoids re-encoding when deps already exist, preserving formatting)
-			if len(deps) > 0 && !hasMcpDeps {
-				// Parse as yaml.Node to preserve ordering
-				var rootNode yaml.Node
-				if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
-					mapNode := rootNode.Content[0]
-					if mapNode.Kind == yaml.MappingNode {
-						// Find and remove existing mcp_dependencies, and find layout index
-						var layoutIndex = -1
-						var mcpDepsIndex = -1
-						for i := 0; i < len(mapNode.Content); i += 2 {
-							if mapNode.Content[i].Value == "mcp_dependencies" {
-								mcpDepsIndex = i
-							}
-							if mapNode.Content[i].Value == "layout" {
-								layoutIndex = i
-							}
-						}
-
-						// Remove existing mcp_dependencies if present
-						if mcpDepsIndex >= 0 {
-							mapNode.Content = append(mapNode.Content[:mcpDepsIndex], mapNode.Content[mcpDepsIndex+2:]...)
-							// Adjust layout index if it was after mcp_dependencies
-							if layoutIndex > mcpDepsIndex {
-								layoutIndex -= 2
-							}
-						}
-
-						// Marshal deps to yaml.Node
-						depsBytes, _ := yaml.Marshal(deps)
-						var depsNode yaml.Node
-						yaml.Unmarshal(depsBytes, &depsNode)
-
-						// Create key node
-						keyNode := &yaml.Node{
-							Kind:  yaml.ScalarNode,
-							Tag:   "!!str",
-							Value: "mcp_dependencies",
-						}
-
-						// Insert before layout if layout exists, otherwise append
-						if layoutIndex >= 0 {
-							// Insert before layout
-							newContent := make([]*yaml.Node, 0, len(mapNode.Content)+2)
-							newContent = append(newContent, mapNode.Content[:layoutIndex]...)
-							newContent = append(newContent, keyNode, depsNode.Content[0])
-							newContent = append(newContent, mapNode.Content[layoutIndex:]...)
-							mapNode.Content = newContent
-						} else {
-							// Append at end
-							mapNode.Content = append(mapNode.Content, keyNode, depsNode.Content[0])
-						}
-
-						// Re-marshal with 2-space indentation to match frontend
-						var buf bytes.Buffer
-						encoder := yaml.NewEncoder(&buf)
-						encoder.SetIndent(2)
-						if err := encoder.Encode(&rootNode); err == nil {
-							finalYAML = buf.String()
-						}
-						encoder.Close()
-					}
-				}
-			}
-		} else {
-			// No tools - remove mcp_dependencies if it exists
-			var rootNode yaml.Node
-			if err := yaml.Unmarshal([]byte(request.YAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
-				mapNode := rootNode.Content[0]
-				if mapNode.Kind == yaml.MappingNode {
-					// Find mcp_dependencies
-					for i := 0; i < len(mapNode.Content); i += 2 {
-						if mapNode.Content[i].Value == "mcp_dependencies" {
-							// Remove it
-							mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
-							// Re-marshal
-							var buf bytes.Buffer
-							encoder := yaml.NewEncoder(&buf)
-							encoder.SetIndent(2)
-							if err := encoder.Encode(&rootNode); err == nil {
-								finalYAML = buf.String()
-							}
-							encoder.Close()
-							break
-						}
-					}
-				}
-			}
-		}
+		mcpCfg := loadMCPConfigForRequest(r)
+		cachedTools := GetCachedToolsForRequest(r)
+		finalYAML = resolveAgentYAMLDependencies(request.YAML, agentConfig, mcpCfg, cachedTools)
 	}
 
+	// Platform mode: scope-aware save (personal by default, team with explicit scope).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		scope := r.URL.Query().Get("scope")
+		if scope == "team" && svc.Flows != nil {
+			// Writing to team scope requires team admin.
+			if !RequireTeamAdmin(w, r) {
+				return
+			}
+			if err := svc.Flows.SaveFlow(r.Context(), name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else if svc.PersonalFlows != nil {
+			if err := svc.PersonalFlows.SaveFlow(r.Context(), name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else if svc.Flows != nil {
+			// Fallback: no personal store, save to team
+			if err := svc.Flows.SaveFlow(r.Context(), name, finalYAML); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save agent: "+err.Error())
+				return
+			}
+		} else {
+			respondError(w, http.StatusServiceUnavailable, "No flow store available")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "yaml": finalYAML})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	// Determine save path: check if flow already exists somewhere
 	var path string
 	existingPath, _, findErr := findAgentPath(name)
@@ -473,11 +509,159 @@ func SaveAgentHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "path": path, "yaml": finalYAML})
 }
 
+// resolveAgentYAMLDependencies analyzes tools used in an agent config and
+// resolves MCP dependencies, returning the final YAML with injected deps.
+func resolveAgentYAMLDependencies(rawYAML string, agentConfig config.AgentConfig, mcpCfg *config.MCPConfig, cachedTools []ToolInfo) string {
+	// Collect all tools used in the flow
+	tools := CollectToolsFromNodes(agentConfig.Nodes)
+
+	if len(tools) > 0 {
+		// Get MCP store servers (from all taps)
+		storeServers, storeErr := loadAllServersFromTaps()
+		if storeErr != nil {
+			slog.Warn("failed to load MCP store servers", "error", storeErr)
+		}
+
+		// Resolve dependencies
+		deps := ResolveMCPDependencies(tools, cachedTools, storeServers, agentConfig.MCPDependencies, mcpCfg)
+
+		// Check if mcp_dependencies section already exists
+		hasMcpDeps := len(agentConfig.MCPDependencies) > 0
+
+		// Only add deps if we have them AND section doesn't exist yet
+		// (Avoids re-encoding when deps already exist, preserving formatting)
+		if len(deps) > 0 && !hasMcpDeps {
+			// Parse as yaml.Node to preserve ordering
+			var rootNode yaml.Node
+			if err := yaml.Unmarshal([]byte(rawYAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+				mapNode := rootNode.Content[0]
+				if mapNode.Kind == yaml.MappingNode {
+					// Find and remove existing mcp_dependencies, and find layout index
+					var layoutIndex = -1
+					var mcpDepsIndex = -1
+					for i := 0; i < len(mapNode.Content); i += 2 {
+						if mapNode.Content[i].Value == "mcp_dependencies" {
+							mcpDepsIndex = i
+						}
+						if mapNode.Content[i].Value == "layout" {
+							layoutIndex = i
+						}
+					}
+
+					// Remove existing mcp_dependencies if present
+					if mcpDepsIndex >= 0 {
+						mapNode.Content = append(mapNode.Content[:mcpDepsIndex], mapNode.Content[mcpDepsIndex+2:]...)
+						// Adjust layout index if it was after mcp_dependencies
+						if layoutIndex > mcpDepsIndex {
+							layoutIndex -= 2
+						}
+					}
+
+					// Marshal deps to yaml.Node
+					depsBytes, _ := yaml.Marshal(deps)
+					var depsNode yaml.Node
+					yaml.Unmarshal(depsBytes, &depsNode)
+
+					// Create key node
+					keyNode := &yaml.Node{
+						Kind:  yaml.ScalarNode,
+						Tag:   "!!str",
+						Value: "mcp_dependencies",
+					}
+
+					// Insert before layout if layout exists, otherwise append
+					if layoutIndex >= 0 {
+						// Insert before layout
+						newContent := make([]*yaml.Node, 0, len(mapNode.Content)+2)
+						newContent = append(newContent, mapNode.Content[:layoutIndex]...)
+						newContent = append(newContent, keyNode, depsNode.Content[0])
+						newContent = append(newContent, mapNode.Content[layoutIndex:]...)
+						mapNode.Content = newContent
+					} else {
+						// Append at end
+						mapNode.Content = append(mapNode.Content, keyNode, depsNode.Content[0])
+					}
+
+					// Re-marshal with 2-space indentation to match frontend
+					var buf bytes.Buffer
+					encoder := yaml.NewEncoder(&buf)
+					encoder.SetIndent(2)
+					if err := encoder.Encode(&rootNode); err == nil {
+						return buf.String()
+					}
+					encoder.Close()
+				}
+			}
+		}
+	} else {
+		// No tools - remove mcp_dependencies if it exists
+		var rootNode yaml.Node
+		if err := yaml.Unmarshal([]byte(rawYAML), &rootNode); err == nil && rootNode.Kind == yaml.DocumentNode && len(rootNode.Content) > 0 {
+			mapNode := rootNode.Content[0]
+			if mapNode.Kind == yaml.MappingNode {
+				// Find mcp_dependencies
+				for i := 0; i < len(mapNode.Content); i += 2 {
+					if mapNode.Content[i].Value == "mcp_dependencies" {
+						// Remove it
+						mapNode.Content = append(mapNode.Content[:i], mapNode.Content[i+2:]...)
+						// Re-marshal
+						var buf bytes.Buffer
+						encoder := yaml.NewEncoder(&buf)
+						encoder.SetIndent(2)
+						if err := encoder.Encode(&rootNode); err == nil {
+							return buf.String()
+						}
+						encoder.Close()
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return rawYAML
+}
+
 // DeleteAgentHandler handles DELETE /api/agents/{name}
 func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
+	// Strip "team:" prefix used by the frontend for React key uniqueness.
+	if strings.HasPrefix(name, "team:") {
+		name = strings.TrimPrefix(name, "team:")
+	}
+
+	// Platform mode: scope-aware delete (try personal first, then team).
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		scope := r.URL.Query().Get("scope")
+		var err error
+		if scope == "team" && svc.Flows != nil {
+			// Deleting from team scope requires team admin.
+			if !RequireTeamAdmin(w, r) {
+				return
+			}
+			err = svc.Flows.DeleteFlow(r.Context(), name)
+		} else if scope == "personal" && svc.PersonalFlows != nil {
+			err = svc.PersonalFlows.DeleteFlow(r.Context(), name)
+		} else {
+			// Default: try personal first, then team
+			if svc.PersonalFlows != nil {
+				err = svc.PersonalFlows.DeleteFlow(r.Context(), name)
+			}
+			if err != nil && svc.Flows != nil {
+				err = svc.Flows.DeleteFlow(r.Context(), name)
+			}
+		}
+		if err != nil {
+			respondError(w, http.StatusNotFound, "Agent not found")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "deleted": name})
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	path, _, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -501,12 +685,38 @@ func DeleteAgentHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // CopyAgentToLocalHandler handles POST /api/agents/{name}/copy-to-local
-// Copies a store flow to the user's local agents directory for editing
+// In personal mode: copies a store flow to the user's local directory for editing.
+// In platform mode: flows in the database are already editable — this is a no-op.
 func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 
-	// Find the source file
+	// Platform mode: flows in the DB are already editable.
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		// Extract the flow name from store:tap:name format
+		flowName := name
+		if strings.HasPrefix(name, "store:") {
+			parts := strings.SplitN(name, ":", 3)
+			if len(parts) == 3 {
+				flowName = parts[2]
+			}
+		}
+
+		// Verify the flow exists in the team's DB
+		if _, err := svc.Flows.GetFlow(r.Context(), flowName); err != nil {
+			respondError(w, http.StatusNotFound, "Flow not found in team database. Install it first.")
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]string{
+			"status":  "ok",
+			"newName": flowName,
+			"message": "Flow is already editable in platform mode.",
+		})
+		return
+	}
+
+	// Personal mode: copy store flow to local filesystem for editing.
 	sourcePath, source, err := findAgentPath(name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "Agent not found")
@@ -518,31 +728,26 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read source content
 	content, err := os.ReadFile(sourcePath)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to read agent file")
 		return
 	}
 
-	// Determine destination: extract just the flow name
-	// Handle store:tap:name format (e.g., "store:official:my_flow" -> "my_flow")
+	// Determine destination name
 	destName := name
 	if strings.HasPrefix(name, "store:") {
-		// Parse store:tap:flowName format
 		parts := strings.SplitN(name, ":", 3)
 		if len(parts) == 3 {
-			destName = parts[2] // Just the flow name
+			destName = parts[2]
 		}
 	} else if containsSlash(name) {
-		// Handle legacy tap/flow format
 		parts := splitFirst(name, "/")
 		if len(parts) == 2 {
 			destName = parts[1]
 		}
 	}
 
-	// Save to flows directory (~/.config/astonish/flows/)
 	flowsDir, err := flowstore.GetFlowsDir()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to get flows directory")
@@ -551,19 +756,16 @@ func CopyAgentToLocalHandler(w http.ResponseWriter, r *http.Request) {
 
 	destPath := filepath.Join(flowsDir, destName+".yaml")
 
-	// Check if already exists
 	if _, err := os.Stat(destPath); err == nil {
 		respondError(w, http.StatusConflict, "Agent already exists locally: "+destName)
 		return
 	}
 
-	// Ensure directory exists
 	if err := os.MkdirAll(flowsDir, 0755); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to create flows directory")
 		return
 	}
 
-	// Write file
 	if err := os.WriteFile(destPath, content, 0644); err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to copy agent file")
 		return
@@ -591,8 +793,8 @@ type ToolsListResponse struct {
 
 // ListToolsHandler handles GET /api/tools
 func ListToolsHandler(w http.ResponseWriter, r *http.Request) {
-	// Use cached tools (initialized at startup)
-	allTools := GetCachedTools()
+	// Use request-scoped tools (platform-aware: reads from DB stores in platform mode)
+	allTools := GetCachedToolsForRequest(r)
 
 	// If cache not ready, return empty list
 	if allTools == nil {
@@ -621,8 +823,6 @@ func (m *minimalReadonlyContext) UserID() string                       { return 
 func (m *minimalReadonlyContext) SessionID() string                    { return "" }
 func (m *minimalReadonlyContext) Branch() string                       { return "" }
 
-// RegisterRoutes registers the API routes on a router
-
 // MCPServerInfo represents an MCP server in the list response
 type MCPServerInfo struct {
 	Name      string `json:"name"`
@@ -639,6 +839,62 @@ type MCPServersListResponse struct {
 
 // GetMCPServersHandler handles GET /api/mcp/servers
 func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: read from DB stores (org + team merged, team overrides org)
+	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
+		serverMap := make(map[string]MCPServerInfo) // name -> info, team overrides org
+
+		// Org-level servers first
+		if svc.MCPServers != nil {
+			orgServers, err := svc.MCPServers.List(r.Context())
+			if err == nil {
+				for _, s := range orgServers {
+					transport := s.Transport
+					if transport == "" {
+						transport = "stdio"
+					}
+					serverMap[s.Name] = MCPServerInfo{
+						Name:      s.Name,
+						Transport: transport,
+						Command:   s.Command,
+						URL:       s.URL,
+						Enabled:   s.IsEnabled(),
+					}
+				}
+			}
+		}
+
+		// Team-level servers override org
+		if svc.TeamMCPServers != nil {
+			teamServers, err := svc.TeamMCPServers.List(r.Context())
+			if err == nil {
+				for _, s := range teamServers {
+					transport := s.Transport
+					if transport == "" {
+						transport = "stdio"
+					}
+					serverMap[s.Name] = MCPServerInfo{
+						Name:      s.Name,
+						Transport: transport,
+						Command:   s.Command,
+						URL:       s.URL,
+						Enabled:   s.IsEnabled(),
+					}
+				}
+			}
+		}
+
+		servers := make([]MCPServerInfo, 0, len(serverMap))
+		for _, info := range serverMap {
+			servers = append(servers, info)
+		}
+		sort.Slice(servers, func(i, j int) bool {
+			return servers[i].Name < servers[j].Name
+		})
+		respondJSON(w, http.StatusOK, MCPServersListResponse{Servers: servers})
+		return
+	}
+
+	// Personal mode: read from filesystem
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
@@ -681,6 +937,11 @@ type UpdateMCPServerResponse struct {
 
 // UpdateMCPServerHandler handles PATCH /api/mcp/servers/{name}
 func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
+	// Team admins (or org admins) can toggle MCP servers.
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
 	vars := mux.Vars(r)
 	serverName := vars["name"]
 
@@ -695,7 +956,40 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load config
+	// Platform mode: toggle in DB store
+	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		server, err := mcpStore.Get(r.Context(), serverName)
+		if err != nil || server == nil {
+			respondError(w, http.StatusNotFound, "Server not found")
+			return
+		}
+		if req.Enabled != nil {
+			server.Enabled = req.Enabled
+			if err := mcpStore.Save(r.Context(), server); err != nil {
+				respondError(w, http.StatusInternalServerError, "Failed to save MCP server")
+				return
+			}
+			GetChatManager().Reset()
+		}
+		transport := server.Transport
+		if transport == "" {
+			transport = "stdio"
+		}
+		response := UpdateMCPServerResponse{
+			Success: true,
+			Server: MCPServerInfo{
+				Name:      server.Name,
+				Transport: transport,
+				Command:   server.Command,
+				URL:       server.URL,
+				Enabled:   server.IsEnabled(),
+			},
+		}
+		respondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	// Personal mode: file-based
 	mcpConfig, err := config.LoadMCPConfig()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
@@ -744,11 +1038,57 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, response)
 }
 
-func RegisterRoutes(router *mux.Router) {
+// RegisterRoutes registers the API routes on a router.
+//
+// When svc is non-nil, every request flowing through these routes will have
+// the Services instance injected into its context (via store.Middleware).
+// Handlers can then retrieve it with store.FromRequest(r).
+// Passing nil is safe — no middleware is applied and existing package-level
+// globals continue to work unchanged. This keeps backward compatibility
+// during the transition from global state to dependency injection.
+//
+// When pg is non-nil (platform mode), TenantMiddleware is also applied after
+// store.Middleware, resolving per-request tenant stores based on the
+// TenantContext set by PlatformAuthMiddleware.
+func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore) {
+	// Register health endpoints BEFORE middleware (they must be auth-exempt and fast).
+	router.HandleFunc("/api/healthz", HealthzHandler).Methods("GET")
+	router.HandleFunc("/api/readyz", ReadyzHandler).Methods("GET")
+	SetHealthPGStore(pg)
+
+	// Apply store middleware so every API handler can access Services via context.
+	if svc != nil {
+		router.Use(store.Middleware(svc))
+	}
+
+	// In platform mode, apply TenantMiddleware to resolve per-tenant stores.
+	// This must run AFTER store.Middleware (which injects the base Services)
+	// and AFTER PlatformAuthMiddleware (which sets TenantContext in the context).
+	// PlatformAuthMiddleware is applied outside the router (wraps the entire handler),
+	// so it always runs before router.Use() middleware.
+	if pg != nil {
+		router.Use(pgstore.TenantMiddleware(pg))
+	}
+
+	// Audit middleware logs API requests in platform mode.
+	// Runs after auth and store middleware so it has access to the
+	// authenticated user and tenant context.
+	router.Use(AuditMiddleware)
+
+	// Body size limiter to prevent oversized payloads (DoS mitigation).
+	// Must run after auth (so 401 returns before reading the body) but before
+	// route handlers that decode JSON request bodies.
+	router.Use(MaxBodySizeMiddleware)
+
 	router.HandleFunc("/api/agents", ListAgentsHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", GetAgentHandler).Methods("GET")
 	router.HandleFunc("/api/agents/{name}", SaveAgentHandler).Methods("PUT")
 	router.HandleFunc("/api/agents/{name}", DeleteAgentHandler).Methods("DELETE")
+	// Flow execution endpoint (headless with params, SSE streaming)
+	router.HandleFunc("/api/agents/{name}/run", FlowRunHandler).Methods("POST")
+	// Flow sharing endpoints (must be before wildcard copy-to-local route)
+	router.HandleFunc("/api/agents/{name}/publish", FlowPublishToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/agents/{name}/fork", FlowForkToPersonalHandler).Methods("POST")
 	router.HandleFunc("/api/agents/{name:.*}/copy-to-local", CopyAgentToLocalHandler).Methods("POST")
 	router.HandleFunc("/api/tools", ListToolsHandler).Methods("GET")
 	router.HandleFunc("/api/tools/web-capable", WebCapableToolsHandler).Methods("GET")
@@ -767,6 +1107,16 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/settings/full", UpdateFullConfigHandler).Methods("PUT")
 	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
+
+	// Provider settings endpoints (cascading: platform → org → team)
+	router.HandleFunc("/api/settings/platform/providers", GetPlatformProvidersHandler).Methods("GET")
+	router.HandleFunc("/api/settings/platform/providers", SavePlatformProvidersHandler).Methods("PUT")
+	router.HandleFunc("/api/settings/org/providers", GetOrgProvidersHandler).Methods("GET")
+	router.HandleFunc("/api/settings/org/providers", SaveOrgProvidersHandler).Methods("PUT")
+	router.HandleFunc("/api/settings/team/providers", GetTeamProvidersHandler).Methods("GET")
+	router.HandleFunc("/api/settings/providers/effective", GetEffectiveProvidersHandler).Methods("GET")
+	router.HandleFunc("/api/settings/providers/test", TestProviderHandler).Methods("POST")
+	router.HandleFunc("/api/settings/{level}/providers/{name}", DeleteProviderHandler).Methods("DELETE")
 	router.HandleFunc("/api/mcp/install-inline", InstallInlineMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/mcp/status", MCPStatusHandler).Methods("GET")
 	router.HandleFunc("/api/mcp/servers", GetMCPServersHandler).Methods("GET")
@@ -776,6 +1126,11 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/mcp/{name}/refresh", RefreshMCPServerHandler).Methods("POST")
 	router.HandleFunc("/api/settings/status", GetSetupStatusHandler).Methods("GET")
 	router.HandleFunc("/api/version", GetVersionHandler).Methods("GET")
+
+	// Platform setup endpoints (for deployment mode configuration)
+	router.HandleFunc("/api/platform/init", PlatformInitHandler).Methods("POST")
+	router.HandleFunc("/api/platform/init/status", PlatformInitStatusHandler).Methods("GET")
+	router.HandleFunc("/api/platform/mode", DeploymentModeHandler).Methods("GET")
 
 	// Sandbox endpoints
 	router.HandleFunc("/api/sandbox/status", SandboxStatusHandler).Methods("GET")
@@ -797,6 +1152,16 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateInfoHandler).Methods("GET")
 	router.HandleFunc("/api/sandbox/templates/{name}", SandboxTemplateDeleteHandler).Methods("DELETE")
 	router.HandleFunc("/api/sandbox/refresh", SandboxRefreshHandler).Methods("POST")
+	router.HandleFunc("/api/sandbox/terminal", SandboxTerminalHandler).Methods("GET")
+
+	// Team template endpoints (platform mode — per-team container customization)
+	router.HandleFunc("/api/team/template/status", TeamTemplateStatusHandler).Methods("GET")
+	router.HandleFunc("/api/team/template/create", TeamTemplateCreateHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/save", TeamTemplateSaveHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/restore", TeamTemplateRestoreHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/start", TeamTemplateStartHandler).Methods("POST")
+	router.HandleFunc("/api/team/template/packages", TeamTemplatePackagesHandler).Methods("POST")
+	router.HandleFunc("/api/team/template", TeamTemplateDeleteHandler).Methods("DELETE")
 
 	// Standard servers endpoints
 	router.HandleFunc("/api/standard-servers", ListStandardServersHandler).Methods("GET")
@@ -810,11 +1175,22 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/skills/{name}/content", UpdateSkillContentHandler).Methods("PUT")
 	router.HandleFunc("/api/skills/{name}", DeleteSkillHandler).Methods("DELETE")
 
+	// MCP Platform endpoints (multi-tenant MCP server management)
+	router.HandleFunc("/api/mcp-platform/servers", ListMCPPlatformServersHandler).Methods("GET")
+	router.HandleFunc("/api/mcp-platform/servers", CreateMCPPlatformServerHandler).Methods("POST")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", GetMCPPlatformServerHandler).Methods("GET")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", UpdateMCPPlatformServerHandler).Methods("PUT")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", DeleteMCPPlatformServerHandler).Methods("DELETE")
+	router.HandleFunc("/api/mcp-platform/servers/{name}", ToggleMCPPlatformServerHandler).Methods("PATCH")
+	router.HandleFunc("/api/mcp-platform/servers/{name}/refresh", RefreshMCPPlatformServerHandler).Methods("POST")
+
 	// Credentials endpoints (master-key routes before {name} to avoid mux conflict)
 	router.HandleFunc("/api/credentials", ListCredentialsHandler).Methods("GET")
 	router.HandleFunc("/api/credentials", SaveCredentialHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/master-key", SetMasterKeyHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/verify-master-key", VerifyMasterKeyHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/publish", PublishCredentialHandler).Methods("POST")
+	router.HandleFunc("/api/credentials/fork", ForkCredentialHandler).Methods("POST")
 	router.HandleFunc("/api/credentials/{name}", GetCredentialHandler).Methods("GET")
 	router.HandleFunc("/api/credentials/{name}", DeleteCredentialHandler).Methods("DELETE")
 	router.HandleFunc("/api/secrets/{key:.+}", GetSecretHandler).Methods("GET")
@@ -878,6 +1254,13 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/apps/state/query", AppStateQueryHandler).Methods("POST")
 	router.HandleFunc("/api/apps/state/exec", AppStateExecHandler).Methods("POST")
 
+	// App sharing endpoints (must be before /api/apps/{name} to avoid capture)
+	router.HandleFunc("/api/apps/publish", AppPublishToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/apps/fork", AppForkToPersonalHandler).Methods("POST")
+	router.HandleFunc("/api/apps/promote", AppPromoteToOrgHandler).Methods("POST")
+	router.HandleFunc("/api/apps/org", ListOrgAppsHandler).Methods("GET")
+	router.HandleFunc("/api/apps/org/{name}", DeleteOrgAppHandler).Methods("DELETE")
+
 	router.HandleFunc("/api/apps", ListAppsHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", SaveAppHandler).Methods("PUT")
@@ -889,6 +1272,8 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/studio/sessions", StudioSessionsHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}", StudioSessionHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}", StudioDeleteSessionHandler).Methods("DELETE")
+	router.HandleFunc("/api/studio/sessions/{id}/trace", StudioSessionTraceHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}/subtask-events", StudioSubtaskEventsHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
 	router.HandleFunc("/api/studio/sessions/{id}/stream", StudioChatStreamHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}/status", StudioChatStatusHandler).Methods("GET")
@@ -918,6 +1303,7 @@ func RegisterRoutes(router *mux.Router) {
 	// Fleet Session endpoints (fleet v2: autonomous agent team)
 	router.HandleFunc("/api/studio/fleet/start", FleetStartHandler).Methods("POST")
 	router.HandleFunc("/api/studio/fleet/sessions", FleetSessionsListHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/history", FleetSessionsHistoryHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}", FleetSessionStatusHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/message", FleetMessageHandler).Methods("POST")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/stop", FleetSessionStopHandler).Methods("POST")
@@ -938,4 +1324,73 @@ func RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/api/drills/{suite}/drills/{name}/yaml", SaveDrillYAMLHandler).Methods("PUT")
 	router.HandleFunc("/api/drill-reports", ListDrillReportsHandler).Methods("GET")
 	router.HandleFunc("/api/drill-reports/{suite}", GetDrillReportHandler).Methods("GET")
+
+	// Memory sharing endpoints (platform mode)
+	router.HandleFunc("/api/memories/search", MemorySearchCrossTierHandler).Methods("POST")
+	router.HandleFunc("/api/memories/team", MemoryShareToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/memories/team", MemoryListTeamHandler).Methods("GET")
+	router.HandleFunc("/api/memories/team/{id}", MemoryDeleteTeamHandler).Methods("DELETE")
+	router.HandleFunc("/api/memories/personal", MemorySavePersonalHandler).Methods("POST")
+	router.HandleFunc("/api/memories/personal", MemoryListPersonalHandler).Methods("GET")
+	router.HandleFunc("/api/memories/personal/{id}", MemoryDeletePersonalHandler).Methods("DELETE")
+	router.HandleFunc("/api/memories/org", MemorySaveOrgHandler).Methods("POST")
+	router.HandleFunc("/api/memories/org", MemoryListOrgHandler).Methods("GET")
+	router.HandleFunc("/api/memories/org/{id}", MemoryDeleteOrgHandler).Methods("DELETE")
+	router.HandleFunc("/api/memories/promote", MemoryPromoteToOrgHandler).Methods("POST")
+	router.HandleFunc("/api/memories/promote-to-team", MemoryPromotePersonalToTeamHandler).Methods("POST")
+	router.HandleFunc("/api/memories/{scope}/{id}", MemoryUpdateHandler).Methods("PUT")
+	router.HandleFunc("/api/memories/session/{id}", MemoryListBySessionHandler).Methods("GET")
+	router.HandleFunc("/api/memories/session/{id}/extract", MemoryExtractHandler).Methods("POST")
+
+	// Audit log query (admin-only, platform mode)
+	router.HandleFunc("/api/audit", AuditQueryHandler).Methods("GET")
+
+	// Platform admin endpoints (superadmin only, platform mode)
+	// These are NOT in the auth bypass list — PlatformAuthMiddleware runs first,
+	// and each handler additionally verifies platform_role == "superadmin".
+	if pg != nil {
+		SetPlatformPGStore(pg)
+
+		// User channel management (any authenticated user manages their own)
+		router.HandleFunc("/api/user/channels", handleListUserChannels).Methods("GET")
+		router.HandleFunc("/api/user/channels", handleLinkUserChannel).Methods("POST")
+		router.HandleFunc("/api/user/channels/link-code", handleGenerateLinkCode).Methods("POST")
+		router.HandleFunc("/api/user/channels/verify-email-code", handleVerifyEmailCode).Methods("POST")
+		router.HandleFunc("/api/user/channels/{id}", handleUpdateUserChannel).Methods("PATCH")
+		router.HandleFunc("/api/user/channels/{id}", handleUnlinkUserChannel).Methods("DELETE")
+		router.HandleFunc("/api/user/channels/{id}/verify", handleVerifyUserChannel).Methods("POST")
+
+		// Channel info (any authenticated user can see bot info)
+		router.HandleFunc("/api/channels/info", handleGetChannelInfo).Methods("GET")
+
+		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminListOrgsHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/orgs", PlatformAdminCreateOrgHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminGetOrgHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminUpdateOrgHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/orgs/{slug}", PlatformAdminDeleteOrgHandler).Methods("DELETE")
+		router.HandleFunc("/api/platform/admin/users", PlatformAdminListUsersHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/users", PlatformAdminCreateUserHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminGetUserHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminUpdateUserHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/users/{id}", PlatformAdminDeleteUserHandler).Methods("DELETE")
+		router.HandleFunc("/api/platform/admin/users/{id}/orgs", PlatformAdminAddUserToOrgHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/users/{id}/orgs/{slug}", PlatformAdminRemoveUserFromOrgHandler).Methods("DELETE")
+
+		// OIDC provider management (superadmin only)
+		router.HandleFunc("/api/platform/admin/oidc-providers", PlatformAdminListOIDCProvidersHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/oidc-providers", PlatformAdminCreateOIDCProviderHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminGetOIDCProviderHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminUpdateOIDCProviderHandler).Methods("PATCH")
+		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminDeleteOIDCProviderHandler).Methods("DELETE")
+
+		// Channel adapter management (superadmin only)
+		router.HandleFunc("/api/platform/admin/channels", PlatformAdminListChannelsHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminSaveChannelHandler).Methods("PUT")
+		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminDeleteChannelHandler).Methods("DELETE")
+
+		// Standard MCP servers / web services management (superadmin only)
+		router.HandleFunc("/api/platform/admin/web-services", PlatformAdminListWebServicesHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminSetWebServiceKeyHandler).Methods("PUT")
+		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminDeleteWebServiceHandler).Methods("DELETE")
+	}
 }

@@ -380,6 +380,8 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		astonishAgent.Redactor = cs.Redactor()
 		astonishAgent.CredentialStore = cs
 		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
+		// Inject Redactor into context so memory_save can Placeholderize()
+		ctx = credentials.WithRedactor(ctx, cs.Redactor())
 		// Attach proactive secret scanner
 		if cfg.AppConfig == nil || cfg.AppConfig.Security.IsSecretScannerEnabled() {
 			scanner := credentials.NewSecretScanner()
@@ -446,16 +448,7 @@ func RunConsole(ctx context.Context, cfg *ConsoleConfig) error {
 		fmt.Println("✓ Runner created")
 	}
 
-	// ANSI color codes
-	const (
-		ColorReset  = "\033[0m"
-		ColorRed    = "\033[31m"
-		ColorGreen  = "\033[32m"
-		ColorYellow = "\033[33m"
-		ColorBlue   = "\033[34m"
-		ColorCyan   = "\033[36m"
-		ColorGray   = "\033[90m"
-	)
+	// Colors defined in colors.go (package level)
 
 	// Start with empty message to let agent initialize and show first prompt
 	var userMsg *genai.Content

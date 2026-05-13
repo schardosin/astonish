@@ -153,6 +153,12 @@ func scrubAppConfig(appCfg *config.AppConfig) {
 	// Email channel password
 	appCfg.Channels.Email.Password = ""
 
+	// Slack channel secrets
+	appCfg.Channels.Slack.BotToken = ""
+	appCfg.Channels.Slack.AppToken = ""
+	appCfg.Channels.Slack.SigningSecret = ""
+	appCfg.Channels.Slack.ClientSecret = ""
+
 	// Web server API keys
 	for id, wsCfg := range appCfg.WebServers {
 		wsCfg.APIKey = ""

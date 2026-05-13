@@ -4,12 +4,23 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 )
+
+// PlanAccess abstracts read/write access to fleet plans for the PlanActivator.
+// In personal mode, this is backed by *PlanRegistry (file-based).
+// In platform mode, this is backed by a DB store adapter.
+type PlanAccess interface {
+	GetPlan(key string) (*FleetPlan, bool)
+	Save(plan *FleetPlan) error
+	ListPlans() []PlanSummary
+	// MonitorStateStore returns the state persistence backend for monitors.
+	// In personal mode, this is file-based (under the fleet_plans directory).
+	// In platform mode, this is backed by the team's database table.
+	MonitorStateStore() MonitorStateStore
+}
 
 // SchedulerAccess abstracts scheduler operations for the PlanActivator.
 // This avoids import cycles between fleet and scheduler/tools packages.
@@ -19,6 +30,7 @@ type SchedulerAccess interface {
 	RemoveJob(id string) error
 	RemoveJobByName(name string) error
 	GetJob(id string) *SchedulerJob
+	GetJobByName(name string) *SchedulerJob
 	ValidateCron(expr string) error
 }
 
@@ -49,6 +61,8 @@ type HeadlessFleetConfig struct {
 	IssueTitle     string                             // GitHub issue title (for task slug derivation)
 	Repo           string                             // GitHub repo "owner/repo"
 	GHToken        string                             // resolved GitHub token (injected as GH_TOKEN)
+	UserID         string                             // platform user ID (UUID) or empty for system-initiated
+	TeamSlug       string                             // team slug for session scoping (empty for personal mode)
 	CompletionFunc func(err error)                    // called when the session finishes (nil=success, non-nil=failed)
 	BallChangeFunc func(ball string, commentID int64) // called when ball moves between agents/human
 }
@@ -61,6 +75,8 @@ type RecoverFleetConfig struct {
 	IssueTitle      string // GitHub issue title (for task slug derivation)
 	Repo            string
 	GHToken         string                             // resolved GitHub token (injected as GH_TOKEN)
+	UserID          string                             // platform user ID (UUID) or empty for system-initiated
+	TeamSlug        string                             // team slug for session scoping (empty for personal mode)
 	CustomerMessage string                             // customer comment that triggered recovery (empty for restart recovery)
 	CompletionFunc  func(err error)                    // called when the recovered session finishes
 	BallChangeFunc  func(ball string, commentID int64) // called when ball moves between agents/human
@@ -74,11 +90,16 @@ type GHTokenResolverFunc func(plan *FleetPlan) string
 // PlanActivator manages the lifecycle of fleet plan activations.
 // It creates scheduler jobs for activated plans and removes them on deactivation.
 type PlanActivator struct {
-	planRegistryFn  func() *PlanRegistry
+	planAccessFn    func() PlanAccess
 	scheduler       SchedulerAccess
 	fleetStart      FleetStartFunc
 	fleetRecover    FleetRecoverFunc
 	ghTokenResolver GHTokenResolverFunc
+
+	// TeamSlug is the team this activator manages plans for.
+	// Set by the daemon at initialization; used to stamp HeadlessFleetConfig
+	// and RecoverFleetConfig so fleet sessions know which team's stores to use.
+	TeamSlug string
 
 	// sessionRegistry provides active session lookup for CheckForWork.
 	// Set by the daemon after initialization via SetSessionRegistry.
@@ -90,21 +111,21 @@ type PlanActivator struct {
 }
 
 // NewPlanActivator creates a new activator.
-// The registryFn is called each time the activator needs the PlanRegistry,
+// The accessFn is called each time the activator needs plan access,
 // ensuring it always sees the current instance even if the package-level
 // variable is replaced (e.g., when the Studio lazy chat init re-creates it).
-func NewPlanActivator(registryFn func() *PlanRegistry, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
+func NewPlanActivator(accessFn func() PlanAccess, sched SchedulerAccess, fleetStart FleetStartFunc) *PlanActivator {
 	return &PlanActivator{
-		planRegistryFn: registryFn,
-		scheduler:      sched,
-		fleetStart:     fleetStart,
-		monitors:       make(map[string]*GitHubMonitor),
+		planAccessFn: accessFn,
+		scheduler:    sched,
+		fleetStart:   fleetStart,
+		monitors:     make(map[string]*GitHubMonitor),
 	}
 }
 
-// registry returns the current PlanRegistry instance.
-func (a *PlanActivator) registry() *PlanRegistry {
-	return a.planRegistryFn()
+// registry returns the current PlanAccess instance.
+func (a *PlanActivator) registry() PlanAccess {
+	return a.planAccessFn()
 }
 
 // SetRecoverFunc sets the function used to recover interrupted fleet sessions.
@@ -159,7 +180,7 @@ func (a *PlanActivator) Activate(ctx context.Context, planKey string) error {
 	// For GitHub Issues: initialize the monitor and mark existing issues as seen
 	// so we only trigger on NEW issues created after activation.
 	if plan.Channel.Type == "github_issues" {
-		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().Dir())
+		monitor := NewGitHubMonitor(planKey, plan.Channel.Config, a.registry().MonitorStateStore())
 		monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 		if err := monitor.LoadState(); err != nil {
 			slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", planKey, "error", err)
@@ -292,46 +313,67 @@ func (a *PlanActivator) RestoreActivated() error {
 
 		// Verify the scheduler job still exists. If it was lost (e.g., manual
 		// deletion, corrupted jobs.json), re-create it so polling resumes.
+		// We check by ID first, then by name to avoid creating duplicates
+		// when the plan JSON's SchedulerJobID is stale.
 		if plan.Activation.SchedulerJobID != "" {
 			existing := a.scheduler.GetJob(plan.Activation.SchedulerJobID)
 			if existing == nil {
-				slog.Warn("scheduler job missing, re-creating", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "plan", summary.Key)
-
-				schedule := plan.Channel.GetSchedule()
-
-				job := &SchedulerJob{
-					Name:    fmt.Sprintf("fleet-plan:%s", summary.Key),
-					Mode:    "fleet_poll",
-					Cron:    schedule,
-					Flow:    summary.Key,
-					Enabled: true,
-				}
-
-				if err := a.scheduler.AddJob(job); err != nil {
-					slog.Error("failed to re-create scheduler job", "component", "plan-activator", "plan", summary.Key, "error", err)
-					// Clear activation state since we can't restore the job
-					plan.Activation = PlanActivationState{}
+				// Job not found by ID — check by name before creating a new one.
+				// This prevents duplicates when the plan JSON has a stale job ID
+				// but the job still exists in the store under a different UUID
+				// (e.g., after a store migration or manual cleanup).
+				jobName := fmt.Sprintf("fleet-plan:%s", summary.Key)
+				existingByName := a.scheduler.GetJobByName(jobName)
+				if existingByName != nil {
+					// Job exists by name — just fix the stale ID reference.
+					slog.Info("scheduler job found by name, updating stale ID reference",
+						"component", "plan-activator", "plan", summary.Key,
+						"old_id", plan.Activation.SchedulerJobID, "found_id", existingByName.ID)
+					plan.Activation.SchedulerJobID = existingByName.ID
 					plan.UpdatedAt = time.Now()
 					if err := a.registry().Save(plan); err != nil {
 						slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
 					}
-					continue
-				}
+				} else {
+					// Job truly missing — re-create it.
+					slog.Warn("scheduler job missing, re-creating", "component", "plan-activator", "job_id", plan.Activation.SchedulerJobID, "plan", summary.Key)
 
-				// Update the job ID in the plan
-				plan.Activation.SchedulerJobID = job.ID
-				plan.UpdatedAt = time.Now()
-				if err := a.registry().Save(plan); err != nil {
-					slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
-				}
+					schedule := plan.Channel.GetSchedule()
 
-				slog.Info("re-created scheduler job", "component", "plan-activator", "job_id", job.ID, "plan", summary.Key, "cron", schedule)
+					job := &SchedulerJob{
+						Name:    jobName,
+						Mode:    "fleet_poll",
+						Cron:    schedule,
+						Flow:    summary.Key,
+						Enabled: true,
+					}
+
+					if err := a.scheduler.AddJob(job); err != nil {
+						slog.Error("failed to re-create scheduler job", "component", "plan-activator", "plan", summary.Key, "error", err)
+						// Clear activation state since we can't restore the job
+						plan.Activation = PlanActivationState{}
+						plan.UpdatedAt = time.Now()
+						if err := a.registry().Save(plan); err != nil {
+							slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+						}
+						continue
+					}
+
+					// Update the job ID in the plan
+					plan.Activation.SchedulerJobID = job.ID
+					plan.UpdatedAt = time.Now()
+					if err := a.registry().Save(plan); err != nil {
+						slog.Error("failed to save fleet plan state", "plan", plan.Name, "error", err)
+					}
+
+					slog.Info("re-created scheduler job", "component", "plan-activator", "job_id", job.ID, "plan", summary.Key, "cron", schedule)
+				}
 			}
 		}
 
 		// Re-create the monitor for this plan
 		if plan.Channel.Type == "github_issues" {
-			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().Dir())
+			monitor := NewGitHubMonitor(summary.Key, plan.Channel.Config, a.registry().MonitorStateStore())
 			monitor.GHToken = a.ResolveGHTokenForPlan(plan)
 			if err := monitor.LoadState(); err != nil {
 				slog.Warn("failed to load monitor state", "component", "plan-activator", "plan", summary.Key, "error", err)
@@ -488,6 +530,8 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 		IssueTitle:  issue.Title,
 		Repo:        repo,
 		GHToken:     a.ResolveGHTokenForPlan(plan),
+		UserID:      plan.CreatedBy, // run under plan creator's identity
+		TeamSlug:    a.TeamSlug,
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
 				monitor.IncrementRetryCount(issueNum, sessionErr.Error())
@@ -538,6 +582,8 @@ func (a *PlanActivator) recoverSession(ctx context.Context, monitor *GitHubMonit
 		IssueTitle:      item.IssueTitle,
 		Repo:            repo,
 		GHToken:         a.ResolveGHTokenForPlan(plan),
+		UserID:          plan.CreatedBy, // run under plan creator's identity
+		TeamSlug:        a.TeamSlug,
 		CustomerMessage: item.CustomerReply,
 		CompletionFunc: func(sessionErr error) {
 			if sessionErr != nil {
@@ -624,11 +670,10 @@ func (a *PlanActivator) ForceCleanup(planKey string) {
 			slog.Warn("failed to clear monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 	} else {
-		// No in-memory monitor, but the state file may still exist on disk.
-		// Remove it directly using the same path convention as GitHubMonitor.
-		statePath := filepath.Join(a.registry().Dir(), ".state", planKey+".json")
-		if err := os.Remove(statePath); err != nil && !os.IsNotExist(err) {
-			slog.Warn("failed to remove state file", "component", "plan-activator", "path", statePath, "error", err)
+		// No in-memory monitor, but persisted state may still exist.
+		// Remove it directly using the store.
+		if err := a.registry().MonitorStateStore().DeleteState(planKey); err != nil {
+			slog.Warn("failed to remove monitor state", "component", "plan-activator", "plan", planKey, "error", err)
 		}
 	}
 

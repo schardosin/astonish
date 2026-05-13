@@ -178,13 +178,27 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 
 		ip := extractIP(r.RemoteAddr)
 
-		// Auth endpoints get stricter limits (brute-force protection)
+		// Auth endpoints get stricter limits (brute-force protection).
+		// Exempt read-only session-check endpoints (/me, /setup-status) —
+		// Auth endpoints: only /login and /register use the strict 10/min
+		// budget (brute-force / account-creation protection). All other
+		// /api/auth/* endpoints (refresh, me, sso/*, setup-status, logout)
+		// are cookie-validated or read-only — they use the general API budget.
 		if len(path) >= 9 && path[:9] == "/api/auth" {
-			if !cfg.Auth.Allow(ip) {
-				slog.Warn("rate limit exceeded on auth endpoint", "ip", ip, "path", path)
-				w.Header().Set("Retry-After", "60")
-				http.Error(w, "Too many requests", http.StatusTooManyRequests)
-				return
+			if path == "/api/auth/login" || path == "/api/auth/register" {
+				if !cfg.Auth.Allow(ip) {
+					slog.Warn("rate limit exceeded on auth endpoint", "ip", ip, "path", path)
+					w.Header().Set("Retry-After", "60")
+					respondError(w, http.StatusTooManyRequests, "Too many requests")
+					return
+				}
+			} else {
+				if !cfg.API.Allow(ip) {
+					slog.Warn("rate limit exceeded on API endpoint", "ip", ip, "path", path)
+					w.Header().Set("Retry-After", "60")
+					respondError(w, http.StatusTooManyRequests, "Too many requests")
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -194,7 +208,7 @@ func RateLimitMiddleware(cfg *RateLimitConfig, next http.Handler) http.Handler {
 		if !cfg.API.Allow(ip) {
 			slog.Warn("rate limit exceeded on API endpoint", "ip", ip, "path", path)
 			w.Header().Set("Retry-After", "60")
-			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			respondError(w, http.StatusTooManyRequests, "Too many requests")
 			return
 		}
 

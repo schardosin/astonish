@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkmodel "google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
@@ -108,13 +110,31 @@ type FleetSessionResult struct {
 // transcript callbacks (rather than replacing them), allowing callers (e.g., Telegram)
 // to add forwarding logic on top.
 // If initialMessage is non-empty, it is posted as the first customer message.
-func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionResult, error) {
-	if fleetPlanRegistryVar == nil {
-		return nil, fmt.Errorf("fleet plan system not initialized")
-	}
-	plan, ok := fleetPlanRegistryVar.GetPlan(planKey)
-	if !ok {
-		return nil, fmt.Errorf("fleet plan %q not found", planKey)
+// teamSlug scopes the session to a team (empty for personal mode).
+// sessionStore is the PG-backed session store for platform mode (nil for personal mode).
+// mcpStores provides platform MCP server stores for sandbox tool injection (nil for personal mode).
+// fleetPlanStore is the DB-backed plan store for platform mode (nil uses the file-based registry).
+func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string, sessionStore store.SessionStore, mcpStores *store.MCPServerStores, teamTemplate string, fleetPlanStore store.FleetPlanStore, fleetStores *FleetStores) (*FleetSessionResult, error) {
+	// Resolve plan from the provided store (platform mode) or the global registry (personal mode)
+	var plan *fleet.FleetPlan
+	if fleetPlanStore != nil {
+		planAny, ok := fleetPlanStore.GetPlan(context.TODO(), planKey)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q not found", planKey)
+		}
+		plan, ok = planAny.(*fleet.FleetPlan)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q has unexpected type: %T", planKey, planAny)
+		}
+	} else {
+		if fleetPlanRegistryVar == nil {
+			return nil, fmt.Errorf("fleet plan system not initialized")
+		}
+		var ok bool
+		plan, ok = fleetPlanRegistryVar.GetPlan(planKey)
+		if !ok {
+			return nil, fmt.Errorf("fleet plan %q not found", planKey)
+		}
 	}
 
 	subAgentMgr := tools.GetSubAgentManager()
@@ -126,30 +146,42 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 	channel := fleet.NewChatChannel(planKey)
 	fleetSession := fleet.NewFleetSession(planKey, fleetCfg, channel, subAgentMgr)
 	fleetSession.Plan = plan
+	fleetSession.TeamSlug = teamSlug
 
 	// Pre-initialize the session context so that the session appears as
 	// "running" immediately (PostHumanMessage checks fs.ctx != nil).
 	// Run() will reuse this context instead of creating its own.
+	// Enrich with session store so child sub-agent sessions are persisted
+	// to PostgreSQL (making tool executions visible in session traces).
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+	if sessionStore != nil {
+		sessionCtx = store.WithSessionService(sessionCtx, sessionStore)
+		if userID != "" {
+			sessionCtx = store.WithUserID(sessionCtx, userID)
+		}
+	}
+	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
+	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
+	// and other platform-mode resources during execution.
+	sessionCtx = fleetStores.InjectIntoContext(sessionCtx)
 	fleetSession.InitContext(sessionCtx, sessionCancel)
 
 	// Resolve per-session workspace directory. Each session gets its own
-	// isolated workspace (via git clone --local from the base) under the sessions dir.
+	// isolated workspace (via git clone --local from the base) under the workspaces dir.
 	// The base workspace (~/astonish_projects/<repo-name>/) is where the wizard
 	// cloned the repo and generated AGENTS.md.
 	baseDir := plan.ResolveWorkspaceDir()
 	var workspaceDir string
 	if fleetCfg.ProjectContext != nil || plan.ResolveProjectSource() != nil {
-		fileStore := getFleetFileStore()
-		if fileStore != nil {
+		if wsDir, wsErr := config.GetWorkspacesDir(); wsErr == nil {
 			workspaceDir = fleet.ResolveSessionWorkspaceDir(
-				fileStore.BaseDir(), fleetSession.ID, "" /* chat sessions use short session ID */)
+				wsDir, fleetSession.ID, "" /* chat sessions use short session ID */)
 			if err := fleet.SetupSessionWorkspace(workspaceDir, plan.ResolveProjectSource(), baseDir); err != nil {
 				slog.Warn("could not set up workspace", "component", "fleet", "workspace", workspaceDir, "error", err)
 				workspaceDir = "" // fall back to legacy behavior
 			}
 		}
-		// Fall back to the legacy shared workspace if no file store is available
+		// Fall back to the legacy shared workspace if no workspace dir available
 		if workspaceDir == "" {
 			workspaceDir = baseDir
 			if workspaceDir != "" {
@@ -175,15 +207,15 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 		}
 		ghToken = fleet.GitHubToken(resolved)
 	}
-	if err := wireFleetSandbox(fleetSession, plan, ghToken); err != nil {
+	if err := wireFleetSandbox(fleetSession, plan, ghToken, mcpStores, teamTemplate); err != nil {
 		return nil, fmt.Errorf("cannot start fleet session: %w", err)
 	}
 
 	// Register in session registry and persist metadata
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, fleetCfg, 0, "")
-	wireFleetTranscript(fleetSession)
+	persistFleetSessionMeta(fleetSession, fleetCfg, userID, 0, "", sessionStore)
+	wireFleetTranscript(fleetSession, userID, sessionStore)
 
 	// Capture the transcript callback so we can compose additional callbacks on top.
 	transcriptCallback := fleetSession.OnMessagePosted
@@ -276,20 +308,54 @@ func StartFleetSessionFromPlan(planKey, initialMessage string) (*FleetSessionRes
 func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	var req FleetStartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.FleetKey == "" && req.PlanKey == "" {
-		http.Error(w, "fleet_key or plan_key is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "fleet_key or plan_key is required")
 		return
+	}
+
+	// Resolve session store for platform mode.
+	// Fleet sessions are team-scoped (shared across team members), so we
+	// use the team Sessions store rather than PersonalSessions.
+	var handlerSessionStore store.SessionStore
+	var handlerMCPStores *store.MCPServerStores
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.Sessions != nil {
+			handlerSessionStore = svc.Sessions
+		}
+		if svc.Mode == store.ModePlatform && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+			handlerMCPStores = &store.MCPServerStores{
+				Org:  svc.MCPServers,
+				Team: svc.TeamMCPServers,
+			}
+		}
 	}
 
 	// If starting from a plan, use the shared helper
 	if req.PlanKey != "" {
-		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message)
+		// Resolve team template from team settings (platform mode)
+		handlerTeamTemplate := ""
+		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+			if settings, err := svc.Settings.Get(r.Context()); err == nil && settings != nil {
+				handlerTeamTemplate = settings.TemplateName
+			}
+		}
+		// Resolve fleet plan store for platform mode
+		var handlerFleetPlanStore store.FleetPlanStore
+		if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+			handlerFleetPlanStore = svc.FleetPlans
+		}
+		// Build tenant-scoped stores for the fleet session context
+		var handlerFleetStores *FleetStores
+		if svc := store.FromRequest(r); svc != nil {
+			handlerFleetStores = FleetStoresFromServices(svc)
+		}
+		result, err := StartFleetSessionFromPlan(req.PlanKey, req.Message, effectiveUserID(r), effectiveTeamSlug(r), handlerSessionStore, handlerMCPStores, handlerTeamTemplate, handlerFleetPlanStore, handlerFleetStores)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
@@ -304,37 +370,74 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Start from a regular fleet template
-	fleetReg := GetFleetRegistry()
-	if fleetReg == nil {
-		http.Error(w, "Fleet system not initialized", http.StatusServiceUnavailable)
-		return
-	}
-	cfg, ok := fleetReg.GetFleet(req.FleetKey)
-	if !ok {
-		http.Error(w, fmt.Sprintf("Fleet %q not found", req.FleetKey), http.StatusNotFound)
-		return
+	var cfg *fleet.FleetConfig
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		cfgAny, found := svc.FleetTemplates.GetFleet(r.Context(), req.FleetKey)
+		if !found {
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet %q not found", req.FleetKey))
+			return
+		}
+		var cfgOk bool
+		cfg, cfgOk = cfgAny.(*fleet.FleetConfig)
+		if !cfgOk {
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Fleet %q has unexpected type", req.FleetKey))
+			return
+		}
+	} else {
+		fleetReg := GetFleetRegistry()
+		if fleetReg == nil {
+			respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
+			return
+		}
+		var found bool
+		cfg, found = fleetReg.GetFleet(req.FleetKey)
+		if !found {
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet %q not found", req.FleetKey))
+			return
+		}
 	}
 
 	subAgentMgr := tools.GetSubAgentManager()
 	if subAgentMgr == nil {
-		http.Error(w, "Sub-agent system not initialized (sub-agents must be enabled)", http.StatusServiceUnavailable)
+		respondError(w, http.StatusServiceUnavailable, "Sub-agent system not initialized (sub-agents must be enabled)")
 		return
 	}
 
 	channel := fleet.NewChatChannel(req.FleetKey)
 	fleetSession := fleet.NewFleetSession(req.FleetKey, cfg, channel, subAgentMgr)
+	fleetSession.TeamSlug = effectiveTeamSlug(r)
+
+	// Build tenant-scoped stores for the fleet session context (must capture
+	// before the goroutine starts since the request context won't be available).
+	var directFleetStores *FleetStores
+	if svc := store.FromRequest(r); svc != nil {
+		directFleetStores = FleetStoresFromServices(svc)
+	}
 
 	registry := getFleetSessionRegistry()
 	registry.Register(fleetSession)
-	persistFleetSessionMeta(fleetSession, cfg, 0, "")
-	wireFleetTranscript(fleetSession)
+	persistFleetSessionMeta(fleetSession, cfg, effectiveUserID(r), 0, "", handlerSessionStore)
+	wireFleetTranscript(fleetSession, effectiveUserID(r), handlerSessionStore)
 
 	go func() {
 		defer func() {
 			registry.Unregister(fleetSession.ID)
 			slog.Info("session removed from registry", "component", "fleet", "session_id", fleetSession.ID)
 		}()
-		if err := fleetSession.Run(context.Background()); err != nil {
+		// Enrich context with session store so child sub-agent sessions
+		// are persisted to PostgreSQL (tool executions visible in traces).
+		runCtx := context.Background()
+		if handlerSessionStore != nil {
+			runCtx = store.WithSessionService(runCtx, handlerSessionStore)
+			uid := effectiveUserID(r)
+			if uid != "" {
+				runCtx = store.WithUserID(runCtx, uid)
+			}
+		}
+		// Inject tenant-scoped stores so fleet sub-agents can access team
+		// drills, credentials, and other platform-mode resources.
+		runCtx = directFleetStores.InjectIntoContext(runCtx)
+		if err := fleetSession.Run(runCtx); err != nil {
 			slog.Error("session error", "component", "fleet", "session_id", fleetSession.ID, "error", err)
 		}
 	}()
@@ -362,13 +465,9 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 
 // persistFleetSessionMeta adds the fleet session to the persistent session index
 // so it appears in the sidebar alongside regular chat sessions.
-func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, issueNumber int, repo string) {
-	fileStore := getFleetFileStore()
-	if fileStore == nil {
-		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
-		return
-	}
-
+// If sessionStore is non-nil (platform mode), it writes to the PostgreSQL store.
+// Otherwise, it writes to the file-based session store.
+func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig, userID string, issueNumber int, repo string, sessionStore store.SessionStore) {
 	// When sandbox is enabled, WorkspaceDir is a container-internal path
 	// (e.g., "/root/astonish"). Do NOT persist it — CleanupSessionWorkspace
 	// would run os.RemoveAll on that path ON THE HOST, potentially destroying
@@ -380,10 +479,39 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 	}
 
 	now := time.Now()
+
+	// Platform mode: write to the PG-backed SessionStore.
+	if sessionStore != nil {
+		meta := store.SessionMeta{
+			ID:           fs.ID,
+			AppName:      studioChatAppName,
+			UserID:       userID,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+			Title:        fmt.Sprintf("Fleet: %s", fleetCfg.Name),
+			FleetKey:     fs.FleetKey,
+			FleetName:    fleetCfg.Name,
+			IssueNumber:  issueNumber,
+			Repo:         repo,
+			WorkspaceDir: workspaceDir,
+		}
+		if err := sessionStore.AddSessionMeta(context.TODO(), meta); err != nil {
+			slog.Warn("could not persist fleet session meta to store", "component", "fleet", "error", err)
+		}
+		return
+	}
+
+	// Personal mode: write to the file-based session store.
+	fileStore := getFleetFileStore()
+	if fileStore == nil {
+		slog.Warn("no file store available, cannot persist fleet session meta", "component", "fleet", "session_id", fs.ID)
+		return
+	}
+
 	meta := session.SessionMeta{
 		ID:           fs.ID,
 		AppName:      studioChatAppName,
-		UserID:       studioChatUserID,
+		UserID:       userID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 		Title:        fmt.Sprintf("Fleet: %s", fleetCfg.Name),
@@ -400,7 +528,18 @@ func persistFleetSessionMeta(fs *fleet.FleetSession, fleetCfg *fleet.FleetConfig
 }
 
 // updateFleetSessionMeta updates the message count and timestamp for a fleet session in the index.
-func updateFleetSessionMeta(sessionID string, messageCount int) {
+// If sessionStore is non-nil (platform mode), it updates the PG store.
+func updateFleetSessionMeta(sessionID string, messageCount int, sessionStore store.SessionStore) {
+	if sessionStore != nil {
+		if err := sessionStore.UpdateSessionMeta(context.TODO(), sessionID, func(meta *store.SessionMeta) {
+			meta.MessageCount = messageCount
+			meta.UpdatedAt = time.Now()
+		}); err != nil {
+			slog.Warn("failed to update fleet session metadata in store", "session_id", sessionID, "error", err)
+		}
+		return
+	}
+
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		return
@@ -417,7 +556,14 @@ func updateFleetSessionMeta(sessionID string, messageCount int) {
 // wireFleetTranscript creates a JSONL transcript file for a fleet session
 // and wires up the OnMessagePosted callback to persist messages to it.
 // This makes fleet sessions visible via `astonish sessions show <id>`.
-func wireFleetTranscript(fs *fleet.FleetSession) {
+// If sessionStore is non-nil (platform mode), events are persisted to the PG
+// store instead of a JSONL file on disk.
+func wireFleetTranscript(fs *fleet.FleetSession, userID string, sessionStore store.SessionStore) {
+	if sessionStore != nil {
+		wireFleetTranscriptPG(fs, sessionStore)
+		return
+	}
+
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		slog.Warn("no file store available, cannot create transcript", "component", "fleet", "session_id", fs.ID)
@@ -425,7 +571,7 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 	}
 
 	// Create the transcript file in the same location as regular session transcripts
-	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, studioChatUserID, fs.ID+".jsonl")
+	transcriptPath := filepath.Join(fileStore.BaseDir(), studioChatAppName, userID, fs.ID+".jsonl")
 	transcript := session.NewTranscript(transcriptPath)
 
 	if err := transcript.WriteHeader(fs.ID); err != nil {
@@ -441,6 +587,26 @@ func wireFleetTranscript(fs *fleet.FleetSession) {
 		if err := transcript.AppendEvent(event); err != nil {
 			slog.Warn("could not persist fleet message", "component", "fleet", "error", err)
 		}
+	}
+}
+
+// wireFleetTranscriptPG wires the OnMessagePosted callback to persist fleet
+// messages as session_events rows in PostgreSQL.
+func wireFleetTranscriptPG(fs *fleet.FleetSession, sessionStore store.SessionStore) {
+	var invocationCounter int
+	fs.OnMessagePosted = func(msg fleet.Message) {
+		invocationCounter++
+		event := fleetMessageToEvent(msg, invocationCounter)
+
+		// Persist the event via the store's AppendEvent method. This requires
+		// a session object that the store recognizes. For PG stores that need
+		// a *pgSession, we use the raw event insertion path instead.
+		if err := sessionStore.AppendFleetEvent(context.TODO(), fs.ID, event); err != nil {
+			slog.Warn("could not persist fleet event to store", "component", "fleet", "session_id", fs.ID, "error", err)
+		}
+
+		// Also update the message count in the session metadata.
+		updateFleetSessionMeta(fs.ID, invocationCounter, sessionStore)
 	}
 }
 
@@ -496,18 +662,18 @@ func FleetMessageHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req FleetMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	if req.Message == "" {
-		http.Error(w, "message is required", http.StatusBadRequest)
+		respondError(w, http.StatusBadRequest, "message is required")
 		return
 	}
 
 	registry := getFleetSessionRegistry()
 	if err := registry.PostHumanMessage(sessionID, req.Message); err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -525,7 +691,7 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
 	}
 
@@ -534,7 +700,7 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Get thread history
 	thread, err := fs.Channel.GetThread(r.Context())
 	if err != nil {
-		http.Error(w, "Failed to get thread: "+err.Error(), http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Failed to get thread: "+err.Error())
 		return
 	}
 
@@ -551,15 +717,96 @@ func FleetSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // FleetSessionsListHandler handles GET /api/studio/fleet/sessions.
-// Lists all active fleet sessions.
+// Returns active fleet sessions from the in-memory registry.
+// Used by StudioChat and SessionTrace to check if a session is currently running.
 func FleetSessionsListHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
-	sessions := registry.List()
+	teamSlug := effectiveTeamSlug(r)
+	sessions := registry.ListForTeam(teamSlug)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"sessions": sessions,
 	})
+}
+
+// FleetSessionsHistoryHandler handles GET /api/studio/fleet/sessions/history.
+// Returns persisted fleet sessions from the team Sessions store (platform mode)
+// or the file store (personal mode). This is the endpoint that FleetView uses
+// to display all fleet sessions (both active and completed).
+func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	userID := effectiveUserID(r)
+
+	// Platform mode: read persisted fleet sessions from the team Sessions store.
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
+			return
+		}
+
+		// Filter to fleet sessions only (those with a fleet key).
+		sessions := make([]StudioSessionResponse, 0, len(metas))
+		for _, m := range metas {
+			if m.FleetKey == "" {
+				continue
+			}
+			sessions = append(sessions, storeMetaToResponse(m))
+		}
+
+		// Sort by updated_at descending (most recent first).
+		sort.Slice(sessions, func(i, j int) bool {
+			return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessions)
+		return
+	}
+
+	// Personal mode: read from file store.
+	cm := GetChatManager()
+	if err := cm.ensureReady(r.Context()); err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("initializing chat manager: %v", err))
+		return
+	}
+	fs := cm.fileStore()
+	if fs == nil {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]StudioSessionResponse{})
+		return
+	}
+
+	metas, err := fs.ListSessionMetas(studioChatAppName, userID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
+		return
+	}
+
+	sessions := make([]StudioSessionResponse, 0, len(metas))
+	for _, m := range metas {
+		if m.FleetKey == "" {
+			continue
+		}
+		sessions = append(sessions, StudioSessionResponse{
+			ID:           m.ID,
+			Title:        m.Title,
+			CreatedAt:    m.CreatedAt.Format(time.RFC3339),
+			UpdatedAt:    m.UpdatedAt.Format(time.RFC3339),
+			MessageCount: m.MessageCount,
+			FleetKey:     m.FleetKey,
+			FleetName:    m.FleetName,
+			IssueNumber:  m.IssueNumber,
+			Repo:         m.Repo,
+		})
+	}
+
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].UpdatedAt > sessions[j].UpdatedAt
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(sessions)
 }
 
 // FleetSessionStopHandler handles POST /api/studio/fleet/sessions/{id}/stop.
@@ -569,7 +816,7 @@ func FleetSessionStopHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
 	}
 
@@ -593,8 +840,15 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 	registry := getFleetSessionRegistry()
 	fs := registry.Get(sessionID)
 	if fs == nil {
-		http.Error(w, "Fleet session not found", http.StatusNotFound)
+		respondError(w, http.StatusNotFound, "Fleet session not found")
 		return
+	}
+
+	// Resolve the session store for metadata updates (platform mode).
+	// Fleet sessions live in the team Sessions store.
+	var streamSessionStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		streamSessionStore = svc.Sessions
 	}
 
 	// Set up SSE headers
@@ -605,7 +859,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		respondError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
 
@@ -723,7 +977,7 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 			// Update persistent meta (message count)
 			if thread, thErr := fs.Channel.GetThread(ctx); thErr == nil {
-				updateFleetSessionMeta(sessionID, len(thread))
+				updateFleetSessionMeta(sessionID, len(thread), streamSessionStore)
 			}
 		}
 	}
@@ -736,9 +990,14 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, r.Context())
+	var sessStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		sessStore = svc.Sessions
+	}
+
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -821,9 +1080,14 @@ func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 	sessionID := mux.Vars(r)["id"]
 
-	messages, err := getFleetMessages(sessionID, r.Context())
+	var sessStore store.SessionStore
+	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
+		sessStore = svc.Sessions
+	}
+
+	messages, err := getFleetMessages(sessionID, effectiveUserID(r), r.Context(), sessStore)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
@@ -848,8 +1112,8 @@ func FleetSessionMessagesHandler(w http.ResponseWriter, r *http.Request) {
 // getFleetMessages returns all fleet messages for a session. It first checks
 // the active session registry (in-memory), then falls back to reading the
 // JSONL transcript (completed sessions).
-func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, error) {
-	// Try active session first
+func getFleetMessages(sessionID, userID string, ctx context.Context, sessionStore store.SessionStore) ([]fleet.Message, error) {
+	// Try active session first (in-memory registry)
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
 		thread, err := fs.Channel.GetThread(ctx)
@@ -859,13 +1123,26 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 		return thread, nil
 	}
 
-	// Fall back to JSONL transcript
+	// Platform mode: read from PG store.
+	if sessionStore != nil {
+		events, err := sessionStore.ReadTranscriptEvents(ctx, studioChatAppName, userID, sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
+		}
+		messages := eventsToFleetMessages(events)
+		if len(messages) == 0 {
+			return nil, fmt.Errorf("session %s has no messages", sessionID)
+		}
+		return messages, nil
+	}
+
+	// Personal mode: fall back to JSONL transcript.
 	fileStore := getFleetFileStore()
 	if fileStore == nil {
 		return nil, fmt.Errorf("session %s not found (no active session, no file store)", sessionID)
 	}
 
-	events, err := fileStore.ReadTranscriptEvents(studioChatAppName, studioChatUserID, sessionID)
+	events, err := fileStore.ReadTranscriptEvents(studioChatAppName, userID, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("session %s not found: %w", sessionID, err)
 	}
@@ -890,7 +1167,7 @@ func getFleetMessages(sessionID string, ctx context.Context) ([]fleet.Message, e
 //   - fleetSession: the fleet session to wire sandbox into
 //   - plan: the fleet plan (for Template and Credentials fields)
 //   - ghToken: resolved GitHub token (may be empty)
-func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string) error {
+func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, ghToken string, mcpStores *store.MCPServerStores, teamTemplate string) error {
 	// Load config to check if sandbox is enabled
 	appCfg, err := config.LoadAppConfig()
 	if err != nil || appCfg == nil {
@@ -917,10 +1194,12 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return fmt.Errorf("sandbox template registry failed: %w", tplErr)
 	}
 
-	// Determine which template to use: plan template or @base
+	// Determine which template to use: plan template > team template > @base
 	template := ""
-	if plan != nil {
+	if plan != nil && plan.Template != "" {
 		template = plan.Template
+	} else if teamTemplate != "" {
+		template = teamTemplate
 	}
 
 	// Create a lazy node client for this fleet session
@@ -983,7 +1262,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	// Each fleet session gets fresh LazyMCPToolset clones that route MCP server
 	// processes through the fleet's dedicated container (via ContainerMCPTransport).
 	// SSE transport servers are unaffected — they connect to remote URLs.
-	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode)
+	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode, mcpStores)
 	if len(sandboxToolsets) > 0 {
 		fleetSession.SandboxToolsets = sandboxToolsets
 	}
@@ -1011,31 +1290,140 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 // It loads the MCP config, creates fresh LazyMCPToolset instances from cached
 // metadata, and wires them with the fleet's LazyNodeClient so MCP server
 // processes run inside the fleet's container.
-func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient) []tool.Toolset {
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+// In platform mode, it reads from the DB stores; in personal mode, from the filesystem.
+func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
+	var mcpServers map[string]config.MCPServerConfig
+
+	if mcpStores != nil {
+		// Platform mode: build merged config from org + team stores
+		mcpServers = make(map[string]config.MCPServerConfig)
+		if mcpStores.Org != nil {
+			orgServers, err := mcpStores.Org.List(context.TODO())
+			if err == nil {
+				for _, s := range orgServers {
+					mcpServers[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+		if mcpStores.Team != nil {
+			teamServers, err := mcpStores.Team.List(context.TODO())
+			if err == nil {
+				for _, s := range teamServers {
+					mcpServers[s.Name] = config.MCPServerConfig{
+						Command:   s.Command,
+						Args:      s.Args,
+						Env:       s.Env,
+						Transport: s.Transport,
+						URL:       s.URL,
+						Enabled:   s.Enabled,
+					}
+				}
+			}
+		}
+	} else {
+		// Personal mode: read from filesystem
+		mcpCfg, err := config.LoadMCPConfig()
+		if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
+			return nil
+		}
+		mcpServers = mcpCfg.MCPServers
+	}
+
+	if len(mcpServers) == 0 {
 		return nil
 	}
 
-	if _, loadErr := cache.LoadCache(); loadErr != nil {
-		return nil
+	// Load cached tools (personal mode only — platform uses DB CachedTools)
+	if mcpStores == nil {
+		if _, loadErr := cache.LoadCache(); loadErr != nil {
+			return nil
+		}
 	}
 
 	var toolsets []tool.Toolset
-	for name, serverCfg := range mcpCfg.MCPServers {
+	for name, serverCfg := range mcpServers {
 		if !serverCfg.IsEnabled() {
 			continue
 		}
-		cachedTools := cache.GetToolsForServer(name)
+
+		var cachedTools []cache.ToolEntry
+		if mcpStores != nil {
+			// Platform mode: get cached tools from DB
+			cachedTools = getPlatformCachedToolsFromStores(mcpStores, name)
+		} else {
+			// Personal mode: get from file cache
+			cachedTools = cache.GetToolsForServer(name)
+		}
 		if len(cachedTools) == 0 {
 			continue
 		}
+
+		// Filter out excluded tools for standard servers (e.g., tavily_research)
+		if excluded := config.GetExcludedTools(name); excluded != nil {
+			filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+			for _, t := range cachedTools {
+				if !excluded[t.Name] {
+					filtered = append(filtered, t)
+				}
+			}
+			cachedTools = filtered
+			if len(cachedTools) == 0 {
+				continue
+			}
+		}
+
 		lt := agent.NewLazyMCPToolset(name, cachedTools, serverCfg, false)
 		lt.SetSandboxClient(lazyNode, incusClient)
 		toolsets = append(toolsets, agent.NewSanitizedToolset(lt, false))
 	}
 
 	return toolsets
+}
+
+// getPlatformCachedToolsFromStores reads cached tools for a server from the platform
+// MCP stores (team first, then org).
+func getPlatformCachedToolsFromStores(mcpStores *store.MCPServerStores, serverName string) []cache.ToolEntry {
+	if mcpStores.Team != nil {
+		srv, err := mcpStores.Team.Get(context.TODO(), serverName)
+		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
+			return parsePlatformCachedTools(srv.CachedTools)
+		}
+	}
+	if mcpStores.Org != nil {
+		srv, err := mcpStores.Org.Get(context.TODO(), serverName)
+		if err == nil && srv != nil && len(srv.CachedTools) > 0 {
+			return parsePlatformCachedTools(srv.CachedTools)
+		}
+	}
+	return nil
+}
+
+// parsePlatformCachedTools parses CachedTools JSON into cache.ToolEntry slice.
+func parsePlatformCachedTools(data json.RawMessage) []cache.ToolEntry {
+	type toolEntry struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	var entries []toolEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil
+	}
+	result := make([]cache.ToolEntry, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, cache.ToolEntry{
+			Name:        e.Name,
+			Description: e.Description,
+			Source:      "",
+		})
+	}
+	return result
 }
 
 // buildSandboxEnv builds the environment variable map for a fleet session's

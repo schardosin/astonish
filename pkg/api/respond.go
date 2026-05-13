@@ -13,8 +13,8 @@ func respondJSON(w http.ResponseWriter, status int, payload any) {
 	json.NewEncoder(w).Encode(payload) //nolint:errcheck // best-effort response encoding
 }
 
-// respondError writes an HTTP error response. This is a thin wrapper
-// around http.Error for consistency with respondJSON.
+// respondError writes a JSON error response with the given status code.
+// The response body is {"error": "<msg>"} with Content-Type: application/json.
 func respondError(w http.ResponseWriter, status int, msg string) {
-	http.Error(w, msg, status)
+	respondJSON(w, status, map[string]string{"error": msg})
 }

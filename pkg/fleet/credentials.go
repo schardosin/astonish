@@ -1,10 +1,12 @@
 package fleet
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // ResolvedCredential holds a credential resolved from the encrypted store at runtime.
@@ -33,12 +35,12 @@ type ResolvedCredential struct {
 //
 // Returns a map keyed by logical name. Returns an error listing any credentials
 // that could not be resolved.
-func ResolveCredentials(plan *FleetPlan, store *credentials.Store) (map[string]*ResolvedCredential, error) {
+func ResolveCredentials(plan *FleetPlan, credStore *credentials.Store) (map[string]*ResolvedCredential, error) {
 	if len(plan.Credentials) == 0 {
 		return nil, nil
 	}
 
-	if store == nil {
+	if credStore == nil {
 		return nil, fmt.Errorf("credential store is not available; cannot resolve fleet plan credentials")
 	}
 
@@ -46,7 +48,7 @@ func ResolveCredentials(plan *FleetPlan, store *credentials.Store) (map[string]*
 	var missing []string
 
 	for logicalName, storeName := range plan.Credentials {
-		rc := resolveOne(store, logicalName, storeName)
+		rc := resolveOne(credStore, logicalName, storeName)
 		if rc == nil {
 			missing = append(missing, fmt.Sprintf("%s (store: %q)", logicalName, storeName))
 			continue
@@ -61,10 +63,41 @@ func ResolveCredentials(plan *FleetPlan, store *credentials.Store) (map[string]*
 	return resolved, nil
 }
 
-// resolveOne attempts to resolve a single credential from the store.
-func resolveOne(store *credentials.Store, logicalName, storeName string) *ResolvedCredential {
+// ResolveCredentialsPlatform resolves all credential references in a fleet plan
+// from a platform-mode store.CredentialStore (PG-backed). This is the platform
+// equivalent of ResolveCredentials which works with the file-based store.
+func ResolveCredentialsPlatform(ctx context.Context, plan *FleetPlan, cs store.CredentialStore) (map[string]*ResolvedCredential, error) {
+	if len(plan.Credentials) == 0 {
+		return nil, nil
+	}
+
+	if cs == nil {
+		return nil, fmt.Errorf("credential store is not available; cannot resolve fleet plan credentials")
+	}
+
+	resolved := make(map[string]*ResolvedCredential, len(plan.Credentials))
+	var missing []string
+
+	for logicalName, storeName := range plan.Credentials {
+		rc := resolveOnePlatform(ctx, cs, logicalName, storeName)
+		if rc == nil {
+			missing = append(missing, fmt.Sprintf("%s (store: %q)", logicalName, storeName))
+			continue
+		}
+		resolved[logicalName] = rc
+	}
+
+	if len(missing) > 0 {
+		return resolved, fmt.Errorf("credentials not found in store: %s", strings.Join(missing, ", "))
+	}
+
+	return resolved, nil
+}
+
+// resolveOne attempts to resolve a single credential from the file-based store.
+func resolveOne(credStore *credentials.Store, logicalName, storeName string) *ResolvedCredential {
 	// Try named credential first
-	cred := store.Get(storeName)
+	cred := credStore.Get(storeName)
 	if cred != nil {
 		rc := &ResolvedCredential{
 			LogicalName: logicalName,
@@ -97,7 +130,55 @@ func resolveOne(store *credentials.Store, logicalName, storeName string) *Resolv
 	}
 
 	// Fall back to flat secret
-	secret := store.GetSecret(storeName)
+	secret := credStore.GetSecret(storeName)
+	if secret != "" {
+		return &ResolvedCredential{
+			LogicalName: logicalName,
+			StoreName:   storeName,
+			Type:        "", // flat secret has no typed structure
+			Token:       secret,
+		}
+	}
+
+	return nil
+}
+
+// resolveOnePlatform attempts to resolve a single credential from a platform-mode store.
+func resolveOnePlatform(ctx context.Context, cs store.CredentialStore, logicalName, storeName string) *ResolvedCredential {
+	// Try named credential first
+	cred := cs.Get(ctx, storeName)
+	if cred != nil {
+		rc := &ResolvedCredential{
+			LogicalName: logicalName,
+			StoreName:   storeName,
+			Type:        cred.Type,
+		}
+
+		switch cred.Type {
+		case store.CredBearer:
+			rc.Token = cred.Token
+		case store.CredAPIKey:
+			rc.Token = cred.Value
+		case store.CredBasic:
+			rc.Username = cred.Username
+			rc.Password = cred.Password
+			rc.Token = cred.Password
+		case store.CredPassword:
+			rc.Username = cred.Username
+			rc.Password = cred.Password
+			rc.Token = cred.Password
+		case store.CredOAuthClientCreds, store.CredOAuthAuthCode:
+			rc.Token = cred.AccessToken
+			if rc.Token == "" {
+				rc.Token = cred.Token
+			}
+		}
+
+		return rc
+	}
+
+	// Fall back to flat secret
+	secret := cs.GetSecret(ctx, storeName)
 	if secret != "" {
 		return &ResolvedCredential{
 			LogicalName: logicalName,

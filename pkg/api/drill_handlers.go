@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
+	"github.com/schardosin/astonish/pkg/store"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,12 +30,12 @@ type DrillSuiteListItem struct {
 
 // DrillSuiteDetail represents full suite detail.
 type DrillSuiteDetail struct {
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	File        string              `json:"file"`
-	SuiteConfig any                 `json:"suite_config,omitempty"`
-	Drills      []DrillListItem     `json:"drills"`
-	LastReport  *adrill.SuiteReport `json:"last_report,omitempty"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	File        string          `json:"file"`
+	SuiteConfig any             `json:"suite_config,omitempty"`
+	Drills      []DrillListItem `json:"drills"`
+	LastReport  any             `json:"last_report,omitempty"` // *adrill.SuiteReport or json.RawMessage
 }
 
 // DrillListItem represents a single drill in listing responses.
@@ -71,8 +73,109 @@ type DrillReportListItem struct {
 	DrillCount int    `json:"drill_count"`
 }
 
+// drillFlowTypes are the flow types that represent drills.
+var drillFlowTypes = []string{"drill", "test"}
+
+// suiteFlowTypes are the flow types that represent drill suites.
+var suiteFlowTypes = []string{"drill_suite", "test_suite"}
+
+// ------------------------------------------------------------------
+// Helpers for platform-mode drill data from the flow store
+// ------------------------------------------------------------------
+
+// flowStoreFromRequest returns the team-scoped FlowStore if running in
+// platform mode, or nil if in personal mode.
+func flowStoreFromRequest(r *http.Request) store.FlowStore {
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		return svc.Flows
+	}
+	return nil
+}
+
+// drillReportStoreFromRequest returns the team-scoped DrillReportStore if
+// running in platform mode, or nil if in personal mode.
+func drillReportStoreFromRequest(r *http.Request) store.DrillReportStore {
+	if svc := store.FromRequest(r); svc != nil && svc.DrillReports != nil {
+		return svc.DrillReports
+	}
+	return nil
+}
+
+// parsedDrillFlow is the subset of an AgentConfig YAML that we parse
+// to construct drill API responses without importing the full config
+// package (which would be circular in some helpers).
+type parsedDrillFlow struct {
+	Type        string         `yaml:"type"`
+	Description string         `yaml:"description"`
+	Suite       string         `yaml:"suite"`
+	Tags        []string       `yaml:"tags"`
+	Timeout     int            `yaml:"timeout"`
+	StepTimeout int            `yaml:"step_timeout"`
+	OnFail      string         `yaml:"on_fail"`
+	Nodes       any            `yaml:"nodes"`
+	Flow        any            `yaml:"flow"`
+	Template    string         `yaml:"template"`
+	SuiteConfig map[string]any `yaml:"suite_config"`
+}
+
+// ------------------------------------------------------------------
+// Suite / Drill List
+// ------------------------------------------------------------------
+
 // ListDrillSuitesHandler handles GET /api/drills
-func ListDrillSuitesHandler(w http.ResponseWriter, _ *http.Request) {
+func ListDrillSuitesHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: discover suites from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		suiteFlows := fs.ListFlowsByType(r.Context(), suiteFlowTypes)
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
+
+		// Count drills per suite.
+		drillCounts := make(map[string]int)
+		for _, d := range drillFlows {
+			drillCounts[d.Suite]++
+		}
+
+		rptStore := drillReportStoreFromRequest(r)
+		items := make([]DrillSuiteListItem, 0, len(suiteFlows))
+		for _, sf := range suiteFlows {
+			item := DrillSuiteListItem{
+				Name:        sf.Name,
+				Description: sf.Description,
+				DrillCount:  drillCounts[sf.Name],
+				LastStatus:  "unknown",
+			}
+
+			// Parse the YAML to extract template from suite_config.
+			if yamlContent, err := fs.GetFlow(r.Context(), sf.Name); err == nil {
+				var parsed parsedDrillFlow
+				if yaml.Unmarshal([]byte(yamlContent), &parsed) == nil {
+					if parsed.Template != "" {
+						item.Template = parsed.Template
+					}
+					if t, ok := parsed.SuiteConfig["template"].(string); ok && t != "" {
+						item.Template = t
+					}
+				}
+			}
+
+			// Latest report from the team-scoped report store.
+			if rptStore != nil {
+				if rpt, err := rptStore.GetLatestReport(r.Context(), sf.Name); err == nil && rpt != nil {
+					item.LastStatus = rpt.Status
+					item.LastSummary = rpt.Summary
+					ts := rpt.FinishedAt.Format("2006-01-02T15:04:05Z")
+					item.LastRunAt = &ts
+				}
+			}
+
+			items = append(items, item)
+		}
+
+		respondJSON(w, http.StatusOK, items)
+		return
+	}
+
+	// Personal mode fallback: filesystem discovery.
 	dirs := adrill.DefaultDrillDirs()
 	suites, err := adrill.DiscoverSuites(dirs)
 	if err != nil {
@@ -93,7 +196,6 @@ func ListDrillSuitesHandler(w http.ResponseWriter, _ *http.Request) {
 			item.Template = s.Config.SuiteConfig.Template
 		}
 
-		// Try to load the latest report for status
 		report := loadLatestReport(s.Name)
 		if report != nil {
 			item.LastStatus = report.Status
@@ -108,11 +210,73 @@ func ListDrillSuitesHandler(w http.ResponseWriter, _ *http.Request) {
 	respondJSON(w, http.StatusOK, items)
 }
 
+// ------------------------------------------------------------------
+// Suite Detail
+// ------------------------------------------------------------------
+
 // GetDrillSuiteHandler handles GET /api/drills/{suite}
 func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 	suiteName := mux.Vars(r)["suite"]
-	dirs := adrill.DefaultDrillDirs()
 
+	// Platform mode: read from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		yamlContent, err := fs.GetFlow(r.Context(), suiteName)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "suite not found")
+			return
+		}
+
+		var parsed parsedDrillFlow
+		if err := yaml.Unmarshal([]byte(yamlContent), &parsed); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to parse suite YAML")
+			return
+		}
+
+		// Find child drills for this suite.
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
+		drills := make([]DrillListItem, 0)
+		for _, d := range drillFlows {
+			if d.Suite != suiteName {
+				continue
+			}
+			item := DrillListItem{
+				Name:        d.Name,
+				Description: d.Description,
+				Tags:        d.Tags,
+			}
+			// Parse drill YAML for step count / timeout.
+			if dy, dErr := fs.GetFlow(r.Context(), d.Name); dErr == nil {
+				var dp parsedDrillFlow
+				if yaml.Unmarshal([]byte(dy), &dp) == nil {
+					if nodes, ok := dp.Nodes.([]any); ok {
+						item.StepCount = len(nodes)
+					}
+					item.Timeout = dp.Timeout
+				}
+			}
+			drills = append(drills, item)
+		}
+
+		detail := DrillSuiteDetail{
+			Name:        suiteName,
+			Description: parsed.Description,
+			SuiteConfig: parsed.SuiteConfig,
+			Drills:      drills,
+		}
+
+		// Latest report from team-scoped store.
+		if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
+			if rpt, rptErr := rptStore.GetLatestReport(r.Context(), suiteName); rptErr == nil && rpt != nil {
+				detail.LastReport = json.RawMessage(rpt.ReportData)
+			}
+		}
+
+		respondJSON(w, http.StatusOK, detail)
+		return
+	}
+
+	// Personal mode fallback.
+	dirs := adrill.DefaultDrillDirs()
 	suite, err := adrill.FindSuite(dirs, suiteName)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
@@ -146,12 +310,46 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, detail)
 }
 
+// ------------------------------------------------------------------
+// Drill Detail
+// ------------------------------------------------------------------
+
 // GetDrillHandler handles GET /api/drills/{suite}/drills/{name}
 func GetDrillHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	suiteName := vars["suite"]
 	drillName := vars["name"]
 
+	// Platform mode: read from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		yamlContent, err := fs.GetFlow(r.Context(), drillName)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "drill not found")
+			return
+		}
+
+		var parsed parsedDrillFlow
+		if err := yaml.Unmarshal([]byte(yamlContent), &parsed); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to parse drill YAML")
+			return
+		}
+
+		resp := DrillDetailResponse{
+			Name:        drillName,
+			Description: parsed.Description,
+			Suite:       suiteName,
+			Tags:        parsed.Tags,
+			Timeout:     parsed.Timeout,
+			StepTimeout: parsed.StepTimeout,
+			OnFail:      parsed.OnFail,
+			Nodes:       parsed.Nodes,
+			Flow:        parsed.Flow,
+		}
+		respondJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Personal mode fallback.
 	dirs := adrill.DefaultDrillDirs()
 	suite, err := adrill.FindSuite(dirs, suiteName)
 	if err != nil {
@@ -183,11 +381,49 @@ func GetDrillHandler(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotFound, "drill not found")
 }
 
+// ------------------------------------------------------------------
+// Delete Suite / Drill
+// ------------------------------------------------------------------
+
 // DeleteDrillSuiteHandler handles DELETE /api/drills/{suite}
 func DeleteDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 	suiteName := mux.Vars(r)["suite"]
-	dirs := adrill.DefaultDrillDirs()
 
+	// Platform mode: delete from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		var deleted []string
+
+		// Delete child drills first.
+		drillFlows := fs.ListFlowsByType(r.Context(), drillFlowTypes)
+		for _, d := range drillFlows {
+			if d.Suite == suiteName {
+				if err := fs.DeleteFlow(r.Context(), d.Name); err == nil {
+					deleted = append(deleted, d.Name)
+				}
+			}
+		}
+
+		// Delete the suite itself.
+		if err := fs.DeleteFlow(r.Context(), suiteName); err != nil {
+			respondError(w, http.StatusNotFound, "suite not found")
+			return
+		}
+		deleted = append(deleted, suiteName)
+
+		// Also clean up drill reports.
+		if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
+			_ = rptStore.DeleteReportsForSuite(r.Context(), suiteName)
+		}
+
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "deleted",
+			"deleted": deleted,
+		})
+		return
+	}
+
+	// Personal mode fallback.
+	dirs := adrill.DefaultDrillDirs()
 	deleted, err := adrill.DeleteSuite(dirs, suiteName, true)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
@@ -202,10 +438,27 @@ func DeleteDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 
 // DeleteDrillHandler handles DELETE /api/drills/{suite}/drills/{name}
 func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
-	drillName := mux.Vars(r)["name"]
-	dirs := adrill.DefaultDrillDirs()
+	vars := mux.Vars(r)
+	suiteName := vars["suite"]
+	drillName := vars["name"]
 
-	deletedPath, suiteName, err := adrill.DeleteTest(dirs, drillName)
+	// Platform mode: delete from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		if err := fs.DeleteFlow(r.Context(), drillName); err != nil {
+			respondError(w, http.StatusNotFound, "drill not found")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "deleted",
+			"deleted": []string{drillName},
+			"suite":   suiteName,
+		})
+		return
+	}
+
+	// Personal mode fallback.
+	dirs := adrill.DefaultDrillDirs()
+	deletedPath, fallbackSuite, err := adrill.DeleteTest(dirs, drillName)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -214,12 +467,40 @@ func DeleteDrillHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{
 		"status":  "deleted",
 		"deleted": []string{deletedPath},
-		"suite":   suiteName,
+		"suite":   fallbackSuite,
 	})
 }
 
+// ------------------------------------------------------------------
+// Reports
+// ------------------------------------------------------------------
+
 // ListDrillReportsHandler handles GET /api/drill-reports
-func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
+func ListDrillReportsHandler(w http.ResponseWriter, r *http.Request) {
+	// Platform mode: use the team-scoped drill report store.
+	if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
+		reports, err := rptStore.ListReports(r.Context())
+		if err != nil {
+			slog.Error("failed to list drill reports from store", "error", err)
+			respondJSON(w, http.StatusOK, []DrillReportListItem{})
+			return
+		}
+		items := make([]DrillReportListItem, 0, len(reports))
+		for _, rpt := range reports {
+			items = append(items, DrillReportListItem{
+				Suite:      rpt.Suite,
+				Status:     rpt.Status,
+				Summary:    rpt.Summary,
+				Duration:   rpt.DurationMs,
+				StartedAt:  rpt.StartedAt.Format("2006-01-02T15:04:05Z"),
+				FinishedAt: rpt.FinishedAt.Format("2006-01-02T15:04:05Z"),
+			})
+		}
+		respondJSON(w, http.StatusOK, items)
+		return
+	}
+
+	// Personal mode fallback: filesystem.
 	reportsDir, err := config.GetReportsDir()
 	if err != nil {
 		slog.Error("failed to get reports dir", "component", "drill", "error", err)
@@ -228,7 +509,6 @@ func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
 	}
 	entries, err := os.ReadDir(reportsDir)
 	if err != nil {
-		// No reports directory yet — return empty list
 		respondJSON(w, http.StatusOK, []DrillReportListItem{})
 		return
 	}
@@ -260,14 +540,197 @@ func ListDrillReportsHandler(w http.ResponseWriter, _ *http.Request) {
 // GetDrillReportHandler handles GET /api/drill-reports/{suite}
 func GetDrillReportHandler(w http.ResponseWriter, r *http.Request) {
 	suiteName := mux.Vars(r)["suite"]
+
+	// Platform mode: use the team-scoped drill report store.
+	if rptStore := drillReportStoreFromRequest(r); rptStore != nil {
+		rpt, err := rptStore.GetLatestReport(r.Context(), suiteName)
+		if err != nil || rpt == nil {
+			respondError(w, http.StatusNotFound, "no report found for suite")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(rpt.ReportData)
+		return
+	}
+
+	// Personal mode fallback.
 	report := loadLatestReport(suiteName)
 	if report == nil {
 		respondError(w, http.StatusNotFound, "no report found for suite")
 		return
 	}
-
 	respondJSON(w, http.StatusOK, report)
 }
+
+// ------------------------------------------------------------------
+// YAML Editors
+// ------------------------------------------------------------------
+
+// GetDrillYAMLHandler handles GET /api/drills/{suite}/drills/{name}/yaml
+func GetDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	drillName := vars["name"]
+
+	// Platform mode: read from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		yamlContent, err := fs.GetFlow(r.Context(), drillName)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "drill not found")
+			return
+		}
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Write([]byte(yamlContent))
+		return
+	}
+
+	// Personal mode fallback.
+	suiteName := vars["suite"]
+	filePath, err := findDrillFile(suiteName, drillName)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "drill not found")
+		return
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to read drill file: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Write(data)
+}
+
+// SaveDrillYAMLHandler handles PUT /api/drills/{suite}/drills/{name}/yaml
+func SaveDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	suiteName := vars["suite"]
+	drillName := vars["name"]
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+	defer r.Body.Close()
+
+	// Validate that the YAML parses.
+	var check map[string]interface{}
+	if err := yaml.Unmarshal(body, &check); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
+		return
+	}
+
+	// Platform mode: save to the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		if err := fs.SaveFlow(r.Context(), drillName, string(body)); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save drill: "+err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status": "saved",
+			"suite":  suiteName,
+			"drill":  drillName,
+		})
+		return
+	}
+
+	// Personal mode fallback.
+	filePath, err := findDrillFile(suiteName, drillName)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "drill not found")
+		return
+	}
+	if err := os.WriteFile(filePath, body, 0644); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to write drill file: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"status": "saved",
+		"suite":  suiteName,
+		"drill":  drillName,
+	})
+}
+
+// GetSuiteYAMLHandler handles GET /api/drills/{suite}/yaml
+func GetSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
+	suiteName := mux.Vars(r)["suite"]
+
+	// Platform mode: read from the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		yamlContent, err := fs.GetFlow(r.Context(), suiteName)
+		if err != nil {
+			respondError(w, http.StatusNotFound, "suite not found")
+			return
+		}
+		w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+		w.Write([]byte(yamlContent))
+		return
+	}
+
+	// Personal mode fallback.
+	filePath, err := findSuiteFile(suiteName)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "suite not found")
+		return
+	}
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to read suite file: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.Write(data)
+}
+
+// SaveSuiteYAMLHandler handles PUT /api/drills/{suite}/yaml
+func SaveSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
+	suiteName := mux.Vars(r)["suite"]
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+	defer r.Body.Close()
+
+	// Validate that the YAML parses.
+	var check map[string]interface{}
+	if err := yaml.Unmarshal(body, &check); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
+		return
+	}
+
+	// Platform mode: save to the team-scoped flow store.
+	if fs := flowStoreFromRequest(r); fs != nil {
+		if err := fs.SaveFlow(r.Context(), suiteName, string(body)); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save suite: "+err.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status": "saved",
+			"suite":  suiteName,
+		})
+		return
+	}
+
+	// Personal mode fallback.
+	filePath, err := findSuiteFile(suiteName)
+	if err != nil {
+		respondError(w, http.StatusNotFound, "suite not found")
+		return
+	}
+	if err := os.WriteFile(filePath, body, 0644); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to write suite file: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]any{
+		"status": "saved",
+		"suite":  suiteName,
+	})
+}
+
+// ------------------------------------------------------------------
+// Helpers (personal-mode filesystem only)
+// ------------------------------------------------------------------
 
 // loadLatestReport loads the most recent report for a suite from disk.
 func loadLatestReport(suiteName string) *adrill.SuiteReport {
@@ -276,7 +739,6 @@ func loadLatestReport(suiteName string) *adrill.SuiteReport {
 		return nil
 	}
 
-	// Check standard report locations
 	dirs := []string{
 		filepath.Join(reportsDir, suiteName),
 	}
@@ -289,7 +751,6 @@ func loadLatestReport(suiteName string) *adrill.SuiteReport {
 		}
 	}
 
-	// Also check if a report was saved with a sanitized name
 	entries, err := os.ReadDir(reportsDir)
 	if err != nil {
 		return nil
@@ -298,7 +759,6 @@ func loadLatestReport(suiteName string) *adrill.SuiteReport {
 		if !entry.IsDir() {
 			continue
 		}
-		// Match suite name case-insensitively or with common variations
 		if strings.EqualFold(entry.Name(), suiteName) {
 			reportPath := filepath.Join(reportsDir, entry.Name(), "suite_report.json")
 			report, err := adrill.LoadReport(reportPath)
@@ -311,7 +771,7 @@ func loadLatestReport(suiteName string) *adrill.SuiteReport {
 	return nil
 }
 
-// findSuiteFile locates a suite's file path by name.
+// findSuiteFile locates a suite's file path by name (personal mode only).
 func findSuiteFile(suiteName string) (string, error) {
 	dirs := adrill.DefaultDrillDirs()
 	suite, err := adrill.FindSuite(dirs, suiteName)
@@ -321,7 +781,7 @@ func findSuiteFile(suiteName string) (string, error) {
 	return suite.File, nil
 }
 
-// findDrillFile locates a drill's file path by suite and drill name.
+// findDrillFile locates a drill's file path by suite and drill name (personal mode only).
 func findDrillFile(suiteName, drillName string) (string, error) {
 	dirs := adrill.DefaultDrillDirs()
 	suite, err := adrill.FindSuite(dirs, suiteName)
@@ -334,123 +794,4 @@ func findDrillFile(suiteName, drillName string) (string, error) {
 		}
 	}
 	return "", os.ErrNotExist
-}
-
-// GetDrillYAMLHandler handles GET /api/drills/{suite}/drills/{name}/yaml
-func GetDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	suiteName := vars["suite"]
-	drillName := vars["name"]
-
-	filePath, err := findDrillFile(suiteName, drillName)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "drill not found")
-		return
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to read drill file: "+err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-	w.Write(data)
-}
-
-// SaveDrillYAMLHandler handles PUT /api/drills/{suite}/drills/{name}/yaml
-func SaveDrillYAMLHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	suiteName := vars["suite"]
-	drillName := vars["name"]
-
-	filePath, err := findDrillFile(suiteName, drillName)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "drill not found")
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
-	defer r.Body.Close()
-
-	// Validate that the YAML parses
-	var check map[string]interface{}
-	if err := yaml.Unmarshal(body, &check); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
-		return
-	}
-
-	// Write the raw bytes to preserve user formatting/comments
-	if err := os.WriteFile(filePath, body, 0644); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to write drill file: "+err.Error())
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]any{
-		"status": "saved",
-		"suite":  suiteName,
-		"drill":  drillName,
-	})
-}
-
-// GetSuiteYAMLHandler handles GET /api/drills/{suite}/yaml
-func GetSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	suiteName := vars["suite"]
-
-	filePath, err := findSuiteFile(suiteName)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "suite not found")
-		return
-	}
-
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to read suite file: "+err.Error())
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
-	w.Write(data)
-}
-
-// SaveSuiteYAMLHandler handles PUT /api/drills/{suite}/yaml
-func SaveSuiteYAMLHandler(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	suiteName := vars["suite"]
-
-	filePath, err := findSuiteFile(suiteName)
-	if err != nil {
-		respondError(w, http.StatusNotFound, "suite not found")
-		return
-	}
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, "failed to read request body")
-		return
-	}
-	defer r.Body.Close()
-
-	// Validate that the YAML parses
-	var check map[string]interface{}
-	if err := yaml.Unmarshal(body, &check); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid YAML: "+err.Error())
-		return
-	}
-
-	// Write the raw bytes to preserve user formatting/comments
-	if err := os.WriteFile(filePath, body, 0644); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to write suite file: "+err.Error())
-		return
-	}
-
-	respondJSON(w, http.StatusOK, map[string]any{
-		"status": "saved",
-		"suite":  suiteName,
-	})
 }

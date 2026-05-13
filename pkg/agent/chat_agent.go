@@ -5,11 +5,14 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"
@@ -59,7 +62,8 @@ type ChatAgent struct {
 
 	// Memory and knowledge
 	MemoryManager             *memory.Manager               // Persistent memory manager
-	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled)
+	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled, personal mode)
+	PlatformReflector         *PlatformReflector            // Post-task memory reflection for platform mode (nil = disabled)
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
 	// Task delegation
@@ -78,7 +82,7 @@ type ChatAgent struct {
 
 	// Credential redaction
 	Redactor          *credentials.Redactor                         // Redacts credential values from tool outputs (nil = disabled)
-	CredentialStore   *credentials.Store                            // Credential store for placeholder substitution (nil = disabled)
+	CredentialStore   credentials.CredentialResolver                // Credential store for placeholder substitution (nil = disabled)
 	PendingSecrets    *credentials.PendingVault                     // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
 	RedactSessionFunc func(appName, userID, sessionID string) error // Called after save_credential to retroactively redact the session transcript (nil = disabled)
 
@@ -223,7 +227,7 @@ func (c *ChatAgent) RegisterSearchToolsResults(toolNames []string) {
 // found via search_tools become available on the very next LLM call within
 // the same turn.
 func (c *ChatAgent) DynamicToolInjectionCallback() llmagent.BeforeModelCallback {
-	return func(_ agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
+	return func(cbCtx agent.CallbackContext, req *model.LLMRequest) (*model.LLMResponse, error) {
 		if c.ToolIndex == nil {
 			return nil, nil
 		}
@@ -259,6 +263,15 @@ func (c *ChatAgent) DynamicToolInjectionCallback() llmagent.BeforeModelCallback 
 			if entry == nil || entry.Tool == nil {
 				continue
 			}
+
+			// MCP tool access control: in platform mode, only inject tools
+			// from MCP servers the user's team/org has access to.
+			if serverName, isMCP := mcpServerNameFromGroup(entry.GroupName); isMCP {
+				if !isMCPServerAccessible(cbCtx, serverName) {
+					continue
+				}
+			}
+
 			packToolIntoRequest(req, entry.Tool)
 			injected++
 		}
@@ -477,4 +490,78 @@ func (c *ChatAgent) extractAndStripImages(output map[string]any) map[string]any 
 	}
 	stripped["image_base64"] = fmt.Sprintf("[screenshot captured, %d bytes]", len(b64))
 	return stripped
+}
+
+// isMCPServerAccessible checks whether the given MCP server name is accessible
+// to the current user based on their org and team stores in the context.
+// Returns true if:
+//   - Not in platform mode (no stores in context → personal mode, allow all)
+//   - The server exists in either the org store or the user's team store AND is enabled
+//
+// This is the per-request authorization gate for MCP tools.
+func isMCPServerAccessible(ctx context.Context, serverName string) bool {
+	stores := store.MCPServerStoresFromContext(ctx)
+	if stores == nil {
+		return true // personal mode — no filtering
+	}
+	// Standard servers (Tavily, Brave, etc.) are always accessible when installed.
+	// They are never stored in the DB but are injected at runtime.
+	if config.IsStandardServerInstalled(serverName) {
+		return true
+	}
+	if stores.Org != nil {
+		if s, _ := stores.Org.Get(ctx, serverName); s != nil {
+			return s.IsEnabled()
+		}
+	}
+	if stores.Team != nil {
+		if s, _ := stores.Team.Get(ctx, serverName); s != nil {
+			return s.IsEnabled()
+		}
+	}
+	return false
+}
+
+// mcpServerNameFromGroup extracts the MCP server name from a tool group name.
+// Group names follow the pattern "mcp:<serverName>".
+// Returns the server name and true if it's an MCP group, empty string and false otherwise.
+func mcpServerNameFromGroup(groupName string) (string, bool) {
+	if strings.HasPrefix(groupName, "mcp:") {
+		return strings.TrimPrefix(groupName, "mcp:"), true
+	}
+	return "", false
+}
+
+// FilterAccessibleToolMatches removes ToolMatch entries for MCP servers the
+// current user doesn't have access to. In personal mode (no stores in context),
+// all matches are returned unchanged.
+//
+// This must be called after ToolIndex.SearchHybrid() and before the results are
+// used for prompt generation or returned to the user (e.g., in search_tools).
+func FilterAccessibleToolMatches(ctx context.Context, matches []ToolMatch) []ToolMatch {
+	stores := store.MCPServerStoresFromContext(ctx)
+	if stores == nil {
+		return matches // personal mode — no filtering
+	}
+	filtered := make([]ToolMatch, 0, len(matches))
+	for _, m := range matches {
+		if serverName, isMCP := mcpServerNameFromGroup(m.GroupName); isMCP {
+			if !isMCPServerAccessible(ctx, serverName) {
+				continue
+			}
+		}
+		filtered = append(filtered, m)
+	}
+	return filtered
+}
+
+// IsMCPGroupInaccessible returns true if the given group name refers to an MCP
+// server that the current user does NOT have access to. Returns false for
+// non-MCP groups (they're always accessible) and in personal mode.
+func IsMCPGroupInaccessible(ctx context.Context, groupName string) bool {
+	serverName, isMCP := mcpServerNameFromGroup(groupName)
+	if !isMCP {
+		return false // not an MCP group — always accessible
+	}
+	return !isMCPServerAccessible(ctx, serverName)
 }

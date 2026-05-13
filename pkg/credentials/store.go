@@ -320,7 +320,7 @@ func (s *Store) Resolve(name string) (headerKey, headerValue string, err error) 
 		return "Authorization", "Bearer " + credCopy.Token, nil
 
 	case CredBasic:
-		encoded := basicAuthValue(credCopy.Username, credCopy.Password)
+		encoded := BasicAuthValue(credCopy.Username, credCopy.Password)
 		return "Authorization", "Basic " + encoded, nil
 
 	case CredOAuthClientCreds:
@@ -586,8 +586,8 @@ func (s *Store) save() error {
 	return nil
 }
 
-// basicAuthValue encodes username:password as base64 for HTTP Basic auth.
-func basicAuthValue(username, password string) string {
+// BasicAuthValue encodes username:password as base64 for HTTP Basic auth.
+func BasicAuthValue(username, password string) string {
 	auth := username + ":" + password
 	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
@@ -674,3 +674,6 @@ func (s *Store) resolveAuthCode(name string, cred *Credential) (string, error) {
 
 	return accessToken, nil
 }
+
+// Compile-time check: *Store satisfies CredentialResolver.
+var _ CredentialResolver = (*Store)(nil)

@@ -1,166 +1,132 @@
-import { Plus, Settings, Plug, ArrowRight, Sparkles, BookMarked, Store } from 'lucide-react'
-import { buildPath, type BuildPathParams } from '../hooks/useHashRouter'
+import { MessageSquare, Zap, Brain, Users, Terminal, Sparkles } from 'lucide-react'
+import type { ReactNode } from 'react'
 
-function navigateTo(view: string, params?: BuildPathParams): void {
-  window.location.hash = '#' + buildPath(view, params)
+interface HomePageProps {
+  onSuggestionClick?: (text: string) => void
 }
 
-export default function HomePage() {
+export default function HomePage({ onSuggestionClick }: HomePageProps) {
+  const suggestions = [
+    'What can you help me with?',
+    'Review my GitHub PR and suggest improvements',
+    'Help me write a script to automate deployments',
+    'Create an app to track my team\'s weekly goals',
+  ]
+
   return (
-    <div 
+    <div
       className="flex-1 flex flex-col items-center justify-center p-8 overflow-y-auto"
       style={{ background: 'var(--bg-primary)' }}
     >
-      {/* Welcome Hero */}
-      <div className="text-center mb-12">
-        <div className="inline-flex items-center justify-center w-28 h-28 mb-6">
-          <img 
-            src="/astonish-logo.svg" 
-            alt="Astonish Logo" 
+      {/* Welcome */}
+      <div className="text-center mb-10">
+        <div className="inline-flex items-center justify-center w-20 h-20 mb-5">
+          <img
+            src="/astonish-logo.svg"
+            alt="Astonish Logo"
             className="w-full h-full"
           />
         </div>
-        <h1 className="text-4xl font-bold mb-3" style={{ color: 'var(--text-primary)' }}>
-          Welcome to Astonish Studio
+        <h1 className="text-3xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+          Astonish Studio
         </h1>
-        <p className="text-lg max-w-xl mx-auto" style={{ color: 'var(--text-muted)' }}>
-          Build powerful AI agents with a visual flow editor. Create, test, and deploy intelligent automation.
+        <p className="text-base max-w-lg mx-auto" style={{ color: 'var(--text-muted)' }}>
+          Your AI operations assistant. Ask questions, run tasks, manage knowledge, or launch autonomous agent teams.
         </p>
       </div>
 
-      {/* Quick Actions */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-5xl w-full">
-        {/* Browse Flows */}
-        <button
-          onClick={() => navigateTo('canvas')}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-indigo-600 to-blue-600 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-indigo-500/20 transition-all">
-            <Sparkles size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            Browse Flows
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-indigo-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            View and manage your existing library of AI agent flows.
-          </p>
-        </button>
-
-        {/* Create Agent */}
-        <button
-          onClick={() => navigateTo('canvas')}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.15), rgba(59, 130, 246, 0.15))',
-            border: '1px solid rgba(147, 51, 234, 0.3)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-600 to-blue-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-purple-500/30 transition-all">
-            <Plus size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            Create Agent
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-purple-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Build a new AI agent flow from scratch or use the AI assistant.
-          </p>
-        </button>
-
-        {/* Flow Store */}
-        <button
-          onClick={() => navigateTo('settings', { section: 'flows' })}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-pink-600 to-rose-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-pink-500/20 transition-all">
-            <Store size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            Flow Store
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-pink-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Browse and install AI agent flows from the official store and community repositories.
-          </p>
-        </button>
-
-        {/* Settings */}
-        <button
-          onClick={() => navigateTo('settings', { section: 'general' })}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-gray-600 to-gray-700 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-gray-500/20 transition-all">
-            <Settings size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            Settings
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Configure AI providers, API keys, and default models.
-          </p>
-        </button>
-
-        {/* MCP Servers */}
-        <button
-          onClick={() => navigateTo('settings', { section: 'mcp' })}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-teal-600 to-cyan-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-teal-500/20 transition-all">
-            <Plug size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            MCP Servers
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-teal-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Connect external tools via Model Context Protocol.
-          </p>
-        </button>
-
-        {/* Repositories */}
-        <button
-          onClick={() => navigateTo('settings', { section: 'taps' })}
-          className="group p-6 rounded-2xl text-left transition-all hover:scale-[1.02] hover:shadow-xl"
-          style={{ 
-            background: 'var(--bg-secondary)',
-            border: '1px solid var(--border-color)'
-          }}
-        >
-          <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-amber-600 to-orange-500 flex items-center justify-center mb-4 shadow-lg group-hover:shadow-amber-500/20 transition-all">
-            <BookMarked size={28} className="text-white" />
-          </div>
-          <h3 className="text-xl font-semibold mb-2 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
-            Repositories
-            <ArrowRight size={18} className="opacity-0 group-hover:opacity-100 transition-opacity text-amber-400" />
-          </h3>
-          <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-            Add community taps and custom repositories to discover more flows.
-          </p>
-        </button>
+      {/* Capabilities */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-3xl w-full mb-10">
+        <CapabilityCard
+          icon={<MessageSquare size={18} />}
+          title="Conversation"
+          description="Ask anything — coding, analysis, writing, planning"
+          color="#a855f7"
+        />
+        <CapabilityCard
+          icon={<Zap size={18} />}
+          title="Tools & Actions"
+          description="Execute commands, browse the web, read & write files"
+          color="#f59e0b"
+        />
+        <CapabilityCard
+          icon={<Brain size={18} />}
+          title="Knowledge"
+          description="Searches your memories for context automatically"
+          color="#3b82f6"
+        />
+        <CapabilityCard
+          icon={<Users size={18} />}
+          title="Fleet Plans"
+          description="Launch multi-agent teams for complex projects"
+          color="#10b981"
+        />
+        <CapabilityCard
+          icon={<Terminal size={18} />}
+          title="Slash Commands"
+          description="/status, /fleet-plan, /drill, /help, and more"
+          color="#06b6d4"
+        />
+        <CapabilityCard
+          icon={<Sparkles size={18} />}
+          title="Apps & Flows"
+          description="Generate interactive UIs and reusable agent flows"
+          color="#ec4899"
+        />
       </div>
 
-      {/* Bottom hint */}
-      <div className="mt-12 text-center">
-        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-          Type a message below to start chatting, or use <code style={{ color: 'var(--accent)' }}>/help</code> for commands
+      {/* Suggestion chips */}
+      <div className="max-w-2xl w-full">
+        <p className="text-xs font-medium uppercase tracking-wider mb-3 text-center" style={{ color: 'var(--text-muted)' }}>
+          Try asking
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
+          {suggestions.map((text) => (
+            <button
+              key={text}
+              onClick={() => onSuggestionClick?.(text)}
+              className="px-3.5 py-2 rounded-xl text-sm transition-all hover:scale-[1.03] active:scale-[0.98]"
+              style={{
+                background: 'var(--bg-secondary)',
+                color: 'var(--text-secondary)',
+                border: '1px solid var(--border-color)',
+              }}
+            >
+              {text}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CapabilityCard({ icon, title, description, color }: {
+  icon: ReactNode
+  title: string
+  description: string
+  color: string
+}) {
+  return (
+    <div
+      className="flex items-start gap-3 p-3.5 rounded-xl"
+      style={{
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border-color)',
+      }}
+    >
+      <div
+        className="flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center"
+        style={{ background: `${color}20`, color }}
+      >
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>
+          {title}
+        </h3>
+        <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          {description}
         </p>
       </div>
     </div>

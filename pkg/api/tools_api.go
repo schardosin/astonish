@@ -67,24 +67,22 @@ func WebCapableToolsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Also include whatever is currently configured in config.yaml.
 	//    This handles servers installed under non-standard names (e.g. "tavily-websearch").
-	appCfg, err := config.LoadAppConfig()
-	if err == nil {
-		if appCfg.General.WebSearchTool != "" {
-			if source, name, ok := parseToolRef(appCfg.General.WebSearchTool); ok {
-				key := source + ":" + name
-				if !seenSearch[key] {
-					response.WebSearch = append(response.WebSearch, WebCapableTool{Name: name, Source: source})
-					seenSearch[key] = true
-				}
+	appCfg := effectiveAppConfig(r)
+	if appCfg.General.WebSearchTool != "" {
+		if source, name, ok := parseToolRef(appCfg.General.WebSearchTool); ok {
+			key := source + ":" + name
+			if !seenSearch[key] {
+				response.WebSearch = append(response.WebSearch, WebCapableTool{Name: name, Source: source})
+				seenSearch[key] = true
 			}
 		}
-		if appCfg.General.WebExtractTool != "" {
-			if source, name, ok := parseToolRef(appCfg.General.WebExtractTool); ok {
-				key := source + ":" + name
-				if !seenExtract[key] {
-					response.WebExtract = append(response.WebExtract, WebCapableTool{Name: name, Source: source})
-					seenExtract[key] = true
-				}
+	}
+	if appCfg.General.WebExtractTool != "" {
+		if source, name, ok := parseToolRef(appCfg.General.WebExtractTool); ok {
+			key := source + ":" + name
+			if !seenExtract[key] {
+				response.WebExtract = append(response.WebExtract, WebCapableTool{Name: name, Source: source})
+				seenExtract[key] = true
 			}
 		}
 	}

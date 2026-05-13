@@ -1,4 +1,4 @@
-package sandbox
+package incus
 
 import (
 	"fmt"
@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	incus "github.com/lxc/incus/v6/client"
+	incusclient "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
 )
 
@@ -23,7 +23,7 @@ const (
 // IncusClient wraps the Incus Go SDK client with convenience methods
 // for Astonish's container management needs.
 type IncusClient struct {
-	server   incus.InstanceServer
+	server   incusclient.InstanceServer
 	platform Platform
 }
 
@@ -31,13 +31,13 @@ type IncusClient struct {
 // On Linux, it connects via Unix socket. On macOS/Windows (Docker+Incus),
 // it connects via TCP to localhost:8443.
 func Connect(platform Platform) (*IncusClient, error) {
-	var server incus.InstanceServer
+	var server incusclient.InstanceServer
 	var err error
 
 	switch platform {
 	case PlatformLinuxNative:
 		// Connect via Unix socket (default path)
-		server, err = incus.ConnectIncusUnix("", nil)
+		server, err = incusclient.ConnectIncusUnix("", nil)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to Incus via Unix socket: %w", err)
 		}
@@ -51,7 +51,7 @@ func Connect(platform Platform) (*IncusClient, error) {
 		}
 
 		// Connect via TCP with client certificate authentication
-		server, err = incus.ConnectIncus("https://localhost:8443", &incus.ConnectionArgs{
+		server, err = incusclient.ConnectIncus("https://localhost:8443", &incusclient.ConnectionArgs{
 			TLSClientCert:      certPEM,
 			TLSClientKey:       keyPEM,
 			InsecureSkipVerify: true, // self-signed server cert inside Docker
@@ -68,8 +68,16 @@ func Connect(platform Platform) (*IncusClient, error) {
 }
 
 // Server returns the underlying Incus InstanceServer for advanced operations.
-func (c *IncusClient) Server() incus.InstanceServer {
+func (c *IncusClient) Server() incusclient.InstanceServer {
 	return c.server
+}
+
+// Platform returns the platform (Linux native vs Docker+Incus) this client
+// was connected for. Exposed so callers in the parent pkg/sandbox package
+// can make platform-sensitive decisions without reaching into the unexported
+// field.
+func (c *IncusClient) Platform() Platform {
+	return c.platform
 }
 
 // ServerArchitecture returns the primary architecture of the Incus server
@@ -149,11 +157,11 @@ func SessionContainerName(sessionID string) string {
 	return SessionPrefix + sanitized
 }
 
-// sanitizeInstanceName replaces characters that are invalid in Incus instance
+// SanitizeInstanceName replaces characters that are invalid in Incus instance
 // names with hyphens and collapses consecutive hyphens. Incus allows only
 // lowercase alphanumeric characters and hyphens, and names must not start or
 // end with a hyphen.
-func sanitizeInstanceName(s string) string {
+func SanitizeInstanceName(s string) string {
 	s = strings.ToLower(s)
 	var b strings.Builder
 	b.Grow(len(s))
@@ -169,6 +177,10 @@ func sanitizeInstanceName(s string) string {
 	}
 	return strings.TrimRight(b.String(), "-")
 }
+
+// sanitizeInstanceName is retained as an internal alias for readability in
+// existing code paths within the incus package.
+func sanitizeInstanceName(s string) string { return SanitizeInstanceName(s) }
 
 // FleetContainerName returns the full Incus container name for a fleet session.
 func FleetContainerName(planKey, agentKey, taskSlug string) string {
@@ -238,9 +250,9 @@ func OrgFleetContainerName(orgSlug, planKey, agentKey, taskSlug string) string {
 	return name
 }
 
-// safeShortID truncates a session ID for display purposes without panicking
+// SafeShortID truncates a session ID for display purposes without panicking
 // on short strings. Used in log messages where the full ID list is unavailable.
-func safeShortID(id string, maxLen int) string {
+func SafeShortID(id string, maxLen int) string {
 	if len(id) <= maxLen {
 		return id
 	}
@@ -264,7 +276,7 @@ func (c *IncusClient) LaunchFromImage(name, image string, config map[string]stri
 	}
 
 	// Connect to the image server
-	imageServer, err := incus.ConnectSimpleStreams(
+	imageServer, err := incusclient.ConnectSimpleStreams(
 		"https://images.linuxcontainers.org",
 		nil,
 	)
@@ -643,7 +655,7 @@ func (c *IncusClient) ExecSimple(containerName string, command []string) (int, e
 // The container must be running. The content is read from an io.ReadSeeker.
 // Mode is a Unix permission mode (e.g., 0755).
 func (c *IncusClient) PushFile(containerName, destPath string, content io.ReadSeeker, mode int) error {
-	args := incus.InstanceFileArgs{
+	args := incusclient.InstanceFileArgs{
 		Content: content,
 		Mode:    mode,
 		Type:    "file",
@@ -659,7 +671,7 @@ func (c *IncusClient) PushFile(containerName, destPath string, content io.ReadSe
 // PullFile downloads a file from a container. Returns the file content as a
 // ReadCloser and metadata (UID, GID, mode, type). The caller must close the
 // reader. The container must be running.
-func (c *IncusClient) PullFile(containerName, srcPath string) (io.ReadCloser, *incus.InstanceFileResponse, error) {
+func (c *IncusClient) PullFile(containerName, srcPath string) (io.ReadCloser, *incusclient.InstanceFileResponse, error) {
 	reader, resp, err := c.server.GetInstanceFile(containerName, srcPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to pull file from %s:%s: %w", containerName, srcPath, err)

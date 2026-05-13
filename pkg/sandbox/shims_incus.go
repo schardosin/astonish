@@ -7,6 +7,55 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
+// IncusClient is re-exported from pkg/sandbox/incus. Keeping the historical
+// name keeps ~50 external call sites across cmd/, pkg/api, pkg/daemon,
+// pkg/launcher, pkg/fleet, and pkg/tools unchanged.
+type IncusClient = incus.IncusClient
+
+// Container naming constants re-exported from pkg/sandbox/incus.
+const (
+	TemplatePrefix = incus.TemplatePrefix
+	SessionPrefix  = incus.SessionPrefix
+	FleetPrefix    = incus.FleetPrefix
+	SnapshotName   = incus.SnapshotName
+	BaseTemplate   = incus.BaseTemplate
+)
+
+// Connect creates a new IncusClient connected to the Incus daemon.
+func Connect(platform Platform) (*IncusClient, error) { return incus.Connect(platform) }
+
+// TemplateName returns the full Incus container name for a template.
+func TemplateName(name string) string { return incus.TemplateName(name) }
+
+// SessionContainerName returns the full Incus container name for a session.
+func SessionContainerName(sessionID string) string { return incus.SessionContainerName(sessionID) }
+
+// FleetContainerName returns the full Incus container name for a fleet session.
+func FleetContainerName(planKey, agentKey, taskSlug string) string {
+	return incus.FleetContainerName(planKey, agentKey, taskSlug)
+}
+
+// OrgSessionContainerName returns the container name scoped to an org/team.
+func OrgSessionContainerName(orgSlug, teamSlug, sessionID string) string {
+	return incus.OrgSessionContainerName(orgSlug, teamSlug, sessionID)
+}
+
+// OrgFleetContainerName returns the fleet container name scoped to an org.
+func OrgFleetContainerName(orgSlug, planKey, agentKey, taskSlug string) string {
+	return incus.OrgFleetContainerName(orgSlug, planKey, agentKey, taskSlug)
+}
+
+// SnapshotSource returns the snapshot source string for cloning.
+func SnapshotSource(templateName string) string { return incus.SnapshotSource(templateName) }
+
+// sanitizeInstanceName is an unexported wrapper preserving the historical
+// name used by pkg/sandbox-internal callers (org_network.go, etc).
+func sanitizeInstanceName(s string) string { return incus.SanitizeInstanceName(s) }
+
+// safeShortID is an unexported wrapper preserving the historical name used
+// by pkg/sandbox-internal callers (lifecycle.go).
+func safeShortID(id string, maxLen int) string { return incus.SafeShortID(id, maxLen) }
+
 // Platform is re-exported from pkg/sandbox/incus.
 type Platform = incus.Platform
 

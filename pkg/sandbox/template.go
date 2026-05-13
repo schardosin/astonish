@@ -661,7 +661,7 @@ func PromoteTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 				Alias: OverlayImageAlias,
 			},
 		}
-		op, err := client.server.CreateInstance(req)
+		op, err := client.Server().CreateInstance(req)
 		if err != nil {
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to create new @base container: %w", err)
@@ -997,7 +997,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 		},
 	}
 
-	op, err := client.server.CreateInstance(req)
+	op, err := client.Server().CreateInstance(req)
 	if err != nil {
 		restartSession()
 		return fmt.Errorf("failed to create template container: %w", err)
@@ -1313,7 +1313,7 @@ func ensureIncusEnvironment(client *IncusClient) error {
 		// because of the limited network namespace. Use a static subnet
 		// that won't conflict with Docker's default ranges (172.17-31.x.x).
 		ipv4Address := "auto"
-		if client.platform == PlatformDockerIncus {
+		if client.Platform() == PlatformDockerIncus {
 			ipv4Address = "10.99.0.1/24"
 		}
 

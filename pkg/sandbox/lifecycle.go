@@ -321,7 +321,7 @@ func DestroyForSession(client *IncusClient, registry *SessionRegistry, sessionID
 // destroyOverlayContainer unmounts overlay, stops, and deletes a container.
 func destroyOverlayContainer(client *IncusClient, containerName string) error {
 	// Stop the container first (overlay can't be unmounted while in use)
-	state, _, err := client.server.GetInstanceState(containerName)
+	state, _, err := client.Server().GetInstanceState(containerName)
 	if err == nil && state.Status == "Running" {
 		if err := client.StopInstance(containerName, true); err != nil {
 			return err

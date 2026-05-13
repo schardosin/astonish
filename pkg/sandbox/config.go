@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // DefaultSandboxConfig returns sensible defaults for the sandbox system.
@@ -63,12 +64,35 @@ func ValidateSandboxConfig(c *config.SandboxConfig) error {
 
 // sandboxCfg stores the active sandbox configuration at package level.
 // Set via SetSandboxConfig during sandbox initialization. Used by
-// IsPrivileged and container creation functions. Follows the same pattern
-// as activePlatform in remote_ops.go.
+// IsPrivileged. Follows the same pattern as activePlatform (now in
+// pkg/sandbox/incus).
 var sandboxCfg *config.SandboxConfig
 
+// sandboxConfigProvider adapts the package-level sandboxCfg to the
+// incus.ConfigProvider interface, avoiding a pkg/sandbox/incus → pkg/sandbox
+// import cycle.
+type sandboxConfigProvider struct{}
+
+// IsPrivileged reports whether containers should run in privileged mode
+// according to the active sandbox config.
+func (sandboxConfigProvider) IsPrivileged() bool {
+	if sandboxCfg != nil && sandboxCfg.Privileged != nil {
+		return *sandboxCfg.Privileged
+	}
+	return false
+}
+
+// Register the ConfigProvider as early as possible so pkg/sandbox/incus sees
+// the current sandboxCfg whether or not SetSandboxConfig has been called.
+// Both pkg/sandbox and pkg/sandbox/incus are linked together at init time;
+// this guarantees a consistent view from first use.
+func init() {
+	incus.SetConfigProvider(sandboxConfigProvider{})
+}
+
 // SetSandboxConfig stores the sandbox configuration at package level for
-// use by container creation functions (defaultContainerConfig, etc.).
+// use by container creation functions. The incus.ConfigProvider registration
+// happens once in init(); this function only updates the underlying config.
 func SetSandboxConfig(c *config.SandboxConfig) {
 	sandboxCfg = c
 }
@@ -87,56 +111,15 @@ func SetSandboxConfig(c *config.SandboxConfig) {
 // (e.g., nested LXC on Proxmox where /proc can't mount in double-nested
 // user namespaces).
 func IsPrivileged() bool {
-	// Explicit user override takes priority
-	if sandboxCfg != nil && sandboxCfg.Privileged != nil {
-		return *sandboxCfg.Privileged
-	}
-	return false
+	return sandboxConfigProvider{}.IsPrivileged()
 }
 
-// containerSecurityConfig returns the security-related config keys for a container
-// based on the current privilege mode and platform.
-//
-// On native Linux (unprivileged), containers get full hardening:
-//   - Syscall intercepts for mknod/setxattr (needed for Docker images)
-//   - Default syscall deny list (blocks dangerous syscalls like kexec, module loading)
-//   - Compat syscall deny (blocks 32-bit syscall attacks on x86_64)
-//   - Guest API disabled (removes /dev/incus from container)
-//
-// On Docker+Incus (macOS/Windows), syscall hardening is skipped because:
-//   - The Docker Desktop VM is the security boundary, not LXC
-//   - Seccomp intercepts may not work in nested/emulated environments
-//     (e.g., deny_compat fails on aarch64 with "Unsupported architecture")
-//   - Containers are still unprivileged (user namespaces active) unless
-//     the user explicitly sets sandbox.privileged: true
-//
-// Note: security.idmap.isolated is intentionally NOT set. All containers must
-// share the same idmap range so that overlay lower layers (shared template
-// snapshots with pre-shifted UIDs) have correct ownership for all containers.
+// containerSecurityConfig returns the security-related config keys for a
+// container. The canonical implementation now lives in pkg/sandbox/incus;
+// this local wrapper preserves the historical unexported name for staying
+// files and tests.
 func containerSecurityConfig() map[string]string {
-	if IsPrivileged() {
-		return map[string]string{
-			"security.privileged": "true",
-		}
-	}
-
-	// On Docker+Incus, skip syscall hardening — the Docker VM provides
-	// isolation and seccomp features may not work in nested environments.
-	if GetActivePlatform() == PlatformDockerIncus {
-		return map[string]string{
-			"security.privileged": "false",
-		}
-	}
-
-	// Native Linux: full hardening
-	return map[string]string{
-		"security.privileged":                  "false",
-		"security.syscalls.intercept.mknod":    "true",
-		"security.syscalls.intercept.setxattr": "true",
-		"security.syscalls.deny_default":       "true",
-		"security.syscalls.deny_compat":        "true",
-		"security.guestapi":                    "false",
-	}
+	return incus.ContainerSecurityConfig()
 }
 
 // EffectiveLimits returns the limits with defaults filled in for any zero values.

@@ -128,12 +128,12 @@ func ValidateEnvironment() error {
 // Status returns the current sandbox runtime status.
 func Status(client *IncusClient, tplRegistry *TemplateRegistry, sessRegistry *SessionRegistry) (*SandboxStatus, error) {
 	status := &SandboxStatus{
-		Platform:       client.platform,
+		Platform:       client.Platform(),
 		IncusConnected: true,
 	}
 
 	// Docker+Incus specific status
-	if client.platform == PlatformDockerIncus {
+	if client.Platform() == PlatformDockerIncus {
 		status.DockerContainerUp = IsIncusDockerContainerRunning()
 		status.DockerImageVersion = GetDockerContainerVersion()
 		status.DockerNeedsUpgrade = NeedsUpgrade()

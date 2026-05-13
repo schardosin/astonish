@@ -100,7 +100,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *TemplateRegistr
 // file (e.g. /var/lib/incus/disks/default.img) which is NOT a directory —
 // the actual mount point is /var/lib/incus/storage-pools/<poolName>.
 func GetPoolSourcePath(client *IncusClient, poolName string) (string, error) {
-	pool, _, err := client.server.GetStoragePool(poolName)
+	pool, _, err := client.Server().GetStoragePool(poolName)
 	if err != nil {
 		return "", fmt.Errorf("failed to get storage pool %q: %w", poolName, err)
 	}
@@ -120,7 +120,7 @@ func GetPoolSourcePath(client *IncusClient, poolName string) (string, error) {
 
 // GetPoolForProfile returns the storage pool name from the default profile's root disk.
 func GetPoolForProfile(client *IncusClient) (string, error) {
-	profile, _, err := client.server.GetProfile("default")
+	profile, _, err := client.Server().GetProfile("default")
 	if err != nil {
 		return "", fmt.Errorf("failed to get default profile: %w", err)
 	}
@@ -150,7 +150,7 @@ func ContainerRootfsPath(poolSourcePath, containerName string) string {
 // The real filesystem comes from overlayfs.
 func EnsureOverlayImage(client *IncusClient) error {
 	// Check if already imported
-	_, _, err := client.server.GetImageAlias(OverlayImageAlias)
+	_, _, err := client.Server().GetImageAlias(OverlayImageAlias)
 	if err == nil {
 		return nil // already exists
 	}
@@ -175,7 +175,7 @@ func EnsureOverlayImage(client *IncusClient) error {
 		MetaName: "astonish-overlay-base.tar.gz",
 	}
 
-	op, err := client.server.CreateImage(imageReq, args)
+	op, err := client.Server().CreateImage(imageReq, args)
 	if err != nil {
 		return fmt.Errorf("failed to import overlay image: %w", err)
 	}
@@ -210,7 +210,7 @@ func EnsureOverlayImage(client *IncusClient) error {
 		},
 	}
 
-	if err := client.server.CreateImageAlias(aliasReq); err != nil {
+	if err := client.Server().CreateImageAlias(aliasReq); err != nil {
 		return fmt.Errorf("failed to create image alias %q: %w", OverlayImageAlias, err)
 	}
 
@@ -407,7 +407,7 @@ func CreateOverlayContainerWithProfiles(client *IncusClient, containerName, temp
 		},
 	}
 
-	op, err := client.server.CreateInstance(req)
+	op, err := client.Server().CreateInstance(req)
 	if err != nil {
 		return fmt.Errorf("failed to create overlay container %q: %w", containerName, err)
 	}

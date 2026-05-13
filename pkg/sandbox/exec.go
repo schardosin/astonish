@@ -196,7 +196,7 @@ func ExecInteractive(client *IncusClient, containerName string, command []string
 		},
 	}
 
-	op, err := client.server.ExecInstance(containerName, req, args)
+	op, err := client.Server().ExecInstance(containerName, req, args)
 	if err != nil {
 		stdinReader.Close()
 		stdinWriter.Close()
@@ -266,7 +266,7 @@ func ExecNonInteractive(client *IncusClient, containerName string, command []str
 		args.Stderr = stdoutWriter // merge stderr into stdout
 	}
 
-	op, err := client.server.ExecInstance(containerName, req, args)
+	op, err := client.Server().ExecInstance(containerName, req, args)
 	if err != nil {
 		stdinReader.Close()
 		stdinWriter.Close()

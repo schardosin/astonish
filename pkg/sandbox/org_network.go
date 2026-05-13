@@ -56,7 +56,7 @@ func EnsureOrgNetwork(client *IncusClient, orgSlug string) error {
 	if err != nil {
 		// Network doesn't exist — create it
 		ipv4Address := "auto"
-		if client.platform == PlatformDockerIncus {
+		if client.Platform() == PlatformDockerIncus {
 			// Inside Docker, use static subnets to avoid conflicts.
 			// Each org gets a different /24 based on a hash of the slug.
 			ipv4Address = orgSubnet(orgSlug)

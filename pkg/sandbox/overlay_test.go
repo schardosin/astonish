@@ -12,9 +12,9 @@ import (
 
 func TestResolveLowerLayers(t *testing.T) {
 	// Set platform to native Linux so statOnSandboxHost uses os.Stat
-	origPlatform := activePlatform
-	activePlatform = PlatformLinuxNative
-	t.Cleanup(func() { activePlatform = origPlatform })
+	origPlatform := GetActivePlatform()
+	SetActivePlatform(PlatformLinuxNative)
+	t.Cleanup(func() { SetActivePlatform(origPlatform) })
 
 	poolPath := t.TempDir()
 

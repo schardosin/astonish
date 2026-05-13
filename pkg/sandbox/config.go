@@ -122,7 +122,7 @@ func containerSecurityConfig() map[string]string {
 
 	// On Docker+Incus, skip syscall hardening — the Docker VM provides
 	// isolation and seccomp features may not work in nested environments.
-	if activePlatform == PlatformDockerIncus {
+	if GetActivePlatform() == PlatformDockerIncus {
 		return map[string]string{
 			"security.privileged": "false",
 		}

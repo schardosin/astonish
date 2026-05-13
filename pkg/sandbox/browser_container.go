@@ -482,7 +482,7 @@ func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height 
 	// baseline features. This forces all libraries to use their baseline NEON
 	// code paths which work correctly.
 	ldPreload := ""
-	if activePlatform == PlatformDockerIncus {
+	if GetActivePlatform() == PlatformDockerIncus {
 		ldPreload = "LD_PRELOAD=/usr/lib/hwcap_mask.so "
 	}
 

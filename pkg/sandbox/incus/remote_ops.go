@@ -1,4 +1,4 @@
-package sandbox
+package incus
 
 import (
 	"bytes"
@@ -10,9 +10,9 @@ import (
 )
 
 // activePlatform stores the detected platform for the current process.
-// Set during SetupSandboxRuntime() and used by remote ops functions to
-// decide whether to execute locally (Linux native) or via docker exec
-// (Docker+Incus on macOS/Windows).
+// Set during sandbox initialization via SetActivePlatform() and used by the
+// remote-ops helpers to decide whether to execute locally (Linux native) or
+// via docker exec (Docker+Incus on macOS/Windows).
 var activePlatform Platform = PlatformUnsupported
 
 // SetActivePlatform sets the package-level platform used by remote ops.
@@ -26,13 +26,13 @@ func GetActivePlatform() Platform {
 	return activePlatform
 }
 
-// execOnSandboxHost runs a command where the Incus daemon lives.
+// ExecOnSandboxHost runs a command where the Incus daemon lives.
 // On Linux native: executes locally via exec.Command.
 // On Docker+Incus: executes inside the Docker container via docker exec.
 // Only known sandbox commands are allowed to prevent command injection.
-func execOnSandboxHost(args []string) ([]byte, error) {
+func ExecOnSandboxHost(args []string) ([]byte, error) {
 	if len(args) == 0 {
-		return nil, fmt.Errorf("execOnSandboxHost: empty command")
+		return nil, fmt.Errorf("ExecOnSandboxHost: empty command")
 	}
 
 	// Resolve command name to a safe constant via allowlist.
@@ -61,7 +61,7 @@ func execOnSandboxHost(args []string) ([]byte, error) {
 	case "umount":
 		safeCmd = "umount"
 	default:
-		return nil, fmt.Errorf("execOnSandboxHost: command %q not allowed", args[0])
+		return nil, fmt.Errorf("ExecOnSandboxHost: command %q not allowed", args[0])
 	}
 
 	switch activePlatform {
@@ -73,13 +73,13 @@ func execOnSandboxHost(args []string) ([]byte, error) {
 		return ExecInDockerHost(append([]string{safeCmd}, args[1:]...))
 
 	default:
-		return nil, fmt.Errorf("execOnSandboxHost: unsupported platform %s", activePlatform)
+		return nil, fmt.Errorf("ExecOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// statOnSandboxHost checks if a path exists on the sandbox host filesystem.
+// StatOnSandboxHost checks if a path exists on the sandbox host filesystem.
 // Returns nil if the path exists, an error otherwise.
-func statOnSandboxHost(path string) error {
+func StatOnSandboxHost(path string) error {
 	switch activePlatform {
 	case PlatformLinuxNative:
 		_, err := os.Stat(path)
@@ -90,19 +90,19 @@ func statOnSandboxHost(path string) error {
 		return err
 
 	default:
-		return fmt.Errorf("statOnSandboxHost: unsupported platform %s", activePlatform)
+		return fmt.Errorf("StatOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// mkdirAllOnSandboxHost creates a directory and all parents on the sandbox host.
-func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
+// MkdirAllOnSandboxHost creates a directory and all parents on the sandbox host.
+func MkdirAllOnSandboxHost(path string, perm os.FileMode) error {
 	// Inline path validation so CodeQL can trace the sanitization.
 	cleanPath := filepath.Clean(path)
 	if !filepath.IsAbs(cleanPath) {
-		return fmt.Errorf("mkdirAllOnSandboxHost: path must be absolute: %s", path)
+		return fmt.Errorf("MkdirAllOnSandboxHost: path must be absolute: %s", path)
 	}
 	if strings.Contains(cleanPath, "..") {
-		return fmt.Errorf("mkdirAllOnSandboxHost: path must not contain traversal sequences: %s", path)
+		return fmt.Errorf("MkdirAllOnSandboxHost: path must not contain traversal sequences: %s", path)
 	}
 
 	switch activePlatform {
@@ -114,12 +114,12 @@ func mkdirAllOnSandboxHost(path string, perm os.FileMode) error {
 		return err
 
 	default:
-		return fmt.Errorf("mkdirAllOnSandboxHost: unsupported platform %s", activePlatform)
+		return fmt.Errorf("MkdirAllOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// removeAllOnSandboxHost removes a path and all children on the sandbox host.
-func removeAllOnSandboxHost(path string) error {
+// RemoveAllOnSandboxHost removes a path and all children on the sandbox host.
+func RemoveAllOnSandboxHost(path string) error {
 	switch activePlatform {
 	case PlatformLinuxNative:
 		return os.RemoveAll(path)
@@ -129,12 +129,12 @@ func removeAllOnSandboxHost(path string) error {
 		return err
 
 	default:
-		return fmt.Errorf("removeAllOnSandboxHost: unsupported platform %s", activePlatform)
+		return fmt.Errorf("RemoveAllOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// readFileOnSandboxHost reads a file from the sandbox host filesystem.
-func readFileOnSandboxHost(path string) ([]byte, error) {
+// ReadFileOnSandboxHost reads a file from the sandbox host filesystem.
+func ReadFileOnSandboxHost(path string) ([]byte, error) {
 	switch activePlatform {
 	case PlatformLinuxNative:
 		return os.ReadFile(path)
@@ -143,13 +143,13 @@ func readFileOnSandboxHost(path string) ([]byte, error) {
 		return ExecInDockerHost([]string{"cat", path})
 
 	default:
-		return nil, fmt.Errorf("readFileOnSandboxHost: unsupported platform %s", activePlatform)
+		return nil, fmt.Errorf("ReadFileOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// readDirOnSandboxHost lists directory entries on the sandbox host filesystem.
+// ReadDirOnSandboxHost lists directory entries on the sandbox host filesystem.
 // Returns a list of entry names. Directories have a trailing "/".
-func readDirOnSandboxHost(path string) ([]string, error) {
+func ReadDirOnSandboxHost(path string) ([]string, error) {
 	switch activePlatform {
 	case PlatformLinuxNative:
 		entries, err := os.ReadDir(path)
@@ -178,13 +178,13 @@ func readDirOnSandboxHost(path string) ([]string, error) {
 		return lines, nil
 
 	default:
-		return nil, fmt.Errorf("readDirOnSandboxHost: unsupported platform %s", activePlatform)
+		return nil, fmt.Errorf("ReadDirOnSandboxHost: unsupported platform %s", activePlatform)
 	}
 }
 
-// mountOverlayOnSandboxHost runs `mount -t overlay` on the sandbox host.
-func mountOverlayOnSandboxHost(opts, target string) error {
-	output, err := execOnSandboxHost([]string{
+// MountOverlayOnSandboxHost runs `mount -t overlay` on the sandbox host.
+func MountOverlayOnSandboxHost(opts, target string) error {
+	output, err := ExecOnSandboxHost([]string{
 		"mount", "-t", "overlay", "overlay", "-o", opts, target,
 	})
 	if err != nil {
@@ -193,21 +193,21 @@ func mountOverlayOnSandboxHost(opts, target string) error {
 	return nil
 }
 
-// umountOnSandboxHost runs `umount` on the sandbox host.
-func umountOnSandboxHost(target string) error {
-	_, err := execOnSandboxHost([]string{"umount", target})
+// UmountOnSandboxHost runs `umount` on the sandbox host.
+func UmountOnSandboxHost(target string) error {
+	_, err := ExecOnSandboxHost([]string{"umount", target})
 	return err
 }
 
-// readMountsOnSandboxHost reads /proc/mounts from the sandbox host.
-func readMountsOnSandboxHost() ([]byte, error) {
-	return readFileOnSandboxHost("/proc/mounts")
+// ReadMountsOnSandboxHost reads /proc/mounts from the sandbox host.
+func ReadMountsOnSandboxHost() ([]byte, error) {
+	return ReadFileOnSandboxHost("/proc/mounts")
 }
 
-// isOverlayMountedOnSandboxHost checks if an overlay is mounted at the given
+// IsOverlayMountedOnSandboxHost checks if an overlay is mounted at the given
 // container rootfs path on the sandbox host.
-func isOverlayMountedOnSandboxHost(containerRootfs string) bool {
-	data, err := readMountsOnSandboxHost()
+func IsOverlayMountedOnSandboxHost(containerRootfs string) bool {
+	data, err := ReadMountsOnSandboxHost()
 	if err != nil {
 		return false
 	}
@@ -222,18 +222,18 @@ func isOverlayMountedOnSandboxHost(containerRootfs string) bool {
 	return false
 }
 
-// rsyncOnSandboxHost runs rsync on the sandbox host filesystem.
-func rsyncOnSandboxHost(src, dst string) error {
-	output, err := execOnSandboxHost([]string{"rsync", "-a", "--delete", "--", src, dst})
+// RsyncOnSandboxHost runs rsync on the sandbox host filesystem.
+func RsyncOnSandboxHost(src, dst string) error {
+	output, err := ExecOnSandboxHost([]string{"rsync", "-a", "--delete", "--", src, dst})
 	if err != nil {
 		return fmt.Errorf("rsync failed: %w\nOutput: %s", err, string(output))
 	}
 	return nil
 }
 
-// cpOnSandboxHost runs cp -a on the sandbox host filesystem.
-func cpOnSandboxHost(src, dst string) error {
-	output, err := execOnSandboxHost([]string{"cp", "-a", "--", src, dst})
+// CpOnSandboxHost runs cp -a on the sandbox host filesystem.
+func CpOnSandboxHost(src, dst string) error {
+	output, err := ExecOnSandboxHost([]string{"cp", "-a", "--", src, dst})
 	if err != nil {
 		return fmt.Errorf("cp failed: %w\nOutput: %s", err, string(output))
 	}

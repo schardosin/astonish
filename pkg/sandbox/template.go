@@ -419,7 +419,7 @@ func ShellIntoTemplate(client *IncusClient, registry *TemplateRegistry, name str
 	// Use the incus CLI for interactive shell (it handles PTY properly).
 	// On Docker+Incus, chain through docker exec to reach the Incus daemon.
 	var cmd *exec.Cmd
-	if activePlatform == PlatformDockerIncus {
+	if GetActivePlatform() == PlatformDockerIncus {
 		cmd = ExecInDockerHostInteractive([]string{
 			"incus", "exec", containerName, "--", "bash", "-l",
 		})
@@ -1186,7 +1186,7 @@ const BinaryDestPath = "/usr/local/bin/astonish"
 // Incus template via the Incus API. For dev builds where the baked binary
 // may be stale, the developer uses `sandbox refresh` after cross-compiling.
 func pushAstonishBinary(client *IncusClient, containerName string) error {
-	if activePlatform == PlatformDockerIncus {
+	if GetActivePlatform() == PlatformDockerIncus {
 		return pushAstonishBinaryFromDocker(client, containerName)
 	}
 	return pushAstonishBinaryFromHost(client, containerName)

@@ -256,15 +256,15 @@ func TestIsPrivileged(t *testing.T) {
 
 func TestContainerSecurityConfig(t *testing.T) {
 	origCfg := sandboxCfg
-	origPlatform := activePlatform
+	origPlatform := GetActivePlatform()
 	t.Cleanup(func() {
 		sandboxCfg = origCfg
-		activePlatform = origPlatform
+		SetActivePlatform(origPlatform)
 	})
 
 	t.Run("native linux unprivileged returns full hardening", func(t *testing.T) {
 		sandboxCfg = nil // defaults to unprivileged
-		activePlatform = PlatformLinuxNative
+		SetActivePlatform(PlatformLinuxNative)
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "false" {
 			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
@@ -292,7 +292,7 @@ func TestContainerSecurityConfig(t *testing.T) {
 
 	t.Run("docker+incus unprivileged skips syscall hardening", func(t *testing.T) {
 		sandboxCfg = nil // defaults to unprivileged
-		activePlatform = PlatformDockerIncus
+		SetActivePlatform(PlatformDockerIncus)
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "false" {
 			t.Errorf("expected security.privileged=false, got %q", cfg["security.privileged"])
@@ -314,7 +314,7 @@ func TestContainerSecurityConfig(t *testing.T) {
 	t.Run("explicit privileged returns minimal config", func(t *testing.T) {
 		priv := true
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
-		activePlatform = PlatformLinuxNative
+		SetActivePlatform(PlatformLinuxNative)
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "true" {
 			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])
@@ -327,7 +327,7 @@ func TestContainerSecurityConfig(t *testing.T) {
 	t.Run("explicit privileged on docker+incus", func(t *testing.T) {
 		priv := true
 		sandboxCfg = &config.SandboxConfig{Privileged: &priv}
-		activePlatform = PlatformDockerIncus
+		SetActivePlatform(PlatformDockerIncus)
 		cfg := containerSecurityConfig()
 		if cfg["security.privileged"] != "true" {
 			t.Errorf("expected security.privileged=true, got %q", cfg["security.privileged"])

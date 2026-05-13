@@ -381,7 +381,7 @@ func CreateOverlayContainerWithProfiles(client *IncusClient, containerName, temp
 	// VM is unreliable. Setting limits.memory/cpu/processes requires cgroup
 	// controllers that may not be delegatable, causing forkstart to fail with
 	// "Device or resource busy" when LXC tries to enable them.
-	if limits != nil && activePlatform != PlatformDockerIncus {
+	if limits != nil && GetActivePlatform() != PlatformDockerIncus {
 		if limits.Memory != "" {
 			containerConfig["limits.memory"] = limits.Memory
 		}

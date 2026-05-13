@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/sandbox/tmplmeta"
 )
 
 func TestResolveLowerLayers(t *testing.T) {
@@ -28,7 +30,7 @@ func TestResolveLowerLayers(t *testing.T) {
 	t.Run("base template single layer", func(t *testing.T) {
 		expectedPath := mkSnapshotRootfs(BaseTemplate)
 
-		registry := &TemplateRegistry{templates: make(map[string]*TemplateMeta)}
+		registry := tmplmeta.NewInMemoryRegistry("")
 
 		got, err := ResolveLowerLayers(poolPath, BaseTemplate, registry)
 		if err != nil {
@@ -41,7 +43,7 @@ func TestResolveLowerLayers(t *testing.T) {
 
 	t.Run("base template missing snapshot", func(t *testing.T) {
 		emptyPool := t.TempDir()
-		registry := &TemplateRegistry{templates: make(map[string]*TemplateMeta)}
+		registry := tmplmeta.NewInMemoryRegistry("")
 
 		_, err := ResolveLowerLayers(emptyPool, BaseTemplate, registry)
 		if err == nil {
@@ -50,7 +52,7 @@ func TestResolveLowerLayers(t *testing.T) {
 	})
 
 	t.Run("custom template not in registry", func(t *testing.T) {
-		registry := &TemplateRegistry{templates: make(map[string]*TemplateMeta)}
+		registry := tmplmeta.NewInMemoryRegistry("")
 
 		_, err := ResolveLowerLayers(poolPath, "my-custom", registry)
 		if err == nil {
@@ -74,11 +76,11 @@ func TestResolveLowerLayers(t *testing.T) {
 	t.Run("custom template with materialized snapshot", func(t *testing.T) {
 		expectedPath := mkSnapshotRootfs("my-materialized")
 
-		registry := &TemplateRegistry{templates: make(map[string]*TemplateMeta)}
-		registry.templates["my-materialized"] = &TemplateMeta{
+		registry := tmplmeta.NewInMemoryRegistry("")
+		registry.SeedForTest(&TemplateMeta{
 			Name:    "my-materialized",
 			BasedOn: BaseTemplate,
-		}
+		})
 
 		got, err := ResolveLowerLayers(poolPath, "my-materialized", registry)
 		if err != nil {
@@ -120,30 +122,23 @@ func TestSnapshotRootfsPath(t *testing.T) {
 
 func TestTemplateRegistrySaveLoad(t *testing.T) {
 	dir := t.TempDir()
-	filePath := filepath.Join(dir, "templates.json")
 
 	// Create and populate
-	r1 := &TemplateRegistry{
-		templates: make(map[string]*TemplateMeta),
-		filePath:  filePath,
-	}
-	r1.templates["base"] = &TemplateMeta{
+	r1 := tmplmeta.NewInMemoryRegistry(dir)
+	r1.SeedForTest(&TemplateMeta{
 		Name:      "base",
 		CreatedAt: time.Now(),
-	}
-	r1.templates["custom"] = &TemplateMeta{
+	})
+	r1.SeedForTest(&TemplateMeta{
 		Name:    "custom",
 		BasedOn: "base",
-	}
+	})
 	if err := r1.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
 	// Load into fresh registry
-	r2 := &TemplateRegistry{
-		templates: make(map[string]*TemplateMeta),
-		filePath:  filePath,
-	}
+	r2 := tmplmeta.NewInMemoryRegistry(dir)
 	if err := r2.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -156,4 +151,7 @@ func TestTemplateRegistrySaveLoad(t *testing.T) {
 	} else if m.BasedOn != "base" {
 		t.Errorf("BasedOn = %q, want base", m.BasedOn)
 	}
+
+	// also avoid unused-import on filepath if future edits remove it above
+	_ = filepath.Separator
 }

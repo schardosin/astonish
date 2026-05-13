@@ -62,7 +62,7 @@ func (s *pgSandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxT
 func (s *pgSandboxTemplateStore) GetByID(ctx context.Context, id string) (*store.SandboxTemplate, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, slug, scope, owner_id, purpose, name, description,
-		        parent_template_id::text, top_layer_id, version,
+		        COALESCE(parent_template_id::text, ''), top_layer_id, version,
 		        COALESCE(created_by::text, ''), created_at, updated_at
 		   FROM sandbox_templates
 		  WHERE id = $1`,
@@ -77,7 +77,7 @@ func (s *pgSandboxTemplateStore) GetBySlug(ctx context.Context, scope store.Sand
 	}
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, slug, scope, owner_id, purpose, name, description,
-		        parent_template_id::text, top_layer_id, version,
+		        COALESCE(parent_template_id::text, ''), top_layer_id, version,
 		        COALESCE(created_by::text, ''), created_at, updated_at
 		   FROM sandbox_templates
 		  WHERE scope = $1 AND owner_id = $2 AND slug = $3`,
@@ -107,7 +107,7 @@ func (s *pgSandboxTemplateStore) List(ctx context.Context, filter store.SandboxT
 	}
 
 	query := `SELECT id, slug, scope, owner_id, purpose, name, description,
-	                 parent_template_id::text, top_layer_id, version,
+	                 COALESCE(parent_template_id::text, ''), top_layer_id, version,
 	                 COALESCE(created_by::text, ''), created_at, updated_at
 	            FROM sandbox_templates`
 	if len(conds) > 0 {
@@ -227,7 +227,7 @@ func (s *pgSandboxTemplateStore) Resolve(ctx context.Context, id string) (*store
 func (s *pgSandboxTemplateStore) ListRoots(ctx context.Context) ([]*store.SandboxTemplate, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, slug, scope, owner_id, purpose, name, description,
-		        parent_template_id::text, top_layer_id, version,
+		        COALESCE(parent_template_id::text, ''), top_layer_id, version,
 		        COALESCE(created_by::text, ''), created_at, updated_at
 		   FROM sandbox_templates
 		  WHERE parent_template_id IS NULL

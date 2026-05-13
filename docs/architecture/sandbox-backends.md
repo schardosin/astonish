@@ -856,9 +856,27 @@ sandbox:
   - If `incus` (default): instantiate `IncusBackend`.
 - Tests: instantiate `MockBackend` via injection.
 
-### 6.4 Personal mode invariant
+### 6.4 Personal mode invariants
 
-`astonish studio` **never** uses the K8s backend. Personal mode assumptions: local Incus (Unix socket on Linux; Docker+Incus sidecar on macOS/Windows); local filesystem for registries; no Kubernetes dependency. Decision Q7. The studio launcher path in `pkg/launcher/studio.go` never reads `sandbox.backend`.
+`astonish studio` **never** uses the K8s backend and **never** touches the Round 2 layer store, event journal, or template DAG. These invariants are type-system-enforced via `ErrUnsupported` returns from `filestore`:
+
+1. **Runtime backend is always Incus.** `pkg/launcher/studio.go` hard-codes `IncusBackend`; it never reads `sandbox.backend` from config. Decision Q7. Assumptions: local Incus (Unix socket on Linux; Docker+Incus sidecar on macOS/Windows); local filesystem for registries; no Kubernetes dependency.
+
+2. **Storage backend is always filestore.** Personal mode retains the JSON registries at `~/.local/share/astonish/sandbox/templates.json` and `sessions.json` via the existing `TemplateRegistry` and `SessionRegistry`. No PostgreSQL is required.
+
+3. **Templates remain flat.** The filestore template store ignores `ParentTemplateID` and `TopLayerID`; when the on-disk `TemplateMeta` grows these fields they are present but always `nil`/empty. Personal mode has no notion of a template DAG.
+
+4. **Scope degenerates to personal.** The `scope` enum value is `personal` for every template; there are no `org`/`team`/`global` templates. The default-template resolution cascade (personal > team > org > @base) collapses to "personal default".
+
+5. **`@base` is a platform-only concept.** Personal mode has no `@base` template and no `SaveAsBase` admin operation; the built-in bundled template fulfills the same role. The `superadmin` role and associated admin API surface (§5.15) do not exist in personal mode.
+
+6. **Layer store returns `ErrUnsupported`.** `filestore.LayerStore` returns `store.ErrUnsupported` for every method (`PutLayer`, `GetLayer`, `IncrementRefCount`, `DecrementRefCount`, `ListUnreferenced`, `DeleteLayer`). Personal-mode Incus save/load uses Incus snapshots (existing code path), which has no code path that calls into `LayerStore`.
+
+7. **Event journal returns `ErrUnsupported`.** `filestore.ChatEventJournal` returns `store.ErrUnsupported` for every method (`Append`, `ReadSince`, `LastSeq`). Cross-pod continuity is meaningless in a single-process personal deployment; SSE streams are served directly from in-memory state.
+
+8. **No migration path personal → platform.** Decision Q8. Personal mode is a terminal deployment shape; there is no export of templates, sessions, or layers into a PostgreSQL-backed deployment.
+
+These invariants MUST hold for every Phase A change: any code added to `pkg/store/filestore/` under the Round 2 interfaces MUST either (a) preserve existing personal-mode behavior verbatim (for template reads via `TemplateRegistry`), or (b) return `store.ErrUnsupported` verbatim. Callers that need to differentiate between "feature disabled in personal mode" and other errors use `errors.Is(err, store.ErrUnsupported)`.
 
 ## 7. Database Schema (Phase A Prerequisite)
 

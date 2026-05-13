@@ -95,6 +95,39 @@ func (s *PGStore) PlatformMCPServers() store.MCPServerStore {
 	}
 }
 
+// SandboxTemplates returns the platform-scoped sandbox template DAG store.
+// Templates live in the platform database's public.sandbox_templates table
+// (migration platform/003). Returns nil if the platform pool cannot be
+// acquired; callers must tolerate that (e.g., early in startup).
+//
+// Callers running in personal mode should NOT use this; they should wire the
+// filestore.NewSandboxTemplateStore variant instead (see §6.4).
+func (s *PGStore) SandboxTemplates() store.SandboxTemplateStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for sandbox templates", "error", err)
+		return nil
+	}
+	return NewPGSandboxTemplateStore(pool)
+}
+
+// SandboxLayers returns the platform-scoped content-addressed layer store.
+// Layer rows live in the platform database's public.sandbox_layers table;
+// the actual bytes live on CephFS at cephfs_path. Ref-count discipline is
+// maintained transactionally by callers that create/delete references
+// (§5.11, §5.12).
+//
+// Callers running in personal mode should NOT use this; they should wire the
+// filestore.NewLayerStore variant instead, which returns ErrUnsupported.
+func (s *PGStore) SandboxLayers() store.LayerStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for sandbox layers", "error", err)
+		return nil
+	}
+	return NewPGLayerStore(pool)
+}
+
 // SetEmbedFunc configures the embedding function used by memory stores for
 // vector search. When set, Search() uses hybrid vector+keyword RRF fusion
 // and Add() auto-generates embeddings for new memories. When nil (default),
@@ -463,6 +496,19 @@ func (t *pgTeamDataStore) MCPServers() store.MCPServerStore {
 
 func (t *pgTeamDataStore) Settings() store.SettingsStore {
 	return &pgSettingsStore{pool: t.pool, teamSlug: t.teamSlug, orgSlug: t.orgSlug, secrets: t.secrets}
+}
+
+// ChatEvents returns the team-scoped chat event journal
+// ({schema}.chat_session_events, migration team/002). Used by the cross-pod
+// continuity pipeline (§5.14).
+//
+// This method is NOT part of the store.TeamDataStore interface by design:
+// Phase A keeps it a concrete method on the PG implementation to avoid
+// propagating a ChatEventJournal requirement through filestore (which would
+// need stubs it cannot reasonably serve). The producer/consumer pipeline in
+// pkg/sandbox (or its successor pkg/chat) will type-assert.
+func (t *pgTeamDataStore) ChatEvents() store.ChatEventJournal {
+	return NewPGChatEventJournal(t.pool, t.schema())
 }
 
 // --- store.PersonalDataStore implementation ---

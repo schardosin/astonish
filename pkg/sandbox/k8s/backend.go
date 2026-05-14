@@ -37,6 +37,7 @@ import (
 	"time"
 
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
@@ -54,6 +55,13 @@ type Config struct {
 	// Client is the Kubernetes API client. Required. Use kubernetes.NewForConfig
 	// in production; tests MAY substitute k8s.io/client-go/kubernetes/fake.NewSimpleClientset.
 	Client kubernetes.Interface
+
+	// RESTConfig is the REST configuration used for subresource
+	// transports (exec, attach, portforward). Required for Exec and
+	// ExecInteractive in production; tests that exercise exec MUST
+	// either supply a RESTConfig and a stub transport OR override the
+	// executor factory via the unexported test hook.
+	RESTConfig *rest.Config
 
 	// Sessions is the session registry, backed by a
 	// store.SandboxSessionStore (Phase A). Required.
@@ -149,9 +157,15 @@ func (c *Config) applyDefaults() {
 // K8sBackend is the Backend implementation backed by Kubernetes +
 // Sysbox. Zero value is NOT usable; construct via New.
 type K8sBackend struct {
-	cfg      Config
-	client   kubernetes.Interface
-	sessions *sandbox.SessionRegistry
+	cfg        Config
+	client     kubernetes.Interface
+	restConfig *rest.Config
+	sessions   *sandbox.SessionRegistry
+
+	// execExecutorFactory constructs a remotecommand-compatible
+	// Executor for a given pod/container/command. Defaults to the real
+	// SPDY factory; tests override this to inject a stub.
+	execExecutorFactory execExecutorFactory
 
 	// startedAt records construction time for Health reporting.
 	startedAt time.Time
@@ -171,10 +185,12 @@ func New(cfg Config) (*K8sBackend, error) {
 	}
 	cfg.applyDefaults()
 	return &K8sBackend{
-		cfg:       cfg,
-		client:    cfg.Client,
-		sessions:  cfg.Sessions,
-		startedAt: time.Now().UTC(),
+		cfg:                 cfg,
+		client:              cfg.Client,
+		restConfig:          cfg.RESTConfig,
+		sessions:            cfg.Sessions,
+		execExecutorFactory: defaultExecExecutorFactory,
+		startedAt:           time.Now().UTC(),
 	}, nil
 }
 
@@ -268,22 +284,8 @@ func (b *K8sBackend) Health(ctx context.Context) (*sandbox.BackendHealth, error)
 }
 
 // ---------------------------------------------------------------------------
-// Exec and file I/O (stubs — Phase C slices: exec.go, files.go)
+// Exec and file I/O — Exec/ExecInteractive live in exec.go; files stubbed below.
 // ---------------------------------------------------------------------------
-
-func (b *K8sBackend) Exec(ctx context.Context, sessionID string, opts sandbox.ExecSpec) (*sandbox.ExecResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("Exec: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) ExecInteractive(ctx context.Context, sessionID string, opts sandbox.PTYSpec) (sandbox.ExecStream, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("ExecInteractive: %w", ErrNotImplementedYet)
-}
 
 func (b *K8sBackend) PushFile(ctx context.Context, sessionID, path string, content io.Reader, mode os.FileMode) error {
 	if err := ctx.Err(); err != nil {

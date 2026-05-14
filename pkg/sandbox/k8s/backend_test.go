@@ -163,11 +163,12 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 }
 
 // TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
-// whose implementation has not yet landed (exec, file I/O, templates,
+// whose implementation has not yet landed (file I/O, templates,
 // networking, fleet) and verifies the returned error wraps
-// ErrNotImplementedYet. The session-lifecycle methods (CreateSession,
+// ErrNotImplementedYet. Session-lifecycle methods (CreateSession,
 // StartSession, StopSession, DestroySession, SessionState, ListSessions)
-// are covered by the lifecycle tests in session_test.go.
+// are covered by session_test.go; Exec and ExecInteractive are covered
+// by exec_test.go.
 func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
@@ -179,14 +180,6 @@ func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"Exec", func() error {
-			_, err := b.Exec(ctx, "s", sandbox.ExecSpec{Command: []string{"true"}})
-			return err
-		}},
-		{"ExecInteractive", func() error {
-			_, err := b.ExecInteractive(ctx, "s", sandbox.PTYSpec{Command: []string{"sh"}})
-			return err
-		}},
 		{"PushFile", func() error {
 			return b.PushFile(ctx, "s", "/x", strings.NewReader(""), 0o644)
 		}},

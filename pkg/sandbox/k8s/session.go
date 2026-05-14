@@ -84,6 +84,11 @@ const (
 	mountWork   = "/var/astonish/work"
 )
 
+// containerName is the fixed name of the sandbox container inside a
+// session pod. exec.go and files.go target this container via
+// PodExecOptions.Container.
+const containerName = "sandbox"
+
 // podNameForSession returns the deterministic pod name used by the K8s
 // backend. Exposed here (rather than inlined) so that session.go,
 // exec.go, files.go, and fleet.go agree on the naming scheme.
@@ -199,7 +204,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 			RestartPolicy:    corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
 				{
-					Name:  "sandbox",
+					Name:  containerName,
 					Image: b.cfg.SandboxImage,
 					Env: []corev1.EnvVar{
 						{Name: "ASTONISH_SESSION_ID", Value: spec.SessionID},

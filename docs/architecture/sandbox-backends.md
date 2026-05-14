@@ -1247,15 +1247,38 @@ Build `K8sSandboxBackend` plus the layer store, GC, default-template resolver, e
 
 ### Phase D -- Deployment tooling (~1-2 weeks)
 
-- Helm chart updates:
-  - New values: `sandbox.backend`, `sandbox.k8s.*`, `sandbox.layers.maxChainDepth`, `sandbox.layers.gcInterval`, `sandbox.k8s.maxConcurrentEvictions`, `sandbox.k8s.cephfsBackpressureP99Ms`.
-  - Sandbox namespace template (labels, PSA baseline).
-  - RBAC template for API/Worker ServiceAccount.
-  - Bootstrap Job template for `@base` layer extraction.
-  - CephFS PVC templates for `/mnt/astonish-layers` and `/mnt/astonish-uppers`.
-- Operator-facing documentation:
-  - `docs/deployment/kubernetes-sysbox.md` -- install guide (Sysbox, CephFS, Astonish).
-  - `docs/operations/sandbox-backend-k8s.md` -- runbook: troubleshooting, scaling, backup, layer-usage audits, how to GC manually, how to update `@base`.
+Status: shipped as of branch `feature/sandbox-k8s-backend`. Delivered
+artefacts:
+
+- Plain-YAML manifests under `deploy/k8s/` (namespaces, RBAC,
+  RuntimeClass, PVCs, base-layer seed Job). Applied lexicographically
+  via `kubectl apply -f deploy/k8s/`. In-process validation lives at
+  `pkg/sandbox/k8s/manifest_deploy_test.go`; an opt-in integration
+  test (`-tags integration`) shells out to `kubectl apply --dry-run=server`.
+- `docker/sandbox-base/Dockerfile`: two-stage build of the
+  `astonish-sandbox-base` image, baking the generated PID-1 overlay
+  composer at `/usr/local/bin/astonish-sandbox-entrypoint`.
+- `cmd/astonish-sandbox-entrypoint-script`: standalone Go helper that
+  emits `pkg/sandbox/k8s.EntrypointScript` to stdout (used by the
+  Dockerfile).
+- `astonish sandbox k8s-smoke` subcommand: end-to-end probe that runs
+  CreateSession → Exec → PushFile → PullFile → SessionState → Stop →
+  Destroy against the cluster pointed at by the operator's kubeconfig.
+- `pkg/sandbox/k8s.TemplatePersister` callback on `k8s.Config`: fires
+  after successful `BuildTemplate` / `SaveSessionAsTemplate` so
+  callers can persist the template/session relationship into their
+  application store without coupling the backend to store internals.
+
+Deferred to Phase E (intentionally out of scope for Phase D):
+
+- Helm-chart integration (the existing `deploy/helm/astonish` chart
+  currently covers the daemon only). Plain YAML in `deploy/k8s/` is
+  sufficient to bootstrap a cluster; a values-driven chart can follow
+  once the contract stabilises.
+- Operator-facing runbooks (`docs/deployment/kubernetes-sysbox.md`,
+  `docs/operations/sandbox-backend-k8s.md`). The Phase-D smoke
+  command is self-documenting for the "does it work?" question; the
+  long-form docs are Phase-E polish.
 
 ### Phase E -- Hardening (~1 week)
 

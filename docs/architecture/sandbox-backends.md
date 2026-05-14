@@ -1268,6 +1268,22 @@ artefacts:
   after successful `BuildTemplate` / `SaveSessionAsTemplate` so
   callers can persist the template/session relationship into their
   application store without coupling the backend to store internals.
+- Backend-agnostic tool-node pool (`pkg/sandbox/node_interfaces.go`,
+  `pkg/sandbox/backend_pool.go`): `ToolNodePool` / `ToolNodeClient`
+  interfaces abstract over the legacy Incus `NodeClientPool` and a
+  new per-call `backendPool` that drives any `SandboxBackend` via
+  `Exec` with stdin-piped NDJSON requests against the sandbox-side
+  `astonish node` server. `SetupFlowSandbox` branches on
+  `sandbox.backend`: the Incus path is unchanged; k8s/mock paths
+  build the backend through `BackendFromAppConfig` and wrap the
+  tool set with `WrapToolsWithPool`. Chat and fleet keep the
+  concrete Incus pool verbatim (out of scope for this pass).
+- `docker/sandbox-base/Dockerfile` bakes a statically-linked
+  `astonish` binary into the base image and installs a chroot
+  wrapper at `/usr/local/bin/astonish`; the entrypoint bind-mounts
+  the host-layer binary over the overlay's wrapper before PID-1
+  handoff so both the chroot entry and subsequent `Backend.Exec`
+  tool calls resolve to the same trusted build.
 
 Deferred to Phase E (intentionally out of scope for Phase D):
 

@@ -1,47 +1,110 @@
-// Package k8s — pod lifecycle helpers (Phase C, skeleton slice).
+// Package k8s — pod lifecycle.
 //
-// This file will hold the pod-lifecycle implementation: materialising a
-// *sandbox.SessionSpec into a corev1.Pod manifest, creating it against
-// the API server with RuntimeClass=sysbox-runc, mounting the layer chain
-// plus the writable upper (fresh or restored from CephFS), watching the
-// pod to Ready, and tearing it down via streamed tar-over-exec eviction.
+// This file implements the sandbox.Backend session-lifecycle methods
+// against a kubernetes.Interface client:
 //
-// The skeleton slice intentionally keeps this file nearly empty: the
-// behaviour lives on K8sBackend in backend.go and currently returns
-// ErrNotImplementedYet. This file is reserved so the first real slice
-// can add code here without a surprise review of a brand-new file.
+//   - CreateSession  — build a PodSpec from a SessionSpec, submit it to
+//                      the API server, persist metadata to the session
+//                      registry. Idempotent on SessionID.
+//   - StartSession   — resume a previously-stopped session. In the
+//                      current slice this is a no-op when the pod is
+//                      running and a not-implemented stub for the
+//                      evicted→running transition (which requires the
+//                      upper-tar resume codepath; landing separately).
+//   - StopSession    — tear down the pod while preserving persisted
+//                      metadata. In the current slice this deletes the
+//                      pod and leaves the session row in state=evicted;
+//                      the tar-stream eviction of the upper layer is a
+//                      later slice.
+//   - DestroySession — delete pod + registry row. Idempotent; absent
+//                      sessions succeed without error.
+//   - SessionState   — map the pod's phase/conditions to sandbox.SessionState.
+//                      Returns SessionStateGone for absent pods.
+//   - ListSessions   — enumerate pods by label selector and materialise
+//                      sandbox.Session views.
 //
-// Planned shape (not yet implemented):
+// The eviction/resume tar-stream plumbing (§5.5), the in-container
+// overlay entrypoint, and real readiness gating are intentionally NOT
+// included in this slice. This slice makes the backend API-useful
+// against a real (or fake) cluster and provides the contract surface
+// subsequent slices build on.
 //
-//   type podBuilder struct { ... }
-//   func (b *K8sBackend) buildPodSpec(spec sandbox.SessionSpec) (*corev1.Pod, error)
-//   func (b *K8sBackend) createPod(ctx context.Context, pod *corev1.Pod) error
-//   func (b *K8sBackend) waitForPodReady(ctx context.Context, name string) error
-//   func (b *K8sBackend) evictPod(ctx context.Context, name string) error
-//
-// References:
-//   - docs/architecture/sandbox-backends.md §3.1 (lifecycle),
-//     §5.5 (eviction), §5.12 (overlay layer chain),
-//     §6 (performance targets: <5 s SaveSessionAsTemplate p95).
-//   - sandbox.Session / sandbox.SessionSpec in pkg/sandbox/backend.go.
+// Reference: docs/architecture/sandbox-backends.md §5.3.
 
 package k8s
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// Label and annotation keys used on sandbox pods. These are part of the
+// public contract with operators (kubectl get pods -l astonish.io/...).
+// See docs/architecture/sandbox-backends.md §5.2 and §5.3.
+const (
+	labelOrg        = "astonish.io/org"
+	labelTeam       = "astonish.io/team"
+	labelSessionID  = "astonish.io/session-id"
+	labelType       = "astonish.io/type"
+	labelTemplate   = "astonish.io/template"
+
+	typeSession         = "session"
+	typeFleet           = "fleet"
+	typeTemplateBuilder = "template-builder"
+
+	annotationCreatedBy  = "astonish.io/created-by"
+	annotationCreatedAt  = "astonish.io/created-at"
+	annotationLayerChain = "astonish.io/layer-chain"
+)
+
+// Volume names used inside sandbox pods.
+const (
+	volumeLayers = "layers" // RO CephFS layer store
+	volumeUppers = "uppers" // RW CephFS upper store (eviction/resume)
+	volumeUpper  = "upper"  // node-local emptyDir, writable overlay upperdir
+	volumeWork   = "work"   // node-local emptyDir, overlayfs workdir
+)
+
+// Mount paths inside the sandbox container.
+const (
+	mountLayers = "/mnt/astonish-layers"
+	mountUppers = "/mnt/astonish-uppers"
+	mountUpper  = "/var/astonish/upper"
+	mountWork   = "/var/astonish/work"
+)
 
 // podNameForSession returns the deterministic pod name used by the K8s
 // backend. Exposed here (rather than inlined) so that session.go,
 // exec.go, files.go, and fleet.go agree on the naming scheme.
 //
-// The scheme is "astn-" + the first 32 chars of the session ID
-// (lowercased) to stay well under Kubernetes' 253-char DNS-1123 limit
-// while remaining trivially reversible for operators reading kubectl
-// output.
+// The scheme is "astn-sess-" + the first 27 chars of the session ID
+// (lowercased, DNS-sanitised) to stay within Kubernetes' 253-char
+// DNS-1123 limit while remaining trivially reversible for operators
+// reading kubectl output. Reference:
+// docs/architecture/sandbox-backends.md §5.3 step 2.
 func podNameForSession(sessionID string) string {
-	const prefix = "astn-"
-	const maxIDLen = 32
-	if len(sessionID) > maxIDLen {
-		sessionID = sessionID[:maxIDLen]
+	const prefix = "astn-sess-"
+	const maxIDLen = 27
+	clean := toDNSLabel(sessionID)
+	if len(clean) > maxIDLen {
+		clean = clean[:maxIDLen]
 	}
-	return prefix + toDNSLabel(sessionID)
+	// Re-trim trailing '-' in case truncation left one.
+	for len(clean) > 0 && clean[len(clean)-1] == '-' {
+		clean = clean[:len(clean)-1]
+	}
+	return prefix + clean
 }
 
 // toDNSLabel lower-cases the input and replaces any character that is
@@ -62,7 +125,6 @@ func toDNSLabel(s string) string {
 			out = append(out, '-')
 		}
 	}
-	// Strip leading/trailing '-'.
 	for len(out) > 0 && out[0] == '-' {
 		out = out[1:]
 	}
@@ -70,4 +132,465 @@ func toDNSLabel(s string) string {
 		out = out[:len(out)-1]
 	}
 	return string(out)
+}
+
+// ---------------------------------------------------------------------------
+// PodSpec builder
+// ---------------------------------------------------------------------------
+
+// buildPodManifest materialises a SessionSpec into a *corev1.Pod.
+// Exposed at package scope to keep it testable without a live client.
+//
+// Spec reference: docs/architecture/sandbox-backends.md §5.3 step 3.
+func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, error) {
+	if spec.SessionID == "" {
+		return nil, errors.New("SessionSpec.SessionID is required")
+	}
+	if spec.TemplateID == "" {
+		return nil, errors.New("SessionSpec.TemplateID is required")
+	}
+	if len(spec.LayerChain) == 0 {
+		// Accept a single-layer chain (template itself acts as the
+		// only lower) so the skeleton is useful before the layer-
+		// store slice lands.
+		spec.LayerChain = []string{spec.TemplateID}
+	}
+	if len(spec.LayerChain) > b.cfg.MaxChainDepth {
+		return nil, fmt.Errorf("layer chain depth %d exceeds MaxChainDepth %d",
+			len(spec.LayerChain), b.cfg.MaxChainDepth)
+	}
+
+	name := podNameForSession(spec.SessionID)
+
+	labels := map[string]string{
+		labelType:      typeSession,
+		labelSessionID: toDNSLabel(spec.SessionID),
+		labelTemplate:  toDNSLabel(spec.TemplateID),
+	}
+	if spec.OrgSlug != "" {
+		labels[labelOrg] = toDNSLabel(spec.OrgSlug)
+	}
+	if spec.TeamSlug != "" {
+		labels[labelTeam] = toDNSLabel(spec.TeamSlug)
+	}
+	// Caller-supplied labels are merged LAST so tests can pin values.
+	for k, v := range spec.Labels {
+		labels[k] = v
+	}
+
+	annotations := map[string]string{
+		annotationCreatedAt:  time.Now().UTC().Format(time.RFC3339),
+		annotationLayerChain: strings.Join(spec.LayerChain, ","),
+	}
+	if spec.UserID != "" {
+		annotations[annotationCreatedBy] = spec.UserID
+	}
+
+	runtimeClass := b.cfg.RuntimeClassName
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        name,
+			Namespace:   b.cfg.Namespace,
+			Labels:      labels,
+			Annotations: annotations,
+		},
+		Spec: corev1.PodSpec{
+			RuntimeClassName: &runtimeClass,
+			RestartPolicy:    corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:  "sandbox",
+					Image: b.cfg.SandboxImage,
+					Env: []corev1.EnvVar{
+						{Name: "ASTONISH_SESSION_ID", Value: spec.SessionID},
+						{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.LayerChain, ",")},
+						{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
+						{Name: "ASTONISH_WORK_DIR", Value: mountWork},
+						{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
+						{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
+					},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
+						{Name: volumeUppers, MountPath: mountUppers},
+						{Name: volumeUpper, MountPath: mountUpper},
+						{Name: volumeWork, MountPath: mountWork},
+					},
+					Resources: buildResourceRequirements(spec.Limits),
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: volumeLayers,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: b.cfg.LayersPVCName,
+							ReadOnly:  true,
+						},
+					},
+				},
+				{
+					Name: volumeUppers,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: b.cfg.UppersPVCName,
+						},
+					},
+				},
+				{Name: volumeUpper, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+				{Name: volumeWork, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			},
+		},
+	}
+
+	return pod, nil
+}
+
+// buildResourceRequirements translates sandbox.ResourceLimits into
+// a corev1.ResourceRequirements block. Zero-valued limits are omitted.
+func buildResourceRequirements(lim sandbox.ResourceLimits) corev1.ResourceRequirements {
+	reqs := corev1.ResourceRequirements{}
+	limits := corev1.ResourceList{}
+	if lim.CPUs > 0 {
+		limits[corev1.ResourceCPU] = *resource.NewQuantity(int64(lim.CPUs), resource.DecimalSI)
+	}
+	if lim.MemoryMiB > 0 {
+		limits[corev1.ResourceMemory] = *resource.NewQuantity(int64(lim.MemoryMiB)*1024*1024, resource.BinarySI)
+	}
+	if lim.DiskMiB > 0 {
+		limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(int64(lim.DiskMiB)*1024*1024, resource.BinarySI)
+	}
+	if len(limits) > 0 {
+		reqs.Limits = limits
+	}
+	return reqs
+}
+
+// ---------------------------------------------------------------------------
+// Session lifecycle (real implementations)
+// ---------------------------------------------------------------------------
+
+// CreateSession builds a PodSpec from the supplied SessionSpec, submits
+// it via the API server, and records the session in the registry.
+// Idempotent on SessionID: a second call with the same ID returns the
+// existing session without recreation.
+func (b *K8sBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec) (*sandbox.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.client == nil {
+		return nil, fmt.Errorf("CreateSession: %w", ErrNotImplementedYet)
+	}
+
+	// Idempotency: if we already know this session, return it rather
+	// than round-tripping to the API server. The registry is the source
+	// of truth for "have we seen this session before?"
+	if existing, err := b.sessions.GetSession(spec.SessionID); err == nil && existing != nil {
+		return sessionFromStore(existing, spec.Type), nil
+	}
+
+	pod, err := b.buildPodManifest(spec)
+	if err != nil {
+		return nil, fmt.Errorf("CreateSession: build manifest: %w", err)
+	}
+
+	created, err := b.client.CoreV1().Pods(b.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		return nil, fmt.Errorf("CreateSession: create pod: %w", err)
+	}
+	// If the pod already existed in the cluster, fetch it so we can
+	// record its actual spec (NodeName, UID) in the registry.
+	if apierrors.IsAlreadyExists(err) {
+		created, err = b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, pod.Name, metav1.GetOptions{})
+		if err != nil {
+			return nil, fmt.Errorf("CreateSession: fetch existing pod: %w", err)
+		}
+	}
+
+	now := time.Now().UTC()
+	rec := &store.SandboxSession{
+		SessionID:     spec.SessionID,
+		ChatSessionID: spec.SessionID,
+		Backend:       string(sandbox.BackendKindK8s),
+		TemplateID:    spec.TemplateID,
+		State:         store.SandboxSessionStateCreating,
+		PodName:       created.Name,
+		NodeName:      created.Spec.NodeName,
+		CreatedBy:     spec.UserID,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		LastActiveAt:  now,
+	}
+	if err := b.sessions.PutSession(rec); err != nil {
+		// Best-effort rollback of the pod: the session isn't visible
+		// in the registry, so leaving the pod behind would leak.
+		_ = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(ctx, created.Name, metav1.DeleteOptions{})
+		return nil, fmt.Errorf("CreateSession: persist registry: %w", err)
+	}
+
+	return sessionFromStore(rec, spec.Type), nil
+}
+
+// StartSession resumes a stopped session. In this slice, the evicted→running
+// transition is not yet implemented; StartSession reports not-implemented
+// unless the session is already running (in which case it's a no-op).
+func (b *K8sBackend) StartSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.client == nil {
+		return fmt.Errorf("StartSession: %w", ErrNotImplementedYet)
+	}
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("StartSession: lookup: %w", err)
+	}
+	if rec == nil {
+		return fmt.Errorf("StartSession: %s: not found", sessionID)
+	}
+	if rec.State == store.SandboxSessionStateRunning {
+		return nil // already running; no-op
+	}
+	return fmt.Errorf("StartSession: resume-from-evicted %w", ErrNotImplementedYet)
+}
+
+// StopSession pauses a running session. In this slice, the upper-layer
+// eviction tar-stream is not yet implemented; StopSession deletes the
+// pod and records the session as evicted without persisting the upper
+// layer.  The resume path (StartSession) will error until the matching
+// slice lands.
+func (b *K8sBackend) StopSession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.client == nil {
+		return fmt.Errorf("StopSession: %w", ErrNotImplementedYet)
+	}
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("StopSession: lookup: %w", err)
+	}
+	if rec == nil {
+		return nil // idempotent
+	}
+	if rec.PodName == "" {
+		return nil
+	}
+	err = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(ctx, rec.PodName, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("StopSession: delete pod: %w", err)
+	}
+	rec.State = store.SandboxSessionStateEvicted
+	rec.PodName = ""
+	rec.NodeName = ""
+	rec.UpdatedAt = time.Now().UTC()
+	if err := b.sessions.PutSession(rec); err != nil {
+		return fmt.Errorf("StopSession: persist registry: %w", err)
+	}
+	return nil
+}
+
+// DestroySession permanently removes the session. Idempotent: absent
+// sessions succeed without error.
+func (b *K8sBackend) DestroySession(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.client == nil {
+		// No client configured — treat as no-op rather than fail, so
+		// the stub is usable in tests that want to confirm registry
+		// drainage without wiring a fake client.
+		return b.sessions.Remove(sessionID)
+	}
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("DestroySession: lookup: %w", err)
+	}
+	name := podNameForSession(sessionID)
+	if rec != nil && rec.PodName != "" {
+		name = rec.PodName
+	}
+	err = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("DestroySession: delete pod: %w", err)
+	}
+	if err := b.sessions.Remove(sessionID); err != nil {
+		return fmt.Errorf("DestroySession: remove from registry: %w", err)
+	}
+	return nil
+}
+
+// SessionState queries the pod and maps its phase to sandbox.SessionState.
+// Returns SessionStateGone for absent pods or absent registry rows.
+func (b *K8sBackend) SessionState(ctx context.Context, sessionID string) (sandbox.SessionState, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if b.client == nil {
+		return "", fmt.Errorf("SessionState: %w", ErrNotImplementedYet)
+	}
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return "", fmt.Errorf("SessionState: lookup: %w", err)
+	}
+	if rec == nil {
+		return sandbox.SessionStateGone, nil
+	}
+	// Evicted sessions are known-not-running without a pod.
+	if rec.State == store.SandboxSessionStateEvicted && rec.PodName == "" {
+		return sandbox.SessionStateStopped, nil
+	}
+	name := rec.PodName
+	if name == "" {
+		name = podNameForSession(sessionID)
+	}
+	pod, err := b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return sandbox.SessionStateGone, nil
+		}
+		return "", fmt.Errorf("SessionState: get pod: %w", err)
+	}
+	return podPhaseToSessionState(pod), nil
+}
+
+// ListSessions enumerates pods in the configured namespace that carry
+// the session type label, materialising each as a sandbox.Session.
+// Filter fields are applied client-side where a server-side label
+// selector cannot express them.
+func (b *K8sBackend) ListSessions(ctx context.Context, filter sandbox.SessionFilter) ([]*sandbox.Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if b.client == nil {
+		return nil, fmt.Errorf("ListSessions: %w", ErrNotImplementedYet)
+	}
+
+	selector := labelSelectorFor(filter)
+	list, err := b.client.CoreV1().Pods(b.cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, fmt.Errorf("ListSessions: list pods: %w", err)
+	}
+
+	out := make([]*sandbox.Session, 0, len(list.Items))
+	for i := range list.Items {
+		p := &list.Items[i]
+		s := sessionFromPod(p)
+		if filter.State != "" && s.State != filter.State {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out, nil
+}
+
+// labelSelectorFor constructs a server-side label selector from the
+// subset of SessionFilter fields that are expressible as equality
+// matches against sandbox pod labels.
+func labelSelectorFor(f sandbox.SessionFilter) string {
+	parts := []string{labelType + "=" + typeSession}
+	if f.Type == sandbox.SessionTypeFleet {
+		parts[0] = labelType + "=" + typeFleet
+	}
+	if f.OrgSlug != "" {
+		parts = append(parts, labelOrg+"="+toDNSLabel(f.OrgSlug))
+	}
+	if f.TeamSlug != "" {
+		parts = append(parts, labelTeam+"="+toDNSLabel(f.TeamSlug))
+	}
+	return strings.Join(parts, ",")
+}
+
+// ---------------------------------------------------------------------------
+// State mapping helpers
+// ---------------------------------------------------------------------------
+
+// podPhaseToSessionState translates the observed pod phase to the
+// backend-neutral SessionState values. Derived from §3.6 state machine.
+func podPhaseToSessionState(pod *corev1.Pod) sandbox.SessionState {
+	switch pod.Status.Phase {
+	case corev1.PodPending:
+		return sandbox.SessionStateCreating
+	case corev1.PodRunning:
+		if isPodReady(pod) {
+			return sandbox.SessionStateRunning
+		}
+		return sandbox.SessionStateCreating
+	case corev1.PodSucceeded, corev1.PodFailed:
+		return sandbox.SessionStateStopped
+	default:
+		return sandbox.SessionStateCreating
+	}
+}
+
+// isPodReady reports whether the pod's Ready condition is True.
+func isPodReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+// sessionFromStore constructs a sandbox.Session from a persisted
+// store.SandboxSession. State is derived from the store's state column
+// (the registry-level view — live cluster state is obtained through
+// SessionState, which queries the API server).
+func sessionFromStore(rec *store.SandboxSession, sessType sandbox.SessionType) *sandbox.Session {
+	if sessType == "" {
+		sessType = sandbox.SessionTypeChat
+	}
+	return &sandbox.Session{
+		SessionID:  rec.SessionID,
+		Type:       sessType,
+		TemplateID: rec.TemplateID,
+		State:      storeStateToSessionState(rec.State),
+		BackendRef: rec.PodName,
+		CreatedAt:  rec.CreatedAt,
+		LastActive: rec.LastActiveAt,
+	}
+}
+
+// sessionFromPod constructs a sandbox.Session from a corev1.Pod. Used
+// by ListSessions where the source of truth is the API server rather
+// than the registry.
+func sessionFromPod(pod *corev1.Pod) *sandbox.Session {
+	typ := sandbox.SessionTypeChat
+	if pod.Labels[labelType] == typeFleet {
+		typ = sandbox.SessionTypeFleet
+	}
+	return &sandbox.Session{
+		SessionID:  pod.Labels[labelSessionID],
+		Type:       typ,
+		TemplateID: pod.Labels[labelTemplate],
+		OrgSlug:    pod.Labels[labelOrg],
+		TeamSlug:   pod.Labels[labelTeam],
+		State:      podPhaseToSessionState(pod),
+		BackendRef: pod.Name,
+		Labels:     pod.Labels,
+		CreatedAt:  pod.CreationTimestamp.Time,
+	}
+}
+
+// storeStateToSessionState maps persisted state values to the interface's
+// SessionState. The two enums overlap but are not identical (the store
+// has "terminated", the interface has "gone"; the store has "evicted",
+// the interface reports that as "stopped").
+func storeStateToSessionState(s store.SandboxSessionState) sandbox.SessionState {
+	switch s {
+	case store.SandboxSessionStateCreating:
+		return sandbox.SessionStateCreating
+	case store.SandboxSessionStateRunning:
+		return sandbox.SessionStateRunning
+	case store.SandboxSessionStateEvicting:
+		return sandbox.SessionStateEvicting
+	case store.SandboxSessionStateEvicted:
+		return sandbox.SessionStateStopped
+	case store.SandboxSessionStateResuming:
+		return sandbox.SessionStateResuming
+	case store.SandboxSessionStateTerminated:
+		return sandbox.SessionStateGone
+	default:
+		return sandbox.SessionStateCreating
+	}
 }

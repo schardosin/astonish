@@ -107,7 +107,7 @@ func TestK8sBackendCapabilities(t *testing.T) {
 	}
 }
 
-// TestK8sBackendHealth verifies the skeleton health report.
+// TestK8sBackendHealth verifies the no-client skeleton health report.
 func TestK8sBackendHealth(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
@@ -118,10 +118,10 @@ func TestK8sBackendHealth(t *testing.T) {
 		t.Fatalf("Health: unexpected error %v", err)
 	}
 	if h.Healthy {
-		t.Error("skeleton Health should report Healthy=false")
+		t.Error("Health without Client should report Healthy=false")
 	}
-	if !strings.Contains(h.Reason, "Phase C") {
-		t.Errorf("Health.Reason = %q, want to mention Phase C", h.Reason)
+	if !strings.Contains(h.Reason, "no Kubernetes client configured") {
+		t.Errorf("Health.Reason = %q, want to mention missing Kubernetes client", h.Reason)
 	}
 	if h.Details["namespace"] == "" {
 		t.Error("Health.Details should include namespace")
@@ -162,11 +162,13 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 	}
 }
 
-// TestK8sBackendStubsReturnNotImplemented exercises each stubbed
-// method and verifies the returned error wraps ErrNotImplementedYet.
-// The contract suite checks ctx-cancelled behaviour; this check covers
-// the non-cancelled path.
-func TestK8sBackendStubsReturnNotImplemented(t *testing.T) {
+// TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
+// whose implementation has not yet landed (exec, file I/O, templates,
+// networking, fleet) and verifies the returned error wraps
+// ErrNotImplementedYet. The session-lifecycle methods (CreateSession,
+// StartSession, StopSession, DestroySession, SessionState, ListSessions)
+// are covered by the lifecycle tests in session_test.go.
+func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
 		t.Fatalf("k8s.New: %v", err)
@@ -177,21 +179,6 @@ func TestK8sBackendStubsReturnNotImplemented(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"CreateSession", func() error {
-			_, err := b.CreateSession(ctx, sandbox.SessionSpec{SessionID: "s", TemplateID: "t"})
-			return err
-		}},
-		{"StartSession", func() error { return b.StartSession(ctx, "s") }},
-		{"StopSession", func() error { return b.StopSession(ctx, "s") }},
-		{"DestroySession", func() error { return b.DestroySession(ctx, "s") }},
-		{"SessionState", func() error {
-			_, err := b.SessionState(ctx, "s")
-			return err
-		}},
-		{"ListSessions", func() error {
-			_, err := b.ListSessions(ctx, sandbox.SessionFilter{})
-			return err
-		}},
 		{"Exec", func() error {
 			_, err := b.Exec(ctx, "s", sandbox.ExecSpec{Command: []string{"true"}})
 			return err
@@ -199,6 +186,9 @@ func TestK8sBackendStubsReturnNotImplemented(t *testing.T) {
 		{"ExecInteractive", func() error {
 			_, err := b.ExecInteractive(ctx, "s", sandbox.PTYSpec{Command: []string{"sh"}})
 			return err
+		}},
+		{"PushFile", func() error {
+			return b.PushFile(ctx, "s", "/x", strings.NewReader(""), 0o644)
 		}},
 		{"PullFile", func() error {
 			_, err := b.PullFile(ctx, "s", "/x")
@@ -275,10 +265,10 @@ func TestPodNameForSession(t *testing.T) {
 	cases := []struct {
 		in, want string
 	}{
-		{"00000000-0000-0000-0000-000000000001", "astn-00000000-0000-0000-0000-00000000"},
-		{"SESSION_with_underscores", "astn-session-with-underscores"},
-		{"--trim-edges--", "astn-trim-edges"},
-		{"abc", "astn-abc"},
+		{"00000000-0000-0000-0000-000000000001", "astn-sess-00000000-0000-0000-0000-000"},
+		{"SESSION_with_underscores", "astn-sess-session-with-underscores"},
+		{"--trim-edges--", "astn-sess-trim-edges"},
+		{"abc", "astn-sess-abc"},
 	}
 	for _, c := range cases {
 		if got := podNameForSession(c.in); got != c.want {

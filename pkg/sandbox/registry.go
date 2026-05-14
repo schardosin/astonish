@@ -171,6 +171,42 @@ func (r *SessionRegistry) Put(sessionID, containerName, templateName string) err
 	return r.store.Put(ctx, sess)
 }
 
+// PutSession inserts or replaces a full session record. Unlike Put, which
+// presumes the Incus backend and builds a minimal SandboxSession for the
+// legacy call sites, PutSession accepts a fully-populated *store.SandboxSession
+// so that backends (e.g., K8sBackend) can record backend-specific fields
+// like PodName, NodeName, and the non-incus Backend tag.
+//
+// The caller is responsible for setting SessionID (required) and Backend
+// ("incus" | "k8s"); empty values of CreatedAt/UpdatedAt/LastActiveAt are
+// populated by the underlying store.
+func (r *SessionRegistry) PutSession(sess *store.SandboxSession) error {
+	if sess == nil {
+		return fmt.Errorf("session is required")
+	}
+	if sess.SessionID == "" {
+		return fmt.Errorf("session ID is required")
+	}
+	if sess.ChatSessionID == "" {
+		sess.ChatSessionID = sess.SessionID
+	}
+	if sess.Backend == "" {
+		return fmt.Errorf("session.Backend is required")
+	}
+	if sess.State == "" {
+		sess.State = store.SandboxSessionStateRunning
+	}
+	return r.store.Put(context.Background(), sess)
+}
+
+// GetSession returns the full store.SandboxSession by ID, or nil if absent.
+// This is a lower-level accessor than Get (which returns a legacy SessionEntry
+// view). Backends that need backend-specific fields (PodName, Backend,
+// UpperLayerID) should use GetSession.
+func (r *SessionRegistry) GetSession(sessionID string) (*store.SandboxSession, error) {
+	return r.store.Get(context.Background(), sessionID)
+}
+
 // Get returns the session entry, or nil if not found.
 func (r *SessionRegistry) Get(sessionID string) *SessionEntry {
 	ctx := context.Background()

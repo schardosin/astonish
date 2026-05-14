@@ -1,37 +1,30 @@
 // Package k8s provides the Kubernetes + Sysbox implementation of the
-// sandbox.Backend interface. Phase C (skeleton slice).
+// sandbox.Backend interface. Phase C.
 //
-// This slice introduces the *K8sBackend* type and registers it with
-// sandbox.NewBackend. All interface methods are stubs that return
-// ErrNotImplementedYet — except pure accessors (Kind, Capabilities) and
-// diagnostics (Health), which report the configured-but-not-ready state.
-// Subsequent slices fill in pod lifecycle (session.go), SPDY exec
-// (exec.go), tar-over-exec file I/O (files.go), templates (template.go),
-// layer store (layer_store.go), GC (layer_gc.go), networking
-// (network.go), fleet (fleet.go), and overlay entrypoint
-// (overlay_entrypoint.go) as enumerated in
-// docs/architecture/sandbox-backends.md §11 Phase C.
+// This file owns the K8sBackend type, its Config, construction, the
+// factory registration, the pure-accessor methods (Kind, Capabilities),
+// diagnostics (Health), and the stubs for the operations whose
+// implementation has not yet landed. Real operations live in their own
+// files:
 //
-// Design invariants (preserved by all future slices):
+//   - session.go — pod lifecycle: CreateSession, StartSession, StopSession,
+//                  DestroySession, SessionState, ListSessions.
+//   - exec.go    — SPDY exec (Exec, ExecInteractive). TODO.
+//   - files.go   — tar-over-exec (PushFile, PullFile). TODO.
+//   - template.go, layer_store.go, layer_gc.go, network.go, fleet.go,
+//     overlay_entrypoint.go — per §11 Phase C.
 //
-//   - K8sBackend MUST honour ctx cancellation: every method returns
-//     ctx.Err() before performing any state-mutating work. The contract
-//     suite (sandbox.RunBackendContract) asserts this.
+// Design invariants:
+//
+//   - Every method returns ctx.Err() before performing any state-mutating
+//     work. The contract suite (sandbox.RunBackendContract) asserts this.
 //   - K8sBackend MUST be safe for concurrent use.
-//   - Session persistence lives in store.SandboxSessionStore (Phase A)
+//   - Session persistence lives in store.SandboxSessionStore (Phase A),
 //     wrapped as *sandbox.SessionRegistry. K8sBackend never owns the
-//     registry; it receives one fully constructed from the caller. In
-//     platform deployments the caller wires in
-//     pgstore.NewPGSandboxSessionStore; in development the local JSON
-//     store may be substituted without code changes.
+//     registry; it receives one fully constructed from the caller.
 //   - Template metadata lives in store.SandboxTemplateStore (Phase A).
-//     K8sBackend does NOT hold a *sandbox.TemplateRegistry directly;
-//     future slices accept a SandboxTemplateStore through config.
-//
-// This skeleton intentionally depends only on the standard library and
-// pkg/sandbox. The Kubernetes client-go dependency is introduced in the
-// first implementation slice that needs it (session lifecycle), not here,
-// to keep the import graph minimal during review.
+//     K8sBackend accepts it in Config for forward compatibility; slices
+//     that depend on it will wire it in as they land.
 
 package k8s
 
@@ -43,22 +36,25 @@ import (
 	"os"
 	"time"
 
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
-// ErrNotImplementedYet is returned by every K8sBackend method whose
+// ErrNotImplementedYet is returned by K8sBackend methods whose
 // implementation has not yet landed. Callers MAY check for this error
 // with errors.Is to gate feature rollout or fall back to another backend
 // during staged migrations.
-var ErrNotImplementedYet = errors.New("sandbox/k8s: not implemented yet (Phase C skeleton)")
+var ErrNotImplementedYet = errors.New("sandbox/k8s: not implemented yet (Phase C)")
 
 // Config bundles the K8sBackend dependencies. Fields are validated by
-// New; missing required fields produce a clear error. Future slices will
-// add kubernetes.Interface, dynamic client, informers, etc. Today the
-// skeleton only needs Sessions to participate in the contract test and
-// the factory plumbing.
+// New; missing required fields produce a clear error.
 type Config struct {
+	// Client is the Kubernetes API client. Required. Use kubernetes.NewForConfig
+	// in production; tests MAY substitute k8s.io/client-go/kubernetes/fake.NewSimpleClientset.
+	Client kubernetes.Interface
+
 	// Sessions is the session registry, backed by a
 	// store.SandboxSessionStore (Phase A). Required.
 	//
@@ -95,6 +91,22 @@ type Config struct {
 	// "/mnt/astonish-uppers".
 	UppersPath string
 
+	// LayersPVCName is the name of the PersistentVolumeClaim that backs
+	// LayersPath (mounted read-only into sandbox pods). Defaults to
+	// "astonish-layers".
+	LayersPVCName string
+
+	// UppersPVCName is the name of the PersistentVolumeClaim that backs
+	// UppersPath (mounted RW for eviction/resume). Defaults to
+	// "astonish-uppers".
+	UppersPVCName string
+
+	// SandboxImage is the container image used for sandbox pods. It
+	// MUST ship the astonish-sandbox-entrypoint binary and the node
+	// runtime. Defaults to
+	// "schardosin/astonish-sandbox-base:latest" (§10 "Astonish ships").
+	SandboxImage string
+
 	// MaxChainDepth caps the overlayfs lowerdir chain (default 20).
 	// Must be ≤ node kernel's overlay.max_lower.
 	MaxChainDepth int
@@ -117,6 +129,15 @@ func (c *Config) applyDefaults() {
 	if c.UppersPath == "" {
 		c.UppersPath = "/mnt/astonish-uppers"
 	}
+	if c.LayersPVCName == "" {
+		c.LayersPVCName = "astonish-layers"
+	}
+	if c.UppersPVCName == "" {
+		c.UppersPVCName = "astonish-uppers"
+	}
+	if c.SandboxImage == "" {
+		c.SandboxImage = "schardosin/astonish-sandbox-base:latest"
+	}
 	if c.MaxChainDepth <= 0 {
 		c.MaxChainDepth = 20
 	}
@@ -127,14 +148,9 @@ func (c *Config) applyDefaults() {
 
 // K8sBackend is the Backend implementation backed by Kubernetes +
 // Sysbox. Zero value is NOT usable; construct via New.
-//
-// This struct is intentionally small in the skeleton slice. Future
-// slices add fields incrementally (kubernetes.Interface client, informer
-// caches, layer-store handle, GC reconciler, etc.) without breaking
-// existing call sites — all callers hold the *sandbox.Backend interface,
-// not *K8sBackend.
 type K8sBackend struct {
 	cfg      Config
+	client   kubernetes.Interface
 	sessions *sandbox.SessionRegistry
 
 	// startedAt records construction time for Health reporting.
@@ -142,7 +158,13 @@ type K8sBackend struct {
 }
 
 // New constructs a K8sBackend from a Config. Returns an error if any
-// required field is missing.
+// required field is missing or invalid.
+//
+// Client is optional ONLY in contexts where the backend is constructed for
+// the contract test / skeleton introspection. When Client is nil, every
+// state-mutating method returns ErrNotImplementedYet (after checking
+// ctx.Err()); this preserves the prior skeleton behavior during staged
+// rollout. Production callers MUST supply a Client.
 func New(cfg Config) (*K8sBackend, error) {
 	if cfg.Sessions == nil {
 		return nil, errors.New("sandbox/k8s: Sessions registry is required")
@@ -150,6 +172,7 @@ func New(cfg Config) (*K8sBackend, error) {
 	cfg.applyDefaults()
 	return &K8sBackend{
 		cfg:       cfg,
+		client:    cfg.Client,
 		sessions:  cfg.Sessions,
 		startedAt: time.Now().UTC(),
 	}, nil
@@ -159,12 +182,12 @@ func New(cfg Config) (*K8sBackend, error) {
 // pkg/sandbox/k8s makes BackendKindK8s available to the factory.
 //
 // The BackendFactoryConfig shape (pre-Phase-A) lacks a
-// store.SandboxTemplateStore slot and a richer k8s-specific config;
-// rather than thread those through the shared factory now, callers that
-// need the full Config wire K8sBackend directly via New. The factory
-// hook here supports the common path where the ambient Sessions
-// registry is sufficient to construct a backend, and surfaces an
-// actionable error otherwise.
+// store.SandboxTemplateStore slot, a kubernetes.Interface, and a
+// k8s-specific Config. Rather than thread those through the shared
+// factory, callers that need the full Config wire K8sBackend directly
+// via New. The factory hook here supports the skeleton path where the
+// ambient Sessions registry is sufficient, and surfaces an actionable
+// error otherwise.
 func init() {
 	sandbox.RegisterBackendFactory(sandbox.BackendKindK8s, func(fc sandbox.BackendFactoryConfig) (sandbox.Backend, error) {
 		if fc.Sessions == nil {
@@ -175,7 +198,7 @@ func init() {
 }
 
 // ---------------------------------------------------------------------------
-// Diagnostics (implemented)
+// Diagnostics
 // ---------------------------------------------------------------------------
 
 // Kind returns BackendKindK8s.
@@ -186,12 +209,6 @@ func (b *K8sBackend) Kind() sandbox.BackendKind {
 // Capabilities advertises the final (post-implementation) feature set.
 // Flags are truthful about the backend's *design*; callers that need a
 // runtime readiness signal should use Health.
-//
-// Rationale: the UI gates features (port expose, org isolation) at
-// config time against Capabilities. Reporting "false" here during the
-// skeleton phase would force every UI caller to know about the phased
-// rollout. Instead the skeleton reports the intended capability set and
-// relies on the not-implemented errors to surface during actual use.
 func (b *K8sBackend) Capabilities() sandbox.BackendCapabilities {
 	return sandbox.BackendCapabilities{
 		Kind:                 sandbox.BackendKindK8s,
@@ -202,73 +219,52 @@ func (b *K8sBackend) Capabilities() sandbox.BackendCapabilities {
 	}
 }
 
-// Health reports the skeleton's configured-but-not-ready state. It
-// honours ctx cancellation (the contract suite asserts this).
+// Health reports the backend's readiness. Honours ctx cancellation.
 //
-// Future slices replace the body with a real readiness probe
-// (API-server ping, Sysbox RuntimeClass existence, CephFS mount check).
+// When a real Client is configured, Health issues a lightweight
+// server-version probe to verify API-server connectivity. When Client is
+// nil (skeleton / misconfigured backend), Health reports unhealthy with
+// a descriptive reason.
+//
+// Future slices will extend Health to verify Sysbox RuntimeClass
+// existence, CephFS mount readiness, and other backend prerequisites.
 func (b *K8sBackend) Health(ctx context.Context) (*sandbox.BackendHealth, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	details := map[string]string{
+		"namespace":     b.cfg.Namespace,
+		"runtime_class": b.cfg.RuntimeClassName,
+		"layers_path":   b.cfg.LayersPath,
+		"uppers_path":   b.cfg.UppersPath,
+		"started_at":    b.startedAt.Format(time.RFC3339),
+	}
+
+	if b.client == nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    "k8s backend: no Kubernetes client configured",
+			CheckedAt: time.Now().UTC(),
+			Details:   details,
+		}, nil
+	}
+
+	version, err := b.client.Discovery().ServerVersion()
+	if err != nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    fmt.Sprintf("k8s API-server unreachable: %v", err),
+			CheckedAt: time.Now().UTC(),
+			Details:   details,
+		}, nil
+	}
+	details["server_version"] = version.GitVersion
+	details["server_platform"] = version.Platform
 	return &sandbox.BackendHealth{
-		Healthy:   false,
-		Reason:    "k8s backend skeleton: implementation pending (Phase C)",
+		Healthy:   true,
 		CheckedAt: time.Now().UTC(),
-		Details: map[string]string{
-			"namespace":      b.cfg.Namespace,
-			"runtime_class":  b.cfg.RuntimeClassName,
-			"layers_path":    b.cfg.LayersPath,
-			"uppers_path":    b.cfg.UppersPath,
-			"started_at":     b.startedAt.Format(time.RFC3339),
-		},
+		Details:   details,
 	}, nil
-}
-
-// ---------------------------------------------------------------------------
-// Session lifecycle (stubs — Phase C slice: session.go)
-// ---------------------------------------------------------------------------
-
-func (b *K8sBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec) (*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("CreateSession: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) StartSession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("StartSession: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) StopSession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("StopSession: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) DestroySession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("DestroySession: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) SessionState(ctx context.Context, sessionID string) (sandbox.SessionState, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return "", fmt.Errorf("SessionState: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) ListSessions(ctx context.Context, filter sandbox.SessionFilter) ([]*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("ListSessions: %w", ErrNotImplementedYet)
 }
 
 // ---------------------------------------------------------------------------

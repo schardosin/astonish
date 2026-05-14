@@ -24,6 +24,16 @@ func handleSandboxCommand(args []string) error {
 		return nil
 	}
 
+	// k8s-smoke is a Phase-D manifest + API smoke probe that runs
+	// against a remote Kubernetes API. It uses kubeconfig/RBAC for
+	// auth and never touches host mounts / Incus sockets, so it must
+	// NOT go through the Linux sudo escalation path below; doing so
+	// would either drop the user's KUBECONFIG / HOME settings or just
+	// fail on non-root CI where sudo is unavailable.
+	if args[0] == "k8s-smoke" {
+		return handleSandboxK8sSmoke(args[1:])
+	}
+
 	// Sandbox commands always need root on Linux for overlay mounts,
 	// UID shifting, and Incus socket access. Re-exec via sudo if needed.
 	if sandbox.NeedsEscalation() {
@@ -190,6 +200,7 @@ func printSandboxUsage() {
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
 	fmt.Println("  prune               Remove orphaned session containers")
 	fmt.Println("  template (tpl)      Manage container templates")
+	fmt.Println("  k8s-smoke           Phase-D smoke test against a Kubernetes cluster")
 }
 
 func printSandboxTemplateUsage() {

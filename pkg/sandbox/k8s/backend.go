@@ -32,8 +32,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -284,22 +282,9 @@ func (b *K8sBackend) Health(ctx context.Context) (*sandbox.BackendHealth, error)
 }
 
 // ---------------------------------------------------------------------------
-// Exec and file I/O — Exec/ExecInteractive live in exec.go; files stubbed below.
+// Exec and file I/O — Exec/ExecInteractive live in exec.go; PushFile /
+// PullFile live in files.go.
 // ---------------------------------------------------------------------------
-
-func (b *K8sBackend) PushFile(ctx context.Context, sessionID, path string, content io.Reader, mode os.FileMode) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("PushFile: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) PullFile(ctx context.Context, sessionID, path string) (io.ReadCloser, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("PullFile: %w", ErrNotImplementedYet)
-}
 
 // ---------------------------------------------------------------------------
 // Templates (stubs — Phase C slice: template.go)

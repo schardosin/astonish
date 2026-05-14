@@ -163,12 +163,12 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 }
 
 // TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
-// whose implementation has not yet landed (file I/O, templates,
-// networking, fleet) and verifies the returned error wraps
-// ErrNotImplementedYet. Session-lifecycle methods (CreateSession,
-// StartSession, StopSession, DestroySession, SessionState, ListSessions)
-// are covered by session_test.go; Exec and ExecInteractive are covered
-// by exec_test.go.
+// whose implementation has not yet landed (templates, networking,
+// fleet) and verifies the returned error wraps ErrNotImplementedYet.
+// Session-lifecycle methods (CreateSession, StartSession, StopSession,
+// DestroySession, SessionState, ListSessions) are covered by
+// session_test.go; Exec and ExecInteractive by exec_test.go; PushFile
+// and PullFile by files_test.go.
 func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
@@ -180,13 +180,6 @@ func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{"PushFile", func() error {
-			return b.PushFile(ctx, "s", "/x", strings.NewReader(""), 0o644)
-		}},
-		{"PullFile", func() error {
-			_, err := b.PullFile(ctx, "s", "/x")
-			return err
-		}},
 		{"BuildTemplate", func() error {
 			_, err := b.BuildTemplate(ctx, sandbox.TemplateBuildSpec{TemplateID: "t"})
 			return err

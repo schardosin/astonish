@@ -3,7 +3,7 @@ name: astonish
 description: Astonish AI Operations Platform - multi-tenant deployment with API, Worker, and Kubernetes sandbox backend (Phase F)
 type: application
 version: 0.2.0
-appVersion: "phase-f"
+appVersion: "dev"
 keywords:
   - ai
   - agent

@@ -5,7 +5,7 @@
 # -- Container image settings (control plane: api + worker)
 image:
   repository: schardosin/astonish
-  tag: phase-f
+  tag: dev
   pullPolicy: Always
 
 # -- Namespace layout
@@ -155,7 +155,7 @@ sandbox:
   # (see docker/sandbox-base/Dockerfile).
   image:
     repository: schardosin/astonish-sandbox-base
-    tag: phase-f
+    tag: dev
     pullPolicy: IfNotPresent
 
   # Overlay strategy — drives applyPodSecurityHardening in the Go backend.

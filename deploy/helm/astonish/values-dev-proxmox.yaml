@@ -21,7 +21,7 @@
 # ------------------------------------------------------------------
 image:
   repository: schardosin/astonish
-  tag: phase-f
+  tag: dev
   pullPolicy: Always
 
 # ------------------------------------------------------------------
@@ -79,7 +79,7 @@ sandbox:
 
   image:
     repository: schardosin/astonish-sandbox-base
-    tag: phase-f
+    tag: dev
     pullPolicy: IfNotPresent
 
   storage:

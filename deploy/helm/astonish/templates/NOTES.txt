@@ -1,8 +1,44 @@
-Astonish has been deployed!
+{{- include "astonish.validate" . -}}
+Astonish {{ .Chart.AppVersion }} has been deployed.
 
-Components:
-  - API:    {{ .Values.api.replicaCount }} replica(s) (ASTONISH_MODE=api)
-  - Worker: {{ .Values.worker.replicaCount }} replica(s) (ASTONISH_MODE=worker)
+Namespaces:
+  Control plane: {{ include "astonish.namespace.controlPlane" . }}
+{{- if .Values.sandbox.enabled }}
+  Sandbox:       {{ include "astonish.namespace.sandbox" . }}  (PSA: {{ .Values.sandbox.podSecurity }})
+{{- end }}
+
+Control plane:
+  API:    {{ .Values.api.replicaCount }} replica(s) (ASTONISH_MODE=api)
+  Worker: {{ .Values.worker.replicaCount }} replica(s) (ASTONISH_MODE=worker)
+  Image:  {{ .Values.image.repository }}:{{ .Values.image.tag }}
+{{- if .Values.sandbox.enabled }}
+  ServiceAccount: {{ include "astonish.serviceAccountName" . }}
+{{- end }}
+
+{{- if .Values.sandbox.enabled }}
+
+Sandbox:
+  Overlay mode:       {{ .Values.sandbox.overlay.mode }}
+  Privileged pods:    {{ .Values.sandbox.overlay.privileged }}
+  RuntimeClass:       {{ default "<cluster-default>" .Values.sandbox.overlay.runtimeClassName }}
+  FUSE device res.:   {{ default "<none>" .Values.sandbox.overlay.fuseDeviceResource }}
+  Base image:         {{ include "astonish.sandbox.image" . }}
+  StorageClass:       {{ .Values.sandbox.storage.storageClassName }}
+  Layers PVC:         {{ .Values.sandbox.storage.layers.pvcName }} ({{ .Values.sandbox.storage.layers.size }})
+  Uppers PVC:         {{ .Values.sandbox.storage.uppers.pvcName }} ({{ .Values.sandbox.storage.uppers.size }})
+
+Wait for the @base seed to complete:
+  kubectl -n {{ include "astonish.namespace.sandbox" . }} wait job/{{ include "astonish.fullname" . }}-sandbox-seed \
+    --for=condition=complete --timeout=300s
+{{- end }}
+
+{{- if .Values.fuseDevicePlugin.enabled }}
+
+FUSE device plugin (smarter-device-manager):
+  Namespace: {{ .Values.fuseDevicePlugin.namespace }}
+  Verify it's advertised on a node:
+    kubectl get node -o json | jq '.items[].status.allocatable | ."smarter-devices/fuse"'
+{{- end }}
 
 {{- if .Values.ingress.enabled }}
 
@@ -13,15 +49,16 @@ Ingress:
 {{- else }}
 
 To access the API locally:
-  kubectl port-forward svc/{{ include "astonish.fullname" . }}-api {{ .Values.service.port }}:{{ .Values.service.port }}
+  kubectl -n {{ include "astonish.namespace.controlPlane" . }} port-forward svc/{{ include "astonish.fullname" . }}-api {{ .Values.service.port }}:{{ .Values.service.port }}
   Then open: http://localhost:{{ .Values.service.port }}
 {{- end }}
 
 Check pod status:
-  kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ include "astonish.namespace.controlPlane" . }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+{{- if .Values.sandbox.enabled }}
+  kubectl -n {{ include "astonish.namespace.sandbox" . }} get pods,pvc
+{{- end }}
 
-View API logs:
-  kubectl logs -l app.kubernetes.io/component=api -f
-
-View Worker logs:
-  kubectl logs -l app.kubernetes.io/component=worker -f
+View logs:
+  kubectl -n {{ include "astonish.namespace.controlPlane" . }} logs -l app.kubernetes.io/component=api -f
+  kubectl -n {{ include "astonish.namespace.controlPlane" . }} logs -l app.kubernetes.io/component=worker -f

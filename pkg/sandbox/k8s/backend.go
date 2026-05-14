@@ -91,9 +91,42 @@ type Config struct {
 	ControlPlaneNamespace string
 
 	// RuntimeClassName is the RuntimeClass used for sandbox pods.
-	// Defaults to "sysbox-runc". See
-	// docs/architecture/sandbox-backends.md §10.
+	// Defaults to the empty string, meaning "use the cluster default
+	// runtime". Operators who run a specialised runtime (Sysbox, Kata)
+	// may set this to the corresponding RuntimeClass name.
+	// See docs/architecture/sandbox-backends.md §10.
 	RuntimeClassName string
+
+	// OverlayMode selects the overlayfs mount strategy in the
+	// entrypoint. One of "fuse", "kernel", "auto" (see OverlayMode
+	// in overlay_entrypoint.go). Defaults to OverlayModeFuse — the
+	// most portable option that works without a specialised runtime.
+	OverlayMode OverlayMode
+
+	// Privileged, when true, sets securityContext.privileged=true on
+	// the sandbox container. This is the simple escape hatch that
+	// grants access to /dev/fuse (via in-container mknod) and the
+	// CAP_SYS_ADMIN needed for the entrypoint's bind-mount step.
+	// Defaults to false — production clusters should prefer the
+	// unprivileged path (FuseDeviceResource + hostUsers:false).
+	Privileged bool
+
+	// HostUsers, when non-nil, sets PodSpec.hostUsers on the pod.
+	// Set to pointer-to-false to request a user namespace for the pod
+	// (K8s 1.33+; kernel 5.11+). Nil means "don't set the field"
+	// (cluster default). See docs/architecture/sandbox-backends.md
+	// §10 for the full matrix.
+	HostUsers *bool
+
+	// FuseDeviceResource is the extended resource key advertised by a
+	// FUSE device plugin (e.g. "smarter-devices/fuse" for the
+	// smarter-device-manager project). When non-empty, sandbox
+	// containers request a quantity of 1 on their resource limits so
+	// the kubelet plugs /dev/fuse into the container without
+	// requiring privileged mode. When empty, no device-plugin resource
+	// is requested — the entrypoint's EnsureFuseDevice mknod path is
+	// the sole provider of /dev/fuse.
+	FuseDeviceResource string
 
 	// LayersPath is the node-local mount point for the RWX CephFS layer
 	// store. Defaults to "/mnt/astonish-layers".
@@ -182,8 +215,12 @@ func (c *Config) applyDefaults() {
 	if c.ControlPlaneNamespace == "" {
 		c.ControlPlaneNamespace = "astonish"
 	}
-	if c.RuntimeClassName == "" {
-		c.RuntimeClassName = "sysbox-runc"
+	// RuntimeClassName intentionally defaults to the empty string
+	// ("use the cluster default runtime"). Phase F drops the hard
+	// dependency on Sysbox; operators who need a specialised runtime
+	// opt in explicitly.
+	if c.OverlayMode == "" {
+		c.OverlayMode = OverlayModeFuse
 	}
 	if c.LayersPath == "" {
 		c.LayersPath = "/mnt/astonish-layers"
@@ -280,6 +317,11 @@ func init() {
 			SandboxImage:          fc.K8s.SandboxImage,
 			LayersPVCName:         fc.K8s.LayersPVCName,
 			UppersPVCName:         fc.K8s.UppersPVCName,
+			// Phase F: portable overlay knobs.
+			OverlayMode:        OverlayMode(fc.K8s.OverlayMode),
+			Privileged:         fc.K8s.PrivilegedPods,
+			HostUsers:          fc.K8s.HostUsers,
+			FuseDeviceResource: fc.K8s.FuseDeviceResource,
 		}
 		// Only attempt cluster connectivity when the caller supplied an
 		// explicit signal: InCluster=true, a KubeconfigPath, or

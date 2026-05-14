@@ -1,0 +1,37 @@
+{{- if .Values.sandbox.enabled }}
+# astonish-layers — content-addressed layer store. Populated by the seed Job
+# (@base) and by template builder pods. Sandbox pods mount this read-only.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.sandbox.storage.layers.pvcName }}
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: layers
+spec:
+  accessModes:
+    - {{ .Values.sandbox.storage.layers.accessMode }}
+  storageClassName: {{ .Values.sandbox.storage.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.sandbox.storage.layers.size }}
+---
+# astonish-uppers — per-session upper layers. RWX so any node hosting a
+# sandbox pod can stream the session's upperdir back on StopSession.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.sandbox.storage.uppers.pvcName }}
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: uppers
+spec:
+  accessModes:
+    - {{ .Values.sandbox.storage.uppers.accessMode }}
+  storageClassName: {{ .Values.sandbox.storage.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.sandbox.storage.uppers.size }}
+{{- end }}

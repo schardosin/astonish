@@ -1,10 +1,9 @@
 # Dockerfile — astonish-sandbox-base image.
 #
 # This is the container image every Astonish sandbox pod runs in when
-# the K8s+Sysbox backend is active (SandboxConfig.Backend = "k8s"). It
-# is NOT the application image (see top-level Dockerfile for that);
-# it's a minimal userland that serves as PID 1 inside the user
-# namespace Sysbox creates for each sandbox.
+# the K8s backend is active (SandboxConfig.Backend = "k8s"). It is NOT
+# the application image (see top-level Dockerfile for that); it's a
+# minimal userland that serves as PID 1 inside the sandbox pod.
 #
 # The image contains, and is RESTRICTED to:
 #
@@ -15,11 +14,20 @@
 #        drift between the backend's expectations (env vars, mount
 #        paths) and the runtime.
 #
-#   2. Base userland: busybox coreutils, tar, zstd (for the resume path
-#        in §5.14 that streams upper layers back from the uppers PVC),
-#        and kernel overlayfs helpers. Sysbox provides the user-namespace
-#        isolation and CAP_SYS_ADMIN inside that namespace, so mount(2)
-#        works from userland without hostPath tricks.
+#   2. Base userland sufficient to compose the overlay in any of the
+#        three supported modes (see pkg/sandbox/k8s.OverlayMode):
+#          - tar, zstd — resume-tar extraction from the uppers PVC
+#            (§5.14).
+#          - util-linux / mount — kernel overlayfs (mount -t overlay)
+#            for nodes that can honour it (Sysbox, hostUsers: false,
+#            or privileged pods on a real kernel).
+#          - fuse-overlayfs — userspace overlay composer for nodes
+#            where kernel overlayfs is unavailable (nested LXC hosts,
+#            restricted RuntimeClass). Requires /dev/fuse, which is
+#            obtained either via a cluster device plugin
+#            (smarter-device-manager advertising smarter-devices/fuse)
+#            or via privileged: true + an in-entrypoint mknod(1).
+#          - busybox-static — minimal fallback tooling.
 #
 #   3. A tiny /sandbox skeleton where the overlay will be composed:
 #        /sandbox/rootfs  — overlay mount point (created by the entrypoint)
@@ -43,8 +51,9 @@
 #
 # Publish:
 #   The image tag MUST match SandboxKubernetesConfig.SandboxImage's
-#   default (pkg/config/app_config.go). If that default changes, bump
-#   the tag here and in deploy/k8s/ manifests in lockstep.
+#   default (pkg/config/app_config.go) and the chart's sandbox.image.tag
+#   (deploy/helm/astonish/values.yaml). If that default changes, bump
+#   all three in lockstep.
 #
 # Reference: docs/architecture/sandbox-backends.md §§5.3, 5.14.
 
@@ -102,29 +111,33 @@ RUN CGO_ENABLED=0 go build \
 # ---------------------------------------------------------------------------
 # Stage 2 — final runtime image.
 #
-# Debian slim is chosen over Alpine because Sysbox + kernel overlayfs
-# works more predictably against glibc in the wild; the resume path
-# also uses zstd which is packaged trivially on Debian. The image stays
-# under ~40 MiB after apt-get clean.
+# Debian slim is chosen over Alpine because fuse-overlayfs binds more
+# predictably against glibc in the wild, and the resume path uses zstd
+# which is packaged trivially on Debian. The image stays under ~60 MiB
+# after apt-get clean.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim
 
 # Labels make kubectl describe / docker inspect self-explanatory and
 # give image-signing tools something stable to chew on.
 LABEL org.opencontainers.image.title="astonish-sandbox-base" \
-      org.opencontainers.image.description="Minimal base image for Astonish K8s+Sysbox sandbox pods" \
+      org.opencontainers.image.description="Minimal base image for Astonish K8s sandbox pods" \
       org.opencontainers.image.source="https://github.com/schardosin/astonish" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Userland required by the entrypoint script:
-#   - ca-certificates: workloads often fetch HTTPS resources
-#   - tar + zstd: resume-tar extraction in §5.14
+# Userland required by the entrypoint script across all OverlayModes:
+#   - ca-certificates: workloads often fetch HTTPS resources.
+#   - tar + zstd: resume-tar extraction in §5.14.
 #   - coreutils: mkdir, echo, tee, etc.
 #   - busybox-static: fallback tooling when a layer ships a minimal
-#       rootfs without GNU utilities
-#   - mount (util-linux): the entrypoint calls mount(2) via /bin/mount
+#       rootfs without GNU utilities.
+#   - mount + util-linux: kernel `mount -t overlay` AND the bind-mount
+#       step for the host astonish binary. mountpoint(1) lives here.
+#   - fuse-overlayfs + fuse3: userspace overlay strategy. Works on any
+#       kernel with FUSE support; no CAP_SYS_ADMIN required for the
+#       overlay mount itself — only /dev/fuse access.
 # We remove apt lists after install to keep the image small; users who
 # need additional packages should compose them into higher layers.
 RUN apt-get update && \
@@ -136,6 +149,8 @@ RUN apt-get update && \
         busybox-static \
         mount \
         util-linux \
+        fuse-overlayfs \
+        fuse3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -227,6 +242,6 @@ RUN printf '%s\n' \
 
 # Default to the entrypoint; the pod manifest can override via command/
 # args if a particular test needs to skip overlay composition. In
-# normal operation, Sysbox starts PID 1 here which sets up the overlay
-# then execs into the workload via chroot (§5.3 step 3).
+# normal operation, the kubelet starts PID 1 here which sets up the
+# overlay then execs into the workload via chroot (§5.3 step 3).
 ENTRYPOINT ["/usr/local/bin/astonish-sandbox-entrypoint"]

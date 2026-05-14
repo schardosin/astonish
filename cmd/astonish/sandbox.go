@@ -200,7 +200,7 @@ func printSandboxUsage() {
 	fmt.Println("  destroy (rm) <id>   Destroy a session container")
 	fmt.Println("  prune               Remove orphaned session containers")
 	fmt.Println("  template (tpl)      Manage container templates")
-	fmt.Println("  k8s-smoke           Phase-D smoke test against a Kubernetes cluster")
+	fmt.Println("  k8s-smoke           End-to-end smoke test against a Kubernetes cluster")
 }
 
 func printSandboxTemplateUsage() {

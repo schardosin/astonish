@@ -191,7 +191,10 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 		annotations[annotationCreatedBy] = spec.UserID
 	}
 
-	runtimeClass := b.cfg.RuntimeClassName
+	// RuntimeClassName, SecurityContext, HostUsers, FUSE device
+	// resource, and overlay-mode env vars are owned by
+	// applyPodSecurityHardening at the bottom of this function so the
+	// rules stay aligned across session / fleet / template pods.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -200,8 +203,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: &runtimeClass,
-			RestartPolicy:    corev1.RestartPolicyNever,
+			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
 				{
 					Name:  containerName,
@@ -241,12 +243,13 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 						},
 					},
 				},
-				{Name: volumeUpper, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				{Name: volumeWork, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: volumeUpper, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: volumeWork, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			},
 		},
 	}
 
+	b.applyPodSecurityHardening(pod)
 	return pod, nil
 }
 

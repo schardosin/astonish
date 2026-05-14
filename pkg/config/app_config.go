@@ -47,7 +47,10 @@ type SandboxConfig struct {
 	// values:
 	//   - ""      → "incus" (default; backward-compatible)
 	//   - "incus" → local Incus daemon (docs/architecture/sandbox-backends.md §4.1)
-	//   - "k8s"   → Kubernetes + Sysbox (docs/architecture/sandbox-backends.md §4.2, Phase C)
+	//   - "k8s"   → Kubernetes (portable overlay strategy; see
+	//                docs/architecture/sandbox-backends.md §4.2 + §10.
+	//                Phase F: fuse-overlayfs by default, kernel overlay
+	//                or auto fallback; Sysbox optional, not required.)
 	//   - "mock"  → in-memory mock (tests only)
 	//
 	// When "k8s" is selected, the Kubernetes sub-config below is
@@ -90,8 +93,41 @@ type SandboxKubernetesConfig struct {
 	// so sandbox pods accept ingress from the control plane.
 	ControlPlaneNamespace string `yaml:"control_plane_namespace,omitempty" json:"control_plane_namespace,omitempty"`
 
-	// RuntimeClassName picks the Pod RuntimeClass. Default: "sysbox-runc".
+	// RuntimeClassName picks the Pod RuntimeClass. Default: empty
+	// (cluster default). Phase F drops the hard Sysbox dependency;
+	// operators who run a specialised runtime (Sysbox, Kata) opt in
+	// explicitly by setting this to e.g. "sysbox-runc".
 	RuntimeClassName string `yaml:"runtime_class_name,omitempty" json:"runtime_class_name,omitempty"`
+
+	// OverlayMode selects the entrypoint's overlay strategy. One of:
+	//   - ""       → "fuse" (default; most portable)
+	//   - "fuse"   → fuse-overlayfs (needs /dev/fuse; see PrivilegedPods
+	//                and FuseDeviceResource)
+	//   - "kernel" → `mount -t overlay -o userxattr` (needs hostUsers:
+	//                false or privileged; blocked on LXC nodes)
+	//   - "auto"   → kernel first, fuse fallback
+	// See docs/architecture/sandbox-backends.md §10.
+	OverlayMode string `yaml:"overlay_mode,omitempty" json:"overlay_mode,omitempty"`
+
+	// PrivilegedPods, when true, sets securityContext.privileged=true
+	// on every sandbox container. This is the simple escape hatch for
+	// dev clusters (LXC nodes, lab Kubernetes) where the unprivileged
+	// path is unavailable. Production deployments should prefer the
+	// unprivileged combo: FuseDeviceResource + HostUsers. Default:
+	// false.
+	PrivilegedPods bool `yaml:"privileged_pods,omitempty" json:"privileged_pods,omitempty"`
+
+	// HostUsers, when non-nil, sets PodSpec.hostUsers on sandbox pods.
+	// Pointer-to-false requests a user namespace (K8s 1.33+ beta-on,
+	// 1.36 GA). nil means "don't set the field" (cluster default).
+	HostUsers *bool `yaml:"host_users,omitempty" json:"host_users,omitempty"`
+
+	// FuseDeviceResource is the extended-resource key advertised by a
+	// FUSE device plugin (e.g. "smarter-devices/fuse" for the
+	// smarter-device-manager project). When non-empty, sandbox pods
+	// request a quantity of 1 on this resource so the kubelet plugs
+	// /dev/fuse in without privileged mode. Default: "" (no plugin).
+	FuseDeviceResource string `yaml:"fuse_device_resource,omitempty" json:"fuse_device_resource,omitempty"`
 
 	// SandboxImage is the container image for sandbox pods. Must ship
 	// the overlay entrypoint and the astonish node binary. Default:

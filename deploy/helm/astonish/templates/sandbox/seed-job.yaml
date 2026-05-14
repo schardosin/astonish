@@ -1,0 +1,67 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.seed.enabled }}
+# astonish-seed-base — one-shot Helm hook that seeds
+# astonish-layers/@base/rootfs from the sandbox base image.
+#
+# Runs on post-install AND post-upgrade so bumping sandbox.image.tag
+# triggers a reseed. The seed script is idempotent: if @base/rootfs
+# already has content, it exits 0.
+#
+# hook-delete-policy: the previous hook Job is deleted before the new
+# one is created, and a successful Job is cleaned up after completion
+# (matching the "run once per release revision" semantics).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-seed
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: seed-job
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: {{ .Values.sandbox.seed.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "astonish.labels" . | nindent 8 }}
+        app.kubernetes.io/component: seed-job
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: {{ include "astonish.sandbox.image" . | quote }}
+          imagePullPolicy: {{ .Values.sandbox.image.pullPolicy }}
+          # Override the image's overlay-composer ENTRYPOINT.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              DEST=/mnt/astonish-layers/@base/rootfs
+              if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+                echo "astonish-seed: @base already present at $DEST; nothing to do"
+                exit 0
+              fi
+              echo "astonish-seed: seeding base layer at $DEST"
+              mkdir -p "$DEST"
+              cd /
+              tar --numeric-owner --xattrs --acls \
+                  --exclude=./proc --exclude=./sys --exclude=./dev \
+                  --exclude=./mnt --exclude=./sandbox \
+                  --exclude=./var/astonish \
+                  -cf - . | tar -xf - -C "$DEST"
+              echo "astonish-seed: done"
+          volumeMounts:
+            - name: layers
+              mountPath: /mnt/astonish-layers
+          resources:
+            {{- toYaml .Values.sandbox.seed.resources | nindent 12 }}
+      volumes:
+        - name: layers
+          persistentVolumeClaim:
+            claimName: {{ .Values.sandbox.storage.layers.pvcName }}
+{{- end }}

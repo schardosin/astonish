@@ -1,7 +1,7 @@
-// sandbox_k8s_smoke.go — Phase-D end-to-end smoke probe for the k8s backend.
+// sandbox_k8s_smoke.go — end-to-end smoke probe for the k8s backend.
 //
-// `astonish sandbox k8s-smoke` exercises every primitive the K8s+Sysbox
-// backend has to get right on a real cluster:
+// `astonish sandbox k8s-smoke` exercises every primitive the Kubernetes
+// sandbox backend has to get right on a real cluster:
 //
 //   1. BackendFromAppConfig → k8s.Backend with a real clientset.
 //   2. CreateSession using a minimal SessionSpec against the @base layer.
@@ -9,25 +9,29 @@
 //   4. PushFile / PullFile roundtrip to verify tar-over-exec streaming.
 //   5. StopSession then DestroySession, cleaning up cluster state.
 //
-// The intent is that a cluster admin can run this once after applying
-// deploy/k8s/* and confirm the plumbing end-to-end BEFORE wiring any
-// real chat / fleet traffic to the new backend. Any failure surfaces
-// as a non-zero exit with a contextual message.
+// The intent is that a cluster admin can run this once after installing
+// the Helm chart (deploy/helm/astonish) and confirm the plumbing end-to-end
+// BEFORE wiring any real chat / fleet traffic to the new backend. Any
+// failure surfaces as a non-zero exit with a contextual message.
 //
 // The command is intentionally conservative: it never writes to the
 // user's config, never creates long-lived state, and uses a UUID-
 // prefixed session ID (astonish-smoke-<ts>) so repeat runs don't
 // collide and orphan runs are trivial to identify with
-// `kubectl -n astonish-sandboxes get pods -l astonish.io/session-id`.
+// `kubectl -n astonish-sandbox get pods -l astonish.io/session-id`.
 //
-// Usage:
+// Phase F — overlay-strategy flags. The smoke can override the
+// cluster's configured overlay mode / security path without editing
+// config.yaml first, which makes it the recommended probe for
+// "does my cluster support path X?" questions:
 //
-//   astonish sandbox k8s-smoke                 # uses @base, default limits
-//   astonish sandbox k8s-smoke --template foo  # override template ID
-//   astonish sandbox k8s-smoke --keep          # leave the pod running for debugging
+//   astonish sandbox k8s-smoke                                     # config.yaml defaults
+//   astonish sandbox k8s-smoke --overlay-mode fuse --privileged    # dev / LXC path
+//   astonish sandbox k8s-smoke --overlay-mode kernel --host-users=false  # K8s 1.33+ userns
+//   astonish sandbox k8s-smoke --overlay-mode fuse \
+//     --fuse-device-resource smarter-devices/fuse                  # production device plugin
 //
-// See docs/architecture/sandbox-backends.md §11 for the Phase-D
-// milestone definition.
+// See docs/deployment/kubernetes.md for the full path matrix.
 
 package astonish
 
@@ -54,13 +58,28 @@ func handleSandboxK8sSmoke(args []string) error {
 	sessionPrefix := fs.String("name", "astonish-smoke", "session-id prefix")
 	timeout := fs.Duration("timeout", 2*time.Minute, "overall smoke-test timeout")
 	keep := fs.Bool("keep", false, "skip Stop/Destroy so the pod stays running for manual inspection")
+
+	// Phase F — overlay strategy overrides. These are optional; when
+	// empty/unset the smoke falls through to whatever the operator's
+	// config.yaml says.
+	overlayMode := fs.String("overlay-mode", "",
+		`override sandbox.kubernetes.overlay_mode ("fuse"|"kernel"|"auto"; default: config)`)
+	privileged := fs.Bool("privileged", false,
+		"force sandbox.kubernetes.privileged_pods=true (dev / LXC path)")
+	fuseDeviceResource := fs.String("fuse-device-resource", "",
+		"override sandbox.kubernetes.fuse_device_resource (e.g. smarter-devices/fuse)")
+	hostUsersFlag := fs.String("host-users", "",
+		`override sandbox.kubernetes.host_users: "true" / "false" (default: leave config value)`)
+	runtimeClass := fs.String("runtime-class", "",
+		"override sandbox.kubernetes.runtime_class_name (e.g. sysbox-runc)")
+
 	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("sandbox k8s-smoke: %w", err)
 	}
 
 	// Force the k8s backend even if the operator's config.yaml still
 	// has sandbox.backend unset — a zero-config cluster admin should be
-	// able to run this right after applying deploy/k8s/*.
+	// able to run this right after installing the Helm chart.
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return fmt.Errorf("sandbox k8s-smoke: load config: %w", err)
@@ -73,6 +92,32 @@ func handleSandboxK8sSmoke(args []string) error {
 				"this command only runs against the k8s backend",
 			appCfg.Sandbox.Backend,
 		)
+	}
+
+	// Phase F — apply optional CLI overrides on top of the config.
+	if *overlayMode != "" {
+		appCfg.Sandbox.Kubernetes.OverlayMode = *overlayMode
+	}
+	if *privileged {
+		appCfg.Sandbox.Kubernetes.PrivilegedPods = true
+	}
+	if *fuseDeviceResource != "" {
+		appCfg.Sandbox.Kubernetes.FuseDeviceResource = *fuseDeviceResource
+	}
+	if *runtimeClass != "" {
+		appCfg.Sandbox.Kubernetes.RuntimeClassName = *runtimeClass
+	}
+	switch strings.ToLower(*hostUsersFlag) {
+	case "":
+		// leave config value
+	case "true", "1", "yes":
+		tv := true
+		appCfg.Sandbox.Kubernetes.HostUsers = &tv
+	case "false", "0", "no":
+		fv := false
+		appCfg.Sandbox.Kubernetes.HostUsers = &fv
+	default:
+		return fmt.Errorf("sandbox k8s-smoke: --host-users=%q (want true/false)", *hostUsersFlag)
 	}
 
 	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
@@ -105,6 +150,19 @@ func handleSandboxK8sSmoke(args []string) error {
 
 	fmt.Printf("sandbox k8s-smoke: session id = %s\n", sessionID)
 	fmt.Printf("sandbox k8s-smoke: template   = %s\n", *templateID)
+	// Echo the chosen Phase F strategy so the operator can see at a
+	// glance which path the smoke is probing.
+	kc := appCfg.Sandbox.Kubernetes
+	hostUsers := "<unset>"
+	if kc.HostUsers != nil {
+		hostUsers = fmt.Sprintf("%v", *kc.HostUsers)
+	}
+	mode := kc.OverlayMode
+	if mode == "" {
+		mode = "fuse (default)"
+	}
+	fmt.Printf("sandbox k8s-smoke: overlay    = mode=%s privileged=%v host_users=%s fuse_device=%q runtime_class=%q\n",
+		mode, kc.PrivilegedPods, hostUsers, kc.FuseDeviceResource, kc.RuntimeClassName)
 
 	// --- Step 1: CreateSession ----------------------------------------
 	step := func(label string, fn func() error) error {

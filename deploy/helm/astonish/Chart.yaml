@@ -1,13 +1,14 @@
 apiVersion: v2
 name: astonish
-description: Astonish AI Operations Platform - multi-tenant deployment with API and Worker components
+description: Astonish AI Operations Platform - multi-tenant deployment with API, Worker, and Kubernetes sandbox backend (Phase F)
 type: application
-version: 0.1.0
-appVersion: "dev"
+version: 0.2.0
+appVersion: "phase-f"
 keywords:
   - ai
   - agent
   - platform
   - multi-tenant
+  - sandbox
 maintainers:
   - name: schardosin

@@ -1,0 +1,77 @@
+{{- if .Values.fuseDevicePlugin.enabled }}
+# smarter-device-manager — advertises /dev/fuse as `smarter-devices/fuse`.
+# Pair with sandbox.overlay.fuseDeviceResource: "smarter-devices/fuse".
+#
+# This is a minimal reference deployment. For production consider the
+# upstream Helm chart: https://gitlab.com/arm-research/smarter/smarter-device-manager
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: smarter-device-manager
+  namespace: {{ .Values.fuseDevicePlugin.namespace }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fuse-device-plugin
+data:
+  conf.yaml: |
+    - devicematch: ^fuse$
+      nummaxdevices: {{ .Values.fuseDevicePlugin.nummaxdevices }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: smarter-device-manager
+  namespace: {{ .Values.fuseDevicePlugin.namespace }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fuse-device-plugin
+spec:
+  selector:
+    matchLabels:
+      name: smarter-device-manager
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        name: smarter-device-manager
+        {{- include "astonish.labels" . | nindent 8 }}
+        app.kubernetes.io/component: fuse-device-plugin
+    spec:
+      priorityClassName: system-node-critical
+      hostname: smarter-device-management
+      {{- with .Values.fuseDevicePlugin.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: smarter-device-manager
+          image: "{{ .Values.fuseDevicePlugin.image.repository }}:{{ .Values.fuseDevicePlugin.image.tag }}"
+          imagePullPolicy: {{ .Values.fuseDevicePlugin.image.pullPolicy }}
+          securityContext:
+            privileged: true
+          resources:
+            {{- toYaml .Values.fuseDevicePlugin.resources | nindent 12 }}
+          volumeMounts:
+            - name: device-plugin
+              mountPath: /var/lib/kubelet/device-plugins
+            - name: dev-dir
+              mountPath: /dev
+            - name: sys-dir
+              mountPath: /sys
+            - name: config
+              mountPath: /root/config
+      volumes:
+        - name: device-plugin
+          hostPath:
+            path: /var/lib/kubelet/device-plugins
+        - name: dev-dir
+          hostPath:
+            path: /dev
+        - name: sys-dir
+          hostPath:
+            path: /sys
+        - name: config
+          configMap:
+            name: smarter-device-manager
+{{- end }}

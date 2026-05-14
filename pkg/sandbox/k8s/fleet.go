@@ -191,7 +191,10 @@ func (b *K8sBackend) buildFleetPodManifest(spec sandbox.FleetSpec) (*corev1.Pod,
 		annotationCreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 
-	runtimeClass := b.cfg.RuntimeClassName
+	// RuntimeClassName, SecurityContext, HostUsers, FUSE device
+	// resource, and overlay-mode env vars are owned by
+	// applyPodSecurityHardening at the bottom of this function so the
+	// rules stay aligned across session / fleet / template pods.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -200,8 +203,7 @@ func (b *K8sBackend) buildFleetPodManifest(spec sandbox.FleetSpec) (*corev1.Pod,
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: &runtimeClass,
-			RestartPolicy:    corev1.RestartPolicyAlways,
+			RestartPolicy: corev1.RestartPolicyAlways,
 			Containers: []corev1.Container{
 				{
 					Name:  containerName,
@@ -247,6 +249,7 @@ func (b *K8sBackend) buildFleetPodManifest(spec sandbox.FleetSpec) (*corev1.Pod,
 		},
 	}
 
+	b.applyPodSecurityHardening(pod)
 	return pod, nil
 }
 

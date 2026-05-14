@@ -9,6 +9,10 @@ import (
 // emitted when callers pass the zero-value options. This is the script
 // that gets baked into astonish-sandbox-base, so regressions in the
 // defaults would ship broken images cluster-wide.
+//
+// The default overlay mode is fuse, because it's the most portable
+// option and the only one that works on nested-LXC dev clusters. See
+// OverlayMode for the matrix.
 func TestEntrypointScript_Defaults(t *testing.T) {
 	s := EntrypointScript(EntrypointScriptOptions{})
 
@@ -26,13 +30,18 @@ func TestEntrypointScript_Defaults(t *testing.T) {
 		{"upperdir default", "UPPER_DIR='/var/astonish/upper'"},
 		{"workdir default", "WORK_DIR='/var/astonish/work'"},
 		{"mountpoint default", "MOUNT_POINT='/sandbox/rootfs'"},
+		{"overlay-mode default", "OVERLAY_MODE='fuse'"},
 		{"resume tarball path", `RESUME_TAR="$UPPERS_DIR/$ASTONISH_SESSION_ID/upper.tar.zst"`},
 		{"resume guard", `if [ -f "$RESUME_TAR" ]; then`},
 		{"resume tar cmd", `tar --numeric-owner --xattrs --acls -I zstd -xf "$RESUME_TAR" -C "$UPPER_DIR"`},
 		{"awk reversal", `awk -F, -v dir="$LAYERS_DIR"`},
 		{"awk body top-first", `for (i = NF; i > 0; i--)`},
-		{"mount overlay", "mount -t overlay overlay"},
-		{"mount options", `-o "lowerdir=$LOWER,upperdir=$UPPER_DIR,workdir=$WORK_DIR"`},
+		{"kernel helper defined", "mount_overlay_kernel() {"},
+		{"fuse helper defined", "mount_overlay_fuse() {"},
+		{"fuse invocation", "fuse-overlayfs \\"},
+		{"fuse mountpoint wait", "mountpoint -q"},
+		{"fuse mknod fallback", "mknod /dev/fuse c 10 229"},
+		{"fuse dispatcher", "mount_overlay_fuse || {"},
 		{"handoff default", `exec chroot "$MOUNT_POINT" '/usr/local/bin/astonish' 'node'`},
 	}
 	for _, c := range checks {
@@ -41,11 +50,21 @@ func TestEntrypointScript_Defaults(t *testing.T) {
 		}
 	}
 
+	// Default mode is fuse; kernel dispatcher line MUST be absent,
+	// otherwise we'd be emitting dead code and the pod logs would
+	// read misleadingly.
+	if strings.Contains(s, "mount_overlay_kernel || {") {
+		t.Errorf("default mode is fuse, but kernel dispatcher present:\n%s", s)
+	}
+	if strings.Contains(s, "if mount_overlay_kernel 2>&1; then") {
+		t.Errorf("default mode is fuse, but auto dispatcher present:\n%s", s)
+	}
+
 	// Resume-tar extraction MUST precede the overlay mount, else the
 	// upper layer will be restored into an already-mounted overlay and
 	// silently land on a different filesystem.
 	tarIdx := strings.Index(s, "tar --numeric-owner")
-	mountIdx := strings.Index(s, "mount -t overlay")
+	mountIdx := strings.Index(s, "mount_overlay_fuse || {")
 	if tarIdx < 0 || mountIdx < 0 || tarIdx >= mountIdx {
 		t.Fatalf("resume-tar extraction must precede overlay mount; tarIdx=%d mountIdx=%d", tarIdx, mountIdx)
 	}
@@ -187,12 +206,21 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	if o.HostBinaryPath != "/usr/local/bin/astonish-host" {
 		t.Errorf("HostBinaryPath default = %q, want /usr/local/bin/astonish-host", o.HostBinaryPath)
 	}
+	if o.Mode != OverlayModeFuse {
+		t.Errorf("Mode default = %q, want %q", o.Mode, OverlayModeFuse)
+	}
+	if o.EnsureFuseDevice == nil || !*o.EnsureFuseDevice {
+		t.Errorf("EnsureFuseDevice default = %v, want &true", o.EnsureFuseDevice)
+	}
 
 	// Idempotency: re-applying defaults must not duplicate args or
 	// mutate already-set values.
+	falseVal := false
 	custom := EntrypointScriptOptions{
-		UppersMount: "/x",
-		HandoffArgs: []string{"a"},
+		UppersMount:      "/x",
+		HandoffArgs:      []string{"a"},
+		Mode:             OverlayModeKernel,
+		EnsureFuseDevice: &falseVal,
 	}
 	custom.applyDefaults()
 	custom.applyDefaults()
@@ -201,6 +229,12 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	}
 	if len(custom.HandoffArgs) != 1 || custom.HandoffArgs[0] != "a" {
 		t.Errorf("applyDefaults mutated explicit HandoffArgs: %v", custom.HandoffArgs)
+	}
+	if custom.Mode != OverlayModeKernel {
+		t.Errorf("applyDefaults mutated explicit Mode: %q", custom.Mode)
+	}
+	if custom.EnsureFuseDevice == nil || *custom.EnsureFuseDevice {
+		t.Errorf("applyDefaults mutated explicit EnsureFuseDevice: %v", custom.EnsureFuseDevice)
 	}
 }
 
@@ -227,16 +261,16 @@ func TestEntrypointScript_QuotingInjection(t *testing.T) {
 	}
 }
 
-// TestEntrypointScript_HostBinaryBindMount exercises the Phase E
-// addition: bind-mounting a base-image astonish binary over the
-// overlay's /usr/local/bin/astonish. Three behaviours are pinned:
+// TestEntrypointScript_HostBinaryBindMount exercises the bind-mount
+// of a base-image astonish binary over the overlay's
+// /usr/local/bin/astonish. Three behaviours are pinned:
 //
 //  1. Default path: HostBinaryPath defaults to /usr/local/bin/astonish-host
 //     and the bind-mount block appears between overlay mount and handoff.
 //  2. Explicit override: a non-standard HostBinaryPath flows through
 //     shellQuote and overrides the default.
 //  3. Sentinel "-": bind-mount block is OMITTED entirely, matching
-//     pre-Phase-E shape for backward-compat tests.
+//     the pre-bind-mount shape for backward-compat tests.
 func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 	t.Run("default enables bind-mount", func(t *testing.T) {
 		s := EntrypointScript(EntrypointScriptOptions{})
@@ -247,11 +281,12 @@ func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 			t.Errorf("bind-mount command missing; got:\n%s", s)
 		}
 
-		// Ordering: bind-mount must come AFTER overlay mount and
+		// Ordering: bind-mount must come AFTER overlay dispatch and
 		// BEFORE handoff. Otherwise the bind destination wouldn't
 		// exist yet (no overlay), or PID 1 would handoff without
-		// the trusted binary in place.
-		mountIdx := strings.Index(s, "mount -t overlay overlay")
+		// the trusted binary in place. The default mode is fuse, so
+		// the post-helpers dispatcher is `mount_overlay_fuse || {`.
+		mountIdx := strings.Index(s, "mount_overlay_fuse || {")
 		bindIdx := strings.Index(s, `mount --bind "$HOST_BIN"`)
 		handoffIdx := strings.Index(s, "exec chroot ")
 		if mountIdx < 0 || bindIdx < 0 || handoffIdx < 0 {
@@ -287,8 +322,8 @@ func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 			t.Errorf("bind-mount should be absent with sentinel; got:\n%s", s)
 		}
 		// Sanity: the rest of the script still emits correctly.
-		if !strings.Contains(s, "mount -t overlay overlay") {
-			t.Errorf("overlay mount missing with sentinel; got:\n%s", s)
+		if !strings.Contains(s, "mount_overlay_fuse") {
+			t.Errorf("overlay mount helper missing with sentinel; got:\n%s", s)
 		}
 		if !strings.Contains(s, `exec chroot "$MOUNT_POINT"`) {
 			t.Errorf("handoff missing with sentinel; got:\n%s", s)
@@ -311,10 +346,109 @@ func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 	})
 }
 
+// TestEntrypointScript_OverlayModes pins the dispatcher emitted for
+// each OverlayMode, plus the EnsureFuseDevice knob.
+//
+// Rationale: the dispatcher shape is the load-bearing behavioural
+// contract between this generator and the cluster. A silent regression
+// (e.g. emitting the fuse dispatcher for a kernel-mode deployment)
+// would result in pods that only work on one kind of cluster.
+func TestEntrypointScript_OverlayModes(t *testing.T) {
+	t.Run("fuse mode (explicit)", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{Mode: OverlayModeFuse})
+		if !strings.Contains(s, "OVERLAY_MODE='fuse'") {
+			t.Errorf("OVERLAY_MODE marker wrong; got:\n%s", s)
+		}
+		if !strings.Contains(s, "mount_overlay_fuse || {") {
+			t.Errorf("fuse dispatcher missing; got:\n%s", s)
+		}
+		if strings.Contains(s, "mount_overlay_kernel || {") {
+			t.Errorf("kernel-only dispatcher leaked; got:\n%s", s)
+		}
+		if strings.Contains(s, "if mount_overlay_kernel 2>&1; then") {
+			t.Errorf("auto dispatcher leaked; got:\n%s", s)
+		}
+	})
+
+	t.Run("kernel mode", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{Mode: OverlayModeKernel})
+		if !strings.Contains(s, "OVERLAY_MODE='kernel'") {
+			t.Errorf("OVERLAY_MODE marker wrong; got:\n%s", s)
+		}
+		if !strings.Contains(s, "mount_overlay_kernel || {") {
+			t.Errorf("kernel dispatcher missing; got:\n%s", s)
+		}
+		// userxattr option is what makes kernel overlayfs work in a
+		// user namespace (K8s hostUsers: false). It's a no-op in
+		// privileged mode, so emitting it unconditionally is safe.
+		if !strings.Contains(s, "userxattr,lowerdir=$LOWER") {
+			t.Errorf("userxattr option missing; got:\n%s", s)
+		}
+		if strings.Contains(s, "mount_overlay_fuse || {") {
+			t.Errorf("fuse dispatcher leaked into kernel mode; got:\n%s", s)
+		}
+	})
+
+	t.Run("auto mode", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{Mode: OverlayModeAuto})
+		if !strings.Contains(s, "OVERLAY_MODE='auto'") {
+			t.Errorf("OVERLAY_MODE marker wrong; got:\n%s", s)
+		}
+		if !strings.Contains(s, "if mount_overlay_kernel 2>&1; then") {
+			t.Errorf("auto dispatcher (kernel-first) missing; got:\n%s", s)
+		}
+		if !strings.Contains(s, "elif mount_overlay_fuse; then") {
+			t.Errorf("auto fallback missing; got:\n%s", s)
+		}
+		// Operator-observable log lines so the chosen path is
+		// visible in pod stdout.
+		if !strings.Contains(s, "composed via kernel overlayfs") {
+			t.Errorf("success-via-kernel log missing; got:\n%s", s)
+		}
+		if !strings.Contains(s, "composed via fuse-overlayfs (kernel path failed)") {
+			t.Errorf("fallback log missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("EnsureFuseDevice enabled emits mknod", func(t *testing.T) {
+		tr := true
+		s := EntrypointScript(EntrypointScriptOptions{
+			Mode:             OverlayModeFuse,
+			EnsureFuseDevice: &tr,
+		})
+		if !strings.Contains(s, "mknod /dev/fuse c 10 229") {
+			t.Errorf("mknod fallback missing; got:\n%s", s)
+		}
+		if !strings.Contains(s, "chmod 0666 /dev/fuse") {
+			t.Errorf("chmod 0666 /dev/fuse missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("EnsureFuseDevice disabled omits mknod", func(t *testing.T) {
+		fv := false
+		s := EntrypointScript(EntrypointScriptOptions{
+			Mode:             OverlayModeFuse,
+			EnsureFuseDevice: &fv,
+		})
+		if strings.Contains(s, "mknod /dev/fuse") {
+			t.Errorf("mknod must be absent when EnsureFuseDevice=false (device plugin path); got:\n%s", s)
+		}
+		if strings.Contains(s, "chmod 0666 /dev/fuse") {
+			t.Errorf("chmod must be absent when EnsureFuseDevice=false; got:\n%s", s)
+		}
+		// The fuse helper itself MUST still be emitted — only the
+		// mknod inside it is skipped.
+		if !strings.Contains(s, "fuse-overlayfs \\") {
+			t.Errorf("fuse-overlayfs invocation missing; got:\n%s", s)
+		}
+	})
+}
+
 // TestEntrypointScript_OrderingInvariants pins the section order so
 // refactors don't silently reshuffle steps that have causal dependencies
 // (resume must precede mount; mount must precede handoff).
 func TestEntrypointScript_OrderingInvariants(t *testing.T) {
+	// Default (fuse) mode shape.
 	s := EntrypointScript(EntrypointScriptOptions{})
 
 	markers := []string{
@@ -323,10 +457,13 @@ func TestEntrypointScript_OrderingInvariants(t *testing.T) {
 		`: "${ASTONISH_LAYER_CHAIN`,
 		"UPPERS_DIR=",
 		"LAYERS_DIR=",
+		"OVERLAY_MODE=",
 		"RESUME_TAR=",
 		"tar --numeric-owner",
 		`awk -F, -v dir="$LAYERS_DIR"`,
-		"mount -t overlay overlay",
+		"mount_overlay_kernel() {",
+		"mount_overlay_fuse() {",
+		"mount_overlay_fuse || {",
 		"exec chroot",
 	}
 	prev := -1

@@ -18,6 +18,9 @@ spec:
       labels:
         {{- include "astonish.apiSelectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.sandbox.enabled }}
+      serviceAccountName: {{ include "astonish.serviceAccountName" . }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

@@ -1,0 +1,65 @@
+{{- if and .Values.sandbox.enabled .Values.serviceAccount.create }}
+# ServiceAccount used by the control-plane (api + worker) pods. Lives in the
+# control-plane namespace; the RoleBinding below grants it management rights
+# in the sandbox namespace. A pod's serviceAccountName MUST resolve to an SA
+# in its own namespace, which is why this SA lives here, not in the sandbox ns.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "astonish.serviceAccountName" . }}
+  namespace: {{ include "astonish.namespace.controlPlane" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: daemon
+{{- end }}
+{{- if and .Values.sandbox.enabled .Values.sandbox.rbac.create }}
+---
+# Role scoped to the sandbox namespace. Permissions match the surface that
+# the K8s backend actually exercises (pods, pods/exec, pods/status,
+# services, networkpolicies, pvc-read). Any future capability MUST be
+# added here in lockstep with the backend code.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "astonish.sandbox.roleName" . }}
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-rbac
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "astonish.sandbox.roleName" . }}
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-rbac
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "astonish.serviceAccountName" . }}
+    namespace: {{ include "astonish.namespace.controlPlane" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "astonish.sandbox.roleName" . }}
+{{- end }}

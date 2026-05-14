@@ -146,8 +146,20 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 	if b.cfg.Namespace != "astonish-sandboxes" {
 		t.Errorf("default Namespace = %q, want %q", b.cfg.Namespace, "astonish-sandboxes")
 	}
-	if b.cfg.RuntimeClassName != "sysbox-runc" {
-		t.Errorf("default RuntimeClassName = %q, want %q", b.cfg.RuntimeClassName, "sysbox-runc")
+	if b.cfg.RuntimeClassName != "" {
+		t.Errorf("default RuntimeClassName = %q, want empty (cluster default)", b.cfg.RuntimeClassName)
+	}
+	if b.cfg.OverlayMode != OverlayModeFuse {
+		t.Errorf("default OverlayMode = %q, want %q", b.cfg.OverlayMode, OverlayModeFuse)
+	}
+	if b.cfg.Privileged {
+		t.Errorf("default Privileged = true, want false (prefer unprivileged path)")
+	}
+	if b.cfg.HostUsers != nil {
+		t.Errorf("default HostUsers = %v, want nil (cluster default)", b.cfg.HostUsers)
+	}
+	if b.cfg.FuseDeviceResource != "" {
+		t.Errorf("default FuseDeviceResource = %q, want empty (no device plugin)", b.cfg.FuseDeviceResource)
 	}
 	if b.cfg.LayersPath != "/mnt/astonish-layers" {
 		t.Errorf("default LayersPath = %q", b.cfg.LayersPath)
@@ -287,6 +299,45 @@ func TestK8sBackendFactory_WithKubeconfig(t *testing.T) {
 	}
 	if kb.cfg.SandboxImage != "repo/img:tag" {
 		t.Errorf("SandboxImage = %q, want repo/img:tag", kb.cfg.SandboxImage)
+	}
+}
+
+// TestK8sBackendFactory_PhaseFOverlayFields verifies the four Phase F
+// knobs (OverlayMode, PrivilegedPods, HostUsers, FuseDeviceResource)
+// are forwarded from the YAML-facing SandboxKubernetesConfig into the
+// runtime Config the backend stores.
+func TestK8sBackendFactory_PhaseFOverlayFields(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "ctx")
+
+	fv := false
+	sr := newRegistry(t)
+	b, err := sandbox.NewBackend(sandbox.BackendFactoryConfig{
+		Kind:     sandbox.BackendKindK8s,
+		Sessions: sr,
+		K8s: config.SandboxKubernetesConfig{
+			KubeconfigPath:     path,
+			OverlayMode:        "kernel",
+			PrivilegedPods:     true,
+			HostUsers:          &fv,
+			FuseDeviceResource: "smarter-devices/fuse",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewBackend(k8s): %v", err)
+	}
+	kb := b.(*K8sBackend)
+	if kb.cfg.OverlayMode != OverlayModeKernel {
+		t.Errorf("OverlayMode = %q, want kernel", kb.cfg.OverlayMode)
+	}
+	if !kb.cfg.Privileged {
+		t.Errorf("Privileged = false, want true")
+	}
+	if kb.cfg.HostUsers == nil || *kb.cfg.HostUsers {
+		t.Errorf("HostUsers = %v, want &false", kb.cfg.HostUsers)
+	}
+	if kb.cfg.FuseDeviceResource != "smarter-devices/fuse" {
+		t.Errorf("FuseDeviceResource = %q, want smarter-devices/fuse", kb.cfg.FuseDeviceResource)
 	}
 }
 

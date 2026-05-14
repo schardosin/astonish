@@ -30,3 +30,25 @@ data:
         {{- if .Values.config.auth.defaultOrgSlug }}
         default_org_slug: {{ .Values.config.auth.defaultOrgSlug | quote }}
         {{- end }}
+    {{- if .Values.sandbox.enabled }}
+    sandbox:
+      backend: {{ .Values.sandbox.backend | quote }}
+      kubernetes:
+        in_cluster: true
+        namespace: {{ include "astonish.namespace.sandbox" . | quote }}
+        control_plane_namespace: {{ include "astonish.namespace.controlPlane" . | quote }}
+        overlay_mode: {{ .Values.sandbox.overlay.mode | quote }}
+        privileged_pods: {{ .Values.sandbox.overlay.privileged }}
+        {{- if not (kindIs "invalid" .Values.sandbox.overlay.hostUsers) }}
+        host_users: {{ .Values.sandbox.overlay.hostUsers }}
+        {{- end }}
+        {{- if .Values.sandbox.overlay.runtimeClassName }}
+        runtime_class_name: {{ .Values.sandbox.overlay.runtimeClassName | quote }}
+        {{- end }}
+        {{- if .Values.sandbox.overlay.fuseDeviceResource }}
+        fuse_device_resource: {{ .Values.sandbox.overlay.fuseDeviceResource | quote }}
+        {{- end }}
+        sandbox_image: {{ include "astonish.sandbox.image" . | quote }}
+        layers_pvc_name: {{ .Values.sandbox.storage.layers.pvcName | quote }}
+        uppers_pvc_name: {{ .Values.sandbox.storage.uppers.pvcName | quote }}
+    {{- end }}

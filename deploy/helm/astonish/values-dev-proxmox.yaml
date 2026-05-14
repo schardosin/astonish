@@ -1,0 +1,94 @@
+# Astonish dev values — K3s on LXC-on-Proxmox (SECRETS; DO NOT COMMIT REAL VALUES)
+#
+# Cluster profile:
+#   - K3s 1.34.3, 2 nodes (k3s-node-1, k3s-node-2), Ubuntu 24.04 / 6.17.4-2-pve.
+#   - Nodes run as privileged LXC guests; kernel overlayfs mount is BLOCKED
+#     even with privileged:true, so fuse-overlayfs is the only viable overlay.
+#   - `hostUsers: false` is also BLOCKED on these nodes (userns proc mount
+#     rejected).
+#   - /dev/fuse is exposed via in-container mknod, which REQUIRES
+#     sandbox.overlay.privileged=true and the sandbox ns PSA set to
+#     "privileged".
+#   - RWX StorageClass: `nfs-client` (nfs-subdir-external-provisioner).
+#
+# Install:
+#   helm upgrade --install astonish deploy/helm/astonish \
+#     -n astonish --create-namespace \
+#     -f deploy/helm/astonish/values-dev-proxmox.yaml
+
+# ------------------------------------------------------------------
+# Control-plane image
+# ------------------------------------------------------------------
+image:
+  repository: schardosin/astonish
+  tag: phase-f
+  pullPolicy: Always
+
+# ------------------------------------------------------------------
+# Namespace prefix. Default "astonish" yields:
+#   controlPlane: astonish
+#   sandbox:      astonish-sandbox
+# ------------------------------------------------------------------
+namespaces:
+  prefix: astonish
+
+# ------------------------------------------------------------------
+# Secrets (rotate for real deployments)
+# ------------------------------------------------------------------
+secrets:
+  masterKey: "684d3dc0b9f0ed4a3189d26c32c80a22bdaa59f1d7a0755d8203ab3b44298de2"
+  jwtSecret: "a1f142e5db71f7b5d7f73c8e9911c79ffcdf1af9558010da3fa7d0ab4a760afd"
+  platformDSN: "postgres://postgres:554252@192.168.1.196:5432/astonish_wjw3p6_platform?sslmode=disable"
+
+# ------------------------------------------------------------------
+# Non-sandbox config
+# ------------------------------------------------------------------
+config:
+  storage:
+    postgres:
+      instanceSuffix: "wjw3p6"
+
+# ------------------------------------------------------------------
+# Ingress (nginx on the dev cluster)
+# ------------------------------------------------------------------
+ingress:
+  enabled: true
+  hosts:
+    - host: devastonish.local.muxpie.com
+      paths:
+        - path: /
+          pathType: Prefix
+
+# ------------------------------------------------------------------
+# Sandbox (Phase F) — dev-proxmox overrides
+# ------------------------------------------------------------------
+sandbox:
+  enabled: true
+
+  # LXC nodes need privileged pods (kernel overlayfs blocked; /dev/fuse via
+  # mknod requires PSA=privileged).
+  podSecurity: privileged
+
+  overlay:
+    mode: fuse
+    privileged: true
+    hostUsers: null            # Must stay null: hostUsers:false is rejected
+                               # by the LXC-hosted kubelet.
+    runtimeClassName: ""
+    fuseDeviceResource: ""     # No device plugin on dev; mknod path.
+
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: phase-f
+    pullPolicy: IfNotPresent
+
+  storage:
+    storageClassName: nfs-client   # nfs-subdir-external-provisioner
+    layers:
+      size: 10Gi                   # ~17 GiB NFS free on the dev export
+    uppers:
+      size: 10Gi
+
+# No FUSE device plugin on dev (privileged+mknod is used instead).
+fuseDevicePlugin:
+  enabled: false

@@ -1,11 +1,33 @@
 # Astonish Helm Chart - Default Values
-# Override secrets in values-dev.yaml (not committed to git)
+# Override secrets and environment-specific settings in a values-*.yaml file
+# (e.g. values-dev-proxmox.yaml). NEVER commit real secrets here.
 
-# -- Container image settings
+# -- Container image settings (control plane: api + worker)
 image:
   repository: schardosin/astonish
-  tag: dev
+  tag: phase-f
   pullPolicy: Always
+
+# -- Namespace layout
+# One prefix drives the names of all namespaces this chart creates. Default
+# prefix "astonish" yields:
+#   controlPlane: astonish          (must equal Release.Namespace)
+#   sandbox:      astonish-sandbox
+# Override `controlPlane` / `sandbox` explicitly only when you need a
+# non-derived name.
+namespaces:
+  prefix: astonish
+  controlPlane: ""       # "" -> "{prefix}"
+  sandbox: ""            # "" -> "{prefix}-sandbox"
+
+# -- ServiceAccount used by the control-plane pods (api + worker).
+# It lives in the control-plane namespace and is granted a Role in the
+# sandbox namespace via RoleBinding. When sandbox.enabled=true and
+# sandbox.rbac.create=true, the SA is created and bound automatically.
+serviceAccount:
+  create: true
+  # "" -> "{fullname}-daemon"
+  name: ""
 
 # -- API Deployment (stateless, horizontally scalable)
 # Handles HTTP requests, SSE streaming, chat execution
@@ -31,8 +53,9 @@ worker:
       cpu: "1"
       memory: 1Gi
 
-# -- Astonish configuration (rendered into config.yaml ConfigMap)
-# Only non-sensitive settings belong here. Secrets go in the secrets section below.
+# -- Astonish configuration (rendered into config.yaml ConfigMap).
+# Non-sandbox fields only — the sandbox block is derived from .Values.sandbox.*
+# below and spliced in automatically (single source of truth).
 config:
   storage:
     backend: postgres
@@ -49,7 +72,7 @@ config:
     accessTokenTTLMinutes: 15
     refreshTokenTTLDays: 90
 
-# -- Secrets (set in values-dev.yaml, NEVER commit real values here)
+# -- Secrets (set in values-*.yaml; NEVER commit real values here)
 secrets:
   # ASTONISH_MASTER_KEY: 64 hex characters (32 bytes AES-256 key)
   # Used for encrypting credentials at rest in the platform database.
@@ -95,7 +118,105 @@ autoscaling:
   maxReplicas: 10
   targetCPUUtilizationPercentage: 70
 
-# -- Pod scheduling constraints
+# -- Pod scheduling constraints (control plane)
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# =============================================================================
+# Sandbox subsystem (Phase F)
+# =============================================================================
+# Creates the sandbox namespace, RBAC, PVCs, and base-layer seed Job. When
+# disabled, only the control plane is installed and the daemon will be unable
+# to create sandbox pods.
+sandbox:
+  enabled: true
+
+  # PodSecurity admission profile for the sandbox namespace.
+  # - baseline    : production default; fuse-overlayfs via device plugin OR
+  #                 kernel overlayfs via hostUsers:false.
+  # - privileged  : dev / lab only; required on LXC nodes and when using
+  #                 in-container mknod for /dev/fuse.
+  # - restricted  : not supported by the sandbox backend; sandbox pods need
+  #                 at least baseline.
+  podSecurity: baseline
+
+  # Backend selector ("kubernetes" is what this chart deploys; "docker" is for
+  # local dev outside Kubernetes). Written into config.sandbox.backend.
+  backend: kubernetes
+
+  rbac:
+    # Create the Role + RoleBinding in the sandbox namespace so the control-
+    # plane ServiceAccount (in the control-plane namespace) can manage
+    # sandbox pods.
+    create: true
+
+  # Sandbox base image — MUST ship the Phase F overlay entrypoint
+  # (see docker/sandbox-base/Dockerfile).
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: phase-f
+    pullPolicy: IfNotPresent
+
+  # Overlay strategy — drives applyPodSecurityHardening in the Go backend.
+  # See docs/architecture/sandbox-backends.md §10.
+  overlay:
+    mode: fuse              # fuse | kernel | auto
+    privileged: false       # set true on dev clusters using in-container mknod
+    hostUsers: null         # null = omit field; true/false = emit as-is
+    runtimeClassName: ""    # e.g. "sysbox-runc" for Sysbox clusters
+    fuseDeviceResource: ""  # e.g. "smarter-devices/fuse" with a device plugin
+
+  # RWX PVCs mounted into sandbox pods. StorageClass MUST provide RWX
+  # (CephFS, EFS, Azure Files, NFS, Manila, ...). Required.
+  storage:
+    storageClassName: ""    # REQUIRED — see docs/deployment/kubernetes.md
+    layers:
+      size: 100Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-layers
+    uppers:
+      size: 50Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-uppers
+
+  # One-shot Job that seeds astonish-layers/@base/rootfs from the sandbox
+  # image. Runs as a Helm post-install / post-upgrade hook so bumping
+  # sandbox.image.tag triggers a reseed automatically.
+  seed:
+    enabled: true
+    backoffLimit: 6
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+# =============================================================================
+# Optional FUSE device plugin DaemonSet (smarter-device-manager reference).
+# =============================================================================
+# Only needed in production when sandbox.overlay.fuseDeviceResource is set to
+# `smarter-devices/fuse` and the cluster does not already ship a FUSE device
+# plugin. Dev clusters using sandbox.overlay.privileged=true do NOT need this.
+fuseDevicePlugin:
+  enabled: false
+  namespace: kube-system
+  image:
+    repository: registry.gitlab.com/arm-research/smarter/smarter-device-manager
+    tag: v1.20.11
+    pullPolicy: IfNotPresent
+  # nodeSelector restricts which nodes advertise the resource. Leave empty
+  # `{}` to run on every node.
+  nodeSelector:
+    smarter-device-manager: enabled
+  # Number of /dev/fuse handles advertised per node.
+  nummaxdevices: 20
+  resources:
+    requests:
+      cpu: 10m
+      memory: 15Mi
+    limits:
+      cpu: 100m
+      memory: 50Mi

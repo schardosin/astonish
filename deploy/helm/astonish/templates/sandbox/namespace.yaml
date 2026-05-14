@@ -1,0 +1,16 @@
+{{- if .Values.sandbox.enabled }}
+{{- /* Trigger validation once, at the top of the first rendered resource. */ -}}
+{{- include "astonish.validate" . -}}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-namespace
+    astonish.io/ns-class: sandboxes
+    pod-security.kubernetes.io/enforce: {{ .Values.sandbox.podSecurity }}
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: {{ .Values.sandbox.podSecurity }}
+    pod-security.kubernetes.io/warn: {{ .Values.sandbox.podSecurity }}
+{{- end }}

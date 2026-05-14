@@ -1,4 +1,17 @@
-# Sandbox Backends (Incus and Kubernetes+Sysbox)
+# Sandbox Backends (Incus and Kubernetes)
+
+> **Phase F update (Sysbox no longer required).**
+> The K8s backend originally depended on Sysbox as its sole privilege
+> path. As of Phase F, the backend picks between three portable overlay
+> strategies — `fuse-overlayfs` via a device plugin (production
+> default), kernel overlayfs via `hostUsers: false` (K8s 1.33+), or
+> `fuse-overlayfs` via `privileged: true` (dev). Sysbox remains
+> **optional**: operators who already run it can still set
+> `sandbox.kubernetes.runtime_class_name: sysbox-runc` and keep
+> `overlay_mode: kernel`. Most of this document still applies verbatim
+> — mentally replace "Sysbox" with "the selected privilege path"
+> wherever you see it. §10 captures the Phase F matrix explicitly.
+> For step-by-step deployment, see `docs/deployment/kubernetes.md`.
 
 ## 1. Context & Motivation
 
@@ -1149,34 +1162,41 @@ The prebuilt `astonish-sandbox-base` image MUST ship GNU tar with xattr/ACL supp
 
 ## 10. Deployment Prerequisites
 
-### K8s+Sysbox backend requires
+### K8s backend requires (Phase F)
 
 1. **Kubernetes cluster** with a self-managed node pool. Managed offerings that forbid DaemonSet-based node installs (GKE Autopilot, EKS Fargate, AKS virtual nodes) are **not supported**.
-2. **Sysbox** installed on sandbox nodes:
-   - `sysbox-deploy-k8s` DaemonSet applied to the cluster.
-   - `RuntimeClass` named `sysbox-runc` registered.
-   - Installation instructions: see Nestybox documentation.
-3. **Shared RWX filesystem** mounted on every sandbox node at the configured paths (default `/mnt/astonish-layers` and `/mnt/astonish-uppers`):
-   - CephFS is the primary target (Rook or external Ceph cluster).
-   - NFS / GlusterFS / Longhorn RWX are acceptable alternatives.
-   - Must support POSIX semantics (extended attributes, symlinks, ACLs).
+2. **An overlay strategy.** Pick one of the four paths below; all are supported by the same backend binary and the same base image — the operator's only decision is which pod-security path fits the cluster.
+
+   | # | Strategy | `sandbox.kubernetes.*` config | What the cluster needs |
+   |---|----------|-------------------------------|------------------------|
+   | 1 | **Device plugin** (recommended production path) | `overlay_mode: fuse`, `fuse_device_resource: smarter-devices/fuse` | FUSE device plugin DaemonSet (chart ships `fuseDevicePlugin.enabled: true`); PSA `baseline` on the sandbox namespace. |
+   | 2 | **User namespace** | `overlay_mode: kernel`, `host_users: false` | K8s 1.33+ (beta-on) or 1.36+ (GA) with UserNamespacesSupport enabled; kernel 5.11+. PSA `baseline`. |
+   | 3 | **Privileged** (dev / lab) | `overlay_mode: fuse`, `privileged_pods: true` | PSA `privileged` on the sandbox namespace (set `sandbox.podSecurity: privileged` in values). No device plugin required. |
+   | 4 | **Sysbox** (optional) | `overlay_mode: kernel`, `runtime_class_name: sysbox-runc` | Sysbox installed on sandbox nodes (`sysbox-deploy-k8s`). Kept for operators who already run Sysbox. |
+
+3. **Shared RWX filesystem** reachable via a RWX StorageClass (mounted into pods through the `astonish-layers` and `astonish-uppers` PVCs).
+   - CephFS, NFS, EFS, Azure Files, Manila (SAP Converged Cloud), or any RWX provisioner with POSIX semantics.
+   - Must support extended attributes, symlinks, and ACLs.
+   - SAP Converged Cloud note: no default RWX class; provision via Manila or an NFS server and set `sandbox.storage.storageClassName` in your Helm values file.
 4. **PostgreSQL database** (already required by platform mode; see `docs/architecture/multi-tenant-platform.md`). LISTEN/NOTIFY and advisory locks are used by the event journal (§5.14) and GC reconciler (§5.12); both are core PG features, no extensions required.
-5. **Node kernel** supports overlayfs + user namespaces (Linux ≥ 5.15; modern distros fine).
+5. **Node kernel** supports overlayfs (kernel path) or FUSE (fuse path). Linux ≥ 5.15 covers both; userns + `overlay -o userxattr` needs ≥ 5.11.
    - `overlay.max_lower` ≥ `sandbox.layers.maxChainDepth` (default 20). Distro defaults (500) are comfortably above; only an issue if an operator has tuned this down.
+   - **Nested LXC nodes** (Proxmox dev clusters): kernel `mount -t overlay` is blocked regardless of in-container privileges. Use path 3 (Privileged + fuse).
 6. **Ingress controller** (optional, only for external port exposure from sandboxes). Ingress sticky sessions are **not** required for correctness in multi-pod Astonish (event journal §5.14 eliminates pod affinity); still permitted for latency reasons.
 
 ### Astonish ships
 
-- Helm chart with `sandbox.backend: k8s` option.
-- Prebuilt base sandbox image: `schardosin/astonish-sandbox-base:<version>` (Docker Hub).
+- Helm chart at `deploy/helm/astonish` with templates for the sandbox namespace, RBAC, RWX PVCs, base-layer seed Job, and an optional FUSE device plugin DaemonSet — all driven by one per-environment values file (see `deploy/helm/astonish/values-dev-proxmox.yaml` for a complete example).
+- Prebuilt base sandbox image: `schardosin/astonish-sandbox-base:<version>` (Docker Hub). Phase F: image bundles `fuse-overlayfs` and the overlay-mode dispatcher in the entrypoint.
 - ConfigMap/Secret templates for backend configuration.
 - Pre-rendered ServiceAccount + Role bindings for the API/Worker to manage the sandbox namespace.
 
 ### Astonish does NOT ship
 
-- Sysbox (operator installs via upstream `sysbox-deploy-k8s`).
-- CephFS / Rook (operator configures cluster storage separately).
-- Kubernetes cluster (operator provides).
+- Sysbox (operator installs via upstream `sysbox-deploy-k8s` **only if they want path 4**; Phase F paths 1–3 don't need it).
+- A production-hardened FUSE device plugin (Astonish ships a reference manifest; operators should install the upstream smarter-device-manager Helm chart for production).
+- The cluster RWX StorageClass (operator configures separately).
+- The Kubernetes cluster itself (operator provides).
 
 ### Eviction concurrency and backpressure
 
@@ -1250,9 +1270,11 @@ Build `K8sSandboxBackend` plus the layer store, GC, default-template resolver, e
 Status: shipped as of branch `feature/sandbox-k8s-backend`. Delivered
 artefacts:
 
-- Plain-YAML manifests under `deploy/k8s/` (namespaces, RBAC,
-  RuntimeClass, PVCs, base-layer seed Job). Applied lexicographically
-  via `kubectl apply -f deploy/k8s/`. In-process validation lives at
+- Helm chart at `deploy/helm/astonish` (sandbox namespace, RBAC,
+  RWX PVCs, base-layer seed Job, optional FUSE device plugin)
+  applied via `helm upgrade --install`. Values-file-driven; see
+  `deploy/helm/astonish/values-dev-proxmox.yaml` for a complete
+  dev-cluster example. In-process validation lives at
   `pkg/sandbox/k8s/manifest_deploy_test.go`; an opt-in integration
   test (`-tags integration`) shells out to `kubectl apply --dry-run=server`.
 - `docker/sandbox-base/Dockerfile`: two-stage build of the
@@ -1287,10 +1309,10 @@ artefacts:
 
 Deferred to Phase E (intentionally out of scope for Phase D):
 
-- Helm-chart integration (the existing `deploy/helm/astonish` chart
-  currently covers the daemon only). Plain YAML in `deploy/k8s/` is
-  sufficient to bootstrap a cluster; a values-driven chart can follow
-  once the contract stabilises.
+- Helm-chart integration — **done in Phase F**. The chart at
+  `deploy/helm/astonish` now covers both control plane and sandbox
+  (namespace, RBAC, PVCs, seed hook, FUSE device plugin), driven by
+  a single per-environment values file.
 - Operator-facing runbooks (`docs/deployment/kubernetes-sysbox.md`,
   `docs/operations/sandbox-backend-k8s.md`). The Phase-D smoke
   command is self-documenting for the "does it work?" question; the

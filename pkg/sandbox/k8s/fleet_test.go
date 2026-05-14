@@ -137,8 +137,11 @@ func TestBuildFleetPodManifest_ContainerShape(t *testing.T) {
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyAlways {
 		t.Errorf("RestartPolicy = %v, want Always (long-running fleet)", pod.Spec.RestartPolicy)
 	}
-	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != b.cfg.RuntimeClassName {
-		t.Errorf("runtimeClassName = %v, want %q", pod.Spec.RuntimeClassName, b.cfg.RuntimeClassName)
+	// Phase F: default backend has empty RuntimeClassName → nil on the
+	// pod (cluster default applies). See session_test.go for the
+	// matching assertion on session pods.
+	if pod.Spec.RuntimeClassName != nil {
+		t.Errorf("runtimeClassName = %v, want nil (empty config → cluster default)", pod.Spec.RuntimeClassName)
 	}
 
 	var sawFleetKeyEnv, sawTemplateEnv bool

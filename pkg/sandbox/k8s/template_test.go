@@ -213,8 +213,10 @@ func TestBuildTemplateBuilderPodManifest_ContainerShape(t *testing.T) {
 	if len(c.Command) == 0 || !strings.Contains(strings.Join(c.Command, " "), "sleep") {
 		t.Errorf("container Command = %v, want it to include sleep", c.Command)
 	}
-	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != b.cfg.RuntimeClassName {
-		t.Errorf("runtimeClassName = %v, want %q", pod.Spec.RuntimeClassName, b.cfg.RuntimeClassName)
+	// Phase F: default backend has empty RuntimeClassName → nil on the
+	// pod (cluster default applies).
+	if pod.Spec.RuntimeClassName != nil {
+		t.Errorf("runtimeClassName = %v, want nil (empty config → cluster default)", pod.Spec.RuntimeClassName)
 	}
 }
 

@@ -1,67 +1,78 @@
-// Package k8s — deploy-manifest validation tests.
+// Package k8s — Helm chart validation tests.
 //
-// The manifests under deploy/k8s/ are applied verbatim by cluster
-// admins; a typo here is the kind of thing that only surfaces when
-// someone tries to bootstrap a new cluster, which is exactly when
-// they least want to debug a YAML error. These tests close that gap
-// by parsing every manifest in-process with the same YAML loader
-// Kubernetes itself uses, rejecting files that fail structural
-// validation (missing required fields, unknown top-level keys,
-// malformed labels, etc.).
+// The chart under deploy/helm/astonish is applied by cluster admins
+// via `helm upgrade --install`; a typo in the sandbox RBAC or PVC
+// templates is the kind of thing that only surfaces when someone
+// tries to bootstrap a new cluster, which is exactly when they least
+// want to debug a YAML error. These tests close that gap by rendering
+// the chart in-process (shelling out to `helm template`) and parsing
+// every resource with the same YAML loader Kubernetes itself uses,
+// rejecting files that fail structural validation (missing required
+// fields, unknown top-level keys, malformed labels, etc.).
 //
 // The approach is deliberately dependency-light: we don't spin up a
-// fake API server or pull in the full openapi schema, because those
-// routes balloon the test binary and hide the failure in a wall of
-// transitive errors. Instead we:
+// fake API server or pull in the full openapi schema. Instead we:
 //
-//   1. Split each file on --- to get a slice of YAML documents.
-//   2. Run sigs.k8s.io/yaml.Unmarshal into a typed struct when the
-//      kind is well-known (Namespace, Role, PVC, etc.) — this gives
-//      real field-name validation via Go struct tags.
-//   3. Assert the per-file invariants that matter for Phase D
-//      (namespaces match the backend defaults, RBAC verbs include
-//      everything the backend calls, RWX access modes, etc.).
+//   1. Shell out to `helm template` with values-dev-proxmox.yaml to
+//      get the full manifest stream (skipped if `helm` is not on PATH).
+//   2. Split on --- to get a slice of YAML documents.
+//   3. Run sigs.k8s.io/yaml.UnmarshalStrict into a typed struct when
+//      the kind is well-known (Namespace, Role, PVC, etc.).
+//   4. Assert the invariants that matter (namespaces match backend
+//      defaults, RBAC verbs cover every b.client call site, PVC access
+//      modes are RWX, etc.).
 //
-// A companion test (behind the "integration" build tag) shells out
-// to `kubectl apply --server-dry-run` so a developer with a live
-// cluster can get the full server-side validation in one command.
-// That test is NOT run in the default `go test ./...` pass; it
-// requires `go test -tags integration -run TestDeployManifests_KubectlDryRun`
-// and a reachable cluster.
-//
-// Reference: docs/architecture/sandbox-backends.md §11 Phase D.
+// Reference: docs/architecture/sandbox-backends.md §11 Phase D/F.
 
 package k8s
 
 import (
-	"os"
+	"bytes"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	nodev1 "k8s.io/api/node/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/yaml"
 )
 
-// deployDir resolves the repo-root relative path to deploy/k8s without
-// hard-coding a module path. Tests live at pkg/sandbox/k8s/ so the
-// deploy dir is two levels up from the test's working directory.
-func deployDir(t *testing.T) string {
+// chartDir returns the absolute path to the Helm chart root.
+// filepath.Abs resolves symlinks so this is stable across repo checkouts.
+func chartDir(t *testing.T) string {
 	t.Helper()
-	// The test binary's cwd is the package directory (pkg/sandbox/k8s).
-	// We want ../../../deploy/k8s. filepath.Abs resolves symlinks so
-	// this is stable across repo checkouts.
-	abs, err := filepath.Abs("../../../deploy/k8s")
+	abs, err := filepath.Abs("../../../deploy/helm/astonish")
 	if err != nil {
-		t.Fatalf("resolve deploy/k8s: %v", err)
-	}
-	if _, err := os.Stat(abs); err != nil {
-		t.Fatalf("deploy/k8s not found at %s: %v", abs, err)
+		t.Fatalf("resolve chart dir: %v", err)
 	}
 	return abs
+}
+
+// renderChart shells out to `helm template` with the dev-proxmox values
+// file so tests exercise the concrete, operator-facing configuration.
+// Returns (stdout, true) on success. Skips the test if `helm` is not
+// installed (CI may opt-in; local dev should always have it).
+func renderChart(t *testing.T) ([]byte, bool) {
+	t.Helper()
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skipf("helm not on PATH: %v (install helm 3.8+ to run chart validation tests)", err)
+		return nil, false
+	}
+	root := chartDir(t)
+	cmd := exec.Command("helm", "template", "astonish", root,
+		"-n", "astonish",
+		"-f", filepath.Join(root, "values-dev-proxmox.yaml"),
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("helm template failed: %v\nstderr:\n%s", err, stderr.String())
+		return nil, false
+	}
+	return stdout.Bytes(), true
 }
 
 // splitYAMLDocs splits a multi-doc YAML file on "---" separators and
@@ -72,8 +83,6 @@ func splitYAMLDocs(b []byte) [][]byte {
 	out := make([][]byte, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		// The very first doc may or may not have a leading "---"; strip
-		// it defensively.
 		p = strings.TrimPrefix(p, "---")
 		p = strings.TrimSpace(p)
 		if p == "" {
@@ -107,108 +116,89 @@ func peekKind(t *testing.T, doc []byte) kindPeek {
 	return p
 }
 
-// TestDeployManifests_AllParse asserts every YAML file under deploy/k8s
-// decodes cleanly into its typed struct. This is the first-line defense
-// against typos in field names — sigs.k8s.io/yaml uses strict JSON-tag
-// matching under the hood, so misspelled keys (e.g. "lables" instead
-// of "labels") show up as decode errors here.
-func TestDeployManifests_AllParse(t *testing.T) {
-	dir := deployDir(t)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatalf("read deploy dir: %v", err)
+// TestChart_AllParse asserts every document rendered by the chart
+// decodes cleanly into its typed struct. sigs.k8s.io/yaml uses strict
+// JSON-tag matching under the hood, so misspelled keys (e.g. "lables"
+// instead of "labels") show up as decode errors here.
+func TestChart_AllParse(t *testing.T) {
+	rendered, ok := renderChart(t)
+	if !ok {
+		return
 	}
-
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
-			continue
+	docs := splitYAMLDocs(rendered)
+	if len(docs) == 0 {
+		t.Fatalf("no YAML docs rendered")
+	}
+	for i, doc := range docs {
+		pk := peekKind(t, doc)
+		switch pk.Kind {
+		case "Namespace":
+			var obj corev1.Namespace
+			if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "ServiceAccount":
+			var obj corev1.ServiceAccount
+			if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "Role":
+			var obj rbacv1.Role
+			if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "RoleBinding":
+			var obj rbacv1.RoleBinding
+			if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "PersistentVolumeClaim":
+			var obj corev1.PersistentVolumeClaim
+			if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "Service", "Secret", "ConfigMap":
+			// Generic decode — struct-tag validation via typed path not
+			// needed (these templates are trivially stable).
+			var obj map[string]interface{}
+			if err := yaml.Unmarshal(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		case "Deployment", "Job", "Ingress", "DaemonSet":
+			// batch/v1, apps/v1, networking.k8s.io imports would grow
+			// the surface; generic decode is sufficient to catch syntax.
+			var obj map[string]interface{}
+			if err := yaml.Unmarshal(doc, &obj); err != nil {
+				t.Errorf("doc %d (%s %s): %v", i, pk.Kind, pk.Metadata.Name, err)
+			}
+		default:
+			t.Errorf("doc %d: unexpected kind %q", i, pk.Kind)
 		}
-		name := e.Name()
-		t.Run(name, func(t *testing.T) {
-			raw, err := os.ReadFile(filepath.Join(dir, name))
-			if err != nil {
-				t.Fatalf("read: %v", err)
-			}
-			docs := splitYAMLDocs(raw)
-			if len(docs) == 0 {
-				t.Fatalf("no YAML docs found")
-			}
-			for i, doc := range docs {
-				pk := peekKind(t, doc)
-				// Route each known kind through a typed decode so struct-
-				// tag validation catches field-name drift. Unknown kinds
-				// (e.g. an admin adding a CRD later) are tolerated with
-				// a generic decode.
-				switch pk.Kind {
-				case "Namespace":
-					var obj corev1.Namespace
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "ServiceAccount":
-					var obj corev1.ServiceAccount
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "Role":
-					var obj rbacv1.Role
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "RoleBinding":
-					var obj rbacv1.RoleBinding
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "RuntimeClass":
-					var obj nodev1.RuntimeClass
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "PersistentVolumeClaim":
-					var obj corev1.PersistentVolumeClaim
-					if err := yaml.UnmarshalStrict(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				case "Job":
-					// batch/v1 import would grow the surface; a non-strict
-					// decode into a map is sufficient to catch syntax.
-					var obj map[string]interface{}
-					if err := yaml.Unmarshal(doc, &obj); err != nil {
-						t.Errorf("doc %d (%s): %v", i, pk.Kind, err)
-					}
-				default:
-					t.Errorf("doc %d: unexpected kind %q", i, pk.Kind)
-				}
-			}
-		})
 	}
 }
 
-// TestDeployManifests_NamespaceInvariants pins the namespace names
-// against the backend defaults. If someone renames the namespaces in
-// the YAML without updating pkg/config/app_config.go's defaults (or
-// vice versa), this test fails loudly with a message pointing at the
-// mismatch.
-func TestDeployManifests_NamespaceInvariants(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(deployDir(t), "00-namespaces.yaml"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
+// TestChart_NamespaceInvariants pins the sandbox namespace name against
+// what the backend expects. The chart derives names from namespaces.prefix;
+// values-dev-proxmox.yaml leaves the default, so the rendered sandbox
+// namespace MUST be "astonish-sandbox".
+func TestChart_NamespaceInvariants(t *testing.T) {
+	rendered, ok := renderChart(t)
+	if !ok {
+		return
 	}
-	docs := splitYAMLDocs(raw)
-	names := make([]string, 0, len(docs))
+	docs := splitYAMLDocs(rendered)
+	names := []string{}
 	for _, d := range docs {
-		var ns corev1.Namespace
-		if err := yaml.Unmarshal(d, &ns); err != nil {
-			t.Fatalf("decode ns: %v", err)
+		pk := peekKind(t, d)
+		if pk.Kind != "Namespace" {
+			continue
 		}
-		names = append(names, ns.Name)
+		names = append(names, pk.Metadata.Name)
 	}
-	// These names are also the SandboxKubernetesConfig defaults
-	// (see pkg/config/app_config.go). Keep the string literals here
-	// so the test fails even if the Config defaults change without a
-	// manifest update (and vice versa).
-	wantContains := []string{"astonish", "astonish-sandboxes"}
+	// dev-proxmox values uses namespaces.prefix=astonish (default), so:
+	//   controlPlane namespace: astonish (Release.Namespace, not rendered as an object)
+	//   sandbox namespace:      astonish-sandbox (rendered below)
+	wantContains := []string{"astonish-sandbox"}
 	for _, w := range wantContains {
 		found := false
 		for _, n := range names {
@@ -218,25 +208,25 @@ func TestDeployManifests_NamespaceInvariants(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Errorf("namespace %q not declared; found %v", w, names)
+			t.Errorf("namespace %q not rendered; found %v", w, names)
 		}
 	}
 }
 
-// TestDeployManifests_RBACCoversBackendCalls asserts the Role grants
-// every verb/resource pair the backend actually invokes. This is the
-// quickest way to catch a backend feature landing without its RBAC
-// rule (or vice-versa, a stale permission kept past its need-to-know).
+// TestChart_RBACCoversBackendCalls asserts the Role grants every
+// verb/resource pair the backend actually invokes. This is the quickest
+// way to catch a backend feature landing without its RBAC rule (or
+// vice-versa, a stale permission kept past its need-to-know).
 //
 // The expected set below MUST mirror the inventory documented in
-// deploy/k8s/10-rbac.yaml; if you add a new b.client call site, update
-// both places.
-func TestDeployManifests_RBACCoversBackendCalls(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(deployDir(t), "10-rbac.yaml"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
+// templates/sandbox/rbac.yaml; if you add a new b.client call site,
+// update both places.
+func TestChart_RBACCoversBackendCalls(t *testing.T) {
+	rendered, ok := renderChart(t)
+	if !ok {
+		return
 	}
-	docs := splitYAMLDocs(raw)
+	docs := splitYAMLDocs(rendered)
 	var role rbacv1.Role
 	for _, d := range docs {
 		pk := peekKind(t, d)
@@ -244,21 +234,22 @@ func TestDeployManifests_RBACCoversBackendCalls(t *testing.T) {
 			if err := yaml.Unmarshal(d, &role); err != nil {
 				t.Fatalf("decode role: %v", err)
 			}
+			break
 		}
 	}
 	if role.Name == "" {
-		t.Fatal("no Role document in 10-rbac.yaml")
+		t.Fatal("no Role rendered by chart")
 	}
 
 	// (apiGroup, resource) → set of required verbs.
 	type key struct{ group, resource string }
 	required := map[key][]string{
-		{"", "pods"}:                                {"get", "list", "watch", "create", "delete"},
-		{"", "pods/exec"}:                           {"create"},
-		{"", "pods/status"}:                         {"update"},
-		{"", "services"}:                            {"get", "list", "create", "delete"},
-		{"networking.k8s.io", "networkpolicies"}:    {"get", "list", "create", "update", "delete"},
-		{"", "persistentvolumeclaims"}:              {"get", "list"},
+		{"", "pods"}:                             {"get", "list", "watch", "create", "delete"},
+		{"", "pods/exec"}:                        {"create"},
+		{"", "pods/status"}:                      {"update"},
+		{"", "services"}:                         {"get", "list", "create", "delete"},
+		{"networking.k8s.io", "networkpolicies"}: {"get", "list", "create", "update", "delete"},
+		{"", "persistentvolumeclaims"}:           {"get", "list"},
 	}
 
 	// Flatten the Role's rules into the same shape for comparison.
@@ -291,25 +282,26 @@ func TestDeployManifests_RBACCoversBackendCalls(t *testing.T) {
 	}
 }
 
-// TestDeployManifests_PVCsAreRWX guards against a storageClassName
-// change that silently drops RWX support (e.g., accidentally switching
-// to an RBD-style block class that is RWO-only). The K8s+Sysbox
-// backend MUST have RWX on both layers and uppers or pods won't be
-// able to schedule on arbitrary nodes (§4).
-func TestDeployManifests_PVCsAreRWX(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join(deployDir(t), "30-storage.yaml"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
+// TestChart_PVCsAreRWX guards against a storageClassName change that
+// silently drops RWX support (e.g., accidentally switching to an RBD-
+// style block class that is RWO-only). The K8s backend MUST have RWX
+// on both layers and uppers or pods won't be able to schedule on
+// arbitrary nodes (§4).
+func TestChart_PVCsAreRWX(t *testing.T) {
+	rendered, ok := renderChart(t)
+	if !ok {
+		return
 	}
-	docs := splitYAMLDocs(raw)
+	docs := splitYAMLDocs(rendered)
 	count := 0
 	for _, d := range docs {
+		pk := peekKind(t, d)
+		if pk.Kind != "PersistentVolumeClaim" {
+			continue
+		}
 		var pvc corev1.PersistentVolumeClaim
 		if err := yaml.Unmarshal(d, &pvc); err != nil {
 			t.Fatalf("decode pvc: %v", err)
-		}
-		if pvc.Kind != "" && pvc.Kind != "PersistentVolumeClaim" {
-			continue
 		}
 		count++
 		hasRWX := false

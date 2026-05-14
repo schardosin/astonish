@@ -103,8 +103,12 @@ func TestBuildPodManifest_RuntimeClassAndVolumes(t *testing.T) {
 		t.Fatalf("buildPodManifest: %v", err)
 	}
 
-	if pod.Spec.RuntimeClassName == nil || *pod.Spec.RuntimeClassName != "sysbox-runc" {
-		t.Errorf("RuntimeClassName = %v, want sysbox-runc", pod.Spec.RuntimeClassName)
+	// Phase F: default backend has RuntimeClassName=="" so the pod's
+	// RuntimeClassName must be nil (cluster default). Operators who
+	// need a specialised runtime set Config.RuntimeClassName
+	// explicitly; see fleet_test.go / a dedicated test for that path.
+	if pod.Spec.RuntimeClassName != nil {
+		t.Errorf("RuntimeClassName = %v, want nil (empty config → cluster default)", pod.Spec.RuntimeClassName)
 	}
 
 	volNames := map[string]bool{}

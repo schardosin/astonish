@@ -1,28 +1,29 @@
-# deploy/k8s — cluster manifests for the K8s+Sysbox sandbox backend.
-#
-# These manifests provision the cluster-side dependencies the backend
-# needs:
-#
-#   00-namespaces.yaml     Two namespaces (control-plane + sandboxes)
-#   10-rbac.yaml           ServiceAccount + Role + RoleBinding
-#   20-runtimeclass.yaml   Sysbox RuntimeClass for user-namespace isolation
-#   30-storage.yaml        PVCs for layers (RWX RO fan-out) and uppers (RWX RW)
-#   40-seed-base-layer.yaml Job that seeds the @base layer into the layers PVC
-#
-# Apply order is encoded in filename prefixes; `kubectl apply -f deploy/k8s`
-# applies lexicographically so the order is respected.
-#
-# Prerequisites:
-#   - A CephFS (or any RWX) StorageClass named ceph-filesystem. Edit
-#     30-storage.yaml if your cluster uses a different RWX class.
-#   - Sysbox installed on nodes that should host sandbox pods
-#     (see https://github.com/nestybox/sysbox).
-#   - The astonish-sandbox-base image published where the cluster can
-#     pull it (default: docker.io/schardosin/astonish-sandbox-base:latest;
-#     override via SandboxKubernetesConfig.SandboxImage).
-#
-# These manifests are intentionally plain YAML (not Helm) so the Phase
-# D smoke test can `kubectl apply -f` without installing extra tooling.
-# A Helm chart may be added later alongside deploy/helm/astonish.
-#
-# Reference: docs/architecture/sandbox-backends.md §§4, 5, 11.
+# deploy/k8s — deprecated
+
+The static manifests that once lived here have been replaced by the Helm
+chart at `deploy/helm/astonish`. All cluster-side resources (namespaces,
+RBAC, PVCs, base-layer seed Job, optional FUSE device plugin) are now
+templates in that chart, driven by a single per-environment values file.
+
+## Quickstart
+
+Dev cluster (K3s on LXC-on-Proxmox):
+
+```bash
+helm upgrade --install astonish deploy/helm/astonish \
+  -n astonish --create-namespace \
+  -f deploy/helm/astonish/values-dev-proxmox.yaml
+
+kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
+  --for=condition=complete --timeout=300s
+```
+
+Other environments: copy `values-dev-proxmox.yaml` to
+`values-<env>.yaml`, adjust the overrides (StorageClass, overlay mode,
+PSA profile, secrets), and run the same command with that file.
+
+## References
+
+- `deploy/helm/astonish/values.yaml` — full list of tunables with inline docs.
+- `docs/deployment/kubernetes.md` — deployment guide and troubleshooting.
+- `docs/architecture/sandbox-backends.md` §10 — Phase F overlay strategies.

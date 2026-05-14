@@ -61,7 +61,7 @@ func lookupBackendFactory(kind BackendKind) (BackendFactoryFunc, bool) {
 type BackendFactoryConfig struct {
 	// Kind selects the backend implementation. Accepted values:
 	//   - "" or "incus" → IncusBackend (default)
-	//   - "k8s"         → K8sSandboxBackend (Phase C, not yet available)
+	//   - "k8s"         → K8sSandboxBackend (Phase C+D)
 	Kind BackendKind
 
 	// Client is the Incus daemon client. Required for Kind == "incus".
@@ -76,6 +76,12 @@ type BackendFactoryConfig struct {
 	// DefaultLim supplies default resource limits when a caller does not
 	// specify them in a SessionSpec. MAY be nil.
 	DefaultLim *config.SandboxLimits
+
+	// K8s carries Kubernetes-specific configuration. Consulted only when
+	// Kind == "k8s"; ignored otherwise. The struct is YAML-friendly
+	// (lives in pkg/config) and is translated to a k8s.Config by the
+	// registered factory in pkg/sandbox/k8s.
+	K8s config.SandboxKubernetesConfig
 }
 
 // NewBackend constructs a Backend implementation from configuration. The

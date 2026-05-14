@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
@@ -243,6 +244,102 @@ func TestK8sBackendFactoryRegistration(t *testing.T) {
 		Kind: sandbox.BackendKindK8s,
 	}); err == nil || !strings.Contains(err.Error(), "Sessions is required") {
 		t.Errorf("NewBackend(k8s) with missing Sessions: got %v, want Sessions-required error", err)
+	}
+}
+
+// TestK8sBackendFactory_WithKubeconfig exercises the production path: a
+// K8s struct with a KubeconfigPath triggers the connectivity ladder,
+// clientset construction, and returns a backend whose Health probes the
+// configured (fake) API server.
+//
+// We don't reach out to a real cluster — the kubeconfig points at a
+// throw-away host — but the code path through NewClientFromOptions and
+// the REST config wiring is real.
+func TestK8sBackendFactory_WithKubeconfig(t *testing.T) {
+	dir := t.TempDir()
+	path := writeKubeconfig(t, dir, "ctx")
+
+	sr := newRegistry(t)
+	b, err := sandbox.NewBackend(sandbox.BackendFactoryConfig{
+		Kind:     sandbox.BackendKindK8s,
+		Sessions: sr,
+		K8s: config.SandboxKubernetesConfig{
+			KubeconfigPath: path,
+			Namespace:      "custom-ns",
+			SandboxImage:   "repo/img:tag",
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewBackend(k8s): %v", err)
+	}
+	kb, ok := b.(*K8sBackend)
+	if !ok {
+		t.Fatalf("expected *K8sBackend, got %T", b)
+	}
+	if kb.client == nil {
+		t.Error("expected clientset to be populated when KubeconfigPath is supplied")
+	}
+	if kb.restConfig == nil {
+		t.Error("expected restConfig to be populated when KubeconfigPath is supplied")
+	}
+	if kb.cfg.Namespace != "custom-ns" {
+		t.Errorf("Namespace = %q, want custom-ns", kb.cfg.Namespace)
+	}
+	if kb.cfg.SandboxImage != "repo/img:tag" {
+		t.Errorf("SandboxImage = %q, want repo/img:tag", kb.cfg.SandboxImage)
+	}
+}
+
+// TestHasK8sConnectivitySignal_EnvVar guards the branch where
+// $KUBECONFIG is the only signal the operator supplies.
+func TestHasK8sConnectivitySignal_EnvVar(t *testing.T) {
+	// Isolate the SA-token probe so a real CI cluster can't skew the
+	// result.
+	origStat := osStat
+	osStat = func(string) (osFileInfo, error) { return nil, errors.New("stub: no token") }
+	t.Cleanup(func() { osStat = origStat })
+
+	t.Setenv("KUBECONFIG", "")
+	if hasK8sConnectivitySignal(config.SandboxKubernetesConfig{}) {
+		t.Error("empty env + no flags should be no-signal")
+	}
+	t.Setenv("KUBECONFIG", "/etc/kubeconfig")
+	if !hasK8sConnectivitySignal(config.SandboxKubernetesConfig{}) {
+		t.Error("$KUBECONFIG set should be signal")
+	}
+}
+
+// TestBackendFromAppConfig_K8s exercises sandbox.BackendFromAppConfig's
+// "k8s" branch end-to-end with this package linked in. The test lives
+// here (rather than pkg/sandbox/) because pkg/sandbox deliberately does
+// not import pkg/sandbox/k8s — the factory registration flows through
+// init().
+func TestBackendFromAppConfig_K8s(t *testing.T) {
+	t.Setenv("KUBECONFIG", "")
+
+	appCfg := &config.AppConfig{}
+	appCfg.Sandbox.Backend = "k8s"
+	appCfg.Sandbox.Kubernetes.Namespace = "custom-ns"
+	enabled := true
+	appCfg.Sandbox.Enabled = &enabled
+
+	b, _, err := sandbox.BackendFromAppConfig(appCfg)
+	if err != nil {
+		t.Fatalf("BackendFromAppConfig: %v", err)
+	}
+	if b == nil {
+		t.Fatal("nil backend")
+	}
+	if b.Kind() != sandbox.BackendKindK8s {
+		t.Errorf("Kind() = %q, want k8s", b.Kind())
+	}
+
+	kb, ok := b.(*K8sBackend)
+	if !ok {
+		t.Fatalf("expected *K8sBackend, got %T", b)
+	}
+	if kb.cfg.Namespace != "custom-ns" {
+		t.Errorf("Namespace = %q, want custom-ns (propagated from AppConfig)", kb.cfg.Namespace)
 	}
 }
 

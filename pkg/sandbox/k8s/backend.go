@@ -32,11 +32,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -203,20 +205,96 @@ func New(cfg Config) (*K8sBackend, error) {
 // init registers K8sBackend with sandbox.NewBackend. Importing
 // pkg/sandbox/k8s makes BackendKindK8s available to the factory.
 //
-// The BackendFactoryConfig shape (pre-Phase-A) lacks a
-// store.SandboxTemplateStore slot, a kubernetes.Interface, and a
-// k8s-specific Config. Rather than thread those through the shared
-// factory, callers that need the full Config wire K8sBackend directly
-// via New. The factory hook here supports the skeleton path where the
-// ambient Sessions registry is sufficient, and surfaces an actionable
-// error otherwise.
+// Production path (Phase D):
+//
+//	sandbox.NewBackend(sandbox.BackendFactoryConfig{
+//	    Kind:     sandbox.BackendKindK8s,
+//	    Sessions: sessRegistry,
+//	    K8s:      cfg.Sandbox.Kubernetes,  // YAML sub-config
+//	})
+//
+// The factory:
+//   - Loads a *rest.Config via LoadRESTConfig(fc.K8s).
+//   - Builds a clientset.
+//   - Translates fc.K8s's YAML-friendly fields into a k8s.Config.
+//   - Invokes New.
+//
+// Tests that just want a skeleton backend (no Kubernetes calls) can call
+// k8s.New directly with a nil or fake Client and no K8s struct.
 func init() {
 	sandbox.RegisterBackendFactory(sandbox.BackendKindK8s, func(fc sandbox.BackendFactoryConfig) (sandbox.Backend, error) {
 		if fc.Sessions == nil {
-			return nil, errors.New("sandbox/k8s: BackendFactoryConfig.Sessions is required; call k8s.New directly for richer configuration")
+			return nil, errors.New("sandbox/k8s: BackendFactoryConfig.Sessions is required")
 		}
-		return New(Config{Sessions: fc.Sessions})
+		cfg := Config{
+			Sessions:              fc.Sessions,
+			Namespace:             fc.K8s.Namespace,
+			ControlPlaneNamespace: fc.K8s.ControlPlaneNamespace,
+			RuntimeClassName:      fc.K8s.RuntimeClassName,
+			SandboxImage:          fc.K8s.SandboxImage,
+			LayersPVCName:         fc.K8s.LayersPVCName,
+			UppersPVCName:         fc.K8s.UppersPVCName,
+		}
+		// Only attempt cluster connectivity when the caller supplied an
+		// explicit signal: InCluster=true, a KubeconfigPath, or
+		// $KUBECONFIG in the environment. Without any of these, fall
+		// back to the client-less skeleton so that smoke tests, unit
+		// tests, and binaries that merely register the backend don't
+		// need to stub a kubeconfig.
+		if hasK8sConnectivitySignal(fc.K8s) {
+			client, restCfg, err := NewClientFromOptions(LoadConfigOptions{
+				KubeconfigPath: fc.K8s.KubeconfigPath,
+				Context:        fc.K8s.Context,
+				InCluster:      fc.K8s.InCluster,
+				QPS:            fc.K8s.QPS,
+				Burst:          fc.K8s.Burst,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("sandbox/k8s: load cluster config: %w", err)
+			}
+			cfg.Client = client
+			cfg.RESTConfig = restCfg
+		}
+		return New(cfg)
 	})
+}
+
+// hasK8sConnectivitySignal reports whether the caller has asked us to
+// connect to a real cluster. See the factory comment for rationale.
+func hasK8sConnectivitySignal(kc config.SandboxKubernetesConfig) bool {
+	if kc.InCluster || kc.KubeconfigPath != "" {
+		return true
+	}
+	// Honour the traditional $KUBECONFIG env var so that CLI invocations
+	// like `KUBECONFIG=... astonish ...` light up the k8s backend.
+	if v, ok := osLookupEnv("KUBECONFIG"); ok && v != "" {
+		return true
+	}
+	// In-cluster token presence also counts; callers running inside a
+	// Pod should not need to set InCluster=true explicitly.
+	if _, statErr := osStat("/var/run/secrets/kubernetes.io/serviceaccount/token"); statErr == nil {
+		return true
+	}
+	return false
+}
+
+// Test seams: these indirections let tests stub env / fs probing.
+var (
+	osLookupEnv = os.LookupEnv
+	osStat      = func(name string) (osFileInfo, error) {
+		fi, err := os.Stat(name)
+		if err != nil {
+			return nil, err
+		}
+		return fi, nil
+	}
+)
+
+// osFileInfo is the minimal contract the factory needs from an fs probe;
+// kept unexported so it doesn't leak through the package API. os.FileInfo
+// satisfies this by construction.
+type osFileInfo interface {
+	Name() string
 }
 
 // ---------------------------------------------------------------------------

@@ -1,0 +1,104 @@
+// BackendFromAppConfig builds a sandbox.Backend directly from an
+// *config.AppConfig. It is the one-stop helper used by tools that want to
+// talk to a sandbox backend without carrying around separate *IncusClient /
+// kubeconfig wiring.
+//
+// Phase D scope: this is the entry point for the k8s smoke command and
+// any future caller that wants backend-kind selection driven by the
+// operator's config.yaml. The existing tool-wrapping pipeline
+// (NodeClientPool + LazyNodeClient) still hardcodes Incus; migrating that
+// layer onto the Backend interface is Phase E.
+//
+// Precedence for the kind selector:
+//
+//  1. Explicit cfg.Sandbox.Backend ("incus" / "k8s" / "mock").
+//  2. Default: "incus" (backward-compat).
+//
+// Required registries are constructed via NewSessionRegistry /
+// NewTemplateRegistry; both honour platform/personal mode automatically.
+
+package sandbox
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/schardosin/astonish/pkg/config"
+)
+
+// BackendFromAppConfig returns a Backend plus a cleanup func. Cleanup may
+// be nil; callers should defer it when non-nil.
+//
+// The returned Backend is ready for production use: for the k8s kind it
+// has a real clientset and rest.Config attached, loaded via the standard
+// kubeconfig ladder (see pkg/sandbox/k8s.LoadConfigOptions).
+//
+// Errors are actionable: missing kubeconfig, unreachable Incus daemon,
+// invalid backend kind, etc. Callers should surface them verbatim to the
+// operator.
+func BackendFromAppConfig(appCfg *config.AppConfig) (Backend, func(), error) {
+	if appCfg == nil {
+		return nil, nil, errors.New("sandbox: nil app config")
+	}
+
+	kind := BackendKind(appCfg.Sandbox.BackendKind())
+
+	sessRegistry, err := NewSessionRegistry()
+	if err != nil {
+		return nil, nil, fmt.Errorf("sandbox: session registry: %w", err)
+	}
+	tplRegistry, err := NewTemplateRegistry()
+	if err != nil {
+		return nil, nil, fmt.Errorf("sandbox: template registry: %w", err)
+	}
+
+	limits := EffectiveLimits(&appCfg.Sandbox)
+
+	switch kind {
+	case BackendKindIncus:
+		SetSandboxConfig(&appCfg.Sandbox)
+		client, err := SetupSandboxRuntime()
+		if err != nil {
+			return nil, nil, fmt.Errorf("sandbox: incus runtime: %w", err)
+		}
+		b, err := NewBackend(BackendFactoryConfig{
+			Kind:       BackendKindIncus,
+			Client:     client,
+			Sessions:   sessRegistry,
+			Templates:  tplRegistry,
+			DefaultLim: &limits,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, nil, nil
+
+	case BackendKindK8s:
+		b, err := NewBackend(BackendFactoryConfig{
+			Kind:       BackendKindK8s,
+			Sessions:   sessRegistry,
+			Templates:  tplRegistry,
+			DefaultLim: &limits,
+			K8s:        appCfg.Sandbox.Kubernetes,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, nil, nil
+
+	case BackendKindMock:
+		b, err := NewBackend(BackendFactoryConfig{
+			Kind:       BackendKindMock,
+			Sessions:   sessRegistry,
+			Templates:  tplRegistry,
+			DefaultLim: &limits,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, nil, nil
+
+	default:
+		return nil, nil, fmt.Errorf("sandbox: unsupported backend kind %q", kind)
+	}
+}

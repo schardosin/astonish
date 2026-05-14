@@ -42,6 +42,88 @@ type SandboxConfig struct {
 	Limits     SandboxLimits      `yaml:"limits,omitempty" json:"limits,omitempty"`
 	Network    string             `yaml:"network,omitempty" json:"network,omitempty"`
 	Prune      SandboxPruneConfig `yaml:"prune,omitempty" json:"prune,omitempty"`
+
+	// Backend selects the sandbox execution implementation. Accepted
+	// values:
+	//   - ""      → "incus" (default; backward-compatible)
+	//   - "incus" → local Incus daemon (docs/architecture/sandbox-backends.md §4.1)
+	//   - "k8s"   → Kubernetes + Sysbox (docs/architecture/sandbox-backends.md §4.2, Phase C)
+	//   - "mock"  → in-memory mock (tests only)
+	//
+	// When "k8s" is selected, the Kubernetes sub-config below is
+	// consulted. When any other value is selected, the Kubernetes
+	// sub-config is ignored.
+	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
+
+	// Kubernetes holds backend-specific settings used when Backend == "k8s".
+	// Fields have sensible defaults; operators typically only set
+	// KubeconfigPath (or InCluster) and SandboxImage.
+	Kubernetes SandboxKubernetesConfig `yaml:"kubernetes,omitempty" json:"kubernetes,omitempty"`
+}
+
+// SandboxKubernetesConfig captures the operator-tunable knobs for the
+// k8s backend. See pkg/sandbox/k8s.Config for the runtime struct;
+// this type is the YAML-friendly mirror.
+//
+// Separating this from pkg/sandbox/k8s.Config keeps pkg/config free of
+// a dependency on k8s.io/client-go (and therefore keeps single-node
+// builds small when the k8s backend is not selected).
+type SandboxKubernetesConfig struct {
+	// KubeconfigPath is the path to a kubeconfig file. When empty, the
+	// loader tries in-cluster config first, then $KUBECONFIG, then
+	// ~/.kube/config. Ignored when InCluster is true.
+	KubeconfigPath string `yaml:"kubeconfig_path,omitempty" json:"kubeconfig_path,omitempty"`
+
+	// Context, if set, pins a named context in the loaded kubeconfig.
+	Context string `yaml:"context,omitempty" json:"context,omitempty"`
+
+	// InCluster forces the in-cluster config loader. Set this when
+	// Astonish is deployed as a Pod in the same cluster it is
+	// managing.
+	InCluster bool `yaml:"in_cluster,omitempty" json:"in_cluster,omitempty"`
+
+	// Namespace for sandbox pods. Default: "astonish-sandboxes".
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+
+	// ControlPlaneNamespace is the namespace running the Astonish API
+	// and worker pods. Default: "astonish". Used by EnsureOrgNetwork
+	// so sandbox pods accept ingress from the control plane.
+	ControlPlaneNamespace string `yaml:"control_plane_namespace,omitempty" json:"control_plane_namespace,omitempty"`
+
+	// RuntimeClassName picks the Pod RuntimeClass. Default: "sysbox-runc".
+	RuntimeClassName string `yaml:"runtime_class_name,omitempty" json:"runtime_class_name,omitempty"`
+
+	// SandboxImage is the container image for sandbox pods. Must ship
+	// the overlay entrypoint and the astonish node binary. Default:
+	// "schardosin/astonish-sandbox-base:latest".
+	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
+
+	// LayersPVCName / UppersPVCName name the RWX PVCs backing the
+	// layer store and per-session uppers. Defaults:
+	// "astonish-layers" / "astonish-uppers".
+	LayersPVCName string `yaml:"layers_pvc_name,omitempty" json:"layers_pvc_name,omitempty"`
+	UppersPVCName string `yaml:"uppers_pvc_name,omitempty" json:"uppers_pvc_name,omitempty"`
+
+	// QPS / Burst tune the client-go rate limiter. Zero → defaults
+	// (50 / 100). Busier fleets want higher values.
+	QPS   float32 `yaml:"qps,omitempty" json:"qps,omitempty"`
+	Burst int     `yaml:"burst,omitempty" json:"burst,omitempty"`
+}
+
+// BackendKind returns the configured backend, lower-cased, with "" and
+// "incus" both normalising to "incus". This is the canonical accessor
+// that callers should use — do NOT read SandboxConfig.Backend directly.
+func (c *SandboxConfig) BackendKind() string {
+	b := strings.ToLower(strings.TrimSpace(c.Backend))
+	if b == "" {
+		return "incus"
+	}
+	return b
+}
+
+// IsK8sBackend is a readability helper for the common case.
+func (c *SandboxConfig) IsK8sBackend() bool {
+	return c.BackendKind() == "k8s"
 }
 
 // SecurityConfig controls security features like proactive secret detection.

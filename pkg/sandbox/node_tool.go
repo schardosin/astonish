@@ -17,27 +17,58 @@ import (
 type ToolWithDeclaration = common.ToolWithDeclaration
 
 // NodeTool wraps an existing tool.Tool and proxies its Run() method to a
-// LazyNodeClient (astonish node inside a container). It preserves the original
-// tool's Name(), Description(), Declaration(), and IsLongRunning() so the
-// ADK sees it as a normal tool.
+// ToolNodeClient (astonish node inside a container, backed by Incus,
+// K8s+Sysbox, or mock). It preserves the original tool's Name(),
+// Description(), Declaration(), and IsLongRunning() so the ADK sees it
+// as a normal tool.
 //
-// On the first Run() call, the LazyNodeClient creates the session container
+// On the first Run() call, the client creates the session container
 // and starts the astonish node process. The session ID is obtained from
 // tool.Context.SessionID().
 //
 // This follows the same structural interface pattern as ADK's mcpTool and
 // Astonish's ProtectedTool/sanitizedTool — it satisfies FunctionTool and
 // RequestProcessor by implementing the methods directly.
+//
+// Two shapes are supported for vending clients:
+//
+//   - pool (chat/flow sessions): ToolNodePool dispenses one client per
+//     sessionID; most production callers.
+//   - lazyClient (fleet sessions): a pre-built *LazyNodeClient pinned
+//     to a single fleet session; fleet never fans out across sessions.
+//
+// The interface type on `pool` is the Phase E bridge: *NodeClientPool
+// (Incus) and backendPool (K8s/mock via sandbox.Backend) both satisfy
+// ToolNodePool, so SetupFlowSandbox can dispatch on backend kind
+// without this file knowing which fulfilled it.
 type NodeTool struct {
 	tool.Tool // Embed the original tool for Name(), Description(), IsLongRunning()
 
-	pool       *NodeClientPool // for chat sessions (per-session containers)
+	pool       ToolNodePool    // for chat/flow sessions (per-session containers)
 	lazyClient *LazyNodeClient // for fleet sessions (dedicated per-session client)
 }
 
-// NewNodeTool creates a NodeTool that proxies the given tool through a pool.
-// Used by chat/Studio sessions where each session gets its own container.
+// NewNodeTool creates a NodeTool that proxies the given tool through a
+// concrete Incus-bound pool. Kept as-is for chat_factory.go and other
+// callers that construct *NodeClientPool directly; internally it wraps
+// the pool in the ToolNodePool adapter so the rest of NodeTool only
+// ever sees the interface.
+//
+// New callers that construct a ToolNodePool directly (e.g. the
+// backend-agnostic pool from NewBackendPool) should use
+// NewNodeToolWithPool instead.
 func NewNodeTool(original tool.Tool, pool *NodeClientPool) *NodeTool {
+	return &NodeTool{
+		Tool: original,
+		pool: AsNodePool(pool),
+	}
+}
+
+// NewNodeToolWithPool creates a NodeTool that proxies through any
+// ToolNodePool implementation. Introduced in Phase E (slice 4) so the
+// flow path can wire either an Incus NodeClientPool (via AsNodePool)
+// or a backend-agnostic backendPool (via NewBackendPool) uniformly.
+func NewNodeToolWithPool(original tool.Tool, pool ToolNodePool) *NodeTool {
 	return &NodeTool{
 		Tool: original,
 		pool: pool,
@@ -177,11 +208,13 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	return result, nil
 }
 
-// getClientFromContext returns the LazyNodeClient for the given session. If the
-// NodeTool was created with a pool (chat sessions), it gets or creates a client
-// from the pool, using any sandbox template found in the context. If created
-// with a direct client (fleet sessions), returns that.
-func (nt *NodeTool) getClientFromContext(ctx context.Context, sessionID string) *LazyNodeClient {
+// getClientFromContext returns the ToolNodeClient for the given session.
+// If the NodeTool was created with a pool (chat/flow sessions), it gets
+// or creates a client from the pool, using any sandbox template found in
+// the context. If created with a direct LazyNodeClient (fleet sessions),
+// returns that (which already satisfies ToolNodeClient via the Phase E
+// compile-time assertion in node_interfaces.go).
+func (nt *NodeTool) getClientFromContext(ctx context.Context, sessionID string) ToolNodeClient {
 	if nt.lazyClient != nil {
 		return nt.lazyClient
 	}
@@ -217,16 +250,32 @@ var containerTools = map[string]bool{
 	"opencode":                  true,
 }
 
-// WrapToolsWithNode wraps tools with NodeTool proxies using a pool, selectively.
-// Only tools listed in containerTools are wrapped — they run inside the container.
-// Host-side tools (memory, credentials, scheduler, delegate_tasks, browser,
-// email, etc.) pass through unwrapped and continue to run on the host.
-// Used by chat/Studio sessions where each session gets its own container.
+// WrapToolsWithNode wraps tools with NodeTool proxies using a concrete
+// Incus-bound pool, selectively. Only tools listed in containerTools
+// are wrapped — they run inside the container. Host-side tools (memory,
+// credentials, scheduler, delegate_tasks, browser, email, etc.) pass
+// through unwrapped and continue to run on the host.
+//
+// Kept for backward compatibility with chat_factory and other callers
+// that hold *NodeClientPool directly. Internally forwards to
+// WrapToolsWithPool via the AsNodePool adapter.
 func WrapToolsWithNode(tools []tool.Tool, pool *NodeClientPool) []tool.Tool {
+	return WrapToolsWithPool(tools, AsNodePool(pool))
+}
+
+// WrapToolsWithPool is the backend-agnostic variant of
+// WrapToolsWithNode. It accepts any ToolNodePool implementation, so the
+// flow setup can pass either the Incus pool (wrapped via AsNodePool) or
+// the K8s backend pool (NewBackendPool) without touching this file's
+// wrapping logic.
+//
+// Same selective-wrapping rule as WrapToolsWithNode: tools in
+// containerTools are wrapped; all others pass through.
+func WrapToolsWithPool(tools []tool.Tool, pool ToolNodePool) []tool.Tool {
 	wrapped := make([]tool.Tool, len(tools))
 	for i, t := range tools {
 		if containerTools[t.Name()] {
-			wrapped[i] = NewNodeTool(t, pool)
+			wrapped[i] = NewNodeToolWithPool(t, pool)
 		} else {
 			wrapped[i] = t // pass through unwrapped
 		}

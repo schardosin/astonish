@@ -83,6 +83,11 @@ type Config struct {
 	// created. Defaults to "astonish-sandboxes".
 	Namespace string
 
+	// ControlPlaneNamespace is the namespace where the Astonish API and
+	// Worker pods run. Used by EnsureOrgNetwork to allow ingress from
+	// the control plane into sandbox pods. Defaults to "astonish".
+	ControlPlaneNamespace string
+
 	// RuntimeClassName is the RuntimeClass used for sandbox pods.
 	// Defaults to "sysbox-runc". See
 	// docs/architecture/sandbox-backends.md §10.
@@ -125,6 +130,9 @@ type Config struct {
 func (c *Config) applyDefaults() {
 	if c.Namespace == "" {
 		c.Namespace = "astonish-sandboxes"
+	}
+	if c.ControlPlaneNamespace == "" {
+		c.ControlPlaneNamespace = "astonish"
 	}
 	if c.RuntimeClassName == "" {
 		c.RuntimeClassName = "sysbox-runc"
@@ -319,36 +327,9 @@ func (b *K8sBackend) DeleteTemplate(ctx context.Context, templateID string, forc
 }
 
 // ---------------------------------------------------------------------------
-// Networking (stubs — Phase C slice: network.go)
+// Networking — EnsureOrgNetwork / DeleteOrgNetwork / ExposePort /
+// UnexposePort live in network.go.
 // ---------------------------------------------------------------------------
-
-func (b *K8sBackend) EnsureOrgNetwork(ctx context.Context, orgSlug string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("EnsureOrgNetwork: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) DeleteOrgNetwork(ctx context.Context, orgSlug string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("DeleteOrgNetwork: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) ExposePort(ctx context.Context, sessionID string, port int, proto string) (*sandbox.ExposedAddr, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("ExposePort: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) UnexposePort(ctx context.Context, sessionID string, port int) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("UnexposePort: %w", ErrNotImplementedYet)
-}
 
 // ---------------------------------------------------------------------------
 // Fleet (stub — Phase C slice: fleet.go)

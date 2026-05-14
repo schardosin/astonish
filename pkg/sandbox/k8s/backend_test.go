@@ -163,12 +163,12 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 }
 
 // TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
-// whose implementation has not yet landed (templates, networking,
-// fleet) and verifies the returned error wraps ErrNotImplementedYet.
+// whose implementation has not yet landed (templates, fleet) and
+// verifies the returned error wraps ErrNotImplementedYet.
 // Session-lifecycle methods (CreateSession, StartSession, StopSession,
 // DestroySession, SessionState, ListSessions) are covered by
 // session_test.go; Exec and ExecInteractive by exec_test.go; PushFile
-// and PullFile by files_test.go.
+// and PullFile by files_test.go; networking by network_test.go.
 func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
@@ -193,13 +193,6 @@ func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 			return err
 		}},
 		{"DeleteTemplate", func() error { return b.DeleteTemplate(ctx, "t", false) }},
-		{"EnsureOrgNetwork", func() error { return b.EnsureOrgNetwork(ctx, "org") }},
-		{"DeleteOrgNetwork", func() error { return b.DeleteOrgNetwork(ctx, "org") }},
-		{"ExposePort", func() error {
-			_, err := b.ExposePort(ctx, "s", 8080, "tcp")
-			return err
-		}},
-		{"UnexposePort", func() error { return b.UnexposePort(ctx, "s", 8080) }},
 		{"EnsureFleetContainer", func() error {
 			_, err := b.EnsureFleetContainer(ctx, sandbox.FleetSpec{FleetKey: "f", TemplateID: "t"})
 			return err

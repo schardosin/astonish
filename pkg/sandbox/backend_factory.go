@@ -126,7 +126,7 @@ func NewBackend(cfg BackendFactoryConfig) (Backend, error) {
 
 	switch kind {
 	case BackendKindK8s:
-		return nil, fmt.Errorf("%w: k8s backend is Phase C, not yet implemented", ErrBackendKindUnavailable)
+		return nil, fmt.Errorf("%w: k8s backend requires importing pkg/sandbox/k8s", ErrBackendKindUnavailable)
 	case BackendKindMock:
 		return nil, fmt.Errorf("%w: mock backend requires importing pkg/sandbox/mock", ErrBackendKindUnavailable)
 	default:

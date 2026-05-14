@@ -1,0 +1,29 @@
+// Sandbox backend link-time registrations.
+//
+// Each backend in pkg/sandbox/* self-registers with sandbox.NewBackend via
+// an init() function. For that init to run, the package must be linked
+// into the binary, which requires an import somewhere in the import graph.
+//
+// The incus backend is already imported transitively (pkg/sandbox/incus is
+// used directly by many cmd/astonish files for client construction), so it
+// doesn't need a blank import here.
+//
+// The k8s and mock backends are optional, used only when the deployment
+// selects them via BackendFactoryConfig.Kind. Blank-importing them here
+// makes the astonish CLI a "batteries-included" distribution: all built-in
+// backends are available without changes to config or build tags.
+//
+// Binaries that want to exclude a backend (e.g., to avoid linking
+// k8s.io/client-go) can fork this list. Out-of-tree backends follow the
+// same pattern: import your package to trigger its init().
+package astonish
+
+import (
+	// Register the k8s backend with sandbox.NewBackend so that
+	// configurations setting backend=k8s succeed.
+	_ "github.com/schardosin/astonish/pkg/sandbox/k8s"
+
+	// Register the mock backend so tests and demos that request
+	// backend=mock succeed without a separate build tag.
+	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
+)

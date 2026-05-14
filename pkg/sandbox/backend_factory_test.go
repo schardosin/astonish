@@ -34,14 +34,22 @@ func TestNewBackend_ExplicitIncus(t *testing.T) {
 	}
 }
 
-func TestNewBackend_K8sNotYetAvailable(t *testing.T) {
+// TestNewBackend_K8sRequiresImport pins the contract that pkg/sandbox on its
+// own does NOT link the k8s backend: callers who want it must import
+// pkg/sandbox/k8s so that its init() registers with the factory. This is
+// intentional isolation — pkg/sandbox/k8s pulls in k8s.io/client-go and its
+// SPDY stack, which we don't want to force on every consumer.
+func TestNewBackend_K8sRequiresImport(t *testing.T) {
 	_, err := NewBackend(BackendFactoryConfig{Kind: BackendKindK8s})
 	if !errors.Is(err, ErrBackendKindUnavailable) {
 		t.Errorf("k8s: got %v, want ErrBackendKindUnavailable", err)
 	}
 }
 
-func TestNewBackend_MockNotYetAvailable(t *testing.T) {
+// TestNewBackend_MockRequiresImport is the analogous contract for the mock
+// backend: it's registered via pkg/sandbox/mock's init() and pkg/sandbox
+// deliberately does not import it.
+func TestNewBackend_MockRequiresImport(t *testing.T) {
 	_, err := NewBackend(BackendFactoryConfig{Kind: BackendKindMock})
 	if !errors.Is(err, ErrBackendKindUnavailable) {
 		t.Errorf("mock: got %v, want ErrBackendKindUnavailable", err)

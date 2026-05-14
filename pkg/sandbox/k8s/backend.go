@@ -295,36 +295,9 @@ func (b *K8sBackend) Health(ctx context.Context) (*sandbox.BackendHealth, error)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Templates (stubs — Phase C slice: template.go)
+// Templates — BuildTemplate / SaveSessionAsTemplate / RefreshTemplate /
+// DeleteTemplate live in template.go.
 // ---------------------------------------------------------------------------
-
-func (b *K8sBackend) BuildTemplate(ctx context.Context, spec sandbox.TemplateBuildSpec) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("BuildTemplate: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) SaveSessionAsTemplate(ctx context.Context, sessionID string) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("SaveSessionAsTemplate: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) RefreshTemplate(ctx context.Context, templateID string) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("RefreshTemplate: %w", ErrNotImplementedYet)
-}
-
-func (b *K8sBackend) DeleteTemplate(ctx context.Context, templateID string, force bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return fmt.Errorf("DeleteTemplate: %w", ErrNotImplementedYet)
-}
 
 // ---------------------------------------------------------------------------
 // Networking — EnsureOrgNetwork / DeleteOrgNetwork / ExposePort /

@@ -163,12 +163,17 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 }
 
 // TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
-// whose implementation has not yet landed (templates, fleet) and
-// verifies the returned error wraps ErrNotImplementedYet.
+// whose implementation has not yet landed (fleet) and verifies the
+// returned error wraps ErrNotImplementedYet. Template methods without
+// a client also fall into this bucket because they require a live
+// Kubernetes client to execute (client-nil guard).
 // Session-lifecycle methods (CreateSession, StartSession, StopSession,
 // DestroySession, SessionState, ListSessions) are covered by
 // session_test.go; Exec and ExecInteractive by exec_test.go; PushFile
-// and PullFile by files_test.go; networking by network_test.go.
+// and PullFile by files_test.go; networking by network_test.go;
+// BuildTemplate / SaveSessionAsTemplate happy paths by template_test.go.
+// DeleteTemplate is a no-op on K8s (bytes reclaimed by the GC
+// reconciler, §5.12) so it is not part of this matrix.
 func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 	b, err := New(Config{Sessions: newRegistry(t)})
 	if err != nil {
@@ -192,7 +197,6 @@ func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {
 			_, err := b.RefreshTemplate(ctx, "t")
 			return err
 		}},
-		{"DeleteTemplate", func() error { return b.DeleteTemplate(ctx, "t", false) }},
 		{"EnsureFleetContainer", func() error {
 			_, err := b.EnsureFleetContainer(ctx, sandbox.FleetSpec{FleetKey: "f", TemplateID: "t"})
 			return err

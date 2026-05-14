@@ -178,20 +178,46 @@ func (b *K8sBackend) Exec(ctx context.Context, sessionID string, opts sandbox.Ex
 		return nil, fmt.Errorf("sandbox/k8s: Exec: session %q has no pod", sessionID)
 	}
 
+	res, err := b.execInPod(ctx, rec.PodName, opts)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/k8s: Exec(%s): %w", sessionID, err)
+	}
+	return res, nil
+}
+
+// execInPod runs a non-interactive exec against a specific pod name,
+// bypassing the session registry. Used internally by template.go where
+// the builder pod is not a registered session, and by Exec after it has
+// resolved the session → pod name mapping.
+//
+// Like Exec, execInPod honours ctx cancellation, wraps the command with
+// a shell when WorkDir or Env is non-empty, and surfaces non-zero exits
+// via ExecResult.ExitCode (errors are reserved for transport failures).
+func (b *K8sBackend) execInPod(ctx context.Context, podName string, opts sandbox.ExecSpec) (*sandbox.ExecResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if podName == "" {
+		return nil, errors.New("sandbox/k8s: execInPod: podName is required")
+	}
+	if len(opts.Command) == 0 {
+		return nil, errors.New("sandbox/k8s: execInPod: Command is required")
+	}
+
 	// Wrap the command with a shell that honours WorkDir and Env, since
 	// PodExecOptions has no such fields. We prepend `cd <workdir>;
 	// export K=V; ...` then exec the user command. The exec(1) tail
 	// keeps PID 1 semantics intact for signal propagation.
 	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
 
-	method, u, err := b.buildExecURL(rec.PodName, command, false /*tty*/, opts.Stdin != nil, true, true)
+	method, u, err := b.buildExecURL(podName, command, false /*tty*/, opts.Stdin != nil, true, true)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/k8s: Exec(%s): build URL: %w", sessionID, err)
+		return nil, fmt.Errorf("build URL: %w", err)
 	}
 
 	execr, err := b.execExecutorFactory(b.restConfig, method, u)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/k8s: Exec(%s): build executor: %w", sessionID, err)
+		return nil, fmt.Errorf("build executor: %w", err)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -203,7 +229,7 @@ func (b *K8sBackend) Exec(ctx context.Context, sessionID string, opts sandbox.Ex
 	})
 	code, err := decodeExitError(streamErr)
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/k8s: Exec(%s): %w", sessionID, err)
+		return nil, err
 	}
 	return &sandbox.ExecResult{
 		ExitCode: code,

@@ -305,12 +305,5 @@ func (b *K8sBackend) Health(ctx context.Context) (*sandbox.BackendHealth, error)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Fleet (stub — Phase C slice: fleet.go)
+// Fleet — EnsureFleetContainer lives in fleet.go.
 // ---------------------------------------------------------------------------
-
-func (b *K8sBackend) EnsureFleetContainer(ctx context.Context, spec sandbox.FleetSpec) (*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, fmt.Errorf("EnsureFleetContainer: %w", ErrNotImplementedYet)
-}

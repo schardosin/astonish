@@ -162,16 +162,19 @@ func TestK8sBackendConfigDefaults(t *testing.T) {
 	}
 }
 
-// TestK8sBackendPendingSlicesReturnNotImplemented exercises each method
-// whose implementation has not yet landed (fleet) and verifies the
-// returned error wraps ErrNotImplementedYet. Template methods without
-// a client also fall into this bucket because they require a live
-// Kubernetes client to execute (client-nil guard).
+// TestK8sBackendPendingSlicesReturnNotImplemented exercises each
+// state-mutating method when the K8sBackend has no Kubernetes client
+// configured and verifies the returned error wraps ErrNotImplementedYet.
+// This is the backend's "skeleton" contract — New(Config{Sessions: ...})
+// without Client produces a Backend whose methods degrade gracefully
+// rather than panicking.
+//
 // Session-lifecycle methods (CreateSession, StartSession, StopSession,
 // DestroySession, SessionState, ListSessions) are covered by
 // session_test.go; Exec and ExecInteractive by exec_test.go; PushFile
 // and PullFile by files_test.go; networking by network_test.go;
-// BuildTemplate / SaveSessionAsTemplate happy paths by template_test.go.
+// BuildTemplate / SaveSessionAsTemplate / RefreshTemplate happy paths
+// by template_test.go; EnsureFleetContainer by fleet_test.go.
 // DeleteTemplate is a no-op on K8s (bytes reclaimed by the GC
 // reconciler, §5.12) so it is not part of this matrix.
 func TestK8sBackendPendingSlicesReturnNotImplemented(t *testing.T) {

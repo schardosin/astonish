@@ -184,6 +184,9 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	if len(o.HandoffArgs) != 1 || o.HandoffArgs[0] != "node" {
 		t.Errorf("HandoffArgs default = %v, want [node]", o.HandoffArgs)
 	}
+	if o.HostBinaryPath != "/usr/local/bin/astonish-host" {
+		t.Errorf("HostBinaryPath default = %q, want /usr/local/bin/astonish-host", o.HostBinaryPath)
+	}
 
 	// Idempotency: re-applying defaults must not duplicate args or
 	// mutate already-set values.
@@ -222,6 +225,90 @@ func TestEntrypointScript_QuotingInjection(t *testing.T) {
 	if strings.Contains(s, "UPPERS_DIR=/tricky'path") {
 		t.Errorf("single-quote escaped incorrectly, producing injectable content:\n%s", s)
 	}
+}
+
+// TestEntrypointScript_HostBinaryBindMount exercises the Phase E
+// addition: bind-mounting a base-image astonish binary over the
+// overlay's /usr/local/bin/astonish. Three behaviours are pinned:
+//
+//  1. Default path: HostBinaryPath defaults to /usr/local/bin/astonish-host
+//     and the bind-mount block appears between overlay mount and handoff.
+//  2. Explicit override: a non-standard HostBinaryPath flows through
+//     shellQuote and overrides the default.
+//  3. Sentinel "-": bind-mount block is OMITTED entirely, matching
+//     pre-Phase-E shape for backward-compat tests.
+func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
+	t.Run("default enables bind-mount", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, "HOST_BIN='/usr/local/bin/astonish-host'") {
+			t.Errorf("default HOST_BIN assignment missing; got:\n%s", s)
+		}
+		if !strings.Contains(s, `mount --bind "$HOST_BIN" "$OVERLAY_BIN"`) {
+			t.Errorf("bind-mount command missing; got:\n%s", s)
+		}
+
+		// Ordering: bind-mount must come AFTER overlay mount and
+		// BEFORE handoff. Otherwise the bind destination wouldn't
+		// exist yet (no overlay), or PID 1 would handoff without
+		// the trusted binary in place.
+		mountIdx := strings.Index(s, "mount -t overlay overlay")
+		bindIdx := strings.Index(s, `mount --bind "$HOST_BIN"`)
+		handoffIdx := strings.Index(s, "exec chroot ")
+		if mountIdx < 0 || bindIdx < 0 || handoffIdx < 0 {
+			t.Fatalf("missing markers: overlay=%d bind=%d handoff=%d", mountIdx, bindIdx, handoffIdx)
+		}
+		if !(mountIdx < bindIdx && bindIdx < handoffIdx) {
+			t.Errorf("ordering wrong: overlay=%d bind=%d handoff=%d; want overlay < bind < handoff",
+				mountIdx, bindIdx, handoffIdx)
+		}
+	})
+
+	t.Run("custom host binary path", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{
+			HostBinaryPath: "/opt/astonish/bin/astonish",
+		})
+		if !strings.Contains(s, "HOST_BIN='/opt/astonish/bin/astonish'") {
+			t.Errorf("custom HOST_BIN missing; got:\n%s", s)
+		}
+		// Default path must NOT leak when overridden.
+		if strings.Contains(s, "HOST_BIN='/usr/local/bin/astonish-host'") {
+			t.Errorf("default HOST_BIN leaked despite override; got:\n%s", s)
+		}
+	})
+
+	t.Run("sentinel suppresses bind-mount", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{
+			HostBinaryPath: "-",
+		})
+		if strings.Contains(s, "HOST_BIN=") {
+			t.Errorf("HOST_BIN assignment should be absent with sentinel; got:\n%s", s)
+		}
+		if strings.Contains(s, "mount --bind") {
+			t.Errorf("bind-mount should be absent with sentinel; got:\n%s", s)
+		}
+		// Sanity: the rest of the script still emits correctly.
+		if !strings.Contains(s, "mount -t overlay overlay") {
+			t.Errorf("overlay mount missing with sentinel; got:\n%s", s)
+		}
+		if !strings.Contains(s, `exec chroot "$MOUNT_POINT"`) {
+			t.Errorf("handoff missing with sentinel; got:\n%s", s)
+		}
+	})
+
+	t.Run("fallback when host binary missing", func(t *testing.T) {
+		// The generated script must tolerate the base-image binary
+		// being absent (e.g. a custom sandbox image that doesn't bake
+		// astonish in). The else branch logs to stderr and leaves
+		// the overlay's binary intact so the handoff still works if
+		// @base shipped its own.
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, `if [ -x "$HOST_BIN" ]; then`) {
+			t.Errorf("missing executability guard; got:\n%s", s)
+		}
+		if !strings.Contains(s, `"skipping bind-mount`) {
+			t.Errorf("missing fallback warning; got:\n%s", s)
+		}
+	})
 }
 
 // TestEntrypointScript_OrderingInvariants pins the section order so

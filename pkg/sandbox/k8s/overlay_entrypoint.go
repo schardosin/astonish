@@ -85,6 +85,25 @@ type EntrypointScriptOptions struct {
 	// HandoffArgs are the arguments passed to Handoff.
 	// Default: []string{"node"}.
 	HandoffArgs []string
+
+	// HostBinaryPath, when non-empty, is the absolute path of a
+	// BASE-IMAGE astonish binary that the entrypoint will bind-mount
+	// over $MOUNT_POINT/usr/local/bin/astonish before the chroot
+	// handoff. This lets the sandbox-base image ship a trusted binary
+	// that covers BOTH the PID-1 handoff AND backend-driven tool calls
+	// (Backend.Exec) without requiring operators to bake astonish into
+	// every @base layer (Phase E §11).
+	//
+	// When empty, the bind-mount step is skipped and Handoff must
+	// already exist inside the overlay at its default path — matches
+	// pre-Phase-E behaviour and keeps the shape unchanged for tests
+	// that don't care about Backend.Exec.
+	//
+	// Default: /usr/local/bin/astonish-host (the path used by
+	// docker/sandbox-base/Dockerfile). Tests that want to assert on
+	// the pre-Phase-E handoff-only shape can set this to "-" to
+	// explicitly suppress the bind-mount.
+	HostBinaryPath string
 }
 
 func (o *EntrypointScriptOptions) applyDefaults() {
@@ -108,6 +127,9 @@ func (o *EntrypointScriptOptions) applyDefaults() {
 	}
 	if len(o.HandoffArgs) == 0 {
 		o.HandoffArgs = []string{"node"}
+	}
+	if o.HostBinaryPath == "" {
+		o.HostBinaryPath = "/usr/local/bin/astonish-host"
 	}
 }
 
@@ -212,7 +234,50 @@ mount -t overlay overlay \
   -o "lowerdir=$LOWER,upperdir=$UPPER_DIR,workdir=$WORK_DIR" \
   "$MOUNT_POINT"
 
-# --- 3. Hand off to workload ------------------------------------------
+`)
+	// Optional host-binary bind-mount. This is the load-bearing step
+	// for Phase E: it installs a trusted astonish binary into the
+	// overlay at /usr/local/bin/astonish so BOTH the PID-1 handoff
+	// below AND later Backend.Exec tool calls (which chroot into the
+	// same overlay via the base image's wrapper) find the same binary.
+	// Value "-" is a sentinel meaning "skip the bind-mount entirely"
+	// — useful for backward-compat tests that pin the pre-Phase-E
+	// shape.
+	if opts.HostBinaryPath != "" && opts.HostBinaryPath != "-" {
+		b.WriteString(`# --- 2a. Overlay astonish binary from the base image ------------------
+# Bind-mount a trusted astonish binary from the base image on top of
+# whatever the @base layer provided (or didn't) at the canonical path.
+# This ensures both PID-1 handoff and Backend.Exec tool calls resolve
+# to the same build, so operators don't have to ship astonish in every
+# @base layer themselves.
+`)
+		b.WriteString("HOST_BIN=")
+		writeSingleQuoted(&b, opts.HostBinaryPath)
+		b.WriteByte('\n')
+		b.WriteString(`OVERLAY_BIN="$MOUNT_POINT/usr/local/bin/astonish"
+if [ -x "$HOST_BIN" ]; then
+  # Ensure the destination exists; on a minimal @base layer the
+  # directory may be missing entirely.
+  mkdir -p "$MOUNT_POINT/usr/local/bin"
+  # The destination must be a regular file for a file bind-mount.
+  # We create an empty one if absent — overlayfs records this on
+  # upperdir which is harmless and fast. Using ":" (the POSIX no-op)
+  # with output redirection is the portable way to touch a file
+  # without depending on touch(1).
+  if [ ! -e "$OVERLAY_BIN" ]; then
+    : > "$OVERLAY_BIN"
+    chmod 0755 "$OVERLAY_BIN"
+  fi
+  mount --bind "$HOST_BIN" "$OVERLAY_BIN"
+else
+  echo "astonish-entrypoint: HOST_BIN=$HOST_BIN missing or not executable; " \
+       "skipping bind-mount (PID-1 handoff will use overlay's binary)" 1>&2
+fi
+
+`)
+	}
+
+	b.WriteString(`# --- 3. Hand off to workload ------------------------------------------
 `)
 	b.WriteString("exec chroot \"$MOUNT_POINT\" ")
 	b.WriteString(shellQuote(opts.Handoff))

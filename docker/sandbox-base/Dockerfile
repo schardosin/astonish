@@ -49,12 +49,20 @@
 # Reference: docs/architecture/sandbox-backends.md §§5.3, 5.14.
 
 # ---------------------------------------------------------------------------
-# Stage 1 — generate the entrypoint script with the Go helper.
+# Stage 1 — generate the entrypoint script with the Go helper AND build the
+# astonish daemon binary itself.
 #
-# We use the same Go toolchain version as the main Dockerfile so the
-# generated script is bit-identical across builds (EntrypointScript is
-# deterministic, but keeping toolchains aligned avoids future footguns
-# like go fmt / string-builder behavioural drift).
+# Two artefacts, one toolchain stage, because:
+#   - We use the same Go toolchain version as the main Dockerfile so the
+#     generated script is bit-identical across builds (EntrypointScript is
+#     deterministic, but keeping toolchains aligned avoids future footguns
+#     like go fmt / string-builder behavioural drift).
+#   - Carrying astonish into the base image (Phase E §11) gives tool calls
+#     a binary to exec inside the sandbox without requiring operators to
+#     bake it into their @base layer. At overlay-compose time the
+#     entrypoint bind-mounts this binary into the overlay so BOTH the
+#     PID-1 chroot handoff AND Backend.Exec tool calls resolve to the
+#     same trusted build.
 # ---------------------------------------------------------------------------
 FROM golang:1.26-alpine AS entrypoint-builder
 
@@ -65,13 +73,13 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Only the files the entrypoint-script command transitively needs.
-# Copying the whole tree would be correct but wasteful; limiting to
-# the relevant packages keeps the build cache tight.
-COPY cmd/astonish-sandbox-entrypoint-script ./cmd/astonish-sandbox-entrypoint-script
-COPY pkg/sandbox/k8s ./pkg/sandbox/k8s
-COPY pkg/sandbox ./pkg/sandbox
-COPY pkg ./pkg
+# Copy the entire source tree. The entrypoint-script generator needs
+# pkg/sandbox/k8s + pkg/sandbox + pkg; the astonish binary additionally
+# needs main.go, cmd/astonish/*, and every internal package it imports
+# transitively. Copying the whole tree is simpler than maintaining two
+# include lists and only costs us cache granularity — the Go build
+# below would invalidate on any source change regardless.
+COPY . .
 
 RUN CGO_ENABLED=0 go run ./cmd/astonish-sandbox-entrypoint-script \
       > /tmp/astonish-sandbox-entrypoint && \
@@ -80,6 +88,16 @@ RUN CGO_ENABLED=0 go run ./cmd/astonish-sandbox-entrypoint-script \
     # POSIX shebang; a broken generator is a build-time failure, not a
     # runtime surprise in the cluster.
     head -1 /tmp/astonish-sandbox-entrypoint | grep -q '^#!/bin/sh'
+
+# Build the astonish binary. CGO is disabled so the resulting binary is
+# statically linked against musl and runs in the minimal base image
+# without libc surprises. The -s -w strip flags mirror the main
+# Dockerfile; version is left as "dev" because the sandbox base is an
+# infrastructure image, not a shippable daemon build.
+RUN CGO_ENABLED=0 go build \
+      -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=sandbox-base" \
+      -o /tmp/astonish \
+      .
 
 # ---------------------------------------------------------------------------
 # Stage 2 — final runtime image.
@@ -133,13 +151,79 @@ RUN mkdir -p \
       /mnt/astonish-uppers \
     && chmod 0755 /sandbox /sandbox/rootfs /var/astonish
 
-# Pull the generated entrypoint from the builder stage. It is the ONLY
-# artefact we carry forward — everything else lives in the base apt
-# footprint. Keeping the COPY at the end of the Dockerfile maximises
-# cache hits when iterating on the Go source.
+# Pull the generated entrypoint from the builder stage.
 COPY --from=entrypoint-builder \
      /tmp/astonish-sandbox-entrypoint \
      /usr/local/bin/astonish-sandbox-entrypoint
+
+# Pull the astonish binary from the builder stage and install it at a
+# NON-standard path. The entrypoint bind-mounts this file into the
+# overlay as /usr/local/bin/astonish once the overlay is composed (see
+# pkg/sandbox/k8s.EntrypointScript). Using a distinct host path
+# ("-host") keeps the base-image namespace distinct from the overlay
+# namespace so tool Exec callers never accidentally run the binary
+# outside the chroot — there is nothing at /usr/local/bin/astonish in
+# the base namespace until the entrypoint has set up the bind-mount.
+#
+# Tool-call execution flow:
+#
+#   Backend.Exec(sessionID, Command: ["astonish", "node"])
+#     → kubectl exec lands in pod base namespace
+#     → /usr/local/bin/astonish resolves via the overlay bind-mount
+#       (once PID 1 has composed the overlay)
+#     → the wrapper nature of the bind-mount means the chroot is
+#       implicit: we are ALREADY in the user-namespace rooted at the
+#       overlay once the bind-mount replaces the base-image binary.
+#
+# Wait — clarification on semantics: kubectl exec does NOT inherit PID 1's
+# chroot. PID 1's `exec chroot $MOUNT_POINT ...` only affects PID 1 and
+# its descendants; new execs start in the container's original root.
+# For Backend.Exec to see the overlay, we need a second chroot. That is
+# why /usr/local/bin/astonish in the base namespace is a WRAPPER (below),
+# not the real binary. The wrapper does its own chroot before handoff.
+COPY --from=entrypoint-builder \
+     /tmp/astonish \
+     /usr/local/bin/astonish-host
+
+# Wrapper that routes Backend.Exec tool calls into the composed overlay.
+#
+# Why this exists:
+#   The daemon invokes tool RPCs by running `astonish node` inside the
+#   sandbox via Backend.Exec. kubectl's exec subresource places the new
+#   process in the pod's base namespace, NOT inside PID 1's chroot.
+#   Tools (read_file /tmp/foo, write_file, shell_command) must see the
+#   overlay rootfs, not the bare base image. The wrapper pivots into
+#   the overlay mount via chroot before handing off to the real binary.
+#
+# Why not bind-mount astonish-host into the overlay at
+# /usr/local/bin/astonish and skip the wrapper?
+#   That covers PID 1 handoff fine, but Backend.Exec commands landing
+#   in the base namespace still see /usr/local/bin/astonish in the base
+#   (not overlay) — so they would exec without a chroot and hit the
+#   wrong rootfs. The wrapper is the minimum that makes both paths
+#   correct without special-casing per invocation source.
+#
+# The wrapper is deliberately plain POSIX (no bash, no arrays) so
+# busybox-static covers it even if /bin/sh is unset.
+RUN printf '%s\n' \
+      '#!/bin/sh' \
+      '# astonish (sandbox-base wrapper) — chroot into the composed overlay' \
+      '# before invoking the real astonish binary at /usr/local/bin/astonish-host.' \
+      '#' \
+      '# DO NOT EDIT. Generated by docker/sandbox-base/Dockerfile during image build.' \
+      '# See docs/architecture/sandbox-backends.md §11 Phase E for the design note.' \
+      'set -e' \
+      'MOUNT_POINT=/sandbox/rootfs' \
+      'BIN=/usr/local/bin/astonish-host' \
+      'if [ ! -d "$MOUNT_POINT" ] || [ ! -x "$MOUNT_POINT/usr/local/bin/astonish" ]; then' \
+      '  # Overlay not composed yet — fall back to the host binary directly.' \
+      '  # This keeps the image usable for one-shot diagnostics (`docker run ... astonish --help`)' \
+      '  # before PID 1 has set up the overlay.' \
+      '  exec "$BIN" "$@"' \
+      'fi' \
+      'exec chroot "$MOUNT_POINT" /usr/local/bin/astonish "$@"' \
+      > /usr/local/bin/astonish \
+    && chmod +x /usr/local/bin/astonish
 
 # Default to the entrypoint; the pod manifest can override via command/
 # args if a particular test needs to skip overlay composition. In

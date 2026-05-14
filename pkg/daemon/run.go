@@ -28,6 +28,7 @@ import (
 	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
@@ -447,7 +448,7 @@ func Run(cfg RunConfig) error {
 				if entry == nil || entry.ContainerName == "" {
 					return nil, fmt.Errorf("no sandbox container for session %s", sessionID)
 				}
-				client, err := sandbox.Connect(sandbox.DetectPlatform())
+				client, err := incus.Connect(incus.DetectPlatform())
 				if err != nil {
 					return nil, fmt.Errorf("failed to connect to sandbox: %w", err)
 				}
@@ -1894,10 +1895,10 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 
 	// 3. Prune orphan sandbox containers
 	if sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
-		platform := sandbox.DetectPlatform()
-		if platform != sandbox.PlatformUnsupported {
-			sandbox.SetActivePlatform(platform)
-			client, connErr := sandbox.Connect(platform)
+		platform := incus.DetectPlatform()
+		if platform != incus.PlatformUnsupported {
+			incus.SetActivePlatform(platform)
+			client, connErr := incus.Connect(platform)
 			if connErr == nil {
 				registry, regErr := sandbox.NewSessionRegistry()
 				if regErr == nil {

@@ -1,4 +1,4 @@
-package sandbox
+package incus
 
 import (
 	"encoding/json"
@@ -7,6 +7,13 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// SetupUnprivilegedOverlay mounts a plain overlay on the container's rootfs
+// for unprivileged containers. Exported so staying files in pkg/sandbox can
+// continue to invoke it after the Phase B.2 reorganization.
+func SetupUnprivilegedOverlay(client *IncusClient, containerName, containerRootfs, lowerDir string) error {
+	return setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir)
+}
 
 // setupUnprivilegedOverlay mounts a plain overlay on the container's rootfs
 // and pre-seeds the Incus idmap state so Incus skips its own UID shifting.
@@ -158,7 +165,7 @@ func ShiftTemplateRootfs(client *IncusClient, templateName string) error {
 // shifted root-owned files, leaving non-root users (e.g., the browser user
 // at UID 1001) unshifted and unmapped inside the container.
 //
-// Dispatches through execOnSandboxHost so it works on both native Linux
+// Dispatches through ExecOnSandboxHost so it works on both native Linux
 // and Docker+Incus (where the chown runs inside the Docker container).
 func chownShift(rootfs string, uidShift, gidShift int64) error {
 	// Enumerate all unique UID:GID pairs in the rootfs that are below
@@ -195,7 +202,7 @@ for pair in $pairs; do
 done
 `, rootfs, uidShift, gidShift)
 
-	output, err := execOnSandboxHost([]string{"sh", "-c", script})
+	output, err := ExecOnSandboxHost([]string{"sh", "-c", script})
 	if err != nil {
 		errMsg := string(output)
 		// Filter harmless "No such file" errors (race with transient files)
@@ -257,15 +264,15 @@ func parseIdmapShifts(idmapJSON string) (int64, int64, error) {
 func mountPlainOverlay(containerName, containerRootfs, lowerDir string) error {
 	upperDir := filepath.Join(overlayBaseDir, containerName, "upper")
 	workDir := filepath.Join(overlayBaseDir, containerName, "work")
-	if err := mkdirAllOnSandboxHost(upperDir, 0755); err != nil {
+	if err := MkdirAllOnSandboxHost(upperDir, 0755); err != nil {
 		return fmt.Errorf("failed to create overlay upper dir: %w", err)
 	}
-	if err := mkdirAllOnSandboxHost(workDir, 0755); err != nil {
+	if err := MkdirAllOnSandboxHost(workDir, 0755); err != nil {
 		return fmt.Errorf("failed to create overlay work dir: %w", err)
 	}
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s",
 		lowerDir, upperDir, workDir)
-	return mountOverlayOnSandboxHost(opts, containerRootfs)
+	return MountOverlayOnSandboxHost(opts, containerRootfs)
 }
 
 // reshiftOverlayUIDs handles overlay UID consistency after a remount.

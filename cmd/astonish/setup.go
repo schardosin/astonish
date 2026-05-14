@@ -27,6 +27,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/sap"
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
@@ -1323,9 +1324,9 @@ func handleWebToolSetup() error {
 // install it and warns about the security risk of running without sandbox.
 func handleSandboxSetup() error {
 	for {
-		platform, reason := sandbox.DetectPlatformReason()
+		platform, reason := incus.DetectPlatformReason()
 
-		if platform == sandbox.PlatformUnsupported {
+		if platform == incus.PlatformUnsupported {
 			// Build description with install instructions and reason
 			desc := "Sandbox runs AI tools inside isolated Linux containers,\n" +
 				"preventing them from accessing your host system directly.\n\n"
@@ -1388,20 +1389,20 @@ func handleSandboxSetup() error {
 		// Container runtime is available — set up the sandbox
 
 		// On Docker+Incus (macOS/Windows), ensure the Docker container is running first
-		if platform == sandbox.PlatformDockerIncus {
+		if platform == incus.PlatformDockerIncus {
 			clearScreen()
 			fmt.Println("Setting up Docker+Incus sandbox runtime...")
 			fmt.Println("This will pull the Incus Docker image and create a container.")
 			fmt.Println("(This may take a few minutes on first run.)")
 			fmt.Println()
 
-			if err := sandbox.EnsureIncusDockerContainer(); err != nil {
+			if err := incus.EnsureIncusDockerContainer(); err != nil {
 				return fmt.Errorf("failed to set up Docker+Incus: %w", err)
 			}
 			fmt.Println("Docker+Incus runtime ready.")
 		}
 
-		sandbox.SetActivePlatform(platform)
+		incus.SetActivePlatform(platform)
 		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
 			sandbox.SetSandboxConfig(&appCfg.Sandbox)
 		}
@@ -1410,7 +1411,7 @@ func handleSandboxSetup() error {
 		// another LXC container (mounting /proc in double-nested user
 		// namespaces is blocked by the outer host). Ask the user whether
 		// to enable privileged mode, which the outer LXC still isolates.
-		if sandbox.IsInsideLXC() && !sandbox.IsPrivileged() {
+		if incus.IsInsideLXC() && !sandbox.IsPrivileged() {
 			var action string
 			clearScreen()
 			err := huh.NewForm(
@@ -1457,13 +1458,13 @@ func handleSandboxSetup() error {
 			fmt.Println("Privileged mode enabled in config.")
 		}
 
-		client, err := sandbox.Connect(platform)
+		client, err := incus.Connect(platform)
 		if err != nil {
 			return fmt.Errorf("failed to connect to Incus: %w", err)
 		}
 
 		// Check if base template already exists
-		containerName := sandbox.TemplateName(sandbox.BaseTemplate)
+		containerName := incus.TemplateName(incus.BaseTemplate)
 		if client.InstanceExists(containerName) {
 			return nil
 		}
@@ -1478,13 +1479,13 @@ func handleSandboxSetup() error {
 		// Wire browser engine into base template options so browser packages
 		// (Chromium, KasmVNC, X11 deps) are installed in the base template.
 		if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
-			bCfg := sandbox.BrowserContainerConfig{
+			bCfg := incus.BrowserContainerConfig{
 				ChromePath:          appCfg.Browser.ChromePath,
 				FingerprintSeed:     appCfg.Browser.FingerprintSeed,
 				FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
 			}
-			engine := sandbox.DetectBrowserEngine(bCfg)
-			if sandbox.IsContainerCompatibleEngine(engine) {
+			engine := incus.DetectBrowserEngine(bCfg)
+			if incus.IsContainerCompatibleEngine(engine) {
 				opts.BrowserEngine = engine
 			}
 		}

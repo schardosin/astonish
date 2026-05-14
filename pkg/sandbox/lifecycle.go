@@ -393,7 +393,7 @@ func ensureOverlayMounted(client *IncusClient, containerName, templateName strin
 	}
 
 	containerRootfs := ContainerRootfsPath(poolPath, containerName)
-	return setupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir)
+	return SetupUnprivilegedOverlay(client, containerName, containerRootfs, lowerDir)
 }
 
 // EnsureOverlayMounted is the exported version of ensureOverlayMounted.

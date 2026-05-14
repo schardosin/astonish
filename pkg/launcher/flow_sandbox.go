@@ -7,6 +7,7 @@ import (
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"google.golang.org/adk/tool"
 )
 
@@ -35,10 +36,10 @@ func setupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool, _ boo
 func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 	cfg := mgr.Config()
 
-	engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+	engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
 		ChromePath: cfg.ChromePath,
 	})
-	if !sandbox.IsContainerCompatibleEngine(engine) {
+	if !incus.IsContainerCompatibleEngine(engine) {
 		return
 	}
 
@@ -52,7 +53,7 @@ func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 		if err != nil {
 			return "", "", fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		containerName := sandbox.SessionContainerName(sessionID)
+		containerName := incus.SessionContainerName(sessionID)
 		if !client.IsRunning(containerName) {
 			return "", "", fmt.Errorf("session container %q is not running", containerName)
 		}
@@ -64,7 +65,7 @@ func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 	}
 
 	// ContainerStartBrowserFunc: start Chromium + KasmVNC inside the container.
-	bCfg := sandbox.BrowserContainerConfig{
+	bCfg := incus.BrowserContainerConfig{
 		ViewportWidth:       cfg.ViewportWidth,
 		ViewportHeight:      cfg.ViewportHeight,
 		KasmVNCPort:         cfg.KasmVNCPort,
@@ -79,7 +80,7 @@ func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 		if err != nil {
 			return fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+		return incus.StartChromiumInContainer(client, containerName, bCfg)
 	}
 
 	// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
@@ -90,7 +91,7 @@ func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 		if err != nil {
 			return nil, fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		dialer := &sandbox.ContainerDialer{Client: client}
+		dialer := &incus.ContainerDialer{Client: client}
 		return dialer.Dial(containerName, port)
 	}
 }

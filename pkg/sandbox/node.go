@@ -881,6 +881,7 @@ func (lnc *LazyNodeClient) RestartNode() error {
 // has its own lifecycle.
 type NodeClientPool struct {
 	incusClient  *IncusClient
+	backend      Backend // Phase B.3: added alongside incusClient for incremental migration
 	sessRegistry *SessionRegistry
 	tplRegistry  *TemplateRegistry
 	template     string
@@ -897,8 +898,12 @@ type NodeClientPool struct {
 // NewNodeClientPool creates a pool that will create per-session LazyNodeClients
 // on demand. The template parameter selects which container template to clone
 // from (empty = @base).
+//
+// A Backend adapter is constructed internally from the supplied *IncusClient
+// and registries; callers can retrieve it via GetBackend() and pass it to
+// components that have been migrated to the Backend interface (Phase B.3).
 func NewNodeClientPool(client *IncusClient, sessRegistry *SessionRegistry, tplRegistry *TemplateRegistry, template string, limits *config.SandboxLimits) *NodeClientPool {
-	return &NodeClientPool{
+	p := &NodeClientPool{
 		incusClient:  client,
 		sessRegistry: sessRegistry,
 		tplRegistry:  tplRegistry,
@@ -906,6 +911,21 @@ func NewNodeClientPool(client *IncusClient, sessRegistry *SessionRegistry, tplRe
 		limits:       limits,
 		clients:      make(map[string]*LazyNodeClient),
 	}
+	// Best-effort Backend construction. Failure here is non-fatal: callers
+	// that need the Backend can check GetBackend() for nil. This keeps pool
+	// creation resilient in tests that pass zero-value registries.
+	if client != nil && sessRegistry != nil && tplRegistry != nil {
+		if b, err := NewBackend(BackendFactoryConfig{
+			Kind:       BackendKindIncus,
+			Client:     client,
+			Sessions:   sessRegistry,
+			Templates:  tplRegistry,
+			DefaultLim: limits,
+		}); err == nil {
+			p.backend = b
+		}
+	}
+	return p
 }
 
 // SetEnv sets environment variables that will be injected into all future
@@ -1187,8 +1207,23 @@ func (p *NodeClientPool) ReplaceSession(sessionID, template string) error {
 }
 
 // GetIncusClient returns the shared Incus client.
+//
+// Deprecated: Phase B.3 callers should prefer GetBackend() to remain
+// backend-agnostic. This accessor is retained for components that still
+// depend on Incus-specific behavior not yet exposed by the Backend
+// interface (template build/refresh operations tied to the Phase A layer
+// store).
 func (p *NodeClientPool) GetIncusClient() *IncusClient {
 	return p.incusClient
+}
+
+// GetBackend returns the Backend adapter wrapping this pool's Incus client.
+// New or migrated call sites (Phase B.3) should use this in preference to
+// GetIncusClient. Returns nil when the pool was constructed with
+// insufficient dependencies to build a Backend (e.g., zero-value registries
+// in unit tests); callers MUST handle nil.
+func (p *NodeClientPool) GetBackend() Backend {
+	return p.backend
 }
 
 // StartIdleWatchdog runs a background goroutine that periodically checks each

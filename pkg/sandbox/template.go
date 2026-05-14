@@ -1031,7 +1031,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	}
 
 	// Also create the work dir for the template's overlay
-	tplWorkDir := filepath.Join(overlayBaseDir, tplContainerName, "work")
+	tplWorkDir := filepath.Join(OverlayBaseDir, tplContainerName, "work")
 	if err := mkdirAllOnSandboxHost(tplWorkDir, 0755); err != nil {
 		slog.Warn("failed to create template work dir", "component", "sandbox", "error", err)
 	}
@@ -1054,7 +1054,7 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	// For unprivileged containers, this mounts a plain overlay and pre-seeds
 	// Incus's idmap state (template rootfs is already shifted at snapshot time).
 	tplRootfs := ContainerRootfsPath(poolPath, tplContainerName)
-	if err := setupUnprivilegedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
+	if err := SetupUnprivilegedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}

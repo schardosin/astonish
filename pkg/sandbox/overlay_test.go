@@ -97,8 +97,8 @@ func TestOverlaySessionDir(t *testing.T) {
 	if !strings.Contains(got, "abc12345") {
 		t.Errorf("expected session ID in path, got %q", got)
 	}
-	if !strings.HasPrefix(got, overlayBaseDir) {
-		t.Errorf("expected overlayBaseDir prefix, got %q", got)
+	if !strings.HasPrefix(got, OverlayBaseDir) {
+		t.Errorf("expected OverlayBaseDir prefix, got %q", got)
 	}
 }
 

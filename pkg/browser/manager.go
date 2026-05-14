@@ -22,7 +22,7 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // defaultPlatform reported to websites via navigator.platform / CDP.
@@ -543,7 +543,7 @@ func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
 		httpClient = &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-					return m.ContainerDialFunc(containerName, sandbox.DefaultCDPPort)
+					return m.ContainerDialFunc(containerName, incus.DefaultCDPPort)
 				},
 			},
 			Timeout: 5 * time.Second,
@@ -552,7 +552,7 @@ func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 
-	versionURL := fmt.Sprintf("http://%s:%d/json/version", ip, sandbox.DefaultCDPPort)
+	versionURL := fmt.Sprintf("http://%s:%d/json/version", ip, incus.DefaultCDPPort)
 
 	var lastErr error
 	for range 30 { // 30 × 500ms = 15s
@@ -707,7 +707,7 @@ func (m *Manager) connectContainerCDP() (*rod.Browser, error) {
 		Dialer: tunnelDialer{
 			dialFunc:      m.ContainerDialFunc,
 			containerName: containerName,
-			port:          sandbox.DefaultCDPPort,
+			port:          incus.DefaultCDPPort,
 		},
 	}
 

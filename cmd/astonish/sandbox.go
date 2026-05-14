@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
 
@@ -209,10 +210,10 @@ func printSandboxTemplateUsage() {
 // --- Status ---
 
 func handleSandboxStatus() error {
-	platform := sandbox.DetectPlatform()
+	platform := incus.DetectPlatform()
 	fmt.Printf("Platform:         %s\n", platform)
 
-	if platform == sandbox.PlatformUnsupported {
+	if platform == incus.PlatformUnsupported {
 		fmt.Println("Status:           No container runtime available")
 		fmt.Println("")
 		fmt.Println("To enable session containers:")
@@ -222,13 +223,13 @@ func handleSandboxStatus() error {
 	}
 
 	// Docker+Incus: show Docker container status
-	if platform == sandbox.PlatformDockerIncus {
-		if sandbox.IsIncusDockerContainerRunning() {
+	if platform == incus.PlatformDockerIncus {
+		if incus.IsIncusDockerContainerRunning() {
 			fmt.Println("Docker container: running")
-			if v := sandbox.GetDockerContainerVersion(); v != "" {
+			if v := incus.GetDockerContainerVersion(); v != "" {
 				fmt.Printf("Docker version:   %s\n", v)
 			}
-			if sandbox.NeedsUpgrade() {
+			if incus.NeedsUpgrade() {
 				fmt.Println("Upgrade needed:   yes (version mismatch)")
 			}
 		} else {
@@ -238,8 +239,8 @@ func handleSandboxStatus() error {
 		}
 	}
 
-	sandbox.SetActivePlatform(platform)
-	client, err := sandbox.Connect(platform)
+	incus.SetActivePlatform(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		fmt.Printf("Incus connection: FAILED (%v)\n", err)
 		return nil
@@ -284,9 +285,9 @@ func handleSandboxStatus() error {
 // --- Init ---
 
 func handleSandboxInit() error {
-	platform := sandbox.DetectPlatform()
+	platform := incus.DetectPlatform()
 
-	if platform == sandbox.PlatformUnsupported {
+	if platform == incus.PlatformUnsupported {
 		return fmt.Errorf("no container runtime available.\nLinux: install Incus (apt install incus && incus admin init)\nmacOS/Windows: install Docker (any Docker-compatible runtime)")
 	}
 
@@ -299,7 +300,7 @@ func handleSandboxInit() error {
 	// Nested LXC hosts cannot run unprivileged containers (mounting /proc
 	// in double-nested user namespaces is blocked). Require the user to
 	// explicitly set sandbox.privileged: true in their config.
-	if sandbox.IsInsideLXC() && !sandbox.IsPrivileged() {
+	if incus.IsInsideLXC() && !sandbox.IsPrivileged() {
 		return fmt.Errorf("this host is an LXC container and sandbox.privileged is not enabled.\n" +
 			"Unprivileged containers cannot run inside nested LXC environments\n" +
 			"(mounting /proc in double-nested user namespaces is not permitted).\n\n" +
@@ -311,16 +312,16 @@ func handleSandboxInit() error {
 	}
 
 	// On Docker+Incus, ensure the Docker container is set up first
-	if platform == sandbox.PlatformDockerIncus {
+	if platform == incus.PlatformDockerIncus {
 		fmt.Println("Setting up Docker+Incus runtime...")
-		if err := sandbox.EnsureIncusDockerContainer(); err != nil {
+		if err := incus.EnsureIncusDockerContainer(); err != nil {
 			return fmt.Errorf("failed to set up Docker+Incus: %w", err)
 		}
 		fmt.Println("Docker+Incus runtime ready.")
 	}
 
-	sandbox.SetActivePlatform(platform)
-	client, err := sandbox.Connect(platform)
+	incus.SetActivePlatform(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
 	}
@@ -335,13 +336,13 @@ func handleSandboxInit() error {
 	// Wire browser engine into base template options so browser packages
 	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
 	if appCfg != nil {
-		bCfg := sandbox.BrowserContainerConfig{
+		bCfg := incus.BrowserContainerConfig{
 			ChromePath:          appCfg.Browser.ChromePath,
 			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
 			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
 		}
-		engine := sandbox.DetectBrowserEngine(bCfg)
-		if sandbox.IsContainerCompatibleEngine(engine) {
+		engine := incus.DetectBrowserEngine(bCfg)
+		if incus.IsContainerCompatibleEngine(engine) {
 			opts.BrowserEngine = engine
 		} else {
 			fmt.Printf("\nNote: browser engine %q is not compatible with container mode.\n", engine)
@@ -403,12 +404,12 @@ func promptOptionalTools() sandbox.BaseTemplateOptions {
 // --- List ---
 
 func handleSandboxList() error {
-	platform := sandbox.DetectPlatform()
-	if platform == sandbox.PlatformUnsupported {
+	platform := incus.DetectPlatform()
+	if platform == incus.PlatformUnsupported {
 		return fmt.Errorf("no container runtime available")
 	}
 
-	client, err := sandbox.Connect(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
 	}
@@ -545,8 +546,8 @@ func handleSandboxCreate(templateName, label string) error {
 
 	// Open interactive shell
 	var cmd *exec.Cmd
-	if sandbox.GetActivePlatform() == sandbox.PlatformDockerIncus {
-		cmd = sandbox.ExecInDockerHostInteractive([]string{
+	if incus.GetActivePlatform() == incus.PlatformDockerIncus {
+		cmd = incus.ExecInDockerHostInteractive([]string{
 			"incus", "exec", containerName, "--", "bash", "-l",
 		})
 	} else {
@@ -737,7 +738,7 @@ func handleSandboxRefresh() error {
 	currentHash, hashErr := sandbox.ComputeBinaryHash()
 	if hashErr != nil {
 		fmt.Printf("Warning: could not compute binary hash: %v\nFalling back to refreshing @base only.\n", hashErr)
-		return sandbox.RefreshTemplate(client, registry, sandbox.BaseTemplate)
+		return sandbox.RefreshTemplate(client, registry, incus.BaseTemplate)
 	}
 
 	templates := registry.List()
@@ -748,7 +749,7 @@ func handleSandboxRefresh() error {
 			continue
 		}
 
-		containerName := sandbox.TemplateName(meta.Name)
+		containerName := incus.TemplateName(meta.Name)
 		if !client.InstanceExists(containerName) {
 			fmt.Printf("Template %q: container missing, skipping.\n", meta.Name)
 			continue
@@ -858,8 +859,8 @@ func handleSandboxShell(sessionID string) error {
 	// Use the incus CLI for interactive shell (it handles PTY properly).
 	// On Docker+Incus, chain through docker exec to reach the Incus daemon.
 	var cmd *exec.Cmd
-	if sandbox.GetActivePlatform() == sandbox.PlatformDockerIncus {
-		cmd = sandbox.ExecInDockerHostInteractive([]string{
+	if incus.GetActivePlatform() == incus.PlatformDockerIncus {
+		cmd = incus.ExecInDockerHostInteractive([]string{
 			"incus", "exec", containerName, "--", "bash", "-l",
 		})
 	} else {
@@ -938,15 +939,15 @@ func handleSandboxReset() error {
 		return err
 	}
 
-	baseName := sandbox.TemplateName(sandbox.BaseTemplate)
+	baseName := incus.TemplateName(incus.BaseTemplate)
 
 	// Check if @base even exists
-	baseExists := client.InstanceExists(baseName) || tplRegistry.Get(sandbox.BaseTemplate) != nil
+	baseExists := client.InstanceExists(baseName) || tplRegistry.Get(incus.BaseTemplate) != nil
 
 	// Warn about affected custom templates
 	var affectedTemplates []*sandbox.TemplateMeta
 	for _, t := range tplRegistry.List() {
-		if t.Name != sandbox.BaseTemplate && t.BasedOn == sandbox.BaseTemplate {
+		if t.Name != incus.BaseTemplate && t.BasedOn == incus.BaseTemplate {
 			affectedTemplates = append(affectedTemplates, t)
 		}
 	}
@@ -995,11 +996,11 @@ func handleSandboxReset() error {
 		fmt.Println("\nDestroying current @base template...")
 
 		// Resolve pool path for overlay cleanup
-		poolName, poolErr := sandbox.GetPoolForProfile(client)
+		poolName, poolErr := incus.GetPoolForProfile(client)
 		if poolErr == nil {
-			poolPath, pathErr := sandbox.GetPoolSourcePath(client, poolName)
-			if pathErr == nil && sandbox.IsOverlayMounted(poolPath, baseName) {
-				if err := sandbox.UnmountSessionOverlay(poolPath, baseName); err != nil {
+			poolPath, pathErr := incus.GetPoolSourcePath(client, poolName)
+			if pathErr == nil && incus.IsOverlayMounted(poolPath, baseName) {
+				if err := incus.UnmountSessionOverlay(poolPath, baseName); err != nil {
 					fmt.Printf("  Warning: failed to unmount overlay: %v\n", err)
 				}
 			}
@@ -1011,8 +1012,8 @@ func handleSandboxReset() error {
 			}
 		}
 
-		if client.HasSnapshot(baseName, sandbox.SnapshotName) {
-			if err := client.DeleteSnapshot(baseName, sandbox.SnapshotName); err != nil {
+		if client.HasSnapshot(baseName, incus.SnapshotName) {
+			if err := client.DeleteSnapshot(baseName, incus.SnapshotName); err != nil {
 				fmt.Printf("  Warning: failed to delete snapshot: %v\n", err)
 			}
 		}
@@ -1024,7 +1025,7 @@ func handleSandboxReset() error {
 		}
 
 		// Remove from registry
-		if err := tplRegistry.Remove(sandbox.BaseTemplate); err != nil {
+		if err := tplRegistry.Remove(incus.BaseTemplate); err != nil {
 			fmt.Printf("  Warning: failed to remove registry entry: %v\n", err)
 		}
 
@@ -1039,13 +1040,13 @@ func handleSandboxReset() error {
 	// (Chromium, KasmVNC, X11 deps) are installed in the base template.
 	appCfg, _ := config.LoadAppConfig()
 	if appCfg != nil {
-		bCfg := sandbox.BrowserContainerConfig{
+		bCfg := incus.BrowserContainerConfig{
 			ChromePath:          appCfg.Browser.ChromePath,
 			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
 			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
 		}
-		engine := sandbox.DetectBrowserEngine(bCfg)
-		if sandbox.IsContainerCompatibleEngine(engine) {
+		engine := incus.DetectBrowserEngine(bCfg)
+		if incus.IsContainerCompatibleEngine(engine) {
 			opts.BrowserEngine = engine
 		}
 	}
@@ -1086,7 +1087,7 @@ func handleSandboxSave(identifier, templateName, description string) error {
 	containerName := entry.ContainerName
 	sourceTemplate := entry.TemplateName
 	if sourceTemplate == "" {
-		sourceTemplate = sandbox.BaseTemplate
+		sourceTemplate = incus.BaseTemplate
 	}
 
 	// Normalize: accept both "base" and "@base"
@@ -1168,7 +1169,7 @@ func handleTemplateList() error {
 		if len(desc) > 28 {
 			desc = desc[:28] + ".."
 		}
-		if desc == "" && t.Name == sandbox.BaseTemplate {
+		if desc == "" && t.Name == incus.BaseTemplate {
 			desc = "(default base template)"
 		}
 
@@ -1214,20 +1215,20 @@ func handleTemplateCreate(name, description string) error {
 
 func handleTemplateShell(name string) error {
 	// Shell uses the incus CLI directly, but we still verify connectivity first.
-	platform := sandbox.DetectPlatform()
-	if platform == sandbox.PlatformUnsupported {
+	platform := incus.DetectPlatform()
+	if platform == incus.PlatformUnsupported {
 		return fmt.Errorf("no container runtime available")
 	}
 
 	// On Docker+Incus, ensure the Docker container is running
-	if platform == sandbox.PlatformDockerIncus {
-		if !sandbox.IsIncusDockerContainerRunning() {
+	if platform == incus.PlatformDockerIncus {
+		if !incus.IsIncusDockerContainerRunning() {
 			return fmt.Errorf("Docker+Incus container is not running.\nRun 'astonish sandbox init' to set up the runtime")
 		}
 	}
 
-	sandbox.SetActivePlatform(platform)
-	client, err := sandbox.Connect(platform)
+	incus.SetActivePlatform(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Incus: %w", err)
 	}
@@ -1322,11 +1323,11 @@ func handleTemplateInfo(name string) error {
 	}
 
 	// Try to get Incus-level info
-	platform := sandbox.DetectPlatform()
-	if platform != sandbox.PlatformUnsupported {
-		client, err := sandbox.Connect(platform)
+	platform := incus.DetectPlatform()
+	if platform != incus.PlatformUnsupported {
+		client, err := incus.Connect(platform)
 		if err == nil {
-			containerName := sandbox.TemplateName(name)
+			containerName := incus.TemplateName(name)
 			if client.InstanceExists(containerName) {
 				inst, err := client.GetInstance(containerName)
 				if err == nil {
@@ -1334,7 +1335,7 @@ func handleTemplateInfo(name string) error {
 					fmt.Printf("Status:        %s\n", inst.Status)
 				}
 
-				hasSnap := client.HasSnapshot(containerName, sandbox.SnapshotName)
+				hasSnap := client.HasSnapshot(containerName, incus.SnapshotName)
 				if hasSnap {
 					fmt.Printf("Snapshot:      ready (cloneable)\n")
 				} else {
@@ -1453,7 +1454,7 @@ type copyStats struct {
 // copyDirectoryFromContainer recursively copies a directory from a container
 // to the local filesystem. Uses the Incus file API to list entries and pull
 // each file individually.
-func copyDirectoryFromContainer(client *sandbox.IncusClient, containerName, containerDir, localDir string) (*copyStats, error) {
+func copyDirectoryFromContainer(client *incus.IncusClient, containerName, containerDir, localDir string) (*copyStats, error) {
 	stats := &copyStats{}
 
 	if err := os.MkdirAll(localDir, 0755); err != nil {
@@ -1530,9 +1531,9 @@ func formatBytes(b int64) string {
 // connectOrFail is a helper that detects the platform and connects to Incus,
 // returning an error if not available. On Docker+Incus, ensures the Docker
 // container is running and sets the active platform.
-func connectOrFail() (*sandbox.IncusClient, error) {
-	platform := sandbox.DetectPlatform()
-	if platform == sandbox.PlatformUnsupported {
+func connectOrFail() (*incus.IncusClient, error) {
+	platform := incus.DetectPlatform()
+	if platform == incus.PlatformUnsupported {
 		return nil, fmt.Errorf("no container runtime available")
 	}
 
@@ -1544,14 +1545,14 @@ func connectOrFail() (*sandbox.IncusClient, error) {
 	}
 
 	// On Docker+Incus, ensure the Docker container is running
-	if platform == sandbox.PlatformDockerIncus {
-		if !sandbox.IsIncusDockerContainerRunning() {
+	if platform == incus.PlatformDockerIncus {
+		if !incus.IsIncusDockerContainerRunning() {
 			return nil, fmt.Errorf("Docker+Incus container is not running.\nRun 'astonish sandbox init' to set up the runtime")
 		}
 	}
 
-	sandbox.SetActivePlatform(platform)
-	client, err := sandbox.Connect(platform)
+	incus.SetActivePlatform(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Incus: %w", err)
 	}

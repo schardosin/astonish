@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
@@ -40,7 +41,7 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	resp := TeamTemplateStatusResponse{
 		TemplateName: templateName,
@@ -84,7 +85,7 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -140,7 +141,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -200,7 +201,7 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -264,7 +265,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -314,7 +315,7 @@ func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -378,7 +379,7 @@ func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName)
+	containerName := incus.TemplateName(templateName)
 
 	client, err := sandboxConnect()
 	if err != nil {
@@ -393,7 +394,7 @@ func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Execute apt-get install non-interactively
 	cmd := append([]string{"apt-get", "install", "-y"}, req.Packages...)
-	proc, err := sandbox.ExecInteractive(client, containerName, cmd, sandbox.ExecOpts{})
+	proc, err := incus.ExecInteractive(client, containerName, cmd, incus.ExecOpts{})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to exec install: "+err.Error())
 		return

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -30,7 +31,7 @@ type SaveSandboxTemplateResult struct {
 // This follows the same closure capture pattern used by browser and email tools.
 type sandboxTemplateDeps struct {
 	nodePool         *sandbox.NodeClientPool
-	incusClient      *sandbox.IncusClient
+	incusClient      *incus.IncusClient
 	templateRegistry *sandbox.TemplateRegistry
 	sessionRegistry  *sandbox.SessionRegistry
 }
@@ -45,7 +46,7 @@ var sandboxTemplateDepsVar *sandboxTemplateDeps
 // The wizard calls it after installing all project dependencies and cloning
 // the repo inside the container. Later, fleet sessions clone from this
 // custom template instead of @base.
-func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *sandbox.IncusClient, templateRegistry *sandbox.TemplateRegistry, sessionRegistry *sandbox.SessionRegistry) (tool.Tool, error) {
+func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *incus.IncusClient, templateRegistry *sandbox.TemplateRegistry, sessionRegistry *sandbox.SessionRegistry) (tool.Tool, error) {
 	sandboxTemplateDepsVar = &sandboxTemplateDeps{
 		nodePool:         nodePool,
 		incusClient:      incusClient,
@@ -101,7 +102,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		}, nil
 	}
 
-	if name == sandbox.BaseTemplate {
+	if name == incus.BaseTemplate {
 		return SaveSandboxTemplateResult{
 			Status:  "error",
 			Message: "Cannot use 'base' as a template name (reserved).",

@@ -27,6 +27,7 @@ import (
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
@@ -675,7 +676,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// container. Container creation is lazy — the first tool call triggers
 	// cloning from the template and starting the node process.
 	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
-	var sandboxIncusClient *sandbox.IncusClient      // hoisted for save_sandbox_template tool
+	var sandboxIncusClient *incus.IncusClient       // hoisted for save_sandbox_template tool
 	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
 	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
@@ -736,13 +737,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
 		{
 			bcfg := browserMgr.Config()
-			engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+			engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
 				ChromePath: bcfg.ChromePath,
 			})
-			if sandbox.IsContainerCompatibleEngine(engine) {
+			if incus.IsContainerCompatibleEngine(engine) {
 				browserMgr.SandboxEnabled = true
 				client := sandboxClient // capture for closures
-				bCfg := sandbox.BrowserContainerConfig{
+				bCfg := incus.BrowserContainerConfig{
 					ViewportWidth:       bcfg.ViewportWidth,
 					ViewportHeight:      bcfg.ViewportHeight,
 					KasmVNCPort:         bcfg.KasmVNCPort,
@@ -753,7 +754,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					FingerprintPlatform: bcfg.FingerprintPlatform,
 				}
 				browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
-					containerName := sandbox.SessionContainerName(sessionID)
+					containerName := incus.SessionContainerName(sessionID)
 					if !client.IsRunning(containerName) {
 						return "", "", fmt.Errorf("session container %q is not running", containerName)
 					}
@@ -764,14 +765,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					return containerName, ip, nil
 				}
 				browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
-					return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+					return incus.StartChromiumInContainer(client, containerName, bCfg)
 				}
 
 				// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
 				// This makes CDP (and /json/version HTTP) work even when container
 				// bridge IPs are not routable from the host (Docker+Incus on macOS).
 				browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
-					dialer := &sandbox.ContainerDialer{Client: client}
+					dialer := &incus.ContainerDialer{Client: client}
 					return dialer.Dial(containerName, port)
 				}
 

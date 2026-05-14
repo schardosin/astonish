@@ -1,18 +1,32 @@
 // Package sandbox — SandboxBackend interface (Phase B.1).
 //
 // This file defines the runtime-backend abstraction described in
-// docs/architecture/sandbox-backends.md §3. It is the first of several Phase B
-// slices; B.1 ONLY introduces the interface + shared value types. No existing
+// docs/architecture/sandbox-backends.md §3. It was the first of several Phase
+// B slices; B.1 ONLY introduces the interface + shared value types. No existing
 // code is rewired, no Incus code is moved, no call sites are changed. Behavior
 // is identical before and after this commit.
 //
-// Subsequent slices will:
-//   - B.2: create pkg/sandbox/incus/ subpackage and move *IncusClient + its
-//           close dependencies into it. Provide an IncusBackend adapter that
-//           satisfies this interface.
-//   - B.3: migrate external call sites from *IncusClient to Backend.
-//   - B.4: add MockBackend for tests.
-//   - B.5: remove backward-compat shims.
+// Subsequent slices:
+//   - B.2 ✅: pkg/sandbox/incus/ subpackage created with *IncusClient and its
+//            close dependencies. IncusBackend adapter (pkg/sandbox/incus_backend.go)
+//            satisfies this interface by delegating to existing sandbox helpers.
+//   - B.3 ✅: Backend factory (sandbox.NewBackend), NodeClientPool.GetBackend()
+//            accessor, and Backend contract test. Per-call-site migration to
+//            the Backend interface is an incremental follow-on gated on
+//            Phase A (template/layer-store semantics) and new Backend methods
+//            for below-abstraction concerns (direct dial, template-container
+//            PTY). Existing *IncusClient consumers continue to work via the
+//            additive shim layer.
+//   - B.4 ✅: MockBackend added in pkg/sandbox/mock, registered with
+//            sandbox.NewBackend via RegisterBackendFactory hook; Backend
+//            contract helper promoted out of _test.go so external packages
+//            can invoke it. MockBackend runs clean through
+//            RunBackendContract.
+//   - B.5 ✅: External callers migrated to import pkg/sandbox/incus
+//            directly; public shim files (shims_incus.go, shims_incus_ext.go)
+//            deleted; only internally-used names kept as aliases in
+//            pkg/sandbox/incus_aliases.go (documented as an internal
+//            bridge, not a public API surface).
 //
 // Scope notes:
 //   - Types in this file are deliberately backend-neutral. Backend-specific
@@ -36,9 +50,12 @@ import (
 )
 
 // Backend is the runtime abstraction over the sandbox tier. Implementations:
-//   - IncusBackend  (pkg/sandbox/incus, Phase B.2): LXC via Incus SDK; overlayfs
+//   - IncusBackend  (pkg/sandbox, Phase B.2): LXC via Incus SDK; overlayfs
 //     fast-clone; used by personal mode and platform deployments with
-//     sandbox.backend=incus.
+//     sandbox.backend=incus. Lives in pkg/sandbox (not pkg/sandbox/incus) to
+//     avoid an import cycle: the adapter delegates to orchestration helpers
+//     (EnsureSessionContainer, DestroyForSession, etc.) that live in
+//     pkg/sandbox and already import pkg/sandbox/incus for *IncusClient.
 //   - K8sSandboxBackend (pkg/sandbox/k8s, Phase C): Kubernetes pods with the
 //     Sysbox runtime; CephFS-backed content-addressed layer store; used by
 //     platform deployments with sandbox.backend=k8s.

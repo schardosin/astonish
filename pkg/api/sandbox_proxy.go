@@ -17,6 +17,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // ipCacheEntry holds a cached container IP with an expiry time.
@@ -31,7 +32,7 @@ var ipCache sync.Map
 const ipCacheTTL = 30 * time.Second
 
 // getCachedIP returns the cached IP for a container, or resolves and caches it.
-func getCachedIP(client *sandbox.IncusClient, containerName string) (string, error) {
+func getCachedIP(client *incus.IncusClient, containerName string) (string, error) {
 	if entry, ok := ipCache.Load(containerName); ok {
 		cached := entry.(*ipCacheEntry)
 		if time.Now().Before(cached.expiry) {
@@ -133,14 +134,14 @@ func SandboxProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// WebSocket upgrade
 	if isWebSocketUpgrade(r) {
 		proxyWebSocket(w, r, func() (net.Conn, error) {
-			dialer := &sandbox.ContainerDialer{Client: client}
+			dialer := &incus.ContainerDialer{Client: client}
 			return dialer.Dial(containerName, port)
 		}, downstreamPath)
 		return
 	}
 
 	// HTTP reverse proxy
-	dialer := &sandbox.ContainerDialer{Client: client}
+	dialer := &incus.ContainerDialer{Client: client}
 	target, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("invalid proxy target URL: %s", err))
@@ -275,7 +276,7 @@ func (m *PortProxyManager) StartProxy(containerName string, containerPort int) (
 		return 0, fmt.Errorf("cannot resolve container IP: %w", err)
 	}
 
-	dialer := &sandbox.ContainerDialer{Client: client}
+	dialer := &incus.ContainerDialer{Client: client}
 	tunnelTarget := fmt.Sprintf("http://127.0.0.1:%d", containerPort)
 
 	// Build the handler: reverse proxy + WebSocket support
@@ -446,7 +447,7 @@ type SubdomainRouter struct {
 	hostMap map[string]*subdomainTarget // hostname → target
 
 	clientMu   sync.Mutex
-	client     *sandbox.IncusClient
+	client     *incus.IncusClient
 	clientInit bool
 }
 
@@ -545,7 +546,7 @@ func (sr *SubdomainRouter) ListForContainer(containerName string) map[int]string
 // The client is reused across all subdomain proxy requests to avoid
 // the overhead of sandboxConnect() (platform detection + Incus dial)
 // on every request.
-func (sr *SubdomainRouter) getClient() (*sandbox.IncusClient, error) {
+func (sr *SubdomainRouter) getClient() (*incus.IncusClient, error) {
 	sr.clientMu.Lock()
 	defer sr.clientMu.Unlock()
 
@@ -578,7 +579,7 @@ func ServeSubdomainProxy(w http.ResponseWriter, r *http.Request, containerName s
 		return
 	}
 
-	dialer := &sandbox.ContainerDialer{Client: client}
+	dialer := &incus.ContainerDialer{Client: client}
 
 	if isWebSocketUpgrade(r) {
 		proxyWebSocket(w, r, func() (net.Conn, error) {

@@ -21,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	adkagent "google.golang.org/adk/agent"
@@ -192,10 +193,10 @@ func GetPDFBrowserManager(sessionID string) *browser.Manager {
 // when sandbox mode is enabled. This is shared between GetBrowserManager and
 // GetPDFBrowserManager to avoid duplicating the sandbox wiring logic.
 func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig, appCfg *config.AppConfig, cfgErr error) {
-	engine := sandbox.DetectBrowserEngine(sandbox.BrowserContainerConfig{
+	engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
 		ChromePath: cfg.ChromePath,
 	})
-	if !sandbox.IsContainerCompatibleEngine(engine) || cfgErr != nil || appCfg == nil || !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+	if !incus.IsContainerCompatibleEngine(engine) || cfgErr != nil || appCfg == nil || !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
 		return
 	}
 
@@ -206,7 +207,7 @@ func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig
 		if err != nil {
 			return "", "", fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		containerName := sandbox.SessionContainerName(sessionID)
+		containerName := incus.SessionContainerName(sessionID)
 		if !client.IsRunning(containerName) {
 			return "", "", fmt.Errorf("session container %q is not running", containerName)
 		}
@@ -217,7 +218,7 @@ func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig
 		return containerName, ip, nil
 	}
 
-	bCfg := sandbox.BrowserContainerConfig{
+	bCfg := incus.BrowserContainerConfig{
 		ViewportWidth:       cfg.ViewportWidth,
 		ViewportHeight:      cfg.ViewportHeight,
 		KasmVNCPort:         cfg.KasmVNCPort,
@@ -232,7 +233,7 @@ func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig
 		if err != nil {
 			return fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		return sandbox.StartChromiumInContainer(client, containerName, bCfg)
+		return incus.StartChromiumInContainer(client, containerName, bCfg)
 	}
 
 	mgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
@@ -240,7 +241,7 @@ func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig
 		if err != nil {
 			return nil, fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		dialer := &sandbox.ContainerDialer{Client: client}
+		dialer := &incus.ContainerDialer{Client: client}
 		return dialer.Dial(containerName, port)
 	}
 }

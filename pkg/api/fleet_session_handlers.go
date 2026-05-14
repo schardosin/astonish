@@ -20,6 +20,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -1291,7 +1292,7 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 // metadata, and wires them with the fleet's LazyNodeClient so MCP server
 // processes run inside the fleet's container.
 // In platform mode, it reads from the DB stores; in personal mode, from the filesystem.
-func createFleetMCPToolsets(incusClient *sandbox.IncusClient, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
+func createFleetMCPToolsets(incusClient *incus.IncusClient, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
 	var mcpServers map[string]config.MCPServerConfig
 
 	if mcpStores != nil {

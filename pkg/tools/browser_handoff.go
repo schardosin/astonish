@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"google.golang.org/adk/tool"
 )
 
@@ -142,8 +142,8 @@ func startKasmVNCHandoff(mgr *browser.Manager, reason string, pageURL, pageTitle
 	}
 
 	// Connect to sandbox
-	platform := sandbox.DetectPlatform()
-	client, err := sandbox.Connect(platform)
+	platform := incus.DetectPlatform()
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return BrowserRequestHumanResult{}, fmt.Errorf("failed to connect to sandbox: %w", err)
 	}
@@ -151,7 +151,7 @@ func startKasmVNCHandoff(mgr *browser.Manager, reason string, pageURL, pageTitle
 	cfg := mgr.Config()
 
 	// Start KasmVNC in the container (auth disabled via -DisableBasicAuth)
-	err = sandbox.StartKasmVNC(client, containerName, sandbox.BrowserContainerConfig{
+	err = incus.StartKasmVNC(client, containerName, incus.BrowserContainerConfig{
 		ViewportWidth:       cfg.ViewportWidth,
 		ViewportHeight:      cfg.ViewportHeight,
 		KasmVNCPort:         cfg.KasmVNCPort,

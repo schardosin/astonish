@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 )
 
@@ -120,7 +121,7 @@ type CreateTemplateRequest struct {
 
 // SandboxStatusHandler handles GET /api/sandbox/status.
 func SandboxStatusHandler(w http.ResponseWriter, r *http.Request) {
-	platform, reason := sandbox.DetectPlatformReason()
+	platform, reason := incus.DetectPlatformReason()
 
 	appCfg, err := config.LoadAppConfig()
 	sandboxEnabled := true
@@ -129,18 +130,18 @@ func SandboxStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	baseTemplateExists := false
-	incusAvailable := platform == sandbox.PlatformLinuxNative || platform == sandbox.PlatformDockerIncus
+	incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
 	if incusAvailable {
 		// For Docker+Incus, only check if the Docker container is running
-		if platform == sandbox.PlatformDockerIncus && !sandbox.IsIncusDockerContainerRunning() {
+		if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
 			incusAvailable = false
 		}
 	}
 	if incusAvailable {
-		client, connErr := sandbox.Connect(platform)
+		client, connErr := incus.Connect(platform)
 		if connErr == nil {
-			sandbox.SetActivePlatform(platform)
-			containerName := sandbox.TemplateName(sandbox.BaseTemplate)
+			incus.SetActivePlatform(platform)
+			containerName := incus.TemplateName(incus.BaseTemplate)
 			baseTemplateExists = client.InstanceExists(containerName)
 		} else {
 			incusAvailable = false
@@ -184,17 +185,17 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	platform, reason := sandbox.DetectPlatformReason()
-	if platform == sandbox.PlatformDockerIncus {
+	platform, reason := incus.DetectPlatformReason()
+	if platform == incus.PlatformDockerIncus {
 		// Ensure the Docker container is running for init
-		if !sandbox.IsIncusDockerContainerRunning() {
-			if err := sandbox.EnsureIncusDockerContainer(); err != nil {
+		if !incus.IsIncusDockerContainerRunning() {
+			if err := incus.EnsureIncusDockerContainer(); err != nil {
 				respondError(w, http.StatusServiceUnavailable, fmt.Sprintf("failed to start Docker+Incus: %v", err))
 				return
 			}
 		}
 	}
-	if platform == sandbox.PlatformUnsupported {
+	if platform == incus.PlatformUnsupported {
 		respondError(w, http.StatusServiceUnavailable, fmt.Sprintf("sandbox unavailable: %s", reason))
 		return
 	}
@@ -204,15 +205,15 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 	if cfgErr == nil && appCfg != nil {
 		sandbox.SetSandboxConfig(&appCfg.Sandbox)
 	}
-	sandbox.SetActivePlatform(platform)
+	incus.SetActivePlatform(platform)
 
-	client, err := sandbox.Connect(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to connect to Incus: %v", err))
 		return
 	}
 
-	containerName := sandbox.TemplateName(sandbox.BaseTemplate)
+	containerName := incus.TemplateName(incus.BaseTemplate)
 	if client.InstanceExists(containerName) {
 		respondError(w, http.StatusConflict, "base template already exists")
 		return
@@ -249,13 +250,13 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Wire browser engine so browser packages are installed in the base template.
 	if appCfg != nil {
-		bCfg := sandbox.BrowserContainerConfig{
+		bCfg := incus.BrowserContainerConfig{
 			ChromePath:          appCfg.Browser.ChromePath,
 			FingerprintSeed:     appCfg.Browser.FingerprintSeed,
 			FingerprintPlatform: appCfg.Browser.FingerprintPlatform,
 		}
-		engine := sandbox.DetectBrowserEngine(bCfg)
-		if sandbox.IsContainerCompatibleEngine(engine) {
+		engine := incus.DetectBrowserEngine(bCfg)
+		if incus.IsContainerCompatibleEngine(engine) {
 			opts.BrowserEngine = engine
 		}
 	}
@@ -273,7 +274,7 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 // SandboxDetailsHandler handles GET /api/sandbox/details.
 // Returns extended sandbox status including Incus version, storage, counts.
 func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
-	platform, reason := sandbox.DetectPlatformReason()
+	platform, reason := incus.DetectPlatformReason()
 
 	appCfg, err := config.LoadAppConfig()
 	sandboxEnabled := true
@@ -287,17 +288,17 @@ func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
 		SandboxEnabled: sandboxEnabled,
 	}
 
-	incusAvailable := platform == sandbox.PlatformLinuxNative || platform == sandbox.PlatformDockerIncus
-	if platform == sandbox.PlatformDockerIncus && !sandbox.IsIncusDockerContainerRunning() {
+	incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
+	if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
 		incusAvailable = false
 	}
 	resp.IncusAvailable = incusAvailable
 
 	if incusAvailable {
-		sandbox.SetActivePlatform(platform)
-		client, connErr := sandbox.Connect(platform)
+		incus.SetActivePlatform(platform)
+		client, connErr := incus.Connect(platform)
 		if connErr == nil {
-			containerName := sandbox.TemplateName(sandbox.BaseTemplate)
+			containerName := incus.TemplateName(incus.BaseTemplate)
 			resp.BaseTemplateExists = client.InstanceExists(containerName)
 
 			tplRegistry, tplErr := sandbox.NewTemplateRegistry()
@@ -562,7 +563,7 @@ func SandboxTemplateInfoHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get live container state from Incus
-	containerName := sandbox.TemplateName(name)
+	containerName := incus.TemplateName(name)
 	resp.ContainerName = containerName
 	resp.ContainerStatus = "missing"
 
@@ -1009,21 +1010,21 @@ func resolveContainerName(registry *sandbox.SessionRegistry, input string) strin
 // --- Helpers ---
 
 // sandboxConnect detects the platform and connects to Incus.
-func sandboxConnect() (*sandbox.IncusClient, error) {
-	platform, reason := sandbox.DetectPlatformReason()
-	if platform == sandbox.PlatformUnsupported {
+func sandboxConnect() (*incus.IncusClient, error) {
+	platform, reason := incus.DetectPlatformReason()
+	if platform == incus.PlatformUnsupported {
 		return nil, fmt.Errorf("sandbox unavailable: %s", reason)
 	}
 
 	// For Docker+Incus, ensure the Docker container is reachable
-	if platform == sandbox.PlatformDockerIncus {
-		if !sandbox.IsIncusDockerContainerRunning() {
+	if platform == incus.PlatformDockerIncus {
+		if !incus.IsIncusDockerContainerRunning() {
 			return nil, fmt.Errorf("Docker+Incus container is not running; run 'astonish sandbox init'")
 		}
 	}
 
-	sandbox.SetActivePlatform(platform)
-	client, err := sandbox.Connect(platform)
+	incus.SetActivePlatform(platform)
+	client, err := incus.Connect(platform)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Incus: %w", err)
 	}
@@ -1031,11 +1032,11 @@ func sandboxConnect() (*sandbox.IncusClient, error) {
 }
 
 // platformString converts a sandbox.Platform to a JSON-friendly string.
-func platformString(p sandbox.Platform) string {
+func platformString(p incus.Platform) string {
 	switch p {
-	case sandbox.PlatformLinuxNative:
+	case incus.PlatformLinuxNative:
 		return "linux_native"
-	case sandbox.PlatformDockerIncus:
+	case incus.PlatformDockerIncus:
 		return "docker_incus"
 	default:
 		return "unsupported"

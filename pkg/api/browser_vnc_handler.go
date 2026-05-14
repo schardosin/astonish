@@ -13,7 +13,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // BrowserVNCProxyHandler proxies HTTP and WebSocket requests to the KasmVNC
@@ -50,8 +50,8 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	port := sandbox.DefaultKasmVNCPort
-	dialer := &sandbox.ContainerDialer{Client: client}
+	port := incus.DefaultKasmVNCPort
+	dialer := &incus.ContainerDialer{Client: client}
 
 	// Strip headers that confuse KasmVNC's auth layer. KasmVNC inspects
 	// several headers for authentication decisions (SSO/auth-proxy pattern)
@@ -176,7 +176,7 @@ func BrowserVNCInfoHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]any{
 		"container": containerName,
 		"ip":        ip,
-		"vnc_port":  sandbox.DefaultKasmVNCPort,
+		"vnc_port":  incus.DefaultKasmVNCPort,
 		"proxy_url": fmt.Sprintf("/api/browser/vnc/%s/", containerName),
 	})
 }

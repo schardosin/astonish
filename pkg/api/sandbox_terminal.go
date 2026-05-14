@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
@@ -53,11 +53,11 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := sandbox.TemplateName(templateName) // astn-tpl-team-<slug>
+	containerName := incus.TemplateName(templateName) // astn-tpl-team-<slug>
 
 	// Connect to sandbox
-	platform := sandbox.DetectPlatform()
-	client, err := sandbox.Connect(platform)
+	platform := incus.DetectPlatform()
+	client, err := incus.Connect(platform)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, "Sandbox unavailable: "+err.Error())
 		return
@@ -82,7 +82,7 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close()
 
 	// Start interactive shell in the container
-	proc, err := sandbox.ExecInteractive(client, containerName, []string{"bash", "-l"}, sandbox.ExecOpts{
+	proc, err := incus.ExecInteractive(client, containerName, []string{"bash", "-l"}, incus.ExecOpts{
 		Rows: 24,
 		Cols: 80,
 	})

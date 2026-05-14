@@ -1,4 +1,4 @@
-package sandbox
+package incus
 
 import (
 	"fmt"
@@ -133,10 +133,10 @@ func DeleteOrgNetwork(client *IncusClient, orgSlug string) {
 	}
 }
 
-// orgSubnet generates a deterministic /24 subnet for an org on Docker+Incus.
+// OrgSubnet generates a deterministic /24 subnet for an org on Docker+Incus.
 // Uses the 10.100-199.x.0/24 range to avoid conflicts with Docker (172.x)
 // and the default incusbr0 (10.99.0.0/24).
-func orgSubnet(orgSlug string) string {
+func OrgSubnet(orgSlug string) string {
 	// Simple hash: sum of bytes mod 100, mapped to 10.100-199.x.1/24
 	var sum int
 	for _, b := range []byte(orgSlug) {
@@ -146,3 +146,6 @@ func orgSubnet(orgSlug string) string {
 	third := (sum / 100) % 256
 	return fmt.Sprintf("10.%d.%d.1/24", second, third)
 }
+
+// orgSubnet is retained as an unexported alias for in-package readability.
+func orgSubnet(orgSlug string) string { return OrgSubnet(orgSlug) }

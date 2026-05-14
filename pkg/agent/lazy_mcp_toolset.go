@@ -11,6 +11,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/sandbox"
+	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
@@ -22,7 +23,7 @@ import (
 // In sandbox mode, each session gets its own container and thus its own
 // MCP server process. This struct tracks the per-session transport and tools.
 type sessionMCPState struct {
-	transport *sandbox.ContainerMCPTransport
+	transport *incus.ContainerMCPTransport
 	liveTools map[string]tool.Tool
 	startErr  error
 	started   bool
@@ -58,7 +59,7 @@ type LazyMCPToolset struct {
 	// to be started inside a specific container. Used for fleet sessions where
 	// the container is created by wireFleetSandbox (not from the pool).
 	sandboxClient *sandbox.LazyNodeClient
-	sandboxIncus  *sandbox.IncusClient
+	sandboxIncus  *incus.IncusClient
 
 	// --- Host mode state (single global MCP server) ---
 	mu        sync.Mutex
@@ -98,9 +99,9 @@ func (l *LazyMCPToolset) SetSandboxPool(pool *sandbox.NodeClientPool) {
 // SetSandboxClient enables sandbox-aware MCP server startup using a specific
 // LazyNodeClient (rather than a pool). Used for fleet sessions where each
 // fleet session has its own dedicated container.
-func (l *LazyMCPToolset) SetSandboxClient(client *sandbox.LazyNodeClient, incus *sandbox.IncusClient) {
+func (l *LazyMCPToolset) SetSandboxClient(client *sandbox.LazyNodeClient, incusClient *incus.IncusClient) {
 	l.sandboxClient = client
-	l.sandboxIncus = incus
+	l.sandboxIncus = incusClient
 }
 
 // CloneForFleet creates a new LazyMCPToolset with the same server config and
@@ -108,9 +109,9 @@ func (l *LazyMCPToolset) SetSandboxClient(client *sandbox.LazyNodeClient, incus 
 // independent — starting/cleaning it up doesn't affect the original.
 // Used by wireFleetSandbox to give each fleet session its own MCP server
 // processes running in the fleet's dedicated container.
-func (l *LazyMCPToolset) CloneForFleet(client *sandbox.LazyNodeClient, incus *sandbox.IncusClient) *LazyMCPToolset {
+func (l *LazyMCPToolset) CloneForFleet(client *sandbox.LazyNodeClient, incusClient *incus.IncusClient) *LazyMCPToolset {
 	clone := NewLazyMCPToolset(l.serverName, l.entries, l.serverCfg, l.debugMode)
-	clone.SetSandboxClient(client, incus)
+	clone.SetSandboxClient(client, incusClient)
 	return clone
 }
 
@@ -268,13 +269,13 @@ func (l *LazyMCPToolset) startInContainerDirect(ctx context.Context, sessionID s
 // startInContainerWith is the shared implementation for starting an MCP server
 // inside a container. Both pool-based and direct-client paths converge here.
 // Caller must hold l.mu.
-func (l *LazyMCPToolset) startInContainerWith(ctx context.Context, sessionID string, incusClient *sandbox.IncusClient, containerName string) error {
+func (l *LazyMCPToolset) startInContainerWith(ctx context.Context, sessionID string, incusClient *incus.IncusClient, containerName string) error {
 	if l.debugMode {
 		slog.Debug("connecting MCP server in container", "component", "lazy-mcp", "server", l.serverName, "container", containerName, "session", sessionID)
 	}
 
 	// Create the container transport
-	transport, stderrBuf := sandbox.NewContainerMCPTransport(incusClient, containerName, l.serverCfg)
+	transport, stderrBuf := incus.NewContainerMCPTransport(incusClient, containerName, l.serverCfg)
 
 	// Create ADK mcptoolset using our container transport
 	toolset, err := mcptoolset.New(mcptoolset.Config{

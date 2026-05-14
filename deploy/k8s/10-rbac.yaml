@@ -1,0 +1,96 @@
+# 10-rbac.yaml — ServiceAccount + Role + RoleBinding for the Astonish
+# daemon's k8s client.
+#
+# The daemon's permissions are scoped to the narrowest set that lets
+# the K8s+Sysbox backend do its job. We explicitly do NOT grant
+# cluster-wide permissions or access to secrets/configmaps outside
+# its own namespace — the backend never reads those directly, so
+# giving them up is a pure safety win.
+#
+# Permissions granted, with the backend code that consumes each:
+#
+#   pods (get/list/create/delete/watch)
+#       session.go CreateSession/DestroySession/ListSessions;
+#       template.go BuildTemplate (builder pods);
+#       fleet.go ScaleFleet.
+#
+#   pods/exec (create)
+#       exec.go ExecCommand — the `create` verb on the exec
+#       subresource is what unlocks remotecommand.NewSPDYExecutor.
+#
+#   pods/status (update)
+#       session.go bookkeeping on evicted pods — the backend marks
+#       its own pods as evicted when StopSession runs; pods/status
+#       is required because pod phase is a status-subresource field.
+#
+#   services (get/list/create/delete)
+#       network.go Service creation for exposed ports.
+#
+#   networkpolicies (get/list/create/update/delete) in networking.k8s.io
+#       network.go egress controls and port-exposure NetworkPolicies.
+#
+#   persistentvolumeclaims (get/list) — read-only
+#       health.go validates the layers/uppers PVCs exist before
+#       accepting CreateSession requests. No write verbs here; PVCs
+#       are provisioned by cluster admins via 30-storage.yaml.
+#
+# Any other resource (ConfigMaps, Secrets, Deployments, Nodes, ...)
+# is intentionally absent. If a future feature needs access to one,
+# the rule set below must be extended in lockstep with that code;
+# keep the contract visible here.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: astonish-daemon
+  namespace: astonish
+  labels:
+    app.kubernetes.io/part-of: astonish
+    app.kubernetes.io/component: daemon
+---
+# Role scoped to the sandbox namespace. The daemon's SA lives in
+# "astonish" but the RoleBinding below grants it this Role in
+# "astonish-sandboxes". This split keeps the blast radius tight:
+# even if the daemon's token leaks, it can't act in the control-
+# plane namespace through this Role.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: astonish-sandbox-operator
+  namespace: astonish-sandboxes
+  labels:
+    app.kubernetes.io/part-of: astonish
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/status"]
+    verbs: ["update"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "update", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: astonish-sandbox-operator
+  namespace: astonish-sandboxes
+  labels:
+    app.kubernetes.io/part-of: astonish
+subjects:
+  - kind: ServiceAccount
+    name: astonish-daemon
+    namespace: astonish
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: astonish-sandbox-operator

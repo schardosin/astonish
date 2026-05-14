@@ -1,0 +1,63 @@
+# 30-storage.yaml — PersistentVolumeClaims for layer and upper storage.
+#
+# The sandbox backend relies on two RWX volumes visible to every node
+# that hosts sandbox pods:
+#
+#   astonish-layers  (RWX, ReadOnlyMany in practice)
+#       Content-addressed layer store. Each layer is a directory
+#       <layer-sha>/rootfs/ populated by template builder pods
+#       (template.go buildCaptureScript emits the tar + stage + rename).
+#       Sandbox pods mount this as read-only and reference layers via
+#       the ASTONISH_LAYER_CHAIN env var consumed by the entrypoint.
+#       100Gi is a reasonable default for a small cluster; scale up if
+#       you expect many templates or large @base images.
+#
+#   astonish-uppers  (RWX, ReadWriteMany)
+#       Per-session upper layers streamed back via tar+zstd when a
+#       session resumes (§5.14). Directory layout:
+#         <session-id>/upper.tar.zst
+#       Each sandbox pod's overlay emptyDir upperdir is written back
+#       here on StopSession, so the PVC needs write access from any
+#       node. 50Gi is a starting point; GC removes stale entries when
+#       sessions are destroyed.
+#
+# storageClassName is set to "ceph-filesystem" because CephFS is the
+# reference RWX backend in the architecture doc (§4). On clusters with
+# a different RWX provisioner (EFS, Azure Files, GPFS, NFS-subdir,
+# OpenEBS Mayastor), change storageClassName to match. If your cluster
+# has a default RWX class, remove the line entirely to use it.
+#
+# NOTE: These PVCs live in astonish-sandboxes because sandbox pods
+# mount them directly. The daemon in the astonish namespace only
+# *reads* the PVC objects (to health-check), it doesn't mount them.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: astonish-layers
+  namespace: astonish-sandboxes
+  labels:
+    app.kubernetes.io/part-of: astonish
+    app.kubernetes.io/component: layers
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: astonish-uppers
+  namespace: astonish-sandboxes
+  labels:
+    app.kubernetes.io/part-of: astonish
+    app.kubernetes.io/component: uppers
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: ceph-filesystem
+  resources:
+    requests:
+      storage: 50Gi

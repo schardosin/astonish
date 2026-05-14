@@ -1,0 +1,36 @@
+# 20-runtimeclass.yaml — Sysbox RuntimeClass for sandbox pods.
+#
+# Sysbox is a container runtime that wraps runc with user-namespace
+# remapping and emulation for a handful of syscalls (mount, namespaces,
+# chroot) so that a workload running as root inside the container has
+# zero privileges on the host. This is what makes it safe for the
+# Astonish entrypoint to call mount(2) on /sandbox/rootfs without any
+# hostPath or privileged: true.
+#
+# The RuntimeClass must be created at cluster scope (no namespace) and
+# installed AFTER Sysbox itself is running on the target nodes (via
+# the sysbox DaemonSet; see https://github.com/nestybox/sysbox).
+# Assigning this RuntimeClass to a pod that lands on a node WITHOUT
+# sysbox will leave the pod in phase Pending with a scheduling error —
+# a loud failure mode, which is what we want.
+#
+# The handler name "sysbox-runc" is Sysbox's default; if your cluster
+# registered it under a different name (some distros rename it to
+# "sysbox" flat), set SandboxKubernetesConfig.RuntimeClassName in the
+# Astonish config to match and update the metadata.name below in
+# lockstep.
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: sysbox-runc
+  labels:
+    app.kubernetes.io/part-of: astonish
+handler: sysbox-runc
+# scheduling.nodeSelector targets nodes that the sysbox installer
+# labels as sysbox-ready. Cluster admins who run sysbox cluster-wide
+# can delete this block; keeping it opt-in is safer because a pod
+# using this RuntimeClass will refuse to schedule to a node that
+# can't handle it.
+scheduling:
+  nodeSelector:
+    sysbox-install: "yes"

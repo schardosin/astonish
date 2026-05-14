@@ -1,0 +1,54 @@
+# 00-namespaces.yaml — control-plane and sandbox namespaces.
+#
+# The K8s backend separates Astonish's own workload (API server,
+# scheduler, session registry) from the sandbox pods it spawns on
+# users' behalf. Two namespaces let cluster-admins apply different
+# NetworkPolicies, ResourceQuotas, and RBAC scopes to each class of
+# workload:
+#
+#   astonish            Control plane. Houses the Astonish Deployment,
+#                       the Service/Ingress that fronts the API, and
+#                       the ServiceAccount whose token the daemon uses
+#                       to talk to the cluster.
+#
+#   astonish-sandboxes  Sandbox pods, NetworkPolicies scoping them,
+#                       and the RWX PVCs for layers/uppers. NEVER
+#                       mixed with control-plane objects so a
+#                       runaway sandbox can't accidentally reach the
+#                       daemon's ServiceAccount token or other
+#                       sensitive resources in the control-plane ns.
+#
+# The backend defaults (SandboxKubernetesConfig) point at these names
+# out of the box (Namespace: "astonish-sandboxes",
+# ControlPlaneNamespace: "astonish"). If you rename them, update the
+# Astonish config file to match; the daemon won't try to create
+# namespaces on its own (that's a cluster-admin action, not a runtime
+# action).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: astonish
+  labels:
+    # Pod-security profile: the control plane runs with restricted
+    # defaults; the daemon doesn't need privileges, only the sandbox
+    # ns does (via Sysbox).
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    app.kubernetes.io/part-of: astonish
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: astonish-sandboxes
+  labels:
+    # Sandbox pods use Sysbox's user-namespace remapping to stay safe
+    # even when the workload asks for CAP_SYS_ADMIN (needed for the
+    # overlay mount in the entrypoint). We set "baseline" here rather
+    # than "restricted" so the RuntimeClass gate is what actually
+    # enforces isolation; "privileged" would be the classic hole.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    app.kubernetes.io/part-of: astonish
+    # Identify the namespace as the sandbox class so NetworkPolicies
+    # and quotas in other namespaces can match on it.
+    astonish.io/ns-class: sandboxes

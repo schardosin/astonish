@@ -22,7 +22,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/sandbox/tmplmeta"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -36,13 +36,13 @@ import (
 // subset of fields to the JSON file; DAG fields are accepted in the API but
 // silently dropped.
 type sandboxTemplateStore struct {
-	reg *sandbox.TemplateRegistry
+	reg *tmplmeta.TemplateRegistry
 }
 
 // NewSandboxTemplateStore wraps the given TemplateRegistry. If reg is nil,
 // the store is a no-op that returns ErrUnsupported for every method -- useful
 // in tests or when the caller explicitly wants no filesystem interaction.
-func NewSandboxTemplateStore(reg *sandbox.TemplateRegistry) store.SandboxTemplateStore {
+func NewSandboxTemplateStore(reg *tmplmeta.TemplateRegistry) store.SandboxTemplateStore {
 	return &sandboxTemplateStore{reg: reg}
 }
 
@@ -58,7 +58,7 @@ func (s *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTem
 		tpl.CreatedAt = now
 	}
 	tpl.UpdatedAt = now
-	meta := &sandbox.TemplateMeta{
+	meta := &tmplmeta.TemplateMeta{
 		Name:        tpl.Slug,
 		Description: tpl.Description,
 		CreatedAt:   tpl.CreatedAt,
@@ -147,7 +147,7 @@ func (s *sandboxTemplateStore) ListRoots(ctx context.Context) ([]*store.SandboxT
 	return s.List(ctx, store.SandboxTemplateFilter{})
 }
 
-func metaToTemplate(m *sandbox.TemplateMeta) *store.SandboxTemplate {
+func metaToTemplate(m *tmplmeta.TemplateMeta) *store.SandboxTemplate {
 	return &store.SandboxTemplate{
 		ID:          m.Name,
 		Slug:        m.Name,

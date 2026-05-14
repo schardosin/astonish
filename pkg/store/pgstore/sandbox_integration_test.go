@@ -716,3 +716,381 @@ func TestPGChatEventJournal_EmptyBatchNoop(t *testing.T) {
 		t.Errorf("Append([]) = %v, want nil", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SandboxSessionStore integration tests
+//
+// sandbox_sessions is team-scoped (team migration 002). We use the shared
+// setupTestSchema helper which runs team migrations. Because the
+// chat_session_events FK references {{schema}}.sessions(id), and because
+// sandbox_sessions.chat_session_id has no FK (it's cross-table-shaped but
+// unenforced), the session store tests do not require a seeded chat session.
+// ---------------------------------------------------------------------------
+
+// seedSandboxSession returns a SandboxSession with defaulted required fields
+// suitable for the team schema shape. The caller can override fields before
+// calling Put.
+func seedSandboxSession(t *testing.T, sessionID string) *store.SandboxSession {
+	t.Helper()
+	return &store.SandboxSession{
+		SessionID:     sessionID,
+		ChatSessionID: sessionID,
+		Backend:       "incus",
+		ContainerName: "astn-" + sessionID,
+		TemplateID:    uuid.New().String(),
+		State:         store.SandboxSessionStateRunning,
+		ExposedPorts:  []int{8080},
+		BaseDomain:    "sandbox.test",
+	}
+}
+
+func TestPGSandboxSessionStore_PutGetDelete(t *testing.T) {
+	pool := testPool(t)
+	schema := setupTestSchema(t, pool)
+	ctx := context.Background()
+
+	ss := NewPGSandboxSessionStore(pool, schema)
+	sess := seedSandboxSession(t, uuid.New().String())
+	if err := ss.Put(ctx, sess); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := ss.Get(ctx, sess.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got == nil {
+		t.Fatal("Get: nil")
+	}
+	if got.ContainerName != sess.ContainerName || got.TemplateID != sess.TemplateID {
+		t.Fatalf("mismatch: %+v", got)
+	}
+	if got.State != store.SandboxSessionStateRunning {
+		t.Fatalf("State: %q", got.State)
+	}
+	if len(got.ExposedPorts) != 1 || got.ExposedPorts[0] != 8080 {
+		t.Fatalf("ExposedPorts: %+v", got.ExposedPorts)
+	}
+	if got.BaseDomain != "sandbox.test" {
+		t.Fatalf("BaseDomain: %q", got.BaseDomain)
+	}
+	if got.Backend != "incus" {
+		t.Fatalf("Backend: %q", got.Backend)
+	}
+	if got.ChatSessionID != sess.SessionID {
+		t.Fatalf("ChatSessionID: %q", got.ChatSessionID)
+	}
+	if got.CreatedAt.IsZero() || got.UpdatedAt.IsZero() {
+		t.Fatal("timestamps not set")
+	}
+
+	// Replace preserves CreatedAt.
+	created := got.CreatedAt
+	time.Sleep(10 * time.Millisecond)
+	sess.State = store.SandboxSessionStateEvicted
+	if err := ss.Put(ctx, sess); err != nil {
+		t.Fatalf("Put replace: %v", err)
+	}
+	got, _ = ss.Get(ctx, sess.SessionID)
+	if !got.CreatedAt.Equal(created) {
+		// Allow sub-microsecond rounding from PG's microsecond precision.
+		diff := got.CreatedAt.Sub(created)
+		if diff < -time.Microsecond || diff > time.Microsecond {
+			t.Fatalf("CreatedAt drifted on replace: was %v now %v", created, got.CreatedAt)
+		}
+	}
+	if got.State != store.SandboxSessionStateEvicted {
+		t.Fatalf("State after replace: %q", got.State)
+	}
+
+	// Delete + idempotent second Delete.
+	if err := ss.Delete(ctx, sess.SessionID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := ss.Delete(ctx, sess.SessionID); err != nil {
+		t.Fatalf("Delete (second): %v", err)
+	}
+	if g, _ := ss.Get(ctx, sess.SessionID); g != nil {
+		t.Fatalf("Get after Delete: %+v", g)
+	}
+}
+
+func TestPGSandboxSessionStore_GetByContainerName(t *testing.T) {
+	pool := testPool(t)
+	schema := setupTestSchema(t, pool)
+	ctx := context.Background()
+
+	ss := NewPGSandboxSessionStore(pool, schema)
+	sess := seedSandboxSession(t, uuid.New().String())
+	if err := ss.Put(ctx, sess); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	got, err := ss.GetByContainerName(ctx, sess.ContainerName)
+	if err != nil {
+		t.Fatalf("GetByContainerName: %v", err)
+	}
+	if got == nil || got.SessionID != sess.SessionID {
+		t.Fatalf("GetByContainerName mismatch: %+v", got)
+	}
+	if g, _ := ss.GetByContainerName(ctx, "missing"); g != nil {
+		t.Fatalf("GetByContainerName missing: %+v", g)
+	}
+}
+
+func TestPGSandboxSessionStore_ListFilters(t *testing.T) {
+	pool := testPool(t)
+	schema := setupTestSchema(t, pool)
+	ctx := context.Background()
+
+	ss := NewPGSandboxSessionStore(pool, schema)
+
+	userA := uuid.New().String()
+	userB := uuid.New().String()
+
+	s1 := seedSandboxSession(t, uuid.New().String())
+	s1.CreatedBy = userA
+	s1.Pinned = true
+	s1.State = store.SandboxSessionStateRunning
+
+	s2 := seedSandboxSession(t, uuid.New().String())
+	s2.CreatedBy = userB
+	s2.State = store.SandboxSessionStateRunning
+
+	s3 := seedSandboxSession(t, uuid.New().String())
+	s3.CreatedBy = userA
+	s3.State = store.SandboxSessionStateEvicted
+
+	for _, s := range []*store.SandboxSession{s1, s2, s3} {
+		if err := ss.Put(ctx, s); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	all, err := ss.List(ctx, store.SandboxSessionFilter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("List all: %d", len(all))
+	}
+
+	running, _ := ss.List(ctx, store.SandboxSessionFilter{State: store.SandboxSessionStateRunning})
+	if len(running) != 2 {
+		t.Fatalf("List running: %d", len(running))
+	}
+
+	byUser, _ := ss.List(ctx, store.SandboxSessionFilter{CreatedBy: userA})
+	if len(byUser) != 2 {
+		t.Fatalf("List userA: %d", len(byUser))
+	}
+
+	pinned := true
+	pinnedList, _ := ss.List(ctx, store.SandboxSessionFilter{Pinned: &pinned})
+	if len(pinnedList) != 1 || pinnedList[0].SessionID != s1.SessionID {
+		t.Fatalf("List pinned: %+v", pinnedList)
+	}
+}
+
+func TestPGSandboxSessionStore_Mutators(t *testing.T) {
+	pool := testPool(t)
+	schema := setupTestSchema(t, pool)
+	ctx := context.Background()
+
+	ss := NewPGSandboxSessionStore(pool, schema)
+	sess := seedSandboxSession(t, uuid.New().String())
+	if err := ss.Put(ctx, sess); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	if err := ss.UpdateState(ctx, sess.SessionID, store.SandboxSessionStateEvicting); err != nil {
+		t.Fatalf("UpdateState: %v", err)
+	}
+	if err := ss.UpdatePorts(ctx, sess.SessionID, []int{80, 443, 3000}); err != nil {
+		t.Fatalf("UpdatePorts: %v", err)
+	}
+	if err := ss.SetBaseDomain(ctx, sess.SessionID, "alt.example"); err != nil {
+		t.Fatalf("SetBaseDomain: %v", err)
+	}
+	if err := ss.SetPinned(ctx, sess.SessionID, true); err != nil {
+		t.Fatalf("SetPinned: %v", err)
+	}
+	if err := ss.SetUpperLayer(ctx, sess.SessionID, "layer-abc"); err != nil {
+		t.Fatalf("SetUpperLayer: %v", err)
+	}
+
+	got, _ := ss.Get(ctx, sess.SessionID)
+	if got.State != store.SandboxSessionStateEvicting {
+		t.Fatalf("State: %q", got.State)
+	}
+	if len(got.ExposedPorts) != 3 {
+		t.Fatalf("ExposedPorts: %+v", got.ExposedPorts)
+	}
+	if got.BaseDomain != "alt.example" {
+		t.Fatalf("BaseDomain: %q", got.BaseDomain)
+	}
+	if !got.Pinned {
+		t.Fatal("Pinned should be true")
+	}
+	if got.UpperLayerID != "layer-abc" {
+		t.Fatalf("UpperLayerID: %q", got.UpperLayerID)
+	}
+
+	// Clear upper layer.
+	if err := ss.SetUpperLayer(ctx, sess.SessionID, ""); err != nil {
+		t.Fatalf("SetUpperLayer clear: %v", err)
+	}
+	got, _ = ss.Get(ctx, sess.SessionID)
+	if got.UpperLayerID != "" {
+		t.Fatalf("UpperLayerID clear: %q", got.UpperLayerID)
+	}
+
+	// Missing session errors on mutators.
+	if err := ss.UpdateState(ctx, uuid.New().String(), store.SandboxSessionStateRunning); err == nil {
+		t.Error("UpdateState on missing should error")
+	}
+	if err := ss.UpdatePorts(ctx, uuid.New().String(), nil); err == nil {
+		t.Error("UpdatePorts on missing should error")
+	}
+	if err := ss.SetBaseDomain(ctx, uuid.New().String(), "x"); err == nil {
+		t.Error("SetBaseDomain on missing should error")
+	}
+	if err := ss.SetPinned(ctx, uuid.New().String(), true); err == nil {
+		t.Error("SetPinned on missing should error")
+	}
+	if err := ss.SetUpperLayer(ctx, uuid.New().String(), "l"); err == nil {
+		t.Error("SetUpperLayer on missing should error")
+	}
+}
+
+func TestPGSandboxSessionStore_Validation(t *testing.T) {
+	pool := testPool(t)
+	schema := setupTestSchema(t, pool)
+	ctx := context.Background()
+
+	ss := NewPGSandboxSessionStore(pool, schema)
+	if err := ss.Put(ctx, nil); err == nil {
+		t.Error("Put(nil) should error")
+	}
+	if err := ss.Put(ctx, &store.SandboxSession{}); err == nil {
+		t.Error("Put empty should error (missing SessionID)")
+	}
+	if err := ss.Put(ctx, &store.SandboxSession{SessionID: "x"}); err == nil {
+		t.Error("Put without TemplateID should error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ref-count backstop trigger (platform/004) integration test
+//
+// The trigger is installed DISABLED. This test enables it, verifies it
+// correctly bumps and drops ref_count on INSERT / UPDATE OF top_layer_id /
+// DELETE, then disables it again. In production the trigger remains off
+// and the application is the sole source of ref_count mutations (§7.5).
+// ---------------------------------------------------------------------------
+
+func TestPGSandboxRefCountBackstopTrigger(t *testing.T) {
+	pool, _ := setupPlatformTestSchema(t)
+	ctx := context.Background()
+
+	// Enable the trigger for this test.
+	if _, err := pool.Exec(ctx,
+		`ALTER TABLE sandbox_templates ENABLE TRIGGER trg_sandbox_templates_ref_backstop`,
+	); err != nil {
+		t.Fatalf("enable trigger: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`ALTER TABLE sandbox_templates DISABLE TRIGGER trg_sandbox_templates_ref_backstop`)
+	})
+
+	ls := NewPGLayerStore(pool)
+	ts := NewPGSandboxTemplateStore(pool)
+
+	// Seed two layers for the churn test.
+	layer1 := &store.SandboxLayer{LayerID: "l1-" + uuid.NewString(), CephFSPath: "/t/l1", SizeBytes: 100}
+	layer2 := &store.SandboxLayer{LayerID: "l2-" + uuid.NewString(), CephFSPath: "/t/l2", SizeBytes: 200}
+	if err := ls.PutLayer(ctx, layer1); err != nil {
+		t.Fatalf("PutLayer l1: %v", err)
+	}
+	if err := ls.PutLayer(ctx, layer2); err != nil {
+		t.Fatalf("PutLayer l2: %v", err)
+	}
+
+	// Seed @base for parent linkage.
+	baseID := seedBaseTemplate(t, ctx, ts)
+
+	// INSERT with top_layer_id=layer1 -> layer1.ref_count should become 1.
+	tpl := &store.SandboxTemplate{
+		Slug:             "t-backstop-" + uuid.NewString(),
+		Scope:            store.SandboxTemplateScopeOrg,
+		OwnerID:          uuid.NewString(),
+		Name:             "Backstop test",
+		ParentTemplateID: &baseID,
+		TopLayerID:       &layer1.LayerID,
+	}
+	// pgSandboxTemplateStore.Create does not adjust ref_count itself today
+	// (explicit ref-count updates live in higher-level orchestration). With
+	// the trigger enabled the INSERT alone should bump layer1.ref_count.
+	if err := ts.Create(ctx, tpl); err != nil {
+		t.Fatalf("Create template: %v", err)
+	}
+
+	got, err := ls.GetLayer(ctx, layer1.LayerID)
+	if err != nil {
+		t.Fatalf("GetLayer l1: %v", err)
+	}
+	if got.RefCount != 1 {
+		t.Fatalf("after INSERT: layer1 ref_count = %d, want 1", got.RefCount)
+	}
+
+	// UPDATE top_layer_id to layer2 -> layer1 -1, layer2 +1.
+	// Use raw SQL to bypass the store (which does not support top_layer_id
+	// updates today; this is a pure trigger check).
+	if _, err := pool.Exec(ctx,
+		`UPDATE sandbox_templates SET top_layer_id = $2, updated_at = now() WHERE id = $1::uuid`,
+		tpl.ID, layer2.LayerID,
+	); err != nil {
+		t.Fatalf("UPDATE top_layer_id: %v", err)
+	}
+	l1After, _ := ls.GetLayer(ctx, layer1.LayerID)
+	l2After, _ := ls.GetLayer(ctx, layer2.LayerID)
+	if l1After.RefCount != 0 {
+		t.Fatalf("after UPDATE: layer1 ref_count = %d, want 0", l1After.RefCount)
+	}
+	if l2After.RefCount != 1 {
+		t.Fatalf("after UPDATE: layer2 ref_count = %d, want 1", l2After.RefCount)
+	}
+
+	// DELETE -> layer2 -1.
+	if _, err := pool.Exec(ctx,
+		`DELETE FROM sandbox_templates WHERE id = $1::uuid`, tpl.ID,
+	); err != nil {
+		t.Fatalf("DELETE template: %v", err)
+	}
+	l2Final, _ := ls.GetLayer(ctx, layer2.LayerID)
+	if l2Final.RefCount != 0 {
+		t.Fatalf("after DELETE: layer2 ref_count = %d, want 0", l2Final.RefCount)
+	}
+}
+
+// jsonEqual is a small helper that unmarshals both arguments and compares
+// the results, ignoring object-key ordering. Used in tests that need to
+// assert JSONB round-trips through PG without caring about whitespace.
+func jsonEqual(t *testing.T, a, b []byte) bool {
+	t.Helper()
+	var ax, bx any
+	if err := json.Unmarshal(a, &ax); err != nil {
+		t.Fatalf("unmarshal a: %v", err)
+	}
+	if err := json.Unmarshal(b, &bx); err != nil {
+		t.Fatalf("unmarshal b: %v", err)
+	}
+	aJSON, _ := json.Marshal(ax)
+	bJSON, _ := json.Marshal(bx)
+	return string(aJSON) == string(bJSON)
+}
+
+// Silence unused-warning in builds that don't reference jsonEqual; it's
+// available to future tests that round-trip JSONB columns.
+var _ = jsonEqual

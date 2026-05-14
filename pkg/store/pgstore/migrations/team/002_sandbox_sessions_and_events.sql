@@ -23,12 +23,17 @@
 CREATE TABLE IF NOT EXISTS {{schema}}.sandbox_sessions (
     id                 TEXT PRIMARY KEY,                       -- sandbox session UUID
     chat_session_id    TEXT NOT NULL,                          -- FK-shaped but not enforced; chat sessions live in {{schema}}.sessions
+    backend            TEXT NOT NULL DEFAULT 'incus',          -- 'incus' | 'k8s' (Phase C)
+    container_name     TEXT,                                   -- Incus container name (or K8s pod ref for Phase C); nullable while creating
     template_id        UUID NOT NULL,                          -- platform.sandbox_templates.id (cross-db, not enforced)
     upper_layer_id     TEXT,                                   -- platform.sandbox_layers.layer_id when evicted; NULL while running
     state              TEXT NOT NULL DEFAULT 'creating'
                        CHECK (state IN ('creating', 'running', 'evicting', 'evicted', 'resuming', 'terminated')),
     pod_name           TEXT,                                   -- active pod, if running on K8s backend
     node_name          TEXT,
+    exposed_ports      JSONB NOT NULL DEFAULT '[]'::jsonb,     -- []int serialized; proxied by the frontend tier
+    base_domain        TEXT,                                   -- subdomain root for per-port hostnames
+    pinned             BOOLEAN NOT NULL DEFAULT FALSE,         -- manual "do not reap" flag
     created_by         UUID,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -45,6 +50,10 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_state_active
 CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_upper_layer
     ON {{schema}}.sandbox_sessions(upper_layer_id)
     WHERE upper_layer_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_sessions_container
+    ON {{schema}}.sandbox_sessions(container_name)
+    WHERE container_name IS NOT NULL;
 
 -- ----------------------------------------------------------------------------
 -- chat_session_events: append-only event journal for cross-pod continuity.

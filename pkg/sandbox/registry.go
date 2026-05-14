@@ -1,17 +1,23 @@
 package sandbox
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/store"
 )
 
-// SessionEntry maps a session to its container.
+// SessionEntry maps a session to its container. This is the legacy in-memory
+// view retained for backward compatibility with the many call sites that
+// consume it directly (cmd/astonish/sandbox.go, pkg/api/*, pkg/fleet/*,
+// pkg/tools/*). Internally the registry persists via store.SandboxSessionStore
+// which is populated from either a filestore (personal mode) or a pgstore
+// (platform mode). The SessionEntry.TemplateName field maps to
+// store.SandboxSession.TemplateID; in personal mode the ID is the slug.
 type SessionEntry struct {
 	SessionID     string    `json:"session_id"`
 	ContainerName string    `json:"container_name"`
@@ -22,329 +28,392 @@ type SessionEntry struct {
 	Pinned        bool      `json:"pinned,omitempty"`
 }
 
-// SessionRegistry maps session IDs to container names with JSON persistence.
-// It is safe for concurrent access.
+// SessionRegistry maps session IDs to container names. Persistence is
+// delegated to a store.SandboxSessionStore; this type provides the
+// higher-level semantics (prefix resolve, reap-against-live-containers,
+// port/domain/pin bookkeeping by container name) that the rest of the
+// sandbox code depends on.
+//
+// Personal mode: constructed via NewSessionRegistry(), which wraps a
+// filestore-backed store over ~/.local/share/astonish/sandbox.
+//
+// Platform mode (Phase C+): construct via NewSessionRegistryFromStore(...)
+// passing a pgstore-backed store.
+//
+// SessionRegistry is safe for concurrent use: all mutation and lookup
+// methods delegate to the underlying store, which has its own concurrency
+// control (filestore: a per-file mutex; pgstore: PostgreSQL transactions).
 type SessionRegistry struct {
-	mu       sync.RWMutex
-	entries  map[string]*SessionEntry
-	filePath string
+	store store.SandboxSessionStore
 }
 
-// NewSessionRegistry creates a new registry backed by a JSON file.
+// NewSessionRegistry creates the personal-mode registry. It wires a
+// filestore-backed store rooted at the same data directory that the legacy
+// sessions.json lived in; if a legacy sessions.json exists in that dir, it
+// is migrated into sandbox_sessions.json on first construction so the new
+// code sees the same sessions as the old registry.
 func NewSessionRegistry() (*SessionRegistry, error) {
 	dataDir, err := sandboxDataDir()
 	if err != nil {
 		return nil, err
 	}
-
-	r := &SessionRegistry{
-		entries:  make(map[string]*SessionEntry),
-		filePath: filepath.Join(dataDir, "sessions.json"),
+	// Intentionally avoid an import cycle with pkg/store/filestore by
+	// constructing the store through a small shim callers provide. The
+	// shim lives in sandbox/registry_personal.go to keep this file free of
+	// the filestore import; the default shim is installed by an init() in
+	// that file.
+	st, err := newDefaultSessionStore(dataDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to init sandbox session store: %w", err)
 	}
+	r := &SessionRegistry{store: st}
 
-	if err := r.Load(); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("failed to load session registry: %w", err)
+	// Best-effort legacy import: if a sessions.json exists alongside
+	// sandbox_sessions.json and the new store is empty, copy the old
+	// entries over. This is idempotent for repeated process starts
+	// because subsequent runs find rows already populated.
+	if err := r.importLegacyIfNeeded(dataDir); err != nil {
+		slog.Warn("sandbox session registry: legacy import failed", "component", "sandbox", "error", err)
 	}
-
 	return r, nil
 }
 
-// Load reads the session registry from disk.
-func (r *SessionRegistry) Load() error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// NewSessionRegistryFromStore wraps an arbitrary SandboxSessionStore. Used
+// by platform-mode wiring (pgstore) and tests.
+func NewSessionRegistryFromStore(st store.SandboxSessionStore) *SessionRegistry {
+	return &SessionRegistry{store: st}
+}
 
-	data, err := os.ReadFile(r.filePath)
+// newDefaultSessionStore is the shim populated by registry_personal.go.
+// It exists so this file can stay free of pkg/store/filestore imports.
+var newDefaultSessionStore = func(dataDir string) (store.SandboxSessionStore, error) {
+	return nil, fmt.Errorf("sandbox: default session store factory not installed (missing pkg/sandbox init?)")
+}
+
+// RegisterDefaultSessionStoreFactory installs the default factory used by
+// NewSessionRegistry. The personal-mode wiring in registry_personal.go
+// invokes this in its init(); platform-mode callers do not need to use it.
+func RegisterDefaultSessionStoreFactory(factory func(dataDir string) (store.SandboxSessionStore, error)) {
+	if factory == nil {
+		return
+	}
+	newDefaultSessionStore = factory
+}
+
+// --------------------------------------------------------------------------
+// Legacy JSON import
+// --------------------------------------------------------------------------
+
+// importLegacyIfNeeded reads sessions.json from dataDir (if it exists) and
+// copies any entries into the backing store that aren't already present.
+// This supports a smooth upgrade: a first run after deploying the new
+// SessionRegistry picks up the existing session list instead of starting
+// from scratch. The legacy file is left in place (not deleted) so that
+// downgrades remain possible while the cutover is rolled out.
+func (r *SessionRegistry) importLegacyIfNeeded(dataDir string) error {
+	legacy := legacySessionsJSONPath(dataDir)
+	info, err := os.Stat(legacy)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+	data, err := os.ReadFile(legacy)
 	if err != nil {
 		return err
 	}
-
-	var entries []*SessionEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return fmt.Errorf("failed to parse session registry: %w", err)
+	var legacyEntries []*SessionEntry
+	if err := jsonUnmarshalPreserveEmpty(data, &legacyEntries); err != nil {
+		return fmt.Errorf("parse legacy sessions.json: %w", err)
 	}
-
-	r.entries = make(map[string]*SessionEntry)
-	for _, e := range entries {
-		r.entries[e.SessionID] = e
+	ctx := context.Background()
+	for _, e := range legacyEntries {
+		if e == nil || e.SessionID == "" {
+			continue
+		}
+		existing, err := r.store.Get(ctx, e.SessionID)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			continue
+		}
+		sess := entryToSession(e)
+		if err := r.store.Put(ctx, sess); err != nil {
+			return fmt.Errorf("import legacy session %s: %w", e.SessionID, err)
+		}
 	}
-
 	return nil
 }
 
-// Save writes the session registry to disk.
-func (r *SessionRegistry) Save() error {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.saveLocked()
-}
+// --------------------------------------------------------------------------
+// Public API (preserved from the pre-cutover implementation)
+// --------------------------------------------------------------------------
 
-// saveLocked writes the session registry to disk. Caller must hold r.mu (read or write).
-func (r *SessionRegistry) saveLocked() error {
-	entries := make([]*SessionEntry, 0, len(r.entries))
-	for _, e := range r.entries {
-		entries = append(entries, e)
-	}
-
-	data, err := json.MarshalIndent(entries, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal session registry: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(r.filePath), 0755); err != nil {
-		return fmt.Errorf("failed to create registry directory: %w", err)
-	}
-
-	return os.WriteFile(r.filePath, data, 0644)
-}
-
-// Put registers a session-to-container mapping and saves.
+// Put registers a session-to-container mapping.
 func (r *SessionRegistry) Put(sessionID, containerName, templateName string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.entries[sessionID] = &SessionEntry{
-		SessionID:     sessionID,
-		ContainerName: containerName,
-		TemplateName:  templateName,
-		CreatedAt:     time.Now(),
+	if sessionID == "" {
+		return fmt.Errorf("session ID is required")
 	}
-	return r.saveLocked()
+	ctx := context.Background()
+	sess := &store.SandboxSession{
+		SessionID:     sessionID,
+		ChatSessionID: sessionID,
+		Backend:       "incus",
+		ContainerName: containerName,
+		TemplateID:    templateName,
+		State:         store.SandboxSessionStateRunning,
+	}
+	return r.store.Put(ctx, sess)
 }
 
 // Get returns the session entry, or nil if not found.
 func (r *SessionRegistry) Get(sessionID string) *SessionEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.entries[sessionID]
+	ctx := context.Background()
+	sess, err := r.store.Get(ctx, sessionID)
+	if err != nil || sess == nil {
+		return nil
+	}
+	return sessionToEntry(sess)
 }
 
 // GetContainerName returns the container name for a session, or empty string.
 func (r *SessionRegistry) GetContainerName(sessionID string) string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if e, ok := r.entries[sessionID]; ok {
+	if e := r.Get(sessionID); e != nil {
 		return e.ContainerName
 	}
 	return ""
 }
 
-// Remove deletes a session-to-container mapping and saves.
+// Remove deletes a session-to-container mapping.
 func (r *SessionRegistry) Remove(sessionID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.entries, sessionID)
-	return r.saveLocked()
+	return r.store.Delete(context.Background(), sessionID)
 }
 
 // List returns all session entries.
 func (r *SessionRegistry) List() []*SessionEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make([]*SessionEntry, 0, len(r.entries))
-	for _, e := range r.entries {
-		result = append(result, e)
+	ctx := context.Background()
+	rows, err := r.store.List(ctx, store.SandboxSessionFilter{})
+	if err != nil {
+		slog.Warn("sandbox session registry: list failed", "component", "sandbox", "error", err)
+		return nil
 	}
-
-	return result
+	out := make([]*SessionEntry, 0, len(rows))
+	for _, s := range rows {
+		out = append(out, sessionToEntry(s))
+	}
+	return out
 }
 
 // SessionIDs returns all registered session IDs.
 func (r *SessionRegistry) SessionIDs() []string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	ids := make([]string, 0, len(r.entries))
-	for id := range r.entries {
-		ids = append(ids, id)
+	entries := r.List()
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ids = append(ids, e.SessionID)
 	}
-
 	return ids
 }
 
 // ResolveSessionID resolves a user-provided identifier to a session ID.
-// It accepts: exact session ID, container name, session ID prefix, or
-// container name prefix. Returns the full session ID and true if found.
+// Accepts: exact session ID, container name (via the store's reverse-lookup),
+// session ID prefix, or container name prefix.
 func (r *SessionRegistry) ResolveSessionID(input string) (string, bool) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// Exact session ID match
-	if _, ok := r.entries[input]; ok {
-		return input, true
+	if input == "" {
+		return "", false
 	}
+	ctx := context.Background()
 
-	// Match by container name, session ID prefix, or container name prefix
-	for sessID, entry := range r.entries {
-		if entry.ContainerName == input {
-			return sessID, true
+	// Exact session ID
+	if sess, _ := r.store.Get(ctx, input); sess != nil {
+		return sess.SessionID, true
+	}
+	// Exact container name (indexed in the store)
+	if sess, _ := r.store.GetByContainerName(ctx, input); sess != nil {
+		return sess.SessionID, true
+	}
+	// Prefix match — scan the list.
+	entries := r.List()
+	for _, e := range entries {
+		if strings.HasPrefix(e.SessionID, input) {
+			return e.SessionID, true
 		}
-		if strings.HasPrefix(sessID, input) {
-			return sessID, true
-		}
-		if strings.HasPrefix(entry.ContainerName, input) {
-			return sessID, true
+		if strings.HasPrefix(e.ContainerName, input) {
+			return e.SessionID, true
 		}
 	}
-
 	return "", false
 }
 
 // Reap removes registry entries whose containers no longer exist in Incus.
-// Returns the number of entries removed. This is the self-healing mechanism
-// that prevents "missing" entries from accumulating after container destruction
-// by code paths that don't clean the registry (e.g., LazyNodeClient.Cleanup,
-// fleet session exit).
+// Returns the number of entries removed.
 func (r *SessionRegistry) Reap(client *IncusClient) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var stale []string
-	for sessID, entry := range r.entries {
-		if !client.InstanceExists(entry.ContainerName) {
-			stale = append(stale, sessID)
+	entries := r.List()
+	ctx := context.Background()
+	removed := 0
+	for _, e := range entries {
+		if client.InstanceExists(e.ContainerName) {
+			continue
 		}
+		if err := r.store.Delete(ctx, e.SessionID); err != nil {
+			slog.Warn("sandbox session registry: reap delete failed", "component", "sandbox", "session", e.SessionID, "error", err)
+			continue
+		}
+		removed++
 	}
-
-	if len(stale) == 0 {
-		return 0
-	}
-
-	for _, sessID := range stale {
-		delete(r.entries, sessID)
-	}
-
-	if err := r.saveLocked(); err != nil {
-		slog.Error("failed to persist registry after pruning stale entries", "error", err)
-	}
-	return len(stale)
+	return removed
 }
 
 // GetByContainerName returns the session entry for a given container name, or nil.
 func (r *SessionRegistry) GetByContainerName(containerName string) *SessionEntry {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			return e
-		}
+	if containerName == "" {
+		return nil
 	}
-	return nil
+	sess, err := r.store.GetByContainerName(context.Background(), containerName)
+	if err != nil || sess == nil {
+		return nil
+	}
+	return sessionToEntry(sess)
 }
 
 // ExposePort adds a port to the exposed ports list for a container.
 // Returns true if the port was newly added, false if already exposed.
 func (r *SessionRegistry) ExposePort(containerName string, port int) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var entry *SessionEntry
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			entry = e
-			break
-		}
+	ctx := context.Background()
+	sess, err := r.store.GetByContainerName(ctx, containerName)
+	if err != nil {
+		return false, err
 	}
-	if entry == nil {
+	if sess == nil {
 		return false, fmt.Errorf("container %q not found in registry", containerName)
 	}
-
-	// Check for duplicate
-	for _, p := range entry.ExposedPorts {
+	for _, p := range sess.ExposedPorts {
 		if p == port {
 			return false, nil
 		}
 	}
-
-	entry.ExposedPorts = append(entry.ExposedPorts, port)
-	return true, r.saveLocked()
+	newPorts := append([]int(nil), sess.ExposedPorts...)
+	newPorts = append(newPorts, port)
+	if err := r.store.UpdatePorts(ctx, sess.SessionID, newPorts); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // UnexposePort removes a port from the exposed ports list for a container.
 // Returns true if the port was found and removed, false if it was not exposed.
 func (r *SessionRegistry) UnexposePort(containerName string, port int) (bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var entry *SessionEntry
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			entry = e
-			break
-		}
+	ctx := context.Background()
+	sess, err := r.store.GetByContainerName(ctx, containerName)
+	if err != nil {
+		return false, err
 	}
-	if entry == nil {
+	if sess == nil {
 		return false, fmt.Errorf("container %q not found in registry", containerName)
 	}
-
-	for i, p := range entry.ExposedPorts {
+	newPorts := make([]int, 0, len(sess.ExposedPorts))
+	found := false
+	for _, p := range sess.ExposedPorts {
 		if p == port {
-			entry.ExposedPorts = append(entry.ExposedPorts[:i], entry.ExposedPorts[i+1:]...)
-			return true, r.saveLocked()
+			found = true
+			continue
 		}
+		newPorts = append(newPorts, p)
 	}
-
-	return false, nil
+	if !found {
+		return false, nil
+	}
+	if err := r.store.UpdatePorts(ctx, sess.SessionID, newPorts); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // IsPortExposed checks if a specific port is exposed on a container.
 func (r *SessionRegistry) IsPortExposed(containerName string, port int) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			for _, p := range e.ExposedPorts {
-				if p == port {
-					return true
-				}
+	if e := r.GetByContainerName(containerName); e != nil {
+		for _, p := range e.ExposedPorts {
+			if p == port {
+				return true
 			}
-			return false
 		}
 	}
 	return false
 }
 
-// SetBaseDomain sets the base domain for a container's session entry and saves.
-// The base domain is used to construct subdomain proxy hostnames.
+// SetBaseDomain sets the base domain for a container's session entry.
 func (r *SessionRegistry) SetBaseDomain(containerName, baseDomain string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			e.BaseDomain = baseDomain
-			return r.saveLocked()
-		}
+	ctx := context.Background()
+	sess, err := r.store.GetByContainerName(ctx, containerName)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("container %q not found in registry", containerName)
+	if sess == nil {
+		return fmt.Errorf("container %q not found in registry", containerName)
+	}
+	return r.store.SetBaseDomain(ctx, sess.SessionID, baseDomain)
 }
 
-// GetBaseDomain returns the stored base domain for a container, or empty string.
+// GetBaseDomain returns the stored base domain for a container.
 func (r *SessionRegistry) GetBaseDomain(containerName string) string {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			return e.BaseDomain
-		}
+	if e := r.GetByContainerName(containerName); e != nil {
+		return e.BaseDomain
 	}
 	return ""
 }
 
-// SetPinned marks a container as pinned (exempt from orphan cleanup) and saves.
-// Pinned containers are manually created via `sandbox create` and should not be
-// destroyed by automatic cleanup cycles.
+// SetPinned marks a container as pinned (exempt from orphan cleanup).
 func (r *SessionRegistry) SetPinned(containerName string, pinned bool) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for _, e := range r.entries {
-		if e.ContainerName == containerName {
-			e.Pinned = pinned
-			return r.saveLocked()
-		}
+	ctx := context.Background()
+	sess, err := r.store.GetByContainerName(ctx, containerName)
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("container %q not found in registry", containerName)
+	if sess == nil {
+		return fmt.Errorf("container %q not found in registry", containerName)
+	}
+	return r.store.SetPinned(ctx, sess.SessionID, pinned)
+}
+
+// --------------------------------------------------------------------------
+// Helpers
+// --------------------------------------------------------------------------
+
+func sessionToEntry(s *store.SandboxSession) *SessionEntry {
+	if s == nil {
+		return nil
+	}
+	ports := append([]int(nil), s.ExposedPorts...)
+	return &SessionEntry{
+		SessionID:     s.SessionID,
+		ContainerName: s.ContainerName,
+		TemplateName:  s.TemplateID,
+		CreatedAt:     s.CreatedAt,
+		ExposedPorts:  ports,
+		BaseDomain:    s.BaseDomain,
+		Pinned:        s.Pinned,
+	}
+}
+
+func entryToSession(e *SessionEntry) *store.SandboxSession {
+	if e == nil {
+		return nil
+	}
+	ports := append([]int(nil), e.ExposedPorts...)
+	return &store.SandboxSession{
+		SessionID:     e.SessionID,
+		ChatSessionID: e.SessionID,
+		Backend:       "incus",
+		ContainerName: e.ContainerName,
+		TemplateID:    e.TemplateName,
+		State:         store.SandboxSessionStateRunning,
+		ExposedPorts:  ports,
+		BaseDomain:    e.BaseDomain,
+		Pinned:        e.Pinned,
+		CreatedAt:     e.CreatedAt,
+	}
 }

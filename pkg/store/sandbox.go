@@ -232,3 +232,132 @@ type ChatEventJournal interface {
 	// events are recorded.
 	LastSeq(ctx context.Context, chatSessionID string) (int64, error)
 }
+
+// --------------------------------------------------------------------------
+// Sandbox session store (team-scoped runtime metadata)
+// --------------------------------------------------------------------------
+//
+// SandboxSession is the platform-scoped runtime record for one live (or
+// evicted) sandbox. It tracks the bindings a backend cares about:
+//
+//   - SessionID:      stable caller-supplied identifier (chat session or
+//                     fleet task key). Primary key.
+//   - ContainerName:  Incus container name (or K8s pod name once Phase C
+//                     ships). One-to-one with SessionID.
+//   - TemplateID:     platform.sandbox_templates.id the session was cloned
+//                     from. TEXT-encoded UUID in platform mode; bare slug
+//                     in personal mode (where the DAG is flat).
+//   - UpperLayerID:   platform.sandbox_layers.layer_id of the evicted upper
+//                     when State=Evicted. Empty while the session is live.
+//   - State:          creating/running/evicting/evicted/resuming/terminated
+//                     — mirrors the {team_schema}.sandbox_sessions CHECK.
+//                     Personal-mode filestore only uses running/evicted.
+//   - ExposedPorts:   list of ports proxied into the container. Serialized
+//                     as JSONB in platform mode, []int in filestore.
+//   - BaseDomain:     subdomain root used by the proxy tier to construct
+//                     per-port hostnames. Optional.
+//   - Pinned:         manual "do not reap" flag set by `sandbox create`.
+//   - CreatedBy:      user ID that opened the session (FK-shaped but not
+//                     enforced across DBs). Optional in personal mode.
+//   - CreatedAt / UpdatedAt / LastActiveAt: standard audit timestamps.
+//
+// The store is a thin persistence layer; registry-level semantics
+// (resolve-by-prefix, reap-against-live-containers) remain in
+// pkg/sandbox.SessionRegistry as higher-level operations over this store.
+
+// SandboxSessionState enumerates the lifecycle phases tracked in the
+// {team_schema}.sandbox_sessions.state column.
+type SandboxSessionState string
+
+const (
+	SandboxSessionStateCreating   SandboxSessionState = "creating"
+	SandboxSessionStateRunning    SandboxSessionState = "running"
+	SandboxSessionStateEvicting   SandboxSessionState = "evicting"
+	SandboxSessionStateEvicted    SandboxSessionState = "evicted"
+	SandboxSessionStateResuming   SandboxSessionState = "resuming"
+	SandboxSessionStateTerminated SandboxSessionState = "terminated"
+)
+
+// SandboxSession is one session metadata row.
+//
+// The SessionID maps to the {team_schema}.sandbox_sessions.id column.
+// ChatSessionID is a separate (FK-shaped, not enforced) reference to the
+// chat session in {team_schema}.sessions. In personal mode and in the
+// common one-chat-one-sandbox case, callers MAY set SessionID == ChatSessionID.
+type SandboxSession struct {
+	SessionID      string              `json:"session_id"`
+	ChatSessionID  string              `json:"chat_session_id"`
+	Backend        string              `json:"backend"` // "incus" | "k8s"
+	ContainerName  string              `json:"container_name,omitempty"`
+	TemplateID     string              `json:"template_id"`
+	UpperLayerID   string              `json:"upper_layer_id,omitempty"`
+	State          SandboxSessionState `json:"state"`
+	PodName        string              `json:"pod_name,omitempty"`
+	NodeName       string              `json:"node_name,omitempty"`
+	ExposedPorts   []int               `json:"exposed_ports,omitempty"`
+	BaseDomain     string              `json:"base_domain,omitempty"`
+	Pinned         bool                `json:"pinned,omitempty"`
+	CreatedBy      string              `json:"created_by,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	UpdatedAt      time.Time           `json:"updated_at"`
+	LastActiveAt   time.Time           `json:"last_active_at"`
+}
+
+// SandboxSessionFilter narrows list queries. Zero-value fields are ignored.
+type SandboxSessionFilter struct {
+	State         SandboxSessionState // exact match
+	CreatedBy     string              // exact user id
+	Pinned        *bool               // nil = ignore; true/false = exact
+	ContainerName string              // exact match (useful for reverse lookup)
+}
+
+// SandboxSessionStore manages team-scoped sandbox runtime metadata. In
+// platform mode it backs {team_schema}.sandbox_sessions; in personal mode
+// it backs ~/.local/share/astonish/sandbox/sandbox_sessions.json.
+//
+// Implementations MUST be safe for concurrent use.
+type SandboxSessionStore interface {
+	// Put inserts or replaces the row keyed by SessionID. CreatedAt is
+	// preserved across replaces (the implementation keeps the earliest
+	// CreatedAt it has seen); UpdatedAt is bumped to now().
+	Put(ctx context.Context, sess *SandboxSession) error
+
+	// Get returns the row by SessionID, or nil, nil if absent.
+	Get(ctx context.Context, sessionID string) (*SandboxSession, error)
+
+	// GetByContainerName returns the row whose ContainerName matches
+	// exactly. Returns nil, nil if no row matches. Useful for the
+	// backend-side reverse lookup during port-expose flows.
+	GetByContainerName(ctx context.Context, containerName string) (*SandboxSession, error)
+
+	// List returns rows matching the filter, ordered by CreatedAt DESC.
+	List(ctx context.Context, filter SandboxSessionFilter) ([]*SandboxSession, error)
+
+	// Delete removes the row by SessionID. Returns nil (no error) if the
+	// row does not exist — Delete is idempotent to match the pkg/sandbox
+	// SessionRegistry.Remove contract that preceded this interface.
+	Delete(ctx context.Context, sessionID string) error
+
+	// UpdateState transitions the lifecycle state and bumps UpdatedAt /
+	// LastActiveAt. Returns an error if the row is absent. Platform-mode
+	// implementations MAY enforce valid transitions; personal-mode MAY
+	// accept any transition.
+	UpdateState(ctx context.Context, sessionID string, state SandboxSessionState) error
+
+	// UpdatePorts replaces the ExposedPorts list. Returns an error if the
+	// row is absent.
+	UpdatePorts(ctx context.Context, sessionID string, ports []int) error
+
+	// SetBaseDomain sets BaseDomain on an existing row. Returns an error
+	// if the row is absent.
+	SetBaseDomain(ctx context.Context, sessionID, baseDomain string) error
+
+	// SetPinned toggles the Pinned flag on an existing row.
+	SetPinned(ctx context.Context, sessionID string, pinned bool) error
+
+	// SetUpperLayer associates an evicted-upper layer with the session.
+	// Passing empty string clears the association. Callers are responsible
+	// for the corresponding LayerStore ref_count adjustment in the same
+	// transaction when applicable (pgstore provides that guarantee).
+	SetUpperLayer(ctx context.Context, sessionID, upperLayerID string) error
+}

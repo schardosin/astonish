@@ -127,6 +127,52 @@ type Config struct {
 	// MaxConcurrentEvictions caps parallel tar-stream evictions
 	// (default 8).
 	MaxConcurrentEvictions int
+
+	// TemplatePersister, when non-nil, is invoked by BuildTemplate and
+	// SaveSessionAsTemplate after the capture pipeline succeeds. It
+	// gives the caller a single place to:
+	//
+	//   - Insert a row into store.SandboxLayerStore keyed by
+	//     artifact.LayerID (content-addressed; safe to call repeatedly).
+	//   - Upsert the template's top_layer_id in store.SandboxTemplateStore.
+	//   - Increment the layer's ref_count under the same transaction.
+	//
+	// The callback is advisory: errors are returned to the caller of
+	// BuildTemplate / SaveSessionAsTemplate but do NOT roll back the
+	// on-CephFS layer bytes (those are content-addressed and safe to
+	// leave — the GC reconciler will reap them if no row references
+	// them after the grace period, per §5.12).
+	//
+	// Nil means "no persistence hook"; the backend returns the
+	// artifact and the caller is responsible for persistence. This
+	// matches the prior contract and keeps backward compatibility.
+	TemplatePersister TemplatePersister
+}
+
+// TemplatePersister is the callback signature used by Config.TemplatePersister.
+// It receives the just-captured artifact and optional caller-provided
+// context (the session ID or template ID the artifact was built for).
+// See Config.TemplatePersister for invocation rules.
+type TemplatePersister func(ctx context.Context, artifact *sandbox.TemplateArtifact, persistHints TemplatePersistHints) error
+
+// TemplatePersistHints gives the persister the breadcrumbs it needs to
+// attribute the artifact to a template row without forcing the backend
+// to know the template DAG. Fields are optional; persisters may ignore
+// any they don't need.
+type TemplatePersistHints struct {
+	// TemplateID is set when BuildTemplate produced the artifact.
+	TemplateID string
+
+	// SessionID is set when SaveSessionAsTemplate produced the artifact.
+	// Persisters that want to bind the new layer to a template row must
+	// resolve SessionID → TemplateID themselves (via the session record
+	// they own) because the backend does not keep that link.
+	SessionID string
+
+	// ParentTemplateID is propagated verbatim for persisters that want
+	// to build the template DAG edge in the same transaction as the
+	// layer row.
+	ParentTemplateID string
 }
 
 func (c *Config) applyDefaults() {

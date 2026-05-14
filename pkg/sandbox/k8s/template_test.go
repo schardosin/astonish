@@ -39,6 +39,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/fake"
 	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/remotecommand"
 
@@ -614,6 +616,188 @@ func TestDeleteTemplate_ContextCancelled(t *testing.T) {
 	cancel()
 	if err := b.DeleteTemplate(ctx, "t1", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TemplatePersister hook (Phase D)
+// ---------------------------------------------------------------------------
+
+// newBackendWithPersister builds a backend like newBackendWithFakeClient
+// but with a caller-supplied TemplatePersister and auto-running builder
+// pods. The returned backend is ready to exercise BuildTemplate /
+// SaveSessionAsTemplate end-to-end; callers just need to stub the
+// executor.
+func newBackendWithPersister(t *testing.T, persister TemplatePersister) (*K8sBackend, kubernetes.Interface) {
+	t.Helper()
+	cs := fake.NewSimpleClientset()
+	b, err := New(Config{
+		Client:            cs,
+		Sessions:          newRegistry(t),
+		TemplatePersister: persister,
+	})
+	if err != nil {
+		t.Fatalf("k8s.New: %v", err)
+	}
+	// Mirror autoRunBuilderPods inline so callers don't need to call it.
+	fake2, ok := b.client.(interface {
+		PrependReactor(verb, resource string, r clientgotesting.ReactionFunc)
+	})
+	if !ok {
+		t.Fatalf("client does not support PrependReactor")
+	}
+	fake2.PrependReactor("create", "pods", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		ca, ok := action.(clientgotesting.CreateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		pod, ok := ca.GetObject().(*corev1.Pod)
+		if !ok {
+			return false, nil, nil
+		}
+		if pod.Labels[labelType] != typeTemplateBuilder {
+			return false, nil, nil
+		}
+		pod.Status.Phase = corev1.PodRunning
+		return false, nil, nil
+	})
+	return b, cs
+}
+
+// TestBuildTemplate_PersisterInvokedOnSuccess asserts the persister is
+// called exactly once with the captured artifact when BuildTemplate
+// succeeds, and that hints.TemplateID carries the spec's identifier.
+func TestBuildTemplate_PersisterInvokedOnSuccess(t *testing.T) {
+	var calls int32
+	var gotHints TemplatePersistHints
+	var gotArt *sandbox.TemplateArtifact
+
+	persister := func(_ context.Context, a *sandbox.TemplateArtifact, h TemplatePersistHints) error {
+		atomic.AddInt32(&calls, 1)
+		gotArt = a
+		gotHints = h
+		return nil
+	}
+
+	b, _ := newBackendWithPersister(t, persister)
+	stubFactory(t, b, func(_ context.Context, opts remotecommand.StreamOptions) error {
+		// Emit valid capture output for every call; build-step calls
+		// ignore the stdout, capture call parses it.
+		_, _ = opts.Stdout.Write(captureStubStdout(sha64, 1234))
+		return nil
+	})
+
+	spec := buildAndTemplateID()
+	art, err := b.BuildTemplate(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("BuildTemplate: %v", err)
+	}
+	if c := atomic.LoadInt32(&calls); c != 1 {
+		t.Errorf("persister calls = %d, want 1", c)
+	}
+	if gotHints.TemplateID != spec.TemplateID {
+		t.Errorf("hints.TemplateID = %q, want %q", gotHints.TemplateID, spec.TemplateID)
+	}
+	if gotHints.SessionID != "" {
+		t.Errorf("hints.SessionID = %q, want empty (BuildTemplate path)", gotHints.SessionID)
+	}
+	if gotArt == nil || gotArt.LayerID != sha64 {
+		t.Errorf("gotArt.LayerID = %v, want %q", gotArt, sha64)
+	}
+	if art.LayerID != sha64 {
+		t.Errorf("returned LayerID = %q, want %q", art.LayerID, sha64)
+	}
+}
+
+// TestBuildTemplate_PersisterErrorPropagates asserts that a non-nil
+// persister error fails BuildTemplate with a wrapped message naming the
+// template — so operators can see which persistence attempt failed.
+func TestBuildTemplate_PersisterErrorPropagates(t *testing.T) {
+	wantErr := errors.New("db down")
+	persister := func(_ context.Context, _ *sandbox.TemplateArtifact, _ TemplatePersistHints) error {
+		return wantErr
+	}
+
+	b, _ := newBackendWithPersister(t, persister)
+	stubFactory(t, b, func(_ context.Context, opts remotecommand.StreamOptions) error {
+		_, _ = opts.Stdout.Write(captureStubStdout(sha64, 1))
+		return nil
+	})
+
+	_, err := b.BuildTemplate(context.Background(), buildAndTemplateID())
+	if err == nil {
+		t.Fatal("expected BuildTemplate to fail when persister errors")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want wrapping %v", err, wantErr)
+	}
+	if !strings.Contains(err.Error(), "python-dev") {
+		t.Errorf("err %q should mention the template id", err)
+	}
+}
+
+// TestSaveSessionAsTemplate_PersisterHintsIncludeSessionID asserts that
+// the save-path populates SessionID on the hints and uses the session's
+// template ID as ParentTemplateID.
+func TestSaveSessionAsTemplate_PersisterHintsIncludeSessionID(t *testing.T) {
+	var gotHints TemplatePersistHints
+	persister := func(_ context.Context, _ *sandbox.TemplateArtifact, h TemplatePersistHints) error {
+		gotHints = h
+		return nil
+	}
+
+	b, _ := newBackendWithPersister(t, persister)
+	seedSession(t, b, "sess-7", "astn-sess-7")
+	rec, _ := b.sessions.GetSession("sess-7")
+	rec.TemplateID = "team-python"
+	if err := b.sessions.PutSession(rec); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	stubFactory(t, b, func(_ context.Context, opts remotecommand.StreamOptions) error {
+		_, _ = opts.Stdout.Write(captureStubStdout(sha64, 99))
+		return nil
+	})
+
+	if _, err := b.SaveSessionAsTemplate(context.Background(), "sess-7"); err != nil {
+		t.Fatalf("SaveSessionAsTemplate: %v", err)
+	}
+	if gotHints.SessionID != "sess-7" {
+		t.Errorf("SessionID = %q, want sess-7", gotHints.SessionID)
+	}
+	if gotHints.ParentTemplateID != "team-python" {
+		t.Errorf("ParentTemplateID = %q, want team-python", gotHints.ParentTemplateID)
+	}
+	if gotHints.TemplateID != "" {
+		t.Errorf("TemplateID = %q, want empty (SaveSessionAsTemplate path)", gotHints.TemplateID)
+	}
+}
+
+// TestSaveSessionAsTemplate_PersisterErrorPropagates is the analogue of
+// TestBuildTemplate_PersisterErrorPropagates for the save path.
+func TestSaveSessionAsTemplate_PersisterErrorPropagates(t *testing.T) {
+	wantErr := errors.New("layer insert failed")
+	persister := func(_ context.Context, _ *sandbox.TemplateArtifact, _ TemplatePersistHints) error {
+		return wantErr
+	}
+
+	b, _ := newBackendWithPersister(t, persister)
+	seedSession(t, b, "sess-8", "astn-sess-8")
+
+	stubFactory(t, b, func(_ context.Context, opts remotecommand.StreamOptions) error {
+		_, _ = opts.Stdout.Write(captureStubStdout(sha64, 1))
+		return nil
+	})
+
+	_, err := b.SaveSessionAsTemplate(context.Background(), "sess-8")
+	if err == nil {
+		t.Fatal("expected error when persister fails")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want wrapping %v", err, wantErr)
+	}
+	if !strings.Contains(err.Error(), "sess-8") {
+		t.Errorf("err %q should mention the session id", err)
 	}
 }
 

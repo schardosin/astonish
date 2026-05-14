@@ -161,6 +161,16 @@ func (b *K8sBackend) BuildTemplate(ctx context.Context, spec sandbox.TemplateBui
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/k8s: BuildTemplate: capture upper: %w", err)
 	}
+
+	if b.cfg.TemplatePersister != nil {
+		hints := TemplatePersistHints{
+			TemplateID: spec.TemplateID,
+		}
+		if perr := b.cfg.TemplatePersister(ctx, artifact, hints); perr != nil {
+			return nil, fmt.Errorf("sandbox/k8s: BuildTemplate: persist artifact for template %q: %w", spec.TemplateID, perr)
+		}
+	}
+
 	return artifact, nil
 }
 
@@ -201,6 +211,16 @@ func (b *K8sBackend) SaveSessionAsTemplate(ctx context.Context, sessionID string
 	artifact, err := b.captureUpperAsLayer(ctx, rec.PodName, rec.TemplateID)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/k8s: SaveSessionAsTemplate(%s): %w", sessionID, err)
+	}
+
+	if b.cfg.TemplatePersister != nil {
+		hints := TemplatePersistHints{
+			SessionID:        sessionID,
+			ParentTemplateID: rec.TemplateID,
+		}
+		if perr := b.cfg.TemplatePersister(ctx, artifact, hints); perr != nil {
+			return nil, fmt.Errorf("sandbox/k8s: SaveSessionAsTemplate(%s): persist artifact: %w", sessionID, perr)
+		}
 	}
 	return artifact, nil
 }

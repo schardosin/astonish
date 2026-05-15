@@ -1,21 +1,25 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // --- Team Template API ---
 //
-// These endpoints manage per-team sandbox template containers.
-// The template name is always "team-<slug>" and is derived server-side from
-// the authenticated team context — never from user input.
+// These endpoints manage per-team sandbox template editor sessions.
+// The session ID is always "team-template-<slug>" and is derived server-side
+// from the authenticated team context — never from user input.
+//
+// The implementation is backend-agnostic: it delegates to sandbox.Backend
+// (CreateSession, ExecInteractive, SaveSessionAsTemplate, DestroySession)
+// which transparently handles both Incus and K8s deployments.
 //
 // All endpoints require team admin permission.
 
@@ -28,7 +32,7 @@ type TeamTemplateStatusResponse struct {
 }
 
 // TeamTemplateStatusHandler handles GET /api/team/template/status.
-// Returns whether the team template container exists and its state.
+// Returns whether the team template editor session exists and its state.
 func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -41,22 +45,39 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
 	resp := TeamTemplateStatusResponse{
 		TemplateName: templateName,
 	}
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		// Sandbox unavailable — template cannot exist
 		respondJSON(w, http.StatusOK, resp)
 		return
 	}
+	if cleanup != nil {
+		defer cleanup()
+	}
 
-	resp.Exists = client.InstanceExists(containerName)
-	if resp.Exists {
-		resp.Running = client.IsRunning(containerName)
+	state, err := backend.SessionState(r.Context(), sessionID)
+	if err != nil {
+		// Error querying state — report as not existing
+		respondJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	switch state {
+	case sandbox.SessionStateRunning:
+		resp.Exists = true
+		resp.Running = true
+	case sandbox.SessionStateStopped, sandbox.SessionStateCreating, sandbox.SessionStateResuming:
+		resp.Exists = true
+		resp.Running = false
+	default:
+		// SessionStateGone or any unknown state
+		resp.Exists = false
 	}
 
 	// Check if team settings has this template saved
@@ -72,7 +93,7 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateCreateHandler handles POST /api/team/template/create.
-// Creates the team template container from @base and starts it.
+// Creates the team template editor session from @base and starts it.
 func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -85,50 +106,55 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-
-	registry, err := sandbox.NewTemplateRegistry()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
-		return
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	// If already exists, just ensure it's running
-	if client.InstanceExists(containerName) {
-		if !client.IsRunning(containerName) {
-			if err := client.StartInstance(containerName); err != nil {
-				respondError(w, http.StatusInternalServerError, "failed to start template: "+err.Error())
-				return
-			}
+	// Check if editor session already exists
+	state, _ := backend.SessionState(r.Context(), sessionID)
+	if state == sandbox.SessionStateRunning {
+		respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "templateName": templateName, "created": false})
+		return
+	}
+	if state == sandbox.SessionStateStopped {
+		// Resume the stopped session
+		if err := backend.StartSession(r.Context(), sessionID); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to start template editor: "+err.Error())
+			return
 		}
 		respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "templateName": templateName, "created": false})
 		return
 	}
 
-	// Create the template from @base
-	if err := sandbox.CreateTemplate(client, registry, templateName, "Team template for "+tc.TeamSlug); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to create template: "+err.Error())
+	// Create fresh editor session from @base
+	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
+		SessionID:  sessionID,
+		Type:       sandbox.SessionTypeChat, // editor sessions use chat type
+		TemplateID: sandbox.BaseTemplateID,
+		TeamSlug:   tc.TeamSlug,
+		Labels: map[string]string{
+			"astonish.io/purpose": "team-template-editor",
+			"astonish.io/team":    tc.TeamSlug,
+		},
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create template editor: "+err.Error())
 		return
-	}
-
-	// Start the container for immediate terminal access
-	if !client.IsRunning(containerName) {
-		if err := client.StartInstance(containerName); err != nil {
-			slog.Warn("team template created but failed to start", "component", "sandbox-terminal", "template", templateName, "error", err)
-		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "templateName": templateName, "created": true})
 }
 
 // TeamTemplateSaveHandler handles POST /api/team/template/save.
-// Saves the current template state and sets it as the team's default for fleet sessions.
+// Captures the editor session's upper layer as a template and sets it as
+// the team's default for fleet sessions.
 func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -141,27 +167,31 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	if cleanup != nil {
+		defer cleanup()
+	}
 
-	if !client.InstanceExists(containerName) {
-		respondError(w, http.StatusNotFound, "Team template does not exist — create it first")
+	// Verify the editor session exists and is running
+	state, _ := backend.SessionState(r.Context(), sessionID)
+	if state == sandbox.SessionStateGone {
+		respondError(w, http.StatusNotFound, "Team template editor does not exist — create it first")
+		return
+	}
+	if state != sandbox.SessionStateRunning {
+		respondError(w, http.StatusConflict, "Team template editor is not running")
 		return
 	}
 
-	registry, err := sandbox.NewTemplateRegistry()
+	// Capture the upper layer as a template
+	_, err = backend.SaveSessionAsTemplate(r.Context(), sessionID)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
-		return
-	}
-
-	// Snapshot the template (for overlay-based templates this just updates metadata)
-	if err := sandbox.SnapshotTemplate(client, registry, templateName); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to save template: "+err.Error())
 		return
 	}
@@ -188,7 +218,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateRestoreHandler handles POST /api/team/template/restore.
-// Destroys the current team template and recreates it fresh from @base.
+// Destroys the current editor session and recreates it fresh from @base.
 func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -201,49 +231,46 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-
-	registry, err := sandbox.NewTemplateRegistry()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
-		return
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	// Delete existing template if it exists
-	if client.InstanceExists(containerName) {
-		if err := sandbox.DeleteTemplate(client, registry, templateName); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to delete template: "+err.Error())
-			return
-		}
+	// Destroy existing editor session if it exists
+	if err := backend.DestroySession(r.Context(), sessionID); err != nil {
+		slog.Warn("failed to destroy old template editor session", "component", "team-template", "error", err)
 	}
 
 	// Recreate from @base
-	if err := sandbox.CreateTemplate(client, registry, templateName, "Team template for "+tc.TeamSlug); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to recreate template: "+err.Error())
+	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
+		SessionID:  sessionID,
+		Type:       sandbox.SessionTypeChat,
+		TemplateID: sandbox.BaseTemplateID,
+		TeamSlug:   tc.TeamSlug,
+		Labels: map[string]string{
+			"astonish.io/purpose": "team-template-editor",
+			"astonish.io/team":    tc.TeamSlug,
+		},
+	})
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to recreate template editor: "+err.Error())
 		return
 	}
 
-	// Start the container
-	if !client.IsRunning(containerName) {
-		if err := client.StartInstance(containerName); err != nil {
-			slog.Warn("team template recreated but failed to start", "component", "sandbox-terminal", "template", templateName, "error", err)
-		}
-	}
-
-	// Clear saved template from team settings (it's a fresh container now)
+	// Clear saved template from team settings (it's a fresh session now)
 	svc := store.FromRequest(r)
 	if svc != nil && svc.Settings != nil {
 		settings, err := svc.Settings.Get(r.Context())
 		if err == nil && settings != nil && settings.TemplateName == templateName {
 			settings.TemplateName = ""
 			if saveErr := svc.Settings.Save(r.Context(), settings); saveErr != nil {
-				slog.Warn("failed to clear template from team settings", "component", "sandbox-terminal", "error", saveErr)
+				slog.Warn("failed to clear template from team settings", "component", "team-template", "error", saveErr)
 			}
 		}
 	}
@@ -252,7 +279,7 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateDeleteHandler handles DELETE /api/team/template.
-// Destroys the team template container and clears the team settings.
+// Destroys the team template editor session and clears the team settings.
 func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -264,26 +291,21 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-
-	registry, err := sandbox.NewTemplateRegistry()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to load template registry: "+err.Error())
-		return
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	if client.InstanceExists(containerName) {
-		if err := sandbox.DeleteTemplate(client, registry, templateName); err != nil {
-			respondError(w, http.StatusInternalServerError, "failed to delete template: "+err.Error())
-			return
-		}
+	// Destroy the editor session
+	if err := backend.DestroySession(r.Context(), sessionID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to delete template editor: "+err.Error())
+		return
 	}
 
 	// Clear from team settings
@@ -293,7 +315,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil && settings != nil && settings.TemplateName != "" {
 			settings.TemplateName = ""
 			if saveErr := svc.Settings.Save(r.Context(), settings); saveErr != nil {
-				slog.Warn("failed to clear template from team settings", "component", "sandbox-terminal", "error", saveErr)
+				slog.Warn("failed to clear template from team settings", "component", "team-template", "error", saveErr)
 			}
 		}
 	}
@@ -302,7 +324,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateStartHandler handles POST /api/team/template/start.
-// Starts the team template container (for terminal access after save/stop).
+// Starts the team template editor session (for terminal access after stop).
 func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -314,37 +336,29 @@ func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-
-	if !client.InstanceExists(containerName) {
-		respondError(w, http.StatusNotFound, "Team template does not exist")
-		return
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	if client.IsRunning(containerName) {
+	state, _ := backend.SessionState(r.Context(), sessionID)
+	if state == sandbox.SessionStateGone {
+		respondError(w, http.StatusNotFound, "Team template editor does not exist")
+		return
+	}
+	if state == sandbox.SessionStateRunning {
 		respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "alreadyRunning": true})
 		return
 	}
 
-	// Ensure overlay is mounted before starting
-	registry, err := sandbox.NewTemplateRegistry()
-	if err == nil {
-		meta := registry.Get(templateName)
-		if meta != nil && meta.BasedOn != "" {
-			// Overlay templates need their overlay mounted
-			sandbox.EnsureOverlayMounted(client, containerName, meta.BasedOn, registry)
-		}
-	}
-
-	if err := client.StartInstance(containerName); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to start template: "+err.Error())
+	if err := backend.StartSession(r.Context(), sessionID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to start template editor: "+err.Error())
 		return
 	}
 
@@ -352,7 +366,7 @@ func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplatePackagesHandler handles POST /api/team/template/packages.
-// Installs packages in the team template container (non-interactive).
+// Installs packages in the team template editor session (non-interactive).
 type TeamTemplatePackagesRequest struct {
 	Packages []string `json:"packages"`
 }
@@ -378,34 +392,67 @@ func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName)
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	client, err := sandboxConnect()
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
+	if cleanup != nil {
+		defer cleanup()
+	}
 
-	if !client.InstanceExists(containerName) || !client.IsRunning(containerName) {
-		respondError(w, http.StatusConflict, "Team template is not running")
+	// Verify editor session is running
+	state, _ := backend.SessionState(r.Context(), sessionID)
+	if state != sandbox.SessionStateRunning {
+		respondError(w, http.StatusConflict, "Team template editor is not running")
 		return
 	}
 
 	// Execute apt-get install non-interactively
 	cmd := append([]string{"apt-get", "install", "-y"}, req.Packages...)
-	proc, err := incus.ExecInteractive(client, containerName, cmd, incus.ExecOpts{})
+	result, err := backend.Exec(r.Context(), sessionID, sandbox.ExecSpec{
+		Command: cmd,
+	})
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to exec install: "+err.Error())
 		return
 	}
-	defer proc.Close()
-
-	exitCode, _ := proc.Wait()
-	if exitCode != 0 {
-		respondError(w, http.StatusInternalServerError, "package install failed with exit code")
+	if result.ExitCode != 0 {
+		respondError(w, http.StatusInternalServerError, "package install failed with exit code "+itoa(result.ExitCode))
 		return
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "installed": req.Packages})
+}
+
+// teamTemplateExecInteractive starts a PTY session in the team template
+// editor. Used by the WebSocket terminal handler.
+func teamTemplateExecInteractive(ctx context.Context, backend sandbox.Backend, teamSlug string, opts sandbox.PTYSpec) (sandbox.ExecStream, error) {
+	sessionID := teamTemplateSessionID(teamSlug)
+	return backend.ExecInteractive(ctx, sessionID, opts)
+}
+
+// itoa is a quick int-to-string helper to avoid importing strconv for one call.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	buf := [20]byte{}
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	return string(buf[i:])
 }

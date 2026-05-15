@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
@@ -29,15 +29,18 @@ type terminalResizeMsg struct {
 }
 
 // SandboxTerminalHandler handles GET /api/sandbox/terminal (WebSocket upgrade).
-// It opens a PTY session inside a running template container and bridges
-// the WebSocket to the container's stdin/stdout.
+// It opens a PTY session inside a running team template editor session and
+// bridges the WebSocket to the session's stdin/stdout.
 //
-// The container name is derived server-side from the team slug — never from
-// user-supplied query parameters — to prevent accessing arbitrary containers.
+// The implementation is backend-agnostic: it delegates to sandbox.Backend's
+// ExecInteractive method, which handles both Incus containers and K8s pods.
+//
+// The session ID is derived server-side from the team slug — never from
+// user-supplied query parameters — to prevent accessing arbitrary sessions.
 //
 // Protocol:
-//   - Binary messages from client → container stdin (keystrokes)
-//   - Binary messages from server → container stdout (terminal output)
+//   - Binary messages from client → session stdin (keystrokes)
+//   - Binary messages from server → session stdout (terminal output)
 //   - Text messages from client: JSON control messages (e.g., {"type":"resize","cols":120,"rows":40})
 func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	// Require team admin
@@ -45,31 +48,32 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Derive container name from team slug
+	// Derive session ID from team slug
 	tc := pgstore.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
 	}
 
-	templateName := "team-" + tc.TeamSlug
-	containerName := incus.TemplateName(templateName) // astn-tpl-team-<slug>
-
-	// Connect to sandbox
-	platform := incus.DetectPlatform()
-	client, err := incus.Connect(platform)
+	// Build backend
+	backend, cleanup, err := sandboxBackendForRequest(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, "Sandbox unavailable: "+err.Error())
 		return
 	}
+	if cleanup != nil {
+		defer cleanup()
+	}
 
-	// Verify the container exists and is running
-	if !client.InstanceExists(containerName) {
-		respondError(w, http.StatusNotFound, "Team template container does not exist")
+	// Verify the editor session exists and is running
+	sessionID := teamTemplateSessionID(tc.TeamSlug)
+	state, _ := backend.SessionState(r.Context(), sessionID)
+	if state == sandbox.SessionStateGone {
+		respondError(w, http.StatusNotFound, "Team template editor does not exist")
 		return
 	}
-	if !client.IsRunning(containerName) {
-		respondError(w, http.StatusConflict, "Team template container is not running")
+	if state != sandbox.SessionStateRunning {
+		respondError(w, http.StatusConflict, "Team template editor is not running")
 		return
 	}
 
@@ -81,28 +85,29 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	// Start interactive shell in the container
-	proc, err := incus.ExecInteractive(client, containerName, []string{"bash", "-l"}, incus.ExecOpts{
-		Rows: 24,
-		Cols: 80,
+	// Start interactive shell via the Backend interface
+	stream, err := teamTemplateExecInteractive(r.Context(), backend, tc.TeamSlug, sandbox.PTYSpec{
+		Command: []string{"bash", "-l"},
+		Rows:    24,
+		Cols:    80,
 	})
 	if err != nil {
-		slog.Error("terminal exec failed", "component", "sandbox-terminal", "container", containerName, "error", err)
+		slog.Error("terminal exec failed", "component", "sandbox-terminal", "session", sessionID, "error", err)
 		ws.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "Failed to start shell"))
 		return
 	}
-	defer proc.Close()
+	defer stream.Close()
 
 	var wg sync.WaitGroup
 
-	// Goroutine: container stdout → WebSocket (binary frames)
+	// Goroutine: session stdout → WebSocket (binary frames)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		buf := make([]byte, 4096)
 		for {
-			n, err := proc.Stdout.Read(buf)
+			n, err := stream.Read(buf)
 			if n > 0 {
 				if writeErr := ws.WriteMessage(websocket.BinaryMessage, buf[:n]); writeErr != nil {
 					slog.Debug("terminal ws write error", "component", "sandbox-terminal", "error", writeErr)
@@ -121,7 +126,7 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Main loop: WebSocket → container stdin + control messages
+	// Main loop: WebSocket → session stdin + control messages
 	for {
 		msgType, msg, err := ws.ReadMessage()
 		if err != nil {
@@ -133,8 +138,8 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 
 		switch msgType {
 		case websocket.BinaryMessage:
-			// Raw input → container stdin
-			if _, err := proc.Stdin.Write(msg); err != nil {
+			// Raw input → session stdin
+			if _, err := stream.Write(msg); err != nil {
 				slog.Debug("terminal stdin write error", "component", "sandbox-terminal", "error", err)
 				goto done
 			}
@@ -147,7 +152,7 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if ctrl.Type == "resize" && ctrl.Cols > 0 && ctrl.Rows > 0 {
-				if err := proc.Resize(ctrl.Cols, ctrl.Rows); err != nil {
+				if err := stream.Resize(ctrl.Rows, ctrl.Cols); err != nil {
 					slog.Debug("terminal resize error", "component", "sandbox-terminal", "error", err)
 				}
 			}
@@ -155,8 +160,8 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 done:
-	// Close stdin to signal the shell to exit
-	proc.Stdin.Close()
+	// Close the stream to signal the process to exit
+	stream.Close()
 
 	// Wait for stdout goroutine to finish
 	wg.Wait()

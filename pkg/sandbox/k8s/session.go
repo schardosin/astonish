@@ -63,6 +63,16 @@ const (
 	typeFleet           = "fleet"
 	typeTemplateBuilder = "template-builder"
 
+	// labelPurpose distinguishes special-purpose sessions (e.g., team-template
+	// editors) from regular chat/fleet sessions. This label controls
+	// volume-mount behaviour: team-template-editor sessions mount the layers
+	// PVC read-write so SaveSessionAsTemplate can stage artifacts directly.
+	labelPurpose = "astonish.io/purpose"
+
+	// purposeTeamTemplateEditor is the label value for team-template editor
+	// sessions. Pods with this purpose get RW access to the layers PVC.
+	purposeTeamTemplateEditor = "team-template-editor"
+
 	annotationCreatedBy  = "astonish.io/created-by"
 	annotationCreatedAt  = "astonish.io/created-at"
 	annotationLayerChain = "astonish.io/layer-chain"
@@ -225,7 +235,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 					{Name: "ASTONISH_HANDOFF_ARGS", Value: "infinity"},
 				},
 				VolumeMounts: []corev1.VolumeMount{
-					{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
+					{Name: volumeLayers, MountPath: mountLayers, ReadOnly: spec.Labels[labelPurpose] != purposeTeamTemplateEditor},
 					{Name: volumeUppers, MountPath: mountUppers},
 					{Name: volumeUpper, MountPath: mountUpper},
 					{Name: volumeWork, MountPath: mountWork},
@@ -239,7 +249,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: b.cfg.LayersPVCName,
-							ReadOnly:  true,
+							ReadOnly:  spec.Labels[labelPurpose] != purposeTeamTemplateEditor,
 						},
 					},
 				},

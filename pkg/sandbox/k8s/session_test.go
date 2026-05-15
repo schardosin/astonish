@@ -217,6 +217,48 @@ func TestBuildPodManifest_Rejects(t *testing.T) {
 	}
 }
 
+// TestBuildPodManifest_TeamTemplateEditorMountsLayersRW verifies that when a
+// session spec has the team-template-editor purpose label, the layers PVC is
+// mounted read-write (required for SaveSessionAsTemplate to stage artifacts).
+func TestBuildPodManifest_TeamTemplateEditorMountsLayersRW(t *testing.T) {
+	b, _ := newBackendWithFakeClient(t)
+	pod, err := b.buildPodManifest(sandbox.SessionSpec{
+		SessionID:  "team-template-general",
+		TemplateID: "@base",
+		Labels: map[string]string{
+			"astonish.io/purpose": "team-template-editor",
+			"astonish.io/team":    "general",
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildPodManifest: %v", err)
+	}
+
+	// Volume source should be RW (ReadOnly=false).
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == volumeLayers {
+			if v.PersistentVolumeClaim == nil {
+				t.Fatalf("volume %q should be PVC-backed", volumeLayers)
+			}
+			if v.PersistentVolumeClaim.ReadOnly {
+				t.Errorf("team-template-editor volume %q should be read-write, got read-only", volumeLayers)
+			}
+			break
+		}
+	}
+
+	// VolumeMount should be RW (ReadOnly=false).
+	c := pod.Spec.Containers[0]
+	for _, vm := range c.VolumeMounts {
+		if vm.Name == volumeLayers {
+			if vm.ReadOnly {
+				t.Errorf("team-template-editor mount %q should be read-write, got read-only", volumeLayers)
+			}
+			break
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // buildResourceRequirements
 // ---------------------------------------------------------------------------

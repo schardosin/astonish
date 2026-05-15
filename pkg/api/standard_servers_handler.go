@@ -257,6 +257,31 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		}
 	}
 
+	// Persist WebSearchTool/WebExtractTool in the team settings so that
+	// effectiveAppConfig() and MergeStandardServersWithConfig() can resolve
+	// the active web tool from the database in platform mode (not config.yaml).
+	if srv.WebSearchTool != "" || srv.WebExtractTool != "" {
+		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+			teamSettings, err := svc.Settings.Get(r.Context())
+			if err != nil {
+				slog.Warn("failed to read team settings for web tool update", "server", srv.ID, "error", err)
+			} else {
+				if teamSettings == nil {
+					teamSettings = &store.TeamSettings{}
+				}
+				if srv.WebSearchTool != "" {
+					teamSettings.WebSearchTool = srv.WebSearchTool
+				}
+				if srv.WebExtractTool != "" {
+					teamSettings.WebExtractTool = srv.WebExtractTool
+				}
+				if err := svc.Settings.Save(r.Context(), teamSettings); err != nil {
+					slog.Warn("failed to save team settings with web tool", "server", srv.ID, "error", err)
+				}
+			}
+		}
+	}
+
 	// Discover tools in background
 	servers := map[string]config.MCPServerConfig{srv.ID: newConfig}
 	go func() {

@@ -50,7 +50,7 @@ AI processing with optional tool use.
   prompt: "Search for: {query}"
   tools: true
   tools_selection:
-    - tavily-search
+    - tavily_search
   output_model:
     search_result: str
   user_message:

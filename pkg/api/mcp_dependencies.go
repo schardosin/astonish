@@ -234,8 +234,9 @@ func CheckMCPDependenciesHandler(w http.ResponseWriter, r *http.Request) {
 		// Also include standard servers (Tavily, Brave, etc.) that are configured
 		// via config.yaml / credential store. These are never stored in the DB
 		// but are always available at runtime via mergeStandardServers().
+		// Use the request-scoped effective config so team-level WebSearchTool is honored.
 		stdCfg := &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
-		config.MergeStandardServers(stdCfg)
+		config.MergeStandardServersWithConfig(stdCfg, effectiveAppConfig(r))
 		for name := range stdCfg.MCPServers {
 			installedServers[name] = true
 		}

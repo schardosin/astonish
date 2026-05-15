@@ -335,7 +335,7 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 		}
 	}
 	if len(validStores) > 0 {
-		mcpCfg := buildMCPConfigFromStores(validStores, requiredServers)
+		mcpCfg := buildMCPConfigFromStores(validStores, requiredServers, EffectiveAppConfigFromContext(ctx, true))
 		mgr = mcp.NewManagerFromConfig(mcpCfg)
 	} else {
 		// Personal mode: load from filesystem
@@ -359,7 +359,9 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 // buildMCPConfigFromStores creates an MCPConfig from multiple platform DB stores
 // (typically team + org) for the specified server names. Team store is queried first
 // so that team-level server configs override org-level ones of the same name.
-func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers []string) *config.MCPConfig {
+// appCfg is used by MergeStandardServersWithConfig to resolve team-level WebSearchTool;
+// pass nil to fall back to the on-disk config.yaml.
+func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers []string, appCfg *config.AppConfig) *config.MCPConfig {
 	cfg := &config.MCPConfig{
 		MCPServers: make(map[string]config.MCPServerConfig),
 	}
@@ -400,9 +402,10 @@ func buildMCPConfigFromStores(mcpStores []store.MCPServerStore, requiredServers 
 
 	// Merge installed standard servers (Tavily, Brave, Firecrawl, etc.)
 	// This injects their full config (command, args, env with API key) from
-	// the filesystem credential store, so they can be launched even if they
+	// the credential store, so they can be launched even if they
 	// are not in the team DB store.
-	config.MergeStandardServers(cfg)
+	// Use the passed appCfg so team-level WebSearchTool is honored.
+	config.MergeStandardServersWithConfig(cfg, appCfg)
 
 	return cfg
 }

@@ -253,3 +253,133 @@ func TestIsEnabled_DefaultsToTrue(t *testing.T) {
 		})
 	}
 }
+
+// TestMergeStandardServersWithConfig_TeamWebSearchTool verifies that passing an
+// AppConfig with WebSearchTool set causes the matching standard server to be
+// injected into the MCPConfig, even when no on-disk config.yaml has the setting.
+// This is the core regression test for the K8s platform-mode fix where
+// WebSearchTool is sourced from team settings (DB) rather than config.yaml.
+func TestMergeStandardServersWithConfig_TeamWebSearchTool(t *testing.T) {
+	// Register a test secret getter that returns a fake API key for tavily.
+	// This simulates the platform_secrets store having the key.
+	originalGetter := getInstalledSecretGetter()
+	SetInstalledSecretGetter(func(key string) string {
+		if key == "web_servers.tavily.api_key" {
+			return "test-tavily-key-12345"
+		}
+		return ""
+	})
+	defer SetInstalledSecretGetter(originalGetter)
+
+	// Simulate platform mode: AppConfig with WebSearchTool from team settings DB.
+	// The on-disk config.yaml would have no web_search_tool (K8s ephemeral fs).
+	appCfg := &AppConfig{
+		General: GeneralConfig{
+			WebSearchTool:  "tavily:tavily_search",
+			WebExtractTool: "tavily:tavily_extract",
+		},
+	}
+
+	cfg := &MCPConfig{MCPServers: make(map[string]MCPServerConfig)}
+	MergeStandardServersWithConfig(cfg, appCfg)
+
+	// Tavily should be injected because appCfg.General.WebSearchTool is set.
+	srv, ok := cfg.MCPServers["tavily"]
+	if !ok {
+		t.Fatal("tavily should be injected when WebSearchTool is set in passed appCfg")
+	}
+	if srv.Command != "npx" {
+		t.Errorf("expected command 'npx', got %q", srv.Command)
+	}
+	// Verify the API key was resolved from the getter
+	if srv.Env == nil || srv.Env["TAVILY_API_KEY"] != "test-tavily-key-12345" {
+		t.Errorf("expected TAVILY_API_KEY to be set from getter, got env: %v", srv.Env)
+	}
+}
+
+// TestMergeStandardServersWithConfig_NoWebSearchTool verifies that when
+// AppConfig has no WebSearchTool set, web-category standard servers are NOT injected.
+// This is the expected behavior — avoids registering inactive providers.
+func TestMergeStandardServersWithConfig_NoWebSearchTool(t *testing.T) {
+	// Register a getter that has the key (key exists, but tool not configured).
+	originalGetter := getInstalledSecretGetter()
+	SetInstalledSecretGetter(func(key string) string {
+		if key == "web_servers.tavily.api_key" {
+			return "test-tavily-key-12345"
+		}
+		return ""
+	})
+	defer SetInstalledSecretGetter(originalGetter)
+
+	// Empty AppConfig — simulates K8s pod with no config.yaml web_search_tool
+	// AND no team setting (unlikely, but tests the guard).
+	appCfg := &AppConfig{}
+
+	cfg := &MCPConfig{MCPServers: make(map[string]MCPServerConfig)}
+	MergeStandardServersWithConfig(cfg, appCfg)
+
+	// Tavily should NOT be injected because WebSearchTool is empty.
+	if _, ok := cfg.MCPServers["tavily"]; ok {
+		t.Fatal("tavily should NOT be injected when WebSearchTool is empty")
+	}
+}
+
+// TestMergeStandardServersWithConfig_HyphenatedToolName verifies that the
+// team-settings value with a hyphenated tool name (e.g., "tavily:tavily-search")
+// still correctly identifies the server ID for injection.
+func TestMergeStandardServersWithConfig_HyphenatedToolName(t *testing.T) {
+	originalGetter := getInstalledSecretGetter()
+	SetInstalledSecretGetter(func(key string) string {
+		if key == "web_servers.tavily.api_key" {
+			return "test-key"
+		}
+		return ""
+	})
+	defer SetInstalledSecretGetter(originalGetter)
+
+	// Hyphenated tool name as found in some DB entries (migration residue).
+	appCfg := &AppConfig{
+		General: GeneralConfig{
+			WebSearchTool: "tavily:tavily-search",
+		},
+	}
+
+	cfg := &MCPConfig{MCPServers: make(map[string]MCPServerConfig)}
+	MergeStandardServersWithConfig(cfg, appCfg)
+
+	// Should still inject tavily — prefix match is "tavily".
+	if _, ok := cfg.MCPServers["tavily"]; !ok {
+		t.Fatal("tavily should be injected even with hyphenated tool name (prefix match)")
+	}
+}
+
+// TestMergeStandardServersWithConfig_NilAppCfgFallsBackToFile verifies that
+// passing nil appCfg falls back to LoadAppConfig() behavior (backward compat).
+func TestMergeStandardServersWithConfig_NilAppCfgFallsBackToFile(t *testing.T) {
+	// Set up a temp config dir with a config.yaml that has web_search_tool.
+	configDir := setupTempConfigDir(t)
+
+	configYAML := `general:
+  web_search_tool: "tavily:tavily_search"
+`
+	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0644); err != nil {
+		t.Fatalf("failed to write test config.yaml: %v", err)
+	}
+
+	originalGetter := getInstalledSecretGetter()
+	SetInstalledSecretGetter(func(key string) string {
+		if key == "web_servers.tavily.api_key" {
+			return "file-based-key"
+		}
+		return ""
+	})
+	defer SetInstalledSecretGetter(originalGetter)
+
+	cfg := &MCPConfig{MCPServers: make(map[string]MCPServerConfig)}
+	// nil appCfg → reads from file
+	MergeStandardServersWithConfig(cfg, nil)
+
+	if _, ok := cfg.MCPServers["tavily"]; !ok {
+		t.Fatal("tavily should be injected when nil appCfg falls back to file with web_search_tool set")
+	}
+}

@@ -79,16 +79,27 @@ func LoadMCPConfigRaw() (*MCPConfig, error) {
 	return &config, nil
 }
 
-// mergeStandardServers injects configured standard servers from config.yaml
-// into the MCPConfig. Entries from config.yaml override same-name entries in mcp_config.json
-// but preserve any explicit Enabled flag the user has set.
+// mergeStandardServers injects configured standard servers into the MCPConfig.
+// It delegates to mergeStandardServersWithConfig using the file-based AppConfig.
+func mergeStandardServers(cfg *MCPConfig) {
+	mergeStandardServersWithConfig(cfg, nil)
+}
+
+// mergeStandardServersWithConfig injects configured standard servers into the MCPConfig.
+// If appCfg is nil, it falls back to LoadAppConfig() (file-based config.yaml).
+// Callers in platform mode should pass the request-scoped effective config so that
+// team-level WebSearchTool settings are respected.
+//
 // Key-based servers (Tavily, Brave, Firecrawl) require an API key — resolved from
 // the credential store first, then config.yaml.
 // Keyless servers are always injected — they need no setup.
-func mergeStandardServers(cfg *MCPConfig) {
-	appCfg, err := LoadAppConfig()
-	if err != nil {
-		slog.Warn("failed to load app config for MCP server merge", "error", err)
+func mergeStandardServersWithConfig(cfg *MCPConfig, appCfg *AppConfig) {
+	if appCfg == nil {
+		var err error
+		appCfg, err = LoadAppConfig()
+		if err != nil {
+			slog.Warn("failed to load app config for MCP server merge", "error", err)
+		}
 	}
 	getter := getInstalledSecretGetter()
 
@@ -156,8 +167,18 @@ func mergeStandardServers(cfg *MCPConfig) {
 // into the given MCPConfig. Call this after building an MCPConfig from
 // database stores in platform mode, so that standard/embedded servers
 // are visible alongside user-configured servers.
+// NOTE: In platform mode, prefer MergeStandardServersWithConfig to pass
+// the request-scoped effective AppConfig (with team settings applied).
 func MergeStandardServers(cfg *MCPConfig) {
-	mergeStandardServers(cfg)
+	mergeStandardServersWithConfig(cfg, nil)
+}
+
+// MergeStandardServersWithConfig is like MergeStandardServers but accepts an
+// explicit AppConfig. In platform mode, callers should pass the effective config
+// (with team settings applied) so that WebSearchTool/WebExtractTool are resolved
+// from the database rather than from the on-disk config.yaml.
+func MergeStandardServersWithConfig(cfg *MCPConfig, appCfg *AppConfig) {
+	mergeStandardServersWithConfig(cfg, appCfg)
 }
 
 // SaveMCPConfig saves the MCP configuration to the config directory.

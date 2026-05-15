@@ -211,7 +211,8 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 		cfg := &config.MCPConfig{MCPServers: merged}
 		// Merge standard servers (Tavily, Brave, etc.) so they appear alongside
 		// user-configured DB servers in platform mode.
-		config.MergeStandardServers(cfg)
+		// Pass the request-scoped effective config so team-level WebSearchTool is honored.
+		config.MergeStandardServersWithConfig(cfg, effectiveAppConfig(r))
 		return cfg
 	}
 

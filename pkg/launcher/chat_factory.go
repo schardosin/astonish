@@ -2312,7 +2312,8 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 	// 3. Merge standard servers (Tavily, Brave, etc.) that are configured via
 	// config.yaml / credential store. These are never stored in the DB but
 	// should be available in platform mode just as they are in personal mode.
-	config.MergeStandardServers(cfg)
+	// Pass the effective app config so team-level WebSearchTool is honored.
+	config.MergeStandardServersWithConfig(cfg, api.EffectiveAppConfigFromContext(ctx, true))
 
 	return cfg, nil
 }

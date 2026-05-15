@@ -443,11 +443,17 @@ func buildCaptureScript(layersPath, builderID string) string {
 	// Canonical tar: --sort=name --mtime=@0 pins layout byte-for-byte
 	// across runs with identical content. --numeric-owner --xattrs
 	// --acls match the preservation requirements (§5.6).
+	//
+	// Two-pass approach (POSIX-compatible, no bash process substitution):
+	//   Pass 1: tar the upper into a temp archive and compute SHA-256.
+	//   Pass 2: extract the archive into the staging rootfs.
+	// This avoids the bash-only >(process substitution) syntax that fails
+	// on Debian's /bin/sh (dash).
 	b.WriteString("tar --numeric-owner --xattrs --acls --sort=name --mtime=@0 \\\n")
-	b.WriteString("    -C /var/astonish/upper -cf - . \\\n")
-	b.WriteString("  | tee >(sha256sum > /tmp/astn-sha) \\\n")
-	b.WriteString("  | tar --numeric-owner --xattrs --acls -C \"$STAGING/rootfs\" -xf -\n")
-	b.WriteString("SHA=$(awk '{print $1}' /tmp/astn-sha)\n")
+	b.WriteString("    -C /var/astonish/upper -cf /tmp/astn-layer.tar .\n")
+	b.WriteString("SHA=$(sha256sum /tmp/astn-layer.tar | awk '{print $1}')\n")
+	b.WriteString("tar --numeric-owner --xattrs --acls -C \"$STAGING/rootfs\" -xf /tmp/astn-layer.tar\n")
+	b.WriteString("rm -f /tmp/astn-layer.tar\n")
 	b.WriteString("if [ -d \"$LAYERS_DIR/$SHA\" ]; then\n")
 	b.WriteString("  rm -rf \"$STAGING\"\n")
 	b.WriteString("else\n")

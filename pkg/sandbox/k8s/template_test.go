@@ -8,7 +8,7 @@
 //   - Name derivation: builder-pod prefix, sanitized template ID,
 //     timestamp suffix.
 //   - parentLayerOf helper: empty chain, single element, multi-element.
-//   - Capture-script shape: `set -e`, canonical tar options, tee to
+//   - Capture-script shape: `set -e`, canonical tar options, sha256sum,
 //     sha256sum, staging-directory rename, emitted SHA= / SIZE= lines.
 //   - parseCaptureOutput: valid, missing SHA, missing SIZE, malformed
 //     SIZE, short SHA, extra diagnostic lines.

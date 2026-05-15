@@ -172,6 +172,14 @@ func (cr *ChatRunner) InjectSandboxTemplate(tpl string) {
 	cr.ctx = store.WithSandboxTemplate(cr.ctx, tpl)
 }
 
+// InjectSandboxLayerChain adds the pre-resolved overlay layer chain to the
+// runner's context. On K8s, the chain is ordered oldest-first (e.g.,
+// ["@base", "<sha256>"]) and used directly as SessionSpec.LayerChain.
+// Must be called before Run(), after InjectSandboxTemplate.
+func (cr *ChatRunner) InjectSandboxLayerChain(chain []string) {
+	cr.ctx = store.WithSandboxLayerChain(cr.ctx, chain)
+}
+
 // InjectSessionService adds a tenant-scoped session store to the runner's context
 // so that sub-agents (delegate_tasks) create child sessions in the correct store
 // (e.g., pgstore PersonalSessions) rather than the factory-time default (FileStore).

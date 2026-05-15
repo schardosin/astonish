@@ -220,7 +220,11 @@ func (nt *NodeTool) getClientFromContext(ctx context.Context, sessionID string) 
 	}
 	if nt.pool != nil {
 		tpl := store.SandboxTemplateFromContext(ctx)
+		chain := store.SandboxLayerChainFromContext(ctx)
 		if tpl != "" {
+			if len(chain) > 0 {
+				return nt.pool.GetOrCreateWithChain(sessionID, tpl, chain)
+			}
 			return nt.pool.GetOrCreateWithTemplate(sessionID, tpl)
 		}
 		return nt.pool.GetOrCreate(sessionID)

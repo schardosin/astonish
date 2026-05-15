@@ -73,6 +73,7 @@ type backendNodeClient struct {
 	backend    Backend
 	sessionID  string // set by BindSession; stable after first call
 	templateID string // may be empty → backend default
+	layerChain []string // pre-resolved chain (K8s); nil → derive from templateID
 	limits     ResourceLimits
 
 	mu         sync.Mutex
@@ -85,10 +86,11 @@ type backendNodeClient struct {
 // newBackendNodeClient constructs a client. The session is NOT created until
 // BindSession is called; the client is inert until then so the caller may
 // defer provisioning until it knows the LLM actually needs a tool.
-func newBackendNodeClient(b Backend, templateID string, limits ResourceLimits) *backendNodeClient {
+func newBackendNodeClient(b Backend, templateID string, layerChain []string, limits ResourceLimits) *backendNodeClient {
 	return &backendNodeClient{
 		backend:    b,
 		templateID: templateID,
+		layerChain: layerChain,
 		limits:     limits,
 	}
 }
@@ -131,6 +133,7 @@ func (c *backendNodeClient) provision(sessionID string) {
 		SessionID:  sessionID,
 		Type:       SessionTypeChat,
 		TemplateID: c.templateID,
+		LayerChain: c.layerChain,
 		Limits:     c.limits,
 	}
 	if _, err := c.backend.CreateSession(ctx, spec); err != nil {
@@ -361,14 +364,18 @@ func NewBackendPool(b Backend, limits ResourceLimits) ToolNodePool {
 }
 
 func (p *backendPool) GetOrCreate(sessionID string) ToolNodeClient {
-	return p.getOrCreate(sessionID, "")
+	return p.getOrCreate(sessionID, "", nil)
 }
 
 func (p *backendPool) GetOrCreateWithTemplate(sessionID, template string) ToolNodeClient {
-	return p.getOrCreate(sessionID, template)
+	return p.getOrCreate(sessionID, template, nil)
 }
 
-func (p *backendPool) getOrCreate(sessionID, template string) ToolNodeClient {
+func (p *backendPool) GetOrCreateWithChain(sessionID, template string, chain []string) ToolNodeClient {
+	return p.getOrCreate(sessionID, template, chain)
+}
+
+func (p *backendPool) getOrCreate(sessionID, template string, chain []string) ToolNodeClient {
 	if sessionID == "" {
 		return nil
 	}
@@ -389,7 +396,7 @@ func (p *backendPool) getOrCreate(sessionID, template string) ToolNodeClient {
 		}
 		return c
 	}
-	c := newBackendNodeClient(p.backend, template, p.limits)
+	c := newBackendNodeClient(p.backend, template, chain, p.limits)
 	p.clients[sessionID] = c
 	return c
 }

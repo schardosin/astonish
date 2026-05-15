@@ -79,6 +79,13 @@ type ToolNodePool interface {
 	// the override is ignored (templates are immutable post-create).
 	GetOrCreateWithTemplate(sessionID, template string) ToolNodeClient
 
+	// GetOrCreateWithChain is like GetOrCreateWithTemplate but also
+	// supplies a pre-resolved layer chain (oldest-first). On backends
+	// that use content-addressed layers (K8s), this chain is passed
+	// directly to SessionSpec.LayerChain, bypassing name-based lookup.
+	// On Incus (where templates are named containers), chain is ignored.
+	GetOrCreateWithChain(sessionID, template string, chain []string) ToolNodeClient
+
 	// Cleanup destroys every client the pool has vended. After Cleanup
 	// the pool is unusable; further GetOrCreate calls return nil.
 	Cleanup()
@@ -134,6 +141,11 @@ func (a *nodePoolAdapter) GetOrCreateWithTemplate(sessionID, template string) To
 		return nil
 	}
 	return c
+}
+
+func (a *nodePoolAdapter) GetOrCreateWithChain(sessionID, template string, _ []string) ToolNodeClient {
+	// Incus pool ignores the chain; templates are named containers on disk.
+	return a.GetOrCreateWithTemplate(sessionID, template)
 }
 
 func (a *nodePoolAdapter) Cleanup() { a.p.Cleanup() }

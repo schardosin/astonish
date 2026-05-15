@@ -751,6 +751,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
 		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings.TemplateName != "" {
 			runner.InjectSandboxTemplate(settings.TemplateName)
+			// On K8s, resolve the template name → layer chain via the
+			// platform DB so the pod gets a real layer chain (not the
+			// human-readable template name which is not a valid layer ID).
+			if chain := resolveTemplateLayerChain(r.Context(), settings.TemplateName); len(chain) > 0 {
+				runner.InjectSandboxLayerChain(chain)
+			}
 		}
 	}
 

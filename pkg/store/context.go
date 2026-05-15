@@ -224,6 +224,7 @@ func FleetPlanStoreFromContext(ctx context.Context) FleetPlanStore {
 }
 
 const sandboxTemplateKey contextKey = "astonish_sandbox_template"
+const sandboxLayerChainKey contextKey = "astonish_sandbox_layer_chain"
 const sessionServiceKey contextKey = "astonish_session_service"
 const userIDKey contextKey = "astonish_user_id"
 
@@ -244,6 +245,28 @@ func SandboxTemplateFromContext(ctx context.Context) string {
 	}
 	tpl, _ := ctx.Value(sandboxTemplateKey).(string)
 	return tpl
+}
+
+// WithSandboxLayerChain returns a new context containing the resolved overlay
+// layer chain (ordered oldest-first, e.g. ["@base", "<sha256>"]). This is the
+// pre-resolved chain that the K8s backend passes directly to
+// SessionSpec.LayerChain, bypassing the template-name-to-SHA indirection.
+//
+// When present, backends MUST use this chain instead of treating the template
+// name as a literal layer ID.
+func WithSandboxLayerChain(ctx context.Context, chain []string) context.Context {
+	return context.WithValue(ctx, sandboxLayerChainKey, chain)
+}
+
+// SandboxLayerChainFromContext retrieves the resolved layer chain from context.
+// Returns nil if no chain is present (personal mode, Incus backend, or team
+// has no custom template). Callers should fall back to the template name if nil.
+func SandboxLayerChainFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	chain, _ := ctx.Value(sandboxLayerChainKey).([]string)
+	return chain
 }
 
 // WithSessionService returns a new context containing a tenant-scoped SessionStore.

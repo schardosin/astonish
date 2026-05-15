@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -155,6 +156,14 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 // TeamTemplateSaveHandler handles POST /api/team/template/save.
 // Captures the editor session's upper layer as a template and sets it as
 // the team's default for fleet sessions.
+//
+// Architecture (K8s):
+//  1. Runs the capture pipeline → produces a content-addressed layer on the PVC.
+//  2. Persists a sandbox_layers row (idempotent, content-addressed).
+//  3. Upserts a sandbox_templates row (scope=team, slug=team-<slug>).
+//  4. Increments the new layer's ref_count, decrements the old one.
+//  5. Updates team_settings.template_name = "team-<slug>" so chat sessions
+//     can resolve the name → layer chain at launch time.
 func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -166,7 +175,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	templateName := "team-" + tc.TeamSlug
+	templateSlug := "team-" + tc.TeamSlug
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
 	backend, cleanup, err := sandboxBackendForRequest(r)
@@ -190,10 +199,23 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Capture the upper layer as a template
-	_, err = backend.SaveSessionAsTemplate(r.Context(), sessionID)
+	artifact, err := backend.SaveSessionAsTemplate(r.Context(), sessionID)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to save template: "+err.Error())
 		return
+	}
+
+	// Persist the layer and template DAG rows in the platform DB.
+	pgStore := getPlatformPGStore()
+	if pgStore != nil {
+		if err := persistTeamTemplateArtifact(r.Context(), pgStore, tc.TeamSlug, templateSlug, artifact); err != nil {
+			// Log but don't fail — the PVC layer exists either way.
+			// A future "resolve" call will fail gracefully and fall back.
+			slog.Error("failed to persist template artifact to platform DB",
+				"team", tc.TeamSlug,
+				"layer", artifact.LayerID,
+				"error", err)
+		}
 	}
 
 	// Update team settings to use this template
@@ -207,14 +229,100 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 		if settings == nil {
 			settings = &store.TeamSettings{}
 		}
-		settings.TemplateName = templateName
+		settings.TemplateName = templateSlug
 		if err := svc.Settings.Save(r.Context(), settings); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to save team settings: "+err.Error())
 			return
 		}
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "templateName": templateName})
+	respondJSON(w, http.StatusOK, map[string]any{"status": "ok", "templateName": templateSlug})
+}
+
+// persistTeamTemplateArtifact writes the captured layer and template rows
+// to the platform DB. Idempotent: re-capturing the same content is safe.
+//
+// Steps:
+//  1. PutLayer (ON CONFLICT DO NOTHING for content dedup).
+//  2. GetBySlug to see if the template already exists.
+//  3. If exists: decrement old layer ref, update top_layer_id, increment new.
+//  4. If not: Create template row, increment ref.
+func persistTeamTemplateArtifact(ctx context.Context, pgStore *pgstore.PGStore, teamSlug, templateSlug string, artifact *sandbox.TemplateArtifact) error {
+	layers := pgStore.SandboxLayers()
+	templates := pgStore.SandboxTemplates()
+	if layers == nil || templates == nil {
+		return fmt.Errorf("platform store not available")
+	}
+
+	// 1. Ensure the layer row exists.
+	layer := &store.SandboxLayer{
+		LayerID:    artifact.LayerID,
+		ParentLayer: ptrIfNonEmpty(artifact.ParentLayer),
+		CephFSPath: "/mnt/astonish-layers/" + artifact.LayerID,
+		SizeBytes:  artifact.SizeBytes,
+	}
+	if err := layers.PutLayer(ctx, layer); err != nil {
+		return fmt.Errorf("put layer: %w", err)
+	}
+
+	// 2. Check if the template already exists.
+	existing, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeTeam, teamSlug, templateSlug)
+	if err != nil {
+		return fmt.Errorf("get template by slug: %w", err)
+	}
+
+	baseTemplateID := baseTemplateUUID // well-known UUID from migration 005
+
+	if existing != nil {
+		// 3a. Template exists — swap top_layer_id.
+		oldLayerID := existing.TopLayerID
+		existing.TopLayerID = &artifact.LayerID
+		existing.Version++
+		if err := templates.Update(ctx, existing); err != nil {
+			return fmt.Errorf("update template: %w", err)
+		}
+		// Ref-count: +1 new, -1 old.
+		if err := layers.IncrementRefCount(ctx, artifact.LayerID); err != nil {
+			return fmt.Errorf("increment ref on new layer: %w", err)
+		}
+		if oldLayerID != nil && *oldLayerID != "" && *oldLayerID != "@base" {
+			if err := layers.DecrementRefCount(ctx, *oldLayerID); err != nil {
+				slog.Warn("failed to decrement ref on old layer",
+					"layer", *oldLayerID, "error", err)
+			}
+		}
+	} else {
+		// 3b. New template — create with parent = @base.
+		tpl := &store.SandboxTemplate{
+			Slug:             templateSlug,
+			Scope:            store.SandboxTemplateScopeTeam,
+			OwnerID:          teamSlug,
+			Name:             "Team " + teamSlug + " default",
+			ParentTemplateID: &baseTemplateID,
+			TopLayerID:       &artifact.LayerID,
+			Version:          1,
+		}
+		if err := templates.Create(ctx, tpl); err != nil {
+			return fmt.Errorf("create template: %w", err)
+		}
+		if err := layers.IncrementRefCount(ctx, artifact.LayerID); err != nil {
+			return fmt.Errorf("increment ref on new layer: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// baseTemplateUUID is the well-known UUID for the global @base template,
+// matching the seed migration (005_seed_base_template.sql).
+const baseTemplateUUID = "a0000000-0000-4000-8000-000000000001"
+
+// ptrIfNonEmpty returns a pointer to s if non-empty, nil otherwise.
+func ptrIfNonEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 // TeamTemplateRestoreHandler handles POST /api/team/template/restore.

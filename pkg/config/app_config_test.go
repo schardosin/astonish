@@ -232,3 +232,50 @@ func TestGetPlatformDSN_Empty(t *testing.T) {
 		t.Errorf("GetPlatformDSN() = %q, want empty", got)
 	}
 }
+
+// --- SandboxConfig.BackendKind / IsK8sBackend ---
+
+func TestSandboxConfig_BackendKind(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", "incus"},
+		{"incus", "incus"},
+		{"INCUS", "incus"},
+		{"k8s", "k8s"},
+		{"K8S", "k8s"},
+		{"kubernetes", "k8s"},
+		{"Kubernetes", "k8s"},
+		{"KUBERNETES", "k8s"},
+		{"mock", "mock"},
+		{"bogus", "bogus"},
+	}
+	for _, tt := range tests {
+		c := SandboxConfig{Backend: tt.input}
+		if got := c.BackendKind(); got != tt.want {
+			t.Errorf("BackendKind(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSandboxConfig_IsK8sBackend(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"", false},
+		{"incus", false},
+		{"k8s", true},
+		{"kubernetes", true},
+		{"K8S", true},
+		{"KUBERNETES", true},
+		{"mock", false},
+	}
+	for _, tt := range tests {
+		c := SandboxConfig{Backend: tt.input}
+		if got := c.IsK8sBackend(); got != tt.want {
+			t.Errorf("IsK8sBackend(%q) = %v, want %v", tt.input, got, tt.want)
+		}
+	}
+}

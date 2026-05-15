@@ -58,8 +58,8 @@ This creates `astonish-linux-amd64` in the project root.
 ### Step 2: Build the Docker image locally
 
 ```bash
-# Build the Incus Docker image (uses Dockerfile.incus)
-docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
+# Build the Incus Docker image (uses docker/incus/Dockerfile)
+docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:latest .
 ```
 
 This builds the image with:
@@ -200,7 +200,7 @@ apt-get update && apt-get install -y docker.io
 
 # Build and test
 make build-linux
-docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
+docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:latest .
 go build -o astonish .
 ./astonish sandbox status
 ```
@@ -237,7 +237,7 @@ docker run --rm schardosin/astonish-incus:latest cat /usr/local/bin/entrypoint-i
 The image needs to exist locally. Build it with:
 ```bash
 make build-linux
-docker build -f Dockerfile.incus -t schardosin/astonish-incus:latest .
+docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:latest .
 ```
 
 ### "Incus API not reachable" timeout

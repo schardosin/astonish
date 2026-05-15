@@ -138,8 +138,13 @@ func TestMockBackend_CreateSession_RequiresFields(t *testing.T) {
 	if _, err := m.CreateSession(context.Background(), sandbox.SessionSpec{TemplateID: "t"}); err == nil {
 		t.Error("CreateSession with empty SessionID: err = nil, want error")
 	}
-	if _, err := m.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: "s"}); err == nil {
-		t.Error("CreateSession with empty TemplateID: err = nil, want error")
+	// Empty TemplateID now defaults to BaseTemplateID ("@base") — should succeed.
+	sess, err := m.CreateSession(context.Background(), sandbox.SessionSpec{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("CreateSession with empty TemplateID should default to @base, got error: %v", err)
+	}
+	if sess.TemplateID != sandbox.BaseTemplateID {
+		t.Errorf("session TemplateID = %q, want %q", sess.TemplateID, sandbox.BaseTemplateID)
 	}
 }
 

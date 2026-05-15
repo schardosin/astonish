@@ -33,6 +33,27 @@ data:
     {{- if .Values.sandbox.enabled }}
     sandbox:
       backend: {{ .Values.sandbox.backend | quote }}
+      {{- with .Values.sandbox.limits }}
+      limits:
+        {{- if .cpu }}
+        cpu: {{ .cpu }}
+        {{- end }}
+        {{- if .memory }}
+        memory: {{ .memory | quote }}
+        {{- end }}
+        {{- if .processes }}
+        processes: {{ .processes }}
+        {{- end }}
+        {{- with $.Values.sandbox.requests }}
+        requests:
+          {{- if .cpuMillis }}
+          cpu_millis: {{ .cpuMillis }}
+          {{- end }}
+          {{- if .memoryMiB }}
+          memory_mib: {{ .memoryMiB }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
       kubernetes:
         in_cluster: true
         namespace: {{ include "astonish.namespace.sandbox" . | quote }}

@@ -587,6 +587,9 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID := effectiveUserID(r)
 
+	// Load app config once for backend-agnostic sandbox cleanup.
+	appCfg, _ := config.LoadAppConfig()
+
 	// If this is an active fleet session, stop it and clean up sandbox
 	registry := getFleetSessionRegistry()
 	if fs := registry.Get(sessionID); fs != nil {
@@ -622,7 +625,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete session: %v", err))
 			return
 		}
-		sandbox.TryDestroySessionContainer(sessionID)
+		sandbox.TryDestroySession(appCfg, sessionID)
 		// Clean up session-scoped app databases
 		if svc.AppStateSQL != nil {
 			// Platform mode: drop all PG schemas matching the session prefix
@@ -665,7 +668,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort: destroy sandbox container if one exists for this session
-	sandbox.TryDestroySessionContainer(sessionID)
+	sandbox.TryDestroySession(appCfg, sessionID)
 
 	// Best-effort: clean up session-scoped app state databases
 	if cleaned := CleanupSessionAppDBs(sessionID); cleaned > 0 {

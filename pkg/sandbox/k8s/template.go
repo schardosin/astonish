@@ -338,23 +338,24 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
-				{
-					Name:    containerName,
-					Image:   b.cfg.SandboxImage,
-					Command: []string{"/bin/sh", "-c", "sleep infinity"},
-					Env: []corev1.EnvVar{
-						{Name: "ASTONISH_TEMPLATE_ID", Value: spec.TemplateID},
-						{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.ParentLayers, ",")},
-						{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
-						{Name: "ASTONISH_WORK_DIR", Value: mountWork},
-						{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: volumeLayers, MountPath: mountLayers}, // RW for atomic rename
-						{Name: volumeUpper, MountPath: mountUpper},
-						{Name: volumeWork, MountPath: mountWork},
-					},
+			{
+				Name:            containerName,
+				Image:           b.cfg.SandboxImage,
+				ImagePullPolicy: imagePullPolicy(b.cfg.SandboxImage),
+				Command:         []string{"/bin/sh", "-c", "sleep infinity"},
+				Env: []corev1.EnvVar{
+					{Name: "ASTONISH_TEMPLATE_ID", Value: spec.TemplateID},
+					{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.ParentLayers, ",")},
+					{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
+					{Name: "ASTONISH_WORK_DIR", Value: mountWork},
+					{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
 				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: volumeLayers, MountPath: mountLayers}, // RW for atomic rename
+					{Name: volumeUpper, MountPath: mountUpper},
+					{Name: volumeWork, MountPath: mountWork},
+				},
+			},
 			},
 			Volumes: []corev1.Volume{
 				{

@@ -54,8 +54,12 @@ func TestToResourceLimits(t *testing.T) {
 		Memory:    "4Gi",
 		CPU:       8,
 		Processes: 1024,
+		Requests: config.SandboxRequests{
+			CPUMillis: 200,
+			MemoryMiB: 512,
+		},
 	}
-	rl := toResourceLimits(in)
+	rl := ToResourceLimits(in)
 	if rl.CPUs != 8 {
 		t.Errorf("CPUs = %d, want 8", rl.CPUs)
 	}
@@ -64,6 +68,12 @@ func TestToResourceLimits(t *testing.T) {
 	}
 	if rl.PIDs != 1024 {
 		t.Errorf("PIDs = %d, want 1024", rl.PIDs)
+	}
+	if rl.RequestCPUMillis != 200 {
+		t.Errorf("RequestCPUMillis = %d, want 200", rl.RequestCPUMillis)
+	}
+	if rl.RequestMemoryMiB != 512 {
+		t.Errorf("RequestMemoryMiB = %d, want 512", rl.RequestMemoryMiB)
 	}
 	// DiskMiB/TimeoutS have no config counterparts — must be zero.
 	if rl.DiskMiB != 0 || rl.TimeoutS != 0 {

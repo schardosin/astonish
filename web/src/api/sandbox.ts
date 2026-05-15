@@ -5,9 +5,15 @@ import { teamFetch } from './teamContext'
 // --- Types ---
 
 export interface SandboxStatus {
+  backend: string           // "incus" | "k8s"
   platform: string
   available: boolean
   reason?: string
+  sandboxEnabled?: boolean
+  runtimeAvailable?: boolean
+  baseTemplateExists?: boolean
+  // Deprecated: use runtimeAvailable
+  incusAvailable?: boolean
   [key: string]: unknown
 }
 
@@ -26,10 +32,15 @@ export interface InitSandboxParams {
 }
 
 export interface SandboxDetails {
+  backend: string           // "incus" | "k8s"
   incus_version: string
   storage_pool: string
   template_count: number
   container_count: number
+  // K8s-specific
+  server_version?: string
+  namespace?: string
+  overlay_mode?: string
   [key: string]: unknown
 }
 

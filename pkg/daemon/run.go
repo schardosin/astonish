@@ -1882,7 +1882,7 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 			deletedIDs := sessionStore.CleanupExpiredSessions(maxAge)
 			// Destroy sandbox containers for deleted sessions
 			for _, id := range deletedIDs {
-				sandbox.TryDestroySessionContainer(id)
+				sandbox.TryDestroySession(appCfg, id)
 			}
 		}
 	}
@@ -1895,20 +1895,42 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 
 	// 3. Prune orphan sandbox containers
 	if sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
-		platform := incus.DetectPlatform()
-		if platform != incus.PlatformUnsupported {
-			incus.SetActivePlatform(platform)
-			client, connErr := incus.Connect(platform)
-			if connErr == nil {
+		var liveSessionIDs map[string]bool
+		if sessionStore != nil {
+			liveSessionIDs = sessionStore.AllSessionIDs()
+		}
+
+		kind := sandbox.BackendKind(appCfg.Sandbox.BackendKind())
+		switch kind {
+		case sandbox.BackendKindK8s:
+			b, cleanup, bErr := sandbox.BackendFromAppConfig(appCfg)
+			if bErr == nil {
+				if cleanup != nil {
+					defer cleanup()
+				}
 				registry, regErr := sandbox.NewSessionRegistry()
 				if regErr == nil {
-					var liveSessionIDs map[string]bool
-					if sessionStore != nil {
-						liveSessionIDs = sessionStore.AllSessionIDs()
-					}
-					pruned, _ := sandbox.PruneOrphans(client, registry, liveSessionIDs)
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					pruned, _ := sandbox.PruneOrphansForBackend(ctx, b, registry, liveSessionIDs)
+					cancel()
 					if pruned > 0 {
-						logger.Printf("[cleanup] Pruned %d orphaned sandbox container(s)", pruned)
+						logger.Printf("[cleanup] Pruned %d orphaned sandbox pod(s)", pruned)
+					}
+				}
+			}
+		default:
+			// Incus path (backward-compatible default)
+			platform := incus.DetectPlatform()
+			if platform != incus.PlatformUnsupported {
+				incus.SetActivePlatform(platform)
+				client, connErr := incus.Connect(platform)
+				if connErr == nil {
+					registry, regErr := sandbox.NewSessionRegistry()
+					if regErr == nil {
+						pruned, _ := sandbox.PruneOrphans(client, registry, liveSessionIDs)
+						if pruned > 0 {
+							logger.Printf("[cleanup] Pruned %d orphaned sandbox container(s)", pruned)
+						}
 					}
 				}
 			}

@@ -56,7 +56,7 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 			return nil, fmt.Errorf("sandbox runtime not available (%s): %w", kind, err)
 		}
 		limits := EffectiveLimits(&appCfg.Sandbox)
-		pool := NewBackendPool(b, toResourceLimits(limits))
+		pool := NewBackendPool(b, ToResourceLimits(limits))
 		wrapped := WrapToolsWithPool(internalTools, pool)
 
 		cleanup := func() {
@@ -104,7 +104,7 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 	}
 }
 
-// toResourceLimits converts the user-visible config.SandboxLimits shape
+// ToResourceLimits converts the user-visible config.SandboxLimits shape
 // (free-form memory string like "2Gi", CPU count, process cap) into the
 // backend-neutral sandbox.ResourceLimits expected by Backend implementations.
 //
@@ -118,11 +118,13 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 // ResourceLimits → SandboxLimits for the Incus orchestration path).
 // Keeping both conversions local makes each call site read naturally
 // without a package-level "normalise" hop.
-func toResourceLimits(l config.SandboxLimits) ResourceLimits {
+func ToResourceLimits(l config.SandboxLimits) ResourceLimits {
 	return ResourceLimits{
-		CPUs:      l.CPU,
-		MemoryMiB: parseMemoryToMiB(l.Memory),
-		PIDs:      l.Processes,
+		CPUs:             l.CPU,
+		MemoryMiB:        parseMemoryToMiB(l.Memory),
+		PIDs:             l.Processes,
+		RequestCPUMillis: l.Requests.CPUMillis,
+		RequestMemoryMiB: l.Requests.MemoryMiB,
 	}
 }
 

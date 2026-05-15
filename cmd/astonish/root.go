@@ -31,8 +31,10 @@ func Execute() error {
 		return nil
 	}
 
-	// Check for updates (skip for version command)
-	if os.Args[1] != "version" {
+	// Check for updates — skip for non-interactive / structured-stdout
+	// subcommands where stdout is a protocol channel (e.g. "node" emits
+	// NDJSON) or already handles its own output ("version").
+	if os.Args[1] != "version" && os.Args[1] != "node" {
 		checkForUpdates()
 	}
 
@@ -229,10 +231,10 @@ func checkForUpdates() {
 
 	// Use semantic version comparison
 	if !versionsEqual(current, latest) {
-		fmt.Println()
-		fmt.Printf("\033[93mA new version of Astonish is available: %s\033[0m\n", result.TagName)
-		fmt.Printf("\033[93mRun \033[1mbrew upgrade schardosin/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
-		fmt.Println()
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintf(os.Stderr, "\033[93mA new version of Astonish is available: %s\033[0m\n", result.TagName)
+		fmt.Fprintf(os.Stderr, "\033[93mRun \033[1mbrew upgrade schardosin/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
+		fmt.Fprintln(os.Stderr)
 	}
 }
 

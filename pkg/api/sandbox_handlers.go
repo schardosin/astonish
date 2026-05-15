@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
@@ -25,11 +27,14 @@ var validTemplateName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 // SandboxStatusResponse is the JSON response for GET /api/sandbox/status.
 type SandboxStatusResponse struct {
+	Backend            string `json:"backend"`
 	Platform           string `json:"platform"`
 	Reason             string `json:"reason,omitempty"`
 	SandboxEnabled     bool   `json:"sandboxEnabled"`
-	IncusAvailable     bool   `json:"incusAvailable"`
+	RuntimeAvailable   bool   `json:"runtimeAvailable"`
 	BaseTemplateExists bool   `json:"baseTemplateExists"`
+	// Deprecated: use RuntimeAvailable. Kept for backward-compat with older UIs.
+	IncusAvailable bool `json:"incusAvailable"`
 }
 
 // SandboxOptionalToolResponse represents one optional tool for the UI.
@@ -51,17 +56,24 @@ type SandboxInitRequest struct {
 
 // SandboxDetailResponse is the JSON response for GET /api/sandbox/details.
 type SandboxDetailResponse struct {
+	Backend            string `json:"backend"`
 	Platform           string `json:"platform"`
 	Reason             string `json:"reason,omitempty"`
 	SandboxEnabled     bool   `json:"sandboxEnabled"`
-	IncusAvailable     bool   `json:"incusAvailable"`
+	RuntimeAvailable   bool   `json:"runtimeAvailable"`
 	BaseTemplateExists bool   `json:"baseTemplateExists"`
-	IncusVersion       string `json:"incus_version,omitempty"`
-	StorageBackend     string `json:"storage_backend,omitempty"`
-	OverlayReady       bool   `json:"overlay_ready"`
-	TemplateCount      int    `json:"template_count"`
-	ContainerCount     int    `json:"container_count"`
-	OrphanCount        int    `json:"orphan_count"`
+	// Deprecated: use RuntimeAvailable. Kept for backward-compat.
+	IncusAvailable bool   `json:"incusAvailable"`
+	IncusVersion   string `json:"incus_version,omitempty"`
+	StorageBackend string `json:"storage_backend,omitempty"`
+	OverlayReady   bool   `json:"overlay_ready"`
+	TemplateCount  int    `json:"template_count"`
+	ContainerCount int    `json:"container_count"`
+	OrphanCount    int    `json:"orphan_count"`
+	// K8s-specific fields (populated when backend == "k8s").
+	ServerVersion string `json:"server_version,omitempty"`
+	Namespace     string `json:"namespace,omitempty"`
+	OverlayMode   string `json:"overlay_mode,omitempty"`
 }
 
 // ContainerInfo represents a session container in the list.
@@ -121,40 +133,57 @@ type CreateTemplateRequest struct {
 
 // SandboxStatusHandler handles GET /api/sandbox/status.
 func SandboxStatusHandler(w http.ResponseWriter, r *http.Request) {
-	platform, reason := incus.DetectPlatformReason()
-
 	appCfg, err := config.LoadAppConfig()
 	sandboxEnabled := true
 	if err == nil && appCfg != nil {
 		sandboxEnabled = sandbox.IsSandboxEnabled(&appCfg.Sandbox)
 	}
 
-	baseTemplateExists := false
-	incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
-	if incusAvailable {
-		// For Docker+Incus, only check if the Docker container is running
-		if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
-			incusAvailable = false
-		}
+	var resp SandboxStatusResponse
+	resp.SandboxEnabled = sandboxEnabled
+
+	backendKind := "incus"
+	if err == nil && appCfg != nil {
+		backendKind = appCfg.Sandbox.BackendKind()
 	}
-	if incusAvailable {
-		client, connErr := incus.Connect(platform)
-		if connErr == nil {
-			incus.SetActivePlatform(platform)
-			containerName := incus.TemplateName(incus.BaseTemplate)
-			baseTemplateExists = client.InstanceExists(containerName)
-		} else {
-			incusAvailable = false
+	resp.Backend = backendKind
+
+	switch backendKind {
+	case "k8s":
+		resp.Platform = "kubernetes"
+		health := sandboxK8sHealth(appCfg)
+		resp.RuntimeAvailable = health.Healthy
+		resp.BaseTemplateExists = health.Healthy // seeded when backend is healthy
+		if !health.Healthy {
+			resp.Reason = health.Reason
 		}
+
+	default: // "incus"
+		platform, reason := incus.DetectPlatformReason()
+		resp.Platform = platformString(platform)
+		resp.Reason = reason
+
+		incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
+		if incusAvailable {
+			if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
+				incusAvailable = false
+			}
+		}
+		if incusAvailable {
+			client, connErr := incus.Connect(platform)
+			if connErr == nil {
+				incus.SetActivePlatform(platform)
+				containerName := incus.TemplateName(incus.BaseTemplate)
+				resp.BaseTemplateExists = client.InstanceExists(containerName)
+			} else {
+				incusAvailable = false
+			}
+		}
+		resp.RuntimeAvailable = incusAvailable
 	}
 
-	resp := SandboxStatusResponse{
-		Platform:           platformString(platform),
-		Reason:             reason,
-		SandboxEnabled:     sandboxEnabled,
-		IncusAvailable:     incusAvailable,
-		BaseTemplateExists: baseTemplateExists,
-	}
+	// Backward compat: mirror runtimeAvailable into deprecated field.
+	resp.IncusAvailable = resp.RuntimeAvailable
 
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -272,56 +301,87 @@ func SandboxInitHandler(w http.ResponseWriter, r *http.Request) {
 // --- New handlers: Details, Containers, Templates ---
 
 // SandboxDetailsHandler handles GET /api/sandbox/details.
-// Returns extended sandbox status including Incus version, storage, counts.
+// Returns extended sandbox status including version, storage, counts.
 func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
-	platform, reason := incus.DetectPlatformReason()
-
 	appCfg, err := config.LoadAppConfig()
 	sandboxEnabled := true
 	if err == nil && appCfg != nil {
 		sandboxEnabled = sandbox.IsSandboxEnabled(&appCfg.Sandbox)
 	}
 
-	resp := SandboxDetailResponse{
-		Platform:       platformString(platform),
-		Reason:         reason,
-		SandboxEnabled: sandboxEnabled,
+	var resp SandboxDetailResponse
+	resp.SandboxEnabled = sandboxEnabled
+
+	backendKind := "incus"
+	if err == nil && appCfg != nil {
+		backendKind = appCfg.Sandbox.BackendKind()
 	}
+	resp.Backend = backendKind
 
-	incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
-	if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
-		incusAvailable = false
-	}
-	resp.IncusAvailable = incusAvailable
-
-	if incusAvailable {
-		incus.SetActivePlatform(platform)
-		client, connErr := incus.Connect(platform)
-		if connErr == nil {
-			containerName := incus.TemplateName(incus.BaseTemplate)
-			resp.BaseTemplateExists = client.InstanceExists(containerName)
-
-			tplRegistry, tplErr := sandbox.NewTemplateRegistry()
-			if tplErr != nil {
-				slog.Warn("failed to create template registry", "error", tplErr)
+	switch backendKind {
+	case "k8s":
+		resp.Platform = "kubernetes"
+		health := sandboxK8sHealth(appCfg)
+		resp.RuntimeAvailable = health.Healthy
+		resp.BaseTemplateExists = health.Healthy
+		if !health.Healthy {
+			resp.Reason = health.Reason
+		}
+		// Populate K8s-specific fields from health details.
+		if health.Details != nil {
+			resp.ServerVersion = health.Details["server_version"]
+			resp.Namespace = health.Details["namespace"]
+			resp.OverlayMode = appCfg.Sandbox.Kubernetes.OverlayMode
+			if resp.OverlayMode == "" {
+				resp.OverlayMode = "fuse"
 			}
-			sessRegistry, sessErr := sandbox.NewSessionRegistry()
-			if sessErr != nil {
-				slog.Warn("failed to create session registry", "error", sessErr)
-			}
-			if tplRegistry != nil && sessRegistry != nil {
-				status, statusErr := sandbox.Status(client, tplRegistry, sessRegistry)
-				if statusErr == nil {
-					resp.IncusVersion = status.IncusVersion
-					resp.StorageBackend = status.StorageBackend
-					resp.OverlayReady = status.OverlayReady
-					resp.TemplateCount = status.TemplateCount
-					resp.ContainerCount = status.SessionCount
-					resp.OrphanCount = status.OrphanCount
+			resp.StorageBackend = "pvc"
+		}
+		resp.OverlayReady = health.Healthy
+
+	default: // "incus"
+		platform, reason := incus.DetectPlatformReason()
+		resp.Platform = platformString(platform)
+		resp.Reason = reason
+
+		incusAvailable := platform == incus.PlatformLinuxNative || platform == incus.PlatformDockerIncus
+		if platform == incus.PlatformDockerIncus && !incus.IsIncusDockerContainerRunning() {
+			incusAvailable = false
+		}
+		resp.RuntimeAvailable = incusAvailable
+
+		if incusAvailable {
+			incus.SetActivePlatform(platform)
+			client, connErr := incus.Connect(platform)
+			if connErr == nil {
+				containerName := incus.TemplateName(incus.BaseTemplate)
+				resp.BaseTemplateExists = client.InstanceExists(containerName)
+
+				tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+				if tplErr != nil {
+					slog.Warn("failed to create template registry", "error", tplErr)
+				}
+				sessRegistry, sessErr := sandbox.NewSessionRegistry()
+				if sessErr != nil {
+					slog.Warn("failed to create session registry", "error", sessErr)
+				}
+				if tplRegistry != nil && sessRegistry != nil {
+					status, statusErr := sandbox.Status(client, tplRegistry, sessRegistry)
+					if statusErr == nil {
+						resp.IncusVersion = status.IncusVersion
+						resp.StorageBackend = status.StorageBackend
+						resp.OverlayReady = status.OverlayReady
+						resp.TemplateCount = status.TemplateCount
+						resp.ContainerCount = status.SessionCount
+						resp.OrphanCount = status.OrphanCount
+					}
 				}
 			}
 		}
 	}
+
+	// Backward compat: mirror runtimeAvailable into deprecated field.
+	resp.IncusAvailable = resp.RuntimeAvailable
 
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -462,9 +522,9 @@ func SandboxContainerDeleteHandler(w http.ResponseWriter, r *http.Request) {
 // SandboxPruneHandler handles POST /api/sandbox/prune.
 // Prunes orphaned containers whose sessions no longer exist.
 func SandboxPruneHandler(w http.ResponseWriter, r *http.Request) {
-	client, err := sandboxConnect()
-	if err != nil {
-		respondError(w, http.StatusServiceUnavailable, err.Error())
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr != nil {
+		respondError(w, http.StatusInternalServerError, "failed to load config: "+cfgErr.Error())
 		return
 	}
 
@@ -476,26 +536,48 @@ func SandboxPruneHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Load existing session IDs from the session store
 	existingSessionIDs := make(map[string]bool)
-	appCfg, cfgErr := config.LoadAppConfig()
-	if cfgErr == nil {
-		if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
-			if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
-				if indexData, loadErr := store.Index().Load(); loadErr == nil {
-					for id := range indexData.Sessions {
-						existingSessionIDs[id] = true
-					}
+	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+			if indexData, loadErr := store.Index().Load(); loadErr == nil {
+				for id := range indexData.Sessions {
+					existingSessionIDs[id] = true
 				}
 			}
 		}
 	}
 
-	pruned, err := sandbox.PruneOrphans(client, sessRegistry, existingSessionIDs)
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "prune failed: "+err.Error())
-		return
-	}
+	kind := sandbox.BackendKind(appCfg.Sandbox.BackendKind())
+	switch kind {
+	case sandbox.BackendKindK8s:
+		b, cleanup, bErr := sandbox.BackendFromAppConfig(appCfg)
+		if bErr != nil {
+			respondError(w, http.StatusServiceUnavailable, "backend init: "+bErr.Error())
+			return
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+		pruned, pErr := sandbox.PruneOrphansForBackend(r.Context(), b, sessRegistry, existingSessionIDs)
+		if pErr != nil {
+			respondError(w, http.StatusInternalServerError, "prune failed: "+pErr.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"pruned": pruned})
 
-	respondJSON(w, http.StatusOK, map[string]any{"pruned": pruned})
+	default:
+		// Incus path
+		client, cErr := sandboxConnect()
+		if cErr != nil {
+			respondError(w, http.StatusServiceUnavailable, cErr.Error())
+			return
+		}
+		pruned, pErr := sandbox.PruneOrphans(client, sessRegistry, existingSessionIDs)
+		if pErr != nil {
+			respondError(w, http.StatusInternalServerError, "prune failed: "+pErr.Error())
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{"pruned": pruned})
+	}
 }
 
 // SandboxTemplateListHandler handles GET /api/sandbox/templates.
@@ -1041,4 +1123,35 @@ func platformString(p incus.Platform) string {
 	default:
 		return "unsupported"
 	}
+}
+
+// sandboxK8sHealth returns a BackendHealth for the K8s sandbox backend.
+// It constructs a Backend via the factory, calls Health, and returns the
+// result. On any construction error it returns an unhealthy status with
+// the error as reason.
+func sandboxK8sHealth(appCfg *config.AppConfig) *sandbox.BackendHealth {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	b, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    fmt.Sprintf("k8s backend construction failed: %v", err),
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+
+	health, err := b.Health(ctx)
+	if err != nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    fmt.Sprintf("k8s health check error: %v", err),
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+	return health
 }

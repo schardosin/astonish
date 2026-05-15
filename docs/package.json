@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
+    "start-host": "astro dev --host",
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro"
@@ -15,7 +16,7 @@
     "@bsmnt/scrollytelling": "^0.3.3",
     "@six-tech/starlight-theme-six": "^1.0.16",
     "@tailwindcss/vite": "^4.1.18",
-    "astro": "^6.1.8",
+    "astro": "^6.3.3",
     "astro-mermaid": "^1.4.0",
     "gsap": "^3.14.2",
     "react": "^19.2.3",

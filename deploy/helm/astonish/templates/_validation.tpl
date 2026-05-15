@@ -12,6 +12,9 @@ Checks:
   3. When sandbox.enabled=true, sandbox.storage.storageClassName is set.
   4. sandbox.podSecurity is one of baseline|privileged|restricted.
   5. sandbox.overlay.mode is one of fuse|kernel|auto.
+  6. sandbox.backend is one of k8s|incus|mock (Go-canonical tokens only).
+  7. sandbox.requests.cpuMillis ≤ sandbox.limits.cpu * 1000 (when both set).
+  8. sandbox.requests.memoryMiB ≤ sandbox.limits.memory (when both set).
 */}}
 
 {{- define "astonish.validate" -}}
@@ -59,6 +62,45 @@ Checks:
 {{- $om := .Values.sandbox.overlay.mode -}}
 {{- if not (has $om (list "fuse" "kernel" "auto")) -}}
 {{- fail (printf "sandbox.overlay.mode must be one of fuse|kernel|auto (got %q)" $om) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* 6. Backend token must be the Go-canonical form. */ -}}
+{{- if .Values.sandbox.enabled -}}
+{{- $sb := .Values.sandbox.backend -}}
+{{- if not (has $sb (list "k8s" "incus" "mock")) -}}
+{{- fail (printf "sandbox.backend must be one of k8s|incus|mock (got %q)" $sb) -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* 7. Requests CPU ≤ Limits CPU (when both set). */ -}}
+{{- if .Values.sandbox.enabled -}}
+{{- if and .Values.sandbox.requests .Values.sandbox.limits -}}
+{{- $reqCPU := .Values.sandbox.requests.cpuMillis | default 0 | int -}}
+{{- $limCPU := .Values.sandbox.limits.cpu | default 0 | int -}}
+{{- if and (gt $reqCPU 0) (gt $limCPU 0) -}}
+{{- if gt $reqCPU (mul $limCPU 1000) -}}
+{{- fail (printf "sandbox.requests.cpuMillis (%d) must not exceed sandbox.limits.cpu (%d) × 1000 = %d" $reqCPU $limCPU (mul $limCPU 1000)) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* 8. Requests memory ≤ Limits memory (basic check: MiB vs MiB). */ -}}
+{{- /* Only enforced when limits.memory looks like a plain integer + Gi/Mi. */ -}}
+{{- if .Values.sandbox.enabled -}}
+{{- if and .Values.sandbox.requests .Values.sandbox.limits -}}
+{{- $reqMem := .Values.sandbox.requests.memoryMiB | default 0 | int -}}
+{{- if gt $reqMem 0 -}}
+{{- $limMemStr := .Values.sandbox.limits.memory | default "" | toString -}}
+{{- if regexMatch "^[0-9]+[Gg][Ii]?[Bb]?$" $limMemStr -}}
+{{- $limGi := regexReplaceAll "[^0-9]" $limMemStr "" | int -}}
+{{- $limMiB := mul $limGi 1024 -}}
+{{- if gt $reqMem (int $limMiB) -}}
+{{- fail (printf "sandbox.requests.memoryMiB (%d) must not exceed sandbox.limits.memory (%s ≈ %d MiB)" $reqMem $limMemStr $limMiB) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 

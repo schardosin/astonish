@@ -1179,6 +1179,13 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return nil // sandbox explicitly disabled — ok
 	}
 
+	// Fleet sessions on non-Incus backends are not yet supported (Phase G).
+	// Return an actionable error instead of the misleading "Incus is not installed".
+	kind := sandbox.BackendKind(appCfg.Sandbox.BackendKind())
+	if kind != sandbox.BackendKindIncus && kind != "" {
+		return fmt.Errorf("fleet sessions on backend %q are not yet supported; use chat sessions, or set sandbox.backend: incus", kind)
+	}
+
 	sandbox.SetSandboxConfig(&appCfg.Sandbox)
 	sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
 	if sandboxErr != nil {

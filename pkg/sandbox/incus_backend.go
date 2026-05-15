@@ -142,7 +142,7 @@ func (b *IncusBackend) CreateSession(ctx context.Context, spec SessionSpec) (*Se
 		return nil, errors.New("CreateSession: SessionID is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("CreateSession: TemplateID is required")
+		spec.TemplateID = BaseTemplateID
 	}
 
 	limits := b.mapLimits(spec.Limits)
@@ -537,7 +537,7 @@ func (b *IncusBackend) EnsureFleetContainer(ctx context.Context, spec FleetSpec)
 		return nil, errors.New("EnsureFleetContainer: FleetKey is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("EnsureFleetContainer: TemplateID is required")
+		spec.TemplateID = BaseTemplateID
 	}
 
 	limits := b.mapLimits(spec.Limits)

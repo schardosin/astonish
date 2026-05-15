@@ -112,6 +112,58 @@ func TestValidateSandboxConfig(t *testing.T) {
 			cfg:     config.SandboxConfig{Prune: config.SandboxPruneConfig{OrphanCheckHours: -1}},
 			wantErr: true,
 		},
+		{
+			name:    "valid K8s memory syntax 2Gi",
+			cfg:     config.SandboxConfig{Limits: config.SandboxLimits{Memory: "2Gi"}},
+			wantErr: false,
+		},
+		{
+			name:    "valid K8s memory syntax 256Mi",
+			cfg:     config.SandboxConfig{Limits: config.SandboxLimits{Memory: "256Mi"}},
+			wantErr: false,
+		},
+		{
+			name:    "negative request cpu millis",
+			cfg:     config.SandboxConfig{Limits: config.SandboxLimits{Requests: config.SandboxRequests{CPUMillis: -1}}},
+			wantErr: true,
+		},
+		{
+			name:    "negative request memory mib",
+			cfg:     config.SandboxConfig{Limits: config.SandboxLimits{Requests: config.SandboxRequests{MemoryMiB: -1}}},
+			wantErr: true,
+		},
+		{
+			name: "request cpu exceeds limit cpu",
+			cfg: config.SandboxConfig{Limits: config.SandboxLimits{
+				CPU:      2,
+				Requests: config.SandboxRequests{CPUMillis: 3000},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "request cpu within limit",
+			cfg: config.SandboxConfig{Limits: config.SandboxLimits{
+				CPU:      2,
+				Requests: config.SandboxRequests{CPUMillis: 500},
+			}},
+			wantErr: false,
+		},
+		{
+			name: "request memory exceeds limit memory",
+			cfg: config.SandboxConfig{Limits: config.SandboxLimits{
+				Memory:   "2GB",
+				Requests: config.SandboxRequests{MemoryMiB: 4096},
+			}},
+			wantErr: true,
+		},
+		{
+			name: "request memory within limit",
+			cfg: config.SandboxConfig{Limits: config.SandboxLimits{
+				Memory:   "2GB",
+				Requests: config.SandboxRequests{MemoryMiB: 256},
+			}},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {

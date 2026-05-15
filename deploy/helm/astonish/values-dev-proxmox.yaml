@@ -89,6 +89,17 @@ sandbox:
     uppers:
       size: 10Gi
 
+  # Dev cluster: 2 nodes × 2 CPUs / 4 Gi RAM each.
+  # Sandbox ceiling: 1 CPU / 1Gi (sufficient for dev tool invocations).
+  # Scheduler floor: 50m / 128Mi → ~40 idle sessions fit per node.
+  limits:
+    cpu: 1
+    memory: "1Gi"
+    processes: 500
+  requests:
+    cpuMillis: 50
+    memoryMiB: 128
+
 # No FUSE device plugin on dev (privileged+mknod is used instead).
 fuseDevicePlugin:
   enabled: false

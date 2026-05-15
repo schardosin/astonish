@@ -26,8 +26,9 @@ interface SandboxForm {
 }
 
 interface SandboxDetailsData {
+  backend?: string
   platform?: string
-  incusAvailable?: boolean
+  runtimeAvailable?: boolean
   baseTemplateExists?: boolean
   incus_version?: string
   storage_backend?: string
@@ -36,6 +37,12 @@ interface SandboxDetailsData {
   container_count?: number
   orphan_count?: number
   reason?: string
+  // K8s-specific
+  server_version?: string
+  namespace?: string
+  overlay_mode?: string
+  // Deprecated: use runtimeAvailable
+  incusAvailable?: boolean
   [key: string]: unknown
 }
 
@@ -209,9 +216,9 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
       .finally(() => setTemplatesLoading(false))
   }, [])
 
-  // Auto-load containers and templates when details show Incus is available
+  // Auto-load containers and templates when runtime is available
   useEffect(() => {
-    if (details?.incusAvailable) {
+    if (details?.runtimeAvailable ?? details?.incusAvailable) {
       loadContainers()
       loadTemplates()
     }
@@ -411,7 +418,10 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
     }
     if (!details) return null
 
-    if (details.platform === 'unsupported') {
+    const runtimeAvailable = details.runtimeAvailable ?? details.incusAvailable ?? false
+    const isK8s = details.backend === 'k8s'
+
+    if (details.platform === 'unsupported' && !isK8s) {
       return (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
@@ -423,13 +433,16 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
       )
     }
 
-    if (!details.incusAvailable) {
+    if (!runtimeAvailable) {
+      const hint = isK8s
+        ? `Kubernetes sandbox not reachable${details.reason ? ` \u2014 ${details.reason}` : ''}`
+        : 'Incus not available \u2014 install with sudo apt install incus'
       return (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
           <Shield size={14} style={{ color: '#eab308' }} />
           <span style={{ color: '#eab308' }}>
-            Incus not available \u2014 install with <code className="font-mono">sudo apt install incus</code>
+            {isK8s ? hint : <>Incus not available &mdash; install with <code className="font-mono">sudo apt install incus</code></>}
           </span>
         </div>
       )
@@ -441,7 +454,7 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
           style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
           <Shield size={14} style={{ color: '#eab308' }} />
           <span style={{ color: '#eab308' }}>
-            Base template not initialized \u2014 run the Setup Wizard to create it
+            Base template not initialized &mdash; run the Setup Wizard to create it
           </span>
         </div>
       )
@@ -461,9 +474,12 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
           </button>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-0.5 pl-5" style={{ color: 'var(--text-muted)' }}>
-          {details.incus_version && <span>Incus {details.incus_version}</span>}
+          {isK8s && details.server_version && <span>K8s {details.server_version}</span>}
+          {isK8s && details.namespace && <span>Namespace: {details.namespace}</span>}
+          {isK8s && details.overlay_mode && <span>Overlay: {details.overlay_mode}</span>}
+          {!isK8s && details.incus_version && <span>Incus {details.incus_version}</span>}
           {details.storage_backend && <span>Storage: {details.storage_backend}</span>}
-          <span>Overlay: {details.overlay_ready ? 'ready' : 'not configured'}</span>
+          {!isK8s && <span>Overlay: {details.overlay_ready ? 'ready' : 'not configured'}</span>}
           <span>{details.template_count} template{details.template_count !== 1 ? 's' : ''}</span>
           <span>{details.container_count} container{details.container_count !== 1 ? 's' : ''}</span>
           {(details.orphan_count ?? 0) > 0 && (
@@ -475,7 +491,7 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
   }
 
   const renderContainers = () => {
-    if (!details?.incusAvailable) return null
+    if (!(details?.runtimeAvailable ?? details?.incusAvailable)) return null
 
     const containers: ContainerItem[] = containerData?.containers || []
     const orphans: ContainerItem[] = containerData?.orphans || []
@@ -720,7 +736,7 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
   }
 
   const renderTemplates = () => {
-    if (!details?.incusAvailable) return null
+    if (!(details?.runtimeAvailable ?? details?.incusAvailable)) return null
 
     const templates: TemplateItem[] = templateData?.templates || []
 
@@ -1102,14 +1118,14 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
       </div>
 
       {/* Session Containers section */}
-      {details?.incusAvailable && (
+      {(details?.runtimeAvailable ?? details?.incusAvailable) && (
         <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
           {renderContainers()}
         </div>
       )}
 
       {/* Templates section */}
-      {details?.incusAvailable && (
+      {(details?.runtimeAvailable ?? details?.incusAvailable) && (
         <div className="pt-4 border-t" style={{ borderColor: 'var(--border-color)' }}>
           {renderTemplates()}
         </div>

@@ -130,6 +130,14 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Deployment',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'deployment/overview' },
+            { label: 'Kubernetes', slug: 'deployment/kubernetes' },
+          ],
+        },
+        {
           label: 'Reference',
           collapsed: true,
           items: [

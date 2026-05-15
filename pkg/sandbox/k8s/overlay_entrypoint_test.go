@@ -42,7 +42,10 @@ func TestEntrypointScript_Defaults(t *testing.T) {
 		{"fuse mountpoint wait", "mountpoint -q"},
 		{"fuse mknod fallback", "mknod /dev/fuse c 10 229"},
 		{"fuse dispatcher", "mount_overlay_fuse || {"},
-		{"handoff default", `exec chroot "$MOUNT_POINT" '/usr/local/bin/astonish' 'node'`},
+		{"handoff env override", `HANDOFF="${ASTONISH_HANDOFF:-$_DEFAULT_HANDOFF}"`},
+		{"handoff default sleep", `_DEFAULT_HANDOFF='/bin/sleep'`},
+		{"handoff args default infinity", `_DEFAULT_HANDOFF_ARGS='infinity'`},
+		{"handoff exec", `exec chroot "$MOUNT_POINT" "$HANDOFF" $HANDOFF_ARGS`},
 	}
 	for _, c := range checks {
 		if !strings.Contains(s, c.want) {
@@ -120,14 +123,14 @@ func TestEntrypointScript_OptionOverrides(t *testing.T) {
 		{
 			name:  "handoff binary override",
 			opts:  EntrypointScriptOptions{Handoff: "/bin/busybox"},
-			wants: []string{`exec chroot "$MOUNT_POINT" '/bin/busybox' 'node'`},
-			avoid: []string{`'/usr/local/bin/astonish'`},
+			wants: []string{`_DEFAULT_HANDOFF='/bin/busybox'`},
+			avoid: []string{`_DEFAULT_HANDOFF='/bin/sleep'`},
 		},
 		{
 			name: "handoff args override — multi-arg",
 			opts: EntrypointScriptOptions{HandoffArgs: []string{"node", "--flag", "value"}},
 			wants: []string{
-				`exec chroot "$MOUNT_POINT" '/usr/local/bin/astonish' 'node' '--flag' 'value'`,
+				`_DEFAULT_HANDOFF_ARGS='node' '--flag' 'value'`,
 			},
 		},
 		{
@@ -154,7 +157,8 @@ func TestEntrypointScript_OptionOverrides(t *testing.T) {
 				"UPPER_DIR='/ud'",
 				"WORK_DIR='/wd'",
 				"MOUNT_POINT='/mp'",
-				`exec chroot "$MOUNT_POINT" '/h' 'x' 'y'`,
+				`_DEFAULT_HANDOFF='/h'`,
+				`_DEFAULT_HANDOFF_ARGS='x' 'y'`,
 			},
 		},
 	}
@@ -197,11 +201,11 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	if o.MountPoint != "/sandbox/rootfs" {
 		t.Errorf("MountPoint default = %q, want /sandbox/rootfs", o.MountPoint)
 	}
-	if o.Handoff != "/usr/local/bin/astonish" {
-		t.Errorf("Handoff default = %q, want /usr/local/bin/astonish", o.Handoff)
+	if o.Handoff != "/bin/sleep" {
+		t.Errorf("Handoff default = %q, want /bin/sleep", o.Handoff)
 	}
-	if len(o.HandoffArgs) != 1 || o.HandoffArgs[0] != "node" {
-		t.Errorf("HandoffArgs default = %v, want [node]", o.HandoffArgs)
+	if len(o.HandoffArgs) != 1 || o.HandoffArgs[0] != "infinity" {
+		t.Errorf("HandoffArgs default = %v, want [infinity]", o.HandoffArgs)
 	}
 	if o.HostBinaryPath != "/usr/local/bin/astonish-host" {
 		t.Errorf("HostBinaryPath default = %q, want /usr/local/bin/astonish-host", o.HostBinaryPath)
@@ -212,6 +216,9 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	if o.EnsureFuseDevice == nil || !*o.EnsureFuseDevice {
 		t.Errorf("EnsureFuseDevice default = %v, want &true", o.EnsureFuseDevice)
 	}
+	if o.BindKernelFS == nil || !*o.BindKernelFS {
+		t.Errorf("BindKernelFS default = %v, want &true", o.BindKernelFS)
+	}
 
 	// Idempotency: re-applying defaults must not duplicate args or
 	// mutate already-set values.
@@ -221,6 +228,7 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 		HandoffArgs:      []string{"a"},
 		Mode:             OverlayModeKernel,
 		EnsureFuseDevice: &falseVal,
+		BindKernelFS:     &falseVal,
 	}
 	custom.applyDefaults()
 	custom.applyDefaults()
@@ -235,6 +243,9 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	}
 	if custom.EnsureFuseDevice == nil || *custom.EnsureFuseDevice {
 		t.Errorf("applyDefaults mutated explicit EnsureFuseDevice: %v", custom.EnsureFuseDevice)
+	}
+	if custom.BindKernelFS == nil || *custom.BindKernelFS {
+		t.Errorf("applyDefaults mutated explicit BindKernelFS: %v", custom.BindKernelFS)
 	}
 }
 
@@ -444,6 +455,69 @@ func TestEntrypointScript_OverlayModes(t *testing.T) {
 	})
 }
 
+// TestEntrypointScript_BindKernelFS exercises the Section 2b kernel-
+// filesystem bind-mount block which makes /dev (including /dev/ptmx),
+// /proc, and /sys visible inside the chroot.
+func TestEntrypointScript_BindKernelFS(t *testing.T) {
+	t.Run("default emits bind-mount block", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, "for _src in /dev /proc /sys") {
+			t.Errorf("bind-mount for-loop missing in default script; got:\n%s", s)
+		}
+		if !strings.Contains(s, "mount --rbind") {
+			t.Errorf("mount --rbind missing in default script; got:\n%s", s)
+		}
+		if !strings.Contains(s, "mount --make-rslave") {
+			t.Errorf("mount --make-rslave missing in default script; got:\n%s", s)
+		}
+		if !strings.Contains(s, `"$MOUNT_POINT$_src"`) {
+			t.Errorf("target path construction missing in default script; got:\n%s", s)
+		}
+		// The section header must be present.
+		if !strings.Contains(s, "--- 2b.") {
+			t.Errorf("section 2b header missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("pre-mount mkdir in upper dir", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		// The pre-mount mkdir must create dirs in UPPER_DIR before the
+		// overlay is composed (fuse-overlayfs snapshots at mount time).
+		if !strings.Contains(s, `mkdir -p "$UPPER_DIR/dev" "$UPPER_DIR/proc" "$UPPER_DIR/sys"`) {
+			t.Errorf("pre-mount upper-dir mkdir missing; got:\n%s", s)
+		}
+		// Must appear BEFORE the overlay mount helpers.
+		mkdirIdx := strings.Index(s, `"$UPPER_DIR/dev"`)
+		overlayIdx := strings.Index(s, "mount_overlay_fuse() {")
+		if mkdirIdx >= overlayIdx {
+			t.Errorf("pre-mount mkdir (idx %d) must appear before overlay mount (idx %d)", mkdirIdx, overlayIdx)
+		}
+	})
+
+	t.Run("BindKernelFS=false suppresses block", func(t *testing.T) {
+		falseVal := false
+		s := EntrypointScript(EntrypointScriptOptions{
+			BindKernelFS: &falseVal,
+		})
+		if strings.Contains(s, "for _src in /dev /proc /sys") {
+			t.Errorf("bind-mount block present despite BindKernelFS=false; got:\n%s", s)
+		}
+		if strings.Contains(s, "--- 2b.") {
+			t.Errorf("section 2b header present despite BindKernelFS=false; got:\n%s", s)
+		}
+		if strings.Contains(s, `"$UPPER_DIR/dev"`) {
+			t.Errorf("pre-mount upper-dir mkdir present despite BindKernelFS=false; got:\n%s", s)
+		}
+	})
+
+	t.Run("idempotent guard uses mountinfo", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, "/proc/self/mountinfo") {
+			t.Errorf("idempotent mountinfo guard missing; got:\n%s", s)
+		}
+	})
+}
+
 // TestEntrypointScript_OrderingInvariants pins the section order so
 // refactors don't silently reshuffle steps that have causal dependencies
 // (resume must precede mount; mount must precede handoff).
@@ -460,10 +534,13 @@ func TestEntrypointScript_OrderingInvariants(t *testing.T) {
 		"OVERLAY_MODE=",
 		"RESUME_TAR=",
 		"tar --numeric-owner",
+		`mkdir -p "$UPPER_DIR/dev" "$UPPER_DIR/proc" "$UPPER_DIR/sys"`,
 		`awk -F, -v dir="$LAYERS_DIR"`,
 		"mount_overlay_kernel() {",
 		"mount_overlay_fuse() {",
 		"mount_overlay_fuse || {",
+		"HOST_BIN=",
+		"for _src in /dev /proc /sys",
 		"exec chroot",
 	}
 	prev := -1

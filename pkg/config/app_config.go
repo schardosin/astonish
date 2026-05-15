@@ -147,14 +147,19 @@ type SandboxKubernetesConfig struct {
 }
 
 // BackendKind returns the configured backend, lower-cased, with "" and
-// "incus" both normalising to "incus". This is the canonical accessor
-// that callers should use — do NOT read SandboxConfig.Backend directly.
+// "incus" both normalising to "incus", and "kubernetes" aliased to "k8s".
+// This is the canonical accessor that callers should use — do NOT read
+// SandboxConfig.Backend directly.
 func (c *SandboxConfig) BackendKind() string {
 	b := strings.ToLower(strings.TrimSpace(c.Backend))
-	if b == "" {
+	switch b {
+	case "", "incus":
 		return "incus"
+	case "kubernetes":
+		return "k8s"
+	default:
+		return b
 	}
-	return b
 }
 
 // IsK8sBackend is a readability helper for the common case.
@@ -495,6 +500,34 @@ type SandboxLimits struct {
 	Memory    string `yaml:"memory,omitempty" json:"memory,omitempty"`
 	CPU       int    `yaml:"cpu,omitempty" json:"cpu,omitempty"`
 	Processes int    `yaml:"processes,omitempty" json:"processes,omitempty"`
+
+	// Requests configures the K8s scheduler reservation (the "floor" for
+	// capacity planning). On Kubernetes, pods request these resources from
+	// the scheduler and are guaranteed at least this much under contention.
+	// Values here should reflect the IDLE/TYPICAL footprint of a sandbox,
+	// not the peak. The Limits fields above define the burst ceiling.
+	//
+	// On Incus this sub-struct is ignored — Incus has only cgroup ceilings
+	// with implicit overcommit.
+	//
+	// Zero values mean "auto-derive from limits" using a built-in ratio
+	// suitable for chat-mostly-idle workloads (cpu: 5% of limit, min 50m;
+	// memory: 12.5% of limit, min 128Mi).
+	Requests SandboxRequests `yaml:"requests,omitempty" json:"requests,omitempty"`
+}
+
+// SandboxRequests defines the K8s scheduler reservation for sandbox pods.
+// These are the "idle floor" values — what the scheduler subtracts from
+// node allocatable. Keep these low for high session density; the Limits
+// fields above define the burst ceiling (cgroup throttle).
+type SandboxRequests struct {
+	// CPUMillis is the CPU request in millicores (e.g. 100 = 100m = 0.1 CPU).
+	// Zero means auto-derive from SandboxLimits.CPU.
+	CPUMillis int `yaml:"cpu_millis,omitempty" json:"cpu_millis,omitempty"`
+
+	// MemoryMiB is the memory request in MiB (e.g. 256 = 256Mi).
+	// Zero means auto-derive from SandboxLimits.Memory.
+	MemoryMiB int `yaml:"memory_mib,omitempty" json:"memory_mib,omitempty"`
 }
 
 // SandboxPruneConfig controls periodic cleanup of orphaned containers.

@@ -43,11 +43,11 @@
 package sandbox
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -263,30 +263,32 @@ func (c *backendNodeClient) close() {
 // "id" field and returns its Result / Error. The ready message is ignored
 // (it has no id). exitCode is included in the error when there is no parsable
 // response — helps operators diagnose container-side panics.
+//
+// The implementation is line-oriented: it splits stdout on newlines, attempts
+// JSON unmarshal per line, and silently skips lines that are not valid JSON.
+// This makes it robust to non-JSON prefix garbage (e.g. ANSI banners, locale
+// messages, debug prints) that may appear on stdout before or between the
+// protocol messages.
 func parseNodeResponse(stdout []byte, exitCode int) (json.RawMessage, error) {
-	reader := bytes.NewReader(stdout)
-	dec := json.NewDecoder(reader)
-	for {
-		// RawMessage is used so a decode failure on one line doesn't
-		// abort the whole scan — but json.Decoder already advances
-		// past invalid tokens, so we rely on it for framing.
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return nil, fmt.Errorf("decode node stream (exit=%d): %w", exitCode, err)
+	scanner := bufio.NewScanner(bytes.NewReader(stdout))
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
 		}
 
-		// Peek for "id" without a full typed unmarshal; the ready
-		// message has no id, responses always do.
+		// Fast reject: valid NDJSON always starts with '{'.
+		if line[0] != '{' {
+			continue
+		}
+
 		var probe struct {
 			ID     string          `json:"id"`
 			Result json.RawMessage `json:"result"`
 			Error  string          `json:"error"`
 		}
-		if err := json.Unmarshal(raw, &probe); err != nil {
-			// Not a JSON object — skip.
+		if err := json.Unmarshal(line, &probe); err != nil {
+			// Looks like it starts with '{' but isn't valid JSON — skip.
 			continue
 		}
 		if probe.ID == "" {
@@ -297,8 +299,14 @@ func parseNodeResponse(stdout []byte, exitCode int) (json.RawMessage, error) {
 		}
 		return probe.Result, nil
 	}
-	return nil, fmt.Errorf("backend exec: no node response in stdout (exit=%d, %d bytes)",
-		exitCode, len(stdout))
+	// If we get here, no valid response line was found.
+	// Include a truncated sample of stdout for diagnostic context.
+	sample := string(stdout)
+	if len(sample) > 256 {
+		sample = sample[:256] + "..."
+	}
+	return nil, fmt.Errorf("backend exec: no node response in stdout (exit=%d, %d bytes, sample=%q)",
+		exitCode, len(stdout), sample)
 }
 
 func shortSession(s string) string {

@@ -167,7 +167,7 @@ build-linux-arm64:
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)
 docker-incus: build-linux
 	@echo "Building Incus Docker image..."
-	docker build -f Dockerfile.incus -t schardosin/astonish-incus:$(VERSION) .
+	docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:$(VERSION) .
 	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
 
 # --- Registry Push (multi-arch via buildx) ---
@@ -182,6 +182,7 @@ ensure-builder:
 push-dev: ensure-builder
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) (linux/amd64,linux/arm64)..."
 	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f docker/astonish/Dockerfile \
 		--build-arg VERSION=$(DEV_TAG) \
 		-t $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) \
 		--push .
@@ -192,13 +193,23 @@ push-dev: ensure-builder
 push-incus-dev: ensure-builder build-linux build-linux-arm64
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) (linux/amd64,linux/arm64)..."
 	docker buildx build --platform linux/amd64,linux/arm64 \
-		-f Dockerfile.incus \
+		-f docker/incus/Dockerfile \
 		-t $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) \
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
 
-# Push both dev images
-push-all-dev: push-dev push-incus-dev
+# Build and push the sandbox base image (multi-arch)
+# Requires web/dist/ to exist (run `cd web && npm ci && npm run build` first)
+push-sandbox-base-dev: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG) (linux/amd64,linux/arm64)..."
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f docker/sandbox-base/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG)"
+
+# Push all dev images
+push-all-dev: push-dev push-incus-dev push-sandbox-base-dev
 	@echo "All dev images pushed successfully!"
 
 

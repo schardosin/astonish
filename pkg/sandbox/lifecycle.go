@@ -403,48 +403,6 @@ func EnsureOverlayMounted(client *IncusClient, containerName, templateName strin
 	return ensureOverlayMounted(client, containerName, templateName, tplRegistry)
 }
 
-// TryDestroySessionContainer is a best-effort helper that destroys the sandbox
-// container for a session. It connects to Incus, looks up the container, and
-// tears it down. Errors are silently ignored — this is designed to be called
-// from session deletion paths where sandbox may or may not be active.
-func TryDestroySessionContainer(sessionID string) {
-	platform := DetectPlatform()
-	if platform == PlatformUnsupported {
-		return
-	}
-
-	SetActivePlatform(platform)
-
-	client, err := Connect(platform)
-	if err != nil {
-		return
-	}
-
-	registry, err := NewSessionRegistry()
-	if err != nil {
-		return
-	}
-
-	// Try the registry-based path first (finds container by session ID lookup)
-	if entry := registry.Get(sessionID); entry != nil {
-		if err := DestroyForSession(client, registry, sessionID); err != nil {
-			slog.Warn("failed to destroy session container via registry", "component", "sandbox", "session", sessionID, "error", err)
-		}
-		return
-	}
-
-	// Registry has no entry — the entry may have been cleaned already (e.g.,
-	// by LazyNodeClient.Cleanup or fleet session stop) but the container might
-	// still exist if Incus was down when destruction was attempted.
-	// Try to destroy by the derived container name directly.
-	containerName := SessionContainerName(sessionID)
-	if client.InstanceExists(containerName) {
-		if err := destroyOverlayContainer(client, containerName); err != nil {
-			slog.Warn("failed to destroy orphan container", "component", "sandbox", "container", containerName, "error", err)
-		}
-	}
-}
-
 // PruneOrphans finds and destroys containers whose sessions no longer exist.
 // existingSessionIDs is the set of session IDs that are still valid.
 // Returns the number of containers pruned.

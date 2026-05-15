@@ -1058,7 +1058,7 @@ func (p *NodeClientPool) TouchActivity(sessionID string) {
 }
 
 // Remove stops the node for a session and removes it from the pool.
-// Does NOT destroy the Incus container — that's TryDestroySessionContainer's
+// Does NOT destroy the sandbox container — that's TryDestroySession's
 // job from the session deletion handler.
 func (p *NodeClientPool) Remove(sessionID string) {
 	p.mu.Lock()

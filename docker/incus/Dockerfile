@@ -1,4 +1,4 @@
-# Dockerfile.incus — Incus runtime container for Astonish sandbox on macOS/Windows.
+# docker/incus/Dockerfile — Incus runtime container for Astonish sandbox on macOS/Windows.
 #
 # This image runs the Incus daemon inside a Docker container, providing
 # Linux container isolation on non-Linux hosts. Astonish on the host
@@ -6,12 +6,12 @@
 #
 # Build (single-arch, local dev):
 #   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux-amd64 .
-#   docker build -f Dockerfile.incus -t schardosin/astonish-incus:dev .
+#   docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:dev .
 #
 # Build (multi-arch, CI):
 #   # Pre-build both binaries, then:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -f Dockerfile.incus -t schardosin/astonish-incus:v1.2.3 --push .
+#     -f docker/incus/Dockerfile -t schardosin/astonish-incus:v1.2.3 --push .
 #
 # The image is published to Docker Hub by the docker-incus GitHub Action.
 # Users never build this image — astonish pulls it automatically.
@@ -58,7 +58,7 @@ COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
 
 # Copy the entrypoint script
-COPY docker/entrypoint-incus.sh /usr/local/bin/entrypoint-incus.sh
+COPY docker/incus/entrypoint-incus.sh /usr/local/bin/entrypoint-incus.sh
 RUN chmod +x /usr/local/bin/entrypoint-incus.sh
 
 # Incus API port (HTTPS with self-signed cert)

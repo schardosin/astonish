@@ -156,6 +156,25 @@ type EntrypointScriptOptions struct {
 	// Default: true (match the privileged/dev deployment). Operators
 	// using a device plugin should set this to false.
 	EnsureFuseDevice *bool
+
+	// BindKernelFS, when true (the default), instructs the entrypoint
+	// to bind-mount /dev, /proc, and /sys from the pod's base namespace
+	// into the overlay rootfs before the chroot handoff. This makes the
+	// kubelet-populated /dev (including /dev/ptmx for PTY allocation),
+	// /proc, and /sys visible inside the chroot.
+	//
+	// Without this, tools that require a PTY (shell_command, ssh) fail
+	// with "open /dev/ptmx: no such file or directory" because the
+	// overlay's own /dev directory is empty.
+	//
+	// The bind-mounts use --rbind so submounts (e.g. /dev/pts, /dev/shm)
+	// come along, and --make-rslave so unmounts inside the chroot do not
+	// propagate back to the pod's mount table.
+	//
+	// Default: true. Set to false only if your @base layer already ships
+	// a fully-populated /dev or if you mount kernel filesystems via a
+	// custom init process.
+	BindKernelFS *bool
 }
 
 func (o *EntrypointScriptOptions) applyDefaults() {
@@ -175,10 +194,10 @@ func (o *EntrypointScriptOptions) applyDefaults() {
 		o.MountPoint = "/sandbox/rootfs"
 	}
 	if o.Handoff == "" {
-		o.Handoff = "/usr/local/bin/astonish"
+		o.Handoff = "/bin/sleep"
 	}
 	if len(o.HandoffArgs) == 0 {
-		o.HandoffArgs = []string{"node"}
+		o.HandoffArgs = []string{"infinity"}
 	}
 	if o.HostBinaryPath == "" {
 		o.HostBinaryPath = "/usr/local/bin/astonish-host"
@@ -189,6 +208,10 @@ func (o *EntrypointScriptOptions) applyDefaults() {
 	if o.EnsureFuseDevice == nil {
 		b := true
 		o.EnsureFuseDevice = &b
+	}
+	if o.BindKernelFS == nil {
+		b := true
+		o.BindKernelFS = &b
 	}
 }
 
@@ -275,8 +298,25 @@ fi
 # Always ensure the overlay dirs exist; on fresh sessions they're
 # already present (emptyDir mounts) but this is cheap and idempotent.
 mkdir -p "$UPPER_DIR" "$WORK_DIR" "$MOUNT_POINT"
+`)
 
-# --- 2. Compose overlay from layer chain -------------------------------
+	// Pre-overlay: ensure /dev, /proc, /sys exist in the upper dir so
+	// they'll be visible through the overlay after mount. This must
+	// happen BEFORE the overlay is composed because fuse-overlayfs
+	// takes a snapshot of the upperdir at mount time — modifications
+	// to the upperdir after mount are not visible through the FUSE
+	// mount (unlike kernel overlayfs which sees them immediately).
+	if opts.BindKernelFS != nil && *opts.BindKernelFS {
+		b.WriteString(`# Ensure /dev, /proc, /sys directories exist in the upper layer so
+# they are visible through the overlay after mount (required for the
+# kernel-filesystem bind-mounts in section 2b below). On fuse-overlayfs
+# the upper must contain these dirs BEFORE the overlay is composed.
+mkdir -p "$UPPER_DIR/dev" "$UPPER_DIR/proc" "$UPPER_DIR/sys"
+
+`)
+	}
+
+	b.WriteString(`# --- 2. Compose overlay from layer chain -------------------------------
 # $ASTONISH_LAYER_CHAIN is oldest-first (e.g., @base,org-layer,template).
 # Overlayfs wants the top-most layer FIRST in its comma-separated
 # lowerdir list, so we reverse. We pass $LAYERS_DIR into awk via -v so
@@ -431,15 +471,70 @@ fi
 `)
 	}
 
-	b.WriteString(`# --- 3. Hand off to workload ------------------------------------------
+	// Section 2b: bind-mount kernel filesystems into the overlay rootfs
+	// so the chroot has a working /dev (for PTY allocation), /proc, and
+	// /sys. Without this, tools like shell_command fail with "open
+	// /dev/ptmx: no such file or directory".
+	if opts.BindKernelFS != nil && *opts.BindKernelFS {
+		b.WriteString(`# --- 2b. Bind kernel filesystems into the overlay rootfs --------------
+# A chroot inherits only the filesystem subtree under MOUNT_POINT.
+# The pod's /dev (kubelet-populated, including /dev/ptmx for PTY
+# allocation), /proc, and /sys are NOT visible inside the chroot
+# unless we bind them in first. Tools that need a PTY (shell_command,
+# ssh, screen) require /dev/pts to be reachable inside the chroot.
+#
+# --rbind: submounts (/dev/pts, /dev/shm, /dev/mqueue) come along.
+# --make-rslave: unmounts inside the chroot do not propagate back to
+# the pod's mount table (defence in depth).
+#
+# The target directories were pre-created in the upper dir (before
+# the overlay mount) so they are guaranteed visible here.
+#
+# Idempotent: skips sources that are already mounted at the target.
+for _src in /dev /proc /sys; do
+  _dst="$MOUNT_POINT$_src"
+  if ! grep -qE " $_dst " /proc/self/mountinfo 2>/dev/null; then
+    if mount --rbind "$_src" "$_dst"; then
+      mount --make-rslave "$_dst" 2>/dev/null || true
+    else
+      echo "astonish-entrypoint: warning: failed to rbind $_src at $_dst" 1>&2
+    fi
+  fi
+done
+
 `)
-	b.WriteString("exec chroot \"$MOUNT_POINT\" ")
+	}
+
+	b.WriteString(`# --- 3. Hand off to workload ------------------------------------------
+# ASTONISH_HANDOFF / ASTONISH_HANDOFF_ARGS allow the pod manifest to
+# override the PID-1 process after overlay composition WITHOUT
+# requiring an image rebuild. The baked-in defaults below keep the
+# image self-contained for docker-run diagnostics.
+`)
+	// Emit the baked-in defaults that the shell will use when the env
+	// vars are unset. These are overridable per-pod via env vars.
+	b.WriteString("_DEFAULT_HANDOFF=")
 	b.WriteString(shellQuote(opts.Handoff))
-	for _, a := range opts.HandoffArgs {
-		b.WriteByte(' ')
+	b.WriteByte('\n')
+
+	b.WriteString("_DEFAULT_HANDOFF_ARGS=")
+	// Build a space-separated, properly-quoted default args string for
+	// the shell fallback. We use single-quote shell quoting so spaces
+	// and special chars in individual args are preserved.
+	for i, a := range opts.HandoffArgs {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
 		b.WriteString(shellQuote(a))
 	}
 	b.WriteByte('\n')
+
+	b.WriteString(`HANDOFF="${ASTONISH_HANDOFF:-$_DEFAULT_HANDOFF}"
+HANDOFF_ARGS="${ASTONISH_HANDOFF_ARGS:-$_DEFAULT_HANDOFF_ARGS}"
+echo "astonish-entrypoint: handing off to $HANDOFF $HANDOFF_ARGS" 1>&2
+# shellcheck disable=SC2086
+exec chroot "$MOUNT_POINT" "$HANDOFF" $HANDOFF_ARGS
+`)
 
 	return b.String()
 }

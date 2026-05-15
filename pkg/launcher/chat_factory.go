@@ -675,181 +675,261 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// proxies that route execution to an astonish node inside an Incus
 	// container. Container creation is lazy — the first tool call triggers
 	// cloning from the template and starting the node process.
-	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool
-	var sandboxIncusClient *incus.IncusClient       // hoisted for save_sandbox_template tool
-	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool
-	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool
+	var sandboxNodePool *sandbox.NodeClientPool      // hoisted for save_sandbox_template tool (Incus only)
+	var sandboxIncusClient *incus.IncusClient       // hoisted for save_sandbox_template tool (Incus only)
+	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool (Incus only)
+	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool (Incus only)
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandbox.SetSandboxConfig(&cfg.AppConfig.Sandbox)
-		sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
-		if sandboxErr != nil {
-			return nil, fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)
-		}
+		kind := sandbox.BackendKind(cfg.AppConfig.Sandbox.BackendKind())
 
-		sessRegistry, regErr := sandbox.NewSessionRegistry()
-		if regErr != nil {
-			return nil, fmt.Errorf("sandbox is enabled but session registry failed: %w", regErr)
-		}
-
-		tplRegistry, tplErr := sandbox.NewTemplateRegistry()
-		if tplErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create template registry", "error", tplErr)
+		switch kind {
+		case sandbox.BackendKindK8s, sandbox.BackendKindMock:
+			// --- Backend-agnostic chat path (Phase F) ---
+			// Minimal feature set:
+			//   - tool wrapping via BackendPool + WrapToolsWithPool
+			//   - per-session pod created lazily on first tool call
+			//   - cleanup destroys pods on shutdown
+			//
+			// NOT wired on K8s (deferred to Phase G):
+			//   - browser-in-sandbox (host fallback continues to work)
+			//   - idle watchdog (BackendPool has no equivalent yet)
+			//   - prune-on-startup (no analogue for stale pods today)
+			//   - async template refresh
+			//   - save/use/list_sandbox_template tools (Incus image-clone)
+			//   - sub-agent alias for delegated tasks
+			//   - MCP stdio servers inside sandbox (host fallback OK)
+			b, backendCleanup, berr := sandbox.BackendFromAppConfig(cfg.AppConfig)
+			if berr != nil {
+				return nil, fmt.Errorf("sandbox is enabled but the %s backend is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", kind, berr)
 			}
-		}
 
-		// Create a pool that manages per-session LazyNodeClients.
-		// Each chat session gets its own container, created lazily
-		// on the first tool call for that session.
-		limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
-		nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "", &limits)
+			limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
+			pool := sandbox.NewBackendPool(b, sandbox.ToResourceLimits(limits))
 
-		// Wrap all tool category slices with NodeTool proxies (pool-backed).
-		// Browser tools are NOT wrapped — they run on the host and need direct
-		// access to Chrome. Each category slice is wrapped independently so
-		// deferred tools are already sandbox-ready when activated later.
-		coreTools = sandbox.WrapToolsWithNode(coreTools, nodePool)
-		if len(credToolsSlice) > 0 {
-			credToolsSlice = sandbox.WrapToolsWithNode(credToolsSlice, nodePool)
-		}
-		if len(schedToolsSlice) > 0 {
-			schedToolsSlice = sandbox.WrapToolsWithNode(schedToolsSlice, nodePool)
-		}
-		if len(distillToolsSlice) > 0 {
-			distillToolsSlice = sandbox.WrapToolsWithNode(distillToolsSlice, nodePool)
-		}
-		if len(emailToolsSlice) > 0 {
-			emailToolsSlice = sandbox.WrapToolsWithNode(emailToolsSlice, nodePool)
-		}
-		if len(skillToolSlice) > 0 {
-			skillToolSlice = sandbox.WrapToolsWithNode(skillToolSlice, nodePool)
-		}
-		// Note: browserToolsSlice is intentionally NOT wrapped — browser runs on host
+			// Wrap all tool category slices with pool-backed proxies.
+			// Browser tools are NOT wrapped — they run on the host.
+			coreTools = sandbox.WrapToolsWithPool(coreTools, pool)
+			if len(credToolsSlice) > 0 {
+				credToolsSlice = sandbox.WrapToolsWithPool(credToolsSlice, pool)
+			}
+			if len(schedToolsSlice) > 0 {
+				schedToolsSlice = sandbox.WrapToolsWithPool(schedToolsSlice, pool)
+			}
+			if len(distillToolsSlice) > 0 {
+				distillToolsSlice = sandbox.WrapToolsWithPool(distillToolsSlice, pool)
+			}
+			if len(emailToolsSlice) > 0 {
+				emailToolsSlice = sandbox.WrapToolsWithPool(emailToolsSlice, pool)
+			}
+			if len(skillToolSlice) > 0 {
+				skillToolSlice = sandbox.WrapToolsWithPool(skillToolSlice, pool)
+			}
+			// Note: browserToolsSlice intentionally NOT wrapped — browser runs on host
 
-		// Hoist references for template tool registration
-		sandboxNodePool = nodePool
-		sandboxIncusClient = sandboxClient
-		sandboxTplRegistry = tplRegistry
-		sandboxSessRegistry = sessRegistry
+			// Lazy MCP toolsets: pass nil pool so stdio MCP servers run on the
+			// API host (same as pre-sandbox behaviour). SSE transports unaffected.
+			for _, lt := range lazyToolsets {
+				lt.SetSandboxPool(nil)
+			}
+			if len(lazyToolsets) > 0 {
+				slog.Info("sandbox MCP routing not yet supported on backend; stdio MCP servers will run on the API host",
+					"component", "chat-factory", "backend", string(kind))
+			}
 
-		// Wire browser to run inside the session container when sandbox is
-		// available. The browser resolves the session container (already
-		// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
-		{
-			bcfg := browserMgr.Config()
-			engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
-				ChromePath: bcfg.ChromePath,
+			// sandboxNodePool, sandboxIncusClient, sandboxTplRegistry,
+			// sandboxSessRegistry all remain nil — downstream nil-guards
+			// silently skip Incus-only features (template tools, browser-in-
+			// sandbox, sub-agent alias, idle watchdog, prune, shutdown).
+
+			cleanups = append(cleanups, func() {
+				pool.Cleanup()
 			})
-			if incus.IsContainerCompatibleEngine(engine) {
-				browserMgr.SandboxEnabled = true
-				client := sandboxClient // capture for closures
-				bCfg := incus.BrowserContainerConfig{
-					ViewportWidth:       bcfg.ViewportWidth,
-					ViewportHeight:      bcfg.ViewportHeight,
-					KasmVNCPort:         bcfg.KasmVNCPort,
-					KasmVNCPassword:     bcfg.KasmVNCPassword,
-					Proxy:               bcfg.Proxy,
-					ChromePath:          bcfg.ChromePath,
-					FingerprintSeed:     bcfg.FingerprintSeed,
-					FingerprintPlatform: bcfg.FingerprintPlatform,
-				}
-				browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
-					containerName := incus.SessionContainerName(sessionID)
-					if !client.IsRunning(containerName) {
-						return "", "", fmt.Errorf("session container %q is not running", containerName)
-					}
-					ip, err := client.GetContainerIPv4(containerName)
-					if err != nil {
-						return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
-					}
-					return containerName, ip, nil
-				}
-				browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
-					return incus.StartChromiumInContainer(client, containerName, bCfg)
-				}
+			if backendCleanup != nil {
+				bc := backendCleanup // capture
+				cleanups = append(cleanups, func() {
+					bc()
+				})
+			}
 
-				// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
-				// This makes CDP (and /json/version HTTP) work even when container
-				// bridge IPs are not routable from the host (Docker+Incus on macOS).
-				browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
-					dialer := &incus.ContainerDialer{Client: client}
-					return dialer.Dial(containerName, port)
-				}
+			slog.Info("sandbox wired to backend-agnostic pool for chat",
+				"component", "chat-factory", "backend", string(kind))
 
-				// ActivityTouchFunc: reset the sandbox idle timer on every browser
-				// tool call. Browser tools communicate with Chromium via CDP, bypassing
-				// the node process — without this, the idle watchdog would kill
-				// containers with active browser sessions after 10 minutes.
-				pool := nodePool // capture for closure
-				browserMgr.ActivityTouchFunc = func(sessionID string) {
-					pool.TouchActivity(sessionID)
+		case sandbox.BackendKindIncus, "":
+			// --- Legacy Incus path (unchanged) ---
+			sandboxClient, sandboxErr := sandbox.SetupSandboxRuntime()
+			if sandboxErr != nil {
+				return nil, fmt.Errorf("sandbox is enabled but the runtime is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", sandboxErr)
+			}
+
+			sessRegistry, regErr := sandbox.NewSessionRegistry()
+			if regErr != nil {
+				return nil, fmt.Errorf("sandbox is enabled but session registry failed: %w", regErr)
+			}
+
+			tplRegistry, tplErr := sandbox.NewTemplateRegistry()
+			if tplErr != nil {
+				if cfg.DebugMode {
+					slog.Warn("failed to create template registry", "error", tplErr)
 				}
 			}
-		}
 
-		// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
-		// start inside the session's container instead of on the host.
-		// SSE transport servers are unaffected (isSSETransport check inside).
-		for _, lt := range lazyToolsets {
-			lt.SetSandboxPool(nodePool)
-		}
+			// Create a pool that manages per-session LazyNodeClients.
+			// Each chat session gets its own container, created lazily
+			// on the first tool call for that session.
+			limits := sandbox.EffectiveLimits(&cfg.AppConfig.Sandbox)
+			nodePool := sandbox.NewNodeClientPool(sandboxClient, sessRegistry, tplRegistry, "", &limits)
 
-		// Async refresh: check all templates for stale binaries in the background.
-		// Must NOT block startup (was the cause of the 502 bug).
-		if tplRegistry != nil {
-			go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
-		}
+			// Wrap all tool category slices with NodeTool proxies (pool-backed).
+			// Browser tools are NOT wrapped — they run on the host and need direct
+			// access to Chrome. Each category slice is wrapped independently so
+			// deferred tools are already sandbox-ready when activated later.
+			coreTools = sandbox.WrapToolsWithNode(coreTools, nodePool)
+			if len(credToolsSlice) > 0 {
+				credToolsSlice = sandbox.WrapToolsWithNode(credToolsSlice, nodePool)
+			}
+			if len(schedToolsSlice) > 0 {
+				schedToolsSlice = sandbox.WrapToolsWithNode(schedToolsSlice, nodePool)
+			}
+			if len(distillToolsSlice) > 0 {
+				distillToolsSlice = sandbox.WrapToolsWithNode(distillToolsSlice, nodePool)
+			}
+			if len(emailToolsSlice) > 0 {
+				emailToolsSlice = sandbox.WrapToolsWithNode(emailToolsSlice, nodePool)
+			}
+			if len(skillToolSlice) > 0 {
+				skillToolSlice = sandbox.WrapToolsWithNode(skillToolSlice, nodePool)
+			}
+			// Note: browserToolsSlice is intentionally NOT wrapped — browser runs on host
 
-		// Auto-prune stale session containers from previous daemon runs.
-		// Only destroy containers whose sessions no longer exist in the store.
-		// In platform mode, session IDs live in PG across many team schemas;
-		// startup pruning is skipped — use scheduled cleanup instead.
-		if !cfg.PlatformMode {
-			existingSessionIDs := make(map[string]bool)
-			if cfg.SessionStore != nil {
-				// Preferred: use the shared store's index (daemon/studio path).
-				if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
-					for id := range indexData.Sessions {
-						existingSessionIDs[id] = true
+			// Hoist references for template tool registration
+			sandboxNodePool = nodePool
+			sandboxIncusClient = sandboxClient
+			sandboxTplRegistry = tplRegistry
+			sandboxSessRegistry = sessRegistry
+
+			// Wire browser to run inside the session container when sandbox is
+			// available. The browser resolves the session container (already
+			// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
+			{
+				bcfg := browserMgr.Config()
+				engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
+					ChromePath: bcfg.ChromePath,
+				})
+				if incus.IsContainerCompatibleEngine(engine) {
+					browserMgr.SandboxEnabled = true
+					client := sandboxClient // capture for closures
+					bCfg := incus.BrowserContainerConfig{
+						ViewportWidth:       bcfg.ViewportWidth,
+						ViewportHeight:      bcfg.ViewportHeight,
+						KasmVNCPort:         bcfg.KasmVNCPort,
+						KasmVNCPassword:     bcfg.KasmVNCPassword,
+						Proxy:               bcfg.Proxy,
+						ChromePath:          bcfg.ChromePath,
+						FingerprintSeed:     bcfg.FingerprintSeed,
+						FingerprintPlatform: bcfg.FingerprintPlatform,
+					}
+					browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+						containerName := incus.SessionContainerName(sessionID)
+						if !client.IsRunning(containerName) {
+							return "", "", fmt.Errorf("session container %q is not running", containerName)
+						}
+						ip, err := client.GetContainerIPv4(containerName)
+						if err != nil {
+							return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
+						}
+						return containerName, ip, nil
+					}
+					browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
+						return incus.StartChromiumInContainer(client, containerName, bCfg)
+					}
+
+					// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
+					// This makes CDP (and /json/version HTTP) work even when container
+					// bridge IPs are not routable from the host (Docker+Incus on macOS).
+					browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
+						dialer := &incus.ContainerDialer{Client: client}
+						return dialer.Dial(containerName, port)
+					}
+
+					// ActivityTouchFunc: reset the sandbox idle timer on every browser
+					// tool call. Browser tools communicate with Chromium via CDP, bypassing
+					// the node process — without this, the idle watchdog would kill
+					// containers with active browser sessions after 10 minutes.
+					pool := nodePool // capture for closure
+					browserMgr.ActivityTouchFunc = func(sessionID string) {
+						pool.TouchActivity(sessionID)
 					}
 				}
-			} else if cfg.AppConfig != nil {
-				// Fallback: read the index file directly (console/CLI path).
-				// Without this, existingSessionIDs is empty and prune would
-				// destroy every stopped container — even valid ones.
-				var sessCfg *config.SessionConfig
-				sessCfg = &cfg.AppConfig.Sessions
-				if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
-					idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
-					if indexData, err := idx.Load(); err == nil {
+			}
+
+			// Wire sandbox pool to all lazy MCP toolsets so stdio MCP servers
+			// start inside the session's container instead of on the host.
+			// SSE transport servers are unaffected (isSSETransport check inside).
+			for _, lt := range lazyToolsets {
+				lt.SetSandboxPool(nodePool)
+			}
+
+			// Async refresh: check all templates for stale binaries in the background.
+			// Must NOT block startup (was the cause of the 502 bug).
+			if tplRegistry != nil {
+				go sandbox.RefreshAllIfNeeded(sandboxClient, tplRegistry)
+			}
+
+			// Auto-prune stale session containers from previous daemon runs.
+			// Only destroy containers whose sessions no longer exist in the store.
+			// In platform mode, session IDs live in PG across many team schemas;
+			// startup pruning is skipped — use scheduled cleanup instead.
+			if !cfg.PlatformMode {
+				existingSessionIDs := make(map[string]bool)
+				if cfg.SessionStore != nil {
+					// Preferred: use the shared store's index (daemon/studio path).
+					if indexData, err := cfg.SessionStore.Index().Load(); err == nil {
 						for id := range indexData.Sessions {
 							existingSessionIDs[id] = true
 						}
 					}
+				} else if cfg.AppConfig != nil {
+					// Fallback: read the index file directly (console/CLI path).
+					// Without this, existingSessionIDs is empty and prune would
+					// destroy every stopped container — even valid ones.
+					var sessCfg *config.SessionConfig
+					sessCfg = &cfg.AppConfig.Sessions
+					if sessDir, dirErr := config.GetSessionsDir(sessCfg); dirErr == nil {
+						idx := persistentsession.NewSessionIndex(filepath.Join(sessDir, "index.json"))
+						if indexData, err := idx.Load(); err == nil {
+							for id := range indexData.Sessions {
+								existingSessionIDs[id] = true
+							}
+						}
+					}
+				}
+				if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
+					startupNotices = append(startupNotices,
+						fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
 				}
 			}
-			if pruned := sandbox.PruneStaleOnStartup(sandboxClient, sessRegistry, existingSessionIDs); pruned > 0 {
-				startupNotices = append(startupNotices,
-					fmt.Sprintf("Cleaned up %d stale session container(s) from previous run", pruned))
-			}
-		}
 
-		// Start idle watchdog: stops containers that have been inactive for the
-		// configured timeout (default 10 min), preserving them for fast restart.
-		idleTimeout := sandbox.EffectiveIdleTimeout(&cfg.AppConfig.Sandbox)
-		if idleTimeout > 0 {
-			idleCtx, idleCancel := context.WithCancel(context.Background())
-			nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
-			cleanups = append(cleanups, idleCancel)
-			if cfg.DebugMode {
-				slog.Debug("sandbox idle watchdog enabled", "component", "chat-factory", "timeout", idleTimeout)
+			// Start idle watchdog: stops containers that have been inactive for the
+			// configured timeout (default 10 min), preserving them for fast restart.
+			idleTimeout := sandbox.EffectiveIdleTimeout(&cfg.AppConfig.Sandbox)
+			if idleTimeout > 0 {
+				idleCtx, idleCancel := context.WithCancel(context.Background())
+				nodePool.StartIdleWatchdog(idleCtx, idleTimeout)
+				cleanups = append(cleanups, idleCancel)
+				if cfg.DebugMode {
+					slog.Debug("sandbox idle watchdog enabled", "component", "chat-factory", "timeout", idleTimeout)
+				}
 			}
-		}
 
-		cleanups = append(cleanups, func() {
-			// Cleanup destroys all per-session containers
-			nodePool.Cleanup()
-		})
+			cleanups = append(cleanups, func() {
+				// Cleanup destroys all per-session containers
+				nodePool.Cleanup()
+			})
+
+		default:
+			return nil, fmt.Errorf("sandbox: unsupported backend kind %q", kind)
+		}
 	}
 
 	// --- 4. Create session service ---

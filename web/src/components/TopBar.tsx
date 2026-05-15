@@ -3,8 +3,10 @@ import { Moon, Sun, Settings, Cpu, Grid, MessageSquare, Rocket, ShieldCheck, Shi
 
 interface SandboxStatus {
   sandboxEnabled: boolean
-  incusAvailable: boolean
+  runtimeAvailable?: boolean
   baseTemplateExists: boolean
+  // Deprecated: use runtimeAvailable
+  incusAvailable?: boolean
 }
 
 interface TopBarProps {
@@ -313,7 +315,8 @@ export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultPro
 
           {/* Sandbox badge */}
           {sandboxStatus && (() => {
-            const isSecure = sandboxStatus.sandboxEnabled && sandboxStatus.incusAvailable && sandboxStatus.baseTemplateExists
+            const runtimeOk = sandboxStatus.runtimeAvailable ?? sandboxStatus.incusAvailable ?? false
+            const isSecure = sandboxStatus.sandboxEnabled && runtimeOk && sandboxStatus.baseTemplateExists
             return (
               <button
                 onClick={onOpenSandbox}
@@ -485,7 +488,8 @@ export default function TopBar({ theme, onToggleTheme, onOpenSandbox, defaultPro
               {/* Quick actions row */}
               <div className="flex items-center gap-2">
                 {sandboxStatus && (() => {
-                  const isSecure = sandboxStatus.sandboxEnabled && sandboxStatus.incusAvailable && sandboxStatus.baseTemplateExists
+                  const runtimeOk = sandboxStatus.runtimeAvailable ?? sandboxStatus.incusAvailable ?? false
+                  const isSecure = sandboxStatus.sandboxEnabled && runtimeOk && sandboxStatus.baseTemplateExists
                   return (
                     <button
                       onClick={() => { onOpenSandbox(); setMobileOpen(false) }}

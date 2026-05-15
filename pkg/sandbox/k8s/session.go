@@ -152,7 +152,9 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 		return nil, errors.New("SessionSpec.SessionID is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("SessionSpec.TemplateID is required")
+		// Empty TemplateID means the canonical base layer, populated by
+		// the seed Job. Mirrors the Incus pool's "" → @base convention.
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 	if len(spec.LayerChain) == 0 {
 		// Accept a single-layer chain (template itself acts as the
@@ -205,25 +207,31 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 		Spec: corev1.PodSpec{
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
-				{
-					Name:  containerName,
-					Image: b.cfg.SandboxImage,
-					Env: []corev1.EnvVar{
-						{Name: "ASTONISH_SESSION_ID", Value: spec.SessionID},
-						{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.LayerChain, ",")},
-						{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
-						{Name: "ASTONISH_WORK_DIR", Value: mountWork},
-						{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
-						{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
-						{Name: volumeUppers, MountPath: mountUppers},
-						{Name: volumeUpper, MountPath: mountUpper},
-						{Name: volumeWork, MountPath: mountWork},
-					},
-					Resources: buildResourceRequirements(spec.Limits),
+			{
+				Name:            containerName,
+				Image:           b.cfg.SandboxImage,
+				ImagePullPolicy: imagePullPolicy(b.cfg.SandboxImage),
+				Env: []corev1.EnvVar{
+					{Name: "ASTONISH_SESSION_ID", Value: spec.SessionID},
+					{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.LayerChain, ",")},
+					{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
+					{Name: "ASTONISH_WORK_DIR", Value: mountWork},
+					{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
+					{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
+					// PID 1 sleeps after overlay composition; tool calls
+					// arrive via Backend.Exec ("kubectl exec -- astonish node")
+					// with proper stdin/stdout attachment per invocation.
+					{Name: "ASTONISH_HANDOFF", Value: "/bin/sleep"},
+					{Name: "ASTONISH_HANDOFF_ARGS", Value: "infinity"},
 				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
+					{Name: volumeUppers, MountPath: mountUppers},
+					{Name: volumeUpper, MountPath: mountUpper},
+					{Name: volumeWork, MountPath: mountWork},
+				},
+				Resources: buildResourceRequirements(spec.Limits),
+			},
 			},
 			Volumes: []corev1.Volume{
 				{
@@ -254,9 +262,26 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 }
 
 // buildResourceRequirements translates sandbox.ResourceLimits into
-// a corev1.ResourceRequirements block. Zero-valued limits are omitted.
+// a corev1.ResourceRequirements block with separate Requests (scheduler
+// reservation) and Limits (cgroup ceiling).
+//
+// On K8s, if only Limits are set without Requests, the kubelet defaults
+// Requests = Limits → Guaranteed QoS → full reservation. That is never
+// what we want for interactive sandbox sessions (which idle 99% of the
+// time). So we always set explicit Requests.
+//
+// Auto-derivation when RequestCPUMillis/RequestMemoryMiB are zero:
+//
+//	CPU request  = max(50m,  ceil(limit*1000/20))  → 5% of ceiling, min 50m
+//	Mem request  = max(128Mi, ceil(limit/8))       → 12.5% of ceiling, min 128Mi
+//
+// This gives ~20:1 CPU packing ratio and ~8:1 memory packing ratio for
+// idle sessions while guaranteeing burst to the full ceiling when load
+// spikes.
 func buildResourceRequirements(lim sandbox.ResourceLimits) corev1.ResourceRequirements {
 	reqs := corev1.ResourceRequirements{}
+
+	// --- Limits (cgroup ceiling, matches Incus semantics) ---
 	limits := corev1.ResourceList{}
 	if lim.CPUs > 0 {
 		limits[corev1.ResourceCPU] = *resource.NewQuantity(int64(lim.CPUs), resource.DecimalSI)
@@ -270,6 +295,38 @@ func buildResourceRequirements(lim sandbox.ResourceLimits) corev1.ResourceRequir
 	if len(limits) > 0 {
 		reqs.Limits = limits
 	}
+
+	// --- Requests (scheduler reservation, idle floor) ---
+	requests := corev1.ResourceList{}
+
+	cpuMillis := lim.RequestCPUMillis
+	if cpuMillis == 0 && lim.CPUs > 0 {
+		// Auto-derive: 5% of ceiling, minimum 50m.
+		cpuMillis = lim.CPUs * 1000 / 20
+		if cpuMillis < 50 {
+			cpuMillis = 50
+		}
+	}
+	if cpuMillis > 0 {
+		requests[corev1.ResourceCPU] = *resource.NewMilliQuantity(int64(cpuMillis), resource.DecimalSI)
+	}
+
+	memMiB := lim.RequestMemoryMiB
+	if memMiB == 0 && lim.MemoryMiB > 0 {
+		// Auto-derive: 12.5% of ceiling, minimum 128Mi.
+		memMiB = lim.MemoryMiB / 8
+		if memMiB < 128 {
+			memMiB = 128
+		}
+	}
+	if memMiB > 0 {
+		requests[corev1.ResourceMemory] = *resource.NewQuantity(int64(memMiB)*1024*1024, resource.BinarySI)
+	}
+
+	if len(requests) > 0 {
+		reqs.Requests = requests
+	}
+
 	return reqs
 }
 
@@ -339,8 +396,10 @@ func (b *K8sBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec
 }
 
 // StartSession resumes a stopped session. In this slice, the evicted→running
-// transition is not yet implemented; StartSession reports not-implemented
-// unless the session is already running (in which case it's a no-op).
+// transition (tar-streaming the upper back from the uppers PVC) is not yet
+// implemented. StartSession is idempotent for the freshly-created case:
+// if the pod is Running or still Pending (Creating), it returns nil.
+// Only genuinely stopped/evicted sessions return not-implemented.
 func (b *K8sBackend) StartSession(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -348,17 +407,26 @@ func (b *K8sBackend) StartSession(ctx context.Context, sessionID string) error {
 	if b.client == nil {
 		return fmt.Errorf("StartSession: %w", ErrNotImplementedYet)
 	}
-	rec, err := b.sessions.GetSession(sessionID)
+
+	// Query live pod state rather than the registry: the registry stays
+	// at "creating" until a reconciler updates it, but the pool calls
+	// StartSession immediately after CreateSession as a defensive
+	// idempotency check. The live pod phase is the authoritative signal.
+	state, err := b.SessionState(ctx, sessionID)
 	if err != nil {
-		return fmt.Errorf("StartSession: lookup: %w", err)
+		return fmt.Errorf("StartSession: query state: %w", err)
 	}
-	if rec == nil {
-		return fmt.Errorf("StartSession: %s: not found", sessionID)
+	switch state {
+	case sandbox.SessionStateRunning, sandbox.SessionStateCreating:
+		// Already running or being provisioned — idempotent no-op.
+		return nil
+	case sandbox.SessionStateStopped, sandbox.SessionStateGone:
+		// Pod has terminated or been deleted; resume requires the
+		// eviction tar-stream round-trip (Phase G).
+		return fmt.Errorf("StartSession: resume-from-evicted %w", ErrNotImplementedYet)
+	default:
+		return nil
 	}
-	if rec.State == store.SandboxSessionStateRunning {
-		return nil // already running; no-op
-	}
-	return fmt.Errorf("StartSession: resume-from-evicted %w", ErrNotImplementedYet)
 }
 
 // StopSession pauses a running session. In this slice, the upper-layer

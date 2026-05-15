@@ -327,9 +327,9 @@ func handleSessionsDelete(sessionID string) error {
 	}
 
 	// Best-effort: destroy sandbox container if one exists for this session
-	sandbox.TryDestroySessionContainer(fullID)
+	sandbox.TryDestroySession(appCfg, fullID)
 	for _, child := range children {
-		sandbox.TryDestroySessionContainer(child.ID)
+		sandbox.TryDestroySession(appCfg, child.ID)
 	}
 
 	if len(children) > 0 {
@@ -384,7 +384,7 @@ func handleSessionsClear() error {
 		transcriptPath := fmt.Sprintf("%s/%s/%s/%s.jsonl", sessDir, meta.AppName, meta.UserID, meta.ID)
 		os.Remove(transcriptPath)
 		// Best-effort: destroy sandbox container if one exists
-		sandbox.TryDestroySessionContainer(id)
+		sandbox.TryDestroySession(appCfg, id)
 		deleted++
 	}
 

@@ -1,6 +1,7 @@
 package astonish
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -892,9 +893,9 @@ func handleSandboxShell(sessionID string) error {
 // --- Prune ---
 
 func handleSandboxPrune() error {
-	client, err := connectOrFail()
-	if err != nil {
-		return err
+	appCfg, cfgErr := config.LoadAppConfig()
+	if cfgErr != nil {
+		return fmt.Errorf("failed to load config: %w", cfgErr)
 	}
 
 	registry, err := sandbox.NewSessionRegistry()
@@ -905,28 +906,53 @@ func handleSandboxPrune() error {
 	// Load existing session IDs from the session store so we don't destroy
 	// containers that still belong to active sessions.
 	existingSessionIDs := make(map[string]bool)
-	appCfg, cfgErr := config.LoadAppConfig()
-	if cfgErr == nil {
-		if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
-			if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
-				if indexData, loadErr := store.Index().Load(); loadErr == nil {
-					for id := range indexData.Sessions {
-						existingSessionIDs[id] = true
-					}
+	if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
+		if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
+			if indexData, loadErr := store.Index().Load(); loadErr == nil {
+				for id := range indexData.Sessions {
+					existingSessionIDs[id] = true
 				}
 			}
 		}
 	}
 
-	pruned, err := sandbox.PruneOrphans(client, registry, existingSessionIDs)
-	if err != nil {
-		return err
-	}
+	kind := sandbox.BackendKind(appCfg.Sandbox.BackendKind())
+	switch kind {
+	case sandbox.BackendKindK8s:
+		b, cleanup, bErr := sandbox.BackendFromAppConfig(appCfg)
+		if bErr != nil {
+			return fmt.Errorf("backend init: %w", bErr)
+		}
+		if cleanup != nil {
+			defer cleanup()
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		pruned, pErr := sandbox.PruneOrphansForBackend(ctx, b, registry, existingSessionIDs)
+		if pErr != nil {
+			return pErr
+		}
+		if pruned == 0 {
+			fmt.Println("No orphaned sandbox pods found.")
+		} else {
+			fmt.Printf("Pruned %d orphaned sandbox pod(s).\n", pruned)
+		}
 
-	if pruned == 0 {
-		fmt.Println("No orphaned containers found.")
-	} else {
-		fmt.Printf("Pruned %d orphaned container(s).\n", pruned)
+	default:
+		// Incus path
+		client, cErr := connectOrFail()
+		if cErr != nil {
+			return cErr
+		}
+		pruned, pErr := sandbox.PruneOrphans(client, registry, existingSessionIDs)
+		if pErr != nil {
+			return pErr
+		}
+		if pruned == 0 {
+			fmt.Println("No orphaned containers found.")
+		} else {
+			fmt.Printf("Pruned %d orphaned container(s).\n", pruned)
+		}
 	}
 
 	return nil

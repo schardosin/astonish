@@ -245,7 +245,7 @@ func (m *MockBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpe
 		return nil, errors.New("mock.CreateSession: SessionID is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("mock.CreateSession: TemplateID is required")
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 
 	m.mu.Lock()
@@ -635,7 +635,7 @@ func (m *MockBackend) EnsureFleetContainer(ctx context.Context, spec sandbox.Fle
 		return nil, errors.New("mock.EnsureFleetContainer: FleetKey is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("mock.EnsureFleetContainer: TemplateID is required")
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -818,6 +818,16 @@ func (m *MockBackend) SeedSession(sess *sandbox.Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[sess.SessionID] = cloneSession(sess)
+}
+
+// SetSessionCreatedAt overrides the CreatedAt timestamp for an existing
+// session. Useful for testing age-based pruning logic.
+func (m *MockBackend) SetSessionCreatedAt(sessionID string, t time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sessionID]; ok {
+		s.CreatedAt = t
+	}
 }
 
 // ---------------------------------------------------------------------------

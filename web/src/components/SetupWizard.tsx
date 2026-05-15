@@ -379,7 +379,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     try {
       const status = await fetchSandboxStatus()
       setSandboxStatus(status)
-      if ((status as any).incusAvailable && !(status as any).baseTemplateExists) {
+      if (((status as any).runtimeAvailable ?? (status as any).incusAvailable) && !(status as any).baseTemplateExists) {
         const toolsData = await fetchOptionalTools()
         setOptionalTools(toolsData)
         // Pre-select recommended tools
@@ -915,7 +915,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 <p className="text-lg font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Sandbox already configured</p>
                 <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Base template exists. AI tools will run inside isolated containers.</p>
               </div>
-            ) : (sandboxStatus as any)?.incusAvailable ? (
+            ) : ((sandboxStatus as any)?.runtimeAvailable ?? (sandboxStatus as any)?.incusAvailable) ? (
               <>
                 {/* Tool selection */}
                 {!sandboxInitializing && !sandboxDone && (

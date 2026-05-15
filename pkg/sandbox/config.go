@@ -36,8 +36,9 @@ func IsSandboxEnabled(c *config.SandboxConfig) bool {
 	return *c.Enabled
 }
 
-// validMemoryPattern matches Incus memory limit strings like "512MB", "2GB", "1024kB".
-var validMemoryPattern = regexp.MustCompile(`(?i)^\d+\s*(kB|MB|GB|TB|EB|PB)$`)
+// validMemoryPattern matches both Incus-style memory limit strings (e.g.
+// "512MB", "2GB") and K8s-style binary suffixes (e.g. "256Mi", "2Gi").
+var validMemoryPattern = regexp.MustCompile(`(?i)^\d+\s*(kB|MB|GB|TB|EB|PB|Ki|Mi|Gi|Ti|Pi|Ei)$`)
 
 // ValidateSandboxConfig checks the sandbox configuration for errors.
 func ValidateSandboxConfig(c *config.SandboxConfig) error {
@@ -45,13 +46,28 @@ func ValidateSandboxConfig(c *config.SandboxConfig) error {
 		return fmt.Errorf("sandbox.network must be 'bridged' or 'none', got %q", c.Network)
 	}
 	if c.Limits.Memory != "" && !validMemoryPattern.MatchString(strings.TrimSpace(c.Limits.Memory)) {
-		return fmt.Errorf("sandbox.limits.memory must be a valid size (e.g. '2GB', '512MB'), got %q", c.Limits.Memory)
+		return fmt.Errorf("sandbox.limits.memory must be a valid size (e.g. '2GB', '512MB', '2Gi', '256Mi'), got %q", c.Limits.Memory)
 	}
 	if c.Limits.CPU < 0 {
 		return fmt.Errorf("sandbox.limits.cpu must be >= 0, got %d", c.Limits.CPU)
 	}
 	if c.Limits.Processes < 0 {
 		return fmt.Errorf("sandbox.limits.processes must be >= 0, got %d", c.Limits.Processes)
+	}
+	if c.Limits.Requests.CPUMillis < 0 {
+		return fmt.Errorf("sandbox.limits.requests.cpu_millis must be >= 0, got %d", c.Limits.Requests.CPUMillis)
+	}
+	if c.Limits.Requests.MemoryMiB < 0 {
+		return fmt.Errorf("sandbox.limits.requests.memory_mib must be >= 0, got %d", c.Limits.Requests.MemoryMiB)
+	}
+	if c.Limits.Requests.CPUMillis > 0 && c.Limits.CPU > 0 && c.Limits.Requests.CPUMillis > c.Limits.CPU*1000 {
+		return fmt.Errorf("sandbox.limits.requests.cpu_millis (%d) must not exceed sandbox.limits.cpu (%d) × 1000", c.Limits.Requests.CPUMillis, c.Limits.CPU)
+	}
+	if c.Limits.Requests.MemoryMiB > 0 && c.Limits.Memory != "" {
+		limitMiB := parseMemoryToMiB(c.Limits.Memory)
+		if limitMiB > 0 && c.Limits.Requests.MemoryMiB > limitMiB {
+			return fmt.Errorf("sandbox.limits.requests.memory_mib (%d) must not exceed sandbox.limits.memory (%q = %d MiB)", c.Limits.Requests.MemoryMiB, c.Limits.Memory, limitMiB)
+		}
 	}
 	if c.Prune.OrphanCheckHours < 0 {
 		return fmt.Errorf("sandbox.prune.orphan_check_hours must be >= 0, got %d", c.Prune.OrphanCheckHours)

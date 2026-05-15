@@ -207,6 +207,12 @@ const (
 	BackendKindMock  BackendKind = "mock"
 )
 
+// BaseTemplateID is the canonical template identifier for the default base
+// layer. All backends treat an empty SessionSpec.TemplateID as equivalent to
+// BaseTemplateID. For K8s, the seed Job populates layers/@base/rootfs; for
+// Incus, the template registry holds @base as the root of the clone tree.
+const BaseTemplateID = "@base"
+
 // SessionType distinguishes the two long-running session flavors.
 type SessionType string
 
@@ -249,6 +255,10 @@ type Session struct {
 type SessionSpec struct {
 	SessionID    string            `json:"session_id"` // caller-chosen UUID
 	Type         SessionType       `json:"type"`
+	// TemplateID identifies the template/layer to use as the session's
+	// base filesystem. Empty string is normalised to BaseTemplateID
+	// ("@base") by all backend implementations — callers need not set it
+	// explicitly for sessions using the default base layer.
 	TemplateID   string            `json:"template_id"`
 	OrgSlug      string            `json:"org_slug,omitempty"`
 	TeamSlug     string            `json:"team_slug,omitempty"`
@@ -270,11 +280,22 @@ type SessionFilter struct {
 // ResourceLimits caps a session's resource use. Zero means "no backend-enforced
 // limit"; the backend MAY still impose hard ceilings from its own config.
 type ResourceLimits struct {
-	CPUs      int   `json:"cpus,omitempty"`       // whole CPU count
-	MemoryMiB int   `json:"memory_mib,omitempty"` // soft memory cap
+	CPUs      int   `json:"cpus,omitempty"`       // whole CPU count (ceiling)
+	MemoryMiB int   `json:"memory_mib,omitempty"` // memory ceiling in MiB
 	DiskMiB   int   `json:"disk_mib,omitempty"`   // upper-layer quota
 	PIDs      int   `json:"pids,omitempty"`       // process count cap
 	TimeoutS  int64 `json:"timeout_s,omitempty"`  // hard wall-clock timeout
+
+	// RequestCPUMillis is the K8s scheduler CPU reservation in millicores.
+	// On K8s, pods request this from the scheduler (the "idle floor").
+	// Zero means "auto-derive from CPUs" using a built-in ratio.
+	// Ignored by Incus.
+	RequestCPUMillis int `json:"request_cpu_millis,omitempty"`
+
+	// RequestMemoryMiB is the K8s scheduler memory reservation in MiB.
+	// Zero means "auto-derive from MemoryMiB" using a built-in ratio.
+	// Ignored by Incus.
+	RequestMemoryMiB int `json:"request_memory_mib,omitempty"`
 }
 
 // ExecSpec configures a non-interactive Exec call.

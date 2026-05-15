@@ -116,10 +116,20 @@ func TestIncusBackendArgValidation(t *testing.T) {
 		!strings.Contains(err.Error(), "SessionID is required") {
 		t.Errorf("CreateSession empty SessionID: got %v", err)
 	}
-	if _, err := b.CreateSession(ctx, SessionSpec{SessionID: "s1"}); err == nil ||
-		!strings.Contains(err.Error(), "TemplateID is required") {
-		t.Errorf("CreateSession empty TemplateID: got %v", err)
-	}
+	// Empty TemplateID now defaults to BaseTemplateID ("@base"). With a
+	// nil Incus client, the call panics downstream — recover and verify
+	// the validation layer no longer rejects empty TemplateID.
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("CreateSession with nil client and empty TemplateID: expected panic (nil Incus client), got clean return")
+			}
+			// Panic from nil client dereference is expected; it proves
+			// we passed validation and reached the Incus orchestration
+			// code that requires a live client.
+		}()
+		_, _ = b.CreateSession(ctx, SessionSpec{SessionID: "s1"})
+	}()
 	if _, err := b.RefreshTemplate(ctx, ""); err == nil ||
 		!strings.Contains(err.Error(), "templateID is required") {
 		t.Errorf("RefreshTemplate empty ID: got %v", err)
@@ -140,10 +150,16 @@ func TestIncusBackendArgValidation(t *testing.T) {
 		!strings.Contains(err.Error(), "FleetKey is required") {
 		t.Errorf("EnsureFleetContainer empty FleetKey: got %v", err)
 	}
-	if _, err := b.EnsureFleetContainer(ctx, FleetSpec{FleetKey: "fk"}); err == nil ||
-		!strings.Contains(err.Error(), "TemplateID is required") {
-		t.Errorf("EnsureFleetContainer empty TemplateID: got %v", err)
-	}
+	// Empty TemplateID defaults to BaseTemplateID; verify we pass
+	// validation (panics downstream on nil client, which is expected).
+	func() {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("EnsureFleetContainer with nil client and empty TemplateID: expected panic, got clean return")
+			}
+		}()
+		_, _ = b.EnsureFleetContainer(ctx, FleetSpec{FleetKey: "fk"})
+	}()
 }
 
 // TestIncusBackendSessionNotFound covers the "session is not in the

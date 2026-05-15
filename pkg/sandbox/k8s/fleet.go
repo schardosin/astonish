@@ -85,7 +85,7 @@ func (b *K8sBackend) EnsureFleetContainer(ctx context.Context, spec sandbox.Flee
 		return nil, errors.New("sandbox/k8s: EnsureFleetContainer: FleetKey is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("sandbox/k8s: EnsureFleetContainer: TemplateID is required")
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 
 	// Idempotency: if this FleetKey has already been registered, return
@@ -163,7 +163,7 @@ func (b *K8sBackend) buildFleetPodManifest(spec sandbox.FleetSpec) (*corev1.Pod,
 		return nil, errors.New("FleetSpec.FleetKey is required")
 	}
 	if spec.TemplateID == "" {
-		return nil, errors.New("FleetSpec.TemplateID is required")
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 
 	name := podNameForFleet(spec.FleetKey)
@@ -203,27 +203,32 @@ func (b *K8sBackend) buildFleetPodManifest(spec sandbox.FleetSpec) (*corev1.Pod,
 			Annotations: annotations,
 		},
 		Spec: corev1.PodSpec{
-			RestartPolicy: corev1.RestartPolicyAlways,
+			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
-				{
-					Name:  containerName,
-					Image: b.cfg.SandboxImage,
-					Env: []corev1.EnvVar{
-						{Name: "ASTONISH_FLEET_KEY", Value: spec.FleetKey},
-						{Name: "ASTONISH_TEMPLATE_ID", Value: spec.TemplateID},
-						{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
-						{Name: "ASTONISH_WORK_DIR", Value: mountWork},
-						{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
-						{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
-					},
-					VolumeMounts: []corev1.VolumeMount{
-						{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
-						{Name: volumeUppers, MountPath: mountUppers},
-						{Name: volumeUpper, MountPath: mountUpper},
-						{Name: volumeWork, MountPath: mountWork},
-					},
-					Resources: buildResourceRequirements(spec.Limits),
+			{
+				Name:            containerName,
+				Image:           b.cfg.SandboxImage,
+				ImagePullPolicy: imagePullPolicy(b.cfg.SandboxImage),
+				Env: []corev1.EnvVar{
+					{Name: "ASTONISH_FLEET_KEY", Value: spec.FleetKey},
+					{Name: "ASTONISH_TEMPLATE_ID", Value: spec.TemplateID},
+					{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
+					{Name: "ASTONISH_WORK_DIR", Value: mountWork},
+					{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
+					{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
+					// PID 1 sleeps after overlay composition; tool calls
+					// arrive via Backend.Exec with attached stdio.
+					{Name: "ASTONISH_HANDOFF", Value: "/bin/sleep"},
+					{Name: "ASTONISH_HANDOFF_ARGS", Value: "infinity"},
 				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: volumeLayers, MountPath: mountLayers, ReadOnly: true},
+					{Name: volumeUppers, MountPath: mountUppers},
+					{Name: volumeUpper, MountPath: mountUpper},
+					{Name: volumeWork, MountPath: mountWork},
+				},
+				Resources: buildResourceRequirements(spec.Limits),
+			},
 			},
 			Volumes: []corev1.Volume{
 				{

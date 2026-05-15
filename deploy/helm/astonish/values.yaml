@@ -141,9 +141,10 @@ sandbox:
   #                 at least baseline.
   podSecurity: baseline
 
-  # Backend selector ("kubernetes" is what this chart deploys; "docker" is for
-  # local dev outside Kubernetes). Written into config.sandbox.backend.
-  backend: kubernetes
+  # Backend selector — canonical token used by the Go runtime.
+  # Accepted values: "k8s" (this chart), "incus" (local dev).
+  # Written verbatim into config.sandbox.backend.
+  backend: k8s
 
   rbac:
     # Create the Role + RoleBinding in the sandbox namespace so the control-
@@ -193,6 +194,33 @@ sandbox:
       limits:
         cpu: "1"
         memory: 1Gi
+
+  # Resource limits for sandbox session pods.
+  # The "limits" block defines the per-session CEILING (cgroup throttle) —
+  # equivalent to the Incus cgroup cap. A session can burst up to this
+  # much but is throttled (CPU) or OOM-killed (memory) when exceeding.
+  #
+  # The "requests" block defines the K8s SCHEDULER RESERVATION (idle floor).
+  # This is what the scheduler subtracts from node allocatable when placing
+  # a pod. Keep this LOW for high session density — most sessions idle
+  # waiting for user input. When zero, the Go backend auto-derives
+  # requests using a built-in ratio (5% CPU, 12.5% memory of limit).
+  #
+  # Mental model:
+  #   limits  = "what one session can burst to" (per-pod, like Incus)
+  #   requests = "how densely sessions pack onto nodes" (fleet capacity)
+  #
+  # On a 4-CPU / 16Gi node with the defaults below (~100m CPU / 256Mi):
+  #   ~40 sessions fit by CPU, ~64 by memory — practical: ~40 idle sessions.
+  #   Under simultaneous load, kernel time-slices fairly within limits.
+  limits:
+    cpu: 2              # whole cores (K8s limits.cpu ceiling)
+    memory: "2GB"       # ceiling; accepts Incus "2GB" or K8s "2Gi" syntax
+    processes: 500      # Incus-only; ignored by K8s backend
+  requests:
+    # K8s-only (ignored by Incus). Zero = auto-derive from limits.
+    cpuMillis: 100      # 100m = 0.1 CPU scheduler reservation
+    memoryMiB: 256      # 256Mi scheduler reservation
 
 # =============================================================================
 # Optional FUSE device plugin DaemonSet (smarter-device-manager reference).

@@ -189,8 +189,22 @@ func TestBuildPodManifest_Rejects(t *testing.T) {
 	if _, err := b.buildPodManifest(sandbox.SessionSpec{}); err == nil {
 		t.Error("empty SessionID should error")
 	}
-	if _, err := b.buildPodManifest(sandbox.SessionSpec{SessionID: "s"}); err == nil {
-		t.Error("empty TemplateID should error")
+	// Empty TemplateID now defaults to BaseTemplateID ("@base") — verify
+	// it succeeds and applies the default rather than erroring.
+	pod, err := b.buildPodManifest(sandbox.SessionSpec{SessionID: "s"})
+	if err != nil {
+		t.Fatalf("empty TemplateID should default to @base, got error: %v", err)
+	}
+	// Verify the default was applied in the pod's env/labels.
+	found := false
+	for _, env := range pod.Spec.Containers[0].Env {
+		if env.Name == "ASTONISH_LAYER_CHAIN" && env.Value == sandbox.BaseTemplateID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected ASTONISH_LAYER_CHAIN=%q in pod env", sandbox.BaseTemplateID)
 	}
 
 	// Chain depth exceeds MaxChainDepth (default 20).
@@ -200,6 +214,88 @@ func TestBuildPodManifest_Rejects(t *testing.T) {
 	}
 	if _, err := b.buildPodManifest(sandbox.SessionSpec{SessionID: "s", TemplateID: "t", LayerChain: chain}); err == nil {
 		t.Error("over-deep chain should error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildResourceRequirements
+// ---------------------------------------------------------------------------
+
+func TestBuildResourceRequirements_ExplicitRequests(t *testing.T) {
+	// When RequestCPUMillis and RequestMemoryMiB are explicitly set, they
+	// should appear as-is in the pod spec Requests.
+	lim := sandbox.ResourceLimits{
+		CPUs:             2,
+		MemoryMiB:        2048,
+		DiskMiB:          4096,
+		RequestCPUMillis: 200,
+		RequestMemoryMiB: 512,
+	}
+	reqs := buildResourceRequirements(lim)
+
+	// Limits should be unchanged.
+	if got := reqs.Limits.Cpu().Value(); got != 2 {
+		t.Errorf("Limits.CPU = %d, want 2", got)
+	}
+	if got := reqs.Limits.Memory().Value(); got != 2048*1024*1024 {
+		t.Errorf("Limits.Memory = %d, want %d", got, 2048*1024*1024)
+	}
+
+	// Requests should reflect the explicit values.
+	if got := reqs.Requests.Cpu().MilliValue(); got != 200 {
+		t.Errorf("Requests.CPU = %dm, want 200m", got)
+	}
+	if got := reqs.Requests.Memory().Value(); got != 512*1024*1024 {
+		t.Errorf("Requests.Memory = %d, want %d", got, 512*1024*1024)
+	}
+}
+
+func TestBuildResourceRequirements_AutoDerive(t *testing.T) {
+	// When request fields are zero, auto-derive from limits.
+	lim := sandbox.ResourceLimits{
+		CPUs:      2,
+		MemoryMiB: 2048,
+	}
+	reqs := buildResourceRequirements(lim)
+
+	// Auto-derived: CPU = max(50, 2*1000/20) = max(50, 100) = 100m
+	if got := reqs.Requests.Cpu().MilliValue(); got != 100 {
+		t.Errorf("Requests.CPU = %dm, want 100m (auto-derived)", got)
+	}
+	// Auto-derived: Memory = max(128, 2048/8) = max(128, 256) = 256 MiB
+	if got := reqs.Requests.Memory().Value(); got != 256*1024*1024 {
+		t.Errorf("Requests.Memory = %d, want %d (auto-derived)", got, 256*1024*1024)
+	}
+}
+
+func TestBuildResourceRequirements_AutoDeriveMinimums(t *testing.T) {
+	// When limits are tiny, auto-derivation applies minimums.
+	lim := sandbox.ResourceLimits{
+		CPUs:      1,    // 1*1000/20 = 50 → exactly the min
+		MemoryMiB: 512,  // 512/8 = 64 → below min 128
+	}
+	reqs := buildResourceRequirements(lim)
+
+	// CPU: max(50, 50) = 50m
+	if got := reqs.Requests.Cpu().MilliValue(); got != 50 {
+		t.Errorf("Requests.CPU = %dm, want 50m (min)", got)
+	}
+	// Memory: max(128, 64) = 128 MiB
+	if got := reqs.Requests.Memory().Value(); got != 128*1024*1024 {
+		t.Errorf("Requests.Memory = %d, want %d (min 128Mi)", got, 128*1024*1024)
+	}
+}
+
+func TestBuildResourceRequirements_ZeroLimits(t *testing.T) {
+	// When limits are all zero, no requests should be set (no resource
+	// requirements means the pod is BestEffort QoS — not typical, but
+	// should not panic).
+	reqs := buildResourceRequirements(sandbox.ResourceLimits{})
+	if reqs.Limits != nil {
+		t.Errorf("expected nil Limits, got %v", reqs.Limits)
+	}
+	if reqs.Requests != nil {
+		t.Errorf("expected nil Requests, got %v", reqs.Requests)
 	}
 }
 
@@ -344,6 +440,71 @@ func TestSessionState_EvictedRecord(t *testing.T) {
 	}
 	if st != sandbox.SessionStateStopped {
 		t.Errorf("evicted record = %q, want stopped", st)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StartSession
+// ---------------------------------------------------------------------------
+
+func TestStartSession_IdempotentOnPendingPod(t *testing.T) {
+	b, _ := newBackendWithFakeClient(t)
+	ctx := context.Background()
+
+	// Create a session. The fake client creates the pod in Pending phase
+	// by default (no status update from kubelet).
+	_, err := b.CreateSession(ctx, sandbox.SessionSpec{SessionID: "s1", TemplateID: "t1"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// StartSession on a Pending pod (SessionStateCreating) should succeed
+	// — it's idempotent, meaning "ensure the session is running or will be".
+	if err := b.StartSession(ctx, "s1"); err != nil {
+		t.Errorf("StartSession on pending pod: got %v, want nil", err)
+	}
+}
+
+func TestStartSession_IdempotentOnRunningPod(t *testing.T) {
+	b, cs := newBackendWithFakeClient(t)
+	ctx := context.Background()
+
+	_, err := b.CreateSession(ctx, sandbox.SessionSpec{SessionID: "s1", TemplateID: "t1"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Simulate kubelet marking the pod as Running+Ready.
+	pod, _ := cs.CoreV1().Pods(b.cfg.Namespace).Get(ctx, podNameForSession("s1"), metav1.GetOptions{})
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	cs.CoreV1().Pods(b.cfg.Namespace).Update(ctx, pod, metav1.UpdateOptions{})
+
+	if err := b.StartSession(ctx, "s1"); err != nil {
+		t.Errorf("StartSession on running pod: got %v, want nil", err)
+	}
+}
+
+func TestStartSession_FailsOnCompletedPod(t *testing.T) {
+	b, cs := newBackendWithFakeClient(t)
+	ctx := context.Background()
+
+	_, err := b.CreateSession(ctx, sandbox.SessionSpec{SessionID: "s1", TemplateID: "t1"})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	// Simulate pod exiting (Succeeded phase = SessionStateStopped).
+	pod, _ := cs.CoreV1().Pods(b.cfg.Namespace).Get(ctx, podNameForSession("s1"), metav1.GetOptions{})
+	pod.Status.Phase = corev1.PodSucceeded
+	cs.CoreV1().Pods(b.cfg.Namespace).Update(ctx, pod, metav1.UpdateOptions{})
+
+	err = b.StartSession(ctx, "s1")
+	if err == nil {
+		t.Fatal("StartSession on completed pod: want error, got nil")
+	}
+	if !errors.Is(err, ErrNotImplementedYet) {
+		t.Errorf("StartSession on completed pod: got %v, want ErrNotImplementedYet", err)
 	}
 }
 

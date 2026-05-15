@@ -4,7 +4,7 @@
 //   - Manifest shape: fleet labels (type=fleet, fleet-key=<key>,
 //     session-id=<key>, template=<id>, optional org/team), annotations,
 //     volumes, container image/env/mounts/runtimeClassName,
-//     RestartPolicy=Always.
+//     RestartPolicy=Never (PID 1 sleeps after overlay composition).
 //   - Name derivation via podNameForFleet: prefix, sanitisation,
 //     length cap, trailing-dash trim.
 //   - EnsureFleetContainer happy path: pod created, registry row
@@ -134,8 +134,8 @@ func TestBuildFleetPodManifest_ContainerShape(t *testing.T) {
 	if c.Image != b.cfg.SandboxImage {
 		t.Errorf("image = %q, want %q", c.Image, b.cfg.SandboxImage)
 	}
-	if pod.Spec.RestartPolicy != corev1.RestartPolicyAlways {
-		t.Errorf("RestartPolicy = %v, want Always (long-running fleet)", pod.Spec.RestartPolicy)
+	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
+		t.Errorf("RestartPolicy = %v, want Never (PID 1 sleeps, not restarted)", pod.Spec.RestartPolicy)
 	}
 	// Phase F: default backend has empty RuntimeClassName → nil on the
 	// pod (cluster default applies). See session_test.go for the
@@ -203,8 +203,13 @@ func TestBuildFleetPodManifest_Validation(t *testing.T) {
 	if _, err := b.buildFleetPodManifest(sandbox.FleetSpec{TemplateID: "t"}); err == nil {
 		t.Errorf("expected error on empty FleetKey")
 	}
-	if _, err := b.buildFleetPodManifest(sandbox.FleetSpec{FleetKey: "f"}); err == nil {
-		t.Errorf("expected error on empty TemplateID")
+	// Empty TemplateID now defaults to BaseTemplateID — verify it succeeds.
+	pod, err := b.buildFleetPodManifest(sandbox.FleetSpec{FleetKey: "f"})
+	if err != nil {
+		t.Fatalf("empty TemplateID should default to @base, got error: %v", err)
+	}
+	if pod.Labels[labelTemplate] != toDNSLabel(sandbox.BaseTemplateID) {
+		t.Errorf("template label = %q, want %q", pod.Labels[labelTemplate], toDNSLabel(sandbox.BaseTemplateID))
 	}
 }
 
@@ -239,9 +244,14 @@ func TestEnsureFleetContainer_Validation(t *testing.T) {
 		!strings.Contains(err.Error(), "FleetKey is required") {
 		t.Errorf("empty FleetKey: err = %v, want FleetKey-required", err)
 	}
-	if _, err := b.EnsureFleetContainer(ctx, sandbox.FleetSpec{FleetKey: "f"}); err == nil ||
-		!strings.Contains(err.Error(), "TemplateID is required") {
-		t.Errorf("empty TemplateID: err = %v, want TemplateID-required", err)
+	// Empty TemplateID now defaults to BaseTemplateID — should succeed
+	// (creates a pod with @base template).
+	sess, err := b.EnsureFleetContainer(ctx, sandbox.FleetSpec{FleetKey: "f"})
+	if err != nil {
+		t.Fatalf("empty TemplateID should default to @base, got error: %v", err)
+	}
+	if sess.TemplateID != sandbox.BaseTemplateID {
+		t.Errorf("session TemplateID = %q, want %q", sess.TemplateID, sandbox.BaseTemplateID)
 	}
 }
 

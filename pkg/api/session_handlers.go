@@ -28,9 +28,14 @@ import (
 	"google.golang.org/adk/session"
 )
 
-// validSessionID matches UUID-format session IDs (with optional prefix).
-// Prevents path traversal and command injection via session ID parameters.
-var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+// validSessionID accepts all canonical session ID formats:
+//   - UUIDs: "e89b12d3-a456-4266-1417-4000"
+//   - Channel session keys: "telegram:direct:8484406081", "email:direct:alice@example.com"
+//   - Prefixed IDs: "triage-abc12345", "test-abc12345"
+//
+// Blocks path traversal (no / or \) and shell metacharacters (no space, ;, |, &, $, etc.).
+// Must start with an alphanumeric character (prevents leading - or . attacks).
+var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:@-]{0,127}$`)
 
 // resolveSessionStore returns the session store that contains the given session.
 // It checks the personal store first (private-first model), then falls back to

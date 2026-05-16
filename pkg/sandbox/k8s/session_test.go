@@ -115,7 +115,7 @@ func TestBuildPodManifest_RuntimeClassAndVolumes(t *testing.T) {
 	for _, v := range pod.Spec.Volumes {
 		volNames[v.Name] = true
 	}
-	for _, want := range []string{volumeLayers, volumeUppers, volumeUpper, volumeWork} {
+	for _, want := range []string{volumeLayers, volumeUppers, volumeOverlay} {
 		if !volNames[want] {
 			t.Errorf("volume %q missing from pod spec", want)
 		}
@@ -173,7 +173,7 @@ func TestBuildPodManifest_EnvAndMounts(t *testing.T) {
 	for _, m := range c.VolumeMounts {
 		mounts[m.Name] = m
 	}
-	for _, want := range []string{volumeLayers, volumeUppers, volumeUpper, volumeWork} {
+	for _, want := range []string{volumeLayers, volumeUppers, volumeOverlay} {
 		if _, ok := mounts[want]; !ok {
 			t.Errorf("VolumeMount %q missing", want)
 		}
@@ -419,6 +419,63 @@ func TestCreateSession_IdempotentOnSessionID(t *testing.T) {
 	list, _ := cs.CoreV1().Pods("astonish-sandboxes").List(ctx, metav1.ListOptions{})
 	if len(list.Items) != 1 {
 		t.Errorf("expected 1 pod, got %d", len(list.Items))
+	}
+}
+
+// TestCreateSession_RecreatesAfterPodDeleted verifies that when the
+// registry holds a stale record (pod was deleted out-of-band) a subsequent
+// CreateSession call recreates the pod instead of returning the stale entry.
+func TestCreateSession_RecreatesAfterPodDeleted(t *testing.T) {
+	b, cs := newBackendWithFakeClient(t)
+	ctx := context.Background()
+
+	spec := sandbox.SessionSpec{SessionID: "s-stale", TemplateID: "t1"}
+
+	// First create — pod is created, registry populated.
+	sess1, err := b.CreateSession(ctx, spec)
+	if err != nil {
+		t.Fatalf("first CreateSession: %v", err)
+	}
+	podName := podNameForSession("s-stale")
+	if _, getErr := cs.CoreV1().Pods("astonish-sandboxes").Get(ctx, podName, metav1.GetOptions{}); getErr != nil {
+		t.Fatalf("pod should exist after first create: %v", getErr)
+	}
+
+	// Delete the pod out-of-band (simulates kubectl delete or node eviction).
+	if err := cs.CoreV1().Pods("astonish-sandboxes").Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	// Verify pod is gone from API server.
+	_, getErr := cs.CoreV1().Pods("astonish-sandboxes").Get(ctx, podName, metav1.GetOptions{})
+	if !apierrors.IsNotFound(getErr) {
+		t.Fatalf("expected NotFound after delete, got: %v", getErr)
+	}
+
+	// Second CreateSession with same spec — should recreate the pod.
+	sess2, err := b.CreateSession(ctx, spec)
+	if err != nil {
+		t.Fatalf("second CreateSession after pod-deleted: %v", err)
+	}
+	if sess2.SessionID != sess1.SessionID {
+		t.Errorf("session ID mismatch: %q vs %q", sess2.SessionID, sess1.SessionID)
+	}
+
+	// Pod must exist again.
+	pod, getErr := cs.CoreV1().Pods("astonish-sandboxes").Get(ctx, podName, metav1.GetOptions{})
+	if getErr != nil {
+		t.Fatalf("pod should be recreated: %v", getErr)
+	}
+	if pod.Name != podName {
+		t.Errorf("recreated pod name = %q, want %q", pod.Name, podName)
+	}
+
+	// Registry should reflect the new record.
+	rec, _ := b.sessions.GetSession("s-stale")
+	if rec == nil {
+		t.Fatal("registry record missing after recreate")
+	}
+	if rec.State != store.SandboxSessionStateCreating {
+		t.Errorf("registry state = %q, want %q", rec.State, store.SandboxSessionStateCreating)
 	}
 }
 

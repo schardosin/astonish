@@ -160,16 +160,14 @@ func TestBuildTemplateBuilderPodManifest_Volumes(t *testing.T) {
 		t.Fatalf("buildTemplateBuilderPodManifest: %v", err)
 	}
 
-	var layersV, upperV, workV *corev1.Volume
+	var layersV, overlayV *corev1.Volume
 	for i := range pod.Spec.Volumes {
 		v := &pod.Spec.Volumes[i]
 		switch v.Name {
 		case volumeLayers:
 			layersV = v
-		case volumeUpper:
-			upperV = v
-		case volumeWork:
-			workV = v
+		case volumeOverlay:
+			overlayV = v
 		}
 	}
 	if layersV == nil || layersV.PersistentVolumeClaim == nil {
@@ -178,11 +176,8 @@ func TestBuildTemplateBuilderPodManifest_Volumes(t *testing.T) {
 	if layersV.PersistentVolumeClaim.ReadOnly {
 		t.Errorf("layers PVC is ReadOnly, want RW for atomic rename")
 	}
-	if upperV == nil || upperV.EmptyDir == nil {
-		t.Errorf("missing upper emptyDir volume")
-	}
-	if workV == nil || workV.EmptyDir == nil {
-		t.Errorf("missing work emptyDir volume")
+	if overlayV == nil || overlayV.EmptyDir == nil {
+		t.Errorf("missing overlay emptyDir volume")
 	}
 
 	// Uppers PVC is NOT mounted in a builder (only sessions need it
@@ -261,7 +256,7 @@ func TestBuildCaptureScript_ContainsCanonicalPipeline(t *testing.T) {
 		"set -e",
 		"/mnt/astonish-layers/__staging-bid-123",
 		"tar --numeric-owner --xattrs --acls --sort=name --mtime=@0",
-		"/var/astonish/upper",
+		"/var/astonish/overlay/upper",
 		"sha256sum",
 		"mv \"$STAGING\" \"$LAYERS_DIR/$SHA\"",
 		"du -sb",
@@ -603,12 +598,45 @@ func TestRefreshTemplate_ReturnsBuildSpecError(t *testing.T) {
 	}
 }
 
-func TestDeleteTemplate_IsNoOp(t *testing.T) {
+func TestDeleteTemplate_SkipsBase(t *testing.T) {
 	b, _ := newBackendWithFakeClient(t)
-	for _, force := range []bool{false, true} {
-		if err := b.DeleteTemplate(context.Background(), "t1", force); err != nil {
-			t.Errorf("DeleteTemplate(force=%v) = %v, want nil", force, err)
+	// @base and empty IDs should be no-ops.
+	for _, id := range []string{"", sandbox.BaseTemplateID} {
+		if err := b.DeleteTemplate(context.Background(), id, false); err != nil {
+			t.Errorf("DeleteTemplate(%q) = %v, want nil", id, err)
 		}
+	}
+}
+
+func TestDeleteTemplate_CreatesGCPod(t *testing.T) {
+	b, _ := newBackendWithFakeClient(t)
+	autoCompleteGCPods(t, b)
+
+	layerID := "abc123def456"
+	if err := b.DeleteTemplate(context.Background(), layerID, false); err != nil {
+		t.Fatalf("DeleteTemplate = %v, want nil", err)
+	}
+
+	// Verify GC pod was created (and cleaned up via defer).
+	cs := b.client.(*fake.Clientset)
+	actions := cs.Actions()
+	var foundCreate bool
+	for _, a := range actions {
+		if a.GetVerb() == "create" && a.GetResource().Resource == "pods" {
+			ca := a.(clientgotesting.CreateAction)
+			pod := ca.GetObject().(*corev1.Pod)
+			if pod.Labels[labelType] == "layer-gc" {
+				foundCreate = true
+				// Verify the rm command references the layer ID.
+				cmd := pod.Spec.Containers[0].Command
+				if len(cmd) < 3 || !strings.Contains(cmd[2], layerID) {
+					t.Errorf("GC pod command does not reference layer ID: %v", cmd)
+				}
+			}
+		}
+	}
+	if !foundCreate {
+		t.Error("expected a layer-gc pod to be created")
 	}
 }
 
@@ -619,6 +647,33 @@ func TestDeleteTemplate_ContextCancelled(t *testing.T) {
 	if err := b.DeleteTemplate(ctx, "t1", false); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
+}
+
+// autoCompleteGCPods installs a reactor that transitions layer-gc pods
+// to Succeeded on create, mirroring autoRunBuilderPods for builder pods.
+func autoCompleteGCPods(t *testing.T, b *K8sBackend) {
+	t.Helper()
+	fakeCS, ok := b.client.(interface {
+		PrependReactor(verb, resource string, r clientgotesting.ReactionFunc)
+	})
+	if !ok {
+		t.Fatalf("client does not support PrependReactor")
+	}
+	fakeCS.PrependReactor("create", "pods", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		ca, ok := action.(clientgotesting.CreateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		pod, ok := ca.GetObject().(*corev1.Pod)
+		if !ok {
+			return false, nil, nil
+		}
+		if pod.Labels[labelType] != "layer-gc" {
+			return false, nil, nil
+		}
+		pod.Status.Phase = corev1.PodSucceeded
+		return false, nil, nil
+	})
 }
 
 // ---------------------------------------------------------------------------

@@ -52,7 +52,7 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 		TemplateName: templateName,
 	}
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		// Sandbox unavailable — template cannot exist
 		respondJSON(w, http.StatusOK, resp)
@@ -94,7 +94,9 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateCreateHandler handles POST /api/team/template/create.
-// Creates the team template editor session from @base and starts it.
+// Creates the team template editor session and starts it.
+// If a previously-saved template exists, the editor resumes on top of
+// that layer chain. Otherwise, it starts from @base.
 func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -109,7 +111,7 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 	templateName := "team-" + tc.TeamSlug
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -134,10 +136,12 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create fresh editor session from @base
+	// Always create the editor from @base. The saved template (if any) only
+	// affects fleet/chat sessions — the editor is a fresh workspace every time.
+	// When the user is satisfied, Save captures the upper as the team default.
 	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
 		SessionID:  sessionID,
-		Type:       sandbox.SessionTypeChat, // editor sessions use chat type
+		Type:       sandbox.SessionTypeChat,
 		TemplateID: sandbox.BaseTemplateID,
 		TeamSlug:   tc.TeamSlug,
 		Labels: map[string]string{
@@ -178,7 +182,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	templateSlug := "team-" + tc.TeamSlug
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -325,8 +329,112 @@ func ptrIfNonEmpty(s string) *string {
 	return &s
 }
 
+// deleteTeamTemplateState removes the sandbox_templates DB row and decrements
+// the ref_count on the associated layer. This is the DB-side complement to
+// DestroySession (which removes the pod). Both Delete and Restore handlers
+// call this to ensure a subsequent Create starts fresh from @base.
+//
+// Best-effort: errors are logged but do not propagate. The GC reconciler can
+// heal a partially-cleaned state (orphan layers with stale ref_counts).
+// Returns the layer ID whose ref_count was decremented (empty string if none).
+// Callers use this to decide whether to reclaim bytes from disk.
+func deleteTeamTemplateState(ctx context.Context, teamSlug string) string {
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		return ""
+	}
+	templates := pgStore.SandboxTemplates()
+	layers := pgStore.SandboxLayers()
+	if templates == nil || layers == nil {
+		return ""
+	}
+	return deleteTeamTemplateStateWith(ctx, teamSlug, templates, layers)
+}
+
+// deleteTeamTemplateStateWith is the testable core of deleteTeamTemplateState.
+// It accepts explicit store interfaces so callers (and tests) don't depend on
+// the package-level platformPGStoreInstance global.
+// Returns the layer ID that was decremented (empty if nothing to do).
+func deleteTeamTemplateStateWith(ctx context.Context, teamSlug string, templates store.SandboxTemplateStore, layers store.LayerStore) string {
+	templateSlug := "team-" + teamSlug
+	tpl, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeTeam, teamSlug, templateSlug)
+	if err != nil || tpl == nil {
+		// Nothing to clean up — template never saved or already deleted.
+		return ""
+	}
+
+	// Capture layer ID before deleting the row (FK is ON DELETE RESTRICT on
+	// the *layer* side, so deleting the template row is safe).
+	oldLayerID := tpl.TopLayerID
+
+	if err := templates.Delete(ctx, tpl.ID); err != nil {
+		slog.Warn("deleteTeamTemplateState: failed to delete template row",
+			"component", "team-template", "templateID", tpl.ID, "error", err)
+		return "" // Don't decrement ref if the row still exists.
+	}
+
+	// Decrement the layer's ref_count.
+	if oldLayerID != nil && *oldLayerID != "" && *oldLayerID != sandbox.BaseTemplateID {
+		if err := layers.DecrementRefCount(ctx, *oldLayerID); err != nil {
+			slog.Warn("deleteTeamTemplateState: failed to decrement layer ref_count",
+				"component", "team-template", "layer", *oldLayerID, "error", err)
+		}
+		return *oldLayerID
+	}
+	return ""
+}
+
+// reclaimLayerBytes checks whether a layer's ref_count has reached 0 and,
+// if so, removes the layer bytes from the backend storage (PVC) and deletes
+// the layer row from the platform DB. Best-effort: errors are logged.
+//
+// layerID may be empty (e.g. when deleteTeamTemplateState found nothing to do),
+// in which case this is a no-op.
+func reclaimLayerBytes(ctx context.Context, backend sandbox.Backend, layerID string) {
+	if layerID == "" || layerID == sandbox.BaseTemplateID {
+		return
+	}
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		return
+	}
+	layers := pgStore.SandboxLayers()
+	if layers == nil {
+		return
+	}
+
+	// Re-read the layer to check ref_count.
+	layer, err := layers.GetLayer(ctx, layerID)
+	if err != nil || layer == nil {
+		// Layer row already gone or error reading — nothing to do.
+		return
+	}
+	if layer.RefCount > 0 {
+		// Another template still references this layer (content-addressed
+		// dedup). Leave bytes in place.
+		return
+	}
+
+	// ref_count == 0: reclaim bytes from disk via the backend.
+	if err := backend.DeleteTemplate(ctx, layerID, true); err != nil {
+		slog.Warn("reclaimLayerBytes: failed to delete layer bytes from disk",
+			"component", "team-template", "layer", layerID, "error", err)
+		// Don't delete the DB row if bytes couldn't be reclaimed — leaves
+		// a trail for manual cleanup.
+		return
+	}
+
+	// Remove the layer row from the DB.
+	if err := layers.DeleteLayer(ctx, layerID); err != nil {
+		slog.Warn("reclaimLayerBytes: failed to delete layer row",
+			"component", "team-template", "layer", layerID, "error", err)
+	}
+}
+
 // TeamTemplateRestoreHandler handles POST /api/team/template/restore.
-// Destroys the current editor session and recreates it fresh from @base.
+// Destroys the current editor session, removes the saved template from the
+// platform DB, reclaims layer bytes from disk if unreferenced, and recreates
+// the editor from @base.
 func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -341,7 +449,7 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	templateName := "team-" + tc.TeamSlug
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -355,7 +463,16 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to destroy old template editor session", "component", "team-template", "error", err)
 	}
 
-	// Recreate from @base
+	// Remove the saved template row + decrement layer ref_count so the
+	// next Create (or Save) starts from a clean @base slate.
+	layerID := deleteTeamTemplateState(r.Context(), tc.TeamSlug)
+
+	// If the layer's ref_count reached 0, reclaim bytes from disk and
+	// remove the layer row from the DB.
+	reclaimLayerBytes(r.Context(), backend, layerID)
+
+	// Recreate from @base (LayerChain left nil → buildPodManifest defaults
+	// to ["@base"]).
 	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
 		SessionID:  sessionID,
 		Type:       sandbox.SessionTypeChat,
@@ -387,7 +504,10 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // TeamTemplateDeleteHandler handles DELETE /api/team/template.
-// Destroys the team template editor session and clears the team settings.
+// Destroys the team template editor session, removes the saved template from
+// the platform DB (row + layer ref_count decrement), reclaims layer bytes from
+// disk if unreferenced, and clears team settings.
+// After this, a subsequent Create will start fresh from @base.
 func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {
 		return
@@ -401,7 +521,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -410,13 +530,21 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		defer cleanup()
 	}
 
-	// Destroy the editor session
+	// Destroy the editor session (pod).
 	if err := backend.DestroySession(r.Context(), sessionID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete template editor: "+err.Error())
 		return
 	}
 
-	// Clear from team settings
+	// Remove the saved template row + decrement layer ref_count so a
+	// subsequent Create starts fresh from @base.
+	layerID := deleteTeamTemplateState(r.Context(), tc.TeamSlug)
+
+	// If the layer's ref_count reached 0, reclaim bytes from disk and
+	// remove the layer row from the DB.
+	reclaimLayerBytes(r.Context(), backend, layerID)
+
+	// Clear from team settings so fleet sessions revert to @base.
 	svc := store.FromRequest(r)
 	if svc != nil && svc.Settings != nil {
 		settings, err := svc.Settings.Get(r.Context())
@@ -446,7 +574,7 @@ func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return
@@ -502,7 +630,7 @@ func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := teamTemplateSessionID(tc.TeamSlug)
 
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, err.Error())
 		return

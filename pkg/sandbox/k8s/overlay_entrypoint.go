@@ -7,8 +7,10 @@
 //     (/mnt/astonish-uppers/<session-id>/upper.tar.zst).
 //  2. Composing the overlay chain encoded in $ASTONISH_LAYER_CHAIN as
 //     lowerdirs (top-most first, per overlayfs syntax), with the
-//     emptyDir at /var/astonish/upper as upperdir and /var/astonish/work
-//     as workdir, mounted at /sandbox/rootfs.
+//     emptyDir at /var/astonish/overlay/upper as upperdir and
+//     /var/astonish/overlay/work as workdir, mounted at /sandbox/rootfs.
+//     Both upper and work MUST reside under the same mount point to
+//     avoid cross-device renameat failures in fuse-overlayfs.
 //  3. Handing off to the workload via chroot into the composed rootfs.
 //
 // The overlay in step 2 is formed by one of three strategies — see
@@ -31,7 +33,7 @@
 //
 //   - `set -euo pipefail` — fail fast; unset variables are errors.
 //   - Resume-tar extraction MUST happen before the overlay mount so
-//     the emptyDir at /var/astonish/upper is populated first.
+//     the emptyDir at /var/astonish/overlay/upper is populated first.
 //   - Resume-tar extraction is SKIPPED if the tarball is absent (fresh
 //     session path). Absence is not an error.
 //   - Layer-chain composition reverses the comma-separated
@@ -101,11 +103,11 @@ type EntrypointScriptOptions struct {
 	LayersMount string
 
 	// UpperDir is the emptyDir path that overlayfs uses as its
-	// upperdir. Default: /var/astonish/upper (mountUpper).
+	// upperdir. Default: /var/astonish/overlay/upper (mountUpper).
 	UpperDir string
 
 	// WorkDir is the emptyDir path that overlayfs uses as its
-	// workdir. Default: /var/astonish/work (mountWork).
+	// workdir. Default: /var/astonish/overlay/work (mountWork).
 	WorkDir string
 
 	// MountPoint is where the composed overlay is mounted. Default:
@@ -335,6 +337,52 @@ fi
 
 `)
 
+	// Pre-seed: create all first-level directories from the bottommost
+	// lowerdir inside the upperdir. fuse-overlayfs v1.10 (and older) on
+	// NFS-backed lowerdirs cannot copy-up directories whose parent
+	// inode lives on the NFS lowerdir (the internal rename/link across
+	// NFS → local upper triggers EXDEV). By ensuring all top-level dirs
+	// already exist in the upper BEFORE the mount, fuse-overlayfs never
+	// needs to copy-up these directory inodes — only their children,
+	// which succeeds because the parent is already local.
+	//
+	// This is harmless for kernel overlayfs (which handles cross-device
+	// copy-up natively) and for non-NFS setups — an empty dir in the
+	// upper simply merges with the lower's content via the overlay.
+	//
+	// We extract the bottommost layer (last entry in $LOWER, which is
+	// top-first) and enumerate its immediate child directories.
+	b.WriteString(`# --- 2pre. Pre-seed upper with first-level directories from lowest layer
+# fuse-overlayfs cannot copy-up directory inodes whose parent lives on
+# a different filesystem (NFS lowerdir → local upper triggers EXDEV).
+# Pre-creating these dirs in the upper avoids the copy-up entirely.
+# Harmless for kernel overlayfs and non-NFS setups.
+#
+# IMPORTANT: Only real directories are pre-seeded. Symlinks (e.g.
+# /bin → usr/bin) must NOT be turned into directories in the upper,
+# as that would shadow the symlink from the lower and break the
+# filesystem layout.
+BOTTOM_LAYER="${LOWER##*:}"
+# If $LOWER has no colon, BOTTOM_LAYER == LOWER (single layer), which
+# is still the bottom.
+if [ -d "$BOTTOM_LAYER" ]; then
+  for _d in "$BOTTOM_LAYER"/*/; do
+    [ -d "$_d" ] || continue
+    # Skip symlinks — they resolve as directories but must not be
+    # replaced with real dirs in the upper.
+    [ -L "${_d%/}" ] && continue
+    _name="${_d%/}"
+    _name="${_name##*/}"
+    # Skip dirs already handled (dev/proc/sys from the kernel-fs step)
+    # and avoid clobbering existing upper entries (resume path).
+    if [ ! -d "$UPPER_DIR/$_name" ]; then
+      mkdir -p "$UPPER_DIR/$_name"
+    fi
+  done
+fi
+
+`)
+
 	// Emit overlay-mount helpers. Both helpers share contract:
 	// on success they leave $MOUNT_POINT as a valid mountpoint; on
 	// failure they return non-zero WITHOUT calling `exit` so the
@@ -376,8 +424,17 @@ mount_overlay_fuse() {
   # asynchronous from the main-thread perspective, so we poll
   # /proc/self/mountinfo for the MOUNT_POINT entry with a short
   # timeout. 5s is generous — the daemon usually takes <50ms.
+  #
+  # squash_to_root: makes all files in the merged view appear owned by
+  # uid/gid 0 from the FUSE perspective. Without this, the FUSE daemon
+  # returns EOPNOTSUPP for open()/execve() calls made by non-root users
+  # (e.g. apt's _apt sandbox user, uid 42). This is a known limitation
+  # of fuse-overlayfs running as root outside a user namespace — the
+  # daemon rejects cross-uid file operations via its default_permissions
+  # policy. squash_to_root eliminates this restriction while preserving
+  # actual ownership in the upper layer for tar capture.
   fuse-overlayfs \
-    -o "lowerdir=$LOWER,upperdir=$UPPER_DIR,workdir=$WORK_DIR" \
+    -o "lowerdir=$LOWER,upperdir=$UPPER_DIR,workdir=$WORK_DIR,squash_to_root" \
     "$MOUNT_POINT" || return $?
   i=0
   while [ "$i" -lt 100 ]; do
@@ -501,6 +558,18 @@ for _src in /dev /proc /sys; do
     fi
   fi
 done
+
+# Bind the pod's /etc/resolv.conf into the overlay so DNS inside the
+# chroot always uses the cluster's nameserver, regardless of what the
+# base image ships. The target file must exist for mount --bind.
+_RESOLV_SRC="/etc/resolv.conf"
+_RESOLV_DST="$MOUNT_POINT/etc/resolv.conf"
+if [ -f "$_RESOLV_SRC" ] && [ -e "$_RESOLV_DST" ]; then
+  if ! grep -qE " $_RESOLV_DST " /proc/self/mountinfo 2>/dev/null; then
+    mount --bind "$_RESOLV_SRC" "$_RESOLV_DST" 2>/dev/null || \
+      echo "astonish-entrypoint: warning: failed to bind resolv.conf" 1>&2
+  fi
+fi
 
 `)
 	}

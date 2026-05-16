@@ -27,8 +27,8 @@ func TestEntrypointScript_Defaults(t *testing.T) {
 		{"layer-chain guard", `: "${ASTONISH_LAYER_CHAIN:?ASTONISH_LAYER_CHAIN must be set}"`},
 		{"uppers default mount", "UPPERS_DIR='/mnt/astonish-uppers'"},
 		{"layers default mount", "LAYERS_DIR='/mnt/astonish-layers'"},
-		{"upperdir default", "UPPER_DIR='/var/astonish/upper'"},
-		{"workdir default", "WORK_DIR='/var/astonish/work'"},
+		{"upperdir default", "UPPER_DIR='/var/astonish/overlay/upper'"},
+		{"workdir default", "WORK_DIR='/var/astonish/overlay/work'"},
 		{"mountpoint default", "MOUNT_POINT='/sandbox/rootfs'"},
 		{"overlay-mode default", "OVERLAY_MODE='fuse'"},
 		{"resume tarball path", `RESUME_TAR="$UPPERS_DIR/$ASTONISH_SESSION_ID/upper.tar.zst"`},
@@ -36,9 +36,14 @@ func TestEntrypointScript_Defaults(t *testing.T) {
 		{"resume tar cmd", `tar --numeric-owner --xattrs --acls -I zstd -xf "$RESUME_TAR" -C "$UPPER_DIR"`},
 		{"awk reversal", `awk -F, -v dir="$LAYERS_DIR"`},
 		{"awk body top-first", `for (i = NF; i > 0; i--)`},
+		{"pre-seed bottom layer", `BOTTOM_LAYER="${LOWER##*:}"`},
+		{"pre-seed loop", `for _d in "$BOTTOM_LAYER"/*/`},
+		{"pre-seed symlink guard", `[ -L "${_d%/}" ] && continue`},
+		{"pre-seed mkdir", `mkdir -p "$UPPER_DIR/$_name"`},
 		{"kernel helper defined", "mount_overlay_kernel() {"},
 		{"fuse helper defined", "mount_overlay_fuse() {"},
 		{"fuse invocation", "fuse-overlayfs \\"},
+		{"fuse squash_to_root", "squash_to_root"},
 		{"fuse mountpoint wait", "mountpoint -q"},
 		{"fuse mknod fallback", "mknod /dev/fuse c 10 229"},
 		{"fuse dispatcher", "mount_overlay_fuse || {"},
@@ -329,8 +334,8 @@ func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 		if strings.Contains(s, "HOST_BIN=") {
 			t.Errorf("HOST_BIN assignment should be absent with sentinel; got:\n%s", s)
 		}
-		if strings.Contains(s, "mount --bind") {
-			t.Errorf("bind-mount should be absent with sentinel; got:\n%s", s)
+		if strings.Contains(s, `mount --bind "$HOST_BIN"`) {
+			t.Errorf("host-binary bind-mount should be absent with sentinel; got:\n%s", s)
 		}
 		// Sanity: the rest of the script still emits correctly.
 		if !strings.Contains(s, "mount_overlay_fuse") {
@@ -516,6 +521,74 @@ func TestEntrypointScript_BindKernelFS(t *testing.T) {
 			t.Errorf("idempotent mountinfo guard missing; got:\n%s", s)
 		}
 	})
+
+	t.Run("resolv.conf bind-mount for DNS", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, `/etc/resolv.conf`) {
+			t.Errorf("resolv.conf bind-mount missing in default script; got:\n%s", s)
+		}
+		if !strings.Contains(s, `mount --bind "$_RESOLV_SRC" "$_RESOLV_DST"`) {
+			t.Errorf("resolv.conf mount --bind command missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("BindKernelFS=false suppresses resolv.conf", func(t *testing.T) {
+		falseVal := false
+		s := EntrypointScript(EntrypointScriptOptions{
+			BindKernelFS: &falseVal,
+		})
+		if strings.Contains(s, `_RESOLV_SRC`) {
+			t.Errorf("resolv.conf block present despite BindKernelFS=false; got:\n%s", s)
+		}
+	})
+}
+
+// TestEntrypointScript_PreSeedUpperDirs verifies the EXDEV-mitigation
+// pre-seed block that creates first-level directories from the lowest
+// layer in the upper before composing the overlay. Key invariants:
+//   - BOTTOM_LAYER is extracted from the reversed $LOWER variable
+//   - Symlinks are skipped (must not turn /bin→usr/bin into a directory)
+//   - Existing upper entries are not clobbered (resume path)
+//   - The block appears AFTER awk reversal and BEFORE mount helpers
+func TestEntrypointScript_PreSeedUpperDirs(t *testing.T) {
+	s := EntrypointScript(EntrypointScriptOptions{})
+
+	t.Run("bottom layer extraction", func(t *testing.T) {
+		// Uses ${LOWER##*:} to get the last colon-separated entry (bottommost layer).
+		if !strings.Contains(s, `BOTTOM_LAYER="${LOWER##*:}"`) {
+			t.Errorf("BOTTOM_LAYER extraction missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("symlink guard", func(t *testing.T) {
+		// Must skip symlinks to avoid turning /bin→usr/bin into a real dir.
+		if !strings.Contains(s, `[ -L "${_d%/}" ] && continue`) {
+			t.Errorf("symlink guard missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("idempotent existing check", func(t *testing.T) {
+		// Must not clobber existing upper entries (from resume path).
+		if !strings.Contains(s, `if [ ! -d "$UPPER_DIR/$_name" ]; then`) {
+			t.Errorf("existing-check guard missing; got:\n%s", s)
+		}
+	})
+
+	t.Run("precedes mount helpers", func(t *testing.T) {
+		preSeedIdx := strings.Index(s, `BOTTOM_LAYER=`)
+		mountFuseIdx := strings.Index(s, "mount_overlay_fuse() {")
+		if preSeedIdx < 0 || mountFuseIdx < 0 || preSeedIdx >= mountFuseIdx {
+			t.Errorf("pre-seed (idx=%d) must precede fuse mount helper (idx=%d)", preSeedIdx, mountFuseIdx)
+		}
+	})
+
+	t.Run("follows LOWER computation", func(t *testing.T) {
+		lowerIdx := strings.Index(s, `awk -F, -v dir="$LAYERS_DIR"`)
+		preSeedIdx := strings.Index(s, `BOTTOM_LAYER=`)
+		if lowerIdx < 0 || preSeedIdx < 0 || lowerIdx >= preSeedIdx {
+			t.Errorf("pre-seed (idx=%d) must follow LOWER computation (idx=%d)", preSeedIdx, lowerIdx)
+		}
+	})
 }
 
 // TestEntrypointScript_OrderingInvariants pins the section order so
@@ -536,6 +609,7 @@ func TestEntrypointScript_OrderingInvariants(t *testing.T) {
 		"tar --numeric-owner",
 		`mkdir -p "$UPPER_DIR/dev" "$UPPER_DIR/proc" "$UPPER_DIR/sys"`,
 		`awk -F, -v dir="$LAYERS_DIR"`,
+		`BOTTOM_LAYER="${LOWER##*:}"`,
 		"mount_overlay_kernel() {",
 		"mount_overlay_fuse() {",
 		"mount_overlay_fuse || {",

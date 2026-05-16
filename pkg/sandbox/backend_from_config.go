@@ -37,15 +37,29 @@ import (
 // invalid backend kind, etc. Callers should surface them verbatim to the
 // operator.
 func BackendFromAppConfig(appCfg *config.AppConfig) (Backend, func(), error) {
+	return BackendFromAppConfigWithSessions(appCfg, nil)
+}
+
+// BackendFromAppConfigWithSessions is like BackendFromAppConfig but allows
+// the caller to inject a pre-built SessionRegistry. This is critical for
+// platform-mode K8s deployments with multiple API replicas: each request
+// should use a pgstore-backed registry so that session records are shared
+// across all replicas rather than being siloed in pod-local JSON files.
+//
+// If sessRegistry is nil, falls back to NewSessionRegistry() (local JSON).
+func BackendFromAppConfigWithSessions(appCfg *config.AppConfig, sessRegistry *SessionRegistry) (Backend, func(), error) {
 	if appCfg == nil {
 		return nil, nil, errors.New("sandbox: nil app config")
 	}
 
 	kind := BackendKind(appCfg.Sandbox.BackendKind())
 
-	sessRegistry, err := NewSessionRegistry()
-	if err != nil {
-		return nil, nil, fmt.Errorf("sandbox: session registry: %w", err)
+	if sessRegistry == nil {
+		var err error
+		sessRegistry, err = NewSessionRegistry()
+		if err != nil {
+			return nil, nil, fmt.Errorf("sandbox: session registry: %w", err)
+		}
 	}
 	tplRegistry, err := NewTemplateRegistry()
 	if err != nil {

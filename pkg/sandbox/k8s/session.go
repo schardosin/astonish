@@ -80,18 +80,25 @@ const (
 
 // Volume names used inside sandbox pods.
 const (
-	volumeLayers = "layers" // RO CephFS layer store
-	volumeUppers = "uppers" // RW CephFS upper store (eviction/resume)
-	volumeUpper  = "upper"  // node-local emptyDir, writable overlay upperdir
-	volumeWork   = "work"   // node-local emptyDir, overlayfs workdir
+	volumeLayers  = "layers"  // RO CephFS layer store
+	volumeUppers  = "uppers"  // RW CephFS upper store (eviction/resume)
+	volumeOverlay = "overlay" // node-local emptyDir, hosts both upperdir and workdir
 )
 
 // Mount paths inside the sandbox container.
+//
+// IMPORTANT: upper and work MUST be subdirectories of the SAME mount
+// point (mountOverlay). fuse-overlayfs performs renameat(workdir, ...,
+// upperdir, ...) during directory copy-up. If upper and work reside on
+// separate bind-mounts — even from the same underlying device — the
+// kernel returns EXDEV because renameat refuses to cross mount
+// boundaries. A single emptyDir guarantees they share a mount.
 const (
-	mountLayers = "/mnt/astonish-layers"
-	mountUppers = "/mnt/astonish-uppers"
-	mountUpper  = "/var/astonish/upper"
-	mountWork   = "/var/astonish/work"
+	mountLayers  = "/mnt/astonish-layers"
+	mountUppers  = "/mnt/astonish-uppers"
+	mountOverlay = "/var/astonish/overlay"
+	mountUpper   = mountOverlay + "/upper"
+	mountWork    = mountOverlay + "/work"
 )
 
 // containerName is the fixed name of the sandbox container inside a
@@ -237,8 +244,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: volumeLayers, MountPath: mountLayers, ReadOnly: spec.Labels[labelPurpose] != purposeTeamTemplateEditor},
 					{Name: volumeUppers, MountPath: mountUppers},
-					{Name: volumeUpper, MountPath: mountUpper},
-					{Name: volumeWork, MountPath: mountWork},
+					{Name: volumeOverlay, MountPath: mountOverlay},
 				},
 				Resources: buildResourceRequirements(spec.Limits),
 			},
@@ -261,8 +267,7 @@ func (b *K8sBackend) buildPodManifest(spec sandbox.SessionSpec) (*corev1.Pod, er
 						},
 					},
 				},
-			{Name: volumeUpper, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-			{Name: volumeWork, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: volumeOverlay, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			},
 		},
 	}
@@ -356,11 +361,28 @@ func (b *K8sBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec
 		return nil, fmt.Errorf("CreateSession: %w", ErrNotImplementedYet)
 	}
 
-	// Idempotency: if we already know this session, return it rather
-	// than round-tripping to the API server. The registry is the source
-	// of truth for "have we seen this session before?"
+	// Idempotency: if we already know this session AND the pod still
+	// exists in the cluster, return the cached record. If the registry
+	// has a stale entry (pod deleted out-of-band by kubectl, eviction,
+	// or node failure) we fall through to recreate the pod.
 	if existing, err := b.sessions.GetSession(spec.SessionID); err == nil && existing != nil {
-		return sessionFromStore(existing, spec.Type), nil
+		podName := existing.PodName
+		if podName == "" {
+			podName = podNameForSession(spec.SessionID)
+		}
+		_, getErr := b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, podName, metav1.GetOptions{})
+		if getErr == nil {
+			// Pod exists — session is live; return cached record.
+			return sessionFromStore(existing, spec.Type), nil
+		}
+		if !apierrors.IsNotFound(getErr) {
+			// Unexpected API error — surface it rather than silently
+			// overwriting the session.
+			return nil, fmt.Errorf("CreateSession: verify pod: %w", getErr)
+		}
+		// Pod is gone — clear stale registry entry so the fresh create
+		// below can persist the replacement atomically via PutSession.
+		_ = b.sessions.Remove(spec.SessionID)
 	}
 
 	pod, err := b.buildPodManifest(spec)

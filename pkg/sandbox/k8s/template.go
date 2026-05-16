@@ -249,24 +249,91 @@ func (b *K8sBackend) RefreshTemplate(ctx context.Context, templateID string) (*s
 	return nil, errors.New("sandbox/k8s: RefreshTemplate: requires build-spec persistence on store.SandboxTemplate (not yet implemented); call BuildTemplate with the desired spec")
 }
 
-// DeleteTemplate is a no-op on the K8s backend.
+// DeleteTemplate removes a content-addressed layer's bytes from the
+// layers PVC. On K8s this spawns a short-lived pod that mounts the PVC
+// and runs `rm -rf /mnt/astonish-layers/<templateID>`. The pod is
+// always cleaned up (defer-delete) regardless of success or failure.
 //
-// Rationale: on K8s, template layer bytes live on CephFS as
-// content-addressed directories. Their lifetime is governed by
-// reference counts in platform.sandbox_layers (maintained transactionally
-// by the caller) and reclaimed asynchronously by the GC reconciler
-// (§5.12). There is no backend-tier synchronous byte-deletion operation.
+// Callers MUST have already decremented/verified ref_count==0 before
+// calling this. The backend does not check references — that
+// responsibility lives in the API layer with access to the platform DB.
 //
-// The force flag is ignored for the same reason — the backend has no
-// handle on "does any session or child template still reference this?"
-// That check lives in the caller, which holds the platform-scoped DB.
+// The force flag is accepted for interface compatibility but has no
+// effect on K8s: if the directory doesn't exist the rm is a no-op.
 func (b *K8sBackend) DeleteTemplate(ctx context.Context, templateID string, force bool) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	// Intentional no-op. See doc comment above.
-	_ = templateID
 	_ = force
+	if b.client == nil {
+		return nil
+	}
+	if templateID == "" || templateID == sandbox.BaseTemplateID {
+		return nil // never delete @base
+	}
+
+	podName := "astn-layer-gc-" + toDNSLabel(templateID)
+	if len(podName) > 63 {
+		podName = podName[:63]
+		for len(podName) > 0 && podName[len(podName)-1] == '-' {
+			podName = podName[:len(podName)-1]
+		}
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: b.cfg.Namespace,
+			Labels: map[string]string{
+				labelType: "layer-gc",
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:            "gc",
+					Image:           "alpine:3.21",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"/bin/sh", "-c", fmt.Sprintf("rm -rf %s/%s", mountLayers, templateID)},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: volumeLayers, MountPath: mountLayers},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: volumeLayers,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: b.cfg.LayersPVCName,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Always clean up the GC pod.
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(cleanupCtx, podName, metav1.DeleteOptions{})
+	}()
+
+	// Delete any leftover pod from a previous failed attempt.
+	_ = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	// Brief pause to let API server process deletion.
+	time.Sleep(500 * time.Millisecond)
+
+	if _, err := b.client.CoreV1().Pods(b.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("sandbox/k8s: DeleteTemplate(%s): create gc pod: %w", templateID, err)
+	}
+
+	if err := b.waitForPodDone(ctx, podName, 60*time.Second); err != nil {
+		return fmt.Errorf("sandbox/k8s: DeleteTemplate(%s): wait gc pod: %w", templateID, err)
+	}
+
 	return nil
 }
 
@@ -352,8 +419,7 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: volumeLayers, MountPath: mountLayers}, // RW for atomic rename
-					{Name: volumeUpper, MountPath: mountUpper},
-					{Name: volumeWork, MountPath: mountWork},
+					{Name: volumeOverlay, MountPath: mountOverlay},
 				},
 			},
 			},
@@ -366,8 +432,7 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 						},
 					},
 				},
-				{Name: volumeUpper, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-				{Name: volumeWork, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			{Name: volumeOverlay, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 			},
 		},
 	}
@@ -384,7 +449,7 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 // given pod and returns the resulting TemplateArtifact.
 //
 // The pipeline:
-//   1. tar's /var/astonish/upper with fixed canonical options (see §5.11).
+//   1. tar's the overlay upper dir with fixed canonical options (see §5.11).
 //   2. Tees the stream through sha256sum into a staging directory on
 //      /mnt/astonish-layers.
 //   3. Atomic-renames staging → /mnt/astonish-layers/<sha>/. If a
@@ -450,7 +515,7 @@ func buildCaptureScript(layersPath, builderID string) string {
 	// This avoids the bash-only >(process substitution) syntax that fails
 	// on Debian's /bin/sh (dash).
 	b.WriteString("tar --numeric-owner --xattrs --acls --sort=name --mtime=@0 \\\n")
-	b.WriteString("    -C /var/astonish/upper -cf /tmp/astn-layer.tar .\n")
+	fmt.Fprintf(&b, "    -C %s -cf /tmp/astn-layer.tar .\n", mountUpper)
 	b.WriteString("SHA=$(sha256sum /tmp/astn-layer.tar | awk '{print $1}')\n")
 	b.WriteString("tar --numeric-owner --xattrs --acls -C \"$STAGING/rootfs\" -xf /tmp/astn-layer.tar\n")
 	b.WriteString("rm -f /tmp/astn-layer.tar\n")
@@ -529,6 +594,36 @@ func (b *K8sBackend) waitForBuilderPodRunning(ctx context.Context, podName strin
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(builderPodReadinessPollInterval):
+		}
+	}
+}
+
+// waitForPodDone polls a pod until it reaches Succeeded or Failed (or
+// the timeout expires). Used by DeleteTemplate's GC pod which runs a
+// single command and exits.
+func (b *K8sBackend) waitForPodDone(ctx context.Context, podName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		pod, err := b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("get gc pod: %w", err)
+		}
+		switch pod.Status.Phase {
+		case corev1.PodSucceeded:
+			return nil
+		case corev1.PodFailed:
+			return fmt.Errorf("gc pod failed (phase=%s)", pod.Status.Phase)
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("gc pod did not complete within %s (phase=%s)", timeout, pod.Status.Phase)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(1 * time.Second):
 		}
 	}
 }

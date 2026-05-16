@@ -13,6 +13,12 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 )
 
+// baseTemplateUUID is the well-known UUID for the "@base" template,
+// matching the seed migration (005_seed_base_template.sql). The K8s
+// backend uses the literal "@base" string internally but the DB column
+// is typed UUID, so we normalize at the persistence boundary.
+const baseTemplateUUID = "a0000000-0000-4000-8000-000000000001"
+
 // pgSandboxSessionStore backs store.SandboxSessionStore with the team-schema
 // {schema}.sandbox_sessions table (migration team/002).
 //
@@ -172,6 +178,12 @@ func (s *pgSandboxSessionStore) Put(ctx context.Context, sess *store.SandboxSess
 	if state == "" {
 		state = store.SandboxSessionStateCreating
 	}
+	// Normalize "@base" literal to the well-known UUID for the DB column
+	// (template_id is typed UUID; the K8s backend uses "@base" in-memory).
+	templateID := sess.TemplateID
+	if templateID == "@base" {
+		templateID = baseTemplateUUID
+	}
 	ports, err := encodePorts(sess.ExposedPorts)
 	if err != nil {
 		return err
@@ -212,7 +224,7 @@ func (s *pgSandboxSessionStore) Put(ctx context.Context, sess *store.SandboxSess
 		chatID,
 		backend,
 		nullableText(sess.ContainerName),
-		sess.TemplateID,
+		templateID,
 		nullableText(sess.UpperLayerID),
 		string(state),
 		nullableText(sess.PodName),

@@ -56,7 +56,7 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build backend
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	backend, cleanup, err := sandboxBackendForTeamTemplate(r)
 	if err != nil {
 		respondError(w, http.StatusServiceUnavailable, "Sandbox unavailable: "+err.Error())
 		return
@@ -85,9 +85,14 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	// Start interactive shell via the Backend interface
+	// Start interactive shell via the Backend interface.
+	// The command uses the astonish-shell wrapper (baked into
+	// sandbox-base) which chroots into the composed overlay at
+	// /sandbox/rootfs before launching bash. Without this, kubectl
+	// exec lands in the pod's base namespace and writes bypass the
+	// fuse-overlayfs upper — causing layer captures to be empty.
 	stream, err := teamTemplateExecInteractive(r.Context(), backend, tc.TeamSlug, sandbox.PTYSpec{
-		Command: []string{"bash", "-l"},
+		Command: []string{"/usr/local/bin/astonish-shell"},
 		Rows:    24,
 		Cols:    80,
 	})

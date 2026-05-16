@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { Box, Play, Save, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
 import {
   fetchTeamTemplateStatus, createTeamTemplate, saveTeamTemplate,
@@ -55,6 +55,25 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
     const t = setTimeout(() => setSuccess(''), 3000)
     return () => clearTimeout(t)
   }, [success])
+
+  // Poll for status while container exists but is not yet running
+  // (e.g. pod in Pending/Creating phase after Create or Start).
+  // Stops once running or after ~30s timeout.
+  const pollCountRef = useRef(0)
+  useEffect(() => {
+    if (!showTerminal || !status?.exists || status.running) {
+      pollCountRef.current = 0
+      return
+    }
+    // Max 20 polls × 1.5s = 30s
+    if (pollCountRef.current >= 20) return
+    const id = setInterval(() => {
+      pollCountRef.current += 1
+      loadStatus()
+      if (pollCountRef.current >= 20) clearInterval(id)
+    }, 1500)
+    return () => clearInterval(id)
+  }, [showTerminal, status?.exists, status?.running, loadStatus])
 
   const handleCreate = async () => {
     setActionLoading('create')
@@ -279,6 +298,16 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
               </button>
             </>
           )}
+        </div>
+      )}
+
+      {/* Starting indicator — shown while pod is being provisioned */}
+      {showTerminal && status?.exists && !status.running && (
+        <div className="flex-1 min-h-0 rounded-lg overflow-hidden flex items-center justify-center" style={{ border: '1px solid var(--border-color)', background: theme === 'dark' ? '#1a1a2e' : '#ffffff' }}>
+          <div className="text-center">
+            <Loader2 size={24} className="animate-spin mx-auto mb-2" style={{ color: 'var(--accent)' }} />
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Starting container...</p>
+          </div>
         </div>
       )}
 

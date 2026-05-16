@@ -170,7 +170,7 @@ func TestBuildFleetPodManifest_Volumes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildFleetPodManifest: %v", err)
 	}
-	var layersV, uppersV, upperV, workV *corev1.Volume
+	var layersV, uppersV, overlayV *corev1.Volume
 	for i := range pod.Spec.Volumes {
 		v := &pod.Spec.Volumes[i]
 		switch v.Name {
@@ -178,10 +178,8 @@ func TestBuildFleetPodManifest_Volumes(t *testing.T) {
 			layersV = v
 		case volumeUppers:
 			uppersV = v
-		case volumeUpper:
-			upperV = v
-		case volumeWork:
-			workV = v
+		case volumeOverlay:
+			overlayV = v
 		}
 	}
 	if layersV == nil || layersV.PersistentVolumeClaim == nil || !layersV.PersistentVolumeClaim.ReadOnly {
@@ -190,11 +188,8 @@ func TestBuildFleetPodManifest_Volumes(t *testing.T) {
 	if uppersV == nil || uppersV.PersistentVolumeClaim == nil || uppersV.PersistentVolumeClaim.ReadOnly {
 		t.Errorf("uppers PVC must be mounted RW in fleet pod")
 	}
-	if upperV == nil || upperV.EmptyDir == nil {
-		t.Errorf("upper emptyDir must be present")
-	}
-	if workV == nil || workV.EmptyDir == nil {
-		t.Errorf("work emptyDir must be present")
+	if overlayV == nil || overlayV.EmptyDir == nil {
+		t.Errorf("overlay emptyDir must be present")
 	}
 }
 

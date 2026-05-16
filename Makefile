@@ -38,9 +38,16 @@ help:
 	@echo "  make docker-incus      - Build the Incus Docker image (for CI release)"
 	@echo ""
 	@echo "Registry Push (multi-arch, requires docker login + buildx):"
-	@echo "  make push-dev          - Build+push astonish:dev (multi-arch)"
-	@echo "  make push-incus-dev    - Build+push astonish-incus:dev (multi-arch)"
-	@echo "  make push-all-dev      - Push both dev images"
+	@echo "  make push-dev              - Build+push astonish:dev (multi-arch)"
+	@echo "  make push-incus-dev        - Build+push astonish-incus:dev (multi-arch)"
+	@echo "  make push-sandbox-base-dev - Build+push astonish-sandbox-base:dev (multi-arch)"
+	@echo "  make push-all-dev          - Push all dev images"
+	@echo ""
+	@echo "Registry Push (fast single-arch, dev iteration):"
+	@echo "  make push-dev-fast              - Build+push astonish:dev (native arch only)"
+	@echo "  make push-sandbox-base-dev-fast - Build+push sandbox-base:dev (native arch only)"
+	@echo "  make push-incus-dev-fast        - Build+push incus:dev (native arch only)"
+	@echo "  make push-all-dev-fast          - Push all dev images (native arch only)"
 
 # Build the Go binary only
 build:
@@ -211,5 +218,43 @@ push-sandbox-base-dev: ensure-builder
 # Push all dev images
 push-all-dev: push-dev push-incus-dev push-sandbox-base-dev
 	@echo "All dev images pushed successfully!"
+
+# --- Fast single-arch dev builds (native architecture only) ---
+# These skip arm64 cross-compilation for faster iteration during development.
+# They detect the host architecture automatically.
+
+DEV_ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
+
+# Fast: build and push main Astonish API image (single arch)
+push-dev-fast: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
+	docker buildx build --platform linux/$(DEV_ARCH) \
+		-f docker/astonish/Dockerfile \
+		--build-arg VERSION=$(DEV_TAG) \
+		-t $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish:$(DEV_TAG)"
+
+# Fast: build and push sandbox base image (single arch)
+push-sandbox-base-dev-fast: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
+	docker buildx build --platform linux/$(DEV_ARCH) \
+		-f docker/sandbox-base/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG)"
+
+# Fast: build and push Incus image (single arch)
+push-incus-dev-fast: ensure-builder build-linux
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
+	docker buildx build --platform linux/$(DEV_ARCH) \
+		-f docker/incus/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
+
+# Fast: push all dev images (single arch)
+push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast
+	@echo "All dev images pushed ($(DEV_ARCH) only)!"
 
 

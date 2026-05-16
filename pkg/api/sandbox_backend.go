@@ -17,6 +17,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // sandboxBackendForRequest constructs a sandbox.Backend appropriate for
@@ -40,6 +41,61 @@ func sandboxBackendForRequest(r *http.Request) (sandbox.Backend, func(), error) 
 		return nil, nil, fmt.Errorf("sandbox unavailable: %w", err)
 	}
 	return b, cleanup, nil
+}
+
+// sandboxBackendForTeamTemplate constructs a sandbox.Backend whose session
+// registry is backed by the team's PostgreSQL schema rather than the pod-
+// local JSON file. This is critical for multi-replica API deployments: all
+// replicas see the same session records, preventing the status-poll bug
+// where a request lands on a replica that never saw the CreateSession call.
+//
+// Falls back to sandboxBackendForRequest if the platform pgstore is not
+// available (personal mode) or if the tenant context cannot be resolved.
+func sandboxBackendForTeamTemplate(r *http.Request) (sandbox.Backend, func(), error) {
+	// Attempt to wire a pgstore-backed session registry for cross-replica
+	// consistency. If unavailable, fall back to the default (local JSON)
+	// via sandboxBackendForRequest.
+	sessRegistry := buildPGSessionRegistry(r.Context())
+	if sessRegistry == nil {
+		return sandboxBackendForRequest(r)
+	}
+
+	appCfg := effectiveAppConfig(r)
+	if appCfg == nil {
+		return nil, nil, fmt.Errorf("sandbox unavailable: unable to load application config")
+	}
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return nil, nil, fmt.Errorf("sandbox is not enabled in configuration")
+	}
+
+	b, cleanup, err := sandbox.BackendFromAppConfigWithSessions(appCfg, sessRegistry)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sandbox unavailable: %w", err)
+	}
+	return b, cleanup, nil
+}
+
+// buildPGSessionRegistry attempts to construct a pgstore-backed
+// SessionRegistry for the current request's team. Returns nil if platform
+// DB or tenant context is unavailable (personal mode fallback).
+func buildPGSessionRegistry(ctx context.Context) *sandbox.SessionRegistry {
+	pg := getPlatformPGStore()
+	if pg == nil {
+		return nil
+	}
+	tc := pgstore.TenantContextFrom(ctx)
+	if tc == nil || tc.OrgSlug == "" || tc.TeamSlug == "" {
+		return nil
+	}
+	pool, err := pg.PoolManager().OrgPool(ctx, tc.OrgSlug)
+	if err != nil {
+		slog.Warn("buildPGSessionRegistry: failed to get org pool, falling back to local registry",
+			"org", tc.OrgSlug, "error", err)
+		return nil
+	}
+	schema := pgstore.TeamSchemaName(tc.TeamSlug)
+	sessStore := pgstore.NewPGSandboxSessionStore(pool, schema)
+	return sandbox.NewSessionRegistryFromStore(sessStore)
 }
 
 // teamTemplateSessionID returns the canonical session ID used by the

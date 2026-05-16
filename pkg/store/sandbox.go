@@ -185,6 +185,10 @@ type LayerStore interface {
 	// before (now - grace). This is the candidate set for GC.
 	ListUnreferenced(ctx context.Context, grace time.Duration) ([]*SandboxLayer, error)
 
+	// ListAll returns every layer row regardless of ref_count. Used by the
+	// sandbox-audit command to diff PG state against on-disk directories.
+	ListAll(ctx context.Context) ([]*SandboxLayer, error)
+
 	// DeleteLayer removes the registry row. Callers remove the CephFS bytes
 	// separately. Returns an error if RefCount>0.
 	DeleteLayer(ctx context.Context, layerID string) error

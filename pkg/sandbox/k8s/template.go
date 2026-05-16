@@ -504,6 +504,10 @@ func buildCaptureScript(layersPath, builderID string) string {
 	b.WriteString("set -e\n")
 	fmt.Fprintf(&b, "STAGING=%q\n", layersPath+"/__staging-"+builderID)
 	fmt.Fprintf(&b, "LAYERS_DIR=%q\n", layersPath)
+	// Trap: if the script exits non-zero (set -e abort, signal, etc.)
+	// remove the staging directory so it doesn't become an orphan.
+	// Only the GC reconciler handles external kills (OOM, pod eviction).
+	b.WriteString("trap 'rm -rf \"$STAGING\"' EXIT\n")
 	b.WriteString("mkdir -p \"$STAGING/rootfs\"\n")
 	// Canonical tar: --sort=name --mtime=@0 pins layout byte-for-byte
 	// across runs with identical content. --numeric-owner --xattrs

@@ -499,6 +499,11 @@ func (b *K8sBackend) StopSession(ctx context.Context, sessionID string) error {
 
 // DestroySession permanently removes the session. Idempotent: absent
 // sessions succeed without error.
+//
+// If the session was previously evicted (upper layer persisted to the
+// uppers PVC), a short-lived GC pod removes the tarball directory
+// before the registry row is dropped. This prevents orphan growth on
+// the uppers PVC.
 func (b *K8sBackend) DestroySession(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -521,9 +526,90 @@ func (b *K8sBackend) DestroySession(ctx context.Context, sessionID string) error
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("DestroySession: delete pod: %w", err)
 	}
+
+	// Reclaim evicted upper-layer tarball from the uppers PVC.
+	if rec != nil && (rec.State == store.SandboxSessionStateEvicted || rec.UpperLayerID != "") {
+		if gcErr := b.reclaimUpperTarball(ctx, sessionID); gcErr != nil {
+			// Best-effort: log but don't fail the destroy. The deferred
+			// GC reconciler (§5.12.2) will catch it later.
+			fmt.Printf("[sandbox/k8s] DestroySession(%s): upper cleanup failed: %v\n", sessionID, gcErr)
+		}
+	}
+
 	if err := b.sessions.Remove(sessionID); err != nil {
 		return fmt.Errorf("DestroySession: remove from registry: %w", err)
 	}
+	return nil
+}
+
+// reclaimUpperTarball spawns a short-lived GC pod that removes the
+// evicted upper directory from the uppers PVC:
+//   /mnt/astonish-uppers/<sessionID>/
+//
+// Uses the same pattern as DeleteTemplate's GC pod. The pod is
+// defer-deleted regardless of outcome.
+func (b *K8sBackend) reclaimUpperTarball(ctx context.Context, sessionID string) error {
+	podName := "astn-upper-gc-" + toDNSLabel(sessionID)
+	if len(podName) > 63 {
+		podName = podName[:63]
+		for len(podName) > 0 && podName[len(podName)-1] == '-' {
+			podName = podName[:len(podName)-1]
+		}
+	}
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: b.cfg.Namespace,
+			Labels: map[string]string{
+				labelType: "upper-gc",
+			},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			Containers: []corev1.Container{
+				{
+					Name:            "gc",
+					Image:           "alpine:3.21",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"/bin/sh", "-c", fmt.Sprintf("rm -rf %s/%s", mountUppers, sessionID)},
+					VolumeMounts: []corev1.VolumeMount{
+						{Name: volumeUppers, MountPath: mountUppers},
+					},
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: volumeUppers,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: b.cfg.UppersPVCName,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Always clean up the GC pod.
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(cleanupCtx, podName, metav1.DeleteOptions{})
+	}()
+
+	// Delete any leftover pod from a previous failed attempt.
+	_ = b.client.CoreV1().Pods(b.cfg.Namespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	time.Sleep(500 * time.Millisecond)
+
+	if _, err := b.client.CoreV1().Pods(b.cfg.Namespace).Create(ctx, pod, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create upper-gc pod: %w", err)
+	}
+
+	if err := b.waitForPodDone(ctx, podName, 60*time.Second); err != nil {
+		return fmt.Errorf("wait upper-gc pod: %w", err)
+	}
+
 	return nil
 }
 

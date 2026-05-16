@@ -1,17 +1,26 @@
 # Sandbox Backends (Incus and Kubernetes)
 
-> **Phase F update (Sysbox no longer required).**
-> The K8s backend originally depended on Sysbox as its sole privilege
-> path. As of Phase F, the backend picks between three portable overlay
-> strategies — `fuse-overlayfs` via a device plugin (production
-> default), kernel overlayfs via `hostUsers: false` (K8s 1.33+), or
-> `fuse-overlayfs` via `privileged: true` (dev). Sysbox remains
-> **optional**: operators who already run it can still set
-> `sandbox.kubernetes.runtime_class_name: sysbox-runc` and keep
-> `overlay_mode: kernel`. Most of this document still applies verbatim
-> — mentally replace "Sysbox" with "the selected privilege path"
-> wherever you see it. §10 captures the Phase F matrix explicitly.
-> For step-by-step deployment, see `docs/deployment/kubernetes.md`.
+> **Status (Phase F shipped).**
+> Sysbox is no longer required. The K8s backend selects one of four
+> overlay strategies at deploy time — `fuse-overlayfs` via a device
+> plugin (production default), kernel overlayfs via `hostUsers: false`
+> (K8s 1.33+), `fuse-overlayfs` via `privileged: true` (dev/lab), or
+> Sysbox (`runtimeClassName: sysbox-runc`, kept for operators who
+> already run it). The same `astonish-sandbox-base` image and the
+> same Go binary serve all four. `pkg/sandbox/k8s/image.go`
+> auto-derives `imagePullPolicy` (`Always` for mutable tags such as
+> `dev`/`latest`/`edge`/`nightly`; `IfNotPresent` for immutable tags
+> and digest pins) so the same chart values work in dev and production.
+> §10 captures the matrix explicitly. For step-by-step deployment,
+> see `docs/deployment/kubernetes.md`.
+>
+> **Reading guide.** Where this document still says "Sysbox pod",
+> read it as "selected privilege path"; the contract holds across
+> all four. Sections that have shipped on top of the original Round 2
+> design — multi-replica session registry (§5.16), team-template
+> editor lifecycle (§5.17), synchronous `DeleteTemplate` GC pod
+> (§5.6), `@base` UUID normalization at the pgstore boundary
+> (§3.9) — are called out with **Status:** annotations.
 
 ## 1. Context & Motivation
 
@@ -26,42 +35,43 @@ As Astonish transitions to an enterprise platform used by many teams within a co
 
 The current Incus-on-a-single-host model cannot satisfy these requirements: Incus is a stateful daemon; its containers, overlay layers, and templates are local to one host; multi-pod deployments would diverge because each Incus has its own private state.
 
-This document specifies a **pluggable sandbox backend architecture** that preserves the Incus implementation for personal mode and existing deployments while introducing a new **Kubernetes + Sysbox** backend for cloud-native platform deployments.
+This document specifies a **pluggable sandbox backend architecture** that preserves the Incus implementation for personal mode and existing deployments while introducing a new **Kubernetes** backend for cloud-native platform deployments.
 
-The goal is capability parity: every operation that works on Incus works on K8s+Sysbox. The deployment choice is an operator decision, not a feature compromise.
+The goal is capability parity: every operation that works on Incus works on K8s. The deployment choice is an operator decision, not a feature compromise.
 
-### Why Sysbox
+### Why elevated capabilities (and four ways to get them)
 
 Standard Kubernetes pods cannot do what Astonish sandboxes need:
 
-- `mount -t overlay` from inside the pod (required for Astonish's overlay template model)
-- Run `systemd` as PID 1 (required for many sandbox workloads)
-- Run nested Docker (required when user tools use containerized services)
-- Install packages whose postinstall scripts use `mount`/`chroot`
+- `mount -t overlay` from inside the pod (or `fuse-overlayfs` as a userspace equivalent) — required for Astonish's overlay template model.
+- Run `systemd` as PID 1 (required for many sandbox workloads).
+- Run nested Docker (required when user tools use containerized services).
+- Install packages whose postinstall scripts use `mount`/`chroot`.
 
-A privileged pod (`privileged: true`) has these capabilities but breaks the Kubernetes security posture: full host access on escape, blocked by Pod Security Admission `restricted`/`baseline`, and unacceptable on multi-tenant clusters.
+A naïvely privileged pod (`privileged: true`) has these capabilities but breaks the Kubernetes security posture: full host access on escape, blocked by Pod Security Admission `restricted`/`baseline`, and unacceptable on multi-tenant clusters.
 
-**Sysbox** (from Nestybox, now maintained under Docker/Mirantis, Apache 2.0) is a Kubernetes RuntimeClass that provides the capabilities a privileged pod would have *without* requiring `privileged: true` in the pod spec. It does this through user-namespace remapping and selective syscall handling. A Sysbox pod appears unprivileged to Kubernetes (PSA-compatible) but can mount, run systemd, run nested Docker, and create user namespaces.
+**Phase F supports four privilege paths**, all driven from the same backend code and the same base image (see §10 for the full matrix):
 
-Sysbox matches Astonish's requirements precisely:
+1. **FUSE device plugin** (production default). PSA `baseline`. The cluster's FUSE device plugin advertises `smarter-devices/fuse`; sandbox pods request one device and run `fuse-overlayfs` from inside the user namespace.
+2. **User namespaces** (K8s 1.33+ beta-on / 1.36+ GA). PSA `baseline`. `hostUsers: false` enables an in-pod kernel overlayfs mount with userxattrs.
+3. **Privileged pods** (dev / lab). PSA `privileged`. The fastest path to working overlays on Proxmox/LXC nodes that block `mount -t overlay` regardless of capabilities; sandbox pod uses `fuse-overlayfs` plus in-container `mknod /dev/fuse`.
+4. **Sysbox** (optional). PSA `baseline`. `runtimeClassName: sysbox-runc` plus kernel overlayfs. Kept for operators who already run Sysbox in their fleet and prefer it.
 
-| Capability | Regular pod | Privileged pod | Sysbox pod |
+| Capability | Regular pod | Privileged pod | FUSE / userns / Sysbox |
 |---|---|---|---|
-| `mount -t overlay` inside pod | Blocked | Works | Works |
+| `mount -t overlay` (or `fuse-overlayfs`) inside pod | Blocked | Works | Works |
 | Run `systemd` as PID 1 | Broken | Works | Works |
 | Nested Docker | Blocked | Works | Works |
 | `privileged: true` in spec | No | Yes | **No** |
-| PSA baseline/restricted compatible | Yes | No | **Yes** |
-| Host kernel escape if compromised | N/A | Full | Remapped UID only |
+| PSA baseline-compatible | Yes | No | **Yes** (paths 1, 2, 4) |
+| Host kernel escape if compromised | N/A | Full | User-namespace remapped UID only |
 | Requires nested virtualization | No | No | **No** |
 
 Alternatives considered and rejected:
 
-- **gVisor** -- blocks `mount`, breaks systemd, breaks nested Docker. Incompatible with Astonish's design.
-- **Kata Containers** -- VM isolation is stronger but requires nested virtualization on nodes (limits deployment targets) and does not solve the template-distribution problem. Overkill for the trusted/semi-trusted enterprise threat model.
-- **Privileged StatefulSet** -- works but violates PSA posture and hands full node access to any sandbox-escape.
-
-Sysbox is the right fit.
+- **gVisor** — blocks `mount`, breaks systemd, breaks nested Docker. Incompatible with Astonish's design.
+- **Kata Containers** — VM isolation is stronger but requires nested virtualization on nodes (limits deployment targets) and does not solve the template-distribution problem. Overkill for the trusted/semi-trusted enterprise threat model.
+- **Privileged StatefulSet by default** — works but violates PSA posture and hands full node access to any sandbox-escape; only acceptable as the explicit dev/lab path 3.
 
 ## 2. Architecture Overview
 
@@ -71,6 +81,7 @@ A single `SandboxBackend` interface abstracts all sandbox operations. Two produc
                  ┌──────────────────────────────────────┐
                  │  Astonish callers:                    │
                  │   - pkg/api/sandbox_handlers.go       │
+                 │   - pkg/api/team_template_handlers.go │
                  │   - pkg/agent (flow/tool exec)        │
                  │   - pkg/chat (chat runner)            │
                  │   - pkg/fleet (monitors)              │
@@ -86,7 +97,7 @@ A single `SandboxBackend` interface abstracts all sandbox operations. Two produc
          ┌────────────────┘        │        └────────────────┐
          │                         │                         │
 ┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
-│ IncusBackend   │       │ K8sSandboxBackend│       │ MockBackend    │
+│ IncusBackend   │       │ K8sBackend       │       │ MockBackend    │
 │                │       │                  │       │                │
 │ pkg/sandbox/   │       │ pkg/sandbox/k8s/ │       │ pkg/sandbox/   │
 │ incus/         │       │                  │       │ mock/          │
@@ -94,8 +105,10 @@ A single `SandboxBackend` interface abstracts all sandbox operations. Two produc
         │                         │
         ▼                         ▼
  Local Incus daemon       Kubernetes API
- Unix socket or TCP       + Sysbox pods
-                          + CephFS templates
+ Unix socket or TCP       + sandbox pods (one of 4
+                            privilege paths; see §10)
+                          + RWX PVCs (CephFS / NFS /
+                            EFS / Manila / Azure Files)
 ```
 
 **Backend selection:**
@@ -104,7 +117,7 @@ A single `SandboxBackend` interface abstracts all sandbox operations. Two produc
 |------|---------|
 | Personal (`astonish studio`) | Always `IncusBackend`; config ignored |
 | Platform (`astonish daemon run`), `sandbox.backend: incus` | `IncusBackend` |
-| Platform (`astonish daemon run`), `sandbox.backend: k8s` | `K8sSandboxBackend` |
+| Platform (`astonish daemon run`), `sandbox.backend: k8s` | `K8sBackend` |
 | Unit tests | `MockBackend` (in-memory) |
 
 The abstraction lives in `pkg/sandbox/backend.go`. Existing Incus code is reorganized under `pkg/sandbox/incus/` and wrapped to implement the interface. K8s code is new under `pkg/sandbox/k8s/`. Callers see only the interface.
@@ -240,7 +253,14 @@ Template creation, refresh, and deletion are interface operations on `SandboxBac
 
 First-run bootstrap (see §5.6) seeds `@base.top_layer_id` from a layer extracted from the prebuilt `astonish-sandbox-base:<version>` image.
 
-Updating `@base` is done by the admin starting a session from `@base`, customizing it, and invoking **save-as-@base**:
+**`@base` UUID normalization (Status: shipped).** The Go runtime refers to `@base` by the literal string `"@base"` (`sandbox.BaseTemplateID`), but the `sandbox_templates.id` column is `UUID NOT NULL`. The pgstore boundary normalizes both directions:
+
+- The well-known UUID `a0000000-0000-4000-8000-000000000001` is reserved for the `@base` row and seeded by migration `platform/005_seed_base_template.sql`.
+- `pkg/store/pgstore/sandbox_sessions.go::Put` rewrites `template_id == "@base"` to `baseTemplateUUID` before the SQL `INSERT`. Reads perform the inverse mapping when returning rows that match the well-known UUID.
+
+This keeps the K8s backend free of database-schema knowledge: the backend speaks only string template IDs; UUID coercion happens at the persistence boundary.
+
+**Updating `@base`** is done by the admin starting a session from `@base`, customizing it, and invoking **save-as-@base**:
 
 1. Tar-stream the session upper to CephFS (while computing `sha256`); register as a new `sandbox_layers` row with `scope='global'`, `parent_layer_id=<old @base.top_layer_id>`.
 2. In a **single PG transaction**:
@@ -262,7 +282,7 @@ Personal mode (`astonish studio`) hardcodes this backend and is unaffected by th
 
 Platform mode deployments that already use Incus continue to work by setting `sandbox.backend: incus` (the default).
 
-## 5. K8s+Sysbox Backend
+## 5. K8s Backend
 
 ### 5.1 Deployment shape
 
@@ -270,7 +290,7 @@ Platform mode deployments that already use Incus continue to work by setting `sa
 ┌─────────────────────────────────────────────────────────────────┐
 │ Kubernetes cluster                                               │
 │                                                                   │
-│  Namespace: astonish                                              │
+│  Namespace: astonish (Helm release namespace; configurable)       │
 │  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │
 │  │ API pod 1  │  │ API pod 2  │  │ Worker pod │                 │
 │  │ unprivl.   │  │ unprivl.   │  │ unprivl.   │                 │
@@ -282,11 +302,15 @@ Platform mode deployments that already use Incus continue to work by setting `sa
 │                         │                                         │
 │                         │  K8s API                                │
 │                         ▼                                         │
-│  Namespace: astonish-sandboxes                                    │
+│  Namespace: astonish-sandbox  (sandbox namespace; configurable)   │
 │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐    │
-│  │ session-abc    │  │ session-xyz    │  │ fleet-pool-1   │    │
+│  │ astn-sess-...  │  │ astn-sess-...  │  │ astn-fleet-... │    │
 │  │                │  │                │  │                │    │
-│  │ runtimeClass:  │  │ runtimeClass:  │  │ runtimeClass:  │    │
+│  │ Privilege path │  │ Privilege path │  │ Privilege path │    │
+│  │ from §10:      │  │ from §10:      │  │ from §10:      │    │
+│  │ FUSE plugin /  │  │ FUSE plugin /  │  │ FUSE plugin /  │    │
+│  │ userns /       │  │ userns /       │  │ userns /       │    │
+│  │ privileged /   │  │ privileged /   │  │ privileged /   │    │
 │  │ sysbox-runc    │  │ sysbox-runc    │  │ sysbox-runc    │    │
 │  │                │  │                │  │                │    │
 │  │ Labels:        │  │ Labels:        │  │ Labels:        │    │
@@ -294,27 +318,44 @@ Platform mode deployments that already use Incus continue to work by setting `sa
 │  │  team=general  │  │  team=ops      │  │                │    │
 │  └────────────────┘  └────────────────┘  └────────────────┘    │
 │                                                                   │
-│  Nodes with sysbox-deploy-k8s DaemonSet:                          │
-│    /mnt/astonish-layers    (CephFS, shared RWX, content-addressed)│
-│    /mnt/astonish-uppers    (CephFS, shared RWX, evicted uppers)   │
-│    /var/astonish/upper     (local emptyDir; live overlay upper)   │
+│  Per-node:                                                        │
+│    /var/astonish/overlay   (emptyDir; upper + work on same FS)    │
 │                                                                   │
-│  PostgreSQL (platform.sandbox_layers, platform.sandbox_templates, │
-│              team.sandbox_sessions, team.chat_session_events)     │
+│  RWX-PVC-mounted (CephFS / NFS / EFS / Manila / Azure Files):     │
+│    /mnt/astonish-layers    (RW in template-builder/editor pods;   │
+│                             RO in chat-session pods)              │
+│    /mnt/astonish-uppers    (RW; persisted uppers for resume)      │
+│                                                                   │
+│  Helm post-install/post-upgrade hook:                             │
+│    {release}-sandbox-seed   (idempotent @base seeder; §5.6)       │
+│                                                                   │
+│  PostgreSQL:                                                      │
+│    platform.sandbox_layers, platform.sandbox_templates            │
+│    team_<slug>.sandbox_sessions   ←  cross-replica registry §5.16 │
+│    team_<slug>.chat_session_events                                │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+**Pod-name conventions** (deterministic, exposed in `kubectl get pods`):
+
+- Chat sessions: `astn-sess-<sessionID>` (truncated to 27 chars after the prefix; DNS-1123 sanitized).
+- Fleet members: `astn-fleet-<plan>-<instance>`.
+- Template editor sessions: `astn-sess-<sessionID>` with label `astonish.io/purpose=team-template-editor`.
+- Layer-GC pods: `astn-layer-gc-<layerID-prefix>` (short-lived; see §5.6).
+- Helm seed Job pods: `{release}-sandbox-seed-...`.
+
 ### 5.2 Namespace model (decision Q2 = single namespace + labels)
 
-All sandbox pods -- sessions and fleet -- live in a single namespace: `astonish-sandboxes`.
+All sandbox pods — sessions, fleet members, and template editors — live in a single namespace. The Helm chart derives the name from `namespaces.prefix` (default `astonish`), yielding `astonish-sandbox`. Operators can override `namespaces.sandbox` directly when they need a non-derived name; the Go runtime accepts whatever the chart writes into `config.sandbox.kubernetes.namespace`.
 
 Isolation is via **labels + NetworkPolicy**:
 
-- `astonish.io/org` -- organization slug
-- `astonish.io/team` -- team slug
-- `astonish.io/session-id` -- session identifier (for session pods)
-- `astonish.io/type` -- `session` | `fleet` | `template-builder`
-- `astonish.io/template` -- source template slug
+- `astonish.io/org` — organization slug
+- `astonish.io/team` — team slug
+- `astonish.io/session-id` — session identifier (for session pods)
+- `astonish.io/type` — `session` | `fleet` | `template-builder`
+- `astonish.io/template` — source template slug
+- `astonish.io/purpose` — `team-template-editor` (only set on team-template editor sessions; controls RW vs RO mount of the layers PVC)
 
 NetworkPolicy rules (applied namespace-wide):
 
@@ -326,71 +367,91 @@ This is decision Q2(b): simpler initial implementation; upgrade to namespace-per
 
 ### 5.3 Session lifecycle
 
+**Volumes mounted into every session pod:**
+
+| Volume | Type | Mount | Mode | Purpose |
+|---|---|---|---|---|
+| `layers` | RWX PVC `astonish-layers` | `/mnt/astonish-layers` | RO (chat) / RW (template editor) | Shared content-addressed layer store + `@base/rootfs` |
+| `uppers` | RWX PVC `astonish-uppers` | `/mnt/astonish-uppers` | RW | Persisted uppers for resume after eviction |
+| `overlay` | `emptyDir` | `/var/astonish/overlay` | RW | Hosts both `upper/` and `work/` on the same filesystem |
+
+**Why a single `emptyDir` for both upperdir and workdir.** `fuse-overlayfs` performs `renameat(workdir, …, upperdir, …)` during directory copy-up. If `upper` and `work` lived on separate bind mounts — even from the same underlying device — the kernel would return `EXDEV`, because `renameat` refuses to cross mount boundaries. A single `emptyDir` with two subdirectories (`/var/astonish/overlay/upper` and `/var/astonish/overlay/work`) guarantees they share a mount.
+
+**RW vs RO layers PVC.** Chat-session pods mount `/mnt/astonish-layers` read-only. Team-template editor pods (label `astonish.io/purpose=team-template-editor`, see §5.17) mount it read-write so `SaveSessionAsTemplate` can stage the new layer directory directly without an intermediate exec channel.
+
+**Pod entrypoint** (`pkg/sandbox/k8s/overlay_entrypoint.go`, baked into `astonish-sandbox-base` at `/usr/local/bin/astonish-sandbox-entrypoint`):
+
+The entrypoint runs as PID 1 with the privilege path selected at chart-install time and performs, in order:
+
+1. **Resume path** — if `/mnt/astonish-uppers/<session-id>/upper.tar.zst` exists, stream it back into the local `emptyDir`:
+   ```sh
+   tar --numeric-owner --xattrs --acls -I zstd \
+       -xf /mnt/astonish-uppers/<session-id>/upper.tar.zst \
+       -C /var/astonish/overlay/upper
+   ```
+2. **Pre-seed first-level directories.** Create the top-level FS layout (`/proc /sys /dev /mnt /sandbox /var/astonish` and friends) inside `/var/astonish/overlay/upper` so subsequent bind mounts have valid mount points after the overlay is composed. This is what makes `chroot /sandbox/rootfs` resolve `/proc`, `/sys`, `/dev`, the layer PVC mounts, and the persisted-uppers mount.
+3. **Compose the overlay.** Build `lowerdir` from the layer chain (top-most layer first, so the leaf wins on conflicts):
+   ```sh
+   LOWER=$(echo "$ASTONISH_LAYER_CHAIN" | awk -F, '{
+       for (i = NF; i > 0; i--)
+           printf "/mnt/astonish-layers/%s/rootfs%s", $i, (i > 1 ? ":" : "")
+   }')
+   fuse-overlayfs \
+       -o lowerdir=$LOWER,upperdir=/var/astonish/overlay/upper,workdir=/var/astonish/overlay/work,squash_to_root \
+       /sandbox/rootfs
+   ```
+   `squash_to_root` flattens UID/GID inside the merged tree to 0/0 so user-namespaced pods see consistent ownership (apt/dpkg, systemd, etc. all expect root-owned `/etc`, `/usr`, …).
+4. **Bind kernel pseudo-filesystems** into the merged tree: `/proc`, `/sys`, `/dev`, `/dev/pts`, `/dev/shm` rebound at `/sandbox/rootfs/{proc,sys,dev,dev/pts,dev/shm}`.
+5. **Bind `/etc/resolv.conf`** from the host (pod) into the merged tree so DNS works without copy-up.
+6. **Bind the layer + uppers PVCs** under `/sandbox/rootfs/mnt/{astonish-layers,astonish-uppers}` so save/eviction tar pipelines running inside the chroot see them at the same paths.
+7. **`chroot /sandbox/rootfs`** and `exec /usr/local/bin/astonish node` (or `exec /sbin/init` if the template requires systemd). The `astonish` binary inside the chroot is itself a wrapper script (`astonish-shell` family) that re-execs the trusted host-layer binary; see §5.17 for the wrapper rationale.
+
+**Rejected alternative.** A separate init container performing the overlay mount would require either a `hostPath` volume (rejected — violates Pod Security Admission `baseline`) or a CSI volume that supports `mountPropagation: Bidirectional` between init and main containers (complex; not all CSI drivers honour it). Doing the mount in the main container's PID 1 keeps the pod spec minimal and works with any CSI driver.
+
 **Create** (`CreateSession`):
 
 1. Resolve the requested template and its **layer chain**:
    - Read `sandbox_templates` row from PG; if `template_slug` is not supplied, apply default-template resolution (§5.13).
    - Walk `parent_template_id` from the chosen template up to the root (`@base`), collecting each ancestor's `top_layer_id`. Reverse to obtain bottom-up order.
-   - Verify every layer exists on CephFS at `/mnt/astonish-layers/<layer-id>/rootfs/`.
+   - Verify every layer exists on the layers PVC at `/mnt/astonish-layers/<layer-id>/rootfs/`.
    - Reject if chain depth > `sandbox.layers.maxChainDepth` (default 20; §5.11).
-2. Generate deterministic pod name: `astn-sess-<sessionID>` (truncated to K8s name limits).
+2. Generate deterministic pod name: `astn-sess-<sessionID>` (truncated to 27 chars after the prefix; DNS-1123 sanitized; `pkg/sandbox/k8s/session.go::podNameForSession`).
 3. Build `PodSpec`:
-   - `runtimeClassName: sysbox-runc`
-   - Namespace: `astonish-sandboxes`
-   - Labels: `astonish.io/{org,team,session-id,type=session,template}`
-   - Annotations: `astonish.io/created-by`, `astonish.io/created-at`, `astonish.io/layer-chain=<comma-separated-ids>`
-    - **Volumes:**
-      - `layers` -- CephFS PVC mount at `/mnt/astonish-layers` (RO in session pods; §5.11 covers the RW layer-writer path for save/eviction)
-      - `uppers` -- CephFS PVC mount at `/mnt/astonish-uppers` (RW; required for eviction/resume tar streams)
-      - `upper` -- `emptyDir` at `/var/astonish/upper` (writable layer on node-local disk)
-      - `work` -- `emptyDir` at `/var/astonish/work` (overlayfs workdir)
-    - **Main container** (no separate init container; Sysbox grants `CAP_SYS_ADMIN` inside the user namespace, so the mount happens in-container):
-      - Entrypoint is `astonish-sandbox-entrypoint`, running as PID 1 with Sysbox-provided privileges. In order:
-        1. (Resume path only) If `/mnt/astonish-uppers/<session-id>/upper.tar.zst` exists, stream it back into the local `emptyDir`:
-           `tar --numeric-owner --xattrs --acls -I zstd -xf /mnt/astonish-uppers/<session-id>/upper.tar.zst -C /var/astonish/upper`
-        2. Compose the overlay from the layer chain (top-most layer first in overlayfs syntax, which is the one closest to `upper`):
-           ```sh
-           LOWER=$(echo "$ASTONISH_LAYER_CHAIN" | awk -F, '{for(i=NF;i>0;i--)printf "/mnt/astonish-layers/%s/rootfs%s",$i,(i>1?":":"")}')
-           mount -t overlay overlay \
-             -o lowerdir=$LOWER,upperdir=/var/astonish/upper,workdir=/var/astonish/work \
-             /sandbox/rootfs
-           ```
-           The `ASTONISH_LAYER_CHAIN` env var is populated by Astonish when building the PodSpec (same value as the `astonish.io/layer-chain` annotation).
-        3. `exec chroot /sandbox/rootfs /usr/local/bin/astonish node` (or `exec /sbin/init` if the template requires systemd).
-      - Resource requests/limits from config defaults + per-request overrides.
-      - **Rejected alternative:** a separate init container performing the overlay mount. This would require either a `hostPath` volume (rejected -- violates Pod Security Admission `baseline`) or a CSI volume that supports `mountPropagation: Bidirectional` between init and main containers (complex; not all CSI drivers honour it). Entrypoint-in-main-container keeps the pod spec minimal and works with any CSI driver.
-4. `kubectl apply` via client-go. Watch pod to `Ready`.
-5. Insert row into `sandbox_sessions` table (session_id, pod name, namespace, template_slug, created_at, user_id).
-6. Return `Session` with `backend_ref` = pod name.
+   - Privilege path from §10 (FUSE plugin / userns / privileged / Sysbox), driven by `sandbox.overlay.*` Helm values.
+   - `imagePullPolicy` derived by `pkg/sandbox/k8s/image.go::imagePullPolicy()` (`Always` for mutable tags such as `dev`/`latest`/`edge`/`nightly`; `IfNotPresent` for digest pins and immutable tags).
+   - Namespace: configured sandbox namespace (default `astonish-sandbox`).
+   - Labels: `astonish.io/{org,team,session-id,type=session,template}`; optional `astonish.io/purpose=team-template-editor` for editor sessions.
+   - Annotations: `astonish.io/created-by`, `astonish.io/created-at`, `astonish.io/layer-chain=<comma-separated-ids>`.
+   - Volumes: `layers` (RO or RW depending on purpose), `uppers` (RW), `overlay` (`emptyDir`).
+   - Main container entrypoint as above; resource requests/limits from `sandbox.requests.*` and `sandbox.limits.*` (auto-derived from limits when requests are zero — see §6).
+4. **Self-heal step (Status: shipped).** Before returning, `CreateSession` verifies the pod actually exists in the cluster — not just in any cached registry entry. This protects against stale registry rows pointing at pods that were deleted out-of-band (e.g., node failure, manual `kubectl delete`); when the verification fails, the registry entry is dropped and the create proceeds normally.
+5. `kubectl apply` via client-go. Watch pod to `Ready`.
+6. Insert row into `sandbox_sessions` (team schema) with `session_id`, pod name, namespace, `template_id` (UUID-normalized; §3.9), `chat_session_id`, `created_at`, `user_id`.
+7. Return `Session` with `backend_ref` = pod name.
 
-**Start / Stop** (decision Q1(b) -- evict to CephFS via tar stream):
+**Start / Stop** (decision Q1(b) — evict via tar stream to the uppers PVC):
 
 - Sessions stay running while active. On idle timeout:
-  - `StopSession` evicts: inside the pod, stream `/var/astonish/upper` to CephFS via
-    `tar --numeric-owner --xattrs --acls -I "zstd --adapt -T0" -C /var/astonish/upper -cf /mnt/astonish-uppers/<session-id>/upper.tar.zst .`
+  - `StopSession` evicts: inside the pod, stream `/var/astonish/overlay/upper` to the uppers PVC via
+    `tar --numeric-owner --xattrs --acls -I "zstd --adapt -T0" -C /var/astonish/overlay/upper -cf /mnt/astonish-uppers/<session-id>/upper.tar.zst .`
     then delete the pod.
   - Row in `sandbox_sessions` stays; status updated to `stopped`; `upper_persisted_at` is set.
-- On next user interaction, `StartSession` is called:
-  - Recreate the pod from the template. The entrypoint (step 1 above) streams the persisted upper back into the local `emptyDir` before mounting the overlay.
-  - Resume latency: ~1-5 s depending on upper-layer size. Acceptable given rare.
+- On next user interaction, `StartSession` recreates the pod from the template; the entrypoint resume step (above) streams the persisted upper back into the local `emptyDir` before mounting the overlay. Resume latency: 1–5 s depending on upper-layer size.
 
 This preserves Incus's "container exists but stopped, resume later" semantics.
 
-**Destroy** (`DestroySession`) -- this is the parity-critical operation:
+**Destroy** (`DestroySession`) — the parity-critical operation:
 
-1. Delete pod: `DELETE /api/v1/namespaces/astonish-sandboxes/pods/astn-sess-<sessionID>`.
-2. Kubelet unmounts overlay and deletes `emptyDir`-backed upper layer automatically.
+1. Delete pod via the K8s API.
+2. Kubelet unmounts overlay and deletes the `emptyDir`-backed upper layer automatically.
 3. Delete any Services / Ingress rules for the session.
-4. Remove persisted CephFS upper (if previously evicted): `rm -rf /mnt/astonish-uppers/<session-id>/` (contains `upper.tar.zst`).
+4. Remove persisted upper (if previously evicted): `rm -rf /mnt/astonish-uppers/<session-id>/`.
 5. Delete row from `sandbox_sessions`.
 6. Emit audit event.
 
-**Guarantee:** when `DestroySession` returns successfully, no trace of the session remains on any node, in CephFS, or in PG. This matches Incus's `incus delete --force` semantics. Every deletion code path (session delete API, org delete cascade, idle orphan pruning) calls `DestroySession` and obtains the same guarantee.
+**Guarantee:** when `DestroySession` returns successfully, no trace of the session remains on any node, in the layers/uppers PVCs, or in PG. This matches Incus's `incus delete --force` semantics. Every deletion code path (session delete API, org delete cascade, idle orphan pruning) calls `DestroySession` and obtains the same guarantee.
 
 **State** (`SessionState`):
-
-- Query pod via K8s API.
-- Map to Astonish's states:
 
 | K8s phase | Astonish state |
 |---|---|
@@ -403,9 +464,9 @@ This preserves Incus's "container exists but stopped, resume later" semantics.
 
 ### 5.4 Exec
 
-**Non-interactive** (`Exec`) -- client-go `remotecommand` using SPDY (decision Q5):
+**Non-interactive** (`Exec`) — client-go `remotecommand` using SPDY (decision Q5):
 
-- POST `/api/v1/namespaces/astonish-sandboxes/pods/<pod>/exec?command=...&stdin=false&stdout=true&stderr=true&container=sandbox`
+- POST `/api/v1/namespaces/{sandboxNamespace}/pods/<pod>/exec?command=...&stdin=false&stdout=true&stderr=true&container=sandbox`
 - Stream stdout/stderr to buffers; capture exit code from SPDY channel 3.
 - Match current Incus `ExecNonInteractive` semantics (exec helpers in `pkg/sandbox/exec.go`).
 
@@ -446,24 +507,20 @@ Implemented in `pkg/sandbox/k8s/files.go`. Matches capability of Incus Files API
 - Layers live on CephFS at `/mnt/astonish-layers/<sha256>/rootfs/` and are indexed in `sandbox_layers` (§5.11). A session composes the full chain as ordered lowerdirs (§5.3).
 - No template ever owns its layers exclusively -- layer lifetime is governed by reference counting (§5.12).
 
-**First-run bootstrap** (decision Q3(c); seeds `@base`):
+**First-run bootstrap (Status: shipped as a Helm hook).**
 
-At daemon startup, when `sandbox.backend: k8s`, Astonish checks whether the `@base` template row exists in PG with a `top_layer_id` whose CephFS directory is present. If either is missing:
+The `@base` template is seeded by a Helm `post-install,post-upgrade` Job (`{release}-sandbox-seed`) defined at `deploy/helm/astonish/templates/sandbox/seed-job.yaml`. The Job:
 
-1. Create a one-shot Kubernetes Job (`astonish-template-bootstrap-<version>`):
-   - Image: prebuilt `schardosin/astonish-sandbox-base:<version>` (Ubuntu 24.04 + core tools + `tar` with xattr support + `zstd` + astonish binary baked in).
-   - Volume: CephFS RW mount on `/mnt/astonish-layers`.
-   - Command: stream the image rootfs into a temporary staging directory, compute `sha256` of the canonical tar, atomic-rename the staging dir to `/mnt/astonish-layers/<sha256>/rootfs/`, write `/mnt/astonish-layers/<sha256>/meta.json`.
-2. Wait for the Job to complete. Timeout: 5 min (image pull + tar extract).
-3. In a single PG transaction:
-   - `INSERT INTO sandbox_layers (layer_id, parent_layer_id, scope, ...)` with `parent_layer_id=NULL`.
-   - `INSERT ... ON CONFLICT (slug) DO UPDATE` into `sandbox_templates` for the `@base` row, setting `top_layer_id=<sha256>`, `scope='global'`, `parent_template_id=NULL`, `is_default_for_scope=true`.
-   - Increment `ref_count` on the new layer.
-4. Proceed with normal daemon startup.
+- Runs the same `astonish-sandbox-base` image used by sandbox pods, with `imagePullPolicy: IfNotPresent` hard-pinned (the chart's runtime auto-detection does not apply here — operators bump the chart, expecting determinism).
+- Mounts the `astonish-layers` PVC RW at `/mnt/astonish-layers`.
+- Tars its own rootfs (excluding `/proc /sys /dev /mnt /sandbox /var/astonish`) into `/mnt/astonish-layers/@base/rootfs/`.
+- **Idempotency guard:** if `@base/rootfs` exists and is non-empty, the Job exits 0 without re-tarring. To force a reseed, an operator clears `@base/rootfs/` (e.g., from a debug pod) and runs `helm upgrade`.
+- `helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded` — pods are auto-cleaned on success.
+- Hook weight `5` so it runs after PVCs/RBAC are ready.
 
-If the Job fails, Astonish logs the error and refuses to serve sandbox requests until the bootstrap succeeds. Administrators can manually trigger re-bootstrap.
+Migration `platform/005_seed_base_template.sql` inserts the `@base` row with the well-known UUID `a0000000-0000-4000-8000-000000000001` (see §3.9). The seed Job and the migration are independent: the migration creates the catalog row; the Job populates the layer bytes. Either one can be re-run independently.
 
-The bootstrap image is the only piece Astonish publishes specifically for the K8s backend; it's versioned alongside Astonish releases and referenced in config.
+**NFS / RWX caveat.** When `rm -rf` runs against `@base/rootfs/` while another pod has files open, the underlying RWX filesystem may surface `.nfs00...` silly-rename markers. Operational practice: kill consuming sandbox pods before clearing `@base/rootfs/`, and prefer GNU `rm` (e.g., from `debian:bookworm-slim`) over BusyBox `rm` to avoid spurious "directory not empty" failures.
 
 **CreateTemplate** (building a new template by customizing a parent):
 
@@ -471,98 +528,90 @@ Input: `parent_template_slug`, new `slug`, `scope`, `scope_ref_id`, optional `cu
 
 1. Resolve the parent's layer chain (walk `parent_template_id`).
 2. Create a short-lived **template-builder pod**:
-   - `runtimeClassName: sysbox-runc`, labels `astonish.io/type=template-builder`.
-   - Overlay composed from the parent's full layer chain as lowerdirs + fresh `emptyDir` as upper.
+   - Privilege path from §10, label `astonish.io/type=template-builder`.
+   - Overlay composed from the parent's full layer chain as lowerdirs + fresh `emptyDir` upper.
    - `/mnt/astonish-layers` mounted RW (builder is trusted).
-3. Exec customization commands in the builder pod (apt install, file copies, project clone, build steps -- typical "ready-to-code" fleet template setup falls here).
-4. On success: run the in-pod tar-to-layer pipeline described below, yielding a new content-addressed layer:
-   ```sh
-   tar --numeric-owner --xattrs --acls -I "zstd --adapt -T0" \
-       -C /var/astonish/upper -cf - . \
-     | tee >(sha256sum > /tmp/sha) \
-     | tar --numeric-owner --xattrs --acls -I zstd \
-       -C /mnt/astonish-layers/__staging-<builder-id>/rootfs -xf -
-   SHA=$(awk '{print $1}' /tmp/sha)
-   mv /mnt/astonish-layers/__staging-<builder-id> /mnt/astonish-layers/$SHA
-   ```
-   The source is the **upper only** (the builder's writes), not the merged overlay view, because the lower layers are already content-addressed in the chain and should not be duplicated.
-5. In a single PG transaction:
-   - `INSERT INTO sandbox_layers (layer_id=SHA, parent_layer_id=<parent.top_layer_id>, ...) ON CONFLICT (layer_id) DO NOTHING` (if the content is identical to an existing layer, reuse; delete the duplicate staging dir in that branch).
-   - `INSERT INTO sandbox_templates (slug, scope, parent_template_id, top_layer_id=SHA, ...)`.
-   - Increment `ref_count` on the new layer (template reference).
+3. Exec customization commands in the builder pod (apt install, file copies, project clone, build steps — typical "ready-to-code" fleet template setup falls here).
+4. On success: run the in-pod tar-to-layer pipeline (see below), yielding a new content-addressed layer.
+5. In a single PG transaction: insert layer row, insert template row, increment ref_count on the new layer.
 6. Delete the builder pod.
 
 If any step fails, the transaction rolls back and the staging directory is removed; no partial state.
 
-**SaveSessionAsTemplate** -- capability-critical, no registry push (decision Q4(a)):
+**SaveSessionAsTemplate** — capability-critical, no registry push (decision Q4(a)):
 
 Input: live session ID, new `slug`, `scope`, `scope_ref_id`.
 
 The difference from `CreateTemplate` is that the content source is the **session's upper layer** (the user's effective changes since the template was composed). Parent is the session's current template.
 
-1. Session pod is running; `/mnt/astonish-layers` is mounted RW inside it for save.
-2. Astonish exec's into the session pod and runs the in-pod tar-to-layer pipeline, streaming **only `/var/astonish/upper`** (not the merged view):
+1. Session pod is running; `/mnt/astonish-layers` is mounted RW inside it (team-template editor sessions get this automatically via the `astonish.io/purpose=team-template-editor` label; see §5.17).
+2. Astonish exec's into the session pod and runs the in-pod tar-to-layer pipeline, streaming **only `/var/astonish/overlay/upper`** (not the merged view):
    ```sh
    tar --numeric-owner --xattrs --acls -I "zstd --adapt -T0" \
-       -C /var/astonish/upper -cf - . \
+       -C /var/astonish/overlay/upper -cf - . \
      | tee >(sha256sum > /tmp/sha) \
      | tar --numeric-owner --xattrs --acls -I zstd \
        -C /mnt/astonish-layers/__staging-<session-id>/rootfs -xf -
    ```
-   (In-pod pipe; CephFS sees a single sequential writer.)
-3. Rename staging directory to `/mnt/astonish-layers/<sha256>/`. If a directory with that sha already exists (content is already stored as a layer under a different scope, for example): skip the rename, remove staging.
+   (In-pod pipe; the layers PVC sees a single sequential writer.)
+3. Rename staging directory to `/mnt/astonish-layers/<sha256>/`. If a directory with that sha already exists (content already stored as a layer under a different scope, for example), skip the rename and remove staging.
 4. In a single PG transaction:
-   - `INSERT INTO sandbox_layers ... ON CONFLICT DO NOTHING` -- **deduplication falls out automatically**: identical upper contents produce identical sha256 and therefore reuse an existing layer.
+   - `INSERT INTO sandbox_layers ... ON CONFLICT DO NOTHING` — **deduplication falls out automatically**: identical upper contents produce identical sha256 and therefore reuse an existing layer.
    - `INSERT INTO sandbox_templates (slug, scope, parent_template_id=<session.template_id>, top_layer_id=<sha256>, ...)`.
    - Increment `ref_count` on the layer (template reference).
-5. Typical duration: 1-5 seconds for normal sandboxes. No registry round-trip.
+5. Typical duration: 1–5 seconds for normal sandboxes. No registry round-trip.
 
-Authorization: scope-appropriate actor required. `save-as-@base` is a privileged variant that updates `@base.top_layer_id` in place (§3.9) instead of creating a new template row -- restricted to `superadmin`.
+The `pkg/sandbox/k8s/template.go::buildCaptureScript` helper builds the capture command line; the API-layer `TemplatePersister` callback (set on `k8s.Config`) is invoked after a successful capture so the calling code can persist the template metadata into the application store without coupling the backend to schema details.
 
-**Rationale (tar+zstd vs rsync).** rsync's cost on CephFS is dominated by per-file metadata round-trips (`readdir`, `stat`, `setattr`, open/close per file). For a typical `node_modules` or Python venv with tens of thousands of files, that is 100k+ MDS RPCs. A single tar stream reads the source tree sequentially (local disk, fast) and produces one sequential writer on CephFS, bypassing most MDS chatter. Empirically 3-10× faster for cold copies of many-small-file trees. `zstd --adapt` scales compression level with CPU headroom; `-T0` uses all cores.
+Authorization: scope-appropriate actor required. `save-as-@base` is a privileged variant that updates `@base.top_layer_id` in place (§3.9) instead of creating a new template row — restricted to `superadmin`.
+
+**Rationale (tar+zstd vs rsync).** rsync's cost on RWX filesystems is dominated by per-file metadata round-trips (`readdir`, `stat`, `setattr`, open/close per file). For a typical `node_modules` or Python venv with tens of thousands of files, that is 100k+ MDS RPCs (CephFS) or NFS round-trips. A single tar stream reads the source tree sequentially (local disk, fast) and produces one sequential writer on the PVC, bypassing most metadata chatter. Empirically 3–10× faster for cold copies of many-small-file trees. `zstd --adapt` scales compression level with CPU headroom; `-T0` uses all cores.
 
 **Preservation requirements (both eviction and save paths):**
-- `--numeric-owner` -- required because Sysbox uses user-namespace UID/GID remapping; textual user lookups on CephFS would not resolve.
-- `--xattrs --acls` -- preserves security.capability, SELinux labels, and ACLs set by apt/dpkg.
+- `--numeric-owner` — required because user-namespaced pods remap UID/GID; textual user lookups on the shared PVC would not resolve.
+- `--xattrs --acls` — preserves `security.capability`, SELinux labels, and ACLs set by apt/dpkg.
 - Sparse files handled natively by GNU tar (`--sparse` added if profiling shows value).
-- `tar` (GNU with xattr support) and `zstd` must be present in `astonish-sandbox-base` image.
+- `tar` (GNU with xattr support) and `zstd` must be present in `astonish-sandbox-base` image (they are).
 
-**RefreshTemplate** (explicit rebuild; decision: no automatic cascade):
+**RefreshTemplate (Status: stub — returns "not yet implemented").**
 
-Input: template slug.
+The Round 2 design called for `RefreshTemplate` to walk the parent chain, run the stored `build_spec`, and atomically swap `top_layer_id` with optimistic CAS on `version`. The K8s backend currently returns `errors.ErrUnsupported` for this path; the API layer surfaces a clear "not yet implemented" message. The semantics described above (running sessions unaffected because the kernel retains old lowerdir inodes; ref-count decrement on the old layer; explicit invocation by a scope-appropriate admin; **no automatic cascade** when `@base` updates) remain the design contract for when the implementation lands.
 
-1. Resolve the template's current `parent_template_id` and its layer chain.
-2. Retrieve the customization recipe used to build this template (stored in `sandbox_templates.build_spec` JSONB, populated at `CreateTemplate` time).
-3. Run the builder pipeline (see `CreateTemplate`) with the **current** parent chain as the lower. This picks up any changes the parent has accumulated since the last refresh (e.g., a new `@base` version).
-4. In a single PG transaction:
-   - Insert new layer row (with new `sha256`).
-   - `UPDATE sandbox_templates SET top_layer_id = <new>, version = version + 1, refreshed_at = now() WHERE id = <template.id> AND version = <expected>` (optimistic concurrency).
-   - Increment ref_count on new layer.
-   - Decrement ref_count on old layer.
+Until then, refresh = manual: a team admin starts a new session from the parent, re-applies customizations, and saves a new template (which gets a new slug or, with explicit superadmin action, replaces `top_layer_id` on the existing slug).
+
+**DeleteTemplate (Status: synchronous GC pod shipped).**
+
+The original Round 2 design imagined a deferred reconciler. The shipped implementation is more direct: `DeleteTemplate` synchronously launches a short-lived GC pod that reclaims layer bytes before returning.
+
+`pkg/sandbox/k8s/template.go::DeleteTemplate`:
+
+1. Refuse if any `sandbox_sessions` row references the template, unless `force=true` (in which case matching sessions are destroyed via §5.3 `Destroy`).
+2. Refuse if any `sandbox_templates` row has this template as its `parent_template_id`, unless `force=true` (in which case still refuse — descendants must be migrated or deleted explicitly; force does not cascade template deletion).
+3. Resolve the layer to free.
+4. Launch a GC pod named `astn-layer-gc-<layer-id-prefix>` in the sandbox namespace:
+   - Image: `alpine:3.21` (small, fast pull).
+   - Mounts the `astonish-layers` PVC RW.
+   - Command: `rm -rf /mnt/astonish-layers/<layer-id>/`.
+   - `restartPolicy: Never`; `activeDeadlineSeconds` bounded.
+5. Wait for the GC pod to terminate `Succeeded`; delete it.
+6. In a single PG transaction:
+   - Decrement `ref_count` on `top_layer_id`.
+   - If `ref_count` reaches zero, `DELETE FROM sandbox_layers WHERE layer_id = ...`.
+   - `DELETE FROM sandbox_templates WHERE id = ...`.
    - Audit.
-5. **Running sessions are unaffected**: the kernel retains their old lowerdirs. New sessions from this template pick up the new chain. The old layer persists until ref_count reaches zero and the GC grace period expires (§5.12).
-6. On failure, the template is unchanged and no partial state is observable.
+7. `@base` cannot be deleted (enforced by the API-layer guard plus a check constraint on `slug != 'base'` in the delete path).
 
-`RefreshTemplate` is the only mechanism that propagates parent changes down the DAG. It runs on demand, invoked by a scope-appropriate admin. A global `@base` update does **not** automatically refresh descendants.
+The application-layer `reclaimLayerBytes` helper (`pkg/api/team_template_handlers.go`) wraps this for the team-template editor flow: it re-reads the layer; if `ref_count == 0` it calls `Backend.DeleteTemplate` (which spawns the GC pod) followed by `layers.DeleteLayer`. It skips `@base` and empty-bytes layers.
 
-**DeleteTemplate:**
-
-- Refuse if any `sandbox_sessions` row references the template, unless `force=true` is set (in which case matching sessions are destroyed via §5.3 `Destroy`).
-- Refuse if any `sandbox_templates` row has this template as its `parent_template_id`, unless `force=true` (in which case refuse anyway -- descendants must be migrated or deleted explicitly; force does not cascade template deletion).
-- In a single PG transaction:
-  - Decrement `ref_count` on `top_layer_id`.
-  - `DELETE FROM sandbox_templates WHERE id = ...`.
-  - Audit.
-- The GC reconciler (§5.12) eventually removes the CephFS directory if nothing else references the layer.
-- `@base` cannot be deleted (enforced by check constraint on `slug != 'base'` in the delete path).
+**Why synchronous, not deferred.** Operators expect `DELETE /templates/<slug>` to free the bytes by the time it returns. A deferred reconciler with a 24h grace period (Round 2 design) is still useful as a safety net for refcount drift but is not the primary reclamation path. See §5.12 for the optional deferred reconciler (still on the roadmap).
 
 ### 5.7 Networking
 
-**Org networks** (decision Q2(b) -- labels + NetworkPolicy):
+**Org networks** (decision Q2(b) — labels + NetworkPolicy):
 
 - `EnsureOrgNetwork(orgSlug)`:
-  - Apply/update a `NetworkPolicy` in `astonish-sandboxes` that selects pods with `astonish.io/org=<slug>`.
-  - Ingress: from same-org pods + from `astonish` namespace.
+  - Apply/update a `NetworkPolicy` in the sandbox namespace that selects pods with `astonish.io/org=<slug>`.
+  - Ingress: from same-org pods + from the control-plane namespace.
   - Egress: DNS, allowed external endpoints, same-org pods.
 - `DeleteOrgNetwork(orgSlug)`:
   - Remove the NetworkPolicy.
@@ -571,7 +620,7 @@ Input: template slug.
 **Port exposure:**
 
 - `ExposePort(sessionID, port, proto)`:
-  - Create a `Service` (ClusterIP) in `astonish-sandboxes` named `sess-<sessionID>-<port>` with selector `astonish.io/session-id=<id>` and port mapping.
+  - Create a `Service` (ClusterIP) in the sandbox namespace named `sess-<sessionID>-<port>` with selector `astonish.io/session-id=<id>` and port mapping.
   - Optional: create an `Ingress` (Gateway) entry if external URL exposure is requested (org-configured base domain).
   - Returns `ExposedAddr` = in-cluster DNS + optional external URL.
 - `UnexposePort`:
@@ -594,7 +643,7 @@ Lifecycle is session-like (create pod, exec, destroy) with label `astonish.io/ty
 
 `astonish` API/Worker ServiceAccount needs:
 
-- On `astonish-sandboxes` namespace:
+- On the sandbox namespace:
   - `pods`: get, list, watch, create, delete, deletecollection
   - `pods/exec`: create
   - `pods/log`: get
@@ -602,97 +651,111 @@ Lifecycle is session-like (create pod, exec, destroy) with label `astonish.io/ty
   - `services`: get, list, create, delete
   - `networkpolicies`: get, list, create, update, patch, delete
   - `persistentvolumeclaims`: get, list, create, delete (for optional per-session PVCs)
-- On `astonish-sandboxes` namespace (limited Jobs for bootstrap/template builder):
-  - `jobs`: get, list, create, delete
+  - `jobs`: get, list, create, delete (for the Helm seed Job and any future bootstrap/builder Jobs)
 - Cluster-scoped: none beyond discovery.
+
+The Helm chart creates the `Role` and `RoleBinding` in the sandbox namespace bound to the control-plane ServiceAccount when `sandbox.rbac.create=true` (default).
 
 ### 5.10 Observability
 
 - Session lifecycle events are logged through Astonish's existing event pipeline.
 - Backend health is exposed via `Health(ctx)` and surfaced in `/api/healthz`:
   - K8s API reachable
-  - `astonish-sandboxes` namespace exists
-  - CephFS mount accessible from at least one node (via a probe pod or DaemonSet)
-  - Base template present on CephFS
+  - Sandbox namespace exists
+  - Layers PVC mount accessible from at least one node (probe pod or DaemonSet)
+  - Base template present in the layers PVC (`/mnt/astonish-layers/@base/rootfs/`)
 - `kubectl logs` is available for support/debugging; Astonish also provides UI-accessible log retrieval via backend interface.
 - Pod lifecycle events are watched (not polled) -- improvement over the current Incus polling model.
 
 ### 5.11 Layer store
 
-The layer store is the content-addressed backing for every template and every evicted session upper. It is shared across all Astonish pods via the same CephFS RWX mount, indexed in PG, and GC'd by a single leader-elected reconciler.
+The layer store is the content-addressed backing for every template and every evicted session upper. It is shared across all Astonish pods via the same RWX PVC mount (CephFS / NFS / EFS / Manila / Azure Files), indexed in PG, and reclaimed by a combination of synchronous GC pods (§5.6) and an optional deferred reconciler (§5.12).
 
-**CephFS layout:**
+**Layout on the layers PVC:**
 
 ```
 /mnt/astonish-layers/
+  @base/
+    rootfs/         ← seeded by the Helm hook Job (§5.6)
   <sha256>/
     rootfs/         ← read-only layer contents (extracted tar tree)
-    meta.json       ← { "layer_id", "parent_layer_id", "size_bytes", "created_at", "scope" }
+    meta.json       ← optional: { layer_id, parent_layer_id, size_bytes, created_at, scope }
 ```
 
-`meta.json` duplicates PG fields intentionally: it lets operators introspect a CephFS tree with ordinary POSIX tools even if PG is momentarily unavailable. PG remains the authoritative source of truth for ref_counts and scope.
+`meta.json` is documented as an operator-friendly sidecar but is not currently written by the shipped K8s backend. PG remains the authoritative source of truth for ref_counts and scope; operators inspecting layers without PG access read directories and ask `psql` for metadata. Writing `meta.json` is a small, low-risk follow-up if operator tooling demands it.
 
 **Properties:**
 
 - **Content-addressed.** Layer ID is `sha256sum` of the canonical tar stream produced during layer creation (fixed options: `tar --numeric-owner --xattrs --acls --sort=name --mtime=@0`). Two independent `SaveSessionAsTemplate` operations that produce byte-identical uppers resolve to the same `layer_id`; the second operation finds the existing row via `ON CONFLICT DO NOTHING` and reuses it.
-- **Immutable.** Once written, a layer's contents never change. Refreshes and edits produce a new layer; old layer remains until GC.
-- **Shared across pods.** Every Astonish pod mounts `/mnt/astonish-layers` (RO in session pods, RW in builder / save / bootstrap pods). No per-pod caching; CephFS is the canonical location.
+- **Immutable.** Once written, a layer's contents never change. Refreshes and edits produce a new layer; old layer remains until reclaimed.
+- **Shared across pods.** Every Astonish pod (control-plane + sandbox) mounts `/mnt/astonish-layers` (RO in chat-session pods, RW in template editor / builder / save pods). No per-pod caching; the PVC is the canonical location.
 - **Ordered by `parent_layer_id`.** The layer DAG mirrors the template DAG but at content-addressed granularity. A layer may appear in many templates' chains (sharing is the default).
 
 **Chain-depth cap:**
 
-- Overlayfs supports hundreds of lowerdirs on modern kernels (`overlay.max_lower`), but practical limits vary with distro and kernel build. Astonish caps template-chain depth at **`sandbox.layers.maxChainDepth` (default 20)**.
+- Overlayfs (kernel and `fuse-overlayfs`) supports hundreds of lowerdirs on modern kernels, but practical limits vary with distro and kernel build. Astonish caps template-chain depth at **`sandbox.layers.maxChainDepth` (default 20)**.
 - Exceeding the cap on `CreateTemplate` / `SaveSessionAsTemplate` / `RefreshTemplate` is a validation error.
-- A **flatten job** (Phase E) walks the DAG, identifies chains approaching the cap, and merges them: spawn a builder pod, compose the full chain, `tar`-stream the merged tree as a new layer (parent=NULL or parent=<deepest-ancestor>), update the descendant template's `top_layer_id` to point at the flat layer, decrement ref_counts on the flattened layers. GC eventually removes them.
+- A **flatten job** (Phase E) walks the DAG, identifies chains approaching the cap, and merges them into a single new layer. Not yet implemented.
 
 **Operator introspection:**
 
-- `psql -c "SELECT layer_id, parent_layer_id, scope, ref_count, size_bytes FROM sandbox_layers ORDER BY created_at DESC LIMIT 50"`
-- `ls /mnt/astonish-layers/` shows every layer dir; `cat /mnt/astonish-layers/<id>/meta.json` for metadata.
-- `kubectl -n astonish-sandboxes get pods -o=jsonpath='{.items[*].metadata.annotations.astonish\.io/layer-chain}'` shows which chain each running session uses.
+- `psql -c "SELECT layer_id, parent_layer_id, scope, ref_count, size_bytes FROM platform.sandbox_layers ORDER BY created_at DESC LIMIT 50"`
+- `ls /mnt/astonish-layers/` shows every layer dir.
+- `kubectl -n astonish-sandbox get pods -o=jsonpath='{.items[*].metadata.annotations.astonish\.io/layer-chain}'` shows which chain each running session uses.
 
-**Orphan detection** (runs hourly inside the GC reconciler):
+**Orphan detection** (runs hourly inside the deferred GC reconciler when enabled; see §5.12):
 
-- PG layers without CephFS dir → **error**: raise alert; do not auto-heal (a missing directory means data loss, which must be investigated).
-- CephFS dirs without PG row + older than 1 hour → **GC candidate**: deleted on next sweep. The 1-hour grace allows in-flight layer writes to complete their PG insert.
+- PG layers without PVC dir → **error**: raise alert; do not auto-heal (a missing directory means data loss, which must be investigated).
+- PVC dirs without PG row + older than 1 hour → **GC candidate**: deleted on next sweep. The 1-hour grace allows in-flight layer writes to complete their PG insert.
 
-### 5.12 Layer garbage collection
+### 5.12 Layer reclamation and reference counting
 
-Layer lifetime is managed by reference counting maintained **transactionally** with every template and session mutation.
+Layer lifetime is managed by reference counting maintained in PG.
 
 **What increments ref_count:**
 - `INSERT INTO sandbox_templates`: `+1` on `top_layer_id`.
 - `UPDATE sandbox_templates SET top_layer_id = <new>`: `+1` on new, `-1` on old.
-- `UPDATE sandbox_sessions SET upper_layer_id = <new>` (set on idle eviction when we decide to promote an eviction into a real layer rather than a simple tar blob -- deferred feature): `+1` on new, `-1` on old (nullable).
+- `UPDATE sandbox_sessions SET upper_layer_id = <new>` (set when an idle eviction is promoted into a real layer rather than a simple tar blob — deferred feature): `+1` on new, `-1` on old (nullable).
 
 **What decrements ref_count:**
 - `DELETE FROM sandbox_templates`: `-1` on `top_layer_id`.
 - `DELETE FROM sandbox_sessions` (when `upper_layer_id IS NOT NULL`): `-1` on that layer.
 
-**Transactional invariant:** every write that changes a template's or session's `top_layer_id`/`upper_layer_id` column adjusts ref_counts in the **same PG transaction**. A trigger on `sandbox_templates` and `sandbox_sessions` enforces this; the application also updates ref_count explicitly for clarity and to avoid trigger-ordering surprises in future refactors.
+**Transactional invariant.** Every write that changes a template's or session's `top_layer_id`/`upper_layer_id` column adjusts ref_counts in the **same PG transaction**. The application updates ref_count explicitly. A backstop trigger from migration `platform/004_sandbox_ref_count_triggers.sql` is **installed but disabled by default in production** — kept available so operators can flip it on for forensic runs without redeploying.
 
-**Check constraint:** `CHECK (ref_count >= 0)`. A negative ref_count is a schema-level invariant violation and the transaction aborts.
+**Check constraint:** `CHECK (ref_count >= 0)` on `sandbox_layers`. A negative ref_count is a schema-level invariant violation and the transaction aborts.
 
-**GC reconciler:**
+#### 5.12.1 Synchronous reclamation (Status: shipped)
+
+The primary reclamation path is the synchronous GC pod fired from `DeleteTemplate` (§5.6) and from the editor lifecycle's `reclaimLayerBytes` helper (§5.17). Operators delete a template; the bytes are gone before the API returns. No grace period, no scheduling delay.
+
+This is sufficient for the team-template editor flow (operator-driven, low frequency, immediate-feedback expectation) and for explicit `DELETE` calls.
+
+#### 5.12.2 Deferred reconciler (Status: deferred — design intact)
+
+Some reclamation patterns benefit from background batching: orphan detection (§5.11), refcount drift recovery if the disabled trigger is ever needed, and bulk cleanup after migrations. The Round 2 design specified a single leader-elected reconciler:
 
 - Runs in the `astonish` daemon, guarded by a PG advisory lock (`pg_try_advisory_lock(hashtext('astonish-layer-gc'))`) so only one pod executes at a time across the deployment.
 - Runs on a schedule (`sandbox.layers.gcInterval`, default 1h) **and** on demand via the admin API (§5.15).
 - Algorithm:
   1. `SELECT layer_id FROM sandbox_layers WHERE ref_count = 0 AND created_at < now() - grace_period FOR UPDATE SKIP LOCKED`
-     (`grace_period` default 24h; `FOR UPDATE SKIP LOCKED` allows concurrent runs to coexist safely even though the advisory lock prevents it -- defense in depth).
+     (`grace_period` default 24h).
   2. For each candidate:
-     - Verify `ref_count = 0` is still true (guard against races where a `RefreshTemplate` acquired the layer between selection and deletion).
+     - Verify `ref_count = 0` is still true (guard against races where a concurrent `RefreshTemplate` acquired the layer between selection and deletion).
      - `rm -rf /mnt/astonish-layers/<layer_id>/`.
      - `DELETE FROM sandbox_layers WHERE layer_id = ...`.
      - Audit row: `layer_gc_removed`, size_bytes reclaimed.
-  3. Commit the transaction; release the advisory lock at end of reconciler run.
 - Metrics: `astonish_sandbox_layer_gc_removed_total`, `astonish_sandbox_layer_gc_bytes_total`, `astonish_sandbox_layer_gc_duration_seconds`.
 
-**Grace period rationale.** Short-lived zero-ref windows happen legitimately: `RefreshTemplate` briefly drops a layer's refcount to 0 between the `DELETE` of the old template row and the subsequent `INSERT` of a redundant reference. In practice these are wrapped in a single transaction so they never appear committed as zero-ref -- but the 24h grace period is a safety margin that also covers operator actions (manual PG edits, rollbacks).
+**Grace period rationale.** Short-lived zero-ref windows happen legitimately: `RefreshTemplate` briefly drops a layer's refcount to 0 between the `DELETE` of the old template row and the subsequent `INSERT` of a redundant reference. In practice these are wrapped in a single transaction so they never appear committed as zero-ref — but the 24h grace period is a safety margin that also covers operator actions (manual PG edits, rollbacks).
+
+The deferred reconciler is **not currently implemented**. The synchronous path covers operator-driven deletion; orphan detection runs only when an operator triggers it manually via SQL/`kubectl`. Implementing the reconciler is a Phase E item.
 
 ### 5.13 Default template resolution
 
-When a user creates a session without specifying a template, Astonish resolves the default with a deterministic cascade. Resolution is performed in the calling code (chat / session API), not in the backend -- backends do not know about orgs/teams/users.
+> **Status: design only.** The cascading resolver below is the Round 2 design. The shipped K8s backend currently resolves to `@base` directly when no template is supplied; the per-scope `is_default_for_scope` machinery (settable by org/team admins) is not yet wired into the chat / session creation paths. Templates are explicitly selected by callers in the team-template editor flow (§5.17) and by the chat UI when the user picks one. Implementing the resolver is a follow-up.
+
+When a user creates a session without specifying a template, Astonish resolves the default with a deterministic cascade. Resolution is performed in the calling code (chat / session API), not in the backend — backends do not know about orgs/teams/users.
 
 ```go
 func resolveDefaultTemplate(user User) Template {
@@ -792,101 +855,206 @@ ALTER TABLE chat_sessions
 
 ### 5.15 Admin API surface
 
-New endpoints in Phase C:
-
-| Method & path | Authz | Purpose |
-|---|---|---|
-| `POST /admin/base/save` | `superadmin` | Save current session upper as the new `@base.top_layer_id` (§3.9). Body: `{session_id}`. |
-| `POST /templates/{slug}/refresh` | scope admin | Rebuild template from current parent chain (§5.6). |
-| `PUT /users/me/default-template` | self | Set personal default template (§5.13). |
-| `PUT /teams/{team}/default-template` | team admin | Set team default. |
-| `PUT /orgs/{org}/default-template` | org owner | Set org default. |
-| `GET /admin/layers` | `superadmin` | List all layers with ref_count, scope, size_bytes. |
-| `GET /admin/layers/{id}/usage` | `superadmin` | Which templates/sessions reference this layer. |
-| `POST /admin/layers/gc` | `superadmin` | Force-run GC reconciler (§5.12). Returns counts of removed layers and reclaimed bytes. |
-| `GET /admin/chat-sessions/{id}/events` | `superadmin` + owner | Operator introspection of the event journal (§5.14). |
+| Method & path | Authz | Status | Purpose |
+|---|---|---|---|
+| `POST /admin/base/save` | `superadmin` | Deferred | Save current session upper as the new `@base.top_layer_id` (§3.9). Body: `{session_id}`. |
+| `POST /templates/{slug}/refresh` | scope admin | Deferred (`RefreshTemplate` returns "not yet implemented" — §5.6) | Rebuild template from current parent chain. |
+| `PUT /users/me/default-template` | self | Deferred | Set personal default template (§5.13). |
+| `PUT /teams/{team}/default-template` | team admin | Deferred | Set team default. |
+| `PUT /orgs/{org}/default-template` | org owner | Deferred | Set org default. |
+| `GET /admin/layers` | `superadmin` | Deferred | List all layers with ref_count, scope, size_bytes. |
+| `GET /admin/layers/{id}/usage` | `superadmin` | Deferred | Which templates/sessions reference this layer. |
+| `POST /admin/layers/gc` | `superadmin` | Deferred | Force-run GC reconciler (§5.12.2). Returns counts of removed layers and reclaimed bytes. |
+| `GET /admin/chat-sessions/{id}/events` | `superadmin` + owner | Deferred | Operator introspection of the event journal (§5.14). |
+| `POST /teams/{team}/templates` | team admin | **Shipped** | Create a team template editor session (§5.17). |
+| `POST /teams/{team}/templates/{id}/save` | team admin | **Shipped** | Save the editor session as the team template (§5.17). |
+| `POST /teams/{team}/templates/{id}/restore` | team admin | **Shipped** | Discard editor changes and reset to `@base` (§5.17). |
+| `DELETE /teams/{team}/templates/{id}` | team admin | **Shipped** | Delete the team template; reclaims layer bytes synchronously (§5.6, §5.17). |
 
 All endpoints are authenticated against the JWT / session middleware already in place. Scope-admin authority is derived from the caller's roles in the org/team schemas.
 
+### 5.16 Cross-replica session-registry consistency (Status: shipped)
+
+In a multi-replica API deployment, any pod must be able to read and update sandbox-session metadata that another pod created. The K8s backend keeps the running container in the cluster (already shared) but historically maintained the **session ↔ pod ↔ template binding** in a per-pod local JSON file. That broke as soon as Pod A created a session and Pod B tried to read it.
+
+**Symptom (live-reproduced).** Pod A's local registry had the row; Pod B's status-poll handler returned `Gone` because no record existed locally. The chat UI saw the session disappear during a normal interaction.
+
+**Resolution.** The team-template path now uses a pgstore-backed `SessionRegistry` that is shared across all replicas:
+
+- `pkg/store/pgstore/sandbox_sessions.go` implements `Put` / `Get` / `Delete` / `List` against `team_<slug>.sandbox_sessions`. The schema (migration `team/002`) keys on `session_id TEXT PRIMARY KEY`, with `template_id UUID NOT NULL` and `chat_session_id TEXT NOT NULL`.
+- `pkg/sandbox/backend_from_config.go::BackendFromAppConfigWithSessions(appCfg, *SessionRegistry)` constructs the K8s backend with the pgstore-backed registry injected.
+- `pkg/api/sandbox_backend.go::sandboxBackendForTeamTemplate` and `buildPGSessionRegistry` are the API-layer constructors that wire this up.
+- `template_id == "@base"` is rewritten to the well-known UUID at the pgstore boundary (§3.9) so the K8s backend never has to know about the schema's UUID requirement.
+
+**Scope of the fix.** The team-template editor path is converted; the chat session and fleet handler paths are not yet on the shared registry (a small Phase E follow-up — the same pattern, applied to `pkg/api/fleet_session_handlers.go` and the chat session creation handler).
+
+**Why pgstore (not LISTEN/NOTIFY).** Sessions are catalog state, not streaming events. A simple read-after-write store is enough; LISTEN/NOTIFY is reserved for the chat event journal (§5.14) where sub-second latency between producer and consumer matters.
+
+### 5.17 Team-template editor lifecycle (Status: shipped)
+
+Team admins customize team templates through a dedicated editor session. The flow is exposed through three buttons in the Studio UI (`web/src/components/TeamContainerTab.tsx` + `TeamContainerTerminal.tsx`); each maps to one shipped API endpoint.
+
+**Editor session pod.** When a team admin opens the editor, the API creates a sandbox session with:
+
+- `astonish.io/purpose=team-template-editor` (the only label that triggers RW mount of the layers PVC; see §5.2 / §5.3).
+- A normal layer chain anchored at `@base` (or at the current team-template top layer, when one exists).
+- Pod name `astn-sess-<sessionID>` like any other session.
+
+The editor session is a regular sandbox pod in every other respect: same image, same entrypoint, same overlay, same exec/files API.
+
+**Buttons (UI is the spec):**
+
+| UI button | API endpoint | Semantics |
+|---|---|---|
+| **Create** | `POST /teams/{team}/templates` | Always creates a fresh editor session anchored at `@base`. Existing team-template top layer is **not** carried over. |
+| **Save** | `POST /teams/{team}/templates/{id}/save` | Run `SaveSessionAsTemplate` on the editor session: tar-stream the upper layer, register the new layer + new top, swap `top_layer_id` on the team-template row, decrement ref_count on the previous top, reclaim layer bytes synchronously if ref_count reaches zero. |
+| **Restore** | `POST /teams/{team}/templates/{id}/restore` | Discard the editor session's upper. The next chat from this template starts from `@base` again. (Note: "Restore" resets to `@base`, **not** to the previous saved top — by design, because we want a clear path to "scrap and start over.") |
+| **Delete** | `DELETE /teams/{team}/templates/{id}` | Delete the team-template row, decrement ref_count, **synchronously** reclaim layer bytes via the GC pod (§5.6). The bytes are gone before the API returns. Editor sessions referencing this template are destroyed first. |
+
+**`reclaimLayerBytes` helper** (`pkg/api/team_template_handlers.go`):
+
+- Re-reads the layer row.
+- If `ref_count == 0`: calls `Backend.DeleteTemplate` (which spawns the GC pod) and then `layers.DeleteLayer` (PG row).
+- Skips `@base` and zero-byte layers.
+- Idempotent: safe to call from multiple paths.
+
+**`deleteTeamTemplateState` helper** removes the application-layer rows (template, session bindings, audit) in a single PG transaction.
+
+**Chroot shell wrapper.** The editor terminal (`pkg/api/sandbox_terminal.go`) connects via WebSocket and execs `astonish-shell` inside the pod. `astonish-shell` is a thin wrapper baked into the base image that:
+
+- Re-execs the trusted `astonish` binary inside the chroot (the same binary that runs as PID 1's payload).
+- Bind-mounts the host-layer binary over the overlay's wrapper so chroot entry and subsequent `Backend.Exec` tool calls resolve to the same trusted build.
+- Provides a stable command surface for the UI's "Open shell" button regardless of what the user has installed inside the overlay.
+
+**UI status polling.** The UI polls `/teams/{team}/templates/{id}/status` every 1.5 s for up to 30 s after Create, displaying "Starting container..." until the editor pod reports `Ready`. This cleanly handles the 5–15 s pod-create + entrypoint-setup window without the user staring at a blank terminal.
+
+**Failure handling.** Each endpoint is idempotent in the "destination state" sense: re-Save after a network error produces the same final layer (deduplicated via `ON CONFLICT DO NOTHING`); re-Delete on an already-deleted template returns 200/404 without leaking state. The backend never leaves the cluster + PVC + PG triple in an inconsistent state; if any step fails, the API returns the error and operators retry.
+
 ## 6. Configuration & Backend Selection
 
-### 6.1 Config schema additions
+### 6.1 Helm values (the authoritative shape)
 
-In `pkg/config/app_config.go`, extend `SandboxConfig`:
+The Helm chart at `deploy/helm/astonish/values.yaml` is the source of truth for sandbox configuration. The schema below documents the keys that drive the K8s backend; non-sandbox keys are unchanged.
 
 ```yaml
+# Namespace layout. One prefix drives all derived names; override
+# controlPlane / sandbox explicitly only when you need a non-derived name.
+namespaces:
+  prefix: astonish              # → controlPlane: astonish, sandbox: astonish-sandbox
+  controlPlane: ""              # "" → "{prefix}"
+  sandbox: ""                   # "" → "{prefix}-sandbox"
+
 sandbox:
   enabled: true
-  backend: incus                 # "incus" | "k8s"; default "incus"
-  privileged: false
+
+  # PodSecurity admission profile for the sandbox namespace.
+  # baseline    : production default; FUSE plugin OR userns path.
+  # privileged  : dev/lab only; required on LXC nodes.
+  # restricted  : not supported.
+  podSecurity: baseline
+
+  # Backend selector. Canonical Go token written into config.
+  # "k8s" (this chart) or "incus" (local dev).
+  backend: k8s
+
+  rbac:
+    create: true                # creates Role + RoleBinding in sandbox ns
+
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: dev                    # mutable tag → backend auto-uses Always
+    pullPolicy: IfNotPresent    # used for runtime pods; seed Job overrides
+
+  # Overlay strategy → one of the four privilege paths in §10.
+  overlay:
+    mode: fuse                  # "fuse" | "kernel" | "auto"
+    privileged: false           # true on dev clusters using in-container mknod
+    hostUsers: null             # null = omit; true/false = emit as-is
+    runtimeClassName: ""        # e.g. "sysbox-runc"
+    fuseDeviceResource: ""      # e.g. "smarter-devices/fuse"
+
+  # RWX PVCs. StorageClass MUST provide RWX (CephFS, NFS, EFS, Manila,
+  # Azure Files). Required.
+  storage:
+    storageClassName: ""        # REQUIRED — see docs/deployment/kubernetes.md
+    layers:
+      size: 100Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-layers
+    uppers:
+      size: 50Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-uppers
+
+  # Helm post-install/post-upgrade hook that seeds @base/rootfs from the
+  # sandbox image. Idempotency guard skips re-seeding when @base/rootfs
+  # is non-empty. See §5.6.
+  seed:
+    enabled: true
+    backoffLimit: 6
+    resources: { requests: { cpu: 100m, memory: 256Mi },
+                 limits:   { cpu: "1",  memory: 1Gi } }
+
+  # Per-session resource limits (cgroup ceiling) and scheduler reservations.
+  # Limits = burst ceiling per session.
+  # Requests = scheduler reservation (idle floor); zero → auto-derive
+  # (5 % CPU, 12.5 % memory of limit) for high session density.
   limits:
-    memory: "2GB"
     cpu: 2
-    processes: 500
-  network: bridged
+    memory: "2GB"               # accepts "2GB" or "2Gi"
+    processes: 500              # Incus-only; ignored by K8s
+  requests:
+    cpuMillis: 100              # 0 → auto-derive
+    memoryMiB: 256
 
-  # Backend-specific settings
-  incus:
-    # Existing fields (bridge name, image server, etc.) -- unchanged
-    remote:                       # optional; controls whether to use a remote Incus
-      address: ""                 # empty = local Unix socket
-      client_cert: ""
-      client_key: ""
-      server_cert: ""             # empty = InsecureSkipVerify (dev only)
-
-  k8s:
-    namespace: astonish-sandboxes
-    kubeconfig: ""                # empty = in-cluster service account
-    runtime_class: sysbox-runc
-    templates:
-      cephfs_path: /mnt/astonish-layers
-      uppers_cephfs_path: /mnt/astonish-uppers
-      base_image: schardosin/astonish-sandbox-base:v1
-    session:
-      upper_medium: emptyDir      # "emptyDir" | "localPV" | "tmpfs"
-      idle_evict_minutes: 10
-    networking:
-      org_network_mode: labels    # "labels" | "namespace-per-org" (future)
-      ingress_base_domain: ""     # e.g. "sandbox.astonish.example.com"
-    resources:
-      default_cpu: "1"
-      default_memory: "2Gi"
-      default_ephemeral_storage: "10Gi"
+# Optional FUSE device plugin DaemonSet (smarter-device-manager
+# reference). Only needed when sandbox.overlay.fuseDeviceResource is
+# set and the cluster does not already ship a plugin.
+fuseDevicePlugin:
+  enabled: false
+  namespace: kube-system
+  nodeSelector: { smarter-device-manager: enabled }
+  nummaxdevices: 20
 ```
+
+The chart renders these into `config.yaml` (mounted as ConfigMap `astonish-config`) under `config.sandbox.*`. The Go runtime reads the rendered config; the Helm sandbox block is the single source of truth.
 
 ### 6.2 Environment variable overrides
 
-- `ASTONISH_SANDBOX_BACKEND` -- overrides `sandbox.backend`.
-- `ASTONISH_K8S_NAMESPACE` -- overrides `sandbox.k8s.namespace`.
-- `ASTONISH_K8S_CEPHFS_PATH` -- overrides `sandbox.k8s.templates.cephfs_path`.
+- `ASTONISH_SANDBOX_BACKEND` — overrides `sandbox.backend`.
+- `ASTONISH_K8S_NAMESPACE` — overrides the sandbox namespace.
 
 ### 6.3 Selection logic
 
 - `pkg/launcher/studio.go` (personal mode): always instantiates `IncusBackend`, ignores `sandbox.backend`.
 - `pkg/daemon/run.go` (platform mode):
   - Reads `sandbox.backend`.
-  - If `k8s`: instantiate `K8sSandboxBackend`. Validates Kubernetes connectivity and CephFS mount at startup; refuses to serve sandbox requests if either fails.
+  - If `k8s`: instantiate `K8sBackend` via `pkg/sandbox/backend_from_config.go::BackendFromAppConfigWithSessions`. Validates Kubernetes connectivity and PVC mount at startup; refuses to serve sandbox requests if either fails.
   - If `incus` (default): instantiate `IncusBackend`.
 - Tests: instantiate `MockBackend` via injection.
 
-### 6.4 Personal mode invariants
+### 6.4 Image-pull policy auto-detection (Status: shipped)
 
-`astonish studio` **never** uses the K8s backend and **never** touches the Round 2 layer store, event journal, or template DAG. These invariants are type-system-enforced via `ErrUnsupported` returns from `filestore`:
+`pkg/sandbox/k8s/image.go::imagePullPolicy()` derives `imagePullPolicy` from the configured image reference at pod-build time:
+
+- Mutable tags (`dev`, `latest`, `edge`, `nightly`, `master`, `main`) → `Always`. Operators iterating on the sandbox image see new bytes on every pod create.
+- Immutable tags + digest pins (`@sha256:...`) → `IfNotPresent`. Production deployments pin a digest and pull once.
+
+The Helm seed Job hard-pins `IfNotPresent` regardless of the runtime auto-detection, because the Job represents an operator-driven version transition and must not silently re-pull mid-upgrade.
+
+When bumping a mutable tag like `:dev` in production, evict the node-level image cache (`crictl rmi <image>`) so the next pod create pulls the new bytes; otherwise containerd's GC will eventually pick it up but the timing is non-deterministic.
+
+### 6.5 Personal mode invariants
+
+`astonish studio` **never** uses the K8s backend and **never** touches the layer store, event journal, or template DAG. These invariants are type-system-enforced via `ErrUnsupported` returns from `filestore`:
 
 1. **Runtime backend is always Incus.** `pkg/launcher/studio.go` hard-codes `IncusBackend`; it never reads `sandbox.backend` from config. Decision Q7. Assumptions: local Incus (Unix socket on Linux; Docker+Incus sidecar on macOS/Windows); local filesystem for registries; no Kubernetes dependency.
-
 2. **Storage backend is always filestore.** Personal mode retains the JSON registries at `~/.local/share/astonish/sandbox/templates.json` and `sessions.json` via the existing `TemplateRegistry` and `SessionRegistry`. No PostgreSQL is required.
-
 3. **Templates remain flat.** The filestore template store ignores `ParentTemplateID` and `TopLayerID`; when the on-disk `TemplateMeta` grows these fields they are present but always `nil`/empty. Personal mode has no notion of a template DAG.
-
-4. **Scope degenerates to personal.** The `scope` enum value is `personal` for every template; there are no `org`/`team`/`global` templates. The default-template resolution cascade (personal > team > org > @base) collapses to "personal default".
-
+4. **Scope degenerates to personal.** The `scope` enum value is `personal` for every template; there are no `org`/`team`/`global` templates. The default-template resolution cascade collapses to "personal default".
 5. **`@base` is a platform-only concept.** Personal mode has no `@base` template and no `SaveAsBase` admin operation; the built-in bundled template fulfills the same role. The `superadmin` role and associated admin API surface (§5.15) do not exist in personal mode.
-
-6. **Layer store returns `ErrUnsupported`.** `filestore.LayerStore` returns `store.ErrUnsupported` for every method (`PutLayer`, `GetLayer`, `IncrementRefCount`, `DecrementRefCount`, `ListUnreferenced`, `DeleteLayer`). Personal-mode Incus save/load uses Incus snapshots (existing code path), which has no code path that calls into `LayerStore`.
-
-7. **Event journal returns `ErrUnsupported`.** `filestore.ChatEventJournal` returns `store.ErrUnsupported` for every method (`Append`, `ReadSince`, `LastSeq`). Cross-pod continuity is meaningless in a single-process personal deployment; SSE streams are served directly from in-memory state.
-
+6. **Layer store returns `ErrUnsupported`.** `filestore.LayerStore` returns `store.ErrUnsupported` for every method.
+7. **Event journal returns `ErrUnsupported`.** `filestore.ChatEventJournal` returns `store.ErrUnsupported` for every method.
 8. **No migration path personal → platform.** Decision Q8. Personal mode is a terminal deployment shape; there is no export of templates, sessions, or layers into a PostgreSQL-backed deployment.
 
 These invariants MUST hold for every Phase A change: any code added to `pkg/store/filestore/` under the Round 2 interfaces MUST either (a) preserve existing personal-mode behavior verbatim (for template reads via `TemplateRegistry`), or (b) return `store.ErrUnsupported` verbatim. Callers that need to differentiate between "feature disabled in personal mode" and other errors use `errors.Is(err, store.ErrUnsupported)`.
@@ -1036,9 +1204,11 @@ Retention: rows deleted on `chat_sessions` close (cascading via `ON DELETE CASCA
 Ref_count on `sandbox_layers` is maintained **transactionally** with template and session mutations. Enforcement is dual:
 
 - Application code explicitly `UPDATE platform.sandbox_layers SET ref_count = ref_count + 1 WHERE layer_id = ...` in the same transaction as the template/session INSERT or UPDATE.
-- A trigger on `sandbox_templates` and `sandbox_sessions` provides a backstop: any row insert / delete / top_layer_id change that is not matched by an explicit ref_count adjustment raises an exception. This prevents drift from application bugs.
+- Migration `platform/004_sandbox_ref_count_triggers.sql` ships a trigger backstop on `sandbox_templates` and `sandbox_sessions` that catches drift from application bugs. **Status: disabled by default in production** — installed but not active. Operators flip it on via `ALTER TRIGGER … ENABLE …` when they want forensic-grade enforcement; the application-layer ref-count writes are sufficient for steady-state correctness.
 
-GC runs when `ref_count = 0 AND created_at < now() - grace_period`; details in §5.12.
+GC runs synchronously from `DeleteTemplate` (§5.6 / §5.12.1); a deferred reconciler (§5.12.2) is on the roadmap.
+
+Migration `platform/005_seed_base_template.sql` inserts the `@base` row with the well-known UUID `a0000000-0000-4000-8000-000000000001`. The pgstore boundary normalizes `template_id == "@base"` to this UUID on write and rewrites it back on read (§3.9).
 
 ### 7.6 Store abstraction
 
@@ -1082,38 +1252,40 @@ The existing `sandbox.TemplateRegistry` / `sandbox.SessionRegistry` types become
 
 ## 8. Capability Parity Matrix
 
-| Capability | Incus backend | K8s+Sysbox backend |
+| Capability | Incus backend | K8s backend |
 |---|---|---|
-| CreateSession | `CreateInstance` | `CreatePod` (Sysbox) with overlay init |
+| CreateSession | `CreateInstance` | `CreatePod` (privilege path from §10) with overlay entrypoint + self-heal verification (§5.3) |
 | StartSession | `UpdateInstanceState(start)` | Recreate pod + restore evicted upper via tar stream |
-| StopSession | `UpdateInstanceState(stop)` | Stream upper to CephFS via tar+zstd + delete pod |
+| StopSession | `UpdateInstanceState(stop)` | Stream upper to uppers PVC via tar+zstd + delete pod |
 | **DestroySession (container + data)** | `DeleteInstance` + overlay cleanup | Delete pod + remove persisted upper |
 | SessionState | `GetInstanceState` | K8s pod phase |
 | Exec (non-interactive) | `ExecInstance` | `remotecommand` (SPDY) |
-| Exec interactive (PTY + resize) | WebSocket + resize | SPDY + `TerminalSize` channel |
+| Exec interactive (PTY + resize) | WebSocket + resize | SPDY + `TerminalSize` channel; chroot wrapper for editor terminals (§5.17) |
 | PushFile / PullFile | Incus Files API | tar-over-exec |
 | List containers | `GetInstances` by prefix | `ListPods` by labels |
-| CreateTemplate | `CreateInstance` + snapshot | Template-builder pod + tar-stream to CephFS |
+| CreateTemplate | `CreateInstance` + snapshot | Template-builder pod + tar-stream to layers PVC |
 | **SaveSessionAsTemplate (no registry push)** | rsync upper + Incus snapshot | sha256-addressed tar-stream of upper to `platform.sandbox_layers` (auto-dedup) |
-| RefreshTemplate | rebuild + replace snapshot | rebuild against current parent chain; atomic `top_layer_id` swap with version CAS |
-| DeleteTemplate | `DeleteInstance` (tpl) | PG row delete + ref_count decrement; layer GC'd later if unreferenced |
+| **DeleteTemplate** | `DeleteInstance` (tpl) | PG row delete + ref_count decrement + **synchronous GC pod** that `rm -rf`s the layer dir before returning (§5.6) |
+| RefreshTemplate | rebuild + replace snapshot | Stub — returns "not yet implemented" (§5.6) |
 | Org network isolation | Per-org bridge + profile | Labels + NetworkPolicy |
 | ExposePort | Incus device + proxy | Service + Ingress |
 | UnexposePort | remove device | delete Service |
 | Tunnel to service in container | socat via exec | socat via exec (identical) |
 | Fleet containers | `astn-fleet-` prefix | `astonish.io/type=fleet` label |
-| Session pinning | Registry field | Registry field |
+| Session pinning | Registry field | Registry field (pgstore-backed; §5.16) |
 | Orphan pruning | registry vs Incus list | registry vs K8s list |
-| Idle timeout | Prune logic | Prune logic + evict-to-CephFS via tar stream |
+| Idle timeout | Prune logic | Prune logic + evict-to-uppers-PVC via tar stream (eviction concurrency: §10) |
 | UI container list | Incus `ListInstances` + registry | K8s `ListPods` + registry |
 | Binary hash staleness | Registry field | Registry field |
 | Template inheritance chain | `based_on` chain (per-host JSON) | `parent_template_id` DAG in PG, composed as ordered lowerdirs |
-| Multi-lowerdir mount depth | N/A (single-host Incus snapshot) | Up to `maxChainDepth` (default 20); flatten job beyond |
+| Multi-lowerdir mount depth | N/A (single-host Incus snapshot) | Up to `maxChainDepth` (default 20); flatten job beyond (deferred) |
 | Layer dedup across templates/sessions | None (every template is its own tree) | Content-addressed by sha256; `ON CONFLICT DO NOTHING` on layer insert |
-| Layer lifecycle | Implicit (Incus manages snapshots) | PG ref_count + leader-elected GC reconciler with grace period |
-| Default template resolution | Per-host default | Cascade: personal > team > org > `@base` (§5.13) |
+| Layer lifecycle | Implicit (Incus manages snapshots) | PG ref_count + synchronous GC pod (shipped) + deferred reconciler (planned) |
+| Default template resolution | Per-host default | Currently `@base` direct; cascading resolver deferred (§5.13) |
+| Cross-replica session catalog | N/A (single host) | pgstore-backed registry shared across API pods (§5.16, shipped for team-template path) |
 | Cross-pod session attach (short exec) | N/A (single host) | Any pod → `pods/exec` on any session |
-| Cross-pod chat-stream continuation | N/A | PG event journal + LISTEN/NOTIFY + per-chat advisory lock (§5.14) |
+| Cross-pod chat-stream continuation | N/A | PG event journal + LISTEN/NOTIFY + per-chat advisory lock (§5.14, designed; not yet implemented) |
+| Team-template editor lifecycle | N/A | Create / Save / Restore / Delete with synchronous byte reclamation (§5.17, shipped) |
 
 No capability lost. Multiple new platform-mode capabilities gained (content dedup, DAG inheritance, cross-pod attach, event-journal replay).
 
@@ -1124,12 +1296,12 @@ These guarantees are identical across both backends.
 ### On session delete
 
 - **Incus:** `DeleteInstance(--force)` removes container, overlay upper directory, volatile state. Registry row deleted.
-- **K8s:** `DeletePod` triggers containerd overlay unmount and `emptyDir` cleanup. If previously evicted, `rm -rf /mnt/astonish-uppers/<id>/` removes the persisted `upper.tar.zst`. Registry row deleted.
+- **K8s:** `DeletePod` triggers containerd overlay unmount and `emptyDir` cleanup. If previously evicted, `rm -rf /mnt/astonish-uppers/<id>/` removes the persisted `upper.tar.zst`. Registry row deleted from `team_<slug>.sandbox_sessions`.
 
 ### On template delete
 
 - **Incus:** `DeleteInstance` on template container + remove overlay base dir.
-- **K8s:** template row deleted from `platform.sandbox_templates` + ref_count decrement on `top_layer_id`. Layer's CephFS directory `/mnt/astonish-layers/<layer_id>/` is removed by the GC reconciler (§5.12) once ref_count reaches zero and grace period elapses -- content survives as long as anything else (another template, an evicted session's upper_layer_id) still references it.
+- **K8s:** template row deleted from `platform.sandbox_templates` + ref_count decrement on `top_layer_id`. Layer's directory `/mnt/astonish-layers/<layer_id>/` is removed by the **synchronous GC pod** (§5.6) before `DeleteTemplate` returns when ref_count reaches zero. Content survives as long as anything else (another template, an evicted session's upper_layer_id) still references it.
 
 ### On org delete (cascade)
 
@@ -1139,12 +1311,12 @@ These guarantees are identical across both backends.
 ### On idle timeout
 
 - **Incus:** existing prune logic (stop + reap).
-- **K8s:** evict (tar-stream upper to CephFS + delete pod); session row status -> `evicted`. See §10 for eviction concurrency controls.
+- **K8s:** evict (tar-stream upper to the uppers PVC + delete pod); session row status -> `evicted`. See §10 for eviction concurrency controls.
 
 ### On orphan prune
 
 - **Incus:** compare registry vs `GetInstances` by prefix; destroy orphans.
-- **K8s:** compare registry vs `ListPods` by labels; destroy orphans (pod delete, CephFS upper cleanup).
+- **K8s:** compare registry (pgstore) vs `ListPods` by labels; destroy orphans (pod delete, uppers PVC cleanup).
 
 **Invariant:** no code path deletes an Astonish entity without also deleting its backing sandbox resource. No backend implements any "soft delete." Every `DestroySession` / `DeleteTemplate` returns only after cleanup is complete and verified.
 
@@ -1152,8 +1324,8 @@ These guarantees are identical across both backends.
 
 All tar-stream operations (eviction, resume, CreateTemplate, SaveSessionAsTemplate, bootstrap) MUST preserve:
 
-- **Numeric UID/GID** (`--numeric-owner`) -- Sysbox uses user-namespace remapping; textual name lookups across the CephFS mount would not resolve correctly.
-- **Extended attributes and ACLs** (`--xattrs --acls`) -- required to keep `security.capability`, SELinux labels, and POSIX ACLs set by apt/dpkg or user software.
+- **Numeric UID/GID** (`--numeric-owner`) — user-namespaced pods remap UID/GID; textual name lookups across the shared PVC would not resolve correctly.
+- **Extended attributes and ACLs** (`--xattrs --acls`) — required to keep `security.capability`, SELinux labels, and POSIX ACLs set by apt/dpkg or user software.
 - **Symlinks** preserved literally (never dereferenced).
 - **Sparse files** preserved where space saving is material (GNU tar `--sparse`; enabled on a per-profile basis if profiling shows benefit).
 - **Hard links** preserved (default GNU tar behavior).
@@ -1167,22 +1339,24 @@ The prebuilt `astonish-sandbox-base` image MUST ship GNU tar with xattr/ACL supp
 1. **Kubernetes cluster** with a self-managed node pool. Managed offerings that forbid DaemonSet-based node installs (GKE Autopilot, EKS Fargate, AKS virtual nodes) are **not supported**.
 2. **An overlay strategy.** Pick one of the four paths below; all are supported by the same backend binary and the same base image — the operator's only decision is which pod-security path fits the cluster.
 
-   | # | Strategy | `sandbox.kubernetes.*` config | What the cluster needs |
-   |---|----------|-------------------------------|------------------------|
-   | 1 | **Device plugin** (recommended production path) | `overlay_mode: fuse`, `fuse_device_resource: smarter-devices/fuse` | FUSE device plugin DaemonSet (chart ships `fuseDevicePlugin.enabled: true`); PSA `baseline` on the sandbox namespace. |
-   | 2 | **User namespace** | `overlay_mode: kernel`, `host_users: false` | K8s 1.33+ (beta-on) or 1.36+ (GA) with UserNamespacesSupport enabled; kernel 5.11+. PSA `baseline`. |
-   | 3 | **Privileged** (dev / lab) | `overlay_mode: fuse`, `privileged_pods: true` | PSA `privileged` on the sandbox namespace (set `sandbox.podSecurity: privileged` in values). No device plugin required. |
-   | 4 | **Sysbox** (optional) | `overlay_mode: kernel`, `runtime_class_name: sysbox-runc` | Sysbox installed on sandbox nodes (`sysbox-deploy-k8s`). Kept for operators who already run Sysbox. |
+   | # | Strategy | `sandbox.overlay.*` config | What the cluster needs | Status |
+   |---|----------|----------------------------|------------------------|--------|
+   | 1 | **Device plugin** (recommended production path) | `mode: fuse`, `fuseDeviceResource: smarter-devices/fuse` | FUSE device plugin DaemonSet (chart ships `fuseDevicePlugin.enabled: true`); PSA `baseline` on the sandbox namespace. | Supported |
+   | 2 | **User namespace** | `mode: kernel`, `hostUsers: false` | K8s 1.33+ (beta-on) or 1.36+ (GA) with UserNamespacesSupport enabled; kernel 5.11+. PSA `baseline`. | Supported |
+   | 3 | **Privileged** (current default for dev / Proxmox-LXC) | `mode: fuse`, `privileged: true` | PSA `privileged` on the sandbox namespace (set `sandbox.podSecurity: privileged` in values). No device plugin required. | Supported (current production default for the dev cluster) |
+   | 4 | **Sysbox** (optional) | `mode: kernel`, `runtimeClassName: sysbox-runc` | Sysbox installed on sandbox nodes (`sysbox-deploy-k8s`). Kept for operators who already run Sysbox. | Supported |
 
 3. **Shared RWX filesystem** reachable via a RWX StorageClass (mounted into pods through the `astonish-layers` and `astonish-uppers` PVCs).
    - CephFS, NFS, EFS, Azure Files, Manila (SAP Converged Cloud), or any RWX provisioner with POSIX semantics.
    - Must support extended attributes, symlinks, and ACLs.
    - SAP Converged Cloud note: no default RWX class; provision via Manila or an NFS server and set `sandbox.storage.storageClassName` in your Helm values file.
-4. **PostgreSQL database** (already required by platform mode; see `docs/architecture/multi-tenant-platform.md`). LISTEN/NOTIFY and advisory locks are used by the event journal (§5.14) and GC reconciler (§5.12); both are core PG features, no extensions required.
+4. **PostgreSQL database** (already required by platform mode; see `docs/architecture/multi-tenant-platform.md`). LISTEN/NOTIFY and advisory locks are used by the chat event journal (§5.14, design) and any future deferred GC reconciler (§5.12.2); both are core PG features, no extensions required.
 5. **Node kernel** supports overlayfs (kernel path) or FUSE (fuse path). Linux ≥ 5.15 covers both; userns + `overlay -o userxattr` needs ≥ 5.11.
    - `overlay.max_lower` ≥ `sandbox.layers.maxChainDepth` (default 20). Distro defaults (500) are comfortably above; only an issue if an operator has tuned this down.
    - **Nested LXC nodes** (Proxmox dev clusters): kernel `mount -t overlay` is blocked regardless of in-container privileges. Use path 3 (Privileged + fuse).
 6. **Ingress controller** (optional, only for external port exposure from sandboxes). Ingress sticky sessions are **not** required for correctness in multi-pod Astonish (event journal §5.14 eliminates pod affinity); still permitted for latency reasons.
+
+**Image-pull policy auto-detection.** `pkg/sandbox/k8s/image.go::imagePullPolicy()` derives `imagePullPolicy` per pod build: mutable tags (`dev`, `latest`, `edge`, `nightly`, `master`, `main`) → `Always`; digest pins and immutable tags → `IfNotPresent`. The Helm seed Job hard-pins `IfNotPresent` regardless. When iterating on a mutable tag like `:dev` in production, evict the kubelet's image cache (`crictl rmi <image>`) on each node so the next pod create pulls fresh bytes. See §6.4.
 
 ### Astonish ships
 
@@ -1200,19 +1374,19 @@ The prebuilt `astonish-sandbox-base` image MUST ship GNU tar with xattr/ACL supp
 
 ### Eviction concurrency and backpressure
 
-Mass idle-eviction of many sessions concurrently can saturate the CephFS metadata servers with simultaneous tar-stream writers, even though each individual writer is sequential. The eviction reconciler implements four controls:
+Mass idle-eviction of many sessions concurrently can saturate the underlying RWX filesystem's metadata path (CephFS MDS / NFS server / EFS metadata) with simultaneous tar-stream writers, even though each individual writer is sequential. The eviction reconciler implements four controls:
 
 - **Bounded worker pool.** `sandbox.k8s.maxConcurrentEvictions` (default `8`) caps the number of parallel tar streams. Excess evictions queue behind the pool.
 - **Jittered scheduling.** Sessions past the idle threshold are not all dispatched in the same reconcile tick; the reconciler spreads them over the reconcile window (default 30 s) with randomized offsets to avoid thundering-herd behavior.
-- **Backpressure signal.** If CephFS write-latency p99 exceeds a configurable threshold (`sandbox.k8s.cephfsBackpressureP99Ms`, default `500`), new evictions pause until latency recovers. Latency is measured by a lightweight probe writing a small file each reconcile tick.
-- **Priority ordering.** Smaller sessions (by persisted upper size; approximated from `emptyDir` usage) are evicted first; the largest sessions drain into CephFS last to prevent head-of-line blocking during storms.
+- **Backpressure signal.** If RWX-write-latency p99 exceeds a configurable threshold (`sandbox.k8s.fsBackpressureP99Ms`, default `500`), new evictions pause until latency recovers. Latency is measured by a lightweight probe writing a small file each reconcile tick.
+- **Priority ordering.** Smaller sessions (by persisted upper size; approximated from `emptyDir` usage) are evicted first; the largest sessions drain into the uppers PVC last to prevent head-of-line blocking during storms.
 
-These controls apply symmetrically to `SaveSessionAsTemplate` operations during load spikes, though template saves are expected to be infrequent (human-driven UX events) and normally dominate neither queue depth nor MDS load.
+These controls apply symmetrically to `SaveSessionAsTemplate` operations during load spikes, though template saves are expected to be infrequent (human-driven UX events) and normally dominate neither queue depth nor metadata-path load.
 
 Metrics exposed in Phase E:
 - `astonish_sandbox_evictions_inflight`
 - `astonish_sandbox_eviction_queue_depth`
-- `astonish_sandbox_cephfs_write_latency_p99_ms`
+- `astonish_sandbox_layers_write_latency_p99_ms`
 - `astonish_sandbox_eviction_backpressure_active` (gauge, 0/1)
 
 ## 11. Phasing & Rollout
@@ -1247,7 +1421,7 @@ Extract `SandboxBackend` interface and wrap existing Incus implementation.
 
 ### Phase C -- K8s backend implementation (~5 weeks)
 
-Build `K8sSandboxBackend` plus the layer store, GC, default-template resolver, event journal, and admin API.
+Build `K8sBackend` plus the layer store, GC, default-template resolver, event journal, and admin API.
 
 - `pkg/sandbox/k8s/backend.go` -- wiring and config
 - `pkg/sandbox/k8s/session.go` -- pod lifecycle (multi-lowerdir mount from layer chain), eviction/resume
@@ -1333,6 +1507,41 @@ Deferred to Phase E (intentionally out of scope for Phase D):
 
 ~8-12 weeks of focused work for a complete Phase A--E rollout (Round 2 adds layer store, GC, event journal, default-template resolver, admin API). Phases A and B are prerequisites; Phase C is the main effort; D and E are polish.
 
+### Phase F — Production hardening (current branch)
+
+Status: shipped on `feature/sandbox-k8s-backend` (commits `4fa7ed6`, `cee00c8`, `406e080`, `c05af10`, `21818e3`, `60cc143`, `c256a49`, `6d0eed4`).
+
+**Shipped:**
+
+- Four-path overlay strategy (FUSE plugin / userns / privileged / Sysbox) selectable via `sandbox.overlay.*`. Same backend binary, same base image (§10).
+- `pkg/sandbox/k8s/overlay_entrypoint.go`: PID-1 entrypoint with single-emptyDir, pre-seeded first-level dirs, `fuse-overlayfs` `squash_to_root`, kernel-FS bind, `/etc/resolv.conf` bind, chroot at `/sandbox/rootfs` (§5.3).
+- Helm post-install/post-upgrade `{release}-sandbox-seed` hook with idempotency guard (§5.6).
+- Synchronous `DeleteTemplate` GC pod (`astn-layer-gc-<id>`) that reclaims layer bytes before returning (§5.6 / §5.12.1).
+- `pkg/sandbox/k8s/image.go::imagePullPolicy()` auto-detection (mutable tags → `Always`; immutable tags / digests → `IfNotPresent`) (§6.4).
+- `CreateSession` self-heal — re-verifies pod existence before returning a cached registry entry (§5.3).
+- pgstore-backed `SessionRegistry` for the team-template path; cross-replica session catalog consistency (§5.16).
+- `@base` UUID normalization at the pgstore boundary (`a0000000-0000-4000-8000-000000000001`) (§3.9, §7).
+- Migration `platform/005_seed_base_template.sql` (seeds `@base` row).
+- Migration `platform/004_sandbox_ref_count_triggers.sql` (installed disabled-by-default).
+- Team-template editor lifecycle: Create / Save / Restore / Delete with synchronous reclamation, `astonish-shell` chroot wrapper, 1.5 s status polling up to 30 s (§5.17).
+- Single Helm chart at `deploy/helm/astonish` covering both control plane and sandbox; configurable hyphen-only DNS-1123 namespace prefix (§6.1).
+- `Makefile` fast targets: `push-dev-fast`, `push-sandbox-base-dev-fast`, `push-incus-dev-fast`, `push-all-dev-fast` (auto-detect `DEV_ARCH`).
+- `apt` cosmetic-warning fix baked into the base image's `/etc/apt/apt.conf.d/00no-sandbox`; carried into `@base` deterministically by the seed Job.
+
+**Still open (Phase F+ / E):**
+
+- Cross-replica consistency for the **fleet** session path (`pkg/api/fleet_session_handlers.go:341-357`) and the chat-session creation handler. The pattern from §5.16 applies; small follow-up.
+- Persisted upper-tarball GC under `/mnt/astonish-uppers/` (currently relies on the `DestroySession` path to clean up; orphaned tar.zst from out-of-band pod kills are not actively reclaimed).
+- Cascading default-template resolution (§5.13 — currently resolves directly to `@base`).
+- `RefreshTemplate` implementation (§5.6 — currently returns "not yet implemented").
+- Deferred GC reconciler (§5.12.2) — synchronous reclamation covers the operator-driven path; the reconciler is the safety net for orphans and refcount drift.
+- Layer-chain flatten job (§5.11).
+- `meta.json` per-layer sidecar (§5.11).
+- Default-template setter API endpoints (§5.15 — `PUT /users/me/default-template` etc.).
+- `chat_session_events` event journal (§5.14) — designed; producer + consumer plumbing not yet implemented.
+- Automatic cascade of template refreshes when a parent changes — explicitly **not** implemented; design calls for explicit `RefreshTemplate` invocation only (see §5.6 and §13).
+- Broader cloud-clean state sweep: any remaining file-based per-pod state in API replicas (Phases 1.A / 2 / 3 of the cloud-clean audit).
+
 ## 12. Testing Strategy
 
 ### Unit
@@ -1414,7 +1623,7 @@ Minor decisions that do not affect the overall design and will be resolved durin
 
 If median session-creation latency on the K8s backend becomes a UX complaint, a pre-warmed pod pool can be introduced **without** changing the `SandboxBackend` interface: `CreateSession` may, at the K8s backend's discretion, acquire a pre-created pod from a pool and rebind its labels/annotations rather than create-from-scratch. Callers remain unaware.
 
-Current expectation: Astonish sessions are minutes-to-hours scale (human chat flows), so just-in-time pod creation is adequate. The interface is deliberately written so pool sizing, pre-warm lifecycle, idle timeouts on pool members, and leak detection can be added later as an internal implementation concern of `K8sSandboxBackend`. No other package or API needs to change.
+Current expectation: Astonish sessions are minutes-to-hours scale (human chat flows), so just-in-time pod creation is adequate. The interface is deliberately written so pool sizing, pre-warm lifecycle, idle timeouts on pool members, and leak detection can be added later as an internal implementation concern of `K8sBackend`. No other package or API needs to change.
 
 Triggers that would motivate adding the warm pool:
 - p50 `CreateSession` latency > 3 s sustained.

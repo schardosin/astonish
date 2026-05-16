@@ -153,6 +153,16 @@ func (m *mockLayerStore) ListUnreferenced(_ context.Context, _ time.Duration) ([
 	return nil, nil
 }
 
+func (m *mockLayerStore) ListAll(_ context.Context) ([]*store.SandboxLayer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []*store.SandboxLayer
+	for _, l := range m.layers {
+		out = append(out, l)
+	}
+	return out, nil
+}
+
 func (m *mockLayerStore) DeleteLayer(_ context.Context, layerID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

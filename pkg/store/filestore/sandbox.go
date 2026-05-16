@@ -188,6 +188,9 @@ func (unsupportedLayerStore) DecrementRefCount(context.Context, string) error {
 func (unsupportedLayerStore) ListUnreferenced(context.Context, time.Duration) ([]*store.SandboxLayer, error) {
 	return nil, store.ErrUnsupported
 }
+func (unsupportedLayerStore) ListAll(context.Context) ([]*store.SandboxLayer, error) {
+	return nil, store.ErrUnsupported
+}
 func (unsupportedLayerStore) DeleteLayer(context.Context, string) error {
 	return store.ErrUnsupported
 }

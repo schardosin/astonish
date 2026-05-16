@@ -36,9 +36,7 @@ namespaces:
 # Secrets (rotate for real deployments)
 # ------------------------------------------------------------------
 secrets:
-  masterKey: "684d3dc0b9f0ed4a3189d26c32c80a22bdaa59f1d7a0755d8203ab3b44298de2"
-  jwtSecret: "a1f142e5db71f7b5d7f73c8e9911c79ffcdf1af9558010da3fa7d0ab4a760afd"
-  platformDSN: "postgres://postgres:554252@192.168.1.196:5432/astonish_wjw3p6_platform?sslmode=disable"
+  existingSecret: "astonish-secrets"
 
 # ------------------------------------------------------------------
 # Non-sandbox config
@@ -46,7 +44,7 @@ secrets:
 config:
   storage:
     postgres:
-      instanceSuffix: "wjw3p6"
+      instanceSuffix: "dxmtlc"
 
 # ------------------------------------------------------------------
 # Ingress (nginx on the dev cluster)

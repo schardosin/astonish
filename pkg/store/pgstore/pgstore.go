@@ -547,3 +547,72 @@ func (p *pgPersonalDataStore) Flows() store.FlowStore {
 func (p *pgPersonalDataStore) Credentials() store.CredentialStore {
 	return &pgCredentialStore{pool: p.pool, schema: p.schema(), encKey: p.credKey, userID: p.userID}
 }
+
+// ---------------------------------------------------------------------------
+// Sandbox audit helpers
+// ---------------------------------------------------------------------------
+
+// ListTeamSchemas returns all team schemas across all active orgs.
+// Each entry is "org_slug:schema_name" so callers can reconstruct the pool.
+func (s *PGStore) ListTeamSchemas(ctx context.Context) ([]string, error) {
+	platformPool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := platformPool.Query(ctx, `SELECT slug FROM organizations WHERE status = 'active'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orgSlugs []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			return nil, err
+		}
+		orgSlugs = append(orgSlugs, slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	var schemas []string
+	for _, orgSlug := range orgSlugs {
+		pool, err := s.poolMgr.OrgPool(ctx, orgSlug)
+		if err != nil {
+			continue
+		}
+		schemaRows, err := pool.Query(ctx,
+			`SELECT schema_name FROM information_schema.schemata
+			 WHERE schema_name LIKE 'team_%'
+			 ORDER BY schema_name`)
+		if err != nil {
+			continue
+		}
+		for schemaRows.Next() {
+			var name string
+			if err := schemaRows.Scan(&name); err != nil {
+				continue
+			}
+			schemas = append(schemas, orgSlug+":"+name)
+		}
+		schemaRows.Close()
+	}
+	return schemas, nil
+}
+
+// SandboxSessionsForSchema returns a SandboxSessionStore for the given
+// "org_slug:schema_name" key. Used by the sandbox-audit command.
+func (s *PGStore) SandboxSessionsForSchema(key string) store.SandboxSessionStore {
+	parts := strings.SplitN(key, ":", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	orgSlug, schema := parts[0], parts[1]
+	pool, err := s.poolMgr.OrgPool(context.Background(), orgSlug)
+	if err != nil {
+		return nil
+	}
+	return NewPGSandboxSessionStore(pool, schema)
+}

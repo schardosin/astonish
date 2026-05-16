@@ -166,6 +166,34 @@ func (s *pgLayerStore) ListUnreferenced(ctx context.Context, grace time.Duration
 	return out, rows.Err()
 }
 
+func (s *pgLayerStore) ListAll(ctx context.Context) ([]*store.SandboxLayer, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT layer_id, parent_layer, cephfs_path, size_bytes, ref_count,
+		        COALESCE(created_by::text, ''), added_at, last_referenced
+		   FROM sandbox_layers
+		  ORDER BY added_at ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []*store.SandboxLayer
+	for rows.Next() {
+		layer := &store.SandboxLayer{}
+		var parent *string
+		if err := rows.Scan(
+			&layer.LayerID, &parent, &layer.CephFSPath, &layer.SizeBytes, &layer.RefCount,
+			&layer.CreatedBy, &layer.AddedAt, &layer.LastReferenced,
+		); err != nil {
+			return nil, err
+		}
+		layer.ParentLayer = parent
+		out = append(out, layer)
+	}
+	return out, rows.Err()
+}
+
 func (s *pgLayerStore) DeleteLayer(ctx context.Context, layerID string) error {
 	// Reject deletion of referenced layers to surface bookkeeping bugs.
 	var refCount int

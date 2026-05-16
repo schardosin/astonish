@@ -254,6 +254,7 @@ func TestBuildCaptureScript_ContainsCanonicalPipeline(t *testing.T) {
 	s := buildCaptureScript("/mnt/astonish-layers", "bid-123")
 	mustContain := []string{
 		"set -e",
+		"trap 'rm -rf \"$STAGING\"' EXIT",
 		"/mnt/astonish-layers/__staging-bid-123",
 		"tar --numeric-owner --xattrs --acls --sort=name --mtime=@0",
 		"/var/astonish/overlay/upper",

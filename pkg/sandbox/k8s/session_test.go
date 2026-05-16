@@ -28,6 +28,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -677,6 +678,65 @@ func TestDestroySession_Idempotent(t *testing.T) {
 	if err := b.DestroySession(context.Background(), "never-existed"); err != nil {
 		t.Errorf("DestroySession on absent session should succeed, got %v", err)
 	}
+}
+
+func TestDestroySession_CleansUpEvictedUpper(t *testing.T) {
+	b, _ := newBackendWithFakeClient(t)
+	ctx := context.Background()
+
+	// Install reactor to auto-complete upper-gc pods.
+	autoCompleteUpperGCPods(t, b)
+
+	// Create and then stop (evict) a session.
+	if _, err := b.CreateSession(ctx, sandbox.SessionSpec{SessionID: "s-evict", TemplateID: "t1"}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := b.StopSession(ctx, "s-evict"); err != nil {
+		t.Fatalf("StopSession: %v", err)
+	}
+
+	// Verify session is evicted.
+	rec, _ := b.sessions.GetSession("s-evict")
+	if rec == nil || rec.State != store.SandboxSessionStateEvicted {
+		t.Fatalf("expected evicted state, got %+v", rec)
+	}
+
+	// DestroySession should spawn an upper-gc pod.
+	if err := b.DestroySession(ctx, "s-evict"); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+
+	// Verify registry row is gone.
+	if rec, _ := b.sessions.GetSession("s-evict"); rec != nil {
+		t.Errorf("registry record should be gone, still present: %+v", rec)
+	}
+}
+
+// autoCompleteUpperGCPods installs a reactor that transitions upper-gc pods
+// to Succeeded on create.
+func autoCompleteUpperGCPods(t *testing.T, b *K8sBackend) {
+	t.Helper()
+	fakeCS, ok := b.client.(interface {
+		PrependReactor(verb, resource string, r clientgotesting.ReactionFunc)
+	})
+	if !ok {
+		t.Fatalf("client does not support PrependReactor")
+	}
+	fakeCS.PrependReactor("create", "pods", func(action clientgotesting.Action) (bool, runtime.Object, error) {
+		ca, ok := action.(clientgotesting.CreateAction)
+		if !ok {
+			return false, nil, nil
+		}
+		pod, ok := ca.GetObject().(*corev1.Pod)
+		if !ok {
+			return false, nil, nil
+		}
+		if pod.Labels[labelType] != "upper-gc" {
+			return false, nil, nil
+		}
+		pod.Status.Phase = corev1.PodSucceeded
+		return false, nil, nil
+	})
 }
 
 // ---------------------------------------------------------------------------

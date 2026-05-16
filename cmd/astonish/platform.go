@@ -47,6 +47,8 @@ func handlePlatformCommand(args []string) error {
 		return handlePlatformInit(args[1:])
 	case "gen-secret":
 		return handlePlatformGenSecret()
+	case "sandbox-audit":
+		return handlePlatformSandboxAudit(args[1:])
 	case "status":
 		return handlePlatformStatus(args[1:])
 	case "org":
@@ -1196,6 +1198,7 @@ func printPlatformUsage() {
 	fmt.Println("commands:")
 	fmt.Println("  init              Initialize the platform database")
 	fmt.Println("  gen-secret        Generate a random secret (for masterKey or jwtSecret)")
+	fmt.Println("  sandbox-audit     Audit sandbox PVCs for orphaned data")
 	fmt.Println("  status            Show platform status and counts")
 	fmt.Println("  org               Manage organizations")
 	fmt.Println("  user              Manage users")

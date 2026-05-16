@@ -29,6 +29,7 @@ import (
 	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
@@ -1291,6 +1292,39 @@ func Run(cfg RunConfig) error {
 				}
 			}
 		}()
+	}
+
+	// Start sandbox GC reconciler in platform mode with K8s backend.
+	// Periodically reclaims orphan layers, uppers, and staging directories.
+	if pgStore != nil && sandbox.BackendKind(appCfg.Sandbox.BackendKind()) == sandbox.BackendKindK8s {
+		platformPool, poolErr := pgStore.PoolManager().PlatformPool(ctx)
+		if poolErr == nil {
+			cs, _, csErr := k8sbackend.NewClientFromOptions(k8sbackend.LoadConfigOptions{
+				KubeconfigPath: appCfg.Sandbox.Kubernetes.KubeconfigPath,
+				Context:        appCfg.Sandbox.Kubernetes.Context,
+				InCluster:      appCfg.Sandbox.Kubernetes.InCluster,
+			})
+			if csErr == nil {
+				gcNamespace := appCfg.Sandbox.Kubernetes.Namespace
+				if gcNamespace == "" {
+					gcNamespace = "astonish-sandbox"
+				}
+				go k8sbackend.RunGCReconciler(ctx, k8sbackend.GCReconcilerConfig{
+					Interval:         time.Hour,
+					LayerGracePeriod: 24 * time.Hour,
+					UpperGracePeriod: time.Hour,
+					Namespace:        gcNamespace,
+					LayersPVCName:    appCfg.Sandbox.Kubernetes.LayersPVCName,
+					UppersPVCName:    appCfg.Sandbox.Kubernetes.UppersPVCName,
+					Client:           cs,
+					PlatformPool:     platformPool,
+					PGStore:          pgStore,
+					Layers:           pgStore.SandboxLayers(),
+				})
+			} else {
+				logger.Printf("[gc-reconciler] Failed to create K8s client: %v (GC reconciler disabled)", csErr)
+			}
+		}
 	}
 
 	// Create and start the Studio server

@@ -939,14 +939,16 @@ No changes. If `storage.backend` is `file` (default), everything works exactly a
 ```bash
 # 1. Deploy PostgreSQL with pgvector extension
 
-# 2. Configure storage backend
+# 2. Initialize platform (generates suffix + creates database)
+astonish platform init --host localhost --user postgres --password secret
+# Output includes the platformDSN and instanceSuffix to use below.
+
+# 3. Configure storage backend (values from platform init output)
 storage:
   backend: postgres
   postgres:
-    platform_dsn: "postgres://admin:pass@host:5432/astonish_platform"
-
-# 3. Initialize platform
-astonish platform init
+    platform_dsn: "postgres://postgres:secret@localhost:5432/astonish_a1b2c3_platform?sslmode=prefer"
+    instance_suffix: "a1b2c3"
 
 # 4. Create first organization
 astonish platform org create --name "My Company" --slug my-company
@@ -1248,7 +1250,7 @@ The user is prompted (in Studio UI or CLI) to either migrate or start fresh. Mig
 - **UI restart requirement:** When Platform mode is configured via the UI Setup Wizard, the daemon must restart to switch from file-backed to PostgreSQL-backed mode. The UI shows "Restart Required" after successful initialization.
 - **API guard:** `POST /api/platform/init` only works when the system is NOT already in platform mode
 
-**Shared Bootstrap Logic:** `pgstore.BootstrapPlatform(ctx, adminDSN)` — used by CLI wizard, `platform init` CLI command, daemon auto-init, and `POST /api/platform/init` API handler.
+**Shared Bootstrap Logic:** `pgstore.BootstrapPlatform(ctx, platformDSN, suffix)` — used by CLI wizard, `platform init` CLI command (admin-credentials flow with auto-suffix), daemon auto-init, and `POST /api/platform/init` API handler.
 
 | # | Task | Package/Files | Status | Notes |
 |---|------|--------------|--------|-------|

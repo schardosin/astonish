@@ -47,25 +47,25 @@ spec:
               value: "worker"
             - name: ASTONISH_HOST
               value: "0.0.0.0"
-            {{- if .Values.secrets.masterKey }}
+            {{- if or .Values.secrets.masterKey .Values.secrets.existingSecret }}
             - name: ASTONISH_MASTER_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "astonish.fullname" . }}-secrets
+                  name: {{ include "astonish.secretName" . }}
                   key: master-key
             {{- end }}
-            {{- if .Values.secrets.jwtSecret }}
+            {{- if or .Values.secrets.jwtSecret .Values.secrets.existingSecret }}
             - name: ASTONISH_JWT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "astonish.fullname" . }}-secrets
+                  name: {{ include "astonish.secretName" . }}
                   key: jwt-secret
             {{- end }}
-            {{- if .Values.secrets.platformDSN }}
+            {{- if or .Values.secrets.platformDSN .Values.secrets.existingSecret }}
             - name: ASTONISH_PLATFORM_DSN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "astonish.fullname" . }}-secrets
+                  name: {{ include "astonish.secretName" . }}
                   key: platform-dsn
             {{- end }}
           volumeMounts:

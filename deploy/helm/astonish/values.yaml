@@ -74,6 +74,10 @@ config:
 
 # -- Secrets (set in values-*.yaml; NEVER commit real values here)
 secrets:
+  # Name of a pre-existing Kubernetes Secret containing master-key, jwt-secret,
+  # and platform-dsn keys. When set, the chart does NOT create its own Secret
+  # and all three fields below are ignored.
+  existingSecret: ""
   # ASTONISH_MASTER_KEY: 64 hex characters (32 bytes AES-256 key)
   # Used for encrypting credentials at rest in the platform database.
   masterKey: ""

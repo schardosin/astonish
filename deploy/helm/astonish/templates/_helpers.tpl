@@ -108,3 +108,15 @@ config.sandbox.kubernetes.sandbox_image.
 {{- define "astonish.sandbox.image" -}}
 {{- printf "%s:%s" .Values.sandbox.image.repository .Values.sandbox.image.tag -}}
 {{- end }}
+
+{{/*
+Secret name — use an existing external secret if configured, otherwise
+the chart-managed secret ("{fullname}-secrets").
+*/}}
+{{- define "astonish.secretName" -}}
+{{- if .Values.secrets.existingSecret -}}
+{{- .Values.secrets.existingSecret -}}
+{{- else -}}
+{{- printf "%s-secrets" (include "astonish.fullname" .) -}}
+{{- end -}}
+{{- end }}

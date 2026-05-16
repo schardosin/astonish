@@ -45,6 +45,8 @@ func handlePlatformCommand(args []string) error {
 	switch args[0] {
 	case "init":
 		return handlePlatformInit(args[1:])
+	case "gen-secret":
+		return handlePlatformGenSecret()
 	case "status":
 		return handlePlatformStatus(args[1:])
 	case "org":
@@ -63,32 +65,89 @@ func handlePlatformCommand(args []string) error {
 
 func handlePlatformInit(args []string) error {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("usage: astonish platform init [--dsn <dsn>]")
-		fmt.Println("")
-		fmt.Println("Initialize the Astonish platform database.")
-		fmt.Println("Creates required roles, the platform database tables, and runs migrations.")
-		fmt.Println("")
-		fmt.Println("options:")
-		fmt.Println("  --dsn <dsn>   PostgreSQL DSN (overrides config.yaml)")
+		printPlatformInitUsage()
 		return nil
 	}
 
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
-	}
+	// Parse flags.
+	var pgHost, pgUser, pgPassword, pgSSLMode, suffix string
+	pgPort := 0
 
-	// Allow --dsn override
-	dsn := appCfg.Storage.Postgres.PlatformDSN
-	for i := 0; i < len(args)-1; i++ {
-		if args[i] == "--dsn" {
-			dsn = args[i+1]
-			break
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--host":
+			if i+1 < len(args) {
+				pgHost = args[i+1]
+				i++
+			}
+		case "--port":
+			if i+1 < len(args) {
+				if _, err := fmt.Sscanf(args[i+1], "%d", &pgPort); err != nil {
+					return fmt.Errorf("invalid port: %s", args[i+1])
+				}
+				i++
+			}
+		case "--user":
+			if i+1 < len(args) {
+				pgUser = args[i+1]
+				i++
+			}
+		case "--password":
+			if i+1 < len(args) {
+				pgPassword = args[i+1]
+				i++
+			}
+		case "--sslmode":
+			if i+1 < len(args) {
+				pgSSLMode = args[i+1]
+				i++
+			}
+		case "--suffix":
+			if i+1 < len(args) {
+				suffix = args[i+1]
+				i++
+			}
+		default:
+			return fmt.Errorf("unknown flag: %s\nRun 'astonish platform init --help' for usage", args[i])
 		}
 	}
-	if dsn == "" {
-		return fmt.Errorf("no PostgreSQL DSN configured\n" +
-			"Set storage.postgres.platform_dsn in config.yaml or pass --dsn")
+
+	// Env var fallbacks.
+	if pgHost == "" {
+		pgHost = os.Getenv("PGHOST")
+	}
+	if pgPort == 0 {
+		if envPort := os.Getenv("PGPORT"); envPort != "" {
+			if _, err := fmt.Sscanf(envPort, "%d", &pgPort); err != nil {
+				return fmt.Errorf("invalid PGPORT env: %s", envPort)
+			}
+		}
+	}
+	if pgUser == "" {
+		pgUser = os.Getenv("PGUSER")
+	}
+	if pgPassword == "" {
+		pgPassword = os.Getenv("PGPASSWORD")
+	}
+	if pgSSLMode == "" {
+		pgSSLMode = os.Getenv("PGSSLMODE")
+	}
+
+	// Defaults.
+	if pgHost == "" {
+		return fmt.Errorf("PostgreSQL host is required (--host or PGHOST)")
+	}
+	if pgPort == 0 {
+		pgPort = 5432
+	}
+	if pgUser == "" {
+		pgUser = "postgres"
+	}
+	if pgPassword == "" {
+		return fmt.Errorf("PostgreSQL password is required (--password or PGPASSWORD)")
+	}
+	if pgSSLMode == "" {
+		pgSSLMode = "prefer"
 	}
 
 	ctx := context.Background()
@@ -96,18 +155,76 @@ func handlePlatformInit(args []string) error {
 	fmt.Println("=== Astonish Platform Init ===")
 	fmt.Println()
 
-	// Bootstrap: create database, roles, and run migrations.
-	fmt.Print("Initializing platform database... ")
-	if err := pgstore.BootstrapPlatform(ctx, dsn, appCfg.Storage.Postgres.InstanceSuffix); err != nil {
+	// Connect to the admin database to check/generate suffix.
+	fmt.Printf("Connecting to PostgreSQL at %s:%d... ", pgHost, pgPort)
+	tempDSN := pgstore.BuildDSN(pgHost, pgPort, pgUser, pgPassword, "postgres", pgSSLMode)
+
+	// Verify connectivity by checking if admin DB is reachable.
+	_, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, "connectivity_check_probe")
+	if checkErr != nil {
+		fmt.Println("FAILED")
+		return fmt.Errorf("cannot connect to PostgreSQL: %w", checkErr)
+	}
+	fmt.Println("OK")
+
+	// Determine suffix.
+	var dbAlreadyExists bool
+	if suffix != "" {
+		// User-provided suffix: check if database already exists.
+		// If it exists, we run migrations (upgrade path).
+		// If it doesn't exist, we create it (fresh install with fixed suffix).
+		fmt.Printf("Checking database %s... ", config.PlatformDBName(suffix))
+		exists, err := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		if err != nil {
+			fmt.Println("FAILED")
+			return fmt.Errorf("failed to check database existence: %w", err)
+		}
+		if exists {
+			fmt.Println("exists (will run migrations)")
+			dbAlreadyExists = true
+		} else {
+			fmt.Println("new (will create)")
+		}
+	} else {
+		// Auto-generate suffix with collision avoidance.
+		fmt.Print("Generating instance suffix... ")
+		suffix = config.GenerateInstanceSuffix()
+		for attempts := 0; attempts < 5; attempts++ {
+			exists, err := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+			if err != nil {
+				fmt.Println("FAILED")
+				return fmt.Errorf("failed to check database existence: %w", err)
+			}
+			if !exists {
+				break
+			}
+			suffix = config.GenerateInstanceSuffix()
+		}
+		fmt.Println(suffix)
+	}
+
+	// Build the platform DSN with the actual platform DB name.
+	platformDBName := config.PlatformDBName(suffix)
+	platformDSN := pgstore.BuildDSN(pgHost, pgPort, pgUser, pgPassword, platformDBName, pgSSLMode)
+
+	// Bootstrap: create database (if needed), ensure roles, and run migrations.
+	if dbAlreadyExists {
+		fmt.Printf("Running migrations on %s... ", platformDBName)
+	} else {
+		fmt.Printf("Creating database %s... ", platformDBName)
+	}
+	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 	fmt.Println("OK")
 
-	// Verify connectivity via PGStore
+	// Verify connectivity via PGStore.
 	fmt.Print("Verifying platform store... ")
-	pgCfg := appCfg.Storage.Postgres
-	pgCfg.PlatformDSN = dsn
+	pgCfg := config.PostgresConfig{
+		PlatformDSN:    platformDSN,
+		InstanceSuffix: suffix,
+	}
 	_, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
 	if err != nil {
 		fmt.Println("FAILED")
@@ -117,15 +234,68 @@ func handlePlatformInit(args []string) error {
 	fmt.Println("OK")
 
 	fmt.Println()
-	fmt.Println("Platform initialized successfully.")
+	if dbAlreadyExists {
+		fmt.Println("Platform migrations applied successfully.")
+	} else {
+		fmt.Println("Platform initialized successfully.")
+	}
 	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Set storage.backend: postgres in config.yaml")
-	fmt.Println("  2. Create an organization:  astonish platform org create --name 'My Org' --slug my-org")
-	fmt.Println("  3. Invite users:            astonish platform org invite --org my-org --email user@example.com")
-	fmt.Println("  4. Start the daemon:         astonish daemon run")
+	fmt.Printf("  Database: %s\n", platformDBName)
+	fmt.Printf("  Server:   %s:%d\n", pgHost, pgPort)
+	fmt.Printf("  Suffix:   %s\n", suffix)
+	fmt.Println()
+	fmt.Println("Add to your Helm values file:")
+	fmt.Println()
+	fmt.Println("  secrets:")
+	fmt.Printf("    platformDSN: %q\n", platformDSN)
+	fmt.Println("  config:")
+	fmt.Println("    storage:")
+	fmt.Println("      postgres:")
+	fmt.Printf("        instanceSuffix: %q\n", suffix)
+	fmt.Println()
+	fmt.Println("For single-binary mode, add to ~/.config/astonish/config.yaml:")
+	fmt.Println()
+	fmt.Println("  storage:")
+	fmt.Println("    backend: postgres")
+	fmt.Println("    postgres:")
+	fmt.Printf("      platform_dsn: %q\n", platformDSN)
+	fmt.Printf("      instance_suffix: %q\n", suffix)
+	fmt.Println()
+	if !dbAlreadyExists {
+		fmt.Println("Next steps:")
+		fmt.Println("  1. Create an organization:  astonish platform org create --name 'My Org' --slug my-org")
+		fmt.Println("  2. Invite users:            astonish platform org invite --org my-org --email user@example.com")
+	}
 
 	return nil
+}
+
+func printPlatformInitUsage() {
+	fmt.Println("usage: astonish platform init --host <host> --password <pass> [options]")
+	fmt.Println("")
+	fmt.Println("Initialize a new Astonish platform database.")
+	fmt.Println("Creates the database, required roles, and runs all platform migrations.")
+	fmt.Println("")
+	fmt.Println("required:")
+	fmt.Println("  --host <host>         PostgreSQL server hostname (or PGHOST env)")
+	fmt.Println("  --password <pass>     PostgreSQL admin password (or PGPASSWORD env)")
+	fmt.Println("")
+	fmt.Println("optional:")
+	fmt.Println("  --port <port>         PostgreSQL port (default: 5432, or PGPORT env)")
+	fmt.Println("  --user <user>         PostgreSQL admin user (default: postgres, or PGUSER env)")
+	fmt.Println("  --sslmode <mode>      SSL mode (default: prefer, or PGSSLMODE env)")
+	fmt.Println("  --suffix <suffix>     Fixed instance suffix (default: auto-generated)")
+	fmt.Println("")
+	fmt.Println("The command generates a random 6-character suffix (unless --suffix is given),")
+	fmt.Println("creates database 'astonish_<suffix>_platform', and prints the configuration")
+	fmt.Println("values to add to your Helm values file or config.yaml.")
+	fmt.Println("")
+	fmt.Println("examples:")
+	fmt.Println("  astonish platform init --host 10.0.0.5 --password secret")
+	fmt.Println("  astonish platform init --host pg.internal --user admin --password s3cr3t --suffix prod1")
+	fmt.Println("")
+	fmt.Println("  # Using environment variables:")
+	fmt.Println("  PGHOST=10.0.0.5 PGPASSWORD=secret astonish platform init")
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1181,13 @@ func truncateStr(s string, maxLen int) string {
 // Usage printers
 // ---------------------------------------------------------------------------
 
+// handlePlatformGenSecret generates a cryptographically secure secret suitable
+// for masterKey or jwtSecret. Prints a single 64-character hex string (32 bytes).
+func handlePlatformGenSecret() error {
+	fmt.Println(config.GenerateJWTSecret())
+	return nil
+}
+
 func printPlatformUsage() {
 	fmt.Println("usage: astonish platform <command> [options]")
 	fmt.Println("")
@@ -1018,12 +1195,13 @@ func printPlatformUsage() {
 	fmt.Println("")
 	fmt.Println("commands:")
 	fmt.Println("  init              Initialize the platform database")
+	fmt.Println("  gen-secret        Generate a random secret (for masterKey or jwtSecret)")
 	fmt.Println("  status            Show platform status and counts")
 	fmt.Println("  org               Manage organizations")
 	fmt.Println("  user              Manage users")
 	fmt.Println("")
 	fmt.Println("examples:")
-	fmt.Println("  astonish platform init")
+	fmt.Println("  astonish platform init --host 10.0.0.5 --password secret")
 	fmt.Println("  astonish platform status")
 	fmt.Println("  astonish platform org create --name 'Acme' --slug acme")
 	fmt.Println("  astonish platform org invite --org acme --email alice@acme.com")

@@ -111,78 +111,177 @@ sandbox:
 
 ### Required secrets
 
-These must be set in your values file. The chart refuses to start without them:
+The chart requires three secret values. Pods will CrashLoopBackOff without them.
+
+| Value | Env var | Purpose |
+|-------|---------|---------|
+| `masterKey` | `ASTONISH_MASTER_KEY` | AES-256 key-encryption-key (KEK). Encrypts all credentials and secrets stored in the platform database. **64 hex characters (32 bytes).** |
+| `jwtSecret` | `ASTONISH_JWT_SECRET` | Signing key for access and refresh tokens. **64 hex characters (32 bytes).** |
+| `platformDSN` | `ASTONISH_PLATFORM_DSN` | PostgreSQL connection string for the platform database (output of `platform init`). |
+
+#### Generating masterKey and jwtSecret
+
+Each value must be exactly 64 hex characters (32 random bytes). Use any of these equivalent methods:
+
+```bash
+# Option A: openssl (universally available)
+openssl rand -hex 32
+
+# Option B: astonish CLI helper (no openssl dependency; works in kubectl run)
+astonish platform gen-secret
+
+# Option C: Python one-liner
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+Generate **two separate values** — one for `masterKey`, one for `jwtSecret`. Never reuse the same value for both.
+
+#### Providing secrets to the chart
+
+**Method 1 — In your values file** (simpler, fine for dev/PoC):
 
 ```yaml
 secrets:
-  # 64 hex characters (32 bytes). Used for encrypting credentials at rest.
-  masterKey: "<generate with: openssl rand -hex 32>"
-  # JWT signing key for access/refresh tokens.
-  jwtSecret: "<generate with: openssl rand -hex 32>"
-  # PostgreSQL DSN for the platform database.
-  platformDSN: "postgres://user:pass@host:5432/astonish?sslmode=require"
+  masterKey: "a3f1...64 hex chars..."
+  jwtSecret: "b7c2...64 hex chars..."
+  platformDSN: "postgres://postgres:yourpass@pg-host:5432/astonish_a1b2c3_platform?sslmode=prefer"
 ```
 
-### Storage sizing
+For git-tracked values files, encrypt with [SOPS](https://github.com/getsops/sops), [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets), or your secret-management workflow of choice.
 
-| PVC | Default | Guidance |
-|-----|---------|----------|
-| `sandbox.storage.layers.size` | 100 GiB | Plan ~1-5 GiB per distinct template. 100 GiB handles ~50 templates comfortably. |
-| `sandbox.storage.uppers.size` | 50 GiB | Proportional to max concurrent suspended sessions x average upper-layer size. |
+**Method 2 — Pre-create a Kubernetes Secret** (recommended for production):
 
-For dev clusters with limited NFS space, 10 GiB each is fine for smoke testing.
+```bash
+kubectl create namespace astonish   # if not yet created
 
-### Sizing the sandbox (CPU/memory)
+kubectl -n astonish create secret generic astonish-secrets \
+  --from-literal=master-key="$(openssl rand -hex 32)" \
+  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
+  --from-literal=platform-dsn="postgres://postgres:yourpass@pg-host:5432/astonish_a1b2c3_platform?sslmode=prefer"
+```
 
-Sandbox session pods use a **two-tier resource model** that maps directly to how Kubernetes schedules and throttles containers:
-
-| Knob | K8s concept | What it does | Analogy |
-|------|-------------|--------------|---------|
-| `sandbox.limits.cpu` | `resources.limits.cpu` | Per-session CPU ceiling (cgroup throttle). Sessions are **throttled** when they try to exceed this. | Same as Incus `limits.cpu` |
-| `sandbox.limits.memory` | `resources.limits.memory` | Per-session memory ceiling. Sessions are **OOM-killed** when they exceed this. | Same as Incus `limits.memory` |
-| `sandbox.requests.cpuMillis` | `resources.requests.cpu` | Scheduler reservation (idle floor). This is what the scheduler subtracts from node allocatable when placing a pod. | No Incus equivalent — Incus overcommits implicitly |
-| `sandbox.requests.memoryMiB` | `resources.requests.memory` | Memory reservation. Pods exceeding their request are first to be evicted under node memory pressure. | No Incus equivalent |
-
-**Why separate `requests` from `limits`?** Interactive sandbox sessions idle 99% of the time (waiting for the next user prompt or tool call). If `requests = limits` (the Kubernetes default when only limits are set), each idle session reserves its full ceiling — meaning a 2-CPU limit prevents more than 2 sessions on a 4-CPU node. With small requests and generous limits, the scheduler packs many idle sessions on a node, and the kernel time-slices fairly when sessions burst.
-
-This gives **Burstable QoS** (the K8s-native term for "overcommit with a ceiling"), which is the correct translation of the implicit Incus overcommit model onto Kubernetes.
-
-**Defaults shipped in `values.yaml`:**
+Then in your values file, reference the existing secret and leave the inline fields empty:
 
 ```yaml
-sandbox:
-  limits:
-    cpu: 2          # ceiling: each session can burst to 2 CPUs
-    memory: "2GB"   # ceiling: OOM-kill above 2 GiB
-  requests:
-    cpuMillis: 100  # 100m = 0.1 CPU scheduler reservation
-    memoryMiB: 256  # 256 MiB scheduler reservation
+secrets:
+  existingSecret: "astonish-secrets"
+  masterKey: ""
+  jwtSecret: ""
+  platformDSN: ""
 ```
 
-**Capacity planning table** (per-node, assuming nodes are dedicated to sandbox pods):
+The chart skips creating its own Secret resource and the deployments reference your pre-created one. The Secret must contain keys named `master-key`, `jwt-secret`, and `platform-dsn`.
 
-| Node shape | Requests | Sessions/node (approx) | Use case |
-|------------|----------|------------------------|----------|
-| 4 CPU / 16 Gi | `50m / 128Mi` | ~80 (CPU) / ~128 (mem) | Chat-mostly-idle |
-| 4 CPU / 16 Gi | `100m / 256Mi` | ~40 (CPU) / ~64 (mem) | Default (mixed chat + tools) |
-| 4 CPU / 16 Gi | `500m / 1Gi` | ~8 (CPU) / ~16 (mem) | Compute-heavy flows |
-| 2 CPU / 4 Gi (dev) | `50m / 128Mi` | ~40 / ~32 | Dev cluster |
+:::caution[masterKey is permanent — do not rotate without re-encryption]
+The `masterKey` encrypts all stored credentials (API keys, OAuth tokens, provider secrets) in the platform database. **There is no automatic re-encryption command today.** If you lose or rotate this key without first decrypting and re-encrypting all stored secrets, those credentials become permanently unrecoverable.
 
-**Auto-derivation:** When `requests.cpuMillis` or `requests.memoryMiB` are zero (or omitted from config), the Go backend auto-derives:
-- CPU: `max(50m, limits.cpu × 1000 / 20)` — 5% of ceiling, minimum 50m.
-- Memory: `max(128Mi, limits.memory / 8)` — 12.5% of ceiling, minimum 128Mi.
+Treat `masterKey` as permanent infrastructure — back it up securely and never change it unless you are prepared to re-add all stored credentials.
+:::
 
-**Eviction caveat:** Under node memory pressure, the kubelet evicts Burstable pods that exceed their memory *request* first. If a sandbox session is actively using 1.5 Gi while only requesting 256 Mi, it may be killed to protect guaranteed workloads. Tune `memoryMiB` to the expected working-set size if evictions are unacceptable (at the cost of packing density).
+#### Rotation guidance
+
+| Secret | Rotation impact | Procedure |
+|--------|----------------|-----------|
+| `jwtSecret` | All active sessions are invalidated; users must re-login. | Generate new value → update Secret → restart pods. Safe to rotate periodically. |
+| `masterKey` | **All encrypted credentials become unreadable.** | Do **not** rotate. If compromised: decrypt all credentials with old key, rotate key, re-encrypt. No automated tool exists yet. |
+| `platformDSN` | Pods reconnect to PG on restart. | Update the DSN value → restart pods. No data loss. |
 
 ### Security note
 
-The example `values-dev-proxmox.yaml` ships with placeholder secrets. **Never deploy those to a real environment.** Generate fresh keys with `openssl rand -hex 32` for each installation.
+The example `values-dev-proxmox.yaml` ships with placeholder secrets. **Never deploy those to a real environment.** Generate fresh keys with `openssl rand -hex 32` (or `astonish platform gen-secret`) for each installation.
 
-## Step 3: install
+## Step 3: initialize the platform database
+
+Before installing the Helm chart, the platform database must be initialized. The `astonish platform init` command connects to your PostgreSQL server, generates a unique instance suffix, creates the database (`astonish_<suffix>_platform`), sets up required PostgreSQL roles (`astonish_platform_admin`, `astonish_app`), and runs all platform-level schema migrations.
+
+The command prints the exact values to add to your Helm values file — no manual suffix or DSN construction needed.
+
+**Required PostgreSQL privileges:** The user must have `CREATEDB` and `CREATEROLE` privileges on the target PostgreSQL server (typically a superuser or a role granted these). After initialization succeeds, running pods only need standard DML access — see the privilege downgrade note below.
+
+### Option A: run from your workstation
+
+Use this when your workstation (or CI runner) has network access to the PostgreSQL server.
+
+```bash
+# Install or build the astonish binary (if not already available):
+go install github.com/schardosin/astonish@latest
+# or: make build
+
+# Run platform init:
+astonish platform init --host pg-host --user postgres --password 'yourpass'
+```
+
+**Note:** The hostname must resolve from where you run the command. If PostgreSQL is only reachable from inside the cluster (e.g., a ClusterIP service), use Option B instead.
+
+### Option B: run inside the cluster
+
+Use this when PostgreSQL is only reachable from within the cluster network (e.g., an in-cluster StatefulSet or a VPC-internal endpoint).
+
+```bash
+kubectl run astonish-platform-init --rm -it --restart=Never \
+  -n astonish --image=schardosin/astonish:dev \
+  --command -- astonish platform init \
+  --host pg-host --user postgres --password 'yourpass'
+```
+
+The pod runs `platform init`, prints the result, and is deleted automatically (`--rm`).
+
+**If the namespace doesn't exist yet**, create it first (`kubectl create namespace astonish`) or run the pod in the `default` namespace.
+
+### Optional flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `5432` | PostgreSQL port |
+| `--sslmode` | `prefer` | SSL mode (`disable`, `prefer`, `require`) |
+| `--suffix` | auto-generated | Fixed instance suffix (e.g., `prod1`) instead of random |
+
+All flags also accept standard PG environment variables: `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGSSLMODE`.
+
+### Expected output
+
+```
+=== Astonish Platform Init ===
+
+Connecting to PostgreSQL at pg-host:5432... OK
+Generating instance suffix... a1b2c3
+Creating database astonish_a1b2c3_platform... OK
+Verifying platform store... OK
+
+Platform initialized successfully.
+
+  Database: astonish_a1b2c3_platform
+  Server:   pg-host:5432
+  Suffix:   a1b2c3
+
+Add to your Helm values file:
+
+  secrets:
+    platformDSN: "postgres://postgres:yourpass@pg-host:5432/astonish_a1b2c3_platform?sslmode=prefer"
+  config:
+    storage:
+      postgres:
+        instanceSuffix: "a1b2c3"
+```
+
+Copy the `secrets.platformDSN` and `config.storage.postgres.instanceSuffix` values directly into your `values-myenv.yaml`, then proceed to Step 4.
+
+### Privilege downgrade (optional, recommended for production)
+
+After `platform init` succeeds, the running api/worker pods do not need `CREATEDB` or `CREATEROLE` — they only perform DML on existing tables. For least-privilege:
+
+1. Create a restricted PostgreSQL role (e.g., `astonish_runtime`) with `LOGIN` and `CONNECT` on the platform database, but no `CREATEDB`.
+2. Grant it the same table-level privileges that `platform init` granted to `astonish_app`.
+3. Update `secrets.platformDSN` in your values file to use the restricted role's credentials.
+4. Keep the elevated-privilege credentials in a secure location for future `platform init` runs (upgrades with new migrations).
+
+This is optional — many teams keep a single set of credentials for simplicity. The trade-off is that compromised pods could theoretically create databases (but not drop them without explicit `DROP` grants).
+
+## Step 4: install
 
 This section explains every command and why it's needed.
 
-### 3.1 Preview the rendered manifests
+### 4.1 Preview the rendered manifests
 
 ```bash
 helm template astonish deploy/helm/astonish \
@@ -194,7 +293,7 @@ helm template astonish deploy/helm/astonish \
 
 **What to check:** Scan the output for your expected namespace names, image tags, PVC sizes, and PSA labels. Pipe to `less` or redirect to a file for inspection.
 
-### 3.2 Install the chart
+### 4.2 Install the chart
 
 ```bash
 helm install astonish deploy/helm/astonish \
@@ -217,7 +316,7 @@ helm install astonish deploy/helm/astonish \
 2. All non-hook resources are applied: namespaces, RBAC, PVCs, configmap, secrets, deployments, service.
 3. The `post-install` hook fires: the seed Job is created in `astonish-sandbox`.
 
-### 3.3 Wait for the seed Job
+### 4.3 Wait for the seed Job
 
 ```bash
 kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
@@ -247,7 +346,7 @@ astonish-seed: done
 
 **If it fails:** Common causes are `ImagePullBackOff` (image not published or tag mismatch), PVC not Bound (StorageClass misconfigured), or NFS export not reachable. Check `kubectl -n astonish-sandbox describe job/astonish-sandbox-seed` and pod events.
 
-### 3.4 Verify control-plane pods
+### 4.4 Verify control-plane pods
 
 ```bash
 kubectl -n astonish rollout status deploy/astonish-api deploy/astonish-worker
@@ -262,9 +361,9 @@ kubectl -n astonish logs deploy/astonish-api --tail=30
 kubectl -n astonish logs deploy/astonish-worker --tail=30
 ```
 
-The logs will show the exact error (connection refused, invalid DSN format, missing key, etc.).
+The logs will show the exact error (connection refused, invalid DSN format, missing key, etc.). If you see "relation does not exist" or "database does not exist", you likely skipped Step 3 (`astonish platform init`).
 
-### 3.5 Inventory the sandbox namespace
+### 4.5 Inventory the sandbox namespace
 
 ```bash
 kubectl get all,pvc,sa,role,rolebinding -n astonish-sandbox
@@ -281,7 +380,7 @@ kubectl get all,pvc,sa,role,rolebinding -n astonish-sandbox
 
 The seed Job itself will be gone (deleted by `hook-succeeded` policy after completion).
 
-### 3.6 (Path 1 only) Verify the FUSE device plugin
+### 4.6 (Path 1 only) Verify the FUSE device plugin
 
 ```bash
 # Label the nodes that should host sandbox pods:
@@ -296,7 +395,7 @@ kubectl get node <node-name> -o jsonpath='{.status.allocatable}' | grep -o 'smar
 
 The chart ships a minimal reference DaemonSet. For production, consider the upstream [smarter-device-manager Helm chart](https://gitlab.com/arm-research/smarter/smarter-device-manager) and set `fuseDevicePlugin.enabled: false` in your values.
 
-## Step 4: smoke test
+## Step 5: smoke test
 
 ```bash
 astonish sandbox k8s-smoke --overlay-mode fuse --privileged
@@ -354,6 +453,10 @@ Helm computes a diff between the stored release manifest and the newly rendered 
 ### After upgrade
 
 ```bash
+# Re-run platform init to apply any new schema migrations:
+astonish platform init --host pg-host --user postgres --password 'yourpass' --suffix a1b2c3
+# Or from inside the cluster (Option B from Step 3).
+
 # Wait for seed Job if sandbox image changed:
 kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
   --for=condition=complete --timeout=300s
@@ -361,6 +464,8 @@ kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
 # Wait for control-plane rollout:
 kubectl -n astonish rollout status deploy/astonish-api deploy/astonish-worker
 ```
+
+**Why re-run `platform init`?** New Astonish versions may include database schema migrations. Running `platform init` with `--suffix` (your existing suffix) after upgrading applies any pending migrations before the new pods start serving requests. Already-applied migrations are no-ops.
 
 ## Day-2: changing values
 
@@ -387,6 +492,8 @@ When you edit your values file and re-run `helm upgrade`:
 helm uninstall astonish -n astonish
 # Verify nothing lingers:
 kubectl get all,pvc,cm,secret -n astonish-sandbox
+# Re-initialize the platform database (Step 3):
+astonish platform init --host pg-host --user postgres --password 'yourpass'
 # Re-install:
 helm install astonish deploy/helm/astonish \
   -n astonish --create-namespace \
@@ -446,7 +553,7 @@ The label `pod-security.kubernetes.io/enforce` must match `sandbox.podSecurity` 
 kubectl describe node <node> | grep -A3 Allocatable | grep fuse
 ```
 
-Either install the device plugin (Step 3.6), switch to Path 3 (`overlay.privileged: true`, `podSecurity: privileged`), or ensure the node has the correct label.
+Either install the device plugin (Step 4.6), switch to Path 3 (`overlay.privileged: true`, `podSecurity: privileged`), or ensure the node has the correct label.
 
 ### Entrypoint fails: "mount: overlay: wrong fs type, bad option"
 
@@ -471,6 +578,23 @@ Fix: either change the `-n` flag to match, or set `namespaces.prefix` / `namespa
 **Cause:** The chart requires an explicit RWX StorageClass for sandbox PVCs.
 
 Set `sandbox.storage.storageClassName` in your values file to a valid RWX-capable StorageClass (e.g., `nfs-client`, `cephfs`, `efs-sc`, `azurefile-csi`, `manila-csi`).
+
+### API/worker pods CrashLoopBackOff: "relation does not exist" or "database does not exist"
+
+**Cause:** The platform database was not initialized before installing the chart. The api and worker pods expect the platform database and its schema to already exist.
+
+**Fix:** Run `astonish platform init` (Step 3). Once the database is initialized, the pods will recover on their next restart cycle (within ~30 seconds due to CrashLoopBackOff backoff).
+
+```bash
+# Option A (from workstation):
+astonish platform init --host pg-host --user postgres --password 'yourpass'
+
+# Option B (from inside the cluster):
+kubectl run astonish-platform-init --rm -it --restart=Never \
+  -n astonish --image=schardosin/astonish:dev \
+  --command -- astonish platform init \
+  --host pg-host --user postgres --password 'yourpass'
+```
 
 ## Gardener (SAP open-source Kubernetes)
 

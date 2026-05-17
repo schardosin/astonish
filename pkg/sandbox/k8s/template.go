@@ -144,14 +144,16 @@ func (b *K8sBackend) BuildTemplate(ctx context.Context, spec sandbox.TemplateBui
 	}
 
 	// Run build steps sequentially. Each step is a single /bin/sh -c
-	// invocation. Non-zero exits abort the build; stderr is surfaced
-	// in the returned error for operator diagnostics.
+	// invocation wrapped through the astonish-shell chroot wrapper so
+	// writes land in /sandbox/rootfs (which is backed by the overlay
+	// upper at /var/astonish/overlay/upper). Non-zero exits abort the
+	// build; stderr is surfaced in the returned error for diagnostics.
 	for i, step := range spec.Steps {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		res, err := b.execInPod(ctx, podName, sandbox.ExecSpec{
-			Command: []string{"/bin/sh", "-c", step},
+			Command: []string{"/usr/local/bin/astonish-shell", "/bin/sh", "-c", step},
 		})
 		if err != nil {
 			return nil, fmt.Errorf("sandbox/k8s: BuildTemplate: step %d (%q): %w", i, truncate(step, 120), err)
@@ -400,6 +402,14 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 	// resource, and overlay-mode env vars are owned by
 	// applyPodSecurityHardening at the bottom of this function so the
 	// rules stay aligned across session / fleet / template pods.
+	//
+	// The builder pod mirrors a session pod's overlay composition: the
+	// image's ENTRYPOINT (astonish-sandbox-entrypoint) runs, composes
+	// the overlay with ParentLayers as lowerdirs, then hands off to
+	// /bin/sleep infinity. Build steps are exec'd through the
+	// astonish-shell wrapper which chroots into the composed overlay,
+	// so writes land in /var/astonish/overlay/upper — exactly as they
+	// do in interactive team-template-editor sessions.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        name,
@@ -414,16 +424,26 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 				Name:            containerName,
 				Image:           b.cfg.SandboxImage,
 				ImagePullPolicy: imagePullPolicy(b.cfg.SandboxImage),
-				Command:         []string{"/bin/sh", "-c", "sleep infinity"},
+				// No Command: — uses the image's ENTRYPOINT which composes
+				// the overlay from ASTONISH_LAYER_CHAIN, then execs into
+				// ASTONISH_HANDOFF (sleep infinity). This is the same
+				// pattern as session pods (session.go buildPodManifest).
 				Env: []corev1.EnvVar{
 					{Name: "ASTONISH_TEMPLATE_ID", Value: spec.TemplateID},
+					{Name: "ASTONISH_SESSION_ID", Value: "build-" + name},                     // synthetic; resume-tar never exists so [ -f ] guard skips it
 					{Name: "ASTONISH_LAYER_CHAIN", Value: strings.Join(spec.ParentLayers, ",")},
 					{Name: "ASTONISH_UPPER_DIR", Value: mountUpper},
 					{Name: "ASTONISH_WORK_DIR", Value: mountWork},
 					{Name: "ASTONISH_LAYERS_DIR", Value: mountLayers},
+					{Name: "ASTONISH_UPPERS_DIR", Value: mountUppers},
+					// PID 1 sleeps after overlay composition; build steps
+					// arrive via execInPod through the astonish-shell wrapper.
+					{Name: "ASTONISH_HANDOFF", Value: "/bin/sleep"},
+					{Name: "ASTONISH_HANDOFF_ARGS", Value: "infinity"},
 				},
 				VolumeMounts: []corev1.VolumeMount{
 					{Name: volumeLayers, MountPath: mountLayers}, // RW for atomic rename
+					{Name: volumeUppers, MountPath: mountUppers},
 					{Name: volumeOverlay, MountPath: mountOverlay},
 				},
 			},
@@ -434,6 +454,14 @@ func (b *K8sBackend) buildTemplateBuilderPodManifest(spec sandbox.TemplateBuildS
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: b.cfg.LayersPVCName,
+						},
+					},
+				},
+				{
+					Name: volumeUppers,
+					VolumeSource: corev1.VolumeSource{
+						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+							ClaimName: b.cfg.UppersPVCName,
 						},
 					},
 				},

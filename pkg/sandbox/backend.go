@@ -354,7 +354,7 @@ type TemplateArtifact struct {
 	LayerID     string    `json:"layer_id"` // sha256 hex of canonical tar
 	ParentLayer string    `json:"parent_layer,omitempty"`
 	SizeBytes   int64     `json:"size_bytes"`
-	CephFSPath  string    `json:"cephfs_path,omitempty"` // populated on K8s backend
+	CephFSPath  string    `json:"cephfs_path,omitempty"` // mount path on the RWX PVC; field name is historical — filesystem-agnostic
 	CreatedAt   time.Time `json:"created_at"`
 }
 

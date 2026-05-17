@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,10 +12,10 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 )
 
-// pgSandboxTemplateStore is the platform-scoped template DAG implementation.
+// PGSandboxTemplateStore is the platform-scoped template DAG implementation.
 // Rows live in the platform database's public.sandbox_templates table (see
 // migration platform/003). Layer rows live in public.sandbox_layers.
-type pgSandboxTemplateStore struct {
+type PGSandboxTemplateStore struct {
 	pool *pgxpool.Pool
 }
 
@@ -22,10 +23,10 @@ type pgSandboxTemplateStore struct {
 // connection pool. The caller must pass a platform pool (see PGStore.poolMgr
 // PlatformPool()) since sandbox_templates lives in the platform database.
 func NewPGSandboxTemplateStore(pool *pgxpool.Pool) store.SandboxTemplateStore {
-	return &pgSandboxTemplateStore{pool: pool}
+	return &PGSandboxTemplateStore{pool: pool}
 }
 
-func (s *pgSandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTemplate) error {
+func (s *PGSandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTemplate) error {
 	if tpl == nil {
 		return errors.New("sandbox template is nil")
 	}
@@ -59,7 +60,7 @@ func (s *pgSandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxT
 	return row.Scan(&tpl.CreatedAt, &tpl.UpdatedAt)
 }
 
-func (s *pgSandboxTemplateStore) GetByID(ctx context.Context, id string) (*store.SandboxTemplate, error) {
+func (s *PGSandboxTemplateStore) GetByID(ctx context.Context, id string) (*store.SandboxTemplate, error) {
 	row := s.pool.QueryRow(ctx,
 		`SELECT id, slug, scope, owner_id, purpose, name, description,
 		        COALESCE(parent_template_id::text, ''), top_layer_id, version,
@@ -71,7 +72,7 @@ func (s *pgSandboxTemplateStore) GetByID(ctx context.Context, id string) (*store
 	return scanSandboxTemplate(row)
 }
 
-func (s *pgSandboxTemplateStore) GetBySlug(ctx context.Context, scope store.SandboxTemplateScope, ownerID, slug string) (*store.SandboxTemplate, error) {
+func (s *PGSandboxTemplateStore) GetBySlug(ctx context.Context, scope store.SandboxTemplateScope, ownerID, slug string) (*store.SandboxTemplate, error) {
 	if !validScope(scope) {
 		return nil, fmt.Errorf("invalid sandbox template scope %q", scope)
 	}
@@ -86,7 +87,7 @@ func (s *pgSandboxTemplateStore) GetBySlug(ctx context.Context, scope store.Sand
 	return scanSandboxTemplate(row)
 }
 
-func (s *pgSandboxTemplateStore) List(ctx context.Context, filter store.SandboxTemplateFilter) ([]*store.SandboxTemplate, error) {
+func (s *PGSandboxTemplateStore) List(ctx context.Context, filter store.SandboxTemplateFilter) ([]*store.SandboxTemplate, error) {
 	// Build dynamic WHERE with up to three filter dimensions.
 	conds := []string{}
 	args := []any{}
@@ -138,7 +139,7 @@ func (s *pgSandboxTemplateStore) List(ctx context.Context, filter store.SandboxT
 	return out, rows.Err()
 }
 
-func (s *pgSandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTemplate) error {
+func (s *PGSandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTemplate) error {
 	if tpl == nil || tpl.ID == "" {
 		return errors.New("sandbox template ID is required for update")
 	}
@@ -165,7 +166,7 @@ func (s *pgSandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxT
 	return nil
 }
 
-func (s *pgSandboxTemplateStore) Delete(ctx context.Context, id string) error {
+func (s *PGSandboxTemplateStore) Delete(ctx context.Context, id string) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM sandbox_templates WHERE id = $1`, id)
 	return err
 }
@@ -174,7 +175,7 @@ func (s *pgSandboxTemplateStore) Delete(ctx context.Context, id string) error {
 // collecting non-NULL top_layer_id values. The returned chain is ordered
 // oldest-first (root ancestor's layer is chain[0]; the template's own
 // top_layer_id, if any, is chain[len-1]).
-func (s *pgSandboxTemplateStore) Resolve(ctx context.Context, id string) (*store.ResolvedTemplateChain, error) {
+func (s *PGSandboxTemplateStore) Resolve(ctx context.Context, id string) (*store.ResolvedTemplateChain, error) {
 	// Recursive CTE walks the parent chain. We ORDER BY depth DESC so the
 	// root ancestor is first in the resulting array, then filter out NULL
 	// top_layer_ids.
@@ -224,7 +225,7 @@ func (s *pgSandboxTemplateStore) Resolve(ctx context.Context, id string) (*store
 	return &store.ResolvedTemplateChain{TemplateID: id, LayerIDs: layerIDs}, nil
 }
 
-func (s *pgSandboxTemplateStore) ListRoots(ctx context.Context) ([]*store.SandboxTemplate, error) {
+func (s *PGSandboxTemplateStore) ListRoots(ctx context.Context) ([]*store.SandboxTemplate, error) {
 	rows, err := s.pool.Query(ctx,
 		`SELECT id, slug, scope, owner_id, purpose, name, description,
 		        COALESCE(parent_template_id::text, ''), top_layer_id, version,
@@ -304,4 +305,95 @@ func topLayerArg(p *string) any {
 		return nil
 	}
 	return *p
+}
+
+// ---------------------------------------------------------------------------
+// BaseConfig helpers (for the @base template's base_config JSONB)
+// ---------------------------------------------------------------------------
+
+// BaseConfigInfo holds the current @base template's configuration and metadata.
+type BaseConfigInfo struct {
+	LayerID      string
+	SizeBytes    int64
+	ConfigJSON   []byte // NULL represented as nil
+	ConfiguredBy string
+	ConfiguredAt *time.Time
+	UpdatedAt    time.Time
+}
+
+// GetBaseConfig retrieves the @base template's current configuration state.
+// Returns nil if the @base template does not exist.
+func (s *PGSandboxTemplateStore) GetBaseConfig(ctx context.Context) (*BaseConfigInfo, error) {
+	var info BaseConfigInfo
+	var topLayer *string
+	var configJSON []byte
+	var configuredBy *string
+	var configuredAt *time.Time
+
+	err := s.pool.QueryRow(ctx,
+		`SELECT t.top_layer_id, t.base_config, t.configured_by::text, t.configured_at, t.updated_at,
+		        COALESCE(l.size_bytes, 0)
+		   FROM sandbox_templates t
+		   LEFT JOIN sandbox_layers l ON l.layer_id = t.top_layer_id
+		  WHERE t.scope = 'global' AND t.slug = 'base' AND t.parent_template_id IS NULL`,
+	).Scan(&topLayer, &configJSON, &configuredBy, &configuredAt, &info.UpdatedAt, &info.SizeBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GetBaseConfig: %w", err)
+	}
+
+	if topLayer != nil {
+		info.LayerID = *topLayer
+	}
+	info.ConfigJSON = configJSON
+	if configuredBy != nil {
+		info.ConfiguredBy = *configuredBy
+	}
+	info.ConfiguredAt = configuredAt
+	return &info, nil
+}
+
+// SetBaseConfig updates the @base template's top_layer_id and base_config.
+// This is called after a successful BuildTemplate run.
+func (s *PGSandboxTemplateStore) SetBaseConfig(ctx context.Context, newLayerID string, configJSON []byte, configuredBy string) error {
+	ct, err := s.pool.Exec(ctx,
+		`UPDATE sandbox_templates
+		    SET top_layer_id  = $1,
+		        base_config   = $2,
+		        configured_by = NULLIF($3, '')::uuid,
+		        configured_at = now(),
+		        updated_at    = now(),
+		        version       = version + 1
+		  WHERE scope = 'global' AND slug = 'base' AND parent_template_id IS NULL`,
+		newLayerID, configJSON, configuredBy,
+	)
+	if err != nil {
+		return fmt.Errorf("SetBaseConfig: %w", err)
+	}
+	if ct.RowsAffected() == 0 {
+		return errors.New("SetBaseConfig: @base template row not found")
+	}
+	return nil
+}
+
+// GetBaseTopLayerID returns the current top_layer_id of the @base template.
+// Returns empty string if not found or if top_layer_id is NULL.
+func (s *PGSandboxTemplateStore) GetBaseTopLayerID(ctx context.Context) (string, error) {
+	var topLayer *string
+	err := s.pool.QueryRow(ctx,
+		`SELECT top_layer_id FROM sandbox_templates
+		  WHERE scope = 'global' AND slug = 'base' AND parent_template_id IS NULL`,
+	).Scan(&topLayer)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", err
+	}
+	if topLayer == nil {
+		return "", nil
+	}
+	return *topLayer, nil
 }

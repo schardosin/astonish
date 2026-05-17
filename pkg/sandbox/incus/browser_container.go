@@ -374,13 +374,7 @@ chown browser:browser /home/browser/.vnc/xstartup`},
 		// Create a default KasmVNC user "user" with write permission.
 		// The actual password is set at handoff time; this just ensures the
 		// user entry exists so vncserver doesn't prompt for user creation.
-		// Use runuser instead of su — in unprivileged LXC containers on
-		// Docker+Incus, su fails with "Authentication failure" because PAM
-		// can't read /etc/shadow (UID namespace mapping breaks pam_unix).
-		// runuser (part of util-linux, always present) bypasses PAM.
-		[]string{"sh", "-c",
-			`printf "kasmvnc\nkasmvnc\n" | runuser -u browser -- /usr/bin/kasmvncpasswd -u user -w`,
-		},
+		kasmPasswdCmd(distro),
 	)
 
 	// ARM64 (aarch64): build a small LD_PRELOAD shim that masks problematic
@@ -446,11 +440,7 @@ rm -f /tmp/hwcap_mask.c`, hwcapShimSource),
 			[]string{"pip3", "install", "--break-system-packages", "cloakbrowser"},
 			// Download the CloakBrowser Chromium binary into ~browser/.cloakbrowser/
 			// Run as the browser user so the binary lands in the right home directory.
-			// Use runuser (not su) to avoid PAM authentication failures in
-			// unprivileged LXC containers on Docker+Incus.
-			[]string{"runuser", "-u", "browser", "--",
-				"python3", "-c", "import cloakbrowser; print(cloakbrowser.ensure_binary())",
-			},
+			cloakBrowserEnsureBinaryCmd(distro),
 		)
 	}
 
@@ -470,6 +460,54 @@ rm -f /tmp/hwcap_mask.c`, hwcapShimSource),
 	)
 
 	return cmds
+}
+
+// kasmPasswdCmd returns the install step for pre-creating the KasmVNC
+// "user" account. On Incus (DistroUbuntuNoble), this uses runuser to
+// switch to the browser user so the password file is owned correctly.
+// On K8s/fuse-overlayfs (DistroDebianBookworm), execve() as non-root
+// returns EOPNOTSUPP on fuse.fuse-overlayfs mounts backed by NFS
+// lowerdirs, so we run as root with an explicit output path instead.
+func kasmPasswdCmd(distro LinuxDistro) []string {
+	switch distro {
+	case DistroDebianBookworm:
+		// K8s sandbox chroot runs under squash_to_root semantics;
+		// everything is UID 0. Run kasmvncpasswd directly as root,
+		// specifying the password file path explicitly. We write to
+		// BOTH /root/.kasmpasswd (where vncserver looks when running
+		// as root at runtime) and /home/browser/.kasmpasswd (fallback
+		// for when vncserver is launched with HOME=/home/browser).
+		return []string{"sh", "-c",
+			`printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browser/.kasmpasswd && ` +
+				`cp /home/browser/.kasmpasswd /root/.kasmpasswd`,
+		}
+	default: // DistroUbuntuNoble — Incus containers with real UID namespaces
+		// Use runuser instead of su — in unprivileged LXC containers on
+		// Docker+Incus, su fails with "Authentication failure" because
+		// PAM can't read /etc/shadow (UID namespace mapping breaks
+		// pam_unix). runuser (part of util-linux) bypasses PAM.
+		return []string{"sh", "-c",
+			`printf "kasmvnc\nkasmvnc\n" | runuser -u browser -- /usr/bin/kasmvncpasswd -u user -w`,
+		}
+	}
+}
+
+// cloakBrowserEnsureBinaryCmd returns the install step for downloading
+// the CloakBrowser binary. Same fuse-overlayfs constraint as
+// kasmPasswdCmd above: non-root execve is unsupported on K8s.
+func cloakBrowserEnsureBinaryCmd(distro LinuxDistro) []string {
+	switch distro {
+	case DistroDebianBookworm:
+		// Run as root; use HOME override so the binary lands in the
+		// browser user's home directory.
+		return []string{"sh", "-c",
+			`HOME=/home/browser python3 -c "import cloakbrowser; print(cloakbrowser.ensure_binary())"`,
+		}
+	default: // DistroUbuntuNoble — Incus containers
+		return []string{"runuser", "-u", "browser", "--",
+			"python3", "-c", "import cloakbrowser; print(cloakbrowser.ensure_binary())",
+		}
+	}
 }
 
 // StartKasmVNC starts KasmVNC inside a container for human visual access.

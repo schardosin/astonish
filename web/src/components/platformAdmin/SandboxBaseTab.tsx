@@ -1,0 +1,345 @@
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react'
+import { InlineError, InlineSuccess, inputStyle } from './shared'
+import * as api from '../../api/platformSandbox'
+import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult } from '../../api/platformSandbox'
+
+// ---------------------------------------------------------------------------
+// SandboxBaseTab — Platform Admin: Configure Base Sandbox
+// ---------------------------------------------------------------------------
+
+export default function SandboxBaseTab() {
+  const [loading, setLoading] = useState(true)
+  const [summary, setSummary] = useState<BaseConfigSummary | null>(null)
+  const [tools, setTools] = useState<OptionalTool[]>([])
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  // Form state
+  const [core, setCore] = useState(true)
+  const [selectedTools, setSelectedTools] = useState<string[]>([])
+  const [browserEngine, setBrowserEngine] = useState<'none' | 'default' | 'cloakbrowser'>('none')
+  const [extraSteps, setExtraSteps] = useState('')
+  const [showAdvanced, setShowAdvanced] = useState(false)
+
+  // Build state
+  const [building, setBuilding] = useState(false)
+  const [buildLog, setBuildLog] = useState<string[]>([])
+  const abortRef = useRef<(() => void) | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [summaryData, toolsData] = await Promise.all([
+        api.getBaseConfig().catch(() => null),
+        api.listOptionalTools().catch(() => []),
+      ])
+      setSummary(summaryData)
+      setTools(toolsData)
+
+      // Populate form from existing config if available
+      if (summaryData?.config) {
+        const cfg = summaryData.config
+        setCore(cfg.core)
+        setSelectedTools(cfg.optional_tools || [])
+        setBrowserEngine(cfg.browser?.engine || 'none')
+        setExtraSteps((cfg.extra_steps || []).join('\n'))
+        if (cfg.extra_steps && cfg.extra_steps.length > 0) {
+          setShowAdvanced(true)
+        }
+      }
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  // Cleanup abort on unmount
+  useEffect(() => {
+    return () => { abortRef.current?.() }
+  }, [])
+
+  const handleBuild = () => {
+    setError('')
+    setSuccess('')
+    setBuildLog([])
+    setBuilding(true)
+
+    const config: BaseConfig = {
+      core,
+      optional_tools: selectedTools,
+      browser: { engine: browserEngine },
+      extra_steps: extraSteps.trim() ? extraSteps.trim().split('\n').filter(l => l.trim()) : undefined,
+      architecture: 'amd64',
+    }
+
+    const { abort } = api.configureBase({
+      config,
+      onProgress: (msg: string) => {
+        setBuildLog(prev => [...prev, msg])
+      },
+      onDone: (result: ConfigureBuildResult) => {
+        setBuilding(false)
+        setSuccess(`Build complete. Layer: ${result.layer_id} (${formatBytes(result.size_bytes)})`)
+        load() // Refresh summary
+      },
+      onError: (err: string) => {
+        setBuilding(false)
+        setError(err)
+      },
+    })
+
+    abortRef.current = abort
+  }
+
+  const handleCancel = () => {
+    if (!confirm('Cancel the build? The in-progress build will be aborted and no changes will be applied.')) return
+    abortRef.current?.()
+    setBuilding(false)
+    setBuildLog(prev => [...prev, '--- Build cancelled by user ---'])
+  }
+
+  const toggleTool = (id: string) => {
+    setSelectedTools(prev =>
+      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
+    )
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="p-6 space-y-6 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 120px)' }}>
+      {/* Header */}
+      <div>
+        <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Base Sandbox Configuration</h3>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+          Configure what gets installed in the @base sandbox template. All user sandboxes inherit from this layer.
+        </p>
+      </div>
+
+      <InlineError msg={error} />
+      <InlineSuccess msg={success} />
+
+      {/* Current status */}
+      {summary && (
+        <div className="rounded-xl p-4 space-y-2" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Current State</span>
+            {summary.config ? (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>
+                Configured
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(245, 158, 11, 0.1)', color: '#f59e0b' }}>
+                Unconfigured
+              </span>
+            )}
+          </div>
+          {summary.config && (
+            <div className="grid grid-cols-3 gap-4 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <div>
+                <span className="block font-medium" style={{ color: 'var(--text-secondary)' }}>Layer</span>
+                <span className="font-mono">{summary.layer_id?.slice(0, 12) || 'none'}...</span>
+              </div>
+              <div>
+                <span className="block font-medium" style={{ color: 'var(--text-secondary)' }}>Size</span>
+                {formatBytes(summary.size_bytes)}
+              </div>
+              <div>
+                <span className="block font-medium" style={{ color: 'var(--text-secondary)' }}>Last Built</span>
+                {summary.configured_at ? new Date(summary.configured_at).toLocaleString() : 'never'}
+              </div>
+            </div>
+          )}
+          {!summary.config && (
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              No base configuration has been applied yet. User sandboxes are running on the bare image.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Configuration form */}
+      <div className="rounded-xl p-4 space-y-5" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+        <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Configuration</h4>
+
+        {/* Core tools toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Core Tools</span>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+              Essential packages: git, curl, Node.js 22, Python 3, uv, Docker CLI, jq, ripgrep, etc.
+            </p>
+          </div>
+          <button
+            onClick={() => setCore(!core)}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: core ? 'rgba(34, 197, 94, 0.15)' : 'rgba(107, 114, 128, 0.15)',
+              color: core ? '#22c55e' : 'var(--text-muted)',
+            }}
+          >
+            {core ? 'Enabled' : 'Disabled'}
+          </button>
+        </div>
+
+        {/* Optional tools */}
+        {tools.length > 0 && (
+          <div>
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Optional Tools</span>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {tools.map(tool => (
+                <label
+                  key={tool.id}
+                  className="flex items-start gap-2 p-2.5 rounded-lg cursor-pointer transition-colors"
+                  style={{
+                    background: selectedTools.includes(tool.id) ? 'var(--accent-soft)' : 'var(--bg-tertiary)',
+                    border: selectedTools.includes(tool.id) ? '1px solid var(--accent)' : '1px solid transparent',
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedTools.includes(tool.id)}
+                    onChange={() => toggleTool(tool.id)}
+                    className="mt-0.5"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{tool.name}</span>
+                      {tool.recommended && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
+                          recommended
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] mt-0.5 truncate" style={{ color: 'var(--text-muted)' }}>{tool.description}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Browser engine */}
+        <div>
+          <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Browser Engine</span>
+          <p className="text-xs mt-0.5 mb-2" style={{ color: 'var(--text-muted)' }}>
+            Pre-install a browser into the base layer for web automation tasks.
+          </p>
+          <select
+            value={browserEngine}
+            onChange={e => setBrowserEngine(e.target.value as 'none' | 'default' | 'cloakbrowser')}
+            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+            style={inputStyle}
+          >
+            <option value="none">None</option>
+            <option value="default">Chromium (headless, standard)</option>
+            <option value="cloakbrowser">CloakBrowser + KasmVNC (anti-detection)</option>
+          </select>
+        </div>
+
+        {/* Advanced section */}
+        <div>
+          <button
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="flex items-center gap-1 text-xs font-medium"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            {showAdvanced ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            Advanced
+          </button>
+          {showAdvanced && (
+            <div className="mt-3 space-y-2">
+              <div className="flex items-start gap-2 p-2.5 rounded-lg" style={{ background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.2)' }}>
+                <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" style={{ color: '#f59e0b' }} />
+                <p className="text-[11px]" style={{ color: '#f59e0b' }}>
+                  Extra steps run as root inside the build pod. Incorrect commands can break the base layer
+                  and require a full rebuild. Use with caution.
+                </p>
+              </div>
+              <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                Extra Steps (one shell command per line)
+              </label>
+              <textarea
+                value={extraSteps}
+                onChange={e => setExtraSteps(e.target.value)}
+                placeholder="apt-get install -y mypackage&#10;pip install mytool"
+                rows={4}
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono resize-y"
+                style={inputStyle}
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Build log */}
+      {buildLog.length > 0 && (
+        <div className="rounded-xl p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <span className="text-xs font-medium block mb-2" style={{ color: 'var(--text-secondary)' }}>Build Log</span>
+          <div
+            className="font-mono text-[11px] space-y-0.5 max-h-48 overflow-y-auto p-3 rounded-lg"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}
+          >
+            {buildLog.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
+            {building && (
+              <div className="flex items-center gap-2 mt-1">
+                <Loader2 size={10} className="animate-spin" /> Running...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex items-center justify-between pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
+          {building ? 'Build in progress...' : 'Ready to configure'}
+        </div>
+        <div className="flex items-center gap-2">
+          {building && (
+            <button
+              onClick={handleCancel}
+              className="px-4 py-2 rounded-lg text-xs font-medium"
+              style={{ color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={handleBuild}
+            disabled={building}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white transition-opacity"
+            style={{ background: 'var(--accent)', opacity: building ? 0.5 : 1 }}
+          >
+            {building ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+            {building ? 'Building...' : 'Build Base Layer'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(1024))
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`
+}

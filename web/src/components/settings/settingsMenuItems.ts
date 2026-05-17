@@ -57,6 +57,7 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-mcp', label: 'MCP Servers', icon: Server },
   { id: 'platform-channels', label: 'Channels', icon: Radio },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
+  { id: 'platform-sandbox', label: 'Base Sandbox', icon: Box },
 ]
 
 // Administration — system config, admin/owner only

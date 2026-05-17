@@ -151,7 +151,7 @@ type SandboxTemplateStore interface {
 type SandboxLayer struct {
 	LayerID      string    `json:"layer_id"` // sha256 hex of canonical tar
 	ParentLayer  *string   `json:"parent_layer,omitempty"`
-	CephFSPath   string    `json:"cephfs_path"` // /mnt/astonish-layers/<layer_id>
+	CephFSPath   string    `json:"cephfs_path"` // mount path on the RWX PVC (e.g. /mnt/astonish-layers/<layer_id>); field name is historical — filesystem-agnostic
 	SizeBytes    int64     `json:"size_bytes"`
 	RefCount     int       `json:"ref_count"`
 	CreatedBy    string    `json:"created_by,omitempty"`

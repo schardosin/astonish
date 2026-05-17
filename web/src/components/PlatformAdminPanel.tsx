@@ -1,11 +1,12 @@
 import { useState, lazy, Suspense } from 'react'
-import { Building2, Users, Crown, Shield, Globe, Loader2 } from 'lucide-react'
+import { Building2, Users, Crown, Shield, Globe, Box, Loader2 } from 'lucide-react'
 import { gradientAmber } from './platformAdmin/shared'
 
 const OrgsTab = lazy(() => import('./platformAdmin/OrgsTab'))
 const UsersTab = lazy(() => import('./platformAdmin/UsersTab'))
 const AuthTab = lazy(() => import('./platformAdmin/AuthTab'))
 const ChannelsTab = lazy(() => import('./platformAdmin/ChannelsTab'))
+const SandboxBaseTab = lazy(() => import('./platformAdmin/SandboxBaseTab'))
 
 function TabFallback() {
   return (
@@ -82,6 +83,16 @@ export default function PlatformAdminPanel({ theme, activeTab: externalTab, onTa
           >
             <Globe size={13} /> Channels
           </button>
+          <button
+            onClick={() => onTabChange('sandbox')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+            style={{
+              background: activeTab === 'sandbox' ? 'var(--accent-soft)' : 'transparent',
+              color: activeTab === 'sandbox' ? 'var(--accent)' : 'var(--text-muted)',
+            }}
+          >
+            <Box size={13} /> Base Sandbox
+          </button>
         </div>
       </div>
 
@@ -91,6 +102,7 @@ export default function PlatformAdminPanel({ theme, activeTab: externalTab, onTa
         {activeTab === 'users' && <UsersTab />}
         {activeTab === 'auth' && <AuthTab />}
         {activeTab === 'channels' && <ChannelsTab />}
+        {activeTab === 'sandbox' && <SandboxBaseTab />}
       </Suspense>
     </div>
   )

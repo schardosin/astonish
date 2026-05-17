@@ -1392,5 +1392,11 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 		router.HandleFunc("/api/platform/admin/web-services", PlatformAdminListWebServicesHandler).Methods("GET")
 		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminSetWebServiceKeyHandler).Methods("PUT")
 		router.HandleFunc("/api/platform/admin/web-services/{id}", PlatformAdminDeleteWebServiceHandler).Methods("DELETE")
+
+		// Base sandbox configuration (superadmin only)
+		router.HandleFunc("/api/platform/admin/sandbox/base", PlatformBaseConfigGetHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/sandbox/base/status", PlatformBaseConfigStatusHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/sandbox/base/configure", PlatformBaseConfigBuildHandler).Methods("POST")
+		router.HandleFunc("/api/platform/admin/sandbox/base/tools", PlatformBaseConfigOptionalToolsHandler).Methods("GET")
 	}
 }

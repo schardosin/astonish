@@ -180,6 +180,16 @@ func (cr *ChatRunner) InjectSandboxLayerChain(chain []string) {
 	cr.ctx = store.WithSandboxLayerChain(cr.ctx, chain)
 }
 
+// InjectSandboxLayerChainIfEmpty sets the layer chain only if no chain
+// has been injected yet (e.g., by a team-template resolution). Used to
+// apply the @base configured layer without overriding team templates.
+func (cr *ChatRunner) InjectSandboxLayerChainIfEmpty(chain []string) {
+	if existing := store.SandboxLayerChainFromContext(cr.ctx); len(existing) > 0 {
+		return // team template already set a chain
+	}
+	cr.ctx = store.WithSandboxLayerChain(cr.ctx, chain)
+}
+
 // InjectSessionService adds a tenant-scoped session store to the runner's context
 // so that sub-agents (delegate_tasks) create child sessions in the correct store
 // (e.g., pgstore PersonalSessions) rather than the factory-time default (FileStore).

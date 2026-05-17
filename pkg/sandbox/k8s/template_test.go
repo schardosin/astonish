@@ -160,7 +160,7 @@ func TestBuildTemplateBuilderPodManifest_Volumes(t *testing.T) {
 		t.Fatalf("buildTemplateBuilderPodManifest: %v", err)
 	}
 
-	var layersV, overlayV *corev1.Volume
+	var layersV, overlayV, uppersV *corev1.Volume
 	for i := range pod.Spec.Volumes {
 		v := &pod.Spec.Volumes[i]
 		switch v.Name {
@@ -168,6 +168,8 @@ func TestBuildTemplateBuilderPodManifest_Volumes(t *testing.T) {
 			layersV = v
 		case volumeOverlay:
 			overlayV = v
+		case volumeUppers:
+			uppersV = v
 		}
 	}
 	if layersV == nil || layersV.PersistentVolumeClaim == nil {
@@ -179,13 +181,11 @@ func TestBuildTemplateBuilderPodManifest_Volumes(t *testing.T) {
 	if overlayV == nil || overlayV.EmptyDir == nil {
 		t.Errorf("missing overlay emptyDir volume")
 	}
-
-	// Uppers PVC is NOT mounted in a builder (only sessions need it
-	// for resume), so verify it's absent.
-	for _, v := range pod.Spec.Volumes {
-		if v.Name == volumeUppers {
-			t.Errorf("uppers PVC unexpectedly mounted in builder pod")
-		}
+	// Uppers PVC is mounted because the overlay entrypoint references
+	// $UPPERS_DIR for the resume-tar path (which is safely skipped when
+	// the tarball is absent). The mount must exist to avoid a pod crash.
+	if uppersV == nil || uppersV.PersistentVolumeClaim == nil {
+		t.Fatalf("missing uppers PVC volume (required by overlay entrypoint)")
 	}
 }
 
@@ -205,8 +205,26 @@ func TestBuildTemplateBuilderPodManifest_ContainerShape(t *testing.T) {
 	if c.Image != b.cfg.SandboxImage {
 		t.Errorf("image = %q, want %q", c.Image, b.cfg.SandboxImage)
 	}
-	if len(c.Command) == 0 || !strings.Contains(strings.Join(c.Command, " "), "sleep") {
-		t.Errorf("container Command = %v, want it to include sleep", c.Command)
+	// Command must be empty — the builder uses the image's ENTRYPOINT
+	// (astonish-sandbox-entrypoint) which composes the overlay, then
+	// execs into ASTONISH_HANDOFF (/bin/sleep infinity).
+	if len(c.Command) != 0 {
+		t.Errorf("container Command = %v, want empty (use image ENTRYPOINT)", c.Command)
+	}
+	// Verify ASTONISH_HANDOFF is set so the entrypoint sleeps after
+	// overlay composition (same as session pods).
+	envMap := make(map[string]string)
+	for _, e := range c.Env {
+		envMap[e.Name] = e.Value
+	}
+	if envMap["ASTONISH_HANDOFF"] != "/bin/sleep" {
+		t.Errorf("ASTONISH_HANDOFF = %q, want /bin/sleep", envMap["ASTONISH_HANDOFF"])
+	}
+	if envMap["ASTONISH_HANDOFF_ARGS"] != "infinity" {
+		t.Errorf("ASTONISH_HANDOFF_ARGS = %q, want infinity", envMap["ASTONISH_HANDOFF_ARGS"])
+	}
+	if !strings.HasPrefix(envMap["ASTONISH_SESSION_ID"], "build-") {
+		t.Errorf("ASTONISH_SESSION_ID = %q, want build-<podname> prefix", envMap["ASTONISH_SESSION_ID"])
 	}
 	// Phase F: default backend has empty RuntimeClassName → nil on the
 	// pod (cluster default applies).

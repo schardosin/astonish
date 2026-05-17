@@ -155,3 +155,36 @@ func resolveTemplateLayerChain(ctx context.Context, templateSlug string) []strin
 
 	return chain.LayerIDs
 }
+
+// resolveBaseLayerChain returns the layer chain for sessions that run against
+// the @base template when the admin has configured it via Configure Base
+// Sandbox. The returned chain is ["@base", "<top_layer_id>"] where
+// top_layer_id is the content-addressed delta produced by the last
+// successful build.
+//
+// Returns nil if:
+//   - The platform PGStore is not available (personal mode).
+//   - @base has no top_layer_id (admin hasn't configured it yet; fresh install).
+//   - Any DB query error (fail-open: sessions still work with plain @base).
+func resolveBaseLayerChain(ctx context.Context) []string {
+	pgStore := getPlatformPGStore()
+	if pgStore == nil {
+		return nil
+	}
+	tplStore := pgStore.SandboxTemplatesPG()
+	if tplStore == nil {
+		return nil
+	}
+
+	topLayerID, err := tplStore.GetBaseTopLayerID(ctx)
+	if err != nil {
+		slog.Debug("failed to resolve @base top_layer_id", "error", err)
+		return nil
+	}
+	if topLayerID == "" {
+		return nil // fresh install, no configured base
+	}
+
+	// Chain: seed-Job @base at the bottom, configured delta on top.
+	return []string{sandbox.BaseTemplateID, topLayerID}
+}

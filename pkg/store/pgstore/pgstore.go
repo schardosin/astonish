@@ -111,6 +111,18 @@ func (s *PGStore) SandboxTemplates() store.SandboxTemplateStore {
 	return NewPGSandboxTemplateStore(pool)
 }
 
+// SandboxTemplatesPG returns the pgstore-specific template store with access
+// to base-config helpers (GetBaseConfig, SetBaseConfig) that are not part of
+// the generic SandboxTemplateStore interface.
+func (s *PGStore) SandboxTemplatesPG() *PGSandboxTemplateStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for sandbox templates (PG)", "error", err)
+		return nil
+	}
+	return &PGSandboxTemplateStore{pool: pool}
+}
+
 // SandboxLayers returns the platform-scoped content-addressed layer store.
 // Layer rows live in the platform database's public.sandbox_layers table;
 // the actual bytes live on CephFS at cephfs_path. Ref-count discipline is

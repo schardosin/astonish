@@ -760,6 +760,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Resolve @base configuration layer. When the admin has run Configure
+	// Base Sandbox, the resulting delta layer is stored as @base's
+	// top_layer_id. Sessions must include it in their chain so they see
+	// the installed tools. Only applies when no team-template chain was
+	// already injected (team templates include @base in their own chain).
+	if chain := resolveBaseLayerChain(r.Context()); len(chain) > 0 {
+		runner.InjectSandboxLayerChainIfEmpty(chain)
+	}
+
 	// Inject per-team disabled tool list so the agent filters them out.
 	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
 		if settings, err := svc.Settings.Get(r.Context()); err == nil && len(settings.DisabledTools) > 0 {

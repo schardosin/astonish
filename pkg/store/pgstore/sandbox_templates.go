@@ -26,6 +26,13 @@ func NewPGSandboxTemplateStore(pool *pgxpool.Pool) store.SandboxTemplateStore {
 	return &PGSandboxTemplateStore{pool: pool}
 }
 
+// NewPGSandboxTemplateStoreDirect returns the concrete type so callers can
+// access platform-specific helpers (GetBaseConfig, SetBaseConfig,
+// GetBaseTopLayerID) that are not part of the generic interface.
+func NewPGSandboxTemplateStoreDirect(pool *pgxpool.Pool) *PGSandboxTemplateStore {
+	return &PGSandboxTemplateStore{pool: pool}
+}
+
 func (s *PGSandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTemplate) error {
 	if tpl == nil {
 		return errors.New("sandbox template is nil")

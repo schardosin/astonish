@@ -1,0 +1,141 @@
+# Makefile.integration — Integration and smoke tests for the sandbox layer-chain pipeline.
+#
+# These tests require external dependencies (Postgres, K8s cluster, auth tokens)
+# and are NOT run as part of `make test` or `go test ./...`.
+#
+# Quick reference:
+#   make -f Makefile.integration test-integration     # Real PG, 4 scenarios
+#   make -f Makefile.integration smoke                # Self-driving cluster test
+#   make -f Makefile.integration get-token            # Obtain a token via browser auth
+#   make -f Makefile.integration all                  # Both
+#
+# Configuration:
+#   Copy .env.integration.example → .env.integration and fill in your values.
+#   The Makefile auto-loads .env.integration if present.
+#
+# Prerequisites:
+#   test-integration:
+#     - ASTONISH_TEST_DSN pointing to a Postgres instance
+#       Example: postgres://postgres:554252@192.168.1.196:5432/astonish_dxmtlc_platform
+#     - Tests create/drop temporary schemas — safe for shared dev DBs
+#
+#   smoke:
+#     - kubectl configured with cluster access
+#     - ASTONISH_TEST_TOKEN set to a valid Bearer JWT
+#     - ASTONISH_API_URL (default: https://devastonish.local.muxpie.com)
+#     - ASTONISH_SANDBOX_NS (default: astonish-sandbox)
+#
+# Token generation (for ASTONISH_TEST_TOKEN):
+#   Option A (recommended): Use the built-in command — opens a browser, outputs token:
+#     astonish platform issue-token --server $ASTONISH_API_URL
+#
+#   Option B: Use the login API:
+#     curl -s -X POST $ASTONISH_API_URL/api/auth/login \
+#       -H 'Content-Type: application/json' \
+#       -d '{"email":"your@email.com","password":"..."}' | jq -r '.access_token'
+#
+# ---------------------------------------------------------------------------
+
+# Auto-load .env.integration if it exists (does not override env vars already set).
+-include .env.integration
+export
+
+.DEFAULT_GOAL := help
+
+.PHONY: help all test-integration smoke clean-schemas get-token
+
+help:
+	@echo "Usage: make -f Makefile.integration <target>"
+	@echo ""
+	@echo "Targets:"
+	@echo "  test-integration  Run Go integration tests against real Postgres (4 scenarios)"
+	@echo "  smoke             Self-driving cluster smoke test (creates session, verifies tools)"
+	@echo "  get-token         Obtain an access token via browser auth"
+	@echo "  all               Run both integration + smoke"
+	@echo "  clean-schemas     Drop any leftover test schemas from the DB"
+	@echo ""
+	@echo "Required environment variables:"
+	@echo "  ASTONISH_TEST_DSN    Postgres connection string (for test-integration)"
+	@echo "  ASTONISH_TEST_TOKEN  Bearer JWT token (for smoke)"
+	@echo ""
+	@echo "Optional:"
+	@echo "  ASTONISH_API_URL     API base URL (default: http://localhost:9393)"
+	@echo "  ASTONISH_SANDBOX_NS  K8s namespace for sandbox pods (default: astonish-sandbox)"
+	@echo "  ASTONISH_TEST_TEAM   Team slug to test (default: general)"
+
+# ---------------------------------------------------------------------------
+# Integration tests (real Postgres, isolated schemas)
+# ---------------------------------------------------------------------------
+
+test-integration:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then \
+		echo ""; \
+		echo "ERROR: ASTONISH_TEST_DSN is not set."; \
+		echo ""; \
+		echo "Set it to a Postgres connection string, e.g.:"; \
+		echo "  export ASTONISH_TEST_DSN='postgres://postgres:554252@192.168.1.196:5432/astonish_dxmtlc_platform'"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "═══════════════════════════════════════════════════"
+	@echo " Integration Tests — Layer-Chain Pipeline"
+	@echo " DB: $$ASTONISH_TEST_DSN"
+	@echo "═══════════════════════════════════════════════════"
+	@echo ""
+	go test -tags=integration -count=1 -v ./pkg/api/ -run 'TestChainScenario'
+	@echo ""
+	@echo "✓ All integration tests passed."
+
+# ---------------------------------------------------------------------------
+# Cluster smoke test (self-driving: creates session, waits for pod, verifies tools)
+# ---------------------------------------------------------------------------
+
+smoke:
+	@if [ -z "$$ASTONISH_TEST_TOKEN" ]; then \
+		echo ""; \
+		echo "ERROR: ASTONISH_TEST_TOKEN is not set."; \
+		echo ""; \
+		echo "Obtain a token with:"; \
+		echo "  export ASTONISH_TEST_TOKEN=\$$(make -f Makefile.integration get-token)"; \
+		echo ""; \
+		echo "Or interactively:"; \
+		echo "  export ASTONISH_TEST_TOKEN=\$$(astonish platform issue-token --server \$$ASTONISH_API_URL)"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@./scripts/smoke-layer-chain.sh
+
+# ---------------------------------------------------------------------------
+# Token helper — obtains a fresh token via browser-based auth
+# ---------------------------------------------------------------------------
+
+ASTONISH_API_URL ?= http://localhost:9393
+
+get-token:
+	@echo "Obtaining access token from $$ASTONISH_API_URL..." >&2
+	@TOKEN=$$(go run . platform issue-token --server "$$ASTONISH_API_URL") && \
+		echo "$$TOKEN" && \
+		echo "" >&2 && \
+		echo "Token obtained. Export it with:" >&2 && \
+		echo "  export ASTONISH_TEST_TOKEN='$$TOKEN'" >&2
+
+# ---------------------------------------------------------------------------
+# Run everything
+# ---------------------------------------------------------------------------
+
+all: test-integration smoke
+
+# ---------------------------------------------------------------------------
+# Utility: clean leftover test schemas (if tests crashed without cleanup)
+# ---------------------------------------------------------------------------
+
+clean-schemas:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then \
+		echo "ERROR: ASTONISH_TEST_DSN is not set."; \
+		exit 1; \
+	fi
+	@echo "Dropping leftover chain_test_* schemas..."
+	@psql "$$ASTONISH_TEST_DSN" -t -c \
+		"SELECT 'DROP SCHEMA ' || schema_name || ' CASCADE;' FROM information_schema.schemata WHERE schema_name LIKE 'chain_test_%';" \
+		| psql "$$ASTONISH_TEST_DSN"
+	@echo "Done."

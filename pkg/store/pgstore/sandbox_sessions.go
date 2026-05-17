@@ -151,6 +151,15 @@ func scanRow(r rowScanner) (*store.SandboxSession, error) {
 		return nil, err
 	}
 	sess.ExposedPorts = ports
+
+	// Reverse the UUID→"@base" mapping applied on write (lines 181-186).
+	// The DB column is UUID-typed, so the read path yields the canonical
+	// UUID string; restore the in-memory sentinel that the K8s backend
+	// (and SaveSessionAsTemplate) expects.
+	if sess.TemplateID == baseTemplateUUID {
+		sess.TemplateID = "@base"
+	}
+
 	return sess, nil
 }
 

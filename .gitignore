@@ -39,6 +39,7 @@ astonish-linux-*
 # Local environment variables
 .env
 .env.*
+!.env.*.example
 
 # MCP config (may contain API tokens)
 .mcp.json

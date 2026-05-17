@@ -1,7 +1,9 @@
 package astonish
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
@@ -55,6 +58,8 @@ func handlePlatformCommand(args []string) error {
 		return handlePlatformOrgCommand(args[1:])
 	case "user":
 		return handlePlatformUserCommand(args[1:])
+	case "issue-token":
+		return handlePlatformIssueToken(args[1:])
 	default:
 		printPlatformUsage()
 		return fmt.Errorf("unknown platform subcommand: %s", args[0])
@@ -1180,6 +1185,171 @@ func truncateStr(s string, maxLen int) string {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// platform issue-token
+// ---------------------------------------------------------------------------
+
+// handlePlatformIssueToken obtains an access token via browser-based authentication
+// and prints it to stdout. No credentials are persisted locally.
+// Supports both SSO (device-code flow) and password authentication.
+func handlePlatformIssueToken(args []string) error {
+	var serverURL, email, password, org, team string
+	useSSO := false
+	outputJSON := false
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-h", "--help":
+			printPlatformIssueTokenUsage()
+			return nil
+		case "--server":
+			if i+1 < len(args) {
+				serverURL = args[i+1]
+				i++
+			}
+		case "--sso":
+			useSSO = true
+		case "--email":
+			if i+1 < len(args) {
+				email = args[i+1]
+				i++
+			}
+		case "--password":
+			if i+1 < len(args) {
+				password = args[i+1]
+				i++
+			}
+		case "--org":
+			if i+1 < len(args) {
+				org = args[i+1]
+				i++
+			}
+		case "--team":
+			if i+1 < len(args) {
+				team = args[i+1]
+				i++
+			}
+		case "--json":
+			outputJSON = true
+		}
+	}
+
+	// Resolve server URL: explicit flag > remote config > error
+	if serverURL == "" {
+		cfg, _ := client.LoadRemoteConfig()
+		if cfg != nil && cfg.URL != "" {
+			serverURL = cfg.URL
+			if org == "" {
+				org = cfg.Org
+			}
+			if team == "" {
+				team = cfg.Team
+			}
+		}
+	}
+	if serverURL == "" {
+		return fmt.Errorf("--server is required (no remote config found)")
+	}
+	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
+		serverURL = "https://" + serverURL
+	}
+	serverURL = strings.TrimRight(serverURL, "/")
+
+	// Auto-detect mode: if SSO providers exist and no explicit email, use SSO.
+	if !useSSO && email == "" {
+		providers, _ := client.ListSSOProviders(serverURL)
+		if len(providers) > 0 {
+			useSSO = true
+		}
+	}
+
+	var result *client.TokenResult
+	var err error
+
+	if useSSO {
+		result, err = client.IssueTokenSSO(serverURL, "", func(status string) {
+			switch status {
+			case "opening_browser":
+				fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
+			case "browser_failed":
+				fmt.Fprintln(os.Stderr, "Could not open browser. Please open the URL printed in your terminal.")
+			case "polling":
+				fmt.Fprintln(os.Stderr, "Waiting for authentication (complete login in browser)...")
+			}
+		})
+	} else {
+		// Password mode — prompt if not provided
+		if email == "" {
+			fmt.Fprint(os.Stderr, "Email: ")
+			reader := bufio.NewReader(os.Stdin)
+			email, _ = reader.ReadString('\n')
+			email = strings.TrimSpace(email)
+		}
+		if password == "" {
+			fmt.Fprint(os.Stderr, "Password: ")
+			passwordBytes, passErr := term.ReadPassword(int(os.Stdin.Fd()))
+			fmt.Fprintln(os.Stderr) // newline
+			if passErr != nil {
+				return fmt.Errorf("failed to read password: %w", passErr)
+			}
+			password = string(passwordBytes)
+		}
+		if email == "" || password == "" {
+			return fmt.Errorf("email and password are required")
+		}
+		result, err = client.IssueTokenPassword(serverURL, email, password, org, team)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	if outputJSON {
+		out := map[string]any{
+			"access_token": result.AccessToken,
+			"expires_in":   result.ExpiresIn,
+			"user_email":   result.UserEmail,
+			"org_slug":     result.OrgSlug,
+			"team_slug":    result.TeamSlug,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+
+	// Default: print bare token to stdout (pipe-friendly)
+	fmt.Print(result.AccessToken)
+	return nil
+}
+
+func printPlatformIssueTokenUsage() {
+	fmt.Println("usage: astonish platform issue-token [options]")
+	fmt.Println("")
+	fmt.Println("Obtain an access token via browser-based authentication.")
+	fmt.Println("The token is printed to stdout; status messages go to stderr.")
+	fmt.Println("No credentials are stored locally.")
+	fmt.Println("")
+	fmt.Println("options:")
+	fmt.Println("  --server <url>     Server URL (uses remote config if omitted)")
+	fmt.Println("  --sso              Force SSO device-code flow")
+	fmt.Println("  --email <email>    Email for password auth (prompts if omitted)")
+	fmt.Println("  --password <pass>  Password (prompts interactively if omitted)")
+	fmt.Println("  --org <slug>       Organization scope")
+	fmt.Println("  --team <slug>      Team scope")
+	fmt.Println("  --json             Output full JSON (token + metadata)")
+	fmt.Println("")
+	fmt.Println("examples:")
+	fmt.Println("  # SSO (auto-detected if server has SSO providers):")
+	fmt.Println("  astonish platform issue-token --server https://astonish.internal")
+	fmt.Println("")
+	fmt.Println("  # Password auth:")
+	fmt.Println("  astonish platform issue-token --server https://astonish.internal --email admin@co.com")
+	fmt.Println("")
+	fmt.Println("  # Use in scripts:")
+	fmt.Println("  export ASTONISH_TEST_TOKEN=$(astonish platform issue-token --server $URL)")
+}
+
+// ---------------------------------------------------------------------------
 // Usage printers
 // ---------------------------------------------------------------------------
 
@@ -1198,6 +1368,7 @@ func printPlatformUsage() {
 	fmt.Println("commands:")
 	fmt.Println("  init              Initialize the platform database")
 	fmt.Println("  gen-secret        Generate a random secret (for masterKey or jwtSecret)")
+	fmt.Println("  issue-token       Obtain an access token via browser auth (no local persistence)")
 	fmt.Println("  sandbox-audit     Audit sandbox PVCs for orphaned data")
 	fmt.Println("  status            Show platform status and counts")
 	fmt.Println("  org               Manage organizations")
@@ -1206,6 +1377,7 @@ func printPlatformUsage() {
 	fmt.Println("examples:")
 	fmt.Println("  astonish platform init --host 10.0.0.5 --password secret")
 	fmt.Println("  astonish platform status")
+	fmt.Println("  astonish platform issue-token --server https://astonish.internal")
 	fmt.Println("  astonish platform org create --name 'Acme' --slug acme")
 	fmt.Println("  astonish platform org invite --org acme --email alice@acme.com")
 	fmt.Println("  astonish platform org list")

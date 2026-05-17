@@ -106,6 +106,32 @@ func teamTemplateSessionID(teamSlug string) string {
 	return "team-template-" + teamSlug
 }
 
+// ---------------------------------------------------------------------------
+// Layer-chain resolution
+// ---------------------------------------------------------------------------
+//
+// These helpers resolve the template DAG in the platform DB into concrete
+// layer chains consumed by the K8s backend (SessionSpec.LayerChain →
+// ASTONISH_LAYER_CHAIN env var → overlay entrypoint).
+//
+// Chain semantics:
+//   - Oldest (bottom) first, youngest (top) last.
+//   - The literal "@base" MUST appear exactly once as chain[0] — it
+//     represents the seed-Job rootfs directory on the PVC.
+//   - Subsequent entries are content-addressed SHA-256 deltas.
+//
+// Sentinel rule (§5.12 migration 005): the seed migration stores
+// top_layer_id='@base' as a FK-satisfying sentinel meaning "no delta
+// has been applied yet." Resolvers MUST filter this sentinel from CTE
+// results so the chain never contains duplicate @base entries.
+// ---------------------------------------------------------------------------
+
+// baseTopLayerResolver is the narrow interface required by
+// resolveBaseLayerChainWith. Satisfied by *pgstore.PGSandboxTemplateStore.
+type baseTopLayerResolver interface {
+	GetBaseTopLayerID(ctx context.Context) (string, error)
+}
+
 // resolveTemplateLayerChain resolves a template slug (e.g. "team-general")
 // to an ordered layer chain (oldest-first, e.g. ["@base", "<sha256>"]).
 //
@@ -128,7 +154,13 @@ func resolveTemplateLayerChain(ctx context.Context, templateSlug string) []strin
 	if templates == nil {
 		return nil
 	}
+	return resolveTemplateLayerChainWith(ctx, templates, templateSlug)
+}
 
+// resolveTemplateLayerChainWith is the testable core of
+// resolveTemplateLayerChain. It accepts an explicit template store so
+// tests can inject mocks without touching the package-level singleton.
+func resolveTemplateLayerChainWith(ctx context.Context, templates store.SandboxTemplateStore, templateSlug string) []string {
 	// Derive the lookup parameters from the slug convention.
 	// Template slugs are "team-<teamSlug>"; scope=team, owner_id=<teamSlug>.
 	teamSlug := strings.TrimPrefix(templateSlug, "team-")
@@ -153,7 +185,24 @@ func resolveTemplateLayerChain(ctx context.Context, templateSlug string) []strin
 		return nil
 	}
 
-	return chain.LayerIDs
+	// Filter the "@base" sentinel from the CTE result. The seed migration
+	// (005) stores top_layer_id='@base' to satisfy the FK constraint; it
+	// is NOT a real content-addressed delta. Without this filter, fresh-
+	// install scenarios produce duplicate @base entries in the chain.
+	filtered := make([]string, 0, len(chain.LayerIDs))
+	for _, id := range chain.LayerIDs {
+		if id != sandbox.BaseTemplateID {
+			filtered = append(filtered, id)
+		}
+	}
+	if len(filtered) == 0 {
+		// All entries were sentinels — template has no real deltas.
+		return nil
+	}
+
+	// Prepend the literal seed-layer (@base) so the overlay entrypoint
+	// sees: lowerdir = @base : <configured-top> : ... : <team-layer>
+	return append([]string{sandbox.BaseTemplateID}, filtered...)
 }
 
 // resolveBaseLayerChain returns the layer chain for sessions that run against
@@ -165,6 +214,7 @@ func resolveTemplateLayerChain(ctx context.Context, templateSlug string) []strin
 // Returns nil if:
 //   - The platform PGStore is not available (personal mode).
 //   - @base has no top_layer_id (admin hasn't configured it yet; fresh install).
+//   - @base's top_layer_id is the literal "@base" sentinel (fresh install).
 //   - Any DB query error (fail-open: sessions still work with plain @base).
 func resolveBaseLayerChain(ctx context.Context) []string {
 	pgStore := getPlatformPGStore()
@@ -175,14 +225,19 @@ func resolveBaseLayerChain(ctx context.Context) []string {
 	if tplStore == nil {
 		return nil
 	}
+	return resolveBaseLayerChainWith(ctx, tplStore)
+}
 
+// resolveBaseLayerChainWith is the testable core of resolveBaseLayerChain.
+func resolveBaseLayerChainWith(ctx context.Context, tplStore baseTopLayerResolver) []string {
 	topLayerID, err := tplStore.GetBaseTopLayerID(ctx)
 	if err != nil {
 		slog.Debug("failed to resolve @base top_layer_id", "error", err)
 		return nil
 	}
-	if topLayerID == "" {
-		return nil // fresh install, no configured base
+	// Empty or literal sentinel → no configured delta exists.
+	if topLayerID == "" || topLayerID == sandbox.BaseTemplateID {
+		return nil
 	}
 
 	// Chain: seed-Job @base at the bottom, configured delta on top.

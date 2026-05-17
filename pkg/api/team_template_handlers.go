@@ -214,16 +214,21 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Persist the layer and template DAG rows in the platform DB.
+	// This MUST succeed; without the DB rows, chat sessions cannot resolve
+	// the team's layer chain and the save is effectively a no-op.
 	pgStore := getPlatformPGStore()
-	if pgStore != nil {
-		if err := persistTeamTemplateArtifact(r.Context(), pgStore, tc.TeamSlug, templateSlug, artifact); err != nil {
-			// Log but don't fail — the PVC layer exists either way.
-			// A future "resolve" call will fail gracefully and fall back.
-			slog.Error("failed to persist template artifact to platform DB",
-				"team", tc.TeamSlug,
-				"layer", artifact.LayerID,
-				"error", err)
-		}
+	if pgStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform DB not available — cannot persist template")
+		return
+	}
+	if err := persistTeamTemplateArtifact(r.Context(), pgStore, tc.TeamSlug, templateSlug, artifact); err != nil {
+		slog.Error("failed to persist template artifact to platform DB",
+			"team", tc.TeamSlug,
+			"layer", artifact.LayerID,
+			"parentLayer", artifact.ParentLayer,
+			"error", err)
+		respondError(w, http.StatusInternalServerError, "failed to persist template: "+err.Error())
+		return
 	}
 
 	// Update team settings to use this template

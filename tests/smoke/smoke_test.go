@@ -36,6 +36,7 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
@@ -94,6 +95,10 @@ func TestSmokeLayerChain(t *testing.T) {
 		t.Fatalf("NewPlatformServices: %v", err)
 	}
 	t.Cleanup(func() { pgStore.Close() })
+
+	// Seed the Bifrost provider in platform settings (in platform mode,
+	// providers come from DB not config.yaml).
+	seedPlatformProvider(t, ctx, pgStore)
 
 	// Create PlatformAuth
 	authCfg := config.PlatformAuthConfig{
@@ -319,9 +324,11 @@ sandbox:
     cpu: 2
     processes: 500
   kubernetes:
+    kubeconfig_path: /root/.kube/config
     namespace: %s
     control_plane_namespace: astonish
     overlay_mode: fuse
+    privileged_pods: true
     sandbox_image: schardosin/astonish-sandbox-base:dev
     layers_pvc_name: astonish-layers
     uppers_pvc_name: astonish-uppers
@@ -681,9 +688,19 @@ func resetBaseSentinel(t *testing.T, ctx context.Context, platformDSN string) {
 	}
 	defer conn.Close(ctx)
 
-	_, err = conn.Exec(ctx, `UPDATE sandbox_templates SET top_layer_id = '@base' WHERE slug = '@base'`)
+	_, err = conn.Exec(ctx, `UPDATE sandbox_templates SET top_layer_id = '@base' WHERE slug = 'base' AND scope = 'global'`)
 	if err != nil {
 		t.Fatalf("reset @base sentinel: %v", err)
+	}
+
+	// Verify the update took effect
+	var topLayerID string
+	err = conn.QueryRow(ctx, `SELECT top_layer_id FROM sandbox_templates WHERE slug = 'base' AND scope = 'global'`).Scan(&topLayerID)
+	if err != nil {
+		t.Fatalf("verify reset: %v", err)
+	}
+	if topLayerID != "@base" {
+		t.Fatalf("reset failed: top_layer_id=%q, want '@base'", topLayerID)
 	}
 	t.Log("  Reset @base.top_layer_id to sentinel '@base'")
 }
@@ -719,4 +736,39 @@ func doPost(t *testing.T, url string, body any, token string) *http.Response {
 		t.Fatalf("do request %s: %v", url, err)
 	}
 	return resp
+}
+
+// ---------------------------------------------------------------------------
+// Platform Provider Seeding
+// ---------------------------------------------------------------------------
+
+func seedPlatformProvider(t *testing.T, ctx context.Context, pgStore *pgstore.PGStore) {
+	t.Helper()
+
+	bifrostURL := os.Getenv("BIFROST_BASE_URL")
+	if bifrostURL == "" {
+		bifrostURL = "https://bifrost.local.muxpie.com"
+	}
+
+	apiKey := os.Getenv("BIFROST_API_KEY")
+	if apiKey == "" {
+		t.Fatal("BIFROST_API_KEY env var is required for the smoke test (LLM provider)")
+	}
+
+	settings := &store.PlatformSettings{
+		DefaultProvider: "Bifrost",
+		DefaultModel:    "sapaicore/anthropic--claude-4.6-opus",
+		Providers: map[string]store.ProviderConfig{
+			"Bifrost": {
+				"type":     "openai_compat",
+				"base_url": bifrostURL,
+				"api_key":  apiKey,
+			},
+		},
+	}
+
+	if err := pgStore.PlatformSettings().Save(ctx, settings); err != nil {
+		t.Fatalf("seed platform provider: %v", err)
+	}
+	t.Log("Seeded Bifrost provider in platform settings")
 }

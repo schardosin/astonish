@@ -265,7 +265,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 }
 
 // Port returns the port the server is listening on.
+// When port 0 was requested, this returns the actual port assigned by the OS.
 func (s *StudioServer) Port() int {
+	if s.port == 0 && s.listener != nil {
+		return s.listener.Addr().(*net.TCPAddr).Port
+	}
 	return s.port
 }
 

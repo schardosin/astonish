@@ -140,7 +140,7 @@ type SandboxBackend interface {
 
     // Stop a session container (idle eviction, pause).
     // For K8s backend: deletes pod after streaming upper layer via tar+zstd to
-    // CephFS for later resume. See §7 for the canonical tar pipeline.
+    // the uppers PVC for later resume. See §7 for the canonical tar pipeline.
     StopSession(ctx context.Context, sessionID string) error
 
     // Permanently destroy a session and all its data. Idempotent.
@@ -262,7 +262,7 @@ This keeps the K8s backend free of database-schema knowledge: the backend speaks
 
 **Updating `@base`** is done by the admin starting a session from `@base`, customizing it, and invoking **save-as-@base**:
 
-1. Tar-stream the session upper to CephFS (while computing `sha256`); register as a new `sandbox_layers` row with `scope='global'`, `parent_layer_id=<old @base.top_layer_id>`.
+1. Tar-stream the session upper to the layers PVC (while computing `sha256`); register as a new `sandbox_layers` row with `scope='global'`, `parent_layer_id=<old @base.top_layer_id>`.
 2. In a **single PG transaction**:
    - Insert new layer row (ref_count starts at 0)
    - `UPDATE sandbox_templates SET top_layer_id = <new>, version = version + 1, refreshed_at = now() WHERE slug = 'base' AND version = <expected>` -- optimistic concurrency; conflicting simultaneous saves cause the second to retry
@@ -504,7 +504,7 @@ Implemented in `pkg/sandbox/k8s/files.go`. Matches capability of Incus Files API
   - `version` (optimistic concurrency)
   - `is_default_for_scope` (at most one per scope, scope_ref_id)
   - `purpose` (`NULL` or `'fleet'`)
-- Layers live on CephFS at `/mnt/astonish-layers/<sha256>/rootfs/` and are indexed in `sandbox_layers` (§5.11). A session composes the full chain as ordered lowerdirs (§5.3).
+- Layers live on the RWX layers PVC at `/mnt/astonish-layers/<sha256>/rootfs/` and are indexed in `sandbox_layers` (§5.11). A session composes the full chain as ordered lowerdirs (§5.3).
 - No template ever owns its layers exclusively -- layer lifetime is governed by reference counting (§5.12).
 
 **First-run bootstrap (Status: shipped as a Helm hook).**
@@ -565,7 +565,7 @@ The `pkg/sandbox/k8s/template.go::buildCaptureScript` helper builds the capture 
 
 Authorization: scope-appropriate actor required. `save-as-@base` is a privileged variant that updates `@base.top_layer_id` in place (§3.9) instead of creating a new template row — restricted to `superadmin`.
 
-**Rationale (tar+zstd vs rsync).** rsync's cost on RWX filesystems is dominated by per-file metadata round-trips (`readdir`, `stat`, `setattr`, open/close per file). For a typical `node_modules` or Python venv with tens of thousands of files, that is 100k+ MDS RPCs (CephFS) or NFS round-trips. A single tar stream reads the source tree sequentially (local disk, fast) and produces one sequential writer on the PVC, bypassing most metadata chatter. Empirically 3–10× faster for cold copies of many-small-file trees. `zstd --adapt` scales compression level with CPU headroom; `-T0` uses all cores.
+**Rationale (tar+zstd vs rsync).** rsync's cost on RWX filesystems is dominated by per-file metadata round-trips (`readdir`, `stat`, `setattr`, open/close per file). For a typical `node_modules` or Python venv with tens of thousands of files, that is 100k+ metadata RPCs (CephFS MDS, NFS, or equivalent). A single tar stream reads the source tree sequentially (local disk, fast) and produces one sequential writer on the PVC, bypassing most metadata chatter. Empirically 3–10× faster for cold copies of many-small-file trees. `zstd --adapt` scales compression level with CPU headroom; `-T0` uses all cores.
 
 **Preservation requirements (both eviction and save paths):**
 - `--numeric-owner` — required because user-namespaced pods remap UID/GID; textual user lookups on the shared PVC would not resolve.
@@ -796,7 +796,7 @@ All setters use the partial unique index on `sandbox_templates (scope, COALESCE(
 
 In a multi-pod Astonish deployment, any pod must be able to:
 
-- **Create** a sandbox session (solved by shared PG + shared CephFS + shared K8s namespace; §5.3).
+- **Create** a sandbox session (solved by shared PG + shared RWX PVC + shared K8s namespace; §5.3).
 - **Exec** against any session created by any pod (solved by shared K8s namespace; `pods/exec` is stateless).
 - **Continue a long-lived stream** (SSE chat, interactive PTY) when the originating pod dies or the client reconnects to a different pod.
 
@@ -973,8 +973,9 @@ sandbox:
     runtimeClassName: ""        # e.g. "sysbox-runc"
     fuseDeviceResource: ""      # e.g. "smarter-devices/fuse"
 
-  # RWX PVCs. StorageClass MUST provide RWX (CephFS, NFS, EFS, Manila,
-  # Azure Files). Required.
+  # RWX PVCs. StorageClass MUST provide ReadWriteMany access mode.
+  # Suitable: CephFS, NFS, EFS, Azure Files, OpenStack Manila.
+  # NOT suitable: Cinder, EBS, Azure Disk (these are RWO block storage).
   storage:
     storageClassName: ""        # REQUIRED — see docs/deployment/kubernetes.md
     layers:
@@ -1070,7 +1071,7 @@ Round 2 of the design adds two new tables to support the content-addressed layer
 
 ### 7.1 `platform.sandbox_layers` table (platform schema)
 
-**Scope placement.** Layers live in the `platform` schema (deployment-wide), not per-org. Rationale: `@base` is a single deployment-wide template, and dedup across orgs/teams is a core property. Per-org duplication would waste CephFS bytes and complicate `@base` updates. Cross-org visibility is constrained at the application layer (queries always filter by `scope` + caller's org/team/user); row-level security is a defense-in-depth overlay.
+**Scope placement.** Layers live in the `platform` schema (deployment-wide), not per-org. Rationale: `@base` is a single deployment-wide template, and dedup across orgs/teams is a core property. Per-org duplication would waste storage bytes and complicate `@base` updates. Cross-org visibility is constrained at the application layer (queries always filter by `scope` + caller's org/team/user); row-level security is a defense-in-depth overlay.
 
 ```sql
 CREATE TABLE platform.sandbox_layers (
@@ -1079,7 +1080,7 @@ CREATE TABLE platform.sandbox_layers (
     size_bytes       BIGINT NOT NULL,
     scope            TEXT NOT NULL CHECK (scope IN ('global','org','team','personal')),
     scope_ref_id     UUID,                         -- org_id / team_id / user_id; NULL iff scope='global'
-    cephfs_path      TEXT NOT NULL,                -- /mnt/astonish-layers/<layer_id>
+    cephfs_path      TEXT NOT NULL,                -- mount path (e.g. /mnt/astonish-layers/<layer_id>); column name is historical — filesystem-agnostic
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_by       UUID REFERENCES platform.users(id),
     ref_count        INT NOT NULL DEFAULT 0 CHECK (ref_count >= 0)
@@ -1165,7 +1166,7 @@ CREATE TABLE {team_schema}.sandbox_sessions (
     exposed_ports      JSONB NOT NULL DEFAULT '[]',
     base_domain        TEXT,
     pinned             BOOLEAN NOT NULL DEFAULT FALSE,
-    upper_persisted_at TIMESTAMPTZ,                -- when evicted, marks CephFS upper tar-stream time
+    upper_persisted_at TIMESTAMPTZ,                -- when evicted, marks upper tar-stream persistence time
     created_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_active_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -1347,9 +1348,10 @@ The prebuilt `astonish-sandbox-base` image MUST ship GNU tar with xattr/ACL supp
    | 4 | **Sysbox** (optional) | `mode: kernel`, `runtimeClassName: sysbox-runc` | Sysbox installed on sandbox nodes (`sysbox-deploy-k8s`). Kept for operators who already run Sysbox. | Supported |
 
 3. **Shared RWX filesystem** reachable via a RWX StorageClass (mounted into pods through the `astonish-layers` and `astonish-uppers` PVCs).
-   - CephFS, NFS, EFS, Azure Files, Manila (SAP Converged Cloud), or any RWX provisioner with POSIX semantics.
+   - Any provisioner that provides `ReadWriteMany` PVs with POSIX semantics: CephFS, NFS, EFS, Azure Files, OpenStack Manila, or equivalent.
    - Must support extended attributes, symlinks, and ACLs.
-   - SAP Converged Cloud note: no default RWX class; provision via Manila or an NFS server and set `sandbox.storage.storageClassName` in your Helm values file.
+   - **Cinder / EBS / Azure Disk are not suitable.** These are block-storage services that provision RWO (ReadWriteOnce) volumes — only one node can attach at a time. The sandbox backend requires multi-node concurrent access. Use the corresponding *filesystem* service instead (Manila for OpenStack, EFS for AWS, Azure Files for AKS).
+   - SAP Converged Cloud (OpenStack-based) note: no default RWX class exists; provision via **Manila** (OpenStack's shared-filesystem service — typically backed by CephFS or NFS) and set `sandbox.storage.storageClassName` in your Helm values. Do not confuse Manila with Cinder — Cinder is block storage (RWO only).
 4. **PostgreSQL database** (already required by platform mode; see `docs/architecture/multi-tenant-platform.md`). LISTEN/NOTIFY and advisory locks are used by the chat event journal (§5.14, design) and any future deferred GC reconciler (§5.12.2); both are core PG features, no extensions required.
 5. **Node kernel** supports overlayfs (kernel path) or FUSE (fuse path). Linux ≥ 5.15 covers both; userns + `overlay -o userxattr` needs ≥ 5.11.
    - `overlay.max_lower` ≥ `sandbox.layers.maxChainDepth` (default 20). Distro defaults (500) are comfortably above; only an issue if an operator has tuned this down.
@@ -1437,7 +1439,7 @@ Build `K8sBackend` plus the layer store, GC, default-template resolver, event jo
 - `pkg/chat/default_template.go` -- cascading default resolver (§5.13)
 - `pkg/api/admin_handlers.go` -- new admin endpoints (§5.15): save-as-@base, refresh, defaults, layers, GC, event-journal introspection
 - `MockBackend` in `pkg/sandbox/mock/` for tests (decision Q6), including layer store and event-journal stubs
-- Unit tests + integration tests against `K3s-in-LXC` (dev) and `kind` (CI). End-to-end against real CephFS in staging.
+- Unit tests + integration tests against `K3s-in-LXC` (dev) and `kind` (CI). End-to-end against real RWX storage in staging.
 
 ### Phase D -- Deployment tooling (~1-2 weeks)
 
@@ -1494,13 +1496,13 @@ Deferred to Phase E (intentionally out of scope for Phase D):
 
 ### Phase E -- Hardening (~1 week)
 
-- Observability: metrics (session count, template operations, evictions, CephFS write-latency p99, backpressure-active gauge, eviction queue depth, layer GC removed / bytes reclaimed, chat event-journal INSERT rate, advisory-lock contention rate), structured logs, health checks.
-- Performance tuning: CephFS read caching, pre-pull base image via DaemonSet, tune tar pipeline compression (`zstd --adapt` level floor/ceiling, `-T` thread count), tune event-journal batching (events-per-insert, flush interval) for the deployment's CPU/bandwidth balance.
-- Eviction-storm validation: 50 concurrent evictions on the staging cluster; measure p99 CephFS latency, confirm backpressure engages at threshold, confirm no leaked `upper.tar.zst` files after resume cycle.
+- Observability: metrics (session count, template operations, evictions, RWX write-latency p99, backpressure-active gauge, eviction queue depth, layer GC removed / bytes reclaimed, chat event-journal INSERT rate, advisory-lock contention rate), structured logs, health checks.
+- Performance tuning: RWX filesystem read caching, pre-pull base image via DaemonSet, tune tar pipeline compression (`zstd --adapt` level floor/ceiling, `-T` thread count), tune event-journal batching (events-per-insert, flush interval) for the deployment's CPU/bandwidth balance.
+- Eviction-storm validation: 50 concurrent evictions on the staging cluster; measure p99 RWX write latency, confirm backpressure engages at threshold, confirm no leaked `upper.tar.zst` files after resume cycle.
 - SaveSessionAsTemplate baselining: measure p50/p95 duration across varying upper-layer sizes (100 MB / 1 GB / 10 GB); confirm ≤5 s at p95 for typical workloads, document worst-case; verify dedup reuse when saving identical content twice.
 - Layer-chain flatten job: implement and exercise on a synthetic 25-deep chain; verify session resumes still work across flatten.
 - Pod-death recovery test: kill the producer pod mid-stream; confirm client reconnects transparently via event-journal replay with no token/tool duplication.
-- End-to-end testing on a real multi-node K8s cluster with real CephFS.
+- End-to-end testing on a real multi-node K8s cluster with real RWX storage.
 - Load testing: concurrent session creation, save-as-template throughput, event-journal throughput at realistic token rates.
 
 ### Total
@@ -1552,7 +1554,7 @@ Status: shipped on `feature/sandbox-k8s-backend` (commits `4fa7ed6`, `cee00c8`, 
 ### Integration
 
 - **Incus backend:** existing tests in `pkg/sandbox/*_test.go` continue to run.
-- **K8s backend -- canonical dev environment:** a 3-node K3s cluster running inside Incus LXC containers on the developer's machine. This reuses the existing Incus workflow and iterates far faster than `kind` or `minikube` for Astonish contributors. Install `sysbox-deploy-k8s` as usual. For initial iteration, a single-node NFS server (or `nfs-subdir-external-provisioner`) provides RWX PVs; Ceph/Rook on LXC is non-trivial and deferred to pre-merge validation. CI uses `kind` with the same RWX-PV shortcut (no Ceph). End-to-end on real CephFS happens in the staging cluster (see End-to-end below). Tests exercise:
+- **K8s backend -- canonical dev environment:** a 3-node K3s cluster running inside Incus LXC containers on the developer's machine. This reuses the existing Incus workflow and iterates far faster than `kind` or `minikube` for Astonish contributors. Install `sysbox-deploy-k8s` as usual. For initial iteration, a single-node NFS server (or `nfs-subdir-external-provisioner`) provides RWX PVs; Rook/CephFS on LXC is non-trivial and deferred to pre-merge validation. CI uses `kind` with the same RWX-PV shortcut (no CephFS). End-to-end on real RWX storage happens in the staging cluster (see End-to-end below). Tests exercise:
   - session lifecycle (create / exec / files / destroy)
   - template create / save-as-template / delete
   - idle eviction + resume (tar-stream round-trip)
@@ -1563,13 +1565,13 @@ Status: shipped on `feature/sandbox-k8s-backend` (commits `4fa7ed6`, `cee00c8`, 
 
 ### End-to-end
 
-- Real K8s cluster with real CephFS and real Sysbox. Run the chat scenario suite (`docs/architecture/testing-chat-scenarios.md`) against both backends. Capability parity is validated by running the **same** scenarios against both.
+- Real K8s cluster with real RWX storage (CephFS, NFS, or Manila). Run the chat scenario suite (`docs/architecture/testing-chat-scenarios.md`) against both backends. Capability parity is validated by running the **same** scenarios against both.
 
 ### Load
 
 - 100 concurrent sessions created / destroyed in a tight loop. Verify:
   - No leaked pods, PVCs, Services.
-  - CephFS disk usage returns to baseline after destroy.
+  - RWX PVC disk usage returns to baseline after destroy.
   - Session registry rows deleted.
 
 ## 13. Non-Goals
@@ -1580,10 +1582,10 @@ Explicitly out of scope for this design:
 - **Running Incus inside Kubernetes pods.** The K8s backend does not use Incus at all; it uses Kubernetes pods directly. The previously-explored "Incus cluster in K8s" approach is abandoned.
 - **Live migration of sandbox pods across nodes.** Sandboxes are stateful but ephemeral; if a node dies, its running sandboxes are lost (user retries). This matches the Incus-single-host behavior today.
 - **Persistent per-session PVCs by default.** Sessions use `emptyDir` for the upper layer. Persistent PVCs may be added later as an opt-in per-session feature, but v1 does not require it.
-- **Save-as-template via OCI registry push.** Templates are written directly to CephFS (decision: no registry push for saves). Registry-based template distribution is explicitly rejected as a save path because it is too slow for the interactive UX.
+- **Save-as-template via OCI registry push.** Templates are written directly to the RWX layers PVC (decision: no registry push for saves). Registry-based template distribution is explicitly rejected as a save path because it is too slow for the interactive UX.
 - **Multi-cluster or multi-region federation.** One cluster, one sandbox tier. Future work may address this.
 - **Migration from prior Incus-based K8s deployments.** Decision Q8: this is the first K8s-native implementation; no legacy migration required.
-- **Support for fully-managed Kubernetes** (GKE Autopilot, EKS Fargate). These platforms forbid the DaemonSet-based Sysbox install and the node-mounted CephFS and are incompatible with this architecture.
+- **Support for fully-managed Kubernetes** (GKE Autopilot, EKS Fargate). These platforms forbid the DaemonSet-based device plugin and the pod-level RWX mounts and are incompatible with this architecture.
 - **gVisor, Kata Containers, Firecracker, KubeVirt.** Considered and rejected in favor of Sysbox (see §1).
 - **Namespace-per-org isolation.** Deferred; v1 uses single namespace + labels (decision Q2b). May be added later without changing the interface contract.
 - **Ingress sticky-session requirement.** Earlier design drafts required Ingress affinity for SSE/ChatRunner continuity. The PG event journal (§5.14) eliminates this as a correctness requirement; stickiness may still be enabled for latency optimization but is not part of the architecture contract.
@@ -1595,14 +1597,14 @@ A ledger of options considered and declined, with reasoning, so future readers u
 
 | Alternative | Why rejected |
 |---|---|
-| **rsync for template save / idle-eviction** | rsync's cost on CephFS is dominated by per-file metadata RPCs (`readdir`, `stat`, `setattr`, open/close). For typical sandbox contents (node_modules, venvs), that is 100k+ MDS round-trips. A single `tar \| zstd` stream is one sequential writer against CephFS, empirically 3-10× faster for cold copies. Delta rsync could beat tar on *iterative* re-saves of the same template, but template saves are infrequent human actions and the 1-5 s budget is already met. |
+| **rsync for template save / idle-eviction** | rsync's cost on RWX filesystems is dominated by per-file metadata RPCs (`readdir`, `stat`, `setattr`, open/close). For typical sandbox contents (node_modules, venvs), that is 100k+ metadata round-trips. A single `tar \| zstd` stream is one sequential writer against the PVC, empirically 3-10× faster for cold copies. Delta rsync could beat tar on *iterative* re-saves of the same template, but template saves are infrequent human actions and the 1-5 s budget is already met. |
 | **Separate init container with `mountPropagation: Bidirectional`** | Requires the mount to live on a host-visible path; either `hostPath` (violates PSA `baseline`/`restricted`) or a CSI volume supporting bidirectional propagation (not universally available). Entrypoint-in-main-container avoids propagation entirely and works with any CSI. |
 | **Kata Containers** | Nested virtualization requirement (KVM on nodes). Hypervisor-per-sandbox CPU/memory overhead. Excessive isolation for the semi-trusted workloads Astonish runs. |
 | **gVisor** | Breaks mount operations, systemd, and nested Docker -- all capabilities Astonish flows rely on. Not viable as a default runtime for Astonish sandboxes. |
 | **Privileged pods (`privileged: true`)** | Violates Pod Security Admission `baseline` and `restricted` policies; unacceptable in enterprise K8s deployments. Sysbox provides the same functional capabilities via user-namespace remapping without requiring privileged mode. |
 | **Incus cluster inside Kubernetes pods** | No production-ready Helm chart or operator for running Incus clustered inside K8s. Operational burden of nested daemons (Incus + K8s scheduling conflicts, storage driver layering). Incus REST API is host-oriented, not pod-oriented. Investigated and abandoned in favor of native K8s pods. |
 | **External Incus VMs managed by Astonish** | Reintroduces a non-K8s tier operators must manage separately, contradicting the "no external infrastructure outside K8s" constraint. |
-| **OCI image registry push for SaveSessionAsTemplate** | Build → push → pull round-trip takes tens of seconds for non-trivial session contents; breaks the 1-5 s interactive UX budget. Direct tar-stream to shared CephFS meets the budget without a registry. |
+| **OCI image registry push for SaveSessionAsTemplate** | Build → push → pull round-trip takes tens of seconds for non-trivial session contents; breaks the 1-5 s interactive UX budget. Direct tar-stream to the shared RWX PVC meets the budget without a registry. |
 | **Per-session Persistent Volumes (PVCs)** by default | Unnecessary for the ephemeral upper-layer model. PVC provisioning adds seconds to session creation and creates cleanup obligations. `emptyDir` on node-local disk is fast and cleaned up automatically. PVCs may be offered as an opt-in future feature for workloads requiring persistent scratch space. |
 | **Fully-managed Kubernetes (GKE Autopilot / EKS Fargate / AKS virtual nodes)** | These platforms prohibit DaemonSet-based node installs, preventing Sysbox deployment, and in most cases forbid node-mounted shared filesystems. Incompatible with the required runtime and storage model. |
 | **Namespace-per-org in v1** | Correct long-term isolation model but not required for security parity (labels + NetworkPolicy suffice). Adds operational complexity to the first cut. Deferred; interface contract is compatible with future migration. |
@@ -1639,4 +1641,5 @@ Triggers that would motivate adding the warm pool:
 - Sysbox on Kubernetes: `sysbox-deploy-k8s`
 - Kubernetes exec API: https://kubernetes.io/docs/tasks/debug/debug-application/get-shell-running-container/
 - CephFS CSI driver: https://github.com/ceph/ceph-csi
+- OpenStack Manila CSI driver: https://github.com/kubernetes/cloud-provider-openstack/tree/master/pkg/csi/manila
 - Rook: https://rook.io

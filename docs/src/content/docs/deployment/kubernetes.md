@@ -30,7 +30,8 @@ The Helm chart creates the following resources in a single `helm install`:
 
 - **Kubernetes cluster** (1.28+). Supported: self-managed (Gardener, Rancher, kubeadm, K3s, k0s), EKS, AKS, GKE with a controllable node pool.
   - **Not supported:** GKE Autopilot, EKS Fargate, AKS virtual nodes — these forbid DaemonSets and hostPath access needed by several overlay paths.
-- **ReadWriteMany (RWX) StorageClass**. Examples: CephFS, NFS (nfs-subdir-external-provisioner), EFS, Azure Files, Manila (SAP Converged Cloud).
+- **ReadWriteMany (RWX) StorageClass**. Examples: CephFS, NFS (nfs-subdir-external-provisioner), EFS, Azure Files, OpenStack Manila.
+  - **Not suitable:** Cinder, EBS, Azure Disk — these are block-storage services that provision RWO (single-node) volumes only. The sandbox backend requires concurrent multi-node access.
 - **`kubectl`** 1.30+ and **`helm`** 3.8+ with cluster-admin access (the chart creates namespaces and cross-namespace RBAC).
 - **Container images** accessible from the cluster:
   - `schardosin/astonish:<tag>` — control plane.
@@ -330,7 +331,7 @@ kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
 2. If empty, runs `tar -cf - / | tar -xf - -C /mnt/astonish-layers/@base/rootfs` (excluding `/proc`, `/sys`, `/dev`, `/mnt`, `/sandbox`).
 3. Exits 0.
 
-**How long it takes:** 30-90 seconds on fast NFS; up to 3 minutes on slow CephFS or cold image pulls.
+**How long it takes:** 30-90 seconds on fast NFS/CephFS; up to 3 minutes on high-latency shared filesystems or cold image pulls.
 
 **Monitor progress while waiting:**
 
@@ -533,7 +534,7 @@ kubectl -n astonish-sandbox describe pvc astonish-layers
 kubectl -n astonish-sandbox describe pod <sandbox-pod>
 ```
 
-Common culprits: nfs-subdir-external-provisioner not running, CephFS CSI node plugin missing on the target node, `sandbox.storage.storageClassName` typo in values.
+Common culprits: NFS provisioner not running, filesystem CSI node plugin (CephFS, Manila) missing on the target node, `sandbox.storage.storageClassName` typo in values, or using a block-storage class (Cinder/EBS) instead of a shared-filesystem class.
 
 ### Pod stuck in `Pending` with "forbidden: violates PodSecurity"
 
@@ -601,7 +602,10 @@ kubectl run astonish-platform-init --rm -it --restart=Never \
 Notes for deploying on [Gardener](https://gardener.cloud/)-managed shoots:
 
 - **Garden Linux shoots** (kernel 6.5+) provide native overlayfs and user namespaces. Both Path 1 and Path 2 work cleanly.
-- **No default RWX StorageClass** on most Gardener infrastructures — provision a shared filesystem (e.g., Manila on OpenStack, EFS on AWS, Azure Files on Azure) and set `sandbox.storage.storageClassName` accordingly.
+- **No default RWX StorageClass** on most Gardener infrastructures — provision a shared filesystem and set `sandbox.storage.storageClassName` accordingly:
+  - **OpenStack (SAP Converged Cloud):** use **Manila** (the shared-filesystem service). The Manila CSI driver provisions RWX PVs backed by CephFS or NFS. Do *not* use Cinder — it is a block-storage service and provisions RWO volumes only.
+  - **AWS:** use EFS (via the EFS CSI driver).
+  - **Azure:** use Azure Files (via the Azure File CSI driver).
 - **PSA defaults** — Gardener sets `privileged` on the `default` namespace. The sandbox namespace the chart creates pins its own PSA label explicitly, so Gardener's defaults don't affect sandbox pod admission.
 - When migrating between Gardener shoots or changing infrastructure providers: validate the StorageClass name exists on the target shoot before migrating, as PVC provisioning silently stalls if the class is absent.
 

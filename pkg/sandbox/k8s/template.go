@@ -79,6 +79,11 @@ const builderPodReadinessTimeout = 2 * time.Minute
 // add perceptible latency.
 const builderPodReadinessPollInterval = 500 * time.Millisecond
 
+// SandboxBaseDistro is the Linux distro of the K8s sandbox-base image
+// (docker/sandbox-base/Dockerfile: FROM debian:bookworm-slim). Used by
+// baseconfig.Render to select correct package names for browser install.
+const SandboxBaseDistro = sandbox.DistroDebianBookworm
+
 // ---------------------------------------------------------------------------
 // BuildTemplate
 // ---------------------------------------------------------------------------

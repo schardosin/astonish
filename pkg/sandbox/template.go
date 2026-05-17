@@ -254,7 +254,7 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 			return fmt.Errorf("failed to detect server architecture for browser install: %w", archErr)
 		}
 
-		for _, cmd := range BrowserContainerInstallCommands(opts.BrowserEngine, serverArch) {
+		for _, cmd := range BrowserContainerInstallCommands(opts.BrowserEngine, serverArch, DistroUbuntuNoble) {
 			progress("  Running: %v\n", cmd)
 			exitCode, err := client.ExecSimple(containerName, cmd)
 			if err != nil {

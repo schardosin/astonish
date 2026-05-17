@@ -33,6 +33,49 @@ const (
 	kasmVNCVersion = "1.3.3"
 )
 
+// LinuxDistro identifies the Linux distribution of the container's base image,
+// which determines package names, repository setup, and KasmVNC .deb variant
+// for the browser stack installation.
+type LinuxDistro string
+
+const (
+	// DistroUbuntuNoble is Ubuntu 24.04 LTS (noble). Used by Incus containers
+	// (DefaultBaseImage = "ubuntu/24.04" in template.go).
+	DistroUbuntuNoble LinuxDistro = "ubuntu-noble"
+	// DistroDebianBookworm is Debian 12 (bookworm). Used by the K8s sandbox-base
+	// image (docker/sandbox-base/Dockerfile: FROM debian:bookworm-slim).
+	DistroDebianBookworm LinuxDistro = "debian-bookworm"
+)
+
+// browserDeps holds distro-specific package names and configuration for the
+// browser container install.
+type browserDeps struct {
+	libasound     string // ALSA library package name
+	libjpegTurbo  string // libjpeg-turbo package name (KasmVNC dep)
+	kasmVNCSuffix string // distro suffix in KasmVNC .deb filename
+	useXtradebPPA bool   // whether to use xtradeb PPA for Chromium
+}
+
+// depsFor returns the distro-specific package names and flags.
+func depsFor(distro LinuxDistro) browserDeps {
+	switch distro {
+	case DistroDebianBookworm:
+		return browserDeps{
+			libasound:     "libasound2",
+			libjpegTurbo:  "libjpeg62-turbo",
+			kasmVNCSuffix: "bookworm",
+			useXtradebPPA: false, // Debian ships native chromium .debs
+		}
+	default: // DistroUbuntuNoble
+		return browserDeps{
+			libasound:     "libasound2t64",
+			libjpegTurbo:  "libjpeg-turbo8",
+			kasmVNCSuffix: "noble",
+			useXtradebPPA: true, // Ubuntu 24.04 chromium is snap-only
+		}
+	}
+}
+
 // BrowserContainerConfig controls browser runtime configuration inside a container.
 type BrowserContainerConfig struct {
 	// ViewportWidth is the browser viewport width in pixels. Default: 1280.
@@ -80,16 +123,26 @@ func IsContainerCompatibleEngine(engine string) bool {
 
 // BrowserContainerInstallCommands returns the commands to install the browser
 // engine and KasmVNC inside a container template. The commands are engine-aware:
-// "default" installs Chromium from the xtradeb PPA (Ubuntu's own
-// chromium-browser package is snap-only and hangs in LXC containers),
-// "cloakbrowser" installs python3 + pip3 + xvfb + the CloakBrowser package.
+// "default" installs Chromium (from xtradeb PPA on Ubuntu noble, or from
+// native repos on Debian bookworm), "cloakbrowser" installs python3 + pip3 +
+// xvfb + the CloakBrowser package.
 //
-// The arch parameter is the Incus server architecture ("x86_64" or "aarch64")
+// The arch parameter is the container architecture ("x86_64" or "aarch64")
 // and is used to select the correct KasmVNC .deb for the platform.
+//
+// The distro parameter selects distro-specific package names and repository
+// configuration. Incus containers use DistroUbuntuNoble; K8s sandbox-base
+// uses DistroDebianBookworm. Key differences:
+//   - ALSA library: libasound2t64 (noble) vs libasound2 (bookworm)
+//   - libjpeg-turbo: libjpeg-turbo8 (noble) vs libjpeg62-turbo (bookworm)
+//   - KasmVNC .deb: kasmvncserver_noble_*.deb vs kasmvncserver_bookworm_*.deb
+//   - Chromium source: xtradeb PPA (noble) vs native apt (bookworm)
 //
 // Common packages (X11 deps, fonts, KasmVNC, browser user) are shared across
 // all engines.
-func BrowserContainerInstallCommands(engine, arch string) [][]string {
+func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) [][]string {
+	deps := depsFor(distro)
+
 	// Common: apt update
 	cmds := [][]string{
 		{"apt-get", "update"},
@@ -112,7 +165,7 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 			"fonts-liberation", "fonts-noto-color-emoji",
 			"xdg-utils", "libnss3", "libatk-bridge2.0-0",
 			"libx11-xcb1", "libxcomposite1", "libxrandr2",
-			"libgbm1", "libasound2t64",
+			"libgbm1", deps.libasound,
 			"libcups2",            // CUPS printing (required by Chromium's print subsystem)
 			"libpango-1.0-0",      // text layout and rendering
 			"libcairo2",           // 2D graphics
@@ -131,7 +184,7 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 			"libgdk-pixbuf-2.0-0", // GDK-Pixbuf image loading
 			"libnspr4",            // Netscape Portable Runtime (NSS dependency)
 			// KasmVNC dependencies
-			"libjpeg-turbo8", "libwebp-dev", "libssl3",
+			deps.libjpegTurbo, "libwebp-dev", "libssl3",
 			"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 			"x11-xserver-utils",
 			// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
@@ -141,51 +194,78 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 			// Utilities
 			"wget", "ca-certificates",
 		})
-	default: // "default" — Chromium from xtradeb PPA
-		// Ubuntu 24.04's chromium-browser package is a snap transitional shim
-		// that triggers `snap install chromium`. Snap does not work inside
-		// unprivileged LXC containers (requires squashfs mounts and AppArmor
-		// confinement), causing the install to hang indefinitely.
-		//
-		// The xtradeb/apps PPA provides native Chromium .deb packages for both
-		// amd64 and arm64. We use the PPA so apt auto-selects the correct
-		// architecture — critical for Apple Silicon Macs where Docker+Incus
-		// runs arm64 containers.
-		//
-		// After adding the PPA, apt-get update may fail with exit code 100
-		// due to AppStream metadata (dep11/Components) download errors during
-		// Ubuntu mirror syncs. These errors are non-fatal for package
-		// installation, so we tolerate them with "|| true".
-		cmds = append(cmds,
-			// Install add-apt-repository tool + shared deps
-			[]string{"apt-get", "install", "-y",
-				"software-properties-common",
-				// Chromium shared deps
-				"fonts-liberation", "fonts-noto-color-emoji",
-				"xdg-utils", "libnss3", "libatk-bridge2.0-0",
-				"libx11-xcb1", "libxcomposite1", "libxrandr2",
-				"libgbm1", "libasound2t64",
-				// KasmVNC dependencies
-				"libjpeg-turbo8", "libwebp-dev", "libssl3",
-				"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
-				"x11-xserver-utils",
-				// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
-				"ssl-cert",
-				// CDP port forwarding (Chromium binds DevTools to loopback only)
-				"socat",
-				// Utilities
-				"wget", "ca-certificates",
-			},
-			// Add PPA with native Chromium .deb packages (amd64 + arm64)
-			[]string{"add-apt-repository", "-y", "ppa:xtradeb/apps"},
-			// Refresh package lists. Tolerate AppStream metadata errors (dep11
-			// Components download failures during mirror syncs) — these don't
-			// affect package installation. The "|| true" prevents exit code 100
-			// from aborting the template creation.
-			[]string{"sh", "-c", "apt-get update || true"},
-			// Install Chromium (apt auto-selects the correct architecture)
-			[]string{"apt-get", "install", "-y", "chromium"},
-		)
+	default: // "default" — Chromium install (method depends on distro)
+		if deps.useXtradebPPA {
+			// Ubuntu 24.04's chromium-browser package is a snap transitional shim
+			// that triggers `snap install chromium`. Snap does not work inside
+			// unprivileged LXC containers (requires squashfs mounts and AppArmor
+			// confinement), causing the install to hang indefinitely.
+			//
+			// The xtradeb/apps PPA provides native Chromium .deb packages for both
+			// amd64 and arm64. We use the PPA so apt auto-selects the correct
+			// architecture — critical for Apple Silicon Macs where Docker+Incus
+			// runs arm64 containers.
+			//
+			// After adding the PPA, apt-get update may fail with exit code 100
+			// due to AppStream metadata (dep11/Components) download errors during
+			// Ubuntu mirror syncs. These errors are non-fatal for package
+			// installation, so we tolerate them with "|| true".
+			cmds = append(cmds,
+				// Install add-apt-repository tool + shared deps
+				[]string{"apt-get", "install", "-y",
+					"software-properties-common",
+					// Chromium shared deps
+					"fonts-liberation", "fonts-noto-color-emoji",
+					"xdg-utils", "libnss3", "libatk-bridge2.0-0",
+					"libx11-xcb1", "libxcomposite1", "libxrandr2",
+					"libgbm1", deps.libasound,
+					// KasmVNC dependencies
+					deps.libjpegTurbo, "libwebp-dev", "libssl3",
+					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
+					"x11-xserver-utils",
+					// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
+					"ssl-cert",
+					// CDP port forwarding (Chromium binds DevTools to loopback only)
+					"socat",
+					// Utilities
+					"wget", "ca-certificates",
+				},
+				// Add PPA with native Chromium .deb packages (amd64 + arm64)
+				[]string{"add-apt-repository", "-y", "ppa:xtradeb/apps"},
+				// Refresh package lists. Tolerate AppStream metadata errors (dep11
+				// Components download failures during mirror syncs) — these don't
+				// affect package installation. The "|| true" prevents exit code 100
+				// from aborting the template creation.
+				[]string{"sh", "-c", "apt-get update || true"},
+				// Install Chromium (apt auto-selects the correct architecture)
+				[]string{"apt-get", "install", "-y", "chromium"},
+			)
+		} else {
+			// Debian bookworm ships native Chromium .deb packages (no snap, no
+			// PPA needed). Install shared deps + chromium in one step.
+			cmds = append(cmds,
+				[]string{"apt-get", "install", "-y",
+					// Chromium (native .deb on Debian)
+					"chromium",
+					// Chromium shared deps (listed explicitly for consistency
+					// with the Ubuntu path, even though apt would pull most in)
+					"fonts-liberation", "fonts-noto-color-emoji",
+					"xdg-utils", "libnss3", "libatk-bridge2.0-0",
+					"libx11-xcb1", "libxcomposite1", "libxrandr2",
+					"libgbm1", deps.libasound,
+					// KasmVNC dependencies
+					deps.libjpegTurbo, "libwebp-dev", "libssl3",
+					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
+					"x11-xserver-utils",
+					// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
+					"ssl-cert",
+					// CDP port forwarding (Chromium binds DevTools to loopback only)
+					"socat",
+					// Utilities
+					"wget", "ca-certificates",
+				},
+			)
+		}
 	}
 
 	// Common: create browser user (KasmVNC cannot run as root)
@@ -200,13 +280,13 @@ func BrowserContainerInstallCommands(engine, arch string) [][]string {
 		debArch = "arm64"
 	}
 
-	// Common: install KasmVNC from release deb (Ubuntu 24.04 noble).
+	// Common: install KasmVNC from release deb (distro-specific .deb).
 	// Use apt-get install with the .deb path (not dpkg) — this resolves and
 	// installs transitive dependencies in a single step. The dpkg + apt-get -f
 	// pattern silently removes the package on Docker+Incus when deps fail.
 	kasmURL := fmt.Sprintf(
-		"https://github.com/kasmtech/KasmVNC/releases/download/v%s/kasmvncserver_noble_%s_%s.deb",
-		kasmVNCVersion, kasmVNCVersion, debArch,
+		"https://github.com/kasmtech/KasmVNC/releases/download/v%s/kasmvncserver_%s_%s_%s.deb",
+		kasmVNCVersion, deps.kasmVNCSuffix, kasmVNCVersion, debArch,
 	)
 	cmds = append(cmds,
 		// Download the KasmVNC .deb (architecture-aware)

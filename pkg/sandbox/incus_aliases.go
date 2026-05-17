@@ -203,9 +203,19 @@ func cpOnSandboxHost(src, dst string) error    { return incus.CpOnSandboxHost(sr
 // provisioning browser-capable templates).
 // ---------------------------------------------------------------------------
 
+// LinuxDistro identifies the Linux distribution of the container's base image.
+type LinuxDistro = incus.LinuxDistro
+
+const (
+	// DistroUbuntuNoble is Ubuntu 24.04 LTS (noble). Used by Incus containers.
+	DistroUbuntuNoble = incus.DistroUbuntuNoble
+	// DistroDebianBookworm is Debian 12 (bookworm). Used by K8s sandbox-base.
+	DistroDebianBookworm = incus.DistroDebianBookworm
+)
+
 func IsContainerCompatibleEngine(engine string) bool {
 	return incus.IsContainerCompatibleEngine(engine)
 }
-func BrowserContainerInstallCommands(engine, arch string) [][]string {
-	return incus.BrowserContainerInstallCommands(engine, arch)
+func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) [][]string {
+	return incus.BrowserContainerInstallCommands(engine, arch, distro)
 }

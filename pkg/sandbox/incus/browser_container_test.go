@@ -83,7 +83,7 @@ func TestIsContainerCompatibleEngine(t *testing.T) {
 func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 	for _, engine := range []string{"default", "cloakbrowser"} {
 		t.Run(engine, func(t *testing.T) {
-			cmds := BrowserContainerInstallCommands(engine, "x86_64")
+			cmds := BrowserContainerInstallCommands(engine, "x86_64", DistroUbuntuNoble)
 			flat := flattenCommands(cmds)
 
 			// Browser user creation (useradd, NOT adduser)
@@ -139,7 +139,7 @@ func TestBrowserContainerInstallCommands_ArchAwareKasmVNC(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.arch, func(t *testing.T) {
-			cmds := BrowserContainerInstallCommands("default", tt.arch)
+			cmds := BrowserContainerInstallCommands("default", tt.arch, DistroUbuntuNoble)
 			flat := flattenCommands(cmds)
 
 			expectedURL := fmt.Sprintf("kasmvncserver_noble_%s_%s.deb", kasmVNCVersion, tt.debArch)
@@ -149,9 +149,9 @@ func TestBrowserContainerInstallCommands_ArchAwareKasmVNC(t *testing.T) {
 }
 
 // TestBrowserContainerInstallCommands_DefaultEngine verifies engine-specific
-// commands for the default (Chromium from xtradeb PPA) engine.
+// commands for the default (Chromium from xtradeb PPA) engine on Ubuntu noble.
 func TestBrowserContainerInstallCommands_DefaultEngine(t *testing.T) {
-	cmds := BrowserContainerInstallCommands("default", "x86_64")
+	cmds := BrowserContainerInstallCommands("default", "x86_64", DistroUbuntuNoble)
 	flat := flattenCommands(cmds)
 
 	// Must add xtradeb PPA
@@ -167,7 +167,7 @@ func TestBrowserContainerInstallCommands_DefaultEngine(t *testing.T) {
 // TestBrowserContainerInstallCommands_CloakBrowserEngine verifies engine-specific
 // commands for the CloakBrowser engine.
 func TestBrowserContainerInstallCommands_CloakBrowserEngine(t *testing.T) {
-	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64")
+	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64", DistroUbuntuNoble)
 	flat := flattenCommands(cmds)
 
 	// Must install python3 and pip3
@@ -189,7 +189,7 @@ func TestBrowserContainerInstallCommands_CloakBrowserEngine(t *testing.T) {
 // standalone Chromium binary needs. These cannot be auto-resolved by apt
 // because CloakBrowser is installed via pip, not as a .deb package.
 func TestCloakBrowserInstallCommands_RequiredSharedLibs(t *testing.T) {
-	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64")
+	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64", DistroUbuntuNoble)
 	flat := flattenCommands(cmds)
 
 	// Each of these packages was confirmed required during live testing.
@@ -418,6 +418,93 @@ func TestLaunchScript_ViewportSize(t *testing.T) {
 			if !strings.Contains(script, "--window-size=1920,1080") {
 				t.Error("launch script missing correct --window-size")
 			}
+		})
+	}
+}
+
+// TestBrowserContainerInstallCommands_DebianBookworm_DefaultEngine verifies
+// that the default engine on Debian bookworm uses native chromium packages
+// without the xtradeb PPA, and uses the correct Debian-specific package names.
+func TestBrowserContainerInstallCommands_DebianBookworm_DefaultEngine(t *testing.T) {
+	cmds := BrowserContainerInstallCommands("default", "x86_64", DistroDebianBookworm)
+	flat := flattenCommands(cmds)
+
+	// Must install chromium from native repos
+	assertCmdSequence(t, cmds, []string{"apt-get", "install", "-y", "chromium"}, "chromium from native repos")
+
+	// Must NOT add xtradeb PPA (only for Ubuntu)
+	if strings.Contains(flat, "ppa:xtradeb") {
+		t.Error("Debian bookworm should not use xtradeb PPA")
+	}
+	if strings.Contains(flat, "add-apt-repository") {
+		t.Error("Debian bookworm should not call add-apt-repository")
+	}
+	if strings.Contains(flat, "software-properties-common") {
+		t.Error("Debian bookworm should not install software-properties-common")
+	}
+
+	// Must use Debian-specific package names
+	assertContainsStr(t, flat, "libasound2", "Debian libasound2 (not libasound2t64)")
+	if strings.Contains(flat, "libasound2t64") {
+		t.Error("Debian bookworm should use libasound2, not libasound2t64")
+	}
+	assertContainsStr(t, flat, "libjpeg62-turbo", "Debian libjpeg62-turbo (not libjpeg-turbo8)")
+	if strings.Contains(flat, "libjpeg-turbo8") {
+		t.Error("Debian bookworm should use libjpeg62-turbo, not libjpeg-turbo8")
+	}
+
+	// KasmVNC URL must use bookworm suffix
+	expectedURL := fmt.Sprintf("kasmvncserver_bookworm_%s_amd64.deb", kasmVNCVersion)
+	assertContainsStr(t, flat, expectedURL, "KasmVNC bookworm .deb URL")
+	if strings.Contains(flat, "kasmvncserver_noble_") {
+		t.Error("Debian bookworm should use kasmvncserver_bookworm_*, not noble")
+	}
+}
+
+// TestBrowserContainerInstallCommands_DebianBookworm_CloakBrowserEngine verifies
+// that CloakBrowser on Debian bookworm uses the correct Debian-specific packages.
+func TestBrowserContainerInstallCommands_DebianBookworm_CloakBrowserEngine(t *testing.T) {
+	cmds := BrowserContainerInstallCommands("cloakbrowser", "x86_64", DistroDebianBookworm)
+	flat := flattenCommands(cmds)
+
+	// Must use Debian-specific package names
+	assertContainsStr(t, flat, "libasound2", "Debian libasound2")
+	if strings.Contains(flat, "libasound2t64") {
+		t.Error("Debian bookworm CloakBrowser should use libasound2, not libasound2t64")
+	}
+	assertContainsStr(t, flat, "libjpeg62-turbo", "Debian libjpeg62-turbo")
+	if strings.Contains(flat, "libjpeg-turbo8") {
+		t.Error("Debian bookworm CloakBrowser should use libjpeg62-turbo, not libjpeg-turbo8")
+	}
+
+	// KasmVNC URL must use bookworm suffix
+	expectedURL := fmt.Sprintf("kasmvncserver_bookworm_%s_amd64.deb", kasmVNCVersion)
+	assertContainsStr(t, flat, expectedURL, "KasmVNC bookworm .deb URL")
+
+	// CloakBrowser-specific commands still present
+	assertContainsStr(t, flat, "python3", "python3 for CloakBrowser")
+	assertContainsStr(t, flat, "python3-pip", "pip3 for CloakBrowser")
+	assertCmdSequence(t, cmds, []string{"pip3", "install"}, "pip install cloakbrowser")
+}
+
+// TestBrowserContainerInstallCommands_DebianBookworm_ArchAwareKasmVNC verifies
+// that the KasmVNC .deb URL on Debian bookworm uses the correct architecture.
+func TestBrowserContainerInstallCommands_DebianBookworm_ArchAwareKasmVNC(t *testing.T) {
+	tests := []struct {
+		arch    string
+		debArch string
+	}{
+		{"x86_64", "amd64"},
+		{"aarch64", "arm64"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.arch, func(t *testing.T) {
+			cmds := BrowserContainerInstallCommands("default", tt.arch, DistroDebianBookworm)
+			flat := flattenCommands(cmds)
+
+			expectedURL := fmt.Sprintf("kasmvncserver_bookworm_%s_%s.deb", kasmVNCVersion, tt.debArch)
+			assertContainsStr(t, flat, expectedURL, "KasmVNC bookworm .deb URL for "+tt.arch)
 		})
 	}
 }

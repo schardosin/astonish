@@ -42,24 +42,25 @@ export
 
 .DEFAULT_GOAL := help
 
-.PHONY: help all test-integration smoke clean-schemas get-token
+.PHONY: help all test-integration smoke smoke-quick clean-schemas get-token
 
 help:
 	@echo "Usage: make -f Makefile.integration <target>"
 	@echo ""
 	@echo "Targets:"
 	@echo "  test-integration  Run Go integration tests against real Postgres (4 scenarios)"
-	@echo "  smoke             Self-driving cluster smoke test (creates session, verifies tools)"
+	@echo "  smoke             Full E2E smoke test (bootstraps fresh instance, 4 scenarios)"
+	@echo "  smoke-quick       Quick smoke (bash, validates current cluster state, needs token)"
 	@echo "  get-token         Obtain an access token via browser auth"
 	@echo "  all               Run both integration + smoke"
 	@echo "  clean-schemas     Drop any leftover test schemas from the DB"
 	@echo ""
 	@echo "Required environment variables:"
-	@echo "  ASTONISH_TEST_DSN    Postgres connection string (for test-integration)"
-	@echo "  ASTONISH_TEST_TOKEN  Bearer JWT token (for smoke)"
+	@echo "  ASTONISH_TEST_DSN    Postgres connection string (for test-integration and smoke)"
 	@echo ""
-	@echo "Optional:"
-	@echo "  ASTONISH_API_URL     API base URL (default: http://localhost:9393)"
+	@echo "Optional (for smoke-quick only):"
+	@echo "  ASTONISH_TEST_TOKEN  Bearer JWT token"
+	@echo "  ASTONISH_API_URL     API base URL (default: https://devastonish.local.muxpie.com)"
 	@echo "  ASTONISH_SANDBOX_NS  K8s namespace for sandbox pods (default: astonish-sandbox)"
 	@echo "  ASTONISH_TEST_TEAM   Team slug to test (default: general)"
 
@@ -87,19 +88,39 @@ test-integration:
 	@echo "✓ All integration tests passed."
 
 # ---------------------------------------------------------------------------
-# Cluster smoke test (self-driving: creates session, waits for pod, verifies tools)
+# Cluster smoke test (self-driving: bootstraps fresh instance, all 4 scenarios)
 # ---------------------------------------------------------------------------
 
 smoke:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then \
+		echo ""; \
+		echo "ERROR: ASTONISH_TEST_DSN is not set."; \
+		echo ""; \
+		echo "Set it to a Postgres admin connection string, e.g.:"; \
+		echo "  export ASTONISH_TEST_DSN='postgres://postgres:554252@192.168.1.196:5432/postgres'"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "═══════════════════════════════════════════════════"
+	@echo " E2E Smoke Test — Layer-Chain Pipeline (4 scenarios)"
+	@echo " DB: $$ASTONISH_TEST_DSN (suffix=smoke)"
+	@echo "═══════════════════════════════════════════════════"
+	@echo ""
+	go test -tags=integration -count=1 -v -timeout=10m ./tests/smoke/ -run 'TestSmokeLayerChain'
+	@echo ""
+	@echo "✓ All smoke scenarios passed."
+
+# ---------------------------------------------------------------------------
+# Quick smoke (bash script — validates current cluster state, needs token)
+# ---------------------------------------------------------------------------
+
+smoke-quick:
 	@if [ -z "$$ASTONISH_TEST_TOKEN" ]; then \
 		echo ""; \
 		echo "ERROR: ASTONISH_TEST_TOKEN is not set."; \
 		echo ""; \
 		echo "Obtain a token with:"; \
 		echo "  export ASTONISH_TEST_TOKEN=\$$(make -f Makefile.integration get-token)"; \
-		echo ""; \
-		echo "Or interactively:"; \
-		echo "  export ASTONISH_TEST_TOKEN=\$$(astonish platform issue-token --server \$$ASTONISH_API_URL)"; \
 		echo ""; \
 		exit 1; \
 	fi

@@ -846,6 +846,23 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Inject sandbox layer chain into context so that sandbox tool calls
+	// (NodeTool.getClientFromContext) create pods with the configured @base
+	// layer chain. Mirrors the Studio chat handler's resolution logic.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings.TemplateName != "" {
+			ctx = store.WithSandboxTemplate(ctx, settings.TemplateName)
+			if chain := resolveTemplateLayerChain(r.Context(), settings.TemplateName); len(chain) > 0 {
+				ctx = store.WithSandboxLayerChain(ctx, chain)
+			}
+		}
+	}
+	if store.SandboxLayerChainFromContext(ctx) == nil {
+		if chain := resolveBaseLayerChain(r.Context()); len(chain) > 0 {
+			ctx = store.WithSandboxLayerChain(ctx, chain)
+		}
+	}
+
 	// 8. Run & Stream
 	var userMsg *genai.Content
 	if req.Message != "" {

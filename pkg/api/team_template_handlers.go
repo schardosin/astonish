@@ -136,14 +136,18 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Always create the editor from @base. The saved template (if any) only
-	// affects fleet/chat sessions — the editor is a fresh workspace every time.
-	// When the user is satisfied, Save captures the upper as the team default.
+	// Always create the editor from the configured @base chain. When the
+	// admin has run Configure Base Sandbox, the resulting delta layer is
+	// included so the editor sees the same tools as chat sessions. If no
+	// config exists yet, resolveBaseLayerChain returns nil and the K8s
+	// backend defaults to plain ["@base"].
+	baseChain := resolveBaseLayerChain(r.Context())
 	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
 		SessionID:  sessionID,
 		Type:       sandbox.SessionTypeChat,
 		TemplateID: sandbox.BaseTemplateID,
 		TeamSlug:   tc.TeamSlug,
+		LayerChain: baseChain,
 		Labels: map[string]string{
 			"astonish.io/purpose": "team-template-editor",
 			"astonish.io/team":    tc.TeamSlug,
@@ -471,13 +475,16 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 	// remove the layer row from the DB.
 	reclaimLayerBytes(r.Context(), backend, layerID)
 
-	// Recreate from @base (LayerChain left nil → buildPodManifest defaults
-	// to ["@base"]).
+	// Recreate the editor from the configured @base chain (same logic as
+	// TeamTemplateCreateHandler). When admin has configured @base, the
+	// chain includes the delta layer so the editor sees installed tools.
+	baseChain := resolveBaseLayerChain(r.Context())
 	_, err = backend.CreateSession(r.Context(), sandbox.SessionSpec{
 		SessionID:  sessionID,
 		Type:       sandbox.SessionTypeChat,
 		TemplateID: sandbox.BaseTemplateID,
 		TeamSlug:   tc.TeamSlug,
+		LayerChain: baseChain,
 		Labels: map[string]string{
 			"astonish.io/purpose": "team-template-editor",
 			"astonish.io/team":    tc.TeamSlug,

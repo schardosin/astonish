@@ -47,14 +47,20 @@ func (s *PGDeviceSessionStore) Create(ctx context.Context, sess *DeviceSession) 
 // Returns nil if not found or expired.
 func (s *PGDeviceSessionStore) GetByCode(ctx context.Context, code string) (*DeviceSession, error) {
 	sess := &DeviceSession{}
+	var errorMsg *string
+	var resultData []byte
 	err := s.pool.QueryRow(ctx,
 		`SELECT device_code, state, nonce, provider_id, client_type, status, error_message, result_data, created_at, expires_at
 		 FROM device_sessions WHERE device_code = $1 AND expires_at > now()`, code,
 	).Scan(&sess.DeviceCode, &sess.State, &sess.Nonce, &sess.ProviderID, &sess.ClientType,
-		&sess.Status, &sess.ErrorMessage, &sess.ResultData, &sess.CreatedAt, &sess.ExpiresAt)
+		&sess.Status, &errorMsg, &resultData, &sess.CreatedAt, &sess.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
+	if errorMsg != nil {
+		sess.ErrorMessage = *errorMsg
+	}
+	sess.ResultData = resultData
 	return sess, nil
 }
 
@@ -62,14 +68,20 @@ func (s *PGDeviceSessionStore) GetByCode(ctx context.Context, code string) (*Dev
 // Returns nil if not found or expired.
 func (s *PGDeviceSessionStore) GetByState(ctx context.Context, state string) (*DeviceSession, error) {
 	sess := &DeviceSession{}
+	var errorMsg *string
+	var resultData []byte
 	err := s.pool.QueryRow(ctx,
 		`SELECT device_code, state, nonce, provider_id, client_type, status, error_message, result_data, created_at, expires_at
 		 FROM device_sessions WHERE state = $1 AND expires_at > now()`, state,
 	).Scan(&sess.DeviceCode, &sess.State, &sess.Nonce, &sess.ProviderID, &sess.ClientType,
-		&sess.Status, &sess.ErrorMessage, &sess.ResultData, &sess.CreatedAt, &sess.ExpiresAt)
+		&sess.Status, &errorMsg, &resultData, &sess.CreatedAt, &sess.ExpiresAt)
 	if err != nil {
 		return nil, err
 	}
+	if errorMsg != nil {
+		sess.ErrorMessage = *errorMsg
+	}
+	sess.ResultData = resultData
 	return sess, nil
 }
 

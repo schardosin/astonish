@@ -27,6 +27,12 @@ help:
 	@echo "  make e2e-down        - Stop test environment"
 	@echo "  make e2e-rebuild     - Rebuild and restart test environment"
 	@echo ""
+	@echo "Kubernetes Platform Init:"
+	@echo "  make platform-init PLATFORM_HOST=<host> PLATFORM_USER=<user> PLATFORM_PASSWORD=<pass>"
+	@echo "                       - Run 'astonish platform init' inside the cluster"
+	@echo "  make create-secrets K8S_NAMESPACE=<ns> PLATFORM_DSN=<dsn>"
+	@echo "                       - Create astonish-secrets (master-key, jwt-secret, platform-dsn)"
+	@echo ""
 	@echo "Docker Production (Persistent Data):"
 	@echo "  make docker-up       - Start persistent container (maps ./.astonish-data)"
 	@echo "  make docker-down     - Stop persistent container"
@@ -121,7 +127,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
+.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
 
 # E2E Testing - Docker-based isolated environment
 e2e-up:
@@ -158,6 +164,35 @@ docker-rebuild:
 	docker compose down
 	docker compose up -d --build
 	@echo "Astonish running at http://localhost:9393"
+
+# Platform init via Kubernetes (run inside cluster)
+platform-init:
+ifndef PLATFORM_HOST
+	$(error PLATFORM_HOST is required. Usage: make platform-init PLATFORM_HOST=... PLATFORM_USER=... PLATFORM_PASSWORD=...)
+endif
+ifndef PLATFORM_USER
+	$(error PLATFORM_USER is required. Usage: make platform-init PLATFORM_HOST=... PLATFORM_USER=... PLATFORM_PASSWORD=...)
+endif
+ifndef PLATFORM_PASSWORD
+	$(error PLATFORM_PASSWORD is required. Usage: make platform-init PLATFORM_HOST=... PLATFORM_USER=... PLATFORM_PASSWORD=...)
+endif
+	kubectl run astonish-platform-init --rm -it --restart=Never \
+	  -n astonish --image=$(DOCKER_REGISTRY)/astonish:$(DEV_TAG) --image-pull-policy=Always \
+	  --command -- astonish platform init \
+	  --host $(PLATFORM_HOST) --user $(PLATFORM_USER) --password $(PLATFORM_PASSWORD)
+
+# Create Kubernetes secrets for Astonish
+create-secrets:
+ifndef K8S_NAMESPACE
+	$(error K8S_NAMESPACE is required. Usage: make create-secrets K8S_NAMESPACE=... PLATFORM_DSN=...)
+endif
+ifndef PLATFORM_DSN
+	$(error PLATFORM_DSN is required. Usage: make create-secrets K8S_NAMESPACE=... PLATFORM_DSN=...)
+endif
+	kubectl -n $(K8S_NAMESPACE) create secret generic astonish-secrets \
+	  --from-literal=master-key="$$(openssl rand -hex 32)" \
+	  --from-literal=jwt-secret="$$(openssl rand -hex 32)" \
+	  --from-literal=platform-dsn="$(PLATFORM_DSN)"
 
 # Cross-compile Linux binary (for macOS/Windows dev pushing into sandbox containers)
 build-linux:

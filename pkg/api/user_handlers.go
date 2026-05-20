@@ -129,10 +129,11 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 	sendInvite := req.SendInvite == nil || *req.SendInvite
 	if sendInvite {
 		scheme := "https"
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-			scheme = proto
-		} else if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
+		if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
 			scheme = "http"
+		}
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+			scheme = "https"
 		}
 		appURL := scheme + "://" + r.Host
 		mailer.SendAsync(ctx, mailer.OrgInvite{

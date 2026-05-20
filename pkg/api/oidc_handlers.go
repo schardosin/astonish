@@ -288,9 +288,11 @@ func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
 		scheme = "http"
 	}
-	// Check X-Forwarded-Proto header for reverse proxy setups
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
+	// X-Forwarded-Proto can only upgrade (http→https), never downgrade.
+	// This prevents misconfigured proxy chains from producing http:// URLs
+	// for external domains (common with TLS termination at an outer proxy).
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+		scheme = "https"
 	}
 	verifyURL := fmt.Sprintf("%s://%s/api/auth/sso/verify/%s", scheme, r.Host, deviceCode)
 
@@ -740,8 +742,9 @@ func (h *SSOHandler) buildOAuth2Config(r *http.Request, provider *store.OIDCProv
 	if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
 		scheme = "http"
 	}
-	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
+	// X-Forwarded-Proto can only upgrade (http→https), never downgrade.
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
+		scheme = "https"
 	}
 	redirectURL := fmt.Sprintf("%s://%s/api/auth/sso/callback", scheme, r.Host)
 

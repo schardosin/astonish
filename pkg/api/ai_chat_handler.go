@@ -1,21 +1,29 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
 
+// getProviderFn is the function used to obtain an LLM client.
+// Tests override this to inject MockLLM without needing real credentials.
+var getProviderFn = func(ctx context.Context, instanceName string, modelName string, cfg *config.AppConfig) (model.LLM, error) {
+	return provider.GetProvider(ctx, instanceName, modelName, cfg)
+}
+
 // AIChatHandler handles AI chat requests
 func AIChatHandler(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
 	// Parse request
 	var req AIChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -38,6 +46,30 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 	}
 
+	// Apply a timeout to the entire handler (bounds total LLM retries).
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	// Panic recovery: ADK's range-over-func iterators can panic when context
+	// is cancelled mid-iteration. Ensure the client always gets a response.
+	var completeSent bool
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("AIChatHandler panic recovered", "error", rec)
+		}
+		// Safety net: ensure a "complete" event is always sent in streaming mode.
+		// This covers panics, forgotten return paths, and any unexpected exits.
+		if !completeSent && streaming && flusher != nil {
+			sendSSE(w, flusher, "error", map[string]string{
+				"error": "An unexpected error occurred. Please try again.",
+			})
+			sendSSE(w, flusher, "complete", AIChatResponse{
+				Message: "An internal error occurred. Please try again.",
+				Action:  "info",
+			})
+		}
+	}()
+
 	// Load app config
 	appCfg := effectiveAppConfig(r)
 	injectProviderSecrets(appCfg)
@@ -55,12 +87,18 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create LLM client
-	llm, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
+	llm, err := getProviderFn(ctx, providerName, modelName, appCfg)
 	if err != nil {
 		if streaming {
 			sendSSE(w, flusher, "error", map[string]string{"error": "Failed to create LLM client: " + err.Error()})
+			completeSent = true
+			sendSSE(w, flusher, "complete", AIChatResponse{
+				Message: "Failed to create LLM client: " + err.Error(),
+				Action:  "info",
+			})
 			return
 		}
+		completeSent = true
 		json.NewEncoder(w).Encode(AIChatResponse{
 			Error: "Failed to create LLM client: " + err.Error(),
 		})
@@ -68,7 +106,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get available tools for context
-	availableTools := getAvailableTools(ctx)
+	availableTools := GetCachedToolsForRequest(r)
 
 	// Build system prompt
 	systemPrompt := getSystemPrompt(req.Context, availableTools)
@@ -168,8 +206,14 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 					if streaming {
 						sendSSE(w, flusher, "error", map[string]string{"error": "LLM error: " + err.Error()})
+						completeSent = true
+						sendSSE(w, flusher, "complete", AIChatResponse{
+							Message: "LLM error: " + err.Error(),
+							Action:  "info",
+						})
 						return
 					}
+					completeSent = true
 					json.NewEncoder(w).Encode(AIChatResponse{
 						Error: "LLM error: " + err.Error(),
 					})
@@ -188,6 +232,19 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+			}
+
+			// Check for context cancellation (Gemini/ADK silently swallows these).
+			if ctx.Err() != nil {
+				if streaming {
+					sendSSE(w, flusher, "error", map[string]string{"error": "Request timed out. Please try again."})
+					completeSent = true
+					sendSSE(w, flusher, "complete", AIChatResponse{
+						Message: "Request timed out during LLM generation. Please try again.",
+						Action:  "info",
+					})
+				}
+				return
 			}
 
 			// If no function calls, we have the final response
@@ -396,6 +453,7 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 		finalMessage = toolLogs.String() + "\n---\n" + fullResponse
 	}
 
+	completeSent = true
 	if streaming {
 		sendSSE(w, flusher, "complete", AIChatResponse{
 			Message:      finalMessage,
@@ -416,9 +474,14 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 func sendSSE(w http.ResponseWriter, flusher http.Flusher, eventType string, data interface{}) {
 	payload, err := json.Marshal(data)
 	if err != nil {
+		slog.Error("sendSSE: failed to marshal event", "event", eventType, "error", err)
 		return
 	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(payload))
+	_, writeErr := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, string(payload))
+	if writeErr != nil {
+		slog.Error("sendSSE: failed to write event", "event", eventType, "error", writeErr)
+		return
+	}
 	if flusher != nil {
 		flusher.Flush()
 	}

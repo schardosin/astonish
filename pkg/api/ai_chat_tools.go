@@ -3,12 +3,10 @@ package api
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcpstore"
-	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
@@ -277,6 +275,26 @@ CRITICAL TOOL RULES:
 - Use tools_selection to limit which tools are available to that node
 
 Be concise. Focus on simplicity and good UX.`
+
+	case "modify_flow":
+		return basePrompt + `
+
+# Your Task
+You are an AI assistant helping users modify existing agent workflows.
+The user wants to make changes to their current flow.
+
+## RESPONSE FORMAT (CRITICAL - follow exactly):
+1. **Brief explanation** of your changes (1-2 sentences)
+2. The **complete modified YAML** wrapped in ` + "```yaml" + ` code blocks
+
+## Rules:
+- Always return the COMPLETE flow YAML (all nodes, flow edges, etc.)
+- Only modify what the user requested — preserve everything else
+- ONLY use tools from the "Available Tools" list above
+- For LLM nodes that need tools, set "tools: true" and use tools_selection
+- Ensure every LLM response the user should see has user_message
+
+Be concise. Focus on the requested change only.`
 
 	case "modify_nodes":
 		return basePrompt + `
@@ -696,28 +714,4 @@ func mergeNodeIntoFlow(nodeSnippet, fullFlowYAML string, selectedNodeNames []str
 	}
 
 	return string(result), nil
-}
-
-// getAvailableTools fetches tools for AI context from cache
-func getAvailableTools(ctx context.Context) []ToolInfo {
-	// Use cached tools (initialized at startup)
-	cached := GetCachedTools()
-	if cached != nil {
-		return cached
-	}
-
-	// Fallback to internal tools only if cache not ready
-	var allTools []ToolInfo
-	internalTools, intErr := tools.GetInternalTools()
-	if intErr != nil {
-		slog.Warn("failed to get internal tools", "error", intErr)
-	}
-	for _, t := range internalTools {
-		allTools = append(allTools, ToolInfo{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Source:      "internal",
-		})
-	}
-	return allTools
 }

@@ -51,25 +51,37 @@ export async function sendChatMessageStream(message: string, context: string, cu
     if (done) break
     
     buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() as string // Last line might be incomplete
-
-    let currentEvent: string | null = null
     
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7).trim()
-      } else if (line.startsWith('data: ')) {
-        const dataStr = line.slice(6)
+    // Split on double-newline (SSE event boundary) to ensure we only
+    // process complete events. Large payloads (e.g., full flow YAML) may
+    // arrive across multiple TCP chunks — buffering until \n\n guarantees
+    // we only JSON.parse complete data lines.
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop()! // Last block might be incomplete — keep it
+
+    for (const block of blocks) {
+      if (!block.trim()) continue
+
+      let eventType: string | null = null
+      let dataStr: string | null = null
+
+      for (const line of block.split('\n')) {
+        if (line.startsWith('event: ')) {
+          eventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          dataStr = line.slice(6)
+        }
+      }
+
+      if (eventType && dataStr) {
         try {
           const data = JSON.parse(dataStr)
-          if (onEvent && currentEvent) {
-            onEvent(currentEvent, data)
+          if (onEvent) {
+            onEvent(eventType, data)
           }
         } catch (e) {
           console.error('Failed to parse SSE JSON:', e)
         }
-        currentEvent = null // Reset for next pair
       }
     }
   }

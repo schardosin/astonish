@@ -31,7 +31,7 @@ cd web && npm run test:coverage
 
 ## Test Architecture
 
-The test suite is organized in **four layers**, each catching a different class of bug:
+The test suite is organized in **four layers**, each catching a different class of bug. The taxonomy below describes **what kind of bug each test catches**; for the orthogonal **build-tag taxonomy** (`unit` / `integration` / `e2e`, run via `make test-unit/integration/e2e`) and for the e2e harness, see [`docs/architecture/testing.md`](architecture/testing.md). When deciding *which* test to add for a new feature or bug, start at the [Choosing the Right Test Type](architecture/testing.md#choosing-the-right-test-type) decision tree.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -399,9 +399,13 @@ go test ./pkg/agent -run TestSystemPromptBuilder_Golden -update
 
 ---
 
-## Layer 4: E2E Tests (Future)
+## Layer 4: E2E Tests
 
-Planned but not yet implemented. Will use Playwright to run real browser tests against a real server with a mock LLM. Reserved for critical-path smoke tests only (5-10 scenarios that exercise the full stack including CSS rendering, WebSocket connections, and browser-specific behavior).
+E2E tests bootstrap a complete Astonish platform (fresh DB, real `StudioServer`, real auth, real LLM provider) and run real user journeys against it. They live under `tests/e2e/<feature>/` and run via `make test-e2e`. The current suite has ~35 passing scenarios across chat, sandbox layer chains, MCP install, fleet, and the flow assistant.
+
+This layer is **operational, not future**. For the harness contract (`e2eboot.Bootstrap(t)`), the K8s sandbox infra (`make e2e-k8s-up`), the inspector mode for browsing failed runs (`make test-e2e-inspect` on port 9394), and the package-scoped seeding model, see [`docs/architecture/testing.md`](architecture/testing.md). For the user-journey scenario catalog and `// COVERS:` contract, see [`tests/scenarios/`](../tests/scenarios/).
+
+A future Playwright layer for browser-specific concerns (CSS, layout, real `<iframe>` rendering) is still on the table but not yet implemented.
 
 ---
 
@@ -590,6 +594,8 @@ Backend integration tests inject a `MockLLM` implementing the `model.LLM` interf
 ### Why golden file snapshots?
 
 The system prompt is a contract that three systems depend on (prompt text, backend regex, frontend parsing). A golden file captures the entire output, so ANY change — even a typo fix — shows up as a diff. This forces developers to acknowledge prompt changes explicitly with `-update`, preventing accidental regressions.
+
+A canonical example of *why this matters* is the **Inline Report Rendering Contract** in `AGENTS.md` (search for "Inline Report Rendering Contract"). Two prior commits (`b5310ae`, `ee2d47d`) tried to "fix" the report-fence gate by widening it; both broke other features. The defense is a prompt-contract test plus an SSE scenario test — not a relaxation of the gate. When tempted to widen a rendering gate, add a contract test instead.
 
 ### Why JSON fixtures instead of inline event arrays?
 

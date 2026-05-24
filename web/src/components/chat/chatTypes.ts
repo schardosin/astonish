@@ -142,6 +142,15 @@ export interface ArtifactMessage {
   type: 'artifact'
   path: string
   toolName: string
+  // Set true when the same turn also emitted a `report_marker` event whose
+  // `path` matches this artifact's path. Drives the "embed inline as
+  // EmbeddedFileViewer" gate in StudioChat — without it, the artifact
+  // renders as the compact ArtifactCard download tile.
+  isReport?: boolean
+  // Optional human-readable title pulled from the `astonish-report` fence's
+  // frontmatter (e.g., "Q4 Revenue Analysis"). Falls back to the file
+  // basename in EmbeddedFileViewer when empty.
+  reportTitle?: string
 }
 
 // Session-level artifact info (from session detail API)
@@ -150,6 +159,24 @@ export interface SessionArtifact {
   fileName: string
   fileType: string
   toolName: string
+  // Same semantics as ArtifactMessage.isReport, projected onto session
+  // detail by the backend's joinReportMarkers step. Persists the report
+  // gate decision across server restarts and history reloads.
+  isReport?: boolean
+  reportTitle?: string
+}
+
+// ---- Report marker (inline report gate signal) ----
+//
+// Emitted by the backend after detecting an ```astonish-report``` fence
+// whose `path` matches a same-turn write_file/edit_file artifact. The
+// frontend uses this signal to flip the matching ArtifactMessage's
+// isReport flag so the chat embeds the file inline instead of showing a
+// download card. The marker carries no on-screen content of its own.
+export interface ReportMarkerMessage {
+  type: 'report_marker'
+  path: string
+  title?: string
 }
 
 // ---- Execution plan (announce_plan / update_plan) ----
@@ -235,6 +262,7 @@ export type ChatMsg =
   | DistillSavedMessage
   | AppSavedMessage
   | ReportPreviewMessage
+  | ReportMarkerMessage
   | SourcesMessage
 
 // ---- Fleet info / state ----

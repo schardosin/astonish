@@ -132,6 +132,22 @@ astonish/
 - Tools cached via `pkg/cache/tools_cache.go`
 - Use `GetCachedTools()` to retrieve available tools
 
+### Inline Report Rendering Contract (do NOT loosen)
+
+A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering iff **all three** signals are present:
+
+1. The artifact event was emitted in the **last turn** (after the most recent user message).
+2. The artifact's `fileType === 'Markdown'`.
+3. The artifact's `isReport === true`, set only when the agent emitted an `` ```astonish-report `` fence whose `path:` matches the artifact's path. The backend's `detectAndEmitReportMarkers` (`pkg/api/chat_runner.go`) validates the path match and emits a `report_marker` SSE event; `joinReportMarkers` (`pkg/api/chat_utils.go`) projects the persisted marker onto `ArtifactInfo` at session-detail load time.
+
+**Anything failing any one of these conditions falls back to the compact `ArtifactCard` download tile.** This is intentional. Do not "fix" code that produces an `ArtifactCard` for a non-report write_file by widening the gate. If you find yourself wanting to widen the gate, the agent prompt is the correct place to teach the LLM the two-step contract — not the gate.
+
+The two prior regressions to avoid:
+- `b5310ae`: widened the gate to "any last-turn artifact embeds" → incidental edits during a multi-step task were promoted to reports. Defended by `TestE2E_Chat_PlainWriteFileNotReport` (CHAT-066) and the system prompt contract test.
+- `ee2d47d`: tried to make the fence carry inline content (no `write_file`) → broke Files panel, artifact API, PDF/DOCX export. Defended by keeping the fence as a *signal*; the file is always real.
+
+Authoritative docs: `docs/architecture/chat-rendering-pipeline.md` ("The Report Pipeline" section).
+
 ## Testing Guidelines
 
 - Write tests for non-trivial functions

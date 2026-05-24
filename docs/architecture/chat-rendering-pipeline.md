@@ -241,16 +241,70 @@ The logic is simple: if `!isStreaming` and `sessionArtifacts.length > 0`, find t
 
 PDF export uses `fetch()` + blob download (not `<a>.click()` navigation) because the backend PDF generation takes 5-15 seconds. The `<a>.click()` pattern causes the browser to show "Site wasn't available" for slow responses. The `fetch()` approach shows a loading spinner on the Download button during generation.
 
-### Why reports use `write_file`, not inline fences
+## The Report Pipeline
 
-This was tested and the inline fence approach (`astonish-report` code fence, similar to `astonish-app`) was **rejected** because:
+Reports use a **two-step contract** combining `write_file` (which produces the file on disk and an `artifact` SSE event) with an explicit `astonish-report` fence emitted in the agent's reply text. Both signals are required: the file is the *content*, the fence is the *intent*.
 
-1. **No file on disk** -- the Files panel requires real files served by the artifact API. Without `write_file`, there's no file to serve, no artifact event, no Files button.
-2. **No `EmbeddedFileViewer`** -- the `EmbeddedFileViewer` fetches file content from `/api/studio/artifacts`. Without a persisted file, it has nothing to fetch.
-3. **No PDF/DOCX export** -- the PDF endpoint reads the markdown file from disk (or sandbox/JSONL). Without `write_file`, there's no file to convert.
-4. **Dual rendering** -- the agent message still contains the raw fence text, rendering as a code-like collapsible block. Stripping the fence from the agent message is fragile.
+This design replaces an earlier heuristic ("any last-turn markdown artifact is a report"), which produced incorrect promotions whenever an agent edited a markdown file incidentally during a non-report task. It also replaces an even earlier alternative ("`astonish-report` fence carries the markdown content inline"), which was rejected because the file had to live on disk anyway for the Files panel, the artifact API, and PDF/DOCX export.
 
-**Rule: Reports always use `write_file`. The LLM saves the full report to disk, then writes a concise summary in the chat.**
+```mermaid
+graph TD
+    A["LLM emits text +<br/>```astonish-report path: ... ``` fence"] --> B
+    A2["LLM calls write_file(path, ...)"] --> C[artifact SSE event]
+    B[Backend: detectAndEmitReportMarkers]
+    B -->|fence path matches a same-turn artifact| D["report_marker SSE event<br/>{path, title}"]
+    B -->|persistReportMarker| E[Session log:<br/>'[report_marker]{...}']
+    D --> F["Frontend: flips ArtifactMessage.isReport<br/>and SessionArtifact.isReport"]
+    E --> G["Session-detail GET:<br/>collectReportMarkers + joinReportMarkers<br/>projects IsReport onto ArtifactInfo"]
+    C --> H["Frontend: ArtifactMessage rendered<br/>(by default as compact ArtifactCard)"]
+    F --> I["StudioChat embeddedArtifactPaths gate:<br/>last-turn AND fileType==='Markdown' AND isReport"]
+    G --> I
+    H --> I
+    I -->|gate passes| J[EmbeddedFileViewer<br/>inline in last agent bubble]
+    I -->|gate fails| K[ArtifactCard<br/>compact download tile]
+```
+
+### Gate rules (the contract surface)
+
+A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering **iff all three** conditions hold:
+
+1. The artifact event was emitted in the **last turn** (after the most recent user message). Earlier-turn edits never embed.
+2. `fileType === 'Markdown'`. Code, configs, scripts, JSON, etc. always render as `ArtifactCard`.
+3. `isReport === true`. This flips only when the agent emits an `astonish-report` fence whose `path` matches the artifact's path; the backend's `detectAndEmitReportMarkers` validates the match before emitting `report_marker`.
+
+Any artifact failing any of these conditions falls back to the compact `ArtifactCard` download tile. There is no other path to inline rendering.
+
+### Fence shape
+
+```
+` + "```" + `astonish-report
+path: /absolute/path/to/file.md
+title: Optional human-readable title
+` + "```" + `
+```
+
+- `path` is required; it MUST equal the absolute path passed to `write_file`/`edit_file` in the same turn. Mismatches are logged and dropped.
+- `title` is optional; when present, `EmbeddedFileViewer` uses it as the header label and the basename becomes a tooltip.
+- Unknown frontmatter keys are tolerated silently for forward compatibility.
+- The fence is **stripped** from displayed agent prose by both the backend (`stripReportMarkerFences`) and the frontend (regex inside `StudioChat.tsx`); it is never displayed to the user.
+
+### Persistence and replay
+
+`persistReportMarker` writes a `[report_marker]{...}` text event to the session log alongside the agent's prose, mirroring the `[app_preview]` and `[distill_preview]` patterns. On session-detail load:
+
+1. `collectReportMarkers` walks the events and rebuilds `path → title` map.
+2. `joinReportMarkers` projects the map onto the `[]ArtifactInfo` returned by `collectArtifacts`, flipping `IsReport` and filling `ReportTitle`.
+
+The frontend's playback `tryParseReportMarkerMessage` recognises the persisted text events as marker records (not chat content) and skips them, preventing both rendering and coalescing into surrounding agent prose.
+
+### Why this design over alternatives
+
+| Alternative | Why rejected |
+|---|---|
+| Agent message containing a long write_file → embed (the `b5310ae` heuristic) | False positives on incidental edits during multi-turn tasks. |
+| `astonish-report` fence carries inline markdown content (no `write_file`) | No file on disk → no Files panel, no artifact API, no PDF/DOCX export, no `EmbeddedFileViewer.fetchArtifactContent`. |
+| Single SSE event combining artifact + report-flag | Tools fire before agent text, so the fence is parsed *after* the artifact event has already been emitted. Splitting into two events keeps the per-event semantics clean and parallels `app_preview`. |
+| Frontend-only fence detection | Backend persistence and session-detail reload would re-derive state from raw text on every load — fragile and parser-coupled. The current split lets backend canonicalize once and persist the structured marker.
 
 ## The App Preview Pipeline
 

@@ -141,11 +141,18 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
           }
         </div>
 
-        {/* Filename + type badge */}
+        {/* Filename + type badge. When the artifact carries a reportTitle
+            (set by an `astonish-report` fence's frontmatter), display that as
+            the human-readable label and demote the basename to a tooltip.
+            Falls back to the basename when no title is available. */}
         <div className="flex items-center gap-2 min-w-0 flex-1">
           <FileText size={13} className="text-green-400 shrink-0" />
-          <span className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-            {artifact.fileName}
+          <span
+            className="text-xs font-medium truncate"
+            style={{ color: 'var(--text-primary)' }}
+            title={artifact.fileName}
+          >
+            {artifact.reportTitle || artifact.fileName}
           </span>
           <span
             className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 font-medium"

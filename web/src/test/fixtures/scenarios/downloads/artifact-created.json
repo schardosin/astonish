@@ -1,6 +1,6 @@
 {
   "name": "artifact-created",
-  "description": "Artifact event emitted after write_file tool creates a file",
+  "description": "Artifact event emitted after write_file creates a file. No astonish-report fence is present, so this artifact renders as a compact ArtifactCard, NOT as an inline EmbeddedFileViewer. Validates the no-marker → card path of the report gate.",
   "category": "downloads",
   "events": [
     { "type": "session", "data": { "sessionId": "sess-artifact-created", "isNew": true } },

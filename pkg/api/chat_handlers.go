@@ -71,6 +71,18 @@ type ArtifactInfo struct {
 	FileName string `json:"fileName"` // basename (e.g., "report.md")
 	FileType string `json:"fileType"` // human-readable type (e.g., "Markdown", "Python")
 	ToolName string `json:"toolName"` // "write_file" or "edit_file"
+
+	// IsReport flags artifacts the agent explicitly signaled as reports via
+	// an ```astonish-report fence in the same turn. Only artifacts with
+	// IsReport=true AND fileType="Markdown" AND emitted in the last turn
+	// are eligible for inline EmbeddedFileViewer rendering on the frontend;
+	// everything else falls back to the compact ArtifactCard.
+	IsReport bool `json:"isReport,omitempty"`
+
+	// ReportTitle is the optional title carried in the astonish-report
+	// fence's frontmatter (e.g., "Q4 Revenue Analysis"). May be empty even
+	// when IsReport is true; the frontend falls back to the file basename.
+	ReportTitle string `json:"reportTitle,omitempty"`
 }
 
 // FleetMessageSummary is a fleet message returned when loading fleet session history.

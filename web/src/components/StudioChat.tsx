@@ -245,9 +245,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   // Pre-compute which artifact paths should be rendered as embedded file viewers
   // inside the last agent message bubble instead of as standalone inline ArtifactCards.
-  // Only artifacts from the *last turn* (after the last user message) are included,
-  // so incidental file edits from earlier turns (e.g. fixing main.py during container
-  // provisioning in a Fleet Plan wizard) don't pollute the final summary.
+  //
+  // The gate is intentionally NARROW (three conditions, all required) to prevent
+  // the b5310ae regression where any last-turn markdown file was treated as a
+  // report. Today's contract: an artifact is embedded iff
+  //   1. it was produced in the *last turn* (after the last user message), AND
+  //   2. its fileType === 'Markdown' (only markdown reports promote to inline), AND
+  //   3. its isReport flag is true — meaning the agent emitted a matching
+  //      ```astonish-report``` fence whose `path` exactly matches this artifact.
+  // The third condition is the explicit signal the agent must opt into. Code
+  // files, configs, scripts, and incidental edits never satisfy condition 3, so
+  // they correctly stay as compact ArtifactCards.
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
@@ -265,11 +273,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
     // Only embed artifacts that belong to the last turn
     if (lastTurnArtifactPaths.size === 0) return paths
-    // Find the last agent message and collect matching artifacts
+    // Find the last agent message and collect matching artifacts that ALSO
+    // satisfy the markdown + isReport gate.
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
         for (const a of sessionArtifacts) {
-          if (lastTurnArtifactPaths.has(a.path)) paths.add(a.path)
+          if (!lastTurnArtifactPaths.has(a.path)) continue
+          if (a.fileType !== 'Markdown') continue
+          if (!a.isReport) continue
+          paths.add(a.path)
         }
         break
       }
@@ -660,6 +672,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 path: data.path as string,
                 toolName: (data.tool_name as string) || 'write_file',
               } as ArtifactMessage])
+            }
+            break
+
+          case 'report_marker':
+            // The agent emitted an ```astonish-report``` fence whose `path`
+            // matched a same-turn write_file/edit_file artifact. Flip the
+            // matching artifact's isReport flag so the embed gate
+            // (embeddedArtifactPaths useMemo) admits it. The marker carries
+            // no on-screen content of its own — only metadata.
+            if (data.path) {
+              const reportPath = data.path as string
+              const reportTitle = (data.title as string) || ''
+              setSessionArtifacts(prev => prev.map(a =>
+                a.path === reportPath
+                  ? { ...a, isReport: true, reportTitle }
+                  : a,
+              ))
+              setMessages((prev: ChatMsg[]) => prev.map(m =>
+                m.type === 'artifact' && (m as ArtifactMessage).path === reportPath
+                  ? { ...(m as ArtifactMessage), isReport: true, reportTitle }
+                  : m,
+              ))
             }
             break
 
@@ -1254,6 +1288,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 path: data.path as string,
                 toolName: (data.tool_name as string) || 'write_file',
               } as ArtifactMessage])
+            }
+            break
+
+          case 'report_marker':
+            // Mirror of the primary handler — see comments at the first
+            // case 'report_marker' above. Both SSE consumers (sendMessage
+            // and reconnect) must apply the same flip so a tab refresh in
+            // the middle of a streaming turn produces the same result as
+            // the original stream.
+            if (data.path) {
+              const reportPath = data.path as string
+              const reportTitle = (data.title as string) || ''
+              setSessionArtifacts(prev => prev.map(a =>
+                a.path === reportPath
+                  ? { ...a, isReport: true, reportTitle }
+                  : a,
+              ))
+              setMessages((prev: ChatMsg[]) => prev.map(m =>
+                m.type === 'artifact' && (m as ArtifactMessage).path === reportPath
+                  ? { ...(m as ArtifactMessage), isReport: true, reportTitle }
+                  : m,
+              ))
             }
             break
 
@@ -2110,24 +2166,33 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                           {msg.content}
                         </pre>
                       ) : (() => {
+                        // Strip ```astonish-report``` fences first — they are
+                        // signal-only (their effect is the report_marker SSE
+                        // event flipping the artifact gate), not display
+                        // content. The matching disk file is rendered inline
+                        // below as an EmbeddedFileViewer; showing the raw
+                        // fence here would duplicate the path on screen.
+                        // Mirrors stripReportMarkerFences in pkg/api/chat_runner.go.
+                        const reportFenceRe = /```astonish-report\s*\n[\s\S]*?(?:\n```|$)/g
+                        const cleanedContent = msg.content.replace(reportFenceRe, '').trim()
                         // Split out astonish-app code fences so they render as a stable
                         // AppCodeIndicator outside the ReactMarkdown tree. This avoids
                         // the jank of ReactMarkdown recreating the component on every
                         // streaming text update.
                         const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
-                        const match = msg.content.match(appFenceRe)
+                        const match = cleanedContent.match(appFenceRe)
                         if (!match) {
                           return (
                             <div style={{ color: 'var(--text-primary)' }} className="markdown-body text-sm">
-                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content}</ReactMarkdown>
+                              <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{cleanedContent}</ReactMarkdown>
                             </div>
                           )
                         }
                         const fenceStart = match.index!
                         const fenceEnd = fenceStart + match[0].length
-                        const before = msg.content.slice(0, fenceStart).trimEnd()
+                        const before = cleanedContent.slice(0, fenceStart).trimEnd()
                         const appCode = match[1]
-                        const after = msg.content.slice(fenceEnd).trimStart()
+                        const after = cleanedContent.slice(fenceEnd).trimStart()
                         return (
                           <>
                             {before && (

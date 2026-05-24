@@ -210,10 +210,16 @@ func TestSystemPromptBuilder_SlimPrompt(t *testing.T) {
 		t.Error("expected guidance hint referencing memory_search")
 	}
 
-	// Verify prompt is reasonably compact (under 5000 chars ~ 1250 tokens).
-	// Budget includes the always-on Credential System hint (~210 chars).
-	if len(prompt) > 5000 {
-		t.Errorf("prompt too large for slim design: %d chars (target < 5000)", len(prompt))
+	// Verify prompt is reasonably compact (under 5500 chars ~ 1375 tokens).
+	// Budget includes the always-on Credential System hint (~210 chars) and
+	// the always-on Reports contract section (~600 chars). The Reports
+	// section is non-negotiable static content: the LLM cannot retrieve
+	// guidance it doesn't know exists, so the report two-step contract
+	// MUST live in the static prefix or it gets silently skipped.
+	// See pkg/api/chat_runner.go:detectAndEmitReportMarkers for the
+	// receiving end of that contract.
+	if len(prompt) > 5500 {
+		t.Errorf("prompt too large for slim design: %d chars (target < 5500)", len(prompt))
 	}
 }
 

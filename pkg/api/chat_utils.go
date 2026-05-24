@@ -90,6 +90,14 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 				// These are persisted with a special prefix marker and must
 				// be reconstructed as their own message types, not coalesced.
 				if role == "model" {
+					// Report markers carry no on-screen chat bubble; their
+					// effect is to flag matching artifacts as reports. Skip
+					// the text entirely so it is neither rendered nor
+					// coalesced into the surrounding agent prose.
+					if tryParseReportMarkerMessage(text) {
+						lastInvocationID = eventInvID
+						continue
+					}
 					if dm := tryParseDistillMessage(text); dm != nil {
 						messages = append(messages, *dm)
 						lastInvocationID = eventInvID
@@ -97,6 +105,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					}
 					if am := tryParseAppPreviewMessage(text); am != nil {
 						messages = append(messages, *am)
+						lastInvocationID = eventInvID
+						continue
+					}
+					if fm := tryParseFlowOutputMessage(text); fm != nil {
+						messages = append(messages, *fm)
 						lastInvocationID = eventInvID
 						continue
 					}
@@ -1151,4 +1164,147 @@ func reconstructActiveApp(events session.Events) *agent.ActiveApp {
 		}
 	}
 	return latestApp
+}
+
+// --- Report marker persistence ---
+//
+// A report marker is the persisted record that an artifact created via
+// write_file/edit_file in a given turn was signaled by the agent (via an
+// ```astonish-report fence) to be a report. The marker carries the absolute
+// path to the artifact and an optional title. It is the source of truth that
+// flips ArtifactInfo.IsReport on subsequent session-detail loads.
+//
+// Why a structured persisted marker (not a flag on the artifact event):
+//   - artifact events come from tool execution and predate the agent's text
+//     output that contains the fence; we cannot retroactively edit them;
+//   - the same marker pattern is already used for app_preview and distill,
+//     so this fits the established prefix-marker convention;
+//   - decoupling the marker from the artifact preserves the one-event-one-
+//     concern rule and lets future report metadata (export formats, summary)
+//     attach without touching the artifact schema.
+
+const reportMarkerPrefix = "[report_marker]"
+
+// reportMarkerPayload is the JSON record persisted inside the text event
+// that follows a report-bearing tool call. Path is required; title is
+// optional and may be empty.
+type reportMarkerPayload struct {
+	Path  string `json:"path"`
+	Title string `json:"title,omitempty"`
+}
+
+// persistReportMarker serializes a report marker as a structured text event
+// appended to the session log. Mirrors persistAppPreview in shape and
+// failure handling — log-and-skip on errors so a persistence hiccup never
+// breaks the live SSE stream.
+func persistReportMarker(ctx context.Context, svc session.Service, userID, sessionID, path, title string) {
+	if svc == nil || sessionID == "" || path == "" {
+		return
+	}
+	payload := reportMarkerPayload{Path: path, Title: title}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal report marker", "component", "persistReportMarker", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", reportMarkerPrefix+string(data))
+}
+
+// collectReportMarkers walks a session's events and returns a map of
+// path -> title for every persisted report-marker record. Used at session-
+// detail load time to project the IsReport / ReportTitle fields back onto
+// reconstructed ArtifactInfo entries.
+func collectReportMarkers(events session.Events) map[string]string {
+	markers := make(map[string]string)
+	for i := range events.Len() {
+		event := events.At(i)
+		if event.LLMResponse.Content == nil {
+			continue
+		}
+		for _, part := range event.LLMResponse.Content.Parts {
+			if part.Text == "" {
+				continue
+			}
+			if !strings.HasPrefix(part.Text, reportMarkerPrefix) {
+				continue
+			}
+			jsonStr := part.Text[len(reportMarkerPrefix):]
+			var payload reportMarkerPayload
+			if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+				continue
+			}
+			if payload.Path == "" {
+				continue
+			}
+			// Last write wins for a given path — if the agent re-emits a
+			// marker for the same file across turns, the most recent title
+			// is kept.
+			markers[payload.Path] = payload.Title
+		}
+	}
+	return markers
+}
+
+// joinReportMarkers projects a map of report markers (as returned by
+// collectReportMarkers) onto a slice of ArtifactInfo. Each artifact whose
+// path is keyed in the markers map has IsReport flipped to true and
+// ReportTitle filled with the marker's title (which may be empty). All
+// other artifacts are returned unchanged.
+func joinReportMarkers(artifacts []ArtifactInfo, markers map[string]string) []ArtifactInfo {
+	if len(markers) == 0 || len(artifacts) == 0 {
+		return artifacts
+	}
+	out := make([]ArtifactInfo, len(artifacts))
+	copy(out, artifacts)
+	for i := range out {
+		if title, ok := markers[out[i].Path]; ok {
+			out[i].IsReport = true
+			out[i].ReportTitle = title
+		}
+	}
+	return out
+}
+
+// tryParseReportMarkerMessage reports whether the given text is a persisted
+// report-marker record. Unlike app_preview / distill markers, report markers
+// do NOT surface as their own chat bubble — their effect is purely a flag
+// projected onto the corresponding artifact's ArtifactInfo by joinReportMarkers.
+// The playback loop calls this helper to detect and skip such records so they
+// are neither rendered nor coalesced into the agent prose around them.
+func tryParseReportMarkerMessage(text string) bool {
+	return strings.HasPrefix(text, reportMarkerPrefix)
+}
+
+// --- Flow output persistence ---
+//
+// Flow output messages are persisted using the same prefix-marker pattern as
+// distill and app_preview. When run_flow produces large output (>500 chars),
+// the output is stripped from the tool result (to save LLM context) and
+// delivered to the user via a transient SSE event. We persist it here so
+// the output survives page refresh / session reload.
+// Format: [flow_output]<raw output text>
+
+const flowOutputPrefix = "[flow_output]"
+
+// persistFlowOutput saves the flow output to the session transcript so it
+// can be reconstructed on session reload.
+func persistFlowOutput(ctx context.Context, svc session.Service, userID, sessionID, content string) {
+	if svc == nil || sessionID == "" || content == "" {
+		return
+	}
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", flowOutputPrefix+content)
+}
+
+// tryParseFlowOutputMessage checks if a text starts with the flow_output marker
+// prefix and returns a structured StudioMessage if so. Returns nil if not a
+// flow output message.
+func tryParseFlowOutputMessage(text string) *StudioMessage {
+	if !strings.HasPrefix(text, flowOutputPrefix) {
+		return nil
+	}
+	content := text[len(flowOutputPrefix):]
+	return &StudioMessage{
+		Type:    "flow_output",
+		Content: content,
+	}
 }

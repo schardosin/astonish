@@ -315,7 +315,14 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- Do NOT set background on the outermost container — it must be transparent.\n")
 	sb.WriteString("- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.\n")
 	sb.WriteString("Search memory for \"generative-ui\" for full documentation and examples.\n")
-	sb.WriteString("**Reports vs apps:** For reports/analyses with diagrams, use `write_file` + mermaid blocks, not `astonish-app`.\n")
+
+	// 6l. Reports contract (always present — must be unconditional, not
+	// hidden behind vector retrieval, because the LLM cannot retrieve
+	// guidance it doesn't know exists).
+	sb.WriteString("\n## Reports\n\n")
+	sb.WriteString("For any report, analysis, review, summary, or document the user may share or export: save it as a `.md` file via `write_file`, then emit an `astonish-report` fence in your reply. Both steps are required every time. Reports may include mermaid diagrams for flows and architectures.\n\n")
+	sb.WriteString("```astonish-report\npath: <exact path passed to write_file>\ntitle: <human-readable title>\n```\n\n")
+	sb.WriteString("The fence's `path` MUST match the `file_path` you used. Without the fence the file appears as a small download card instead of an inline report. Without `write_file` the fence is ignored. Do NOT use `astonish-app` for reports — that fence is for interactive UIs.\n")
 
 	// ── Tier 3: Per-Turn Dynamic ─────────────────────────────────
 	// Execution plans and auto-retrieved knowledge are appended here at

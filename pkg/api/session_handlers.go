@@ -176,6 +176,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 		messages := eventsToMessages(getResp.Session.Events(), nil)
 		artifacts := collectArtifacts(getResp.Session.Events())
+		// Project persisted astonish-report fences onto matching artifacts so
+		// the frontend can decide which markdown files to embed inline.
+		artifacts = joinReportMarkers(artifacts, collectReportMarkers(getResp.Session.Events()))
 		totalUsage := collectUsage(getResp.Session.Events())
 
 		resp := StudioSessionDetailResponse{
@@ -260,6 +263,9 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Collect file artifacts from write_file/edit_file tool calls
 	artifacts := collectArtifacts(getResp.Session.Events())
+	// Project persisted astonish-report fences onto matching artifacts so
+	// the frontend can decide which markdown files to embed inline.
+	artifacts = joinReportMarkers(artifacts, collectReportMarkers(getResp.Session.Events()))
 
 	// Collect cumulative token usage from all LLM responses
 	totalUsage := collectUsage(getResp.Session.Events())

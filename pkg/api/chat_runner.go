@@ -340,7 +340,7 @@ func (cr *ChatRunner) Run(
 		if chatAgent.SubTaskProgressCallback != nil {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionResponse != nil {
-					cr.drainImagesAndFlowOutput(chatAgent)
+					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 				}
 			}
 			return
@@ -369,7 +369,7 @@ func (cr *ChatRunner) Run(
 					"name":   part.FunctionResponse.Name,
 					"result": summarizeToolResult(resp),
 				})
-				cr.drainImagesAndFlowOutput(chatAgent)
+				cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 			}
 		}
 	}
@@ -539,7 +539,7 @@ func (cr *ChatRunner) Run(
 						"name":   part.FunctionResponse.Name,
 						"result": summarizeToolResult(resp),
 					})
-					cr.drainImagesAndFlowOutput(chatAgent)
+					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 
 					// Emit memory_saved SSE event when memory_save tool succeeds
 					if part.FunctionResponse.Name == "memory_save" && resp != nil {
@@ -640,7 +640,7 @@ func (cr *ChatRunner) Run(
 							"name":   part.FunctionResponse.Name,
 							"result": summarizeToolResult(resp),
 						})
-						cr.drainImagesAndFlowOutput(chatAgent)
+						cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 					}
 				}
 			}
@@ -683,6 +683,14 @@ func (cr *ChatRunner) Run(
 	// Post-processing: detect astonish-app code fences in the accumulated response
 	// text and emit app_preview events + persist them.
 	cr.detectAndEmitAppPreviews(chatAgent, sessionService)
+
+	// Post-processing: detect astonish-report code fences in the accumulated
+	// response text and emit report_marker events + persist them. The fence
+	// is a SIGNAL only — the file content itself was already created via
+	// write_file/edit_file (rule 1: every report uses write_file). The fence
+	// flips an artifact's "is this a report?" gate so the frontend embeds it
+	// inline as EmbeddedFileViewer instead of showing a small artifact card.
+	cr.detectAndEmitReportMarkers(sessionService)
 }
 
 // processStateDelta extracts approval, retry, error, and thinking events from state deltas.
@@ -737,7 +745,7 @@ func (cr *ChatRunner) processStateDelta(delta map[string]any) {
 }
 
 // drainImagesAndFlowOutput drains images, flow output, and file artifacts from the chat agent and emits them as events.
-func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent) {
+func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent, sessionService session.Service) {
 	for _, img := range chatAgent.DrainImages() {
 		mimeType := "image/png"
 		if img.Format == "jpeg" || img.Format == "jpg" {
@@ -750,6 +758,7 @@ func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent) {
 	}
 	if flowOut := chatAgent.DrainFlowOutput(); flowOut != "" {
 		cr.emitEvent("flow_output", map[string]any{"content": flowOut})
+		persistFlowOutput(cr.ctx, sessionService, cr.UserID, cr.SessionID, flowOut)
 	}
 	for _, file := range chatAgent.DrainFiles() {
 		cr.emitEvent("artifact", map[string]any{
@@ -849,6 +858,154 @@ func (cr *ChatRunner) detectAndEmitAppPreviews(chatAgent *agent.ChatAgent, sessi
 
 		// Update active app state for cross-turn refinement
 		chatAgent.SetActiveApp(cr.SessionID, existingApp)
+	}
+}
+
+// reportMarkerFenceRe matches ```astonish-report code fences. It captures the
+// frontmatter body (a YAML-ish key:value block) between the opening and
+// closing fences. Mirrors appPreviewFenceRe in shape so both fence types
+// are detected by structurally identical post-processors.
+var reportMarkerFenceRe = regexp.MustCompile("(?s)```astonish-report\\s*\\n(.*?)\\n```")
+
+// reportMarkerInfo is the parsed content of a single astonish-report fence.
+// It is intentionally minimal: the fence is a signal that an artifact should
+// be rendered as a report, not a content carrier. Future fields (mermaid hint,
+// summary, export formats) attach naturally here without changing the
+// surrounding pipeline.
+type reportMarkerInfo struct {
+	Path  string // required, must match a same-turn artifact's path
+	Title string // optional, displayed by EmbeddedFileViewer when present
+}
+
+// parseReportMarkerFrontmatter parses the body of a ```astonish-report fence.
+// Recognised format (Shape B):
+//
+//	path: /tmp/q4-revenue.md
+//	title: Q4 Revenue Analysis
+//	# unknown keys are ignored without error so future extensions don't break parsing
+//
+// Returns ok=true only when a non-empty path is present. Empty body, missing
+// path, or a malformed body all return ok=false; callers WARN-and-skip.
+func parseReportMarkerFrontmatter(body string) (info reportMarkerInfo, ok bool) {
+	for _, raw := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:colon])
+		value := strings.TrimSpace(line[colon+1:])
+		// Strip optional surrounding quotes a permissive YAML-ish parser would tolerate.
+		value = strings.Trim(value, `"'`)
+		switch key {
+		case "path":
+			info.Path = value
+		case "title":
+			info.Title = value
+		}
+	}
+	if info.Path == "" {
+		return reportMarkerInfo{}, false
+	}
+	return info, true
+}
+
+// stripReportMarkerFences removes every ```astonish-report fence from text,
+// leaving the surrounding prose intact. Used so the persisted agent message
+// transcript and the rendered chat bubble don't show the raw fence to the
+// user — it is a signal, not display content. Mirrors the equivalent
+// frontend stripping logic in StudioChat.tsx.
+func stripReportMarkerFences(text string) string {
+	return reportMarkerFenceRe.ReplaceAllString(text, "")
+}
+
+// recentTurnArtifactPaths walks the runner's event buffer and returns the
+// set of file paths emitted as "artifact" events during the current turn.
+// The set is used by detectAndEmitReportMarkers to validate that the path
+// inside an astonish-report fence corresponds to a file the agent actually
+// wrote. Mismatches are logged-and-skipped so a stray or stale path in the
+// model's text cannot fabricate a report marker out of nothing.
+func (cr *ChatRunner) recentTurnArtifactPaths() map[string]bool {
+	paths := make(map[string]bool)
+	cr.eventsMu.RLock()
+	defer cr.eventsMu.RUnlock()
+	for _, ev := range cr.events {
+		if ev.Type != "artifact" {
+			continue
+		}
+		if p, ok := ev.Data["path"].(string); ok && p != "" {
+			paths[p] = true
+		}
+	}
+	return paths
+}
+
+// detectAndEmitReportMarkers scans the buffered text events for one or more
+// ```astonish-report fences. For each well-formed fence whose path matches
+// an artifact emitted in this turn, it:
+//
+//  1. emits a "report_marker" SSE event {path, title} carrying the gate
+//     signal the frontend uses to decide on EmbeddedFileViewer rendering;
+//  2. persists a structured marker record so the gate state survives
+//     server restarts and is rebuilt on session-detail GET;
+//  3. dedups repeats — if the LLM re-emits the same path, only one event
+//     is sent.
+//
+// Malformed fences (missing path, unparseable frontmatter) and fences whose
+// path doesn't correspond to a same-turn artifact are skipped with a WARN
+// log line. The downstream effect is that the artifact remains a plain
+// ArtifactCard rather than promoting to a report viewer — a graceful
+// degradation that preserves correctness when the LLM mis-signals.
+func (cr *ChatRunner) detectAndEmitReportMarkers(sessionService session.Service) {
+	cr.eventsMu.RLock()
+	var fullText strings.Builder
+	for _, ev := range cr.events {
+		if ev.Type == "text" {
+			if t, ok := ev.Data["text"].(string); ok {
+				fullText.WriteString(t)
+			}
+		}
+	}
+	cr.eventsMu.RUnlock()
+
+	matches := reportMarkerFenceRe.FindAllStringSubmatch(fullText.String(), -1)
+	if len(matches) == 0 {
+		return
+	}
+
+	turnArtifacts := cr.recentTurnArtifactPaths()
+	emitted := make(map[string]bool)
+
+	for _, match := range matches {
+		body := match[1]
+		info, ok := parseReportMarkerFrontmatter(body)
+		if !ok {
+			slog.Warn("astonish-report fence missing required path field; ignoring",
+				"component", "chat_runner",
+				"session", cr.SessionID,
+				"body", strings.TrimSpace(body))
+			continue
+		}
+		if !turnArtifacts[info.Path] {
+			slog.Warn("astonish-report fence references a path with no matching write_file/edit_file artifact in this turn; ignoring",
+				"component", "chat_runner",
+				"session", cr.SessionID,
+				"path", info.Path)
+			continue
+		}
+		if emitted[info.Path] {
+			continue // dedup repeated fences for the same path
+		}
+		emitted[info.Path] = true
+
+		cr.emitEvent("report_marker", map[string]any{
+			"path":  info.Path,
+			"title": info.Title,
+		})
+		persistReportMarker(cr.ctx, sessionService, cr.UserID, cr.SessionID, info.Path, info.Title)
 	}
 }
 

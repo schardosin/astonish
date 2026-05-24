@@ -191,10 +191,21 @@ func TestSystemPromptContracts_GenerativeUI(t *testing.T) {
 	assertContains(t, prompt, "@credential-name", "credential @-syntax — useAppData('url@credential-name') resolves credentials server-side")
 
 	// Contract 3: Mermaid diagrams for reports
-	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences, reports use astonish-report + mermaid")
+	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences inside report markdown")
 
-	// Contract 20: write_file for structured report output
-	assertContains(t, prompt, "write_file", "write_file tool — reports are saved as files via write_file, rendered as ResultCard with Files panel")
+	// Contract 20: Reports use a TWO-STEP contract — write_file PLUS astonish-report fence.
+	// Both signals are required for an artifact to be promoted to inline report
+	// rendering on the frontend (EmbeddedFileViewer). The prompt MUST teach the
+	// LLM both halves of the contract:
+	//   1. write_file creates the markdown file on disk;
+	//   2. an ```astonish-report fence with `path:` flips the IsReport gate so
+	//      the chat UI embeds the artifact inline instead of as a download card.
+	// These three assertions prevent silent regression where the prompt teaches
+	// only one side of the contract and the gate effectively goes back to "any
+	// last-turn markdown file is a report" (the b5310ae regression).
+	assertContains(t, prompt, "write_file", "write_file tool — Step 1 of the report contract: persist the markdown file on disk")
+	assertContains(t, prompt, "astonish-report", "astonish-report fence — Step 2 of the report contract: signal the file as a report so the frontend embeds it inline")
+	assertContains(t, prompt, "path:", "astonish-report fence requires `path:` — the path MUST match the absolute path passed to write_file or the marker is silently dropped")
 
 	// useAppData sourceId format
 	assertContains(t, prompt, `"http:GET:`, "useAppData HTTP sourceId format — frontend parses this prefix to route data requests")
@@ -509,9 +520,13 @@ func TestSystemPromptBuilder_MinimalSize(t *testing.T) {
 
 func TestSystemPromptBuilder_MaximalSize(t *testing.T) {
 	prompt := maximalBuilder().Build()
-	// Maximal prompt with all features enabled — budget ceiling ~15% above current 9299 bytes
-	if len(prompt) > 10700 {
-		t.Errorf("maximal prompt too large: %d bytes (limit 10700)", len(prompt))
+	// Maximal prompt with all features enabled — budget ceiling reflects
+	// post-Reports-section size. The Reports two-step contract is static
+	// (always present, ~600 bytes) because the LLM cannot retrieve
+	// guidance it doesn't know exists. See system_prompt_builder.go
+	// "## Reports" section.
+	if len(prompt) > 11000 {
+		t.Errorf("maximal prompt too large: %d bytes (limit 11000)", len(prompt))
 	}
 	if len(prompt) < 5000 {
 		t.Errorf("maximal prompt suspiciously small: %d bytes (expected > 5000)", len(prompt))

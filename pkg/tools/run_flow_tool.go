@@ -3,24 +3,35 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
+
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
-	"strings"
 )
 
 // FlowRunnerAccess provides the ability to execute flows from the chat agent.
 // Implemented by the daemon/launcher layer which has access to the full
 // tool and provider infrastructure.
 type FlowRunnerAccess interface {
-	// RunFlow starts or resumes a flow execution.
+	// RunFlow starts or resumes a flow execution from a filesystem path.
 	// - flowPath: absolute path to the flow YAML file
 	// - parameters: input node values (node_name -> value)
 	// - inputResponse: response to a mid-flow input node (empty on first call)
 	// - sessionKey: unique key to track stateful execution across calls
 	// Returns the execution result.
 	RunFlow(ctx context.Context, flowPath string, parameters map[string]string, inputResponse string, sessionKey string) (*FlowRunResult, error)
+
+	// RunFlowFromYAML starts or resumes a flow execution from raw YAML content.
+	// Used in platform mode where flows are stored in the database, not on disk.
+	// - yamlContent: raw YAML definition of the flow
+	// - flowName: logical name of the flow (for logging/session tracking)
+	// - parameters: input node values (node_name -> value)
+	// - inputResponse: response to a mid-flow input node (empty on first call)
+	// - sessionKey: unique key to track stateful execution across calls
+	RunFlowFromYAML(ctx context.Context, yamlContent string, flowName string, parameters map[string]string, inputResponse string, sessionKey string) (*FlowRunResult, error)
 
 	// GetPausedNode returns the name of the input node the flow is currently
 	// paused on, or "" if no session exists or the flow is not paused.
@@ -99,6 +110,12 @@ func runFlow(ctx tool.Context, args RunFlowArgs) (RunFlowResult, error) {
 		}, nil
 	}
 
+	// Platform mode: load and run flow from the database store.
+	if fs := getEffectiveFlowStore(ctx); fs != nil {
+		return runFlowFromStore(ctx, fs, args)
+	}
+
+	// Personal mode: resolve from filesystem.
 	// Resolve the flow YAML path
 	flowPath, err := resolveFlowFilePath(args.FlowName)
 	if err != nil {
@@ -252,7 +269,12 @@ func scanFlowParameters(flowPath string) ([]FlowParameter, error) {
 	if err != nil {
 		return nil, err
 	}
+	return scanFlowParametersFromConfig(agentCfg), nil
+}
 
+// scanFlowParametersFromConfig extracts initial input node parameters from a
+// parsed agent config. Shared by the filesystem and platform-mode paths.
+func scanFlowParametersFromConfig(agentCfg *config.AgentConfig) []FlowParameter {
 	// Build flow graph adjacency
 	adj := make(map[string]string)
 	for _, fi := range agentCfg.Flow {
@@ -312,7 +334,129 @@ func scanFlowParameters(flowPath string) ([]FlowParameter, error) {
 		current = next
 	}
 
-	return params, nil
+	return params
+}
+
+// runFlowFromStore handles flow execution in platform mode, where flows are
+// stored in the database rather than on the filesystem.
+func runFlowFromStore(ctx tool.Context, fs store.FlowStore, args RunFlowArgs) (RunFlowResult, error) {
+	// Load flow YAML from the database.
+	yamlContent, err := fs.GetFlow(ctx, args.FlowName)
+	if err != nil {
+		return RunFlowResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Flow %q not found: %v", args.FlowName, err),
+		}, nil
+	}
+
+	// Parse to check type and extract parameters.
+	agentCfg, parseErr := config.LoadAgentFromBytes([]byte(yamlContent))
+	if parseErr != nil {
+		return RunFlowResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Failed to parse flow %q: %v", args.FlowName, parseErr),
+		}, nil
+	}
+
+	// Reject drills — they have different execution semantics.
+	if agentCfg.Type == "drill" || agentCfg.Type == "drill_suite" {
+		return RunFlowResult{
+			Status:  "error",
+			Message: fmt.Sprintf("%q is a drill, not a flow. Use the drill commands to run drills.", args.FlowName),
+		}, nil
+	}
+
+	// Build a session key for stateful tracking.
+	sessionKey := fmt.Sprintf("flow:%s:%s", args.FlowName, ctx.SessionID())
+
+	// Check if there's a paused session waiting for input.
+	var inputResponse string
+	if pausedNode := flowRunnerAccessVar.GetPausedNode(sessionKey); pausedNode != "" {
+		if val, ok := args.Parameters[pausedNode]; ok {
+			inputResponse = val
+		}
+
+		// Validate against available options.
+		if pausedOptions := flowRunnerAccessVar.GetPausedOptions(sessionKey); len(pausedOptions) > 0 {
+			if inputResponse == "" {
+				return RunFlowResult{
+					Status:       "waiting_for_input",
+					Message:      fmt.Sprintf("Missing required parameter %q. The user must choose one of the available options.", pausedNode),
+					InputNode:    pausedNode,
+					InputOptions: pausedOptions,
+				}, nil
+			}
+			validChoice := false
+			for _, opt := range pausedOptions {
+				if strings.EqualFold(inputResponse, opt) {
+					inputResponse = opt
+					validChoice = true
+					break
+				}
+			}
+			if !validChoice {
+				return RunFlowResult{
+					Status:       "waiting_for_input",
+					Message:      fmt.Sprintf("Invalid selection %q. The user must choose one of the available options. Ask them to pick one.", inputResponse),
+					InputNode:    pausedNode,
+					InputOptions: pausedOptions,
+				}, nil
+			}
+		}
+
+		if inputResponse == "" {
+			return RunFlowResult{
+				Status:  "waiting_for_input",
+				Message: fmt.Sprintf("The flow is waiting for input on node %q. Provide the value in parameters[\"%s\"].", pausedNode, pausedNode),
+			}, nil
+		}
+	}
+
+	// No paused session — check if the flow needs parameters that weren't provided.
+	if inputResponse == "" && len(args.Parameters) == 0 {
+		params := scanFlowParametersFromConfig(agentCfg)
+		if len(params) > 0 {
+			return RunFlowResult{
+				Status:     "needs_parameters",
+				Message:    fmt.Sprintf("Flow %q requires the following parameters. Ask the user for each one, then call run_flow again with all parameters filled in.", args.FlowName),
+				Parameters: params,
+			}, nil
+		}
+	}
+
+	// Execute the flow from YAML content.
+	result, err := flowRunnerAccessVar.RunFlowFromYAML(
+		ctx,
+		yamlContent,
+		args.FlowName,
+		args.Parameters,
+		inputResponse,
+		sessionKey,
+	)
+	if err != nil {
+		return RunFlowResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Flow execution failed: %v", err),
+		}, nil
+	}
+
+	// Map the internal result to the tool result.
+	toolResult := RunFlowResult{
+		Status:       result.Status,
+		Output:       result.Output,
+		Message:      result.Message,
+		InputNode:    result.InputNode,
+		InputPrompt:  result.InputPrompt,
+		InputOptions: result.InputOptions,
+		Parameters:   result.Parameters,
+	}
+
+	// Clean up completed/errored sessions.
+	if result.Status == "completed" || result.Status == "error" {
+		flowRunnerAccessVar.CleanupSession(sessionKey)
+	}
+
+	return toolResult, nil
 }
 
 // NewRunFlowTool creates the run_flow tool.

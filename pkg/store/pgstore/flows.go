@@ -45,11 +45,24 @@ func (f *pgFlowStore) ListAllFlows(ctx context.Context) []store.FlowSummary {
 
 		desc, _ := def["description"].(string)
 		suite, _ := def["suite"].(string)
+
+		var tags []string
+		if rawTags, ok := def["tags"]; ok {
+			if arr, ok := rawTags.([]any); ok {
+				for _, t := range arr {
+					if s, ok := t.(string); ok {
+						tags = append(tags, s)
+					}
+				}
+			}
+		}
+
 		flows = append(flows, store.FlowSummary{
 			Name:        name,
 			Description: desc,
 			Type:        flowType,
 			Suite:       suite,
+			Tags:        tags,
 			Installed:   true,
 		})
 	}

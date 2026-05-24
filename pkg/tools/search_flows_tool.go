@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -37,7 +38,13 @@ type FlowMatch struct {
 	Tags        []string `json:"tags,omitempty"`
 }
 
-func searchFlows(_ tool.Context, args SearchFlowsArgs) (SearchFlowsResult, error) {
+func searchFlows(ctx tool.Context, args SearchFlowsArgs) (SearchFlowsResult, error) {
+	// Platform mode: query flows from the database store.
+	if fs := getEffectiveFlowStore(ctx); fs != nil {
+		return searchFlowsFromStore(ctx, fs, args)
+	}
+
+	// Personal mode: use in-memory FlowRegistry (populated from filesystem).
 	if flowRegistryVar == nil {
 		return SearchFlowsResult{
 			Status: "error",
@@ -98,6 +105,68 @@ func searchFlows(_ tool.Context, args SearchFlowsArgs) (SearchFlowsResult, error
 				Name:        strings.TrimSuffix(e.FlowFile, ".yaml"),
 				Description: e.Description,
 				Tags:        e.Tags,
+			})
+		}
+	}
+
+	return SearchFlowsResult{
+		Status: "ok",
+		Flows:  matches,
+		Count:  len(matches),
+	}, nil
+}
+
+// searchFlowsFromStore queries flows from a platform-mode FlowStore (PG-backed)
+// and applies the same word-matching filter as the personal-mode path.
+func searchFlowsFromStore(ctx tool.Context, fs store.FlowStore, args SearchFlowsArgs) (SearchFlowsResult, error) {
+	summaries := fs.ListAllFlows(ctx)
+	if len(summaries) == 0 {
+		return SearchFlowsResult{
+			Status: "ok",
+		}, nil
+	}
+
+	query := strings.ToLower(strings.TrimSpace(args.Query))
+	var matches []FlowMatch
+
+	for _, s := range summaries {
+		// If no query, return all flows
+		if query == "" {
+			matches = append(matches, FlowMatch{
+				Name:        s.Name,
+				Description: s.Description,
+				Tags:        s.Tags,
+			})
+			continue
+		}
+
+		// Match against name, description, and tags
+		name := strings.ToLower(s.Name)
+		desc := strings.ToLower(s.Description)
+
+		queryWords := strings.Fields(query)
+		matched := true
+		for _, word := range queryWords {
+			found := strings.Contains(name, word) || strings.Contains(desc, word)
+			if !found {
+				for _, tag := range s.Tags {
+					if strings.Contains(strings.ToLower(tag), word) {
+						found = true
+						break
+					}
+				}
+			}
+			if !found {
+				matched = false
+				break
+			}
+		}
+
+		if matched {
+			matches = append(matches, FlowMatch{
+				Name:        s.Name,
+				Description: s.Description,
+				Tags:        s.Tags,
 			})
 		}
 	}

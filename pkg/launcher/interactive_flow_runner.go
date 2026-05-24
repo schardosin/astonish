@@ -69,6 +69,25 @@ func (ifr *InteractiveFlowRunner) RunFlow(
 	return ifr.startFlow(ctx, flowPath, parameters, sessionKey)
 }
 
+// RunFlowFromYAML starts or resumes a flow execution from raw YAML content.
+// Used in platform mode where flows are stored in the database, not on disk.
+func (ifr *InteractiveFlowRunner) RunFlowFromYAML(
+	ctx context.Context,
+	yamlContent string,
+	_ string, // flowName — used for logging by callers, not needed here
+	parameters map[string]string,
+	inputResponse string,
+	sessionKey string,
+) (*tools.FlowRunResult, error) {
+	// Check if we're resuming an existing session
+	if inputResponse != "" {
+		return ifr.resumeFlow(ctx, sessionKey, inputResponse)
+	}
+
+	// Start a new flow execution from YAML content
+	return ifr.startFlowFromYAML(ctx, yamlContent, parameters, sessionKey)
+}
+
 // CleanupSession removes state for a completed/abandoned flow.
 func (ifr *InteractiveFlowRunner) CleanupSession(sessionKey string) {
 	if val, ok := ifr.sessions.LoadAndDelete(sessionKey); ok {
@@ -132,6 +151,41 @@ func (ifr *InteractiveFlowRunner) startFlow(
 		}, nil
 	}
 
+	return ifr.startFlowWithConfig(ctx, agentCfg, parameters, sessionKey)
+}
+
+// startFlowFromYAML initializes and runs a new flow from raw YAML content.
+// Used in platform mode where flows are stored in the database.
+func (ifr *InteractiveFlowRunner) startFlowFromYAML(
+	ctx context.Context,
+	yamlContent string,
+	parameters map[string]string,
+	sessionKey string,
+) (*tools.FlowRunResult, error) {
+	// Clean up any existing session with the same key
+	ifr.CleanupSession(sessionKey)
+
+	// Parse the flow config from YAML content
+	agentCfg, err := config.LoadAgentFromBytes([]byte(yamlContent))
+	if err != nil {
+		return &tools.FlowRunResult{
+			Status:  "error",
+			Message: fmt.Sprintf("Failed to parse flow YAML: %v", err),
+		}, nil
+	}
+
+	return ifr.startFlowWithConfig(ctx, agentCfg, parameters, sessionKey)
+}
+
+// startFlowWithConfig is the shared implementation for starting a flow from
+// an already-parsed AgentConfig. Used by both the filesystem path (startFlow)
+// and the platform/YAML path (startFlowFromYAML).
+func (ifr *InteractiveFlowRunner) startFlowWithConfig(
+	ctx context.Context,
+	agentCfg *config.AgentConfig,
+	parameters map[string]string,
+	sessionKey string,
+) (*tools.FlowRunResult, error) {
 	// Suppress default logger in non-debug mode
 	if !ifr.DebugMode {
 		log.SetOutput(io.Discard)

@@ -27,6 +27,13 @@ func (m *mockFlowRunnerAccess) RunFlow(_ context.Context, _ string, params map[s
 	return m.result, m.err
 }
 
+func (m *mockFlowRunnerAccess) RunFlowFromYAML(_ context.Context, _ string, _ string, params map[string]string, inputResponse string, sessionKey string) (*FlowRunResult, error) {
+	m.lastParams = params
+	m.lastInput = inputResponse
+	m.lastKey = sessionKey
+	return m.result, m.err
+}
+
 func (m *mockFlowRunnerAccess) GetPausedNode(_ string) string {
 	return m.pausedNode
 }

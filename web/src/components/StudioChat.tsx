@@ -552,6 +552,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               appId: m.appId || undefined,
             } as AppPreviewMessage
           }
+          if (m.type === 'flow_output') {
+            return { type: 'agent', content: m.content || '' } as AgentMessage
+          }
           return m as unknown as ChatMsg
         })
         setMessages(mapped)

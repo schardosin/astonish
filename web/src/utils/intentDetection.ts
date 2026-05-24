@@ -126,7 +126,7 @@ export function detectSearchRefinementFeedback(text: string) {
   const refinementPatterns = [
     /(?:try|look for|search for|find|check)\s+(?:the\s+)?(.+?)\s+(?:repo|repository|server|package|instead)/i,
     /(?:i believe|i think|maybe|try)\s+(.+?)\s+(?:has|have|is|might)/i,
-    /(?:modelcontextprotocol|anthropic|github)\s*[\/]?\s*(.+)/i,
+    /(?:modelcontextprotocol|anthropic|github)\s*[/]?\s*(.+)/i,
     /(?:better option|better server|the right one)\s+(?:is|called|named)\s+(.+)/i,
     /(?:search.*for|look.*for|try.*finding)\s+(.+)/i,
     /(.+?)\s+(?:is what i need|is the one|is better)/i

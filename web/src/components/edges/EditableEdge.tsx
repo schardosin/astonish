@@ -3,7 +3,6 @@ import {
   BaseEdge, 
   EdgeLabelRenderer, 
   useReactFlow,
-  useStore,
   type EdgeProps,
   type Edge
 } from '@xyflow/react'

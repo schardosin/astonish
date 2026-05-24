@@ -27,7 +27,7 @@ export default function Header({
   agentName, agentSource, showYaml, onToggleYaml, isRunning, onRun, onExit,
   canUndo, canRedo, onUndo, onRedo, readOnly, onCopyToLocal
 }: HeaderProps) {
-  let displayName = agentName
+  let displayName: string
   if (agentSource === 'store' && agentName.includes('/')) {
     const [tap, flowName] = agentName.split('/')
     displayName = `${tap.toLowerCase()} - ${snakeToTitleCase(flowName)}`

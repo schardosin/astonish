@@ -841,6 +841,7 @@ function TeamProvidersTab({ teamSlug }: { teamSlug: string }) {
       // If team providers endpoint fails, defaults stay empty (= "Not Set")
       setGeneralForm({ default_provider: '', default_model: '' })
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when active team changes
   }, [teamSlug])
 
   const loadInheritedProviders = useCallback(async () => {
@@ -1170,7 +1171,7 @@ export default function SettingsPage({
           { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: memberTeamItems },
         ]
     : [
-        { label: 'Personal', items: PERSONAL_ITEMS },
+        { label: 'Personal', items: PERSONAL_ITEMS.filter(i => i.id !== 'knowledge') },
         { label: 'Resources', items: RESOURCE_ITEMS },
         { label: 'System', items: SYSTEM_ITEMS },
       ]
@@ -1210,8 +1211,6 @@ export default function SettingsPage({
     try {
       await deleteTeam(resolvedTeamSlug)
       await loadTeams()
-      // Navigate to first available team
-      const newSlug = allTeams.find(t => t.slug !== resolvedTeamSlug)?.slug || 'general'
       if (onSectionChange) onSectionChange(`team-members`)
     } catch (err) { setTeamsError(errMsg(err, 'Failed to delete team')) }
   }

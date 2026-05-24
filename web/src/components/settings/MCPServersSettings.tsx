@@ -741,7 +741,7 @@ export default function MCPServersSettings({
                                     ...mcpServers,
                                     [name]: { ...server, env }
                                   })
-                                } catch {}
+                                } catch { /* JSON parse validation — ignore malformed input */ }
                               }}
                               onClick={(e) => e.stopPropagation()}
                               placeholder={'{\n  "KEY": "value"\n}'}
@@ -826,7 +826,7 @@ export default function MCPServersSettings({
                     try {
                       JSON.parse(value)
                       setMcpSourceError(null)
-                    } catch {}
+                    } catch { /* validation only */ }
                   }}
                   height="100%"
                   className="h-full"

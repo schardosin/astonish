@@ -11,7 +11,7 @@ import {
 import type { DrillSuiteDetail, DrillDetail } from '../../api/drillApi'
 import { buildPath } from '../../hooks/useHashRouter'
 import YamlDrawer from '../YamlDrawer'
-import { formatTimeAgo, formatDuration, statusColor, StatusDot, StatusBadge } from './drillUtils'
+import { formatTimeAgo, formatDuration, StatusDot, StatusBadge } from './drillUtils'
 import { ReportStepCard } from './DrillCards'
 
 // ─── Suite Detail ───

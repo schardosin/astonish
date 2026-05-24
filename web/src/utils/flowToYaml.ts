@@ -2,10 +2,10 @@ import yaml from 'js-yaml'
 
 // --- Types ---
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 type YamlData = Record<string, any>
 type YamlNode = Record<string, any>
-/* eslint-enable @typescript-eslint/no-explicit-any */
+ 
 
 interface LayoutPosition {
   x: number

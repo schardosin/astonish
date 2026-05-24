@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCircle, Plus, Folder, Search, Globe, Monitor, Shield, ShieldAlert, ExternalLink, Server, Database } from 'lucide-react'
 import { fetchStandardServers, installStandardServer, StandardServer, McpInstallResult } from '../api/agents'
 import { fetchSandboxStatus, fetchOptionalTools, initSandbox, SandboxStatus, OptionalTool } from '../api/sandbox'
-import { initializePlatform, getDeploymentMode } from '../api/platform'
+import { initializePlatform } from '../api/platform'
 
 // --- Local types ---
 
@@ -133,7 +133,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [step, setStep] = useState(0)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null)
-  const [isNewProvider, setIsNewProvider] = useState(false)
+  const [_isNewProvider, setIsNewProvider] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState<string | null>(null)
   const [instanceName, setInstanceName] = useState('')
   const [credentials, setCredentials] = useState<Record<string, string>>({})
@@ -231,7 +231,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     finally { setIsLoading(false) }
   }
 
-  const handleAddNewProvider = () => { setIsNewProvider(true); setSelectedInstance(null); setSelectedProvider(null); setInstanceName(''); setCredentials({}); setTestSuccess(false); setStep(2) }
+  const _handleAddNewProvider = () => { setIsNewProvider(true); setSelectedInstance(null); setSelectedProvider(null); setInstanceName(''); setCredentials({}); setTestSuccess(false); setStep(2) }
 
   const handleSelectExisting = (instName: string) => {
     setIsNewProvider(false)

@@ -102,7 +102,7 @@ export default function UserManagement({ user, org }: UserManagementProps) {
     finally { setLoading(false) }
   }, [])
 
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- async data fetch on mount
+   
   useEffect(() => { void loadUsers() }, [loadUsers])
 
   // Auto-dismiss success after 3s

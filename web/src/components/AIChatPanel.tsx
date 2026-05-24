@@ -57,7 +57,7 @@ export default function AIChatPanel({
   const [nodeMessages, setNodeMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [pendingYaml, setPendingYaml] = useState<string | null>(null)
+  const [_pendingYaml, setPendingYaml] = useState<string | null>(null)
   const [isExpanded, setIsExpanded] = useState(false)
   const [storeResults, setStoreResults] = useState<ToolInfo[] | null>(null) // Store search results
   const [internetResults, setInternetResults] = useState<InternetResult[] | null>(null) // Internet search results

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, waitFor, act } from '@testing-library/react'
+import { render, screen, act } from '@testing-library/react'
 import App from '../../App'
 
 // Mock all heavyweight child components to isolate App rendering
@@ -130,7 +130,7 @@ describe('App', () => {
     render(<App />)
     // During setup check, a loading spinner may appear
     // The loading state contains an animated element
-    const loadingEl = screen.queryByText(/loading/i) ||
+    const _loadingEl = screen.queryByText(/loading/i) ||
       document.querySelector('[class*="animate"]')
     // App should either show loading or have rendered the main UI
     expect(document.body.innerHTML.length).toBeGreaterThan(0)

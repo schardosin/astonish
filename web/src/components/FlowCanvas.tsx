@@ -372,7 +372,7 @@ function FlowCanvasInner({
   }, [storeNodes, storeEdges, onLayoutSave])
 
   // Get React Flow instance for coordinate conversion and viewport control
-  const { screenToFlowPosition, setViewport, getViewport } = useReactFlow()
+  const { setViewport, getViewport } = useReactFlow()
   const hasCentered = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   

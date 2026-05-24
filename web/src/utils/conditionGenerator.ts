@@ -92,7 +92,7 @@ export function parseLambda(lambdaStr: string): ParsedLambda | null {
   const body = match[1].trim()
 
   let logic = 'and'
-  let parts: string[] = []
+  let parts: string[]
 
   if (body.includes(' or ')) {
     logic = 'or'

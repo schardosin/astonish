@@ -29,7 +29,7 @@ interface MCPStoreModalProps {
 }
 
 // API functions for MCP Store
-const fetchMCPStore = async (query = ''): Promise<{ servers: MCPServer[]; sources: string[] }> => {
+const _fetchMCPStore = async (query = ''): Promise<{ servers: MCPServer[]; sources: string[] }> => {
   const url = query ? `/api/mcp-store?q=${encodeURIComponent(query)}` : '/api/mcp-store'
   const res = await teamFetch(url)
   if (!res.ok) throw new Error('Failed to fetch MCP store')

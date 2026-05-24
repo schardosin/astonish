@@ -2,10 +2,10 @@ import type ELK_TYPE from 'elkjs/lib/elk.bundled.js'
 
 // --- Types ---
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+ 
 type YamlData = Record<string, any>
 type YamlNode = Record<string, any>
-/* eslint-enable @typescript-eslint/no-explicit-any */
+ 
 
 interface Position {
   x: number

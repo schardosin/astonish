@@ -123,7 +123,7 @@ export default function EdgeEditor({
   }, [mode, rules, logic, rawCondition])
   
   // Check if condition is valid
-  const isValid = useMemo(() => {
+  const _isValid = useMemo(() => {
     if (mode === 'advanced') {
       return rawCondition.trim().length > 0
     }

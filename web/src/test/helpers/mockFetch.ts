@@ -1,4 +1,4 @@
-/* eslint-disable no-undef */
+ 
 /**
  * Shared Fetch Mock — intelligent routing for StudioChat API calls.
  *

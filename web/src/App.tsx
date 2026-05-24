@@ -209,7 +209,7 @@ function App() {
   const currentFlowEdgesRef = useRef<FlowEdge[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)  // Debounce timer for auto-save
-  const layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce timer for layout changes
+  const _layoutSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce timer for layout changes
   
   // Chat State
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([

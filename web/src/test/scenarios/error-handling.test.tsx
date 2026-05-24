@@ -3,6 +3,7 @@
  *
  * Tests error events, structured error info, retry events,
  * and connection error handling.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

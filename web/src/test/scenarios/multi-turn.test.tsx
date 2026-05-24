@@ -4,6 +4,7 @@
  * Tests that a user can send multiple messages in the same session and
  * receive different responses each time. Uses the queue-based mockFetch
  * to serve different SSE event sets for each POST /api/studio/chat call.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

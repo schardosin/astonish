@@ -3,6 +3,7 @@
  *
  * Tests session management interactions: deleting sessions from the sidebar
  * and creating new sessions via the new conversation button.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

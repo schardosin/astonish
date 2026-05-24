@@ -2,6 +2,7 @@
  * Clipboard Copy Scenario Tests (T1)
  *
  * Tests the copy-to-clipboard functionality on agent messages.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

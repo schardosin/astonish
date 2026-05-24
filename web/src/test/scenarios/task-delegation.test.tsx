@@ -4,6 +4,7 @@
  * Tests the delegate_tasks flow: delegation start, task lifecycle
  * (start → tool calls → text → complete/failed), retry, and the
  * TaskPlanPanel rendering.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

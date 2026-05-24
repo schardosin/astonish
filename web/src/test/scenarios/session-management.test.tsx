@@ -3,6 +3,7 @@
  *
  * Tests session list loading, session search filtering, sidebar collapse,
  * and the new_session event clearing messages.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

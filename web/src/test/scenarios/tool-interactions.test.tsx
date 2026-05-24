@@ -3,6 +3,7 @@
  *
  * Tests user interactions with tool cards: expanding/collapsing tool details,
  * and clicking approval buttons.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

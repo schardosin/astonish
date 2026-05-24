@@ -1,5 +1,6 @@
 /**
  * App Preview Scenario Tests (G1-G3)
+ *
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest'

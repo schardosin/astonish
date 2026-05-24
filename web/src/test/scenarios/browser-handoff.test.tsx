@@ -4,6 +4,7 @@
  * Tests the browser_request_human tool result being synthesized into a
  * browser_handoff message, which renders a BrowserView with page title,
  * reason text, and VNC iframe.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

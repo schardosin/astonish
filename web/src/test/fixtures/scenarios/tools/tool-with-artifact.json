@@ -1,6 +1,6 @@
 {
   "name": "tool-with-artifact",
-  "description": "Agent writes a file, producing both tool_result and artifact events",
+  "description": "Agent writes a file, producing both tool_result and artifact events with no astonish-report fence. Verifies the artifact card renders for a non-report write_file (the artifact is a working file the agent created, not a deliberate report deliverable).",
   "category": "tools",
   "events": [
     { "type": "session", "data": { "sessionId": "sess-tool-artifact", "isNew": true } },

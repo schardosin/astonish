@@ -3,6 +3,7 @@
  *
  * Tests the slash command popup: activation when "/" is typed,
  * filtering as the user types, and command execution via the popup.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

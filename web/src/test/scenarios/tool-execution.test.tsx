@@ -3,6 +3,7 @@
  *
  * Tests tool call/result rendering, parallel tool calls, streaming text
  * finalization, artifacts, auto-approval, and approval flow.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

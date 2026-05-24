@@ -7,6 +7,7 @@
  * These tests use the REAL connectChat() SSE parsing code, the REAL StudioChat
  * state management, and the REAL component tree. Only fetch() is mocked (at
  * the network level) to return simulated SSE streams from JSON fixtures.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

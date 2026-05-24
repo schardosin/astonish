@@ -3,6 +3,7 @@
  *
  * Tests artifact card rendering after write_file tool, agent text after
  * artifact creation, and long agent responses following artifact events.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

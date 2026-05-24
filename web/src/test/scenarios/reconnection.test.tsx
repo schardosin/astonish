@@ -5,6 +5,7 @@
  * active background runner, the frontend reconnects via GET /api/studio/sessions/:id/stream
  * instead of loading static history. The SSE events from the reconnect stream should
  * render normally — text, tool calls, results, etc.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

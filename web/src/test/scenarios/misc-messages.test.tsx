@@ -3,6 +3,7 @@
  *
  * Tests thinking messages, system messages, image messages,
  * usage accumulation, and mermaid diagram rendering.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

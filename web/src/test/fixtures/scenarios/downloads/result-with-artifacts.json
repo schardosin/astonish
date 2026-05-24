@@ -1,6 +1,6 @@
 {
   "name": "result-with-artifacts",
-  "description": "Long result text with embedded artifact, triggering ResultCard scenario for 600+ char content",
+  "description": "Long agent prose followed by a write_file artifact, with NO astonish-report fence — verifies the negative path: agent text renders normally and the artifact appears as a compact ArtifactCard (NOT embedded inline as a report). The inline-report gate requires an astonish-report fence + matching report_marker event; this fixture has neither, so the artifact stays a download card. Renaming this fixture is intentional: pre-change the same shape used to trigger inline embedding, and now exercises the regression boundary.",
   "category": "downloads",
   "events": [
     { "type": "session", "data": { "sessionId": "sess-result-artifacts", "isNew": true } },

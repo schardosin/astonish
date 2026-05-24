@@ -4,6 +4,7 @@
  * Tests fleet execution progress rendering and fleet redirect event handling.
  * Fleet progress events flow through the regular sendMessage SSE handler
  * and create fleet_execution message types rendered by FleetExecutionPanel.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

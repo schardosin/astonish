@@ -4,6 +4,7 @@
  * Tests that switching sessions or creating new sessions during/after active
  * streaming doesn't crash the component. Verifies the abort→cleanup→reset
  * path that runs when the user interrupts a stream by navigating away.
+ *
  */
 
 import { describe, it, expect, afterEach } from 'vitest'

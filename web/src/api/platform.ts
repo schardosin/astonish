@@ -9,6 +9,28 @@
 
 import { teamFetch } from './teamContext'
 
+/**
+ * Throws a meaningful error from a non-OK Response. Tries to parse the
+ * backend JSON body for a `message` or `error` field; falls back to
+ * `<fallback> (HTTP <status>)` if the body isn't JSON or is empty.
+ *
+ * Use this everywhere we surface an HTTP failure to the user — never
+ * throw a hard-coded generic string, because it makes server-side
+ * problems undebuggable from the browser console.
+ */
+async function throwBackendError(res: Response, fallback: string): Promise<never> {
+  let detail = ''
+  try {
+    const body = await res.json()
+    detail = body?.message || body?.error || ''
+  } catch {
+    // ignore — body wasn't JSON
+  }
+  if (!detail) detail = res.statusText || ''
+  const suffix = detail ? `: ${detail}` : ''
+  throw new Error(`${fallback}${suffix} (HTTP ${res.status})`)
+}
+
 // --------------------------------------------------------------------------
 // Teams
 // --------------------------------------------------------------------------
@@ -36,7 +58,7 @@ export interface OrgInfo {
 
 export async function fetchTeams(): Promise<Team[]> {
   const res = await teamFetch('/api/teams')
-  if (!res.ok) throw new Error('Failed to fetch teams')
+  if (!res.ok) await throwBackendError(res, 'Failed to fetch teams')
   const data = await res.json()
   return data.teams || []
 }
@@ -69,7 +91,7 @@ export interface TeamMembersResponse {
 
 export async function fetchTeamMembers(slug: string): Promise<TeamMembersResponse> {
   const res = await teamFetch(`/api/teams/${slug}/members`)
-  if (!res.ok) throw new Error('Failed to fetch team members')
+  if (!res.ok) await throwBackendError(res, 'Failed to fetch team members')
   const data = await res.json()
   return { members: data.members || [], callerRole: data.callerRole || '' }
 }
@@ -108,7 +130,7 @@ export async function setTeamMemberRole(slug: string, userID: string, role: stri
 
 export async function fetchOrg(): Promise<OrgInfo> {
   const res = await teamFetch('/api/org')
-  if (!res.ok) throw new Error('Failed to fetch org info')
+  if (!res.ok) await throwBackendError(res, 'Failed to fetch org info')
   return res.json()
 }
 
@@ -164,7 +186,7 @@ export async function promoteAppToOrg(slug: string, teamSlug: string): Promise<{
 
 export async function fetchOrgApps(): Promise<AppItem[]> {
   const res = await teamFetch('/api/apps/org')
-  if (!res.ok) throw new Error('Failed to fetch org apps')
+  if (!res.ok) await throwBackendError(res, 'Failed to fetch org apps')
   const data = await res.json()
   return data.apps || []
 }
@@ -197,7 +219,7 @@ export async function searchMemories(query: string, limit?: number, teamSlug?: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, max_results: limit || 20 }),
   }, teamSlug)
-  if (!res.ok) throw new Error('Failed to search memories')
+  if (!res.ok) await throwBackendError(res, 'Failed to search memories')
   const data = await res.json()
   return data.results || []
 }
@@ -230,26 +252,26 @@ export async function savePersonalMemory(snippet: string, category?: string, tea
 
 export async function listTeamMemories(teamSlug?: string): Promise<MemoryEntry[]> {
   const res = await teamFetch('/api/memories/team', undefined, teamSlug)
-  if (!res.ok) throw new Error('Failed to list team memories')
+  if (!res.ok) await throwBackendError(res, 'Failed to list team memories')
   const data = await res.json()
   return data.results || []
 }
 
 export async function listOrgMemories(teamSlug?: string): Promise<MemoryEntry[]> {
   const res = await teamFetch('/api/memories/org', undefined, teamSlug)
-  if (!res.ok) throw new Error('Failed to list org memories')
+  if (!res.ok) await throwBackendError(res, 'Failed to list org memories')
   const data = await res.json()
   return data.results || []
 }
 
 export async function deleteTeamMemory(id: string, teamSlug?: string): Promise<void> {
   const res = await teamFetch(`/api/memories/team/${id}`, { method: 'DELETE' }, teamSlug)
-  if (!res.ok) throw new Error('Failed to delete team memory')
+  if (!res.ok) await throwBackendError(res, 'Failed to delete team memory')
 }
 
 export async function deleteOrgMemory(id: string, teamSlug?: string): Promise<void> {
   const res = await teamFetch(`/api/memories/org/${id}`, { method: 'DELETE' }, teamSlug)
-  if (!res.ok) throw new Error('Failed to delete org memory')
+  if (!res.ok) await throwBackendError(res, 'Failed to delete org memory')
 }
 
 export async function promoteMemoryToOrg(id: string, teamSlug?: string): Promise<void> {
@@ -266,7 +288,7 @@ export async function promoteMemoryToOrg(id: string, teamSlug?: string): Promise
 
 export async function listPersonalMemories(teamSlug?: string): Promise<MemoryEntry[]> {
   const res = await teamFetch('/api/memories/personal', undefined, teamSlug)
-  if (!res.ok) throw new Error('Failed to list personal memories')
+  if (!res.ok) await throwBackendError(res, 'Failed to list personal memories')
   const data = await res.json()
   return data.results || []
 }
@@ -341,7 +363,7 @@ export interface ExtractionResponse {
 export async function listSessionMemories(sessionId: string, teamSlug?: string): Promise<SessionMemoriesResponse> {
   const res = await teamFetch(`/api/memories/session/${sessionId}`, {}, teamSlug)
   if (!res.ok) {
-    throw new Error('Failed to list session memories')
+    await throwBackendError(res, 'Failed to list session memories')
   }
   return res.json()
 }
@@ -396,7 +418,7 @@ export async function queryAuditLogs(filter: AuditFilter = {}): Promise<{ entrie
   if (filter.offset) params.set('offset', String(filter.offset))
 
   const res = await teamFetch(`/api/audit?${params.toString()}`)
-  if (!res.ok) throw new Error('Failed to query audit logs')
+  if (!res.ok) await throwBackendError(res, 'Failed to query audit logs')
   return res.json()
 }
 
@@ -472,7 +494,7 @@ export interface OrgUser {
 
 export async function fetchOrgUsers(): Promise<OrgUser[]> {
   const res = await teamFetch('/api/admin/users')
-  if (!res.ok) throw new Error('Failed to fetch users')
+  if (!res.ok) await throwBackendError(res, 'Failed to fetch users')
   const data = await res.json()
   return data.users || []
 }

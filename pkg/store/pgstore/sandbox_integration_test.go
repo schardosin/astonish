@@ -104,10 +104,16 @@ func mustTestDSN(t *testing.T) string {
 	return dsn
 }
 
-// seedBaseTemplate inserts the global "@base" root so child templates can
-// reference it via parent_template_id. Returns the base template ID.
+// seedBaseTemplate ensures the global "@base" root exists (it may already
+// have been seeded by platform migration 005) and returns its ID. This is
+// idempotent: if the row already exists it returns the existing ID without
+// attempting a duplicate insert.
 func seedBaseTemplate(t *testing.T, ctx context.Context, ts store.SandboxTemplateStore) string {
 	t.Helper()
+	// Check if migration 005 already seeded it.
+	if existing, err := ts.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base"); err == nil && existing != nil {
+		return existing.ID
+	}
 	base := &store.SandboxTemplate{
 		Slug:    "base",
 		Scope:   store.SandboxTemplateScopeGlobal,
@@ -248,15 +254,28 @@ func TestPGSandboxTemplateStore_Resolve(t *testing.T) {
 	layerB := seedLayer(t, ctx, ls, "bbbbbbbbbbbbbbbb")
 	layerC := seedLayer(t, ctx, ls, "cccccccccccccccc")
 
-	// Base has layerA as top.
-	base := &store.SandboxTemplate{
-		Slug:       "base",
-		Scope:      store.SandboxTemplateScopeGlobal,
-		Name:       "@base",
-		TopLayerID: &layerA,
-	}
-	if err := ts.Create(ctx, base); err != nil {
-		t.Fatalf("create base: %v", err)
+	// Get the @base template (seeded by migration 005 or seedBaseTemplate)
+	// and point its top_layer_id at layerA so the resolve chain is deterministic.
+	base, err := ts.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || base == nil {
+		// Fallback: create it if migration 005 hasn't run.
+		base = &store.SandboxTemplate{
+			Slug:       "base",
+			Scope:      store.SandboxTemplateScopeGlobal,
+			Name:       "@base",
+			TopLayerID: &layerA,
+		}
+		if err := ts.Create(ctx, base); err != nil {
+			t.Fatalf("create base: %v", err)
+		}
+	} else {
+		// Update top_layer_id to layerA via raw SQL (Update() doesn't mutate top_layer_id).
+		if _, err := pool.Exec(ctx,
+			`UPDATE sandbox_templates SET top_layer_id = $2 WHERE id = $1::uuid`,
+			base.ID, layerA,
+		); err != nil {
+			t.Fatalf("update base top_layer_id: %v", err)
+		}
 	}
 	orgID := uuid.New().String()
 	mid := &store.SandboxTemplate{

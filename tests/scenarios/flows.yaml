@@ -1,0 +1,135 @@
+# Flows View — E2E Scenario Catalog
+# Real user journeys exercised against a running Astonish platform.
+# Unit-level UI rendering tests (Vitest) are NOT tracked here.
+#
+# Status: covered | partial | missing
+# Priority: P0 (must-have) | P1 (important) | P2 (nice-to-have)
+
+scenarios:
+
+  # ---------------------------------------------------------------------------
+  # Flow Creation (AI Assistant)
+  # ---------------------------------------------------------------------------
+
+  - id: FLOWS-001
+    title: "Create a flow via AI from natural language description"
+    user_story: |
+      As a user, I describe a flow in plain English to the AI assistant.
+      The AI generates a valid flow YAML via the real LLM, the server
+      validates it, and it's ready to run.
+    priority: P0
+    status: covered
+    test_refs:
+      - "tests/e2e/flow_assistant/flow_assistant_test.go::TestE2E_FlowAssistant_CreateFlow"
+
+  - id: FLOWS-002
+    title: "Modify an existing flow via AI chat"
+    user_story: |
+      As a user, I load an existing flow and ask the AI to modify it
+      (e.g., "add error handling"). The AI produces updated YAML that
+      passes validation and preserves the original structure.
+    priority: P0
+    status: covered
+    test_refs:
+      - "tests/e2e/flow_assistant/flow_assistant_test.go::TestE2E_FlowAssistant_ModifyFlow"
+
+  - id: FLOWS-003
+    title: "Large flow delivered via SSE without truncation"
+    user_story: |
+      As a user, I ask the AI to create a complex 8+ node flow. The full
+      YAML is delivered via SSE without truncation or corruption, even
+      when it exceeds typical chunk sizes.
+    priority: P0
+    status: covered
+    test_refs:
+      - "tests/e2e/flow_assistant/flow_assistant_test.go::TestE2E_FlowAssistant_LargeFlowSSE"
+
+  # ---------------------------------------------------------------------------
+  # Flow Execution
+  # ---------------------------------------------------------------------------
+
+  - id: FLOWS-004
+    title: "Run a flow end-to-end with input parameters"
+    user_story: |
+      As a user, I run a flow with required input parameters via the API.
+      Each node executes in order (LLM calls real provider, tools run),
+      and I receive SSE events for each node transition plus the final
+      output.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLOWS-005
+    title: "Run flow with missing required parameter returns error"
+    user_story: |
+      As a user, I run a flow but omit a required input parameter. The
+      server returns a clear error message about the missing parameter
+      without crashing.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  - id: FLOWS-006
+    title: "Run a flow with a tool node that calls an MCP tool"
+    user_story: |
+      As a user, I run a flow containing a Tool node configured with
+      an MCP tool. The tool actually executes via the MCP server and
+      returns a real result to the next node.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # Flow CRUD
+  # ---------------------------------------------------------------------------
+
+  - id: FLOWS-007
+    title: "Create, list, read, and delete a flow via API"
+    user_story: |
+      As a user, I create a flow (POST), verify it appears in the list
+      (GET), read it by name (GET), then delete it (DELETE) and confirm
+      it's gone.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLOWS-008
+    title: "Flow YAML validation rejects invalid input"
+    user_story: |
+      As a user, I submit malformed flow YAML (e.g., missing name,
+      invalid node type, broken edges). The server returns validation
+      errors with helpful messages instead of saving garbage.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  - id: FLOWS-009
+    title: "Publish personal flow to team scope"
+    user_story: |
+      As a team admin, I publish a personal flow to the team. Other team
+      members can now see and run it. The personal copy is unaffected.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  - id: FLOWS-010
+    title: "Fork a team flow to personal scope"
+    user_story: |
+      As a user, I fork a team flow to my personal scope. I can modify
+      my copy without affecting the team version.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # Flow Store
+  # ---------------------------------------------------------------------------
+
+  - id: FLOWS-011
+    title: "Install a flow from the Flow Store"
+    user_story: |
+      As a user, I browse the Flow Store, select a flow, click Install,
+      and verify it appears in my personal flow list ready to run.
+    priority: P1
+    status: missing
+    test_refs: []

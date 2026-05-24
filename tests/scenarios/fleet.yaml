@@ -1,0 +1,97 @@
+# Fleet View — E2E Scenario Catalog
+# Real user journeys exercised against a running Astonish platform.
+# Unit-level UI rendering tests (Vitest) are NOT tracked here.
+#
+# Status: covered | partial | missing
+# Priority: P0 (must-have) | P1 (important) | P2 (nice-to-have)
+
+scenarios:
+
+  # ---------------------------------------------------------------------------
+  # Plan Management
+  # ---------------------------------------------------------------------------
+
+  - id: FLEET-001
+    title: "Create a fleet plan from a template"
+    user_story: |
+      As a user, I select a template, configure agents and communication
+      flow, and save it as a new plan. The plan is persisted and appears
+      in the plans list.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLEET-002
+    title: "List, read, and delete a fleet plan"
+    user_story: |
+      As a user, I create a plan, verify it in the list API, read its
+      full config, delete it, and confirm it's gone.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLEET-003
+    title: "Duplicate a fleet plan"
+    user_story: |
+      As a user, I duplicate an existing plan. A new plan is created
+      with the same config but a new name/key.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # Session Execution
+  # ---------------------------------------------------------------------------
+
+  - id: FLEET-004
+    title: "Launch a fleet session and receive execution events"
+    user_story: |
+      As a user, I launch a fleet session from a plan with a task
+      message. The server starts execution and I receive SSE events
+      showing agent interactions and progress.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLEET-005
+    title: "Stop a running fleet session"
+    user_story: |
+      As a user, I stop a running fleet session. The server halts
+      execution and the session transitions to stopped state.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  - id: FLEET-006
+    title: "Fleet session trace shows agent messages and tool calls"
+    user_story: |
+      As a user, I view the trace of a completed fleet session. I see
+      the full history of agent-to-agent messages, tool calls, and
+      final results.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # Channel Monitoring
+  # ---------------------------------------------------------------------------
+
+  - id: FLEET-007
+    title: "Activate channel monitoring on a plan"
+    user_story: |
+      As a user, I activate monitoring on a plan (e.g., GitHub Issues).
+      The server starts watching the channel and the plan status shows
+      as active.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: FLEET-008
+    title: "Channel event triggers automatic fleet session"
+    user_story: |
+      As a user with monitoring active, when a new event arrives on the
+      channel (e.g., new GitHub issue), the server automatically launches
+      a fleet session to handle it.
+    priority: P1
+    status: missing
+    test_refs: []

@@ -1,0 +1,126 @@
+# Astonish E2E values — isolated sandbox infrastructure for `make test-e2e`.
+#
+# This values file installs ONLY the sandbox slice of the chart (namespaces,
+# PVCs, RBAC, seed Job) into a dedicated namespace pair:
+#
+#   control plane: astonishe2e        (no api/worker pods — replicas: 0)
+#   sandbox:       astonishe2e-sandbox
+#
+# E2E tests run on the host (via `e2eboot.Bootstrap`) using the user's
+# kubeconfig. They DO NOT use the chart's api/worker deployments; the chart
+# is here only to provision the sandbox infra (namespaces + PVCs + seeded
+# @base layer) reproducibly.
+#
+# Cluster profile: same as values-dev-proxmox (K3s on LXC-on-Proxmox, NFS RWX,
+# privileged FUSE). If your cluster is different, fork this file.
+#
+# Install:
+#   helm upgrade --install astonishe2e deploy/helm/astonish \
+#     -n astonishe2e --create-namespace \
+#     -f deploy/helm/astonish/values-e2e.yaml \
+#     --wait --timeout=10m
+#
+#   kubectl -n astonishe2e-sandbox wait --for=condition=complete \
+#     job -l app.kubernetes.io/component=seed-job --timeout=10m
+#
+# Uninstall:
+#   helm uninstall astonishe2e -n astonishe2e
+#   kubectl delete ns astonishe2e astonishe2e-sandbox --ignore-not-found
+
+# ------------------------------------------------------------------
+# Control-plane image (unused — pods stay at replicas: 0).
+# Kept consistent with dev so the chart renders cleanly.
+# ------------------------------------------------------------------
+image:
+  repository: schardosin/astonish
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# ------------------------------------------------------------------
+# Namespace prefix → astonishe2e + astonishe2e-sandbox.
+# Reserved exclusively for the e2e suite.
+# ------------------------------------------------------------------
+namespaces:
+  prefix: astonishe2e
+
+# ------------------------------------------------------------------
+# Throwaway in-cluster Secret. The api/worker pods are scaled to 0,
+# so these values are never consumed; they just satisfy the chart's
+# Secret rendering. NEVER reuse for a real deployment.
+# ------------------------------------------------------------------
+secrets:
+  existingSecret: ""
+  masterKey: "e2e-throwaway-master-key-not-used-anywhere"
+  jwtSecret: "e2e-throwaway-jwt-secret-not-used-anywhere"
+  platformDSN: "postgres://unused:unused@127.0.0.1:5432/unused?sslmode=disable"
+
+# ------------------------------------------------------------------
+# Disable control-plane pods entirely. Tests run the server in-process
+# via tests/e2eboot/bootstrap.go and never talk to these.
+# ------------------------------------------------------------------
+api:
+  replicaCount: 0
+worker:
+  replicaCount: 0
+
+# No ingress, no autoscaling — irrelevant when there are no pods.
+ingress:
+  enabled: false
+autoscaling:
+  enabled: false
+
+# Non-sandbox config block is required by the chart but unused
+# (no api/worker pods to consume it).
+config:
+  storage:
+    backend: postgres
+    postgres:
+      instanceSuffix: ""
+
+# ------------------------------------------------------------------
+# Sandbox — mirrors values-dev-proxmox so it actually works on the
+# K3s-on-Proxmox dev cluster. Adjust if the e2e cluster differs.
+# ------------------------------------------------------------------
+sandbox:
+  enabled: true
+  backend: k8s
+
+  podSecurity: privileged
+
+  overlay:
+    mode: fuse
+    privileged: true
+    hostUsers: null
+    runtimeClassName: ""
+    fuseDeviceResource: ""
+
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  storage:
+    storageClassName: nfs-client
+    layers:
+      size: 10Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-layers
+    uppers:
+      size: 10Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-uppers
+
+  seed:
+    enabled: true
+    backoffLimit: 6
+
+  limits:
+    cpu: 1
+    memory: "1Gi"
+    processes: 500
+  requests:
+    cpuMillis: 50
+    memoryMiB: 128
+
+fuseDevicePlugin:
+  enabled: false

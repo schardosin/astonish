@@ -28,6 +28,7 @@ package k8s
 
 import (
 	"bytes"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -61,9 +62,15 @@ func renderChart(t *testing.T) ([]byte, bool) {
 		return nil, false
 	}
 	root := chartDir(t)
+	valuesFile := filepath.Join(root, "values-dev-proxmox.yaml")
+
+	// Derive the release namespace from the values file's namespaces.prefix
+	// so the chart validation template's Release.Namespace check passes.
+	ns := helmNamespaceFromValues(t, valuesFile)
+
 	cmd := exec.Command("helm", "template", "astonish", root,
-		"-n", "astonish",
-		"-f", filepath.Join(root, "values-dev-proxmox.yaml"),
+		"-n", ns,
+		"-f", valuesFile,
 	)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -73,6 +80,28 @@ func renderChart(t *testing.T) ([]byte, bool) {
 		return nil, false
 	}
 	return stdout.Bytes(), true
+}
+
+// helmNamespaceFromValues reads namespaces.prefix from a values YAML file.
+// Falls back to "astonish" if not set (the chart default).
+func helmNamespaceFromValues(t *testing.T, valuesFile string) string {
+	t.Helper()
+	data, err := os.ReadFile(valuesFile)
+	if err != nil {
+		t.Fatalf("read values file: %v", err)
+	}
+	var vals struct {
+		Namespaces struct {
+			Prefix string `yaml:"prefix"`
+		} `yaml:"namespaces"`
+	}
+	if err := yaml.Unmarshal(data, &vals); err != nil {
+		t.Fatalf("parse values file: %v", err)
+	}
+	if vals.Namespaces.Prefix == "" {
+		return "astonish"
+	}
+	return vals.Namespaces.Prefix
 }
 
 // splitYAMLDocs splits a multi-doc YAML file on "---" separators and
@@ -179,8 +208,7 @@ func TestChart_AllParse(t *testing.T) {
 
 // TestChart_NamespaceInvariants pins the sandbox namespace name against
 // what the backend expects. The chart derives names from namespaces.prefix;
-// values-dev-proxmox.yaml leaves the default, so the rendered sandbox
-// namespace MUST be "astonish-sandbox".
+// the rendered sandbox namespace MUST be "{prefix}-sandbox".
 func TestChart_NamespaceInvariants(t *testing.T) {
 	rendered, ok := renderChart(t)
 	if !ok {
@@ -195,21 +223,19 @@ func TestChart_NamespaceInvariants(t *testing.T) {
 		}
 		names = append(names, pk.Metadata.Name)
 	}
-	// dev-proxmox values uses namespaces.prefix=astonish (default), so:
-	//   controlPlane namespace: astonish (Release.Namespace, not rendered as an object)
-	//   sandbox namespace:      astonish-sandbox (rendered below)
-	wantContains := []string{"astonish-sandbox"}
-	for _, w := range wantContains {
-		found := false
-		for _, n := range names {
-			if n == w {
-				found = true
-				break
-			}
+	// The sandbox namespace is always {prefix}-sandbox.
+	root := chartDir(t)
+	prefix := helmNamespaceFromValues(t, filepath.Join(root, "values-dev-proxmox.yaml"))
+	wantSandboxNS := prefix + "-sandbox"
+	found := false
+	for _, n := range names {
+		if n == wantSandboxNS {
+			found = true
+			break
 		}
-		if !found {
-			t.Errorf("namespace %q not rendered; found %v", w, names)
-		}
+	}
+	if !found {
+		t.Errorf("namespace %q not rendered; found %v", wantSandboxNS, names)
 	}
 }
 

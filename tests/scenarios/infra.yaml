@@ -1,0 +1,14 @@
+# Infrastructure / Test Harness Scenarios
+# These validate the E2E test infrastructure itself — seed correctness, tenant isolation.
+view: infra
+
+scenarios:
+  - id: INFRA-001
+    title: Multi-tenant seed provisions orgs, teams, users, and verifies basic isolation
+    priority: P0
+    status: covered
+    notes: >
+      Verifies the full Seed() harness: 2 extra orgs (acme, globex), 5 teams,
+      5 users with JWTs, memories/skills/MCP/credentials at personal/team/org tiers.
+      Asserts positive access (alice sees red team data) and negative isolation
+      (alice cannot see blue team, eve cannot see acme data, unauthenticated rejected).

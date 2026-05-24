@@ -1,0 +1,766 @@
+# Chat View — E2E Scenario Catalog
+# Real user journeys exercised against a running Astonish platform.
+# Unit-level UI rendering tests (Vitest) are NOT tracked here.
+#
+# Status: covered | missing
+# Priority: P0 (must-have) | P1 (important) | P2 (nice-to-have)
+view: chat
+
+scenarios:
+
+  # ---------------------------------------------------------------------------
+  # Section A — Basic Conversation
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-001
+    title: "User sends a message and receives a complete LLM response"
+    user_story: |
+      As a user, I type a question and press Enter. The real LLM generates
+      a response streamed via SSE through the real server. I receive a
+      complete, coherent answer.
+    priority: P0
+    status: covered
+
+  - id: CHAT-002
+    title: "Multi-turn conversation continues prior task without re-statement"
+    user_story: |
+      As a user, I send a follow-up message that references the agent's
+      previous reply (e.g. "now translate them to Spanish") without
+      re-stating any of the prior content. The agent uses the prior
+      assistant output as the input for the new task.
+      This verifies multi-turn task continuation via session-history
+      replay. It deliberately does NOT test recalling a fact the user
+      stated (which is a tautology — the LLM trivially has its own
+      context window). Cross-session memory is covered by CHAT-016.
+    priority: P0
+    status: covered
+
+  - id: CHAT-003
+    title: "User stops an active LLM stream mid-response"
+    user_story: |
+      As a user, I click Stop while the LLM is streaming. The server
+      aborts the generation, partial text is persisted to the session,
+      and I can send a new message.
+    priority: P1
+    status: missing
+
+  - id: CHAT-004
+    title: "Session persists and reloads after page refresh"
+    user_story: |
+      As a user, I have a conversation, close the browser, reopen, and
+      see my previous session in the sidebar. Clicking it restores the
+      full message history from the database.
+    priority: P0
+    status: covered
+
+  - id: CHAT-005
+    title: "Reconnect to an active session shows live output"
+    user_story: |
+      As a user, I open a session that is still running (e.g., from
+      another tab). I see the live LLM output resume via SSE reconnection.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section B — Tools & Approval
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-006
+    title: "Agent calls a safe tool (read-only) and returns the result"
+    user_story: |
+      As a user, I ask a question that requires a safe tool (e.g., file_tree,
+      memory_search). The agent calls the tool without approval, gets a result,
+      and incorporates it into its answer.
+    priority: P0
+    status: covered
+
+  - id: CHAT-007
+    title: "Tool requiring approval halts and waits for user decision"
+    user_story: |
+      As a user, the agent wants to run an unsafe tool. The SSE stream
+      emits an approval event, execution pauses, and the test verifies
+      the server is blocked waiting for a decision.
+    priority: P0
+    status: missing
+
+  - id: CHAT-008
+    title: "User approves a tool and execution resumes"
+    user_story: |
+      As a user, after approval is requested I approve the tool. The agent
+      executes it successfully and continues with its answer.
+    priority: P0
+    status: missing
+
+  - id: CHAT-009
+    title: "User denies a tool and the agent adapts"
+    user_story: |
+      As a user, I deny a tool execution. The agent acknowledges the denial
+      and adapts its response without executing the tool.
+    priority: P1
+    status: missing
+
+  - id: CHAT-010
+    title: "autoApprove flag bypasses approval gate for unsafe tools"
+    user_story: |
+      As a user, I send a message with autoApprove=true. The agent calls
+      an unsafe tool that would normally require approval, and it executes
+      immediately without waiting for my decision.
+    priority: P1
+    status: covered
+
+  - id: CHAT-011
+    title: "Tool creates a file artifact persisted to session"
+    user_story: |
+      As a user, I ask the agent to write a file. The tool creates an
+      artifact that is persisted in the database and retrievable via
+      the artifacts API.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section C — Multi-Step Reasoning
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-012
+    title: "Agent announces a plan and reports per-step progress"
+    user_story: |
+      As a user, I ask a complex question. The agent announces a plan
+      with multiple steps, executes them in order, and SSE events report
+      per-step progress updates.
+    priority: P0
+    status: missing
+
+  - id: CHAT-013
+    title: "Agent delegates tasks to sub-agents"
+    user_story: |
+      As a user, I ask something that triggers delegation. The agent
+      spawns sub-tasks that execute via the delegation engine, and
+      subtask_progress events flow over SSE.
+    priority: P1
+    status: missing
+
+  - id: CHAT-014
+    title: "Sub-agent failure surfaces in main conversation"
+    user_story: |
+      As a user, when a delegated sub-task fails, I see a clear error
+      event in the main SSE stream indicating which task failed and why.
+    priority: P1
+    status: missing
+
+  - id: CHAT-015
+    title: "Stream truncation triggers automatic single retry"
+    user_story: |
+      As a user, if the LLM response is truncated mid-stream, the server
+      automatically retries once with a nudge message. The retry SSE event
+      appears before the final complete response.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section D — Memory Authorization
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-016
+    title: "Agent saves durable infrastructure knowledge in one session and recalls it in a new session"
+    user_story: |
+      As a user, in one chat session I state durable, environment-specific
+      infrastructure facts ("our Proxmox server is named pve-prod-01 and
+      its management IP is 192.168.55.42"). The system persists this
+      knowledge to the team memory store — either inline via memory_save
+      or via the post-turn memory reflector, since hostnames and IPs are
+      explicitly listed as durable connection details in the reflector's
+      positive criteria. In a brand-new session with empty conversation
+      history, I ask for the IP of pve-prod-01. The agent retrieves it
+      from team memory (injected at session start or fetched via
+      memory_search) and replies with `192.168.55.42`. This proves the
+      memory store survives across sessions and is distinct from
+      same-session transcript replay (CHAT-002).
+
+      Note: this test deliberately uses TEAM-scoped infrastructure
+      knowledge, not personal facts. Personal facts (names, preferences)
+      are private and must NOT be saved to team memory — that scenario is
+      reserved for a future personal-memory-scope test (out of scope
+      until memory_save supports a personal scope path; see CHAT-017 for
+      the privacy contract that must be preserved).
+    priority: P0
+    status: covered
+
+  - id: CHAT-017
+    title: "User A's chat cannot retrieve User B's personal memories"
+    user_story: |
+      As Alice (team red), I search for a memory seeded in Bob's personal
+      store. The search returns zero results — Bob's personal data is
+      invisible to me even though we are on the same team.
+    priority: P0
+    status: covered
+
+  - id: CHAT-018
+    title: "Team memory is searchable by all team members"
+    user_story: |
+      As Bob (member of team red), I search for a team memory. The
+      search returns the memory that was saved to team red's scope.
+      Both Alice and Bob can find it.
+    priority: P0
+    status: covered
+
+  - id: CHAT-019
+    title: "Team A's chat cannot retrieve Team B's memories"
+    user_story: |
+      As Alice (team red), I search for a memory seeded in team blue's
+      scope. The search returns zero results — team blue data does not
+      leak to team red, even though both teams are in the same org.
+    priority: P0
+    status: covered
+
+  - id: CHAT-020
+    title: "Org memory is searchable by all teams in the org but not other orgs"
+    user_story: |
+      As Alice (acme org), I search for an org-level memory. It is returned.
+      As Eve (globex org), I perform the same search — zero results. Org
+      memory is visible across teams within an org but invisible to outsiders.
+    priority: P0
+    status: covered
+
+  # ---------------------------------------------------------------------------
+  # Section E — Skills, MCP, Credentials Authorization
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-021
+    title: "Bundled skills are available to every user"
+    user_story: |
+      As any user, I query the skills API without a scope filter. The
+      response includes bundled (built-in) skills available to everyone,
+      regardless of team or org membership.
+    priority: P1
+    status: missing
+
+  - id: CHAT-022
+    title: "Team skill is visible to team members; not to other teams"
+    user_story: |
+      As Alice (team red), I list team skills and see the red team skill.
+      As Carol (team blue), I list team skills and do NOT see the red team
+      skill — only blue team's skill appears.
+    priority: P0
+    status: covered
+
+  - id: CHAT-023
+    title: "Team MCP server is visible to team members; not to other teams"
+    user_story: |
+      As Alice (team red), I list team MCP servers and see the red team's
+      server. As Eve (globex/engineering), I list team MCP servers and
+      see only globex's server — acme's servers are invisible.
+    priority: P0
+    status: covered
+
+  - id: CHAT-024
+    title: "Personal credential is visible only to its owner"
+    user_story: |
+      As Alice, I list personal credentials and see my credential.
+      Bob lists personal credentials and does NOT see Alice's — only
+      his own appears.
+    priority: P0
+    status: covered
+
+  - id: CHAT-025
+    title: "Provider configured at team scope is available to all team members"
+    user_story: |
+      As a team admin, I configure a provider at the team level. All team
+      members can see and use this provider; members of other teams cannot.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section F — Session & Lifecycle Authorization
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-026
+    title: "User cannot access another user's personal session by ID"
+    user_story: |
+      As Alice, I create a session. Eve (different org) tries to fetch
+      that session by ID — she receives a 404 or empty result. The session
+      is invisible across org boundaries.
+
+      Note: the chat handler currently accepts a client-supplied sessionId on
+      POST /api/studio/chat without an ownership check, so the SSE stream may
+      echo Eve's sessionId back. The real boundary is data isolation: the
+      session service is resolved per-org, so Eve's writes land in her own
+      personal store and Alice's session content remains untouched. Tests
+      assert content isolation (Alice fetches her session and Eve's text is
+      absent), not the cosmetic sessionId echo.
+    priority: P0
+    status: covered
+
+  - id: CHAT-027
+    title: "Cross-team session access is denied"
+    user_story: |
+      As Alice (team red), I create a session. Carol (team blue, same org)
+      cannot read Alice's personal session. Team schema isolation prevents
+      cross-team personal session access.
+    priority: P0
+    status: covered
+
+  - id: CHAT-028
+    title: "User creates, lists, and deletes their own sessions"
+    user_story: |
+      As a user, I start a chat (creates session), verify it appears in my
+      sessions list, then delete it and confirm it's gone from the list.
+    priority: P0
+    status: covered
+
+  - id: CHAT-029
+    title: "Distilling a chat creates a personal flow; teammate cannot see it"
+    user_story: |
+      As Alice, I distill a conversation into a flow. The flow is saved
+      in my personal scope. Bob (same team) cannot see it in his flows
+      list — personal flows are private.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section G — Errors & Edge Cases
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-030
+    title: "Provider error returns structured error event to client"
+    user_story: |
+      As a user, when the LLM provider is down or rate-limited, I receive
+      a structured error event via SSE with a clear message and suggestion.
+    priority: P0
+    status: missing
+
+  - id: CHAT-031
+    title: "Unauthenticated request to chat endpoint is rejected"
+    user_story: |
+      As an unauthenticated caller, I send a request to /api/studio/chat
+      without a valid JWT. The server returns 401 Unauthorized.
+    priority: P0
+    status: covered
+
+  - id: CHAT-032
+    title: "Session title is auto-generated after first response"
+    user_story: |
+      As a user, after my first message the server generates a session
+      title (via LLM or heuristic) and persists it. The sessions list
+      returns the title.
+    priority: P1
+    status: covered
+
+  # ---------------------------------------------------------------------------
+  # Section H — Reports & Export
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-033
+    title: "Agent writes a report and it renders inline as EmbeddedFileViewer"
+    user_story: |
+      As a user, I ask the agent to produce a report. It calls write_file,
+      an artifact event arrives, and when streaming completes, the report
+      renders inline inside the last agent message bubble via EmbeddedFileViewer.
+    priority: P0
+    status: covered
+
+  - id: CHAT-034
+    title: "Files button lists all session artifacts"
+    user_story: |
+      As a user, after the agent produces artifacts during a session, the
+      Files button appears in the chat toolbar. Clicking it lists all
+      files produced in this session via the artifacts API.
+    priority: P0
+    status: covered
+
+  - id: CHAT-035
+    title: "User downloads report as Markdown"
+    user_story: |
+      As a user, I click the Markdown download link on a report. The
+      browser fetches the raw file from /api/studio/artifacts and I
+      receive the .md file instantly.
+    priority: P0
+    status: covered
+
+  - id: CHAT-036
+    title: "User exports report as DOCX"
+    user_story: |
+      As a user, I click Export DOCX on a report. The client converts
+      the markdown to DOCX via remark-docx and triggers a browser
+      download of the .docx file.
+    priority: P1
+    status: missing
+
+  - id: CHAT-037
+    title: "User exports report as PDF via headless Chrome"
+    user_story: |
+      As a user, I click Export PDF on a report. The server renders it
+      via headless Chrome (go-rod), returns a PDF blob after 5-15s, and
+      the client triggers a browser download.
+    priority: P0
+    status: missing
+
+  - id: CHAT-038
+    title: "Source citations appear below report when web search tools were used"
+    user_story: |
+      As a user, when the agent used web search tools before writing a
+      report, clickable source citation pills appear below the report
+      bubble with the URLs that were referenced.
+    priority: P1
+    status: missing
+
+  - id: CHAT-039
+    title: "Cross-user artifact URL is denied"
+    user_story: |
+      As Eve (different org), I attempt to fetch Alice's report artifact
+      via its URL path. The server returns 404 or 403 — artifact access
+      is scoped to the session owner.
+    priority: P0
+    status: covered
+
+  # ---------------------------------------------------------------------------
+  # Section I — Generative Apps in Chat
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-040
+    title: "AppCodeIndicator shows progress while app is being generated"
+    user_story: |
+      As a user, while the agent is streaming an astonish-app code fence,
+      I see a pulsing "Generating app..." indicator (AppCodeIndicator)
+      instead of raw fence text.
+    priority: P1
+    status: missing
+
+  - id: CHAT-041
+    title: "app_preview event renders sandboxed iframe with the generated app"
+    user_story: |
+      As a user, after the agent finishes generating an app, the
+      app_preview SSE event arrives and AppPreviewCard renders a
+      sandboxed iframe with the live React preview.
+    priority: P1
+    status: missing
+
+  - id: CHAT-042
+    title: "User saves generated app; app_saved confirmation appears"
+    user_story: |
+      As a user, I click Save on the app preview. The server persists
+      the app, emits app_saved/app_done, and a confirmation card appears
+      with the app name and path.
+    priority: P1
+    status: missing
+
+  - id: CHAT-043
+    title: "App useData hook fetches real session data via proxy"
+    user_story: |
+      As a user, I generate an app that uses the useData hook. The
+      sandboxed iframe communicates with the server via the session
+      proxy, receives real data, and renders it correctly.
+    priority: P2
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section J — Visual & Multimodal
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-044
+    title: "Image event renders inline image in chat"
+    user_story: |
+      As a user, when the agent returns an image (e.g., generated chart
+      or screenshot), the image SSE event renders an inline <img> in the
+      chat bubble using a base64 data URI.
+    priority: P1
+    status: missing
+
+  - id: CHAT-045
+    title: "Browser handoff renders VNC view"
+    user_story: |
+      As a user, when the agent invokes browser tools, a browser_handoff
+      event arrives and BrowserView renders with the VNC proxy connection
+      showing the page the agent is interacting with.
+    priority: P2
+    status: missing
+
+  - id: CHAT-046
+    title: "Thinking event renders italic indicator for reasoning models"
+    user_story: |
+      As a user, when a reasoning model emits thinking tokens, I see an
+      italic "thinking..." indicator in the chat. It disappears when the
+      model begins emitting visible response text.
+    priority: P2
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section K — Slash Commands & Flow Output
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-047
+    title: "/distill produces DistillPreviewCard with editable YAML"
+    user_story: |
+      As a user, I type /distill in a session. The server generates a
+      flow YAML from the conversation. A DistillPreviewCard renders with
+      the flow name, description, tags, and editable YAML preview.
+    priority: P1
+    status: missing
+
+  - id: CHAT-048
+    title: "User saves distilled flow; confirmation shows file path and run command"
+    user_story: |
+      As a user, I click Save on the DistillPreviewCard. The server
+      persists the flow and emits distill_saved with the file path and
+      run command. A confirmation card appears.
+    priority: P1
+    status: missing
+
+  - id: CHAT-049
+    title: "/fleet redirect opens fleet template picker"
+    user_story: |
+      As a user, I type /fleet (or the agent decides to redirect). The
+      server emits fleet_plan_redirect and the UI opens the fleet
+      template picker dialog.
+    priority: P1
+    status: missing
+
+  - id: CHAT-050
+    title: "/drill redirect switches UI to drill wizard"
+    user_story: |
+      As a user, I type /drill (or the agent decides to redirect). The
+      server emits drill_redirect and the UI switches to the drill
+      creation wizard with the suggested name.
+    priority: P2
+    status: missing
+
+  - id: CHAT-051
+    title: "flow_output events render as agent messages when running a flow"
+    user_story: |
+      As a user, I run a flow from chat. The server emits flow_output
+      events for each step's output. These render as agent message
+      bubbles in the conversation.
+    priority: P2
+    status: missing
+
+  - id: CHAT-052
+    title: "system event renders system info card"
+    user_story: |
+      As a user, I type an unknown slash command or trigger a system
+      event. The server emits a system event and the UI renders a
+      system info card with an info icon and markdown content.
+    priority: P2
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section L — Multi-Agent UX
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-053
+    title: "plan event renders PlanPanel with goal and step checklist"
+    user_story: |
+      As a user, when the agent formulates a multi-step plan, the plan
+      SSE event arrives and PlanPanel renders with the goal text and a
+      checklist of steps that update as each completes.
+    priority: P1
+    status: missing
+
+  - id: CHAT-054
+    title: "fleet_progress renders FleetExecutionPanel with per-agent status"
+    user_story: |
+      As a user, when a fleet execution is running, fleet_progress events
+      update the FleetExecutionPanel showing each agent's name, status,
+      and progress events in real time.
+    priority: P1
+    status: missing
+
+  - id: CHAT-055
+    title: "fleet_message events render as agent-colored bubbles per sub-agent"
+    user_story: |
+      As a user, during fleet execution, fleet_message events render as
+      color-coded markdown bubbles — each sub-agent has a distinct color
+      so I can visually differentiate their outputs.
+    priority: P2
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section M — Memory UX & Usage in Chat
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-056
+    title: "Memory saved indicator appears after agent calls memory_save"
+    user_story: |
+      As a user, when the agent saves a memory during the conversation,
+      a visible indicator appears in the chat confirming what was saved
+      and at which scope (personal/team/org).
+    priority: P1
+    status: missing
+
+  - id: CHAT-057
+    title: "usage event updates token counter in toolbar"
+    user_story: |
+      As a user, after each LLM turn, the usage SSE event fires and the
+      token counter in the chat toolbar updates to show input/output
+      token counts for the session.
+    priority: P2
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section N — Mode & Input
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-058
+    title: "Ask mode disables write tools; agent cannot execute unsafe operations"
+    user_story: |
+      As a user, I switch to Ask mode before sending a message. The
+      agent responds conversationally but does not attempt write_file,
+      run_command, or other unsafe tools — they are not offered to the
+      LLM in ask mode.
+    priority: P1
+    status: missing
+
+  - id: CHAT-059
+    title: "Agent mode enables full tool access (default)"
+    user_story: |
+      As a user, in the default Agent mode I send a message requiring
+      a tool call. The agent invokes the tool successfully, confirming
+      that full tool access is active.
+    priority: P1
+    status: missing
+
+  - id: CHAT-060
+    title: "User starts a new session from the sidebar"
+    user_story: |
+      As a user, I click New Chat in the sidebar. A fresh session is
+      created, my previous session remains in the sidebar list, and the
+      chat area is empty ready for a new message.
+    priority: P1
+    status: missing
+
+  # ---------------------------------------------------------------------------
+  # Section O — Additional Authorization Edges
+  # ---------------------------------------------------------------------------
+
+  - id: CHAT-061
+    title: "Cross-team runtime tool authorization blocks foreign MCP tools"
+    user_story: |
+      As Alice (team red), my agent is running and attempts to call a
+      tool registered only to team blue's MCP server. The server blocks
+      the call — the tool is not available to my session at runtime.
+    priority: P0
+    status: missing
+
+  - id: CHAT-062
+    title: "Approval decision is bound to the session owner"
+    user_story: |
+      As Bob, I attempt to approve a pending tool call in Alice's session
+      by calling the approval API with her session ID. The server returns
+      403 — only the session owner can approve or deny tool calls.
+    priority: P0
+    status: covered
+
+  - id: CHAT-063
+    title: "Personal credential is injected only for its owner at runtime"
+    user_story: |
+      As Alice, I have a personal credential. When my agent runs, it can
+      access that credential. When Bob's agent runs, it cannot access
+      Alice's credential — the secret is never exposed to another user.
+    priority: P1
+    status: missing
+
+  - id: CHAT-064
+    title: "Same-team user cannot access another user's personal session"
+    user_story: |
+      As Alice (acme/red), I create a session. Bob (acme/red, same team)
+      cannot read it via GET /api/studio/sessions/{id}, his sessions list
+      does not contain Alice's session ID, his DELETE attempt does not
+      remove Alice's session, and a chat POST that supplies Alice's
+      sessionId does not inject content into her personal session.
+      Personal sessions are user-scoped even within the same team.
+    priority: P0
+    status: covered
+
+  - id: CHAT-065
+    title: "Same-team user cannot download another user's artifact"
+    user_story: |
+      As Alice (acme/red), my agent writes a file and the artifact
+      content endpoint serves it to me. Bob (acme/red, same team)
+      issues GET /api/studio/artifacts/content?path=<alice path>&session=<alice session>
+      and is denied — artifact authorization is bound to the session
+      owner, not just to team membership.
+    priority: P0
+    status: covered
+
+  - id: CHAT-069
+    title: "Standard MCP server install in platform mode persists encrypted env without breaking JSONB"
+    user_story: |
+      As a platform admin, I install a standard MCP server (e.g. Tavily)
+      via POST /api/standard-servers/{id}/install?scope=platform with an
+      env map containing a real API key. The install succeeds (HTTP 200)
+      even when the platform master key is set, because the encrypted env
+      bytes are wrapped as a base64 JSON envelope ({"_encrypted":"..."})
+      before being written to the JSONB env column. The follow-up GET
+      /api/mcp-platform/servers?scope=platform returns the server with
+      its env decrypted and equal to what was sent. Pins the fix for
+      the SQLSTATE 22021 ("invalid byte sequence for encoding UTF8")
+      regression that fired the first time a platform-tier MCP install
+      was attempted with a configured ASTONISH_MASTER_KEY and a non-empty
+      env map (e.g., TAVILY_API_KEY).
+    priority: P0
+    status: covered
+
+  - id: CHAT-070
+    title: "Standard MCP server installed at platform tier cascades into org/team chats"
+    user_story: |
+      As a platform admin, I install Tavily at scope=platform. As a
+      regular team user (different org/team than where the install was
+      configured), my chat agent must immediately see Tavily's tools as
+      available — they are not gated to the admin's org. Pins the
+      cascade contract: platform → org → team for MCP server tool
+      visibility (mirrors the documented inheritance for Services
+      .PlatformMCPServers and matches loadMCPConfigForRequest behavior
+      already used by HTTP listing endpoints). Without the cascade,
+      GET /api/tools called as a team user would not include
+      tavily_search, and the chat system prompt would never tell the
+      LLM web search exists, even though the server is installed and
+      its cached_tools are populated in platform_mcp_servers.
+    priority: P0
+    status: covered
+
+  # ---------------------------------------------------------------------------
+  # Section I — Report Gate (two-step astonish-report contract)
+  # ---------------------------------------------------------------------------
+  # These three scenarios pin the boundary of the report-vs-artifact gate
+  # introduced to fix the b5310ae regression. The contract: an artifact is
+  # promoted to inline EmbeddedFileViewer rendering iff it is markdown,
+  # produced in the last turn, AND the agent emitted a matching
+  # ```astonish-report``` fence. Without all three signals, the artifact
+  # renders as a compact ArtifactCard. CHAT-066 covers the negative path,
+  # CHAT-067 covers the report_marker SSE event, and CHAT-068 covers the
+  # positive end-to-end markdown+marker case.
+
+  - id: CHAT-066
+    title: "Plain write_file (no astonish-report fence) does not promote to a report"
+    user_story: |
+      As a user, when my agent writes a working file (e.g. a Python script)
+      without emitting an astonish-report fence, the file appears as a
+      compact ArtifactCard download tile and NOT as an inline embedded
+      report viewer. The session detail's artifacts[] entry has
+      isReport=false. Pins the negative path of the gate to prevent any
+      future b5310ae-style "any last-turn artifact embeds" regression.
+    priority: P0
+    status: covered
+
+  - id: CHAT-067
+    title: "Agent emits astonish-report fence and a report_marker SSE event is delivered"
+    user_story: |
+      As a user, when my agent writes a markdown report AND emits the
+      ```astonish-report``` fence with a matching path, the backend
+      detects the fence and emits a report_marker SSE event whose path
+      matches the artifact. The persisted marker survives session-detail
+      reload — artifacts[] returns isReport=true and the optional
+      reportTitle from the fence's frontmatter. Without this signal,
+      the frontend gate cannot promote the artifact to inline rendering.
+    priority: P0
+    status: covered
+
+  - id: CHAT-068
+    title: "Markdown file with astonish-report fence is flagged as a report"
+    user_story: |
+      As a user, when my agent saves a markdown file via write_file and
+      then emits a matching astonish-report fence, the session-detail
+      artifacts[] entry comes back with isReport=true AND
+      fileType="Markdown". This is the symmetric positive counterpart of
+      CHAT-066: together they pin the gate's behavior on both sides
+      independently of LLM cooperation in any single test run.
+    priority: P0
+    status: covered

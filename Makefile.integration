@@ -88,7 +88,7 @@ test-integration:
 	@echo "✓ All integration tests passed."
 
 # ---------------------------------------------------------------------------
-# Cluster smoke test (self-driving: bootstraps fresh instance, all 4 scenarios)
+# Cluster E2E test (self-driving: bootstraps fresh instance, all 4 scenarios)
 # ---------------------------------------------------------------------------
 
 smoke:
@@ -102,13 +102,13 @@ smoke:
 		exit 1; \
 	fi
 	@echo "═══════════════════════════════════════════════════"
-	@echo " E2E Smoke Test — Layer-Chain Pipeline (4 scenarios)"
-	@echo " DB: $$ASTONISH_TEST_DSN (suffix=smoke)"
+	@echo " E2E Test — Sandbox Layer-Chain Pipeline (4 scenarios)"
+	@echo " DB: $$ASTONISH_TEST_DSN"
 	@echo "═══════════════════════════════════════════════════"
 	@echo ""
-	go test -tags=integration -count=1 -v -timeout=10m ./tests/smoke/ -run 'TestSmokeLayerChain'
+	go test -tags=e2e -count=1 -v -timeout=10m ./tests/e2e/sandbox_layerchain/ -run 'TestE2E_SandboxLayerChain'
 	@echo ""
-	@echo "✓ All smoke scenarios passed."
+	@echo "✓ All layer-chain scenarios passed."
 
 # ---------------------------------------------------------------------------
 # Quick smoke (bash script — validates current cluster state, needs token)

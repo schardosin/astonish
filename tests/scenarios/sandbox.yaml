@@ -1,0 +1,19 @@
+# Sandbox View — E2E Scenario Catalog
+# Real user journeys involving the K8s sandbox (layered containers).
+#
+# Status: covered | partial | missing
+# Priority: P0 (must-have) | P1 (important) | P2 (nice-to-have)
+
+scenarios:
+
+  - id: SANDBOX-001
+    title: "Fresh session boots a layered sandbox pod"
+    user_story: |
+      As a user, I start a new chat session that triggers sandbox
+      creation. The server provisions a K8s pod with the base layer,
+      the pod reaches Running state, and I can execute commands in it.
+    priority: P0
+    status: covered
+    test_refs:
+      - "tests/e2e/sandbox_layerchain/layerchain_test.go::TestE2E_SandboxLayerChain"
+    notes: "Skipped automatically if K8s sandbox infra (namespace + PVCs) is not available."

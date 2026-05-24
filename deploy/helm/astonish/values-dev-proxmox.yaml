@@ -30,7 +30,7 @@ image:
 #   sandbox:      astonish-sandbox
 # ------------------------------------------------------------------
 namespaces:
-  prefix: astonish
+  prefix: astonishdev
 
 # ------------------------------------------------------------------
 # Secrets (rotate for real deployments)
@@ -44,7 +44,7 @@ secrets:
 config:
   storage:
     postgres:
-      instanceSuffix: "dxmtlc"
+      instanceSuffix: "zgoubo"
 
 # ------------------------------------------------------------------
 # Ingress (nginx on the dev cluster)

@@ -1,3 +1,13 @@
+# Auto-load .env files if present (credentials, DSN, provider config).
+# .env for shared defaults, .env.local for per-developer secrets.
+# Both are gitignored. Existing shell env vars take precedence.
+-include .env
+-include .env.local
+export
+
+# Use bash for recipe execution — we rely on `set -o pipefail`, `[[`, etc.
+SHELL := /bin/bash
+
 # Variables
 BINARY_NAME = astonish
 WEB_DIR = web
@@ -17,15 +27,22 @@ help:
 	@echo "  make run             - Run the Go application"
 	@echo "  make studio          - Run Astonish Studio (dev mode)"
 	@echo "  make studio-dev      - Run Studio with live UI reload"
-	@echo "  make test            - Run Go tests"
+	@echo "  make test            - Run all unit tests (Go + frontend)"
+	@echo "  make test-unit       - Same as 'make test'"
+	@echo "  make test-integration - Run integration tests (needs ASTONISH_TEST_DSN)"
+	@echo "  make test-e2e        - Run E2E tests (needs live LLM + DB + e2e k8s infra)"
+	@echo "  make test-e2e-inspect - Run E2E tests in shared mode (browse sessions in UI after run)"
+	@echo "  make test-e2e-inspect-stop - Stop the inspector started by 'test-e2e-inspect'"
+	@echo "  make e2e-k8s-up      - Provision isolated k8s sandbox infra for e2e tests"
+	@echo "  make e2e-k8s-down    - Tear down e2e k8s sandbox infra"
 	@echo "  make install         - Install the binary to ~/bin"
 	@echo "  make clean           - Clean up build artifacts"
 	@echo "  make update-mcp-stars - Update MCP store GitHub star counts"
 	@echo ""
-	@echo "E2E Testing (Docker):"
-	@echo "  make e2e-up          - Start isolated test environment"
-	@echo "  make e2e-down        - Stop test environment"
-	@echo "  make e2e-rebuild     - Rebuild and restart test environment"
+	@echo "Docker Test Environment:"
+	@echo "  make e2e-env-up      - Start isolated test environment"
+	@echo "  make e2e-env-down    - Stop test environment"
+	@echo "  make e2e-env-rebuild - Rebuild and restart test environment"
 	@echo ""
 	@echo "Kubernetes Platform Init:"
 	@echo "  make platform-init PLATFORM_HOST=<host> PLATFORM_USER=<user> PLATFORM_PASSWORD=<pass>"
@@ -101,10 +118,240 @@ studio-dev:
 	@echo "Run 'cd web && npm run dev' in another terminal for live UI reload"
 	go run . studio
 
-# Run tests
-test:
-	@echo "Running Go tests..."
+# Run tests — unit tests (Go + frontend, no external deps)
+test: test-unit
+
+test-unit:
+	@echo "Running Go unit tests..."
 	go test ./...
+	@echo "Running frontend tests..."
+	cd $(WEB_DIR) && npm test -- --run
+	@echo "All unit tests passed!"
+
+# Integration tests — need Postgres (ASTONISH_TEST_DSN)
+test-integration:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then \
+		echo "ERROR: ASTONISH_TEST_DSN required. Example: export ASTONISH_TEST_DSN=postgres://user:pass@localhost:5432/testdb"; exit 1; fi
+	@echo "Running integration tests..."
+	go test -tags=integration -count=1 -timeout=10m ./...
+	@echo "Integration tests passed!"
+
+# E2E tests — need Postgres + live LLM provider + kubectl (for sandbox tests)
+# Each test bootstraps a full platform (fresh DB, real server, real auth).
+# -p 1 serializes packages to avoid Postgres role creation races.
+test-e2e:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then echo "ERROR: ASTONISH_TEST_DSN required"; exit 1; fi
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH (required for e2e sandbox preflight)"; exit 1; }
+	@CP_NS="$${ASTONISH_E2E_CONTROL_PLANE_NAMESPACE:-astonish}"; \
+	SB_NS="$${ASTONISH_E2E_SANDBOX_NAMESPACE:-astonish-sandbox}"; \
+	echo "Preflight: verifying e2e k8s infra ($$CP_NS + $$SB_NS)..."; \
+	for NS in "$$CP_NS" "$$SB_NS"; do \
+		if ! kubectl get ns "$$NS" >/dev/null 2>&1; then \
+			echo ""; \
+			echo "ERROR: e2e k8s infra not found — namespace \"$$NS\" missing."; \
+			echo ""; \
+			echo "  Provision it with:    make e2e-k8s-up"; \
+			echo "  Tear it down with:    make e2e-k8s-down"; \
+			echo ""; \
+			echo "  Override namespaces by setting ASTONISH_E2E_CONTROL_PLANE_NAMESPACE"; \
+			echo "  and ASTONISH_E2E_SANDBOX_NAMESPACE in .env (defaults: astonish, astonish-sandbox)."; \
+			echo ""; \
+			exit 1; \
+		fi; \
+	done; \
+	for PVC in astonish-layers astonish-uppers; do \
+		if ! kubectl get pvc -n "$$SB_NS" "$$PVC" >/dev/null 2>&1; then \
+			echo ""; \
+			echo "ERROR: e2e k8s infra incomplete — PVC \"$$PVC\" missing in namespace \"$$SB_NS\"."; \
+			echo "  Re-provision with:    make e2e-k8s-up"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "Preflight OK."
+	@echo ""
+	@echo "Running E2E tests (~26 tests, typically 5-15 min)..."
+	@set -o pipefail; go test -tags=e2e -count=1 -p 1 -timeout=15m -json ./tests/e2e/... \
+		| node tests/scenarios/stream.mjs /tmp/e2e-results.json; \
+	RESULT=$$?; \
+	node tests/scenarios/parse-run.mjs /tmp/e2e-results.json; \
+	exit $$RESULT
+
+# E2E k8s sandbox infrastructure — provision/destroy the isolated namespaces,
+# PVCs, RBAC, and seeded @base layer used by sandbox-aware E2E tests.
+#
+# Namespace layout (DEDICATED to e2e — never reuse a live install):
+#   control plane: astonishe2e
+#   sandbox:       astonishe2e-sandbox
+#
+# Tests run on the host using your kubeconfig; the chart's api/worker pods
+# are scaled to 0 (we only need the sandbox slice). See
+# deploy/helm/astonish/values-e2e.yaml for details.
+E2E_K8S_RELEASE := astonishe2e
+E2E_K8S_NS := astonishe2e
+E2E_K8S_SANDBOX_NS := astonishe2e-sandbox
+
+e2e-k8s-up:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Provisioning isolated e2e k8s infra ($(E2E_K8S_NS) + $(E2E_K8S_SANDBOX_NS))..."
+	helm upgrade --install $(E2E_K8S_RELEASE) deploy/helm/astonish \
+		-n $(E2E_K8S_NS) --create-namespace \
+		-f deploy/helm/astonish/values-e2e.yaml \
+		--wait --timeout=10m
+	@echo "Verifying seeded @base layer..."
+	@E2E_K8S_SANDBOX_NS=$(E2E_K8S_SANDBOX_NS) scripts/verify-e2e-seed.sh
+	@echo "E2E k8s infra ready."
+
+e2e-k8s-down:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Tearing down e2e k8s infra..."
+	-helm uninstall $(E2E_K8S_RELEASE) -n $(E2E_K8S_NS) 2>/dev/null
+	-kubectl delete pods --all -n $(E2E_K8S_SANDBOX_NS) --force --grace-period=0 --ignore-not-found 2>/dev/null
+	-kubectl delete ns $(E2E_K8S_NS) --ignore-not-found
+	-kubectl delete ns $(E2E_K8S_SANDBOX_NS) --ignore-not-found
+	@echo "E2E k8s infra removed."
+
+# E2E inspector mode — long-lived single-instance for post-run UI inspection.
+#
+# Boots a long-lived in-process StudioServer (port 9394) and runs the entire
+# e2e suite against it. After the run, the server keeps running so you can
+# log into the UI and browse every chat session created during the run.
+#
+# Usage:
+#   make test-e2e-inspect       # boot inspector + run suite + leave running
+#   make test-e2e-inspect-stop  # gracefully stop the inspector
+#
+# The platform DB (suffix=e2einspect) is dropped & re-created on every
+# `test-e2e-inspect` invocation — each run starts fresh.
+E2E_INSPECT_BIN := bin/e2e-inspector
+E2E_INSPECT_LOG := /tmp/astonish-e2e-inspect.log
+E2E_INSPECT_PORT := 9394
+
+# Inspector links the full StudioServer (pkg/...), so any change to backend
+# code (chat runner, handlers, agent) MUST trigger a rebuild — otherwise
+# tests run against a stale binary and silently mask backend regressions.
+# See: 2026-05-23 CHAT-067 stale-inspector incident.
+E2E_INSPECT_DEPS := $(shell find tools/e2e-inspector tests/e2eboot pkg cmd -name '*.go' -not -name '*_test.go' 2>/dev/null)
+
+$(E2E_INSPECT_BIN): $(E2E_INSPECT_DEPS)
+	@mkdir -p $(@D)
+	go build -o $@ ./tools/e2e-inspector
+
+test-e2e-inspect: $(E2E_INSPECT_BIN)
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then echo "ERROR: ASTONISH_TEST_DSN required"; exit 1; fi
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH (required for e2e sandbox preflight)"; exit 1; }
+	@CP_NS="$${ASTONISH_E2E_CONTROL_PLANE_NAMESPACE:-astonish}"; \
+	SB_NS="$${ASTONISH_E2E_SANDBOX_NAMESPACE:-astonish-sandbox}"; \
+	echo "Preflight: verifying e2e k8s infra ($$CP_NS + $$SB_NS)..."; \
+	for NS in "$$CP_NS" "$$SB_NS"; do \
+		kubectl get ns "$$NS" >/dev/null 2>&1 || { echo "ERROR: namespace $$NS missing — run 'make e2e-k8s-up' first"; exit 1; }; \
+	done; \
+	for PVC in astonish-layers astonish-uppers; do \
+		kubectl get pvc -n "$$SB_NS" "$$PVC" >/dev/null 2>&1 || { echo "ERROR: PVC $$PVC missing in $$SB_NS"; exit 1; }; \
+	done; \
+	echo "Preflight OK."
+	@if [ -f /tmp/astonish-e2e-inspect.json ] && kill -0 $$(node -e "console.log(JSON.parse(require('fs').readFileSync('/tmp/astonish-e2e-inspect.json')).pid)" 2>/dev/null) 2>/dev/null; then \
+		echo "Inspector already running. Stop it first with: make test-e2e-inspect-stop"; \
+		exit 1; \
+	fi
+	@rm -f /tmp/astonish-e2e-inspect.json /tmp/astonish-e2e-inspect.secret
+	@echo ""
+	@echo "Draining any sandbox pods left over from previous runs..."
+	@$(E2E_INSPECT_BIN) --stop-pods 2>&1 | sed 's/^/  /'
+	@echo ""
+	@echo "Starting e2e inspector on port $(E2E_INSPECT_PORT) (log: $(E2E_INSPECT_LOG))..."
+	@nohup $(E2E_INSPECT_BIN) > $(E2E_INSPECT_LOG) 2>&1 & echo $$! > /tmp/astonish-e2e-inspect.pid
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		if [ -f /tmp/astonish-e2e-inspect.json ]; then break; fi; \
+		sleep 1; \
+	done
+	@if [ ! -f /tmp/astonish-e2e-inspect.json ]; then \
+		echo "ERROR: inspector failed to start within 15s. Log:"; \
+		cat $(E2E_INSPECT_LOG); \
+		exit 1; \
+	fi
+	@echo "Inspector started. Tail of startup log:"
+	@tail -10 $(E2E_INSPECT_LOG) | sed 's/^/  /'
+	@echo ""
+	@echo "Running E2E tests against shared inspector instance..."
+	@set -o pipefail; ASTONISH_E2E_KEEP_ALIVE=1 \
+		go test -tags=e2e -count=1 -p 1 -timeout=15m -json ./tests/e2e/... \
+		| node tests/scenarios/stream.mjs /tmp/e2e-results.json; \
+	RESULT=$$?; \
+	node tests/scenarios/parse-run.mjs /tmp/e2e-results.json; \
+	echo ""; \
+	if [ $$RESULT -ne 0 ]; then \
+		echo "Some tests failed — inspector is still running so you can investigate."; \
+	fi; \
+	echo ""; \
+	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"; \
+	echo "Inspector still running with all tests' chat sessions captured."; \
+	echo ""; \
+	echo "Open in browser:"; \
+	HOST=$$(hostname -f 2>/dev/null || hostname); \
+	echo "  http://localhost:$(E2E_INSPECT_PORT)        (from this host)"; \
+	if [ "$$HOST" != "localhost" ] && [ -n "$$HOST" ]; then \
+		echo "  http://$$HOST:$(E2E_INSPECT_PORT)  (from any host that can reach this one)"; \
+	fi; \
+	echo ""; \
+	echo "Or tunnel from your laptop:"; \
+	echo "  ssh -L $(E2E_INSPECT_PORT):localhost:$(E2E_INSPECT_PORT) $${USER}@$$HOST"; \
+	echo "  Then open: http://localhost:$(E2E_INSPECT_PORT)"; \
+	echo ""; \
+	$(E2E_INSPECT_BIN) --info; \
+	echo ""; \
+	echo "Stop inspector:           make test-e2e-inspect-stop"; \
+	echo "Drain sandbox pods only:  $(E2E_INSPECT_BIN) --stop-pods"; \
+	echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Stop inspector + drop its databases + clean tmp files. Always idempotent:
+# safe to run when nothing is running, when only DBs are orphaned, or when
+# only state files are stale. Order: kill first (using PID file or pgrep
+# fallback), then call `e2e-inspector --cleanup` which drops the DBs and
+# removes /tmp/astonish-e2e-inspect-* dirs and state files.
+test-e2e-inspect-stop: $(E2E_INSPECT_BIN)
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then echo "ERROR: ASTONISH_TEST_DSN required (used to drop databases)"; exit 1; fi
+	@PIDS=""; \
+	if [ -f /tmp/astonish-e2e-inspect.pid ]; then \
+		FILE_PID=$$(cat /tmp/astonish-e2e-inspect.pid 2>/dev/null); \
+		if [ -n "$$FILE_PID" ] && kill -0 $$FILE_PID 2>/dev/null; then \
+			PIDS="$$FILE_PID"; \
+		fi; \
+	fi; \
+	PGREP_PIDS=$$(pgrep -x e2e-inspector 2>/dev/null || true); \
+	for P in $$PGREP_PIDS; do \
+		case " $$PIDS " in *" $$P "*) ;; *) PIDS="$$PIDS $$P" ;; esac; \
+	done; \
+	if [ -n "$$PIDS" ]; then \
+		for PID in $$PIDS; do \
+			echo "Stopping inspector (PID $$PID)..."; \
+			kill -TERM $$PID 2>/dev/null || true; \
+		done; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			ALIVE=""; \
+			for PID in $$PIDS; do \
+				if kill -0 $$PID 2>/dev/null; then ALIVE="$$ALIVE $$PID"; fi; \
+			done; \
+			[ -z "$$ALIVE" ] && break; \
+			sleep 1; \
+		done; \
+		for PID in $$PIDS; do \
+			if kill -0 $$PID 2>/dev/null; then \
+				echo "PID $$PID did not exit gracefully, sending SIGKILL"; \
+				kill -KILL $$PID 2>/dev/null || true; \
+			fi; \
+		done; \
+	else \
+		echo "No inspector process running."; \
+	fi
+	@rm -f /tmp/astonish-e2e-inspect.pid
+	@$(E2E_INSPECT_BIN) --cleanup
+
+# Scenario coverage report — reads YAML catalogs under tests/scenarios/
+scenario-coverage:
+	@node tests/scenarios/report.mjs
 
 # Install to ~/bin
 install: build-all
@@ -127,23 +374,22 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-up e2e-down e2e-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
 
-# E2E Testing - Docker-based isolated environment
-e2e-up:
+# Docker Test Environment - isolated environment for running integration/E2E tests
+e2e-env-up:
 	@echo "Starting isolated test environment..."
 	docker compose -f docker-compose.e2e.yml up -d --build
 	@echo "Astonish running at http://localhost:9393"
 
-e2e-down:
+e2e-env-down:
 	@echo "Stopping test environment..."
 	docker compose -f docker-compose.e2e.yml down
 	@echo "Test environment stopped."
 
-e2e-rebuild:
+e2e-env-rebuild:
 	@echo "Rebuilding test environment..."
 	docker compose -f docker-compose.e2e.yml down
-	docker compose -f docker-compose.e2e.yml up -d --build
 	docker compose -f docker-compose.e2e.yml up -d --build
 	@echo "Astonish running at http://localhost:9393"
 

@@ -1,0 +1,78 @@
+# Apps View — E2E Scenario Catalog
+# Real user journeys exercised against a running Astonish platform.
+# Unit-level UI rendering tests (Vitest) are NOT tracked here.
+#
+# Status: covered | partial | missing
+# Priority: P0 (must-have) | P1 (important) | P2 (nice-to-have)
+
+scenarios:
+
+  # ---------------------------------------------------------------------------
+  # App Generation
+  # ---------------------------------------------------------------------------
+
+  - id: APPS-001
+    title: "Generate an app from chat and save it"
+    user_story: |
+      As a user, I ask the agent to build an app in chat. The LLM
+      generates the code, the server returns it via SSE, and I save it.
+      The app is persisted and appears in the apps list API.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: APPS-002
+    title: "Iterate on an app and create a new version"
+    user_story: |
+      As a user, I ask the agent to improve an existing app. The LLM
+      generates an updated version, I save it, and the apps API returns
+      the new version while preserving the previous one.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # App CRUD
+  # ---------------------------------------------------------------------------
+
+  - id: APPS-003
+    title: "List, read, and delete an app"
+    user_story: |
+      As a user, I create an app, verify it in the list API, read its
+      code and metadata, delete it, and confirm it's gone.
+    priority: P0
+    status: missing
+    test_refs: []
+
+  - id: APPS-004
+    title: "Publish personal app to team scope"
+    user_story: |
+      As a user, I publish a personal app to my team. Other team members
+      can now see it in their apps list.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  - id: APPS-005
+    title: "Fork a team app to personal scope"
+    user_story: |
+      As a user, I fork a team app. I get my own copy that I can edit
+      independently without affecting the team version.
+    priority: P1
+    status: missing
+    test_refs: []
+
+  # ---------------------------------------------------------------------------
+  # App Execution
+  # ---------------------------------------------------------------------------
+
+  - id: APPS-006
+    title: "App preview renders and responds to data requests"
+    user_story: |
+      As a user, I open an app that uses useData/useAction hooks. The
+      server proxies the requests, the app receives real data, and
+      renders correctly in the preview iframe.
+    priority: P1
+    status: missing
+    test_refs: []
+    notes: "Requires running sandbox with iframe communication."

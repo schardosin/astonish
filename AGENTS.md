@@ -32,8 +32,9 @@ make studio              # Production mode (serves built UI)
 make studio-dev          # Dev mode (live UI reload on http://localhost:5173)
 
 # Run all tests
-go test ./...
-make test
+make test-unit           # Go + frontend unit tests (fast, no external deps)
+make test-integration    # Integration tests (needs ASTONISH_TEST_DSN)
+make test-e2e            # E2E tests (needs ASTONISH_TEST_DSN + provider API key + kubectl)
 
 # Run single test
 go test ./pkg/tools -run TestFileTree

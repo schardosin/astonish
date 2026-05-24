@@ -162,11 +162,19 @@ func SchedulerStoreFromContext(ctx context.Context) SchedulerStore {
 	return ss
 }
 
-// MCPServerStores holds references to both org and team MCP server stores
+// MCPServerStores holds references to platform/org/team MCP server stores
 // for use in tool context injection.
+//
+// Cascade contract: at chat-build time the agent must see MCP servers from
+// ALL three tiers, with team overriding org overriding platform on name
+// collisions (mirrors loadMCPConfigForRequest in pkg/api/request_helpers.go).
+// Platform-tier installs (e.g. standard servers like Tavily) MUST be visible
+// to chats in every org/team — that is the documented inheritance model
+// (see Services.PlatformMCPServers docstring).
 type MCPServerStores struct {
-	Org  MCPServerStore // org-level MCP server store (nil if not in platform mode)
-	Team MCPServerStore // team-level MCP server store (nil if not in platform mode)
+	Platform MCPServerStore // platform-wide MCP server store (nil in personal mode); cascades into all orgs/teams
+	Org      MCPServerStore // org-level MCP server store (nil if not in platform mode)
+	Team     MCPServerStore // team-level MCP server store (nil if not in platform mode)
 }
 
 // WithMCPServerStores returns a new context containing the MCPServerStores.

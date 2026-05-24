@@ -1063,7 +1063,7 @@ func Run(cfg RunConfig) error {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
 							teamStore := orgStore.ForTeam(fCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
 						}
 					}
 					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore, fleetStores)
@@ -1112,7 +1112,7 @@ func Run(cfg RunConfig) error {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
 							teamStore := orgStore.ForTeam(rCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
 						}
 					}
 					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore, fleetStores)
@@ -1224,7 +1224,7 @@ func Run(cfg RunConfig) error {
 					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
 						teamStore := orgStore.ForTeam("general")
 						fleetPlanStore = teamStore.FleetPlans()
-						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore)
+						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
 					}
 				}
 				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "", fleetPlanStore, fleetStores)

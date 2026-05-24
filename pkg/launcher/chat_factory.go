@@ -2254,8 +2254,11 @@ func isDaemonRunning() bool {
 
 // loadMCPConfig loads MCP server configurations based on deployment mode.
 // In personal mode, reads from the local mcp_config.json file.
-// In platform mode, reads from the context's org+team MCP server stores
-// and builds a config.MCPConfig with the merged (team overrides org) view.
+// In platform mode, reads from the context's platform+org+team MCP server stores
+// and builds a config.MCPConfig with the merged (team overrides org overrides
+// platform) view. Platform-tier servers are inherited by every org/team — this
+// is the documented inheritance model for standard servers like Tavily that are
+// installed at scope=platform.
 func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, error) {
 	if !platformMode {
 		return config.LoadMCPConfig()
@@ -2268,10 +2271,11 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 	// If not set, extract from the Services in context (set by TenantMiddleware).
 	if mcpStores == nil {
 		svc := store.FromContext(ctx)
-		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		if svc != nil && (svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil) {
 			mcpStores = &store.MCPServerStores{
-				Org:  svc.MCPServers,
-				Team: svc.TeamMCPServers,
+				Platform: svc.PlatformMCPServers,
+				Org:      svc.MCPServers,
+				Team:     svc.TeamMCPServers,
 			}
 		}
 	}
@@ -2283,7 +2287,19 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 
 	merged := make(map[string]config.MCPServerConfig)
 
-	// 1. Load org-level servers as base
+	// 1. Load platform-level servers as base (cascade root).
+	if mcpStores.Platform != nil {
+		platformServers, err := mcpStores.Platform.List(ctx)
+		if err != nil {
+			slog.Warn("failed to load platform MCP servers", "error", err)
+		} else {
+			for _, s := range platformServers {
+				merged[s.Name] = storeMCPServerToConfig(&s)
+			}
+		}
+	}
+
+	// 2. Org servers override platform by name.
 	if mcpStores.Org != nil {
 		orgServers, err := mcpStores.Org.List(ctx)
 		if err != nil {
@@ -2295,7 +2311,7 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 		}
 	}
 
-	// 2. Team servers override org by name
+	// 3. Team servers override org+platform by name.
 	if mcpStores.Team != nil {
 		teamServers, err := mcpStores.Team.List(ctx)
 		if err != nil {
@@ -2309,7 +2325,7 @@ func loadMCPConfig(ctx context.Context, platformMode bool) (*config.MCPConfig, e
 
 	cfg := &config.MCPConfig{MCPServers: merged}
 
-	// 3. Merge standard servers (Tavily, Brave, etc.) that are configured via
+	// 4. Merge standard servers (Tavily, Brave, etc.) that are configured via
 	// config.yaml / credential store. These are never stored in the DB but
 	// should be available in platform mode just as they are in personal mode.
 	// Pass the effective app config so team-level WebSearchTool is honored.
@@ -2330,19 +2346,21 @@ func storeMCPServerToConfig(s *store.MCPServer) config.MCPServerConfig {
 	}
 }
 
-// getPlatformCachedTools extracts cached tool declarations from the platform
-// MCP server stores in the context. It checks both team and org stores
-// (team takes priority by name, matching the override semantics).
+// getPlatformCachedTools extracts cached tool declarations from the MCP server
+// stores in the context. Walks team → org → platform in that order, returning
+// the first tier that has cached_tools for the given server name (matches the
+// override semantics of loadMCPConfig: team beats org beats platform).
 func getPlatformCachedTools(ctx context.Context, serverName string) []cache.ToolEntry {
 	mcpStores := store.MCPServerStoresFromContext(ctx)
 
 	// If not set via dedicated key, try Services from context
 	if mcpStores == nil {
 		svc := store.FromContext(ctx)
-		if svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		if svc != nil && (svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil) {
 			mcpStores = &store.MCPServerStores{
-				Org:  svc.MCPServers,
-				Team: svc.TeamMCPServers,
+				Platform: svc.PlatformMCPServers,
+				Org:      svc.MCPServers,
+				Team:     svc.TeamMCPServers,
 			}
 		}
 	}
@@ -2351,7 +2369,7 @@ func getPlatformCachedTools(ctx context.Context, serverName string) []cache.Tool
 		return nil
 	}
 
-	// Try team first (since it overrides org)
+	// Try team first (highest precedence).
 	if mcpStores.Team != nil {
 		srv, err := mcpStores.Team.Get(ctx, serverName)
 		if err == nil && len(srv.CachedTools) > 0 {
@@ -2359,9 +2377,17 @@ func getPlatformCachedTools(ctx context.Context, serverName string) []cache.Tool
 		}
 	}
 
-	// Fall back to org
+	// Fall back to org.
 	if mcpStores.Org != nil {
 		srv, err := mcpStores.Org.Get(ctx, serverName)
+		if err == nil && len(srv.CachedTools) > 0 {
+			return parseCachedToolsJSON(srv.CachedTools)
+		}
+	}
+
+	// Fall back to platform (cascade root for standard servers like Tavily).
+	if mcpStores.Platform != nil {
+		srv, err := mcpStores.Platform.Get(ctx, serverName)
 		if err == nil && len(srv.CachedTools) > 0 {
 			return parseCachedToolsJSON(srv.CachedTools)
 		}

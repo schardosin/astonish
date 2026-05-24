@@ -201,8 +201,9 @@ func (mts *MultiTenantScheduler) executeJob(
 		Team: teamStore.Skills(),
 	})
 	execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
-		Org:  orgStore.OrgMCPServers(),
-		Team: teamStore.MCPServers(),
+		Platform: mts.pgStore.PlatformMCPServers(),
+		Org:      orgStore.OrgMCPServers(),
+		Team:     teamStore.MCPServers(),
 	})
 	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
@@ -333,7 +334,8 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 		Team: teamStore.Skills(),
 	})
 	execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
-		Team: teamStore.MCPServers(),
+		Platform: mts.pgStore.PlatformMCPServers(),
+		Team:     teamStore.MCPServers(),
 	})
 	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())

@@ -430,6 +430,12 @@ func IsWebSearchConfigured() (bool, string, string) {
 }
 
 // isWebSearchConfiguredWith checks web search config using a pre-loaded AppConfig.
+//
+// Tool names are normalized hyphen→underscore. MCP servers register their tools
+// with underscore identifiers (e.g. tavily_search, tavily_extract); a hyphen
+// form (tavily-search) is never a valid tool function name and would never
+// resolve at the LLM level. Older config.yaml hand-edits and pre-1.0 install
+// flows produced the hyphen form, so we canonicalize at the parse boundary.
 func isWebSearchConfiguredWith(appCfg *config.AppConfig) (bool, string, string) {
 	if appCfg == nil || appCfg.General.WebSearchTool == "" {
 		return false, "", ""
@@ -437,7 +443,7 @@ func isWebSearchConfiguredWith(appCfg *config.AppConfig) (bool, string, string) 
 	// Parse the format "serverName:toolName"
 	parts := strings.SplitN(appCfg.General.WebSearchTool, ":", 2)
 	if len(parts) == 2 {
-		return true, parts[0], parts[1]
+		return true, parts[0], strings.ReplaceAll(parts[1], "-", "_")
 	}
 	// No tool name specified, return just server name
 	return true, parts[0], ""
@@ -456,6 +462,7 @@ func IsWebExtractConfigured() (bool, string, string) {
 }
 
 // isWebExtractConfiguredWith checks web extract config using a pre-loaded AppConfig.
+// See isWebSearchConfiguredWith for the hyphen→underscore normalization rationale.
 func isWebExtractConfiguredWith(appCfg *config.AppConfig) (bool, string, string) {
 	if appCfg == nil || appCfg.General.WebExtractTool == "" {
 		return false, "", ""
@@ -463,7 +470,7 @@ func isWebExtractConfiguredWith(appCfg *config.AppConfig) (bool, string, string)
 	// Parse the format "serverName:toolName"
 	parts := strings.SplitN(appCfg.General.WebExtractTool, ":", 2)
 	if len(parts) == 2 {
-		return true, parts[0], parts[1]
+		return true, parts[0], strings.ReplaceAll(parts[1], "-", "_")
 	}
 	// No tool name specified, return just server name
 	return true, parts[0], ""

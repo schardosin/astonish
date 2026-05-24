@@ -327,10 +327,11 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		if svc.Sessions != nil {
 			handlerSessionStore = svc.Sessions
 		}
-		if svc.Mode == store.ModePlatform && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		if svc.Mode == store.ModePlatform && (svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil) {
 			handlerMCPStores = &store.MCPServerStores{
-				Org:  svc.MCPServers,
-				Team: svc.TeamMCPServers,
+				Platform: svc.PlatformMCPServers,
+				Org:      svc.MCPServers,
+				Team:     svc.TeamMCPServers,
 			}
 		}
 	}

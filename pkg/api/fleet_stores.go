@@ -33,7 +33,11 @@ type FleetStores struct {
 // FleetStoresFromTeam builds a FleetStores from a TeamDataStore and OrgDataStore.
 // Used in the daemon/headless path where we have direct access to the data stores
 // (e.g., fleet starter/recover closures in daemon/run.go).
-func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore) *FleetStores {
+//
+// platformMCP, when non-nil, makes platform-tier MCP servers (e.g. standard
+// servers like Tavily installed at scope=platform) visible to the fleet's chat
+// agents. Pass nil only in personal-mode tests.
+func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore, platformMCP store.MCPServerStore) *FleetStores {
 	if team == nil {
 		return nil
 	}
@@ -49,7 +53,8 @@ func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore) *Flee
 			Team: team.Skills(),
 		},
 		MCPServers: &store.MCPServerStores{
-			Team: team.MCPServers(),
+			Platform: platformMCP,
+			Team:     team.MCPServers(),
 		},
 	}
 
@@ -87,10 +92,11 @@ func FleetStoresFromServices(svc *store.Services) *FleetStores {
 		}
 	}
 
-	if svc.MCPServers != nil || svc.TeamMCPServers != nil {
+	if svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil {
 		fs.MCPServers = &store.MCPServerStores{
-			Org:  svc.MCPServers,
-			Team: svc.TeamMCPServers,
+			Platform: svc.PlatformMCPServers,
+			Org:      svc.MCPServers,
+			Team:     svc.TeamMCPServers,
 		}
 	}
 

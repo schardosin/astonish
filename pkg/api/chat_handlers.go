@@ -729,9 +729,11 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject tenant-scoped MCP server stores into the runner context so that
-	// the chat agent can resolve MCP server configs from org and team stores.
-	if svc := store.FromRequest(r); svc != nil && (svc.MCPServers != nil || svc.TeamMCPServers != nil) {
-		runner.InjectMCPServerStores(svc.MCPServers, svc.TeamMCPServers)
+	// the chat agent can resolve MCP server configs from platform, org, and
+	// team stores. Platform-tier servers (e.g. standard servers like Tavily
+	// installed at scope=platform) cascade down into every org/team chat.
+	if svc := store.FromRequest(r); svc != nil && (svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil) {
+		runner.InjectMCPServerStores(svc.PlatformMCPServers, svc.MCPServers, svc.TeamMCPServers)
 	}
 
 	// Inject tenant-scoped scheduler store into the runner context so that

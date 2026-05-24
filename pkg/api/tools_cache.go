@@ -568,20 +568,36 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 		return GetCachedTools()
 	}
 
-	// Platform mode: build merged tool list from DB stores (team overrides org by name)
+	// Platform mode: build merged tool list from DB stores. Cascade is
+	// platform → org → team, with later tiers overriding earlier on name.
+	// Team-disabled servers explicitly delete the entry so a team can hide a
+	// platform/org-tier server it doesn't want exposed.
 	type toolEntry struct {
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
 
-	// Collect servers: org first, team overrides
+	// Collect servers: platform → org → team
 	serverMap := make(map[string]json.RawMessage) // name -> cachedTools
+	if svc.PlatformMCPServers != nil {
+		platformServers, err := svc.PlatformMCPServers.List(r.Context())
+		if err == nil {
+			for _, s := range platformServers {
+				if s.IsEnabled() && len(s.CachedTools) > 0 {
+					serverMap[s.Name] = s.CachedTools
+				}
+			}
+		}
+	}
 	if svc.MCPServers != nil {
 		orgServers, err := svc.MCPServers.List(r.Context())
 		if err == nil {
 			for _, s := range orgServers {
 				if s.IsEnabled() && len(s.CachedTools) > 0 {
 					serverMap[s.Name] = s.CachedTools
+				} else if !s.IsEnabled() {
+					// Org disabled server overrides platform enabled
+					delete(serverMap, s.Name)
 				}
 			}
 		}
@@ -593,7 +609,7 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 				if s.IsEnabled() && len(s.CachedTools) > 0 {
 					serverMap[s.Name] = s.CachedTools
 				} else {
-					// Team disabled server overrides org enabled
+					// Team disabled server overrides org+platform enabled
 					delete(serverMap, s.Name)
 				}
 			}

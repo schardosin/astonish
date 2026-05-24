@@ -148,8 +148,16 @@ func (cr *ChatRunner) InjectDrillReportStore(rs store.DrillReportStore) {
 // InjectMCPServerStores adds tenant-scoped MCP server stores to the runner's context
 // so that the chat agent can resolve MCP server configurations from the database
 // in platform mode. Must be called before Run().
-func (cr *ChatRunner) InjectMCPServerStores(org, team store.MCPServerStore) {
-	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{Org: org, Team: team})
+//
+// All three tiers cascade: platform-tier servers are inherited by every org/team,
+// org-tier servers are inherited by every team within the org, and team-tier
+// servers can override either parent. Pass nil for tiers that don't apply.
+func (cr *ChatRunner) InjectMCPServerStores(platform, org, team store.MCPServerStore) {
+	cr.ctx = store.WithMCPServerStores(cr.ctx, &store.MCPServerStores{
+		Platform: platform,
+		Org:      org,
+		Team:     team,
+	})
 }
 
 // InjectFleetStores adds tenant-scoped fleet template and plan stores to the

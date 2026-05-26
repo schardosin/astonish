@@ -112,6 +112,11 @@ func Bootstrap(t *testing.T) *Harness {
 		return bootstrapShared(t, dsn)
 	}
 
+	// Clean slate: remove any pods left behind by a previously crashed run.
+	SweepAllPods(t)
+	// Post-test: ensure all sandbox pods are cleaned up when the test ends.
+	t.Cleanup(func() { SweepAllPods(t) })
+
 	ctx := context.Background()
 	suffix := deriveSuffix(t.Name())
 

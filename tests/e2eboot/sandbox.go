@@ -122,3 +122,20 @@ func DeletePod(t *testing.T, podName string) {
 		time.Sleep(2 * time.Second)
 	}
 }
+
+// SweepAllPods deletes all pods in the sandbox namespace. This is used as
+// both a pre-test cleanup (remove stale pods from a previously crashed run)
+// and a post-test cleanup (remove pods created during the test). The
+// namespace and PVCs are preserved so the next test run doesn't need to
+// re-provision infrastructure or rebuild the base layer.
+func SweepAllPods(t *testing.T) {
+	t.Helper()
+	ns := SandboxNamespace()
+	out, err := exec.Command("kubectl", "delete", "pods", "--all", "-n", ns,
+		"--grace-period=5", "--ignore-not-found").CombinedOutput()
+	if err != nil {
+		t.Logf("[e2eboot] SweepAllPods: %v (output: %s)", err, strings.TrimSpace(string(out)))
+	} else {
+		t.Logf("[e2eboot] SweepAllPods: cleaned sandbox namespace %s", ns)
+	}
+}

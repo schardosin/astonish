@@ -37,6 +37,11 @@ func bootstrapSQLite(t *testing.T) *Harness {
 		t.Log("[e2eboot] ASTONISH_E2E_KEEP_ALIVE ignored in SQLite mode (always isolated)")
 	}
 
+	// Clean slate: remove any pods left behind by a previously crashed run.
+	SweepAllPods(t)
+	// Post-test: ensure all sandbox pods are cleaned up when the test ends.
+	t.Cleanup(func() { SweepAllPods(t) })
+
 	ctx := context.Background()
 	dataDir := t.TempDir() // auto-cleaned when test ends
 

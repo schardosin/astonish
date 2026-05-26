@@ -13,20 +13,16 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 )
 
-// Advisory lock ID for base config builds.
-// hashtext('astonish-base-config-build') evaluated once.
-const baseConfigBuildLockID int64 = 849271653
-
 // PlatformBaseConfigGetHandler returns the current @base template configuration.
 // GET /api/platform/admin/sandbox/base
 func PlatformBaseConfigGetHandler(w http.ResponseWriter, r *http.Request) {
-	pg := getPlatformPGStore()
-	if pg == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform database not available")
 		return
 	}
 
-	tplStore := pg.SandboxTemplatesPG()
+	tplStore := backend.SandboxTemplates()
 	if tplStore == nil {
 		respondError(w, http.StatusServiceUnavailable, "template store not available")
 		return
@@ -73,35 +69,26 @@ func PlatformBaseConfigGetHandler(w http.ResponseWriter, r *http.Request) {
 // PlatformBaseConfigStatusHandler returns whether a build is in progress.
 // GET /api/platform/admin/sandbox/base/status
 func PlatformBaseConfigStatusHandler(w http.ResponseWriter, r *http.Request) {
-	pg := getPlatformPGStore()
-	if pg == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform database not available")
 		return
 	}
 
-	pool, err := pg.PoolManager().PlatformPool(r.Context())
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get platform pool: %v", err))
+	tplStore := backend.SandboxTemplates()
+	if tplStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "template store not available")
 		return
 	}
 
-	// Try to acquire the advisory lock without blocking.
-	// If we can acquire it, no build is in progress. Release immediately.
-	var acquired bool
-	err = pool.QueryRow(r.Context(),
-		`SELECT pg_try_advisory_lock($1)`, baseConfigBuildLockID,
-	).Scan(&acquired)
+	inProgress, err := tplStore.IsBuildInProgress(r.Context())
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to check build lock: %v", err))
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to check build status: %v", err))
 		return
-	}
-	if acquired {
-		// Release immediately — we just wanted to probe.
-		_, _ = pool.Exec(r.Context(), `SELECT pg_advisory_unlock($1)`, baseConfigBuildLockID)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"in_progress": !acquired})
+	json.NewEncoder(w).Encode(map[string]bool{"in_progress": inProgress})
 }
 
 // PlatformBaseConfigBuildHandler triggers a base template build.
@@ -110,8 +97,8 @@ func PlatformBaseConfigStatusHandler(w http.ResponseWriter, r *http.Request) {
 // Request body: BaseConfig JSON.
 // Response: text/event-stream with progress/done/error events.
 func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
-	pg := getPlatformPGStore()
-	if pg == nil {
+	db := getPlatformBackend()
+	if db == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform database not available")
 		return
 	}
@@ -141,17 +128,14 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Acquire advisory lock (single build at a time).
-	pool, err := pg.PoolManager().PlatformPool(r.Context())
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to get platform pool: %v", err))
+	// Acquire build lock (single build at a time).
+	tplStore := db.SandboxTemplates()
+	if tplStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "template store not available")
 		return
 	}
 
-	var acquired bool
-	err = pool.QueryRow(r.Context(),
-		`SELECT pg_try_advisory_lock($1)`, baseConfigBuildLockID,
-	).Scan(&acquired)
+	acquired, release, err := tplStore.AcquireBuildLock(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to acquire build lock: %v", err))
 		return
@@ -160,10 +144,7 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusConflict, "another base configuration build is already in progress")
 		return
 	}
-	// Release the lock when done.
-	defer func() {
-		_, _ = pool.Exec(r.Context(), `SELECT pg_advisory_unlock($1)`, baseConfigBuildLockID)
-	}()
+	defer release()
 
 	// Set up SSE streaming.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -177,7 +158,7 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get the sandbox backend.
-	backend, cleanup, err := sandboxBackendForRequest(r)
+	sbBackend, cleanup, err := sandboxBackendForRequest(r)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -191,16 +172,9 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		"message": fmt.Sprintf("Starting base configuration build (%d steps)...", len(steps)),
 	})
 
-	// Build the template. Use BuildTemplate with progress reporting.
-	// We wrap each step in a progress callback.
+	// Build the template.
 	templateID := fmt.Sprintf("@base-config-%d", time.Now().UnixMilli())
 
-	// The BuildTemplate in K8s runs steps sequentially, but doesn't have
-	// built-in per-step progress. We'll send progress before starting
-	// each step by wrapping the steps with markers.
-	// Actually, BuildTemplate.Steps are opaque — we can't easily hook into
-	// each step's execution from outside. Instead, we'll send progress
-	// for the overall build and rely on the step count for the UI.
 	for i, step := range steps {
 		// Truncate for display.
 		display := step
@@ -218,9 +192,9 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		"message": "Executing build steps in sandbox pod (this may take several minutes)...",
 	})
 
-	artifact, err := backend.BuildTemplate(r.Context(), sandbox.TemplateBuildSpec{
+	artifact, err := sbBackend.BuildTemplate(r.Context(), sandbox.TemplateBuildSpec{
 		TemplateID:   templateID,
-		ParentLayers: []string{sandbox.BaseTemplateID}, // always-fresh: build on top of the seed-Job @base rootfs
+		ParentLayers: []string{sandbox.BaseTemplateID},
 		Steps:        steps,
 	})
 	if err != nil {
@@ -233,8 +207,7 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	// Persist: register the layer and update @base.
-	layers := pg.SandboxLayers()
-	tplStore := pg.SandboxTemplatesPG()
+	layers := db.SandboxLayers()
 
 	// Get old top_layer_id for ref_count management.
 	oldLayerID, err := tplStore.GetBaseTopLayerID(r.Context())
@@ -280,7 +253,6 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		if err := layers.DecrementRefCount(r.Context(), oldLayerID); err != nil {
 			slog.Error("failed to decrement old layer ref_count", "layer", oldLayerID, "error", err)
 		}
-		// TODO: trigger synchronous GC if ref_count reached 0
 	}
 
 	SendSSE(w, flusher, "done", map[string]any{

@@ -5,22 +5,22 @@ import (
 	"fmt"
 
 	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
-// pgDeliveryResolver implements scheduler.DeliveryResolver using the platform
+// deliveryResolver implements scheduler.DeliveryResolver using the platform
 // store to look up user channel links and team membership.
-type pgDeliveryResolver struct {
-	pgStore *pgstore.PGStore
+type deliveryResolver struct {
+	backend store.PlatformBackend
 }
 
-// Ensure pgDeliveryResolver implements scheduler.DeliveryResolver.
-var _ scheduler.DeliveryResolver = (*pgDeliveryResolver)(nil)
+// Ensure deliveryResolver implements scheduler.DeliveryResolver.
+var _ scheduler.DeliveryResolver = (*deliveryResolver)(nil)
 
 // ResolveUserChannels returns all active (enabled+verified) channel targets
 // for a given platform user ID.
-func (r *pgDeliveryResolver) ResolveUserChannels(ctx context.Context, userID string) ([]scheduler.DeliveryTarget, error) {
-	links, err := r.pgStore.UserChannels().ListByUser(ctx, userID)
+func (r *deliveryResolver) ResolveUserChannels(ctx context.Context, userID string) ([]scheduler.DeliveryTarget, error) {
+	links, err := r.backend.UserChannels().ListByUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list channels for user %s: %w", userID, err)
 	}
@@ -43,8 +43,8 @@ func (r *pgDeliveryResolver) ResolveUserChannels(ctx context.Context, userID str
 }
 
 // ResolveTeamMembers returns all user IDs that are members of the given org/team.
-func (r *pgDeliveryResolver) ResolveTeamMembers(ctx context.Context, orgSlug, teamSlug string) ([]string, error) {
-	orgStore, err := r.pgStore.ForOrg(orgSlug)
+func (r *deliveryResolver) ResolveTeamMembers(ctx context.Context, orgSlug, teamSlug string) ([]string, error) {
+	orgStore, err := r.backend.ForOrg(orgSlug)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve org %s: %w", orgSlug, err)
 	}

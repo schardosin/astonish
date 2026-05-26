@@ -5,17 +5,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-)
 
-// PendingLinkCode represents a transient channel-linking verification code stored in PG.
-type PendingLinkCode struct {
-	Code      string    `json:"code"`
-	UserID    string    `json:"user_id"`
-	Email     string    `json:"email"`
-	Channel   string    `json:"channel"`
-	CreatedAt time.Time `json:"created_at"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
+	"github.com/schardosin/astonish/pkg/store"
+)
 
 // PGLinkCodeStore manages pending link codes in the platform database.
 type PGLinkCodeStore struct {
@@ -45,16 +37,16 @@ func (s *PGLinkCodeStore) Generate(ctx context.Context, code, userID, email, cha
 
 // Consume looks up a code, returns the pending link if valid, and removes it.
 // Returns nil if the code is invalid or expired.
-func (s *PGLinkCodeStore) Consume(ctx context.Context, code string) (*PendingLinkCode, error) {
-	link := &PendingLinkCode{}
+func (s *PGLinkCodeStore) Consume(ctx context.Context, code string) (*store.LinkCode, error) {
+	var link store.LinkCode
 	err := s.pool.QueryRow(ctx,
 		`DELETE FROM pending_link_codes WHERE code = $1 AND expires_at > now()
 		 RETURNING code, user_id, email, channel, created_at, expires_at`, code,
 	).Scan(&link.Code, &link.UserID, &link.Email, &link.Channel, &link.CreatedAt, &link.ExpiresAt)
 	if err != nil {
-		return nil, err
+		return nil, nil // not found or expired
 	}
-	return link, nil
+	return &link, nil
 }
 
 // Cleanup removes expired link codes.
@@ -62,3 +54,6 @@ func (s *PGLinkCodeStore) Cleanup(ctx context.Context) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM pending_link_codes WHERE expires_at < now()`)
 	return err
 }
+
+// Compile-time interface check
+var _ store.LinkCodeStore = (*PGLinkCodeStore)(nil)

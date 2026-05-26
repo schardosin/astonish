@@ -24,11 +24,11 @@
 package chat_auth
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/schardosin/astonish/tests/e2eboot"
 )
@@ -94,22 +94,18 @@ func TestE2E_StandardMCPInstall_PlatformEncryptionEnvelope(t *testing.T) {
 }
 
 // TestE2E_StandardMCPInstall_PlatformCascadeVisibleToOrgChat installs Tavily
-// at scope=platform, then issues a tools-listing request through the same
-// HTTP path the chat agent uses to assemble its tool set. The platform-tier
-// install MUST be visible without any per-org/team install: that is the
-// documented inheritance contract for Services.PlatformMCPServers and is
-// what users expect when they install a standard server "for everyone."
+// at scope=platform, then verifies the platform-tier cascade contract: a
+// server with cached_tools at the platform tier MUST be visible to org/team-
+// scoped GET /api/tools without any per-org/team install.
 //
-// We intentionally test through GET /api/tools rather than fabricating a chat
-// turn so the assertion is deterministic and provider-key-free: GET /api/tools
-// shares the same DB-walking logic (tools_cache.go GetCachedToolsForRequest)
-// with the chat path's tool list assembly (chat_factory.go loadMCPConfig +
-// getPlatformCachedTools), and both were patched together. If /api/tools
-// can see tavily_search after a platform install, the chat path will too.
+// This test isolates the cascade logic from sandbox-based discovery. After
+// install, it writes synthetic cached_tools directly to the platform MCP store
+// (simulating what asyncDiscoverAndCacheTools would produce), then asserts
+// visibility through the same HTTP path the chat agent uses.
 //
-// To make this test independent of any pre-existing tools cache, we wait for
-// the discovery goroutine spawned by installStandardServerPlatform to finish
-// (it writes cached_tools back to the platform store). The wait is bounded.
+// Real end-to-end discovery (sandbox container creation → MCP server startup →
+// tool listing → DB caching) is covered by TestE2E_Apps_MCPDataSource which
+// exercises the full path with a real Tavily API key and ensureBaseConfigured.
 //
 // COVERS: CHAT-070
 func TestE2E_StandardMCPInstall_PlatformCascadeVisibleToOrgChat(t *testing.T) {
@@ -129,30 +125,22 @@ func TestE2E_StandardMCPInstall_PlatformCascadeVisibleToOrgChat(t *testing.T) {
 		t.Fatalf("install returned %d: %s", resp.StatusCode, body)
 	}
 
-	// installStandardServerPlatform discovers tools in a background goroutine
-	// (pkg/api/standard_servers_handler.go ~287). Poll briefly for tavily_search
-	// to appear in /api/tools. This polls the SAME endpoint the UI uses, which
-	// shares its cascade logic with the chat agent.
-	if !waitForToolInList(t, h, "tavily_search", 10) {
-		// Diagnostic: dump current tool list so a cascade regression is visible.
+	// Simulate what async discovery would produce: write cached_tools directly
+	// to the platform MCP store. This isolates the cascade contract test from
+	// sandbox availability, Node.js presence, and network access to npm.
+	syntheticTools := json.RawMessage(`[{"name":"tavily_search","description":"Search the web using Tavily"}]`)
+	platformMCP := h.PlatformBackend().PlatformMCPServers()
+	if err := platformMCP.UpdateCachedTools(context.Background(), "tavily", syntheticTools); err != nil {
+		t.Fatalf("failed to write synthetic cached_tools: %v", err)
+	}
+
+	// The cascade contract: platform-tier cached_tools MUST be visible to an
+	// org/team-scoped /api/tools request (the same path chat uses).
+	if !hasToolInList(t, h, "tavily_search") {
 		dump := dumpToolList(t, h)
-		t.Fatalf("CHAT-070 regression: platform-tier tavily_search not visible to org-scoped /api/tools call within timeout. "+
+		t.Fatalf("CHAT-070 regression: platform-tier tavily_search not visible to org-scoped /api/tools call. "+
 			"This means platform MCP servers are not cascading into the chat tool list. Tools seen: %s", dump)
 	}
-}
-
-// waitForToolInList polls GET /api/tools up to maxAttempts times (200ms apart)
-// looking for a tool with the given name. Returns true on first sighting.
-func waitForToolInList(t *testing.T, h *e2eboot.Harness, toolName string, maxAttempts int) bool {
-	t.Helper()
-	for i := 0; i < maxAttempts; i++ {
-		if hasToolInList(t, h, toolName) {
-			return true
-		}
-		// Short sleep between polls; intentionally short so total budget is small.
-		sleepMillis(200)
-	}
-	return false
 }
 
 func hasToolInList(t *testing.T, h *e2eboot.Harness, toolName string) bool {
@@ -189,10 +177,6 @@ func dumpToolList(t *testing.T, h *e2eboot.Harness) string {
 		Status: resp.StatusCode,
 	})
 	return string(b)
-}
-
-func sleepMillis(ms int) {
-	time.Sleep(time.Duration(ms) * time.Millisecond)
 }
 
 // findEnvForServer walks the loosely-typed servers-list payload and returns

@@ -32,7 +32,7 @@ func mcpManagerForRequest(r *http.Request, serverName string) (*mcp.Manager, err
 		}
 		return mcp.NewManagerFromConfig(cfg), nil
 	}
-	return mcp.NewManager()
+	return nil, fmt.Errorf("MCP server store not available")
 }
 
 // ToolSchema represents a tool's parameter schema

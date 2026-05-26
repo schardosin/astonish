@@ -318,20 +318,10 @@ func topLayerArg(p *string) any {
 // BaseConfig helpers (for the @base template's base_config JSONB)
 // ---------------------------------------------------------------------------
 
-// BaseConfigInfo holds the current @base template's configuration and metadata.
-type BaseConfigInfo struct {
-	LayerID      string
-	SizeBytes    int64
-	ConfigJSON   []byte // NULL represented as nil
-	ConfiguredBy string
-	ConfiguredAt *time.Time
-	UpdatedAt    time.Time
-}
-
 // GetBaseConfig retrieves the @base template's current configuration state.
 // Returns nil if the @base template does not exist.
-func (s *PGSandboxTemplateStore) GetBaseConfig(ctx context.Context) (*BaseConfigInfo, error) {
-	var info BaseConfigInfo
+func (s *PGSandboxTemplateStore) GetBaseConfig(ctx context.Context) (*store.BaseConfigInfo, error) {
+	var info store.BaseConfigInfo
 	var topLayer *string
 	var configJSON []byte
 	var configuredBy *string
@@ -404,3 +394,46 @@ func (s *PGSandboxTemplateStore) GetBaseTopLayerID(ctx context.Context) (string,
 	}
 	return *topLayer, nil
 }
+
+// baseConfigBuildLockID is the PG advisory lock ID for base config builds.
+// hashtext('astonish-base-config-build') evaluated once.
+const baseConfigBuildLockID int64 = 849271653
+
+// AcquireBuildLock uses PG advisory locks to ensure only one base config
+// build runs at a time. Returns (true, releaseFunc, nil) if acquired.
+func (s *PGSandboxTemplateStore) AcquireBuildLock(ctx context.Context) (bool, func(), error) {
+	var acquired bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1)`, baseConfigBuildLockID,
+	).Scan(&acquired)
+	if err != nil {
+		return false, nil, fmt.Errorf("AcquireBuildLock: %w", err)
+	}
+	if !acquired {
+		return false, nil, nil
+	}
+	release := func() {
+		_, _ = s.pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, baseConfigBuildLockID)
+	}
+	return true, release, nil
+}
+
+// IsBuildInProgress checks if a base config build is currently running by
+// probing the PG advisory lock.
+func (s *PGSandboxTemplateStore) IsBuildInProgress(ctx context.Context) (bool, error) {
+	var acquired bool
+	err := s.pool.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock($1)`, baseConfigBuildLockID,
+	).Scan(&acquired)
+	if err != nil {
+		return false, fmt.Errorf("IsBuildInProgress: %w", err)
+	}
+	if acquired {
+		// Release immediately — we just wanted to probe.
+		_, _ = s.pool.Exec(ctx, `SELECT pg_advisory_unlock($1)`, baseConfigBuildLockID)
+	}
+	return !acquired, nil
+}
+
+// Compile-time interface check
+var _ store.SandboxTemplateStore = (*PGSandboxTemplateStore)(nil)

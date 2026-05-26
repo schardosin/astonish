@@ -193,3 +193,6 @@ func isValidSchemaName(name string) bool {
 
 // Compile-time check that pgAppStateSQLStore implements store.AppStateSQLStore.
 var _ store.AppStateSQLStore = (*pgAppStateSQLStore)(nil)
+
+// IsPGBackend marks this as a PostgreSQL backend for dialect detection.
+func (s *pgAppStateSQLStore) IsPGBackend() {}

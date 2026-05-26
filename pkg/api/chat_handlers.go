@@ -560,13 +560,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					SessionID:   req.SessionID,
 				}
 				var saveErr error
-				// Platform mode: save to personal store first; personal mode: write to disk
+				// Save to personal store first, team store as fallback.
 				if svc := store.FromRequest(r); svc != nil && svc.PersonalApps != nil {
 					savedPath, saveErr = svc.PersonalApps.Save(r.Context(), savedApp)
-				} else if svc != nil && svc.Apps != nil {
+				} else if svc := store.FromRequest(r); svc != nil && svc.Apps != nil {
 					savedPath, saveErr = svc.Apps.Save(r.Context(), savedApp)
 				} else {
-					savedPath, saveErr = apps.SaveApp(savedApp)
+					saveErr = fmt.Errorf("app store not available")
 				}
 				if saveErr != nil {
 					slog.Error("failed to save app", "error", saveErr)

@@ -29,21 +29,24 @@ interface ToolRunResult {
 interface MCPInspectorProps {
   serverName: string
   teamSlug?: string
+  scope?: string  // 'team' | 'platform' | undefined (org default)
   onClose: () => void
 }
 
 // Fetch tools for a specific MCP server
-const fetchServerTools = async (serverName: string, teamSlug?: string): Promise<{ tools?: MCPTool[]; error?: string }> => {
-  const scope = teamSlug ? '?scope=team' : ''
-  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools${scope}`, undefined, teamSlug)
+const fetchServerTools = async (serverName: string, teamSlug?: string, scope?: string): Promise<{ tools?: MCPTool[]; error?: string }> => {
+  const scopeParam = scope || (teamSlug ? 'team' : '')
+  const scopeQuery = scopeParam ? `?scope=${scopeParam}` : ''
+  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools${scopeQuery}`, undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch tools')
   return res.json()
 }
 
 // Run a tool on a specific MCP server
-const runServerTool = async (serverName: string, toolName: string, params: Record<string, any>, teamSlug?: string): Promise<ToolRunResult> => {
-  const scope = teamSlug ? '?scope=team' : ''
-  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/run${scope}`, {
+const runServerTool = async (serverName: string, toolName: string, params: Record<string, any>, teamSlug?: string, scope?: string): Promise<ToolRunResult> => {
+  const scopeParam = scope || (teamSlug ? 'team' : '')
+  const scopeQuery = scopeParam ? `?scope=${scopeParam}` : ''
+  const res = await teamFetch(`/api/mcp/${encodeURIComponent(serverName)}/tools/${encodeURIComponent(toolName)}/run${scopeQuery}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ params })
@@ -52,7 +55,7 @@ const runServerTool = async (serverName: string, toolName: string, params: Recor
   return res.json()
 }
 
-export default function MCPInspector({ serverName, teamSlug, onClose }: MCPInspectorProps) {
+export default function MCPInspector({ serverName, teamSlug, scope, onClose }: MCPInspectorProps) {
   const [tools, setTools] = useState<MCPTool[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +70,7 @@ export default function MCPInspector({ serverName, teamSlug, onClose }: MCPInspe
   useEffect(() => {
     setLoading(true)
     setError(null)
-    fetchServerTools(serverName, teamSlug)
+    fetchServerTools(serverName, teamSlug, scope)
       .then(data => {
         if (data.error) {
           setError(data.error)
@@ -80,7 +83,7 @@ export default function MCPInspector({ serverName, teamSlug, onClose }: MCPInspe
       })
       .catch(err => setError(err.message))
       .finally(() => setLoading(false))
-  }, [serverName])
+  }, [serverName, teamSlug, scope])
 
   // Filter tools based on search
   const filteredTools = useMemo(() => {
@@ -106,7 +109,7 @@ export default function MCPInspector({ serverName, teamSlug, onClose }: MCPInspe
     setResult(null)
     setResultError(null)
     try {
-      const res = await runServerTool(serverName, selectedTool.name, params, teamSlug)
+      const res = await runServerTool(serverName, selectedTool.name, params, teamSlug, scope)
       if (res.success) {
         setResult(res)
       } else {

@@ -2,13 +2,18 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 )
 
 // PlatformInitRequest is the request body for POST /api/platform/init.
@@ -174,6 +179,144 @@ func cleanPGError(msg string) string {
 	return msg
 }
 
+// SQLitePlatformInitRequest is the request body for POST /api/platform/init/sqlite.
+type SQLitePlatformInitRequest struct {
+	DataDir      string `json:"data_dir"`
+	OrgName      string `json:"org_name"`
+	OrgSlug      string `json:"org_slug"`
+	AdminEmail   string `json:"admin_email"`
+	AdminName    string `json:"admin_name"`
+	AdminPassword string `json:"admin_password"`
+}
+
+// SQLitePlatformInitHandler handles POST /api/platform/init/sqlite.
+//
+// It creates the SQLite platform database, bootstraps the first user/org/team,
+// generates a JWT secret and master encryption key, and saves the config.
+// This endpoint only works when the system is NOT already running in platform mode.
+func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
+	// Guard: refuse if already in platform mode.
+	cfg, err := config.LoadAppConfig()
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to load config: " + err.Error(),
+		})
+		return
+	}
+	if cfg.Storage.IsPostgres() || cfg.Storage.IsSQLite() {
+		respondJSON(w, http.StatusConflict, PlatformInitResponse{
+			Error: "Platform mode is already configured. To reconfigure, edit config.yaml directly.",
+		})
+		return
+	}
+
+	var req SQLitePlatformInitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
+			Error: "Invalid request body: " + err.Error(),
+		})
+		return
+	}
+
+	// Validate required fields.
+	if req.AdminEmail == "" {
+		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
+			Error: "Admin email is required",
+		})
+		return
+	}
+	if req.AdminPassword == "" || len(req.AdminPassword) < 8 {
+		respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
+			Error: "Admin password must be at least 8 characters",
+		})
+		return
+	}
+	if req.OrgName == "" {
+		req.OrgName = "My Organization"
+	}
+	if req.OrgSlug == "" {
+		req.OrgSlug = "default"
+	}
+
+	// Validate slug format.
+	for _, ch := range req.OrgSlug {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+			respondJSON(w, http.StatusBadRequest, PlatformInitResponse{
+				Error: "Organization slug must be lowercase alphanumeric with hyphens/underscores",
+			})
+			return
+		}
+	}
+
+	// Determine data directory.
+	dataDir := req.DataDir
+	if dataDir == "" {
+		dataDir = cfg.Storage.SQLite.GetDataDir()
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	// Create the SQLite store (opens/creates platform.db, runs migrations).
+	sqlStore, err := sqlitestore.New(ctx, dataDir)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to initialize SQLite database: " + err.Error(),
+		})
+		return
+	}
+	defer sqlStore.Close()
+
+	// Bootstrap: create first user, org, team.
+	if err := sqlStore.Bootstrap(ctx, sqlitestore.BootstrapConfig{
+		Email:       req.AdminEmail,
+		DisplayName: req.AdminName,
+		Password:    req.AdminPassword,
+		OrgName:     req.OrgName,
+		OrgSlug:     req.OrgSlug,
+		TeamName:    "General",
+		TeamSlug:    "general",
+	}); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to bootstrap platform: " + err.Error(),
+		})
+		return
+	}
+
+	// Generate master encryption key and save to .store_key file.
+	masterKey := make([]byte, 32)
+	if _, err := rand.Read(masterKey); err == nil {
+		masterKeyHex := hex.EncodeToString(masterKey)
+		if configDir, dirErr := config.GetConfigDir(); dirErr == nil {
+			keyPath := filepath.Join(configDir, ".store_key")
+			_ = os.WriteFile(keyPath, []byte(masterKeyHex), 0600)
+		}
+	}
+
+	// Generate JWT secret and save config.
+	jwtSecret := config.GenerateJWTSecret()
+
+	cfg.Storage.Backend = "sqlite"
+	cfg.Storage.SQLite.DataDir = dataDir
+	cfg.Storage.Auth.Mode = "builtin"
+	cfg.Storage.Auth.JWTSecret = jwtSecret
+	cfg.Storage.Auth.DefaultOrgName = req.OrgName
+	cfg.Storage.Auth.DefaultOrgSlug = req.OrgSlug
+
+	if err := config.SaveAppConfig(cfg); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Platform initialized but failed to save config: " + err.Error(),
+		})
+		return
+	}
+
+	respondJSON(w, http.StatusOK, PlatformInitResponse{
+		Success:         true,
+		Message:         "SQLite platform initialized successfully. Please restart Astonish to activate platform mode.",
+		RestartRequired: true,
+	})
+}
+
 // DeploymentModeHandler handles GET /api/platform/mode.
 // Returns the current deployment mode so the frontend can adapt.
 func DeploymentModeHandler(w http.ResponseWriter, r *http.Request) {
@@ -188,6 +331,8 @@ func DeploymentModeHandler(w http.ResponseWriter, r *http.Request) {
 	mode := "personal"
 	if cfg.Storage.IsPostgres() {
 		mode = "platform"
+	} else if cfg.Storage.IsSQLite() {
+		mode = "sqlite"
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -208,10 +353,10 @@ func PlatformInitStatusHandler(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 
-	configured := cfg.Storage.IsPostgres()
+	configured := cfg.Storage.IsPostgres() || cfg.Storage.IsSQLite()
 	initialized := false
 
-	if configured {
+	if cfg.Storage.IsPostgres() {
 		// Try connecting to verify the database is actually accessible.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -220,6 +365,17 @@ func PlatformInitStatusHandler(w http.ResponseWriter, _ *http.Request) {
 		if pgErr == nil {
 			initialized = true
 			pgStore.Close()
+		}
+	} else if cfg.Storage.IsSQLite() {
+		// Check that the platform.db exists and is accessible.
+		dataDir := cfg.Storage.SQLite.GetDataDir()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		sqlStore, sqlErr := sqlitestore.New(ctx, dataDir)
+		if sqlErr == nil {
+			initialized = true
+			sqlStore.Close()
 		}
 	}
 

@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	chromem "github.com/philippgille/chromem-go"
 	"github.com/schardosin/astonish/pkg/agent"
 	"google.golang.org/adk/tool"
 )
@@ -237,7 +236,7 @@ func TestFindFiles(t *testing.T) {
 // --- search_tools tests ---
 
 // testToolEmbeddingFunc creates a bag-of-words embedding function for tests.
-func testToolEmbeddingFunc() chromem.EmbeddingFunc {
+func testToolEmbeddingFunc() agent.EmbedFunc {
 	return func(_ context.Context, text string) ([]float32, error) {
 		vec := make([]float32, 384)
 		words := testToolSplitWords(text)
@@ -292,12 +291,11 @@ func (m searchToolsMockTool) IsLongRunning() bool { return false }
 
 func testToolIndex(t *testing.T) *agent.ToolIndex {
 	t.Helper()
-	db := chromem.NewDB()
-	vs, err := agent.NewChromemToolVectorStore(db, testToolEmbeddingFunc())
+	vs, err := agent.NewInMemoryToolVectorStore(testToolEmbeddingFunc())
 	if err != nil {
-		t.Fatalf("NewChromemToolVectorStore: %v", err)
+		t.Fatalf("NewInMemoryToolVectorStore: %v", err)
 	}
-	idx, err := agent.NewToolIndex(vs, agent.EmbedFunc(testToolEmbeddingFunc()))
+	idx, err := agent.NewToolIndex(vs, testToolEmbeddingFunc())
 	if err != nil {
 		t.Fatalf("NewToolIndex: %v", err)
 	}
@@ -393,12 +391,11 @@ func TestSearchTools_AccessField(t *testing.T) {
 }
 
 func TestSearchTools_NoResults(t *testing.T) {
-	db := chromem.NewDB()
-	vs, vsErr := agent.NewChromemToolVectorStore(db, testToolEmbeddingFunc())
+	vs, vsErr := agent.NewInMemoryToolVectorStore(testToolEmbeddingFunc())
 	if vsErr != nil {
-		t.Fatalf("NewChromemToolVectorStore: %v", vsErr)
+		t.Fatalf("NewInMemoryToolVectorStore: %v", vsErr)
 	}
-	idx, err := agent.NewToolIndex(vs, agent.EmbedFunc(testToolEmbeddingFunc()))
+	idx, err := agent.NewToolIndex(vs, testToolEmbeddingFunc())
 	if err != nil {
 		t.Fatalf("NewToolIndex: %v", err)
 	}

@@ -78,16 +78,20 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
 
-	secrets := pgStore.PlatformSecrets()
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusInternalServerError, "platform secrets not available")
+		return
+	}
 
 	// Load platform settings for channel config
-	settingsStore := pgStore.PlatformSettings()
+	settingsStore := backend.PlatformSettings()
 	settings, _ := settingsStore.Get(r.Context())
 	if settings == nil {
 		settings = &store.PlatformSettings{}
@@ -203,8 +207,8 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
 	}
@@ -227,7 +231,7 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Save non-secret config to PlatformSettings
-	settingsStore := pgStore.PlatformSettings()
+	settingsStore := backend.PlatformSettings()
 	settings, _ := settingsStore.Get(r.Context())
 	if settings == nil {
 		settings = &store.PlatformSettings{}
@@ -296,7 +300,11 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 			allowedKeys[s.key] = true
 		}
 
-		secretStore := pgStore.PlatformSecrets()
+		secretStore := getPlatformSecrets()
+		if secretStore == nil {
+			respondError(w, http.StatusInternalServerError, "platform secrets not available")
+			return
+		}
 		for key, value := range body.Secrets {
 			if !allowedKeys[key] {
 				respondError(w, http.StatusBadRequest, "key "+key+" is not valid for channel type "+channelType)
@@ -334,9 +342,15 @@ func PlatformAdminDeleteChannelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
+		return
+	}
+
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusInternalServerError, "platform secrets not available")
 		return
 	}
 
@@ -348,13 +362,12 @@ func PlatformAdminDeleteChannelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Remove all secrets
-	secrets := pgStore.PlatformSecrets()
 	for _, s := range def.secrets {
 		_ = secrets.RemoveSecret(s.key)
 	}
 
 	// Disable the channel in PlatformSettings
-	settingsStore := pgStore.PlatformSettings()
+	settingsStore := backend.PlatformSettings()
 	settings, _ := settingsStore.Get(r.Context())
 	if settings != nil && settings.Channels != nil {
 		switch channelType {
@@ -402,13 +415,12 @@ func PlatformAdminListWebServicesHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusInternalServerError, "platform secrets not available")
 		return
 	}
 
-	secrets := pgStore.PlatformSecrets()
 	stdServers := config.GetStandardServers()
 	var services []webServiceInfo
 
@@ -434,9 +446,9 @@ func PlatformAdminSetWebServiceKeyHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusInternalServerError, "platform secrets not available")
 		return
 	}
 
@@ -456,7 +468,6 @@ func PlatformAdminSetWebServiceKeyHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	secretKey := "web_servers." + serverID + ".api_key"
-	secrets := pgStore.PlatformSecrets()
 
 	if body.APIKey == "" {
 		_ = secrets.RemoveSecret(secretKey)
@@ -483,9 +494,9 @@ func PlatformAdminDeleteWebServiceHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
-		respondError(w, http.StatusInternalServerError, "platform store not available")
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusInternalServerError, "platform secrets not available")
 		return
 	}
 
@@ -497,7 +508,7 @@ func PlatformAdminDeleteWebServiceHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	secretKey := "web_servers." + serverID + ".api_key"
-	_ = pgStore.PlatformSecrets().RemoveSecret(secretKey)
+	_ = secrets.RemoveSecret(secretKey)
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"message": "API key removed for " + srv.DisplayName,
@@ -509,11 +520,11 @@ func PlatformAdminDeleteWebServiceHandler(w http.ResponseWriter, r *http.Request
 // GetPlatformChannelSettings loads the channel configuration from PlatformSettings.
 // Returns nil if not in platform mode or if no channel config exists.
 func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSettings {
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		return nil
 	}
-	settingsStore := pgStore.PlatformSettings()
+	settingsStore := backend.PlatformSettings()
 	settings, err := settingsStore.Get(ctx)
 	if err != nil || settings == nil {
 		return nil

@@ -81,18 +81,14 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	tools.SetDistillAccess(newDistillBridgeConsole(result.ChatAgent))
 
 	// Unpack factory result into local variables used by the TUI loop
-	llm := result.LLM
 	currentProvider := result.ProviderName
 	currentModel := result.ModelName
 	chatAgent := result.ChatAgent
 	compactor := result.Compactor
 	internalTools := result.InternalTools
 	mcpToolsets := result.MCPToolsets
-	memMgr := result.MemoryManager
-	memStore := result.MemoryStore
 	memorySearchAvailable := result.MemorySearchAvailable
 	indexingDone := result.IndexingDone
-	indexingErr := result.IndexingErr
 	sessionService := result.SessionService
 	startupNotices := result.StartupNotices
 
@@ -120,16 +116,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 	var sess session.Session
 	isResumed := false
 	if cfg.SessionID != "" {
-		// Resolve partial session ID if using file store
-		resolvedID := cfg.SessionID
-		if fs, ok := sessionService.(*persistentsession.FileStore); ok {
-			fullID, resolveErr := fs.ResolveSessionID(cfg.SessionID)
-			if resolveErr != nil {
-				return fmt.Errorf("failed to resolve session ID %q: %w", cfg.SessionID, resolveErr)
-			}
-			resolvedID = fullID
-		}
 		// Resume existing session
+		resolvedID := cfg.SessionID
 		getResp, getErr := sessionService.Get(ctx, &session.GetRequest{
 			AppName:   appName,
 			UserID:    userID,
@@ -348,23 +336,16 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				} else {
 					fmt.Printf("  Tools:     %d internal\n", toolCount)
 				}
-				if memMgr != nil {
-					fmt.Printf("  Memory:    active\n")
-				} else {
-					fmt.Printf("  Memory:    disabled\n")
-				}
 				if memorySearchAvailable {
+					fmt.Printf("  Memory:    active (platform)\n")
 					select {
 					case <-indexingDone:
-						if *indexingErr != nil {
-							fmt.Printf("  RAG:       error (%v)\n", *indexingErr)
-						} else {
-							fmt.Printf("  RAG:       %d chunks indexed\n", memStore.Count())
-						}
+						fmt.Printf("  RAG:       ready\n")
 					default:
-						fmt.Printf("  RAG:       indexing...\n")
+						fmt.Printf("  RAG:       initializing...\n")
 					}
 				} else {
+					fmt.Printf("  Memory:    disabled\n")
 					fmt.Printf("  RAG:       unavailable\n")
 				}
 				if chatAgent.FlowRegistry != nil {
@@ -764,7 +745,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				(newProvider != currentProvider || newModel != currentModel) {
 				newLLM, swapErr := provider.GetProvider(ctx, newProvider, newModel, updatedCfg)
 				if swapErr == nil {
-					llm = newLLM
 					chatAgent.LLM = newLLM
 					currentProvider = newProvider
 					currentModel = newModel
@@ -798,10 +778,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 		turnCount++
 		if needsTitle && turnCount == 1 {
 			needsTitle = false
-			// Fire background goroutine to generate session title via LLM
-			if fs, ok := sessionService.(*persistentsession.FileStore); ok {
-				go generateSessionTitle(ctx, llm, fs, sess.ID(), input)
-			}
 		}
 
 		// Newline after response
@@ -814,60 +790,6 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 // generateSessionTitle calls the LLM to produce a short, meaningful session title
 // from the user's first message. Runs in a background goroutine with its own
 // 120s timeout so it is not tied to the caller's context lifecycle.
-func generateSessionTitle(_ context.Context, llm model.LLM, store *persistentsession.FileStore, sessionID, userMessage string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-
-	prompt := fmt.Sprintf(
-		"Generate a concise title (5-7 words max) for a conversation that starts with this message. "+
-			"Return ONLY the title, no quotes, no punctuation at the end.\n\nUser message: %s", userMessage)
-
-	req := &model.LLMRequest{
-		Contents: []*genai.Content{
-			genai.NewContentFromText(prompt, genai.RoleUser),
-		},
-		Config: &genai.GenerateContentConfig{
-			Temperature:     genai.Ptr(float32(0.3)),
-			MaxOutputTokens: 100,
-		},
-	}
-
-	var title string
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
-		if err != nil {
-			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
-			return
-		}
-		if resp.Content != nil {
-			for _, part := range resp.Content.Parts {
-				title += part.Text
-			}
-		}
-	}
-
-	title = consoleThinkTagRe.ReplaceAllString(title, "")
-	// Also strip unclosed thinking tags (model hit token limit mid-tag)
-	if idx := strings.Index(title, "<think"); idx >= 0 {
-		title = title[:idx]
-	}
-	if idx := strings.Index(title, "<thinking"); idx >= 0 {
-		title = title[:idx]
-	}
-	title = strings.TrimSpace(title)
-	if title == "" {
-		slog.Debug("session title generation produced empty result", "session_id", sessionID)
-		return
-	}
-	// Truncate if somehow too long
-	if len(title) > 80 {
-		title = title[:77] + "..."
-	}
-
-	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
-		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
-	}
-}
-
 // printRecentHistory displays the last N user/assistant exchanges from the session.
 // It coalesces consecutive same-author events into single messages (since SSE
 // streaming produces many small events per turn) and skips tool call/response events.

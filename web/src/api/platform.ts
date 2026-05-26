@@ -436,6 +436,15 @@ export interface PlatformInitParams {
   org_slug: string
 }
 
+export interface SQLitePlatformInitParams {
+  data_dir?: string
+  org_name: string
+  org_slug: string
+  admin_email: string
+  admin_name?: string
+  admin_password: string
+}
+
 export interface PlatformInitResult {
   success: boolean
   message: string
@@ -444,7 +453,7 @@ export interface PlatformInitResult {
 }
 
 export interface DeploymentModeInfo {
-  mode: 'personal' | 'platform'
+  mode: 'personal' | 'platform' | 'sqlite'
   configured: boolean
 }
 
@@ -457,6 +466,19 @@ export async function initializePlatform(params: PlatformInitParams): Promise<Pl
   const data = await res.json()
   if (!res.ok) {
     throw new Error(data.error || 'Failed to initialize platform')
+  }
+  return data
+}
+
+export async function initializeSQLitePlatform(params: SQLitePlatformInitParams): Promise<PlatformInitResult> {
+  const res = await fetch('/api/platform/init/sqlite', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  const data = await res.json()
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to initialize SQLite platform')
   }
   return data
 }

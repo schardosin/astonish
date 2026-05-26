@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCircle, Plus, Folder, Search, Globe, Monitor, Shield, ShieldAlert, ExternalLink, Server, Database } from 'lucide-react'
 import { fetchStandardServers, installStandardServer, StandardServer, McpInstallResult } from '../api/agents'
 import { fetchSandboxStatus, fetchOptionalTools, initSandbox, SandboxStatus, OptionalTool } from '../api/sandbox'
-import { initializePlatform } from '../api/platform'
+import { initializePlatform, initializeSQLitePlatform } from '../api/platform'
 
 // --- Local types ---
 
@@ -144,7 +144,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [testSuccess, setTestSuccess] = useState(false)
 
   // Step 1: Deployment Mode state
-  const [deploymentMode, setDeploymentMode] = useState<'personal' | 'platform' | null>(null)
+  const [deploymentMode, setDeploymentMode] = useState<'platform' | 'sqlite' | null>(null)
   const [pgHost, setPgHost] = useState('localhost')
   const [pgPort, setPgPort] = useState('5432')
   const [pgUser, setPgUser] = useState('postgres')
@@ -156,6 +156,10 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const [platformInitDone, setPlatformInitDone] = useState(false)
   const [platformError, setPlatformError] = useState<string | null>(null)
   const [restartRequired, setRestartRequired] = useState(false)
+  // SQLite-specific state
+  const [sqliteAdminEmail, setSqliteAdminEmail] = useState('')
+  const [sqliteAdminName, setSqliteAdminName] = useState('')
+  const [sqliteAdminPassword, setSqliteAdminPassword] = useState('')
 
   // Step 6: Web Search state
   const [standardServers, setStandardServers] = useState<StandardServerExt[]>([])
@@ -422,7 +426,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const canProceed = () => {
     switch (step) {
       case 0: return true
-      case 1: return deploymentMode === 'personal' || platformInitDone || restartRequired
+      case 1: return platformInitDone || restartRequired
       case 2: return selectedProvider !== null
       case 3: return Object.values(credentials).some(v => v)
       case 4: return instanceName.trim() !== ''
@@ -484,39 +488,116 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
       case 1:
         return (
           <div>
-            <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Deployment Mode</h2>
-            <p className="text-center mb-6" style={{ color: 'var(--text-muted)' }}>How would you like to run Astonish?</p>
+            <h2 className="text-2xl font-bold mb-2 text-center" style={{ color: 'var(--text-primary)' }}>Database Backend</h2>
+            <p className="text-center mb-6" style={{ color: 'var(--text-muted)' }}>Choose your database backend for Astonish.</p>
 
-            <div className="grid grid-cols-2 gap-4 max-w-xl mx-auto mb-6">
+            <div className="grid grid-cols-2 gap-4 max-w-2xl mx-auto mb-6">
               <button
-                onClick={() => { setDeploymentMode('personal'); setPlatformError(null) }}
-                className={`p-6 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'personal' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
-                style={{ background: deploymentMode === 'personal' ? undefined : 'var(--bg-tertiary)' }}
+                onClick={() => { setDeploymentMode('sqlite'); setPlatformError(null) }}
+                className={`p-5 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'sqlite' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
+                style={{ background: deploymentMode === 'sqlite' ? undefined : 'var(--bg-tertiary)' }}
               >
                 <div className="flex items-center gap-3 mb-3">
-                  <Monitor size={28} className="text-blue-400" />
-                  <span className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Personal</span>
+                  <Database size={24} className="text-emerald-400" />
+                  <span className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>SQLite (Recommended)</span>
                 </div>
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Single user, local file storage. No database needed. Best for individual use.
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Multi-user with teams and auth. Zero infrastructure needed.
                 </p>
               </button>
 
               <button
                 onClick={() => { setDeploymentMode('platform'); setPlatformError(null) }}
-                className={`p-6 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'platform' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
+                className={`p-5 rounded-xl border-2 text-left transition-all hover:scale-[1.02] ${deploymentMode === 'platform' ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
                 style={{ background: deploymentMode === 'platform' ? undefined : 'var(--bg-tertiary)' }}
               >
                 <div className="flex items-center gap-3 mb-3">
-                  <Database size={28} className="text-green-400" />
-                  <span className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Platform</span>
+                  <Server size={24} className="text-orange-400" />
+                  <span className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>PostgreSQL</span>
                 </div>
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Multi-user with teams, shared knowledge, and authentication. Requires PostgreSQL.
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Multi-user, scalable. Requires an external PostgreSQL server.
                 </p>
               </button>
             </div>
 
+            {/* SQLite Platform Form */}
+            {deploymentMode === 'sqlite' && !platformInitDone && !restartRequired && (
+              <div className="max-w-xl mx-auto mt-4 p-6 rounded-xl" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+                  <Shield size={18} className="text-emerald-400" />
+                  Create Admin Account
+                </h3>
+                <div className="space-y-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Admin Email</label>
+                    <input type="email" value={sqliteAdminEmail} onChange={e => setSqliteAdminEmail(e.target.value)} placeholder="admin@example.com" className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Display Name (optional)</label>
+                    <input type="text" value={sqliteAdminName} onChange={e => setSqliteAdminName(e.target.value)} placeholder="Admin" className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Password</label>
+                    <input type="password" value={sqliteAdminPassword} onChange={e => setSqliteAdminPassword(e.target.value)} placeholder="Minimum 8 characters" className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Organization Name</label>
+                    <input type="text" value={orgName} onChange={e => setOrgName(e.target.value)} className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Organization Slug</label>
+                    <input type="text" value={orgSlug} onChange={e => setOrgSlug(e.target.value)} placeholder="lowercase-with-hyphens" className="w-full px-3 py-2 rounded-lg border text-sm" style={{ background: 'var(--bg-primary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }} />
+                  </div>
+                </div>
+
+                {platformError && (
+                  <div className="mb-4 p-3 rounded-lg bg-red-500/10 border border-red-500/30 flex items-center gap-2">
+                    <AlertCircle size={18} className="text-red-400 shrink-0" />
+                    <span className="text-sm text-red-400">{platformError}</span>
+                  </div>
+                )}
+
+                <button
+                  onClick={async () => {
+                    setPlatformInitializing(true)
+                    setPlatformError(null)
+                    try {
+                      const result = await initializeSQLitePlatform({
+                        org_name: orgName,
+                        org_slug: orgSlug,
+                        admin_email: sqliteAdminEmail,
+                        admin_name: sqliteAdminName,
+                        admin_password: sqliteAdminPassword,
+                      })
+                      if (result.success) {
+                        setPlatformInitDone(true)
+                        if (result.restart_required) {
+                          setRestartRequired(true)
+                        }
+                      }
+                    } catch (err: any) {
+                      setPlatformError(err.message || 'Failed to initialize SQLite platform')
+                    } finally {
+                      setPlatformInitializing(false)
+                    }
+                  }}
+                  disabled={platformInitializing || !sqliteAdminEmail || sqliteAdminPassword.length < 8}
+                  className="w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-all disabled:opacity-50"
+                  style={{ background: 'linear-gradient(to right, #059669, #3b82f6)', color: 'white' }}
+                >
+                  {platformInitializing ? (
+                    <><Loader2 size={18} className="animate-spin" />Initializing Platform...</>
+                  ) : (
+                    <><Database size={18} />Initialize Platform</>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {/* PostgreSQL Platform Form */}
             {deploymentMode === 'platform' && !platformInitDone && !restartRequired && (
               <div className="max-w-xl mx-auto mt-4 p-6 rounded-xl" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
@@ -1067,11 +1148,11 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
             <h2 className="text-2xl font-bold mb-4" style={{ color: 'var(--text-primary)' }}>You're All Set!</h2>
             <p className="text-lg mb-6" style={{ color: 'var(--text-muted)' }}>Astonish Studio is ready to use.</p>
             <div className="inline-block text-left p-4 rounded-lg space-y-3 min-w-[280px]" style={{ background: 'var(--bg-tertiary)' }}>
-              {deploymentMode === 'platform' && (
+              {(deploymentMode === 'platform' || deploymentMode === 'sqlite') && (
                 <div className="flex items-center gap-2 text-xs pb-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
                   <Database size={14} className="text-green-400" />
                   <span style={{ color: 'var(--text-secondary)' }}>Mode:</span>
-                  <span style={{ color: 'var(--text-muted)' }}>Platform (multi-user)</span>
+                  <span style={{ color: 'var(--text-muted)' }}>Platform ({deploymentMode === 'sqlite' ? 'SQLite' : 'PostgreSQL'})</span>
                   {restartRequired && <span className="text-yellow-400 text-[10px] px-1.5 py-0.5 bg-yellow-500/10 rounded">Restart needed</span>}
                 </div>
               )}

@@ -1,20 +1,14 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
-	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/mcpstore"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -243,133 +237,19 @@ func InstallMCPStoreServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: save to filesystem
-	// Load current MCP config
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
-		return
-	}
-
-	// Initialize map if nil
-	if mcpCfg.MCPServers == nil {
-		mcpCfg.MCPServers = make(map[string]config.MCPServerConfig)
-	}
-
-	// Add/update the server
-	mcpCfg.MCPServers[serverName] = newConfig
-
-	// Save config
-	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
-		return
-	}
-
-	// Re-setup environment variables
-	config.SetupMCPEnv(mcpCfg)
-
-	// Set initial status to loading
-	SetServerStatus(serverName, cache.ServerStatus{
-		Name:      serverName,
-		Status:    "loading",
-		ToolCount: 0,
-		LastCheck: time.Now().Format(time.RFC3339),
-	})
-
-	// Incrementally load just this server's tools (synchronous, should be fast for one server)
-	toolsLoaded := 0
-	toolError := ""
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		slog.Warn(toolError)
-	} else {
-		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), serverName)
-		if err != nil {
-			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			slog.Warn(toolError)
-		} else {
-			// Get tools from this server and add to cache
-			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
-			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-			if err != nil {
-				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-				if stderrOutput != "" && stderrOutput != "no stderr output" {
-					toolError = stderrOutput
-				} else {
-					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
-				}
-				slog.Warn("failed to get tools from server", "error", err)
-			} else {
-				var newTools []ToolInfo
-				for _, t := range mcpTools {
-					newTools = append(newTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      serverName,
-					})
-				}
-				AddServerToolsToCache(serverName, newTools)
-				toolsLoaded = len(newTools)
-
-				// Also update persistent cache (use mcpTools for schema access)
-				persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
-				for _, t := range mcpTools {
-					persistentTools = append(persistentTools, cache.ToolEntry{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      serverName,
-						InputSchema: common.ExtractToolInputSchema(t),
-					})
-				}
-				checksum := cache.ComputeServerChecksum(newConfig.Command, newConfig.Args, newConfig.Env)
-				cache.AddServerTools(serverName, persistentTools, checksum)
-				if err := cache.SaveCache(); err != nil {
-					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
-				} else {
-					slog.Info("saved tools to persistent cache", "component", "cache", "count", len(persistentTools), "server", serverName)
-				}
-			}
-		}
-	}
-
-	// Update final status based on result
-	if toolError != "" {
-		SetServerStatus(serverName, cache.ServerStatus{
-			Name:      serverName,
-			Status:    "error",
-			Error:     toolError,
-			ToolCount: 0,
-			LastCheck: time.Now().Format(time.RFC3339),
-		})
-	} else {
-		SetServerStatus(serverName, cache.ServerStatus{
-			Name:      serverName,
-			Status:    "healthy",
-			ToolCount: toolsLoaded,
-			LastCheck: time.Now().Format(time.RFC3339),
-		})
-	}
-
-	// Reset the Studio chat agent so the next request picks up the new MCP server.
-	GetChatManager().Reset()
-
-	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"status":      "ok",
-		"serverName":  serverName,
-		"message":     "Server installed successfully",
-		"toolsLoaded": toolsLoaded,
-	}
-	if toolError != "" {
-		response["toolError"] = toolError
-	}
-	json.NewEncoder(w).Encode(response)
+	// No MCP store available — platform mode requires the DB store
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // installMCPStoreServerPlatform handles MCP Store server installation in platform mode.
-// Saves the server config to the DB store and discovers tools in the background.
+// Saves the server config to the DB store and discovers tools synchronously.
 func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpStore store.MCPServerStore, serverName string, newConfig config.MCPServerConfig) {
+	// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
+	if err := checkStdioMCPInstallable(newConfig.Transport); err != nil {
+		respondError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+
 	userID := effectiveUserID(r)
 
 	s := &store.MCPServer{
@@ -388,28 +268,22 @@ func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		return
 	}
 
-	// Discover tools in background
-	servers := map[string]config.MCPServerConfig{serverName: newConfig}
-	go func() {
-		bgCtx := context.Background()
-		discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
-		if discoveredTools != nil {
-			if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
-				slog.Warn("failed to update cached_tools after store install", "server", serverName, "error", err)
-			}
-		}
-	}()
+	// Discover tools asynchronously — sandbox discovery can take 30-120s.
+	asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig)
 
 	// Reset the Studio chat agent so the next request picks up the new MCP server.
 	GetChatManager().Reset()
 
+	slog.Info("installed MCP store server (platform)", "server", serverName)
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":      "ok",
-		"serverName":  serverName,
-		"message":     "Server installed successfully",
-		"toolsLoaded": 0, // tools discovered async
-	})
+	response := map[string]interface{}{
+		"status":         "ok",
+		"serverName":     serverName,
+		"message":        "Server installed successfully",
+		"toolsDiscovery": "pending",
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // GetMCPStoreTagsHandler handles GET /api/mcp-store/tags

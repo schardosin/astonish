@@ -53,7 +53,7 @@ func handleListUserChannels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pg := getPlatformPGStore()
+	pg := getPlatformBackend()
 	if pg == nil {
 		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
 		return
@@ -81,7 +81,7 @@ func handleLinkUserChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pg := getPlatformPGStore()
+	pg := getPlatformBackend()
 	if pg == nil {
 		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
 		return
@@ -152,7 +152,7 @@ func handleUpdateUserChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pg := getPlatformPGStore()
+	pg := getPlatformBackend()
 	if pg == nil {
 		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
 		return
@@ -204,7 +204,7 @@ func handleUnlinkUserChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pg := getPlatformPGStore()
+	pg := getPlatformBackend()
 	if pg == nil {
 		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
 		return
@@ -243,7 +243,7 @@ func handleVerifyUserChannel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pg := getPlatformPGStore()
+	pg := getPlatformBackend()
 	if pg == nil {
 		respondError(w, http.StatusNotImplemented, "user channels require platform mode")
 		return
@@ -440,7 +440,7 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 	emailAddr := strings.TrimPrefix(pending.Channel, "email:")
 
 	// Check if this email is already linked to another user
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return

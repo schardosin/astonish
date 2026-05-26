@@ -81,7 +81,10 @@ func (*interfaceTestStub) StartSession(ctx context.Context, sessionID string) er
 func (*interfaceTestStub) StopSession(ctx context.Context, sessionID string) error    { return nil }
 func (*interfaceTestStub) DestroySession(ctx context.Context, sessionID string) error { return nil }
 func (*interfaceTestStub) SessionState(ctx context.Context, sessionID string) (SessionState, error) {
-	return "", nil
+	return SessionStateRunning, nil
+}
+func (*interfaceTestStub) WaitForSessionReady(ctx context.Context, sessionID string) error {
+	return nil
 }
 func (*interfaceTestStub) ListSessions(ctx context.Context, filter SessionFilter) ([]*Session, error) {
 	return nil, nil
@@ -90,6 +93,9 @@ func (*interfaceTestStub) Exec(ctx context.Context, sessionID string, opts ExecS
 	return nil, nil
 }
 func (*interfaceTestStub) ExecInteractive(ctx context.Context, sessionID string, opts PTYSpec) (ExecStream, error) {
+	return nil, nil
+}
+func (*interfaceTestStub) ExecStreaming(ctx context.Context, sessionID string, opts ExecStreamSpec) (ExecStream, error) {
 	return nil, nil
 }
 func (*interfaceTestStub) PushFile(ctx context.Context, sessionID, path string, content io.Reader, mode os.FileMode) error {

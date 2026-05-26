@@ -199,16 +199,43 @@ func (c *SecurityConfig) IsSecretScannerEnabled() bool {
 // multi-tenant isolation (database-per-org, schema-per-team). This enables
 // the platform mode with organizations, teams, and shared knowledge.
 type StorageConfig struct {
-	// Backend selects the storage implementation: "file" (default) or "postgres".
+	// Backend selects the storage implementation: "file" (default), "sqlite", or "postgres".
 	Backend string `yaml:"backend,omitempty" json:"backend,omitempty"`
+
+	// SQLite holds settings for the SQLite-backed platform mode.
+	// Only used when backend is "sqlite".
+	SQLite SQLiteConfig `yaml:"sqlite,omitempty" json:"sqlite,omitempty"`
 
 	// Postgres holds connection settings for the platform database.
 	// Only used when backend is "postgres".
 	Postgres PostgresConfig `yaml:"postgres,omitempty" json:"postgres,omitempty"`
 
-	// Auth configures authentication for platform mode (backend: postgres).
+	// Auth configures authentication for platform mode (backend: postgres or sqlite).
 	// In personal mode (backend: file), this is ignored — device auth is used instead.
 	Auth PlatformAuthConfig `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
+// SQLiteConfig holds settings for SQLite-backed platform mode.
+type SQLiteConfig struct {
+	// DataDir is the directory where all SQLite database files are stored.
+	// Defaults to ~/.local/share/astonish/ if empty.
+	DataDir string `yaml:"data_dir,omitempty" json:"data_dir,omitempty"`
+}
+
+// GetDataDir returns the SQLite data directory, falling back to
+// $XDG_DATA_HOME/astonish/ or ~/.local/share/astonish/.
+func (c *SQLiteConfig) GetDataDir() string {
+	if c.DataDir != "" {
+		return c.DataDir
+	}
+	if envDir := os.Getenv("ASTONISH_DATA_DIR"); envDir != "" {
+		return envDir
+	}
+	if xdg := os.Getenv("XDG_DATA_HOME"); xdg != "" {
+		return xdg + "/astonish"
+	}
+	home, _ := os.UserHomeDir()
+	return home + "/.local/share/astonish"
 }
 
 // PostgresConfig holds PostgreSQL connection parameters for platform mode.
@@ -249,6 +276,11 @@ type PostgresConfig struct {
 // IsPostgres returns true if the storage backend is PostgreSQL.
 func (c *StorageConfig) IsPostgres() bool {
 	return c.Backend == "postgres"
+}
+
+// IsSQLite returns true if the storage backend is SQLite.
+func (c *StorageConfig) IsSQLite() bool {
+	return c.Backend == "sqlite"
 }
 
 // IsFile returns true if the storage backend is file-based (default).

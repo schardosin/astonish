@@ -4,43 +4,41 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/cache"
 )
 
+func testSetup(t *testing.T) func() {
+	t.Helper()
+	tmpDir, err := os.MkdirTemp("", "api-cache-test-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	cache.SetCacheDir(tmpDir)
+
+	return func() {
+		os.RemoveAll(tmpDir)
+		cache.SetCacheDir("")
+	}
+}
+
 func TestMCPStatusHandler(t *testing.T) {
 	cleanup := testSetup(t)
 	defer cleanup()
 
-	// 1. Set up some data in cache
-	SetServerStatus("test-server-1", cache.ServerStatus{
-		Name:      "test-server-1",
-		Status:    "healthy",
-		ToolCount: 10,
-		LastCheck: "2024-12-31T12:00:00Z",
-	})
-	SetServerStatus("test-server-2", cache.ServerStatus{
-		Name:      "test-server-2",
-		Status:    "error",
-		Error:     "Bad config",
-		ToolCount: 0,
-		LastCheck: "2024-12-31T12:00:00Z",
-	})
-
-	// 2. Create a request
+	// Without platform context (no MCP store), handler returns empty servers list
 	req, err := http.NewRequest("GET", "/api/mcp/status", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// 3. Record the response
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(MCPStatusHandler)
 	handler.ServeHTTP(rr, req)
 
-	// 4. Verify results
 	if status := rr.Code; status != http.StatusOK {
 		t.Errorf("handler returned wrong status code: got %v want %v", status, http.StatusOK)
 	}
@@ -52,23 +50,8 @@ func TestMCPStatusHandler(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if len(response.Servers) != 2 {
-		t.Errorf("expected 2 servers, got %d", len(response.Servers))
-	}
-
-	found1 := false
-	found2 := false
-	for _, s := range response.Servers {
-		if s.Name == "test-server-1" && s.Status == "healthy" {
-			found1 = true
-		}
-		if s.Name == "test-server-2" && s.Status == "error" && s.Error == "Bad config" {
-			found2 = true
-		}
-	}
-
-	if !found1 || !found2 {
-		t.Error("servers not found in response or have wrong status")
+	if len(response.Servers) != 0 {
+		t.Errorf("expected 0 servers without platform context, got %d", len(response.Servers))
 	}
 }
 

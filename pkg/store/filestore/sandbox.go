@@ -147,6 +147,26 @@ func (s *sandboxTemplateStore) ListRoots(ctx context.Context) ([]*store.SandboxT
 	return s.List(ctx, store.SandboxTemplateFilter{})
 }
 
+func (s *sandboxTemplateStore) GetBaseConfig(context.Context) (*store.BaseConfigInfo, error) {
+	return nil, store.ErrUnsupported
+}
+
+func (s *sandboxTemplateStore) SetBaseConfig(context.Context, string, []byte, string) error {
+	return store.ErrUnsupported
+}
+
+func (s *sandboxTemplateStore) GetBaseTopLayerID(context.Context) (string, error) {
+	return "", store.ErrUnsupported
+}
+
+func (s *sandboxTemplateStore) AcquireBuildLock(context.Context) (bool, func(), error) {
+	return false, nil, store.ErrUnsupported
+}
+
+func (s *sandboxTemplateStore) IsBuildInProgress(context.Context) (bool, error) {
+	return false, store.ErrUnsupported
+}
+
 func metaToTemplate(m *tmplmeta.TemplateMeta) *store.SandboxTemplate {
 	return &store.SandboxTemplate{
 		ID:          m.Name,

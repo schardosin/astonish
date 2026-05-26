@@ -76,8 +76,10 @@ func sandboxBackendForTeamTemplate(r *http.Request) (sandbox.Backend, func(), er
 }
 
 // buildPGSessionRegistry attempts to construct a pgstore-backed
-// SessionRegistry for the current request's team. Returns nil if platform
-// DB or tenant context is unavailable (personal mode fallback).
+// SessionRegistry for the current request's team. Returns nil if the platform
+// backend is not PG-backed or tenant context is unavailable.
+// For SQLite deployments (single-node), the caller falls back to the local
+// file-based session registry which is adequate.
 func buildPGSessionRegistry(ctx context.Context) *sandbox.SessionRegistry {
 	pg := getPlatformPGStore()
 	if pg == nil {
@@ -127,7 +129,7 @@ func teamTemplateSessionID(teamSlug string) string {
 // ---------------------------------------------------------------------------
 
 // baseTopLayerResolver is the narrow interface required by
-// resolveBaseLayerChainWith. Satisfied by *pgstore.PGSandboxTemplateStore.
+// resolveBaseLayerChainWith. Satisfied by store.SandboxTemplateStore.
 type baseTopLayerResolver interface {
 	GetBaseTopLayerID(ctx context.Context) (string, error)
 }
@@ -140,17 +142,17 @@ type baseTopLayerResolver interface {
 // a literal directory name under /mnt/astonish-layers/ on the PVC.
 //
 // Returns nil if:
-//   - The platform PGStore is not available (personal mode).
+//   - The platform backend is not available.
 //   - The template doesn't exist in the DB (not yet saved).
 //   - Resolution fails (broken DAG).
 //
 // Callers MUST tolerate nil and fall back gracefully (e.g. use @base).
 func resolveTemplateLayerChain(ctx context.Context, templateSlug string) []string {
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		return nil
 	}
-	templates := pgStore.SandboxTemplates()
+	templates := backend.SandboxTemplates()
 	if templates == nil {
 		return nil
 	}
@@ -217,11 +219,11 @@ func resolveTemplateLayerChainWith(ctx context.Context, templates store.SandboxT
 //   - @base's top_layer_id is the literal "@base" sentinel (fresh install).
 //   - Any DB query error (fail-open: sessions still work with plain @base).
 func resolveBaseLayerChain(ctx context.Context) []string {
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		return nil
 	}
-	tplStore := pgStore.SandboxTemplatesPG()
+	tplStore := backend.SandboxTemplates()
 	if tplStore == nil {
 		return nil
 	}

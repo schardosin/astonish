@@ -75,7 +75,7 @@ func TestHugotEmbedderRunPipeline(t *testing.T) {
 	}
 }
 
-// TestHugotEmbeddingFunc tests the chromem-go compatible embedding function.
+// TestHugotEmbeddingFunc tests the embedding function.
 func TestHugotEmbeddingFunc(t *testing.T) {
 	skipIfNoModel(t)
 

@@ -236,7 +236,7 @@ func (h *SSOHandler) handleInit(w http.ResponseWriter, r *http.Request) {
 	var req ssoInitRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
@@ -322,7 +322,7 @@ func (h *SSOHandler) handleVerify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load the OIDC provider
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "Platform store not available")
 		return
@@ -376,7 +376,7 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load OIDC provider
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		h.failDeviceSession(sess, "platform store not available")
 		h.renderCallbackError(w, "Internal server error")
@@ -696,7 +696,7 @@ func (h *SSOHandler) handlePoll(w http.ResponseWriter, r *http.Request) {
 // --------------------------------------------------------------------------
 
 func (h *SSOHandler) handleListProviders(w http.ResponseWriter, r *http.Request) {
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		// Platform store not initialized — return 503 so frontend knows to retry
 		respondError(w, http.StatusServiceUnavailable, "platform not ready")

@@ -216,13 +216,8 @@ func loadMCPConfigForRequest(r *http.Request) *config.MCPConfig {
 		return cfg
 	}
 
-	// Personal mode
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("failed to load MCP config for request", "error", err)
-		return &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
-	}
-	return mcpCfg
+	// No platform context — return empty config
+	return &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
 }
 
 // EffectiveAppConfigFromContext builds the effective application configuration using

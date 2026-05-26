@@ -4,22 +4,23 @@ import (
 	"context"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
-// pgLinkCodeBackend implements LinkCodeBackend using PostgreSQL.
-// Enables stateless horizontal scaling by storing link codes in PG
-// instead of process memory.
-type pgLinkCodeBackend struct {
-	store *pgstore.PGLinkCodeStore
+// dbLinkCodeBackend implements LinkCodeBackend using any store.LinkCodeStore.
+// Enables stateless horizontal scaling by storing link codes in the database
+// (PG or SQLite) instead of process memory.
+type dbLinkCodeBackend struct {
+	store store.LinkCodeStore
 }
 
-// NewPGLinkCodeBackend creates a PG-backed link code backend.
-func NewPGLinkCodeBackend(store *pgstore.PGLinkCodeStore) LinkCodeBackend {
-	return &pgLinkCodeBackend{store: store}
+// NewDBLinkCodeBackend creates a database-backed link code backend.
+// Works with both PGLinkCodeStore and SQLiteLinkCodeStore.
+func NewDBLinkCodeBackend(s store.LinkCodeStore) LinkCodeBackend {
+	return &dbLinkCodeBackend{store: s}
 }
 
-func (b *pgLinkCodeBackend) Generate(ctx context.Context, userID, email, channel string) (string, error) {
+func (b *dbLinkCodeBackend) Generate(ctx context.Context, userID, email, channel string) (string, error) {
 	code := generateLinkCode()
 	err := b.store.Generate(ctx, code, userID, email, channel)
 	if err != nil {
@@ -28,7 +29,7 @@ func (b *pgLinkCodeBackend) Generate(ctx context.Context, userID, email, channel
 	return code, nil
 }
 
-func (b *pgLinkCodeBackend) Consume(ctx context.Context, code string) *PendingLink {
+func (b *dbLinkCodeBackend) Consume(ctx context.Context, code string) *PendingLink {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	row, err := b.store.Consume(ctx, code)
 	if err != nil || row == nil {
@@ -45,4 +46,4 @@ func (b *pgLinkCodeBackend) Consume(ctx context.Context, code string) *PendingLi
 }
 
 // Compile-time interface check
-var _ LinkCodeBackend = (*pgLinkCodeBackend)(nil)
+var _ LinkCodeBackend = (*dbLinkCodeBackend)(nil)

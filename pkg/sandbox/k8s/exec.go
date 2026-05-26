@@ -326,6 +326,77 @@ func (b *K8sBackend) ExecInteractive(ctx context.Context, sessionID string, opts
 	return stream, nil
 }
 
+// ExecStreaming starts a non-interactive streaming process (no PTY) inside the
+// session's pod. Used for machine-to-machine protocols (MCP JSON-RPC, NDJSON)
+// that need a long-running bidirectional stdin/stdout stream without terminal
+// processing.
+func (b *K8sBackend) ExecStreaming(ctx context.Context, sessionID string, opts sandbox.ExecStreamSpec) (sandbox.ExecStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(opts.Command) == 0 {
+		return nil, errors.New("sandbox/k8s: ExecStreaming: Command is required")
+	}
+
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/k8s: ExecStreaming(%s): lookup session: %w", sessionID, err)
+	}
+	if rec == nil || rec.PodName == "" {
+		return nil, fmt.Errorf("sandbox/k8s: ExecStreaming: session %q has no pod", sessionID)
+	}
+
+	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
+
+	wantStderr := opts.SeparateStderr != nil
+	method, u, err := b.buildExecURL(rec.PodName, command, false /*tty*/, true, true, wantStderr)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/k8s: ExecStreaming(%s): build URL: %w", sessionID, err)
+	}
+
+	execr, err := b.execExecutorFactory(b.restConfig, method, u)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/k8s: ExecStreaming(%s): build executor: %w", sessionID, err)
+	}
+
+	// Pipes bridge the caller's Read/Write against the SPDY stream.
+	stdinR, stdinW := io.Pipe()
+	stdoutR, stdoutW := io.Pipe()
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	stream := &k8sExecStream{
+		stdinW:   stdinW,
+		stdoutR:  stdoutR,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		resizeCh: make(chan remotecommand.TerminalSize, 4), // unused but needed for interface
+	}
+
+	var stderrW io.Writer
+	if wantStderr {
+		stderrW = opts.SeparateStderr
+	}
+
+	go func() {
+		defer close(stream.done)
+		defer stdoutW.Close()
+		defer stdinR.Close()
+		err := execr.StreamWithContext(streamCtx, remotecommand.StreamOptions{
+			Stdin:  stdinR,
+			Stdout: stdoutW,
+			Stderr: stderrW,
+			Tty:    false, // No PTY — raw stdin/stdout for machine protocols
+		})
+		code, decodeErr := decodeExitError(err)
+		stream.mu.Lock()
+		stream.exitCode = code
+		stream.exitErr = decodeErr
+		stream.mu.Unlock()
+	}()
+
+	return stream, nil
+}
+
 // ---------------------------------------------------------------------------
 // k8sExecStream: sandbox.ExecStream + TerminalSizeQueue
 // ---------------------------------------------------------------------------

@@ -1,18 +1,12 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
-	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -87,132 +81,12 @@ func InstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform mode: save to DB store
-	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
-		installStandardServerPlatform(w, r, mcpStore, srv, req)
+	mcpStore := effectiveMCPStore(r)
+	if mcpStore == nil {
+		respondError(w, http.StatusInternalServerError, "No MCP store available")
 		return
 	}
-
-	// Personal mode: save to filesystem
-	// Save API key to the shared credential store so that the in-memory
-	// cache is updated immediately (mergeStandardServers uses the same
-	// instance via getInstalledSecretGetter to resolve keys at load time).
-	storeKeyInConfig := true
-	if store := getAPICredentialStore(); store != nil {
-		for _, ev := range srv.EnvVars {
-			if val, ok := req.Env[ev.Name]; ok && val != "" {
-				storeKey := "web_servers." + serverID + ".api_key"
-				if setErr := store.SetSecret(storeKey, val); setErr == nil {
-					storeKeyInConfig = false
-				}
-				break
-			}
-		}
-	}
-
-	// Install to config.yaml (web tool settings; key excluded if stored in credential store)
-	if err := config.InstallStandardServer(serverID, req.Env, storeKeyInConfig); err != nil {
-		respondError(w, http.StatusBadRequest, "Failed to install server: "+err.Error())
-		return
-	}
-
-	// Setup environment variables for the new MCP server
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("failed to load MCP config", "error", err)
-	}
-	if mcpCfg != nil {
-		config.SetupMCPEnv(mcpCfg)
-	}
-
-	// Load tools from the server (synchronous, same pattern as InstallInlineMCPServerHandler)
-	toolsLoaded := 0
-	toolError := ""
-
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		slog.Warn(toolError)
-	} else {
-		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), srv.ID)
-		if err != nil {
-			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			slog.Warn(toolError)
-		} else {
-			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
-			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-			if err != nil {
-				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-				if stderrOutput != "" && stderrOutput != "no stderr output" {
-					toolError = stderrOutput
-				} else {
-					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
-				}
-				slog.Warn(toolError)
-			} else {
-				// Update in-memory cache
-				var newTools []ToolInfo
-				for _, t := range mcpTools {
-					newTools = append(newTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      srv.ID,
-					})
-				}
-				AddServerToolsToCache(srv.ID, newTools)
-				toolsLoaded = len(newTools)
-
-				// Update persistent cache
-				serverCfg := config.MCPServerConfig{
-					Command: srv.Command,
-					Args:    srv.Args,
-					Env:     req.Env,
-				}
-				persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
-				for _, t := range mcpTools {
-					persistentTools = append(persistentTools, cache.ToolEntry{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      srv.ID,
-						InputSchema: common.ExtractToolInputSchema(t),
-					})
-				}
-				checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-				cache.AddServerTools(srv.ID, persistentTools, checksum)
-				if err := cache.SaveCache(); err != nil {
-					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
-				} else {
-					slog.Info("saved tools for standard server", "component", "cache", "count", len(persistentTools), "server", srv.ID)
-				}
-
-				// Update server status to healthy
-				SetServerStatus(srv.ID, cache.ServerStatus{
-					Name:      srv.ID,
-					Status:    "healthy",
-					ToolCount: len(persistentTools),
-					LastCheck: time.Now().UTC().Format(time.RFC3339),
-				})
-			}
-		}
-	}
-
-	// Refresh in-memory tools cache
-	RefreshToolsCache(context.Background())
-
-	slog.Info("installed standard server", "component", "standard-server", "server", srv.ID, "displayName", srv.DisplayName, "toolsLoaded", toolsLoaded)
-
-	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"status":         "installed",
-		"serverName":     srv.ID,
-		"toolsLoaded":    toolsLoaded,
-		"webSearchTool":  srv.WebSearchTool,
-		"webExtractTool": srv.WebExtractTool,
-	}
-	if toolError != "" {
-		response["toolError"] = toolError
-	}
-	json.NewEncoder(w).Encode(response)
+	installStandardServerPlatform(w, r, mcpStore, srv, req)
 }
 
 // installStandardServerPlatform handles standard server install in platform mode.
@@ -225,6 +99,12 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		Args:      srv.Args,
 		Transport: "stdio",
 		Env:       req.Env,
+	}
+
+	// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
+	if err := checkStdioMCPInstallable(newConfig.Transport); err != nil {
+		respondError(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
 
 	s := &store.MCPServer{
@@ -244,11 +124,11 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 	// Write the API key to platform_secrets so that IsStandardServerInstalled()
 	// and MergeStandardServers() can resolve it via the registered SecretGetter.
 	// This is the critical bridge between DB MCP config and the credential resolution path.
-	if pgStore := getPlatformPGStore(); pgStore != nil {
+	if secrets := getPlatformSecrets(); secrets != nil {
 		for _, ev := range srv.EnvVars {
 			if val, ok := req.Env[ev.Name]; ok && val != "" {
 				storeKey := "web_servers." + srv.ID + ".api_key"
-				if err := pgStore.PlatformSecrets().SetSecret(storeKey, val); err != nil {
+				if err := secrets.SetSecret(storeKey, val); err != nil {
 					slog.Warn("failed to write standard server API key to platform_secrets",
 						"server", srv.ID, "key", storeKey, "error", err)
 				}
@@ -282,30 +162,25 @@ func installStandardServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 		}
 	}
 
-	// Discover tools in background
-	servers := map[string]config.MCPServerConfig{srv.ID: newConfig}
-	go func() {
-		bgCtx := context.Background()
-		discoveredTools := discoverMCPToolsForPlatform(bgCtx, srv.ID, servers)
-		if discoveredTools != nil {
-			if err := mcpStore.UpdateCachedTools(bgCtx, srv.ID, discoveredTools); err != nil {
-				slog.Warn("failed to update cached_tools for standard server", "server", srv.ID, "error", err)
-			}
-		}
-	}()
+	// Discover tools asynchronously — the sandbox discovery (container creation +
+	// MCP server startup + tool listing) can take 30-120s. Running this on the
+	// HTTP request path caused timeouts and context-cancellation failures.
+	// Tools appear in cached_tools within seconds to minutes after install.
+	asyncDiscoverAndCacheTools(mcpStore, srv.ID, newConfig)
 
 	GetChatManager().Reset()
 
 	slog.Info("installed standard server (platform)", "server", srv.ID, "displayName", srv.DisplayName)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := map[string]interface{}{
 		"status":         "installed",
 		"serverName":     srv.ID,
-		"toolsLoaded":    0, // async discovery
+		"toolsDiscovery": "pending",
 		"webSearchTool":  srv.WebSearchTool,
 		"webExtractTool": srv.WebExtractTool,
-	})
+	}
+	json.NewEncoder(w).Encode(response)
 }
 
 // UninstallStandardServerHandler handles DELETE /api/standard-servers/{id}
@@ -326,29 +201,53 @@ func UninstallStandardServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Remove API key from the shared credential store
-	if store := getAPICredentialStore(); store != nil {
-		storeKey := "web_servers." + serverID + ".api_key"
-		if err := store.RemoveSecret(storeKey); err != nil {
+	mcpStore := effectiveMCPStore(r)
+	if mcpStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
+		return
+	}
+
+	// Remove from MCP store (DB)
+	if err := mcpStore.Delete(r.Context(), serverID); err != nil {
+		slog.Warn("failed to delete standard server from store", "server", serverID, "error", err)
+	}
+
+	// Remove API key from platform secrets (DB)
+	storeKey := "web_servers." + serverID + ".api_key"
+	if secrets := getPlatformSecrets(); secrets != nil {
+		if err := secrets.RemoveSecret(storeKey); err != nil {
 			slog.Warn("failed to remove secret during uninstall", "key", storeKey, "error", err)
 		}
 	}
 
-	// Remove from config.yaml (web_servers entry + web tool references)
-	if err := config.UninstallStandardServer(serverID); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to uninstall server: "+err.Error())
-		return
+	// Also remove from file-based credential store (belt & suspenders: cleans up
+	// any legacy key that daemonSecretGetter's fallback would otherwise still resolve).
+	if cs := getAPICredentialStore(); cs != nil {
+		if err := cs.RemoveSecret(storeKey); err != nil {
+			slog.Warn("failed to remove secret from file credential store", "key", storeKey, "error", err)
+		}
 	}
 
-	// Remove from in-memory and persistent caches
-	RemoveServerToolsFromCache(serverID)
-	cache.RemoveServer(serverID)
-	if err := cache.SaveCache(); err != nil {
-		slog.Warn("failed to save cache after uninstall", "component", "cache", "error", err)
+	// Clear web tool settings if this server provided them
+	if srv.WebSearchTool != "" || srv.WebExtractTool != "" {
+		if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+			teamSettings, err := svc.Settings.Get(r.Context())
+			if err == nil && teamSettings != nil {
+				if teamSettings.WebSearchTool == srv.WebSearchTool {
+					teamSettings.WebSearchTool = ""
+				}
+				if teamSettings.WebExtractTool == srv.WebExtractTool {
+					teamSettings.WebExtractTool = ""
+				}
+				if err := svc.Settings.Save(r.Context(), teamSettings); err != nil {
+					slog.Warn("failed to clear team web tool settings", "server", serverID, "error", err)
+				}
+			}
+		}
 	}
 
-	// Clear server status
-	ClearServerStatus(serverID)
+	// Reset chat agent to pick up removed server
+	GetChatManager().Reset()
 
 	slog.Info("uninstalled standard server", "component", "standard-server", "server", srv.ID, "displayName", srv.DisplayName)
 

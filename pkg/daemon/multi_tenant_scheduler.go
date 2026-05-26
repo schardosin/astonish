@@ -8,7 +8,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // MultiTenantScheduler manages scheduled job execution across all organizations
@@ -17,7 +16,7 @@ import (
 //
 // In personal mode, the legacy single-instance scheduler.Scheduler is used instead.
 type MultiTenantScheduler struct {
-	pgStore  *pgstore.PGStore
+	backend  store.PlatformBackend
 	executor *scheduler.Executor
 	deliver  scheduler.DeliverFunc
 	logger   *log.Logger
@@ -34,7 +33,7 @@ type MultiTenantScheduler struct {
 
 // NewMultiTenantScheduler creates a new multi-tenant scheduler for platform mode.
 func NewMultiTenantScheduler(
-	pgStore *pgstore.PGStore,
+	backend store.PlatformBackend,
 	executor *scheduler.Executor,
 	deliver scheduler.DeliverFunc,
 	logger *log.Logger,
@@ -43,7 +42,7 @@ func NewMultiTenantScheduler(
 		logger = log.Default()
 	}
 	return &MultiTenantScheduler{
-		pgStore:  pgStore,
+		backend:  backend,
 		executor: executor,
 		deliver:  deliver,
 		logger:   logger,
@@ -95,7 +94,7 @@ func (mts *MultiTenantScheduler) tick() {
 	ctx := mts.ctx
 
 	// List all organizations
-	orgs, err := mts.pgStore.Organizations().List(ctx)
+	orgs, err := mts.backend.Organizations().List(ctx)
 	if err != nil {
 		mts.logger.Printf("[scheduler] Failed to list organizations: %v", err)
 		return
@@ -111,7 +110,7 @@ func (mts *MultiTenantScheduler) tick() {
 
 // tickOrg processes all teams in a single organization.
 func (mts *MultiTenantScheduler) tickOrg(ctx context.Context, orgSlug string) {
-	orgStore, err := mts.pgStore.ForOrg(orgSlug)
+	orgStore, err := mts.backend.ForOrg(orgSlug)
 	if err != nil {
 		mts.logger.Printf("[scheduler] Failed to resolve org %q: %v", orgSlug, err)
 		return
@@ -201,7 +200,7 @@ func (mts *MultiTenantScheduler) executeJob(
 		Team: teamStore.Skills(),
 	})
 	execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
-		Platform: mts.pgStore.PlatformMCPServers(),
+		Platform: mts.backend.PlatformMCPServers(),
 		Org:      orgStore.OrgMCPServers(),
 		Team:     teamStore.MCPServers(),
 	})
@@ -274,7 +273,7 @@ func (mts *MultiTenantScheduler) executeJob(
 func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 	ctx := context.Background()
 
-	orgs, err := mts.pgStore.Organizations().List(ctx)
+	orgs, err := mts.backend.Organizations().List(ctx)
 	if err != nil {
 		mts.logger.Printf("[scheduler] Failed to list orgs for NextRun refresh: %v", err)
 		return
@@ -285,7 +284,7 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 		if org.Status != "active" {
 			continue
 		}
-		orgStore, err := mts.pgStore.ForOrg(org.Slug)
+		orgStore, err := mts.backend.ForOrg(org.Slug)
 		if err != nil {
 			continue
 		}
@@ -334,7 +333,7 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 		Team: teamStore.Skills(),
 	})
 	execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
-		Platform: mts.pgStore.PlatformMCPServers(),
+		Platform: mts.backend.PlatformMCPServers(),
 		Team:     teamStore.MCPServers(),
 	})
 	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())

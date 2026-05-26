@@ -338,13 +338,8 @@ func (sm *SessionManager) GetOrCreateMCPManager(ctx context.Context, sessionID s
 		mcpCfg := buildMCPConfigFromStores(validStores, requiredServers, EffectiveAppConfigFromContext(ctx, true))
 		mgr = mcp.NewManagerFromConfig(mcpCfg)
 	} else {
-		// Personal mode: load from filesystem
-		var err error
-		mgr, err = mcp.NewManager()
-		if err != nil {
-			slog.Warn("failed to create mcp manager", "error", err)
-			return nil, nil
-		}
+		// No platform MCP stores available — return empty
+		return nil, nil
 	}
 
 	if err := mgr.InitializeSelectiveToolsets(ctx, requiredServers); err != nil {
@@ -495,21 +490,8 @@ func getRequiredMCPServers(cfg *config.AgentConfig, mcpStores ...store.MCPServer
 		return getRequiredMCPServersFromStore(validStores, toolsNeeded)
 	}
 
-	// Personal mode: use file-based cache
-	cachedTools := GetCachedTools()
-	serversNeeded := make(map[string]bool)
-	for _, t := range cachedTools {
-		if toolsNeeded[t.Name] && t.Source != "internal" {
-			serversNeeded[t.Source] = true
-		}
-	}
-
-	// Convert to slice
-	var servers []string
-	for server := range serversNeeded {
-		servers = append(servers, server)
-	}
-	return servers
+	// No platform stores available — cannot resolve MCP servers
+	return nil
 }
 
 // getRequiredMCPServersFromStore queries multiple platform MCP stores' cached_tools

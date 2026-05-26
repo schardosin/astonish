@@ -216,12 +216,12 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 	// Persist the layer and template DAG rows in the platform DB.
 	// This MUST succeed; without the DB rows, chat sessions cannot resolve
 	// the team's layer chain and the save is effectively a no-op.
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	platformBackend := getPlatformBackend()
+	if platformBackend == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform DB not available — cannot persist template")
 		return
 	}
-	if err := persistTeamTemplateArtifact(r.Context(), pgStore, tc.TeamSlug, templateSlug, artifact); err != nil {
+	if err := persistTeamTemplateArtifact(r.Context(), platformBackend, tc.TeamSlug, templateSlug, artifact); err != nil {
 		slog.Error("failed to persist template artifact to platform DB",
 			"team", tc.TeamSlug,
 			"layer", artifact.LayerID,
@@ -260,9 +260,9 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 //  2. GetBySlug to see if the template already exists.
 //  3. If exists: decrement old layer ref, update top_layer_id, increment new.
 //  4. If not: Create template row, increment ref.
-func persistTeamTemplateArtifact(ctx context.Context, pgStore *pgstore.PGStore, teamSlug, templateSlug string, artifact *sandbox.TemplateArtifact) error {
-	layers := pgStore.SandboxLayers()
-	templates := pgStore.SandboxTemplates()
+func persistTeamTemplateArtifact(ctx context.Context, backend store.PlatformBackend, teamSlug, templateSlug string, artifact *sandbox.TemplateArtifact) error {
+	layers := backend.SandboxLayers()
+	templates := backend.SandboxTemplates()
 	if layers == nil || templates == nil {
 		return fmt.Errorf("platform store not available")
 	}
@@ -348,12 +348,12 @@ func ptrIfNonEmpty(s string) *string {
 // Returns the layer ID whose ref_count was decremented (empty string if none).
 // Callers use this to decide whether to reclaim bytes from disk.
 func deleteTeamTemplateState(ctx context.Context, teamSlug string) string {
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		return ""
 	}
-	templates := pgStore.SandboxTemplates()
-	layers := pgStore.SandboxLayers()
+	templates := backend.SandboxTemplates()
+	layers := backend.SandboxLayers()
 	if templates == nil || layers == nil {
 		return ""
 	}
@@ -403,11 +403,11 @@ func reclaimLayerBytes(ctx context.Context, backend sandbox.Backend, layerID str
 	if layerID == "" || layerID == sandbox.BaseTemplateID {
 		return
 	}
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	platformBackend := getPlatformBackend()
+	if platformBackend == nil {
 		return
 	}
-	layers := pgStore.SandboxLayers()
+	layers := platformBackend.SandboxLayers()
 	if layers == nil {
 		return
 	}

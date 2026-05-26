@@ -23,8 +23,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/tests/e2eboot"
 )
 
@@ -256,25 +255,33 @@ func createAndSaveTeamTemplate(t *testing.T, h *e2eboot.Harness) {
 func resetBaseSentinel(t *testing.T, h *e2eboot.Harness) {
 	t.Helper()
 	ctx := context.Background()
-	conn, err := pgx.Connect(ctx, h.PlatformDSN)
-	if err != nil {
-		t.Fatalf("connect to platform DB: %v", err)
-	}
-	defer conn.Close(ctx)
 
-	_, err = conn.Exec(ctx, `UPDATE sandbox_templates SET top_layer_id = '@base' WHERE slug = 'base' AND scope = 'global'`)
+	// Use the store interface (works for both PG and SQLite backends).
+	tpl, err := h.PlatformBackend().SandboxTemplates().GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
 	if err != nil {
+		t.Fatalf("get @base template: %v", err)
+	}
+	if tpl == nil {
+		t.Fatal("@base template not found")
+	}
+
+	baseVal := "@base"
+	tpl.TopLayerID = &baseVal
+	if err := h.PlatformBackend().SandboxTemplates().Update(ctx, tpl); err != nil {
 		t.Fatalf("reset @base sentinel: %v", err)
 	}
 
-	// Verify the update took effect
-	var topLayerID string
-	err = conn.QueryRow(ctx, `SELECT top_layer_id FROM sandbox_templates WHERE slug = 'base' AND scope = 'global'`).Scan(&topLayerID)
+	// Verify the update took effect.
+	tpl2, err := h.PlatformBackend().SandboxTemplates().GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
 	if err != nil {
 		t.Fatalf("verify reset: %v", err)
 	}
-	if topLayerID != "@base" {
-		t.Fatalf("reset failed: top_layer_id=%q, want '@base'", topLayerID)
+	if tpl2 == nil || tpl2.TopLayerID == nil || *tpl2.TopLayerID != "@base" {
+		topID := ""
+		if tpl2 != nil && tpl2.TopLayerID != nil {
+			topID = *tpl2.TopLayerID
+		}
+		t.Fatalf("reset failed: top_layer_id=%q, want '@base'", topID)
 	}
 	t.Log("  Reset @base.top_layer_id to sentinel '@base'")
 }

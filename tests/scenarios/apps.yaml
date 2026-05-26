@@ -41,8 +41,9 @@ scenarios:
       As a user, I create an app, verify it in the list API, read its
       code and metadata, delete it, and confirm it's gone.
     priority: P0
-    status: missing
-    test_refs: []
+    status: covered
+    test_refs:
+      - tests/e2e/apps/apps_test.go::TestE2E_Apps_CRUD
 
   - id: APPS-004
     title: "Publish personal app to team scope"
@@ -76,3 +77,22 @@ scenarios:
     status: missing
     test_refs: []
     notes: "Requires running sandbox with iframe communication."
+
+  # ---------------------------------------------------------------------------
+  # App Persistence & Data Sources
+  # ---------------------------------------------------------------------------
+
+  - id: APPS-007
+    title: "App state persistence and MCP data source invocation"
+    user_story: |
+      As a user, my app uses a per-app SQLite database (or PG schema)
+      to store structured data via CREATE TABLE / INSERT / SELECT.
+      The data persists across requests. Additionally, my app fetches
+      live data from a registered MCP server (Tavily search) via the
+      app data handler, receiving real search results.
+    priority: P0
+    status: covered
+    test_refs:
+      - tests/e2e/apps/apps_test.go::TestE2E_Apps_StatePersistence
+      - tests/e2e/apps/apps_test.go::TestE2E_Apps_MCPDataSource
+    notes: "MCP test requires TAVILY_API_KEY and K8s sandbox."

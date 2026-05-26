@@ -1,21 +1,16 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
-	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/mcp"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/anthropic"
 	"github.com/schardosin/astonish/pkg/provider/google"
@@ -452,14 +447,7 @@ func GetMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: read from filesystem
-	cfg, err := config.LoadMCPConfigRaw()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load MCP config: "+err.Error())
-		return
-	}
-
-	respondJSON(w, http.StatusOK, cfg)
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // UpdateMCPSettingsHandler handles PUT /api/settings/mcp
@@ -481,8 +469,8 @@ func UpdateMCPSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: file-based (original logic)
-	updateMCPSettingsPersonal(w, r, newCfg)
+	// Personal mode no longer supported
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // updateMCPSettingsPlatform handles the PUT in platform mode (DB store).
@@ -494,6 +482,14 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 		if server.Transport == "" {
 			server.Transport = "stdio"
 			newCfg.MCPServers[name] = server
+		}
+	}
+
+	// Pre-flight: ensure all stdio servers can be installed (sandbox must be enabled)
+	for name, server := range newCfg.MCPServers {
+		if err := checkStdioMCPInstallable(server.Transport); err != nil {
+			respondError(w, http.StatusUnprocessableEntity, fmt.Sprintf("server %q: %s", name, err.Error()))
+			return
 		}
 	}
 
@@ -538,99 +534,9 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 		// (skip if the server already has cached_tools and config hasn't changed)
 		existing := existingMap[name]
 		if existing == nil || !mcpServerConfigUnchanged(existing, s) {
-			go refreshMCPPlatformServer(mcpStore, s)
+			refreshMCPPlatformServer(mcpStore, s)
 		}
 	}
-
-	// Reset the Studio chat agent so the next request picks up fresh MCP config.
-	GetChatManager().Reset()
-
-	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-// updateMCPSettingsPersonal handles the PUT in personal mode (filesystem).
-func updateMCPSettingsPersonal(w http.ResponseWriter, r *http.Request, newCfg config.MCPConfig) {
-	// Load existing config to detect added/removed servers
-	oldCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("failed to load existing MCP config", "error", err)
-	}
-
-	// Set default transport to "stdio" if not specified
-	for name, server := range newCfg.MCPServers {
-		if server.Transport == "" {
-			server.Transport = "stdio"
-			newCfg.MCPServers[name] = server
-		}
-	}
-
-	// Detect removed servers and remove from persistent cache
-	if oldCfg != nil && oldCfg.MCPServers != nil {
-		for serverName := range oldCfg.MCPServers {
-			if _, exists := newCfg.MCPServers[serverName]; !exists {
-				// Server was removed - clear its tools from persistent cache
-				cache.RemoveServer(serverName)
-				RemoveServerToolsFromCache(serverName) // Also update in-memory cache
-				slog.Info("removed server from persistent cache", "component", "cache", "server", serverName)
-			}
-		}
-	}
-
-	// Detect added or changed servers
-	addedOrChanged := make(map[string]config.MCPServerConfig)
-	for serverName, serverCfg := range newCfg.MCPServers {
-		if oldCfg == nil || oldCfg.MCPServers == nil {
-			addedOrChanged[serverName] = serverCfg
-			continue
-		}
-		oldServer, existed := oldCfg.MCPServers[serverName]
-		if !existed {
-			// New server
-			addedOrChanged[serverName] = serverCfg
-		} else {
-			// Check if config changed using checksum
-			oldChecksum := cache.ComputeServerChecksum(oldServer.Command, oldServer.Args, oldServer.Env)
-			newChecksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-			if oldChecksum != newChecksum {
-				addedOrChanged[serverName] = serverCfg
-			}
-		}
-	}
-
-	if err := config.SaveMCPConfig(&newCfg); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
-		return
-	}
-
-	// Re-setup environment variables
-	config.SetupMCPEnv(&newCfg)
-
-	// Update persistent cache for added/changed servers
-	if len(addedOrChanged) > 0 {
-		slog.Info("detected added/changed servers", "component", "cache", "count", len(addedOrChanged), "servers", keysOf(addedOrChanged))
-
-		// Set initial status to "loading" for all added/changed servers
-		now := time.Now().UTC().Format(time.RFC3339)
-		for serverName := range addedOrChanged {
-			SetServerStatus(serverName, cache.ServerStatus{
-				Name:      serverName,
-				Status:    "loading",
-				ToolCount: 0,
-				LastCheck: now,
-			})
-		}
-
-		// Use background context since request context gets cancelled
-		go updatePersistentCacheForServers(context.Background(), addedOrChanged)
-	}
-
-	// Save persistent cache after removals
-	if err := cache.SaveCache(); err != nil {
-		slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
-	}
-
-	// Refresh in-memory tools cache
-	RefreshToolsCache(r.Context())
 
 	// Reset the Studio chat agent so the next request picks up fresh MCP config.
 	GetChatManager().Reset()
@@ -670,6 +576,12 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: save directly to DB store
 	if mcpStore := effectiveMCPStore(r); mcpStore != nil {
+		// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
+		if err := checkStdioMCPInstallable(req.Config.Transport); err != nil {
+			respondError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+
 		// Team-scoped install requires team admin privileges
 		if !RequireTeamAdmin(w, r) {
 			return
@@ -690,17 +602,8 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Discover tools in background
-		servers := map[string]config.MCPServerConfig{req.ServerName: req.Config}
-		go func() {
-			bgCtx := context.Background()
-			discoveredTools := discoverMCPToolsForPlatform(bgCtx, req.ServerName, servers)
-			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(bgCtx, req.ServerName, discoveredTools); err != nil {
-					slog.Warn("failed to update cached_tools after install", "server", req.ServerName, "error", err)
-				}
-			}
-		}()
+		// Discover tools asynchronously with timeout
+		asyncDiscoverAndCacheTools(mcpStore, req.ServerName, req.Config)
 
 		GetChatManager().Reset()
 
@@ -712,195 +615,8 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: file-based install
-	installInlineMCPServerPersonal(w, r, req)
-}
-
-// installInlineMCPServerPersonal handles the install in personal mode (filesystem).
-func installInlineMCPServerPersonal(w http.ResponseWriter, r *http.Request, req InstallInlineMCPServerRequest) {
-	// Load current MCP config
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		mcpCfg = &config.MCPConfig{MCPServers: make(map[string]config.MCPServerConfig)}
-	}
-
-	// Initialize map if nil
-	if mcpCfg.MCPServers == nil {
-		mcpCfg.MCPServers = make(map[string]config.MCPServerConfig)
-	}
-
-	// Add the server
-	mcpCfg.MCPServers[req.ServerName] = req.Config
-
-	// Save config
-	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to save MCP config: "+err.Error())
-		return
-	}
-
-	// Setup environment variables
-	config.SetupMCPEnv(mcpCfg)
-
-	// Synchronously load this server's tools (should be fast for one server)
-	toolsLoaded := 0
-	toolError := ""
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		toolError = fmt.Sprintf("Failed to create MCP manager: %v", err)
-		slog.Warn(toolError)
-	} else {
-		namedToolset, err := mcpManager.InitializeSingleToolset(r.Context(), req.ServerName)
-		if err != nil {
-			toolError = fmt.Sprintf("Failed to initialize server: %v", err)
-			slog.Warn(toolError)
-		} else {
-			// Get tools from this server and add to cache
-			minimalCtx := &minimalReadonlyContext{Context: r.Context()}
-			mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-			if err != nil {
-				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-				if stderrOutput != "" && stderrOutput != "no stderr output" {
-					toolError = stderrOutput
-				} else {
-					toolError = fmt.Sprintf("Server started but failed to get tools: %v", err)
-				}
-				slog.Warn(toolError)
-			} else {
-				var newTools []ToolInfo
-				for _, t := range mcpTools {
-					newTools = append(newTools, ToolInfo{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      req.ServerName,
-					})
-				}
-				AddServerToolsToCache(req.ServerName, newTools)
-				toolsLoaded = len(newTools)
-
-				// Also update persistent cache (use mcpTools for schema access)
-				persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
-				for _, t := range mcpTools {
-					persistentTools = append(persistentTools, cache.ToolEntry{
-						Name:        t.Name(),
-						Description: t.Description(),
-						Source:      req.ServerName,
-						InputSchema: common.ExtractToolInputSchema(t),
-					})
-				}
-				checksum := cache.ComputeServerChecksum(req.Config.Command, req.Config.Args, req.Config.Env)
-				cache.AddServerTools(req.ServerName, persistentTools, checksum)
-				if err := cache.SaveCache(); err != nil {
-					slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
-				} else {
-					slog.Info("saved tools to persistent cache", "component", "cache", "count", len(persistentTools), "server", req.ServerName)
-				}
-			}
-		}
-	}
-
-	slog.Info("installed inline mcp server", "component", "mcp-install", "server", req.ServerName)
-
-	// Reset the Studio chat agent so the next request picks up the new MCP server.
-	GetChatManager().Reset()
-
-	w.Header().Set("Content-Type", "application/json")
-	response := map[string]interface{}{
-		"status":      "installed",
-		"serverName":  req.ServerName,
-		"toolsLoaded": toolsLoaded,
-	}
-	if toolError != "" {
-		response["toolError"] = toolError
-	}
-	json.NewEncoder(w).Encode(response)
-}
-
-// updatePersistentCacheForServers initializes specific servers and adds their tools to persistent cache
-func updatePersistentCacheForServers(ctx context.Context, servers map[string]config.MCPServerConfig) {
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		slog.Error("failed to create mcp manager", "component", "cache", "error", err)
-		return
-	}
-	defer mcpManager.Cleanup()
-
-	for serverName, serverCfg := range servers {
-		slog.Info("updating cache for server", "component", "cache", "server", serverName)
-
-		// Initialize just this server
-		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
-		if err != nil {
-			slog.Error("failed to initialize server", "component", "cache", "server", serverName, "error", err)
-			// Update status to error
-			SetServerStatus(serverName, cache.ServerStatus{
-				Name:      serverName,
-				Status:    "error",
-				Error:     err.Error(),
-				ToolCount: 0,
-				LastCheck: time.Now().UTC().Format(time.RFC3339),
-			})
-			continue
-		}
-
-		// Get its tools
-		minimalCtx := &minimalReadonlyContext{Context: ctx}
-		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-		if err != nil {
-			stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-			slog.Error("failed to get tools from server", "component", "cache", "server", serverName, "error", err, "stderr", stderrOutput)
-			// Update status to error
-			errMsg := fmt.Sprintf("Failed to list tools: %v", err)
-			if stderrOutput != "" && stderrOutput != "no stderr output" {
-				errMsg = stderrOutput
-			}
-			SetServerStatus(serverName, cache.ServerStatus{
-				Name:      serverName,
-				Status:    "error",
-				Error:     errMsg,
-				ToolCount: 0,
-				LastCheck: time.Now().UTC().Format(time.RFC3339),
-			})
-			continue
-		}
-
-		// Build tool entries
-		var toolEntries []cache.ToolEntry
-		for _, t := range mcpTools {
-			toolEntries = append(toolEntries, cache.ToolEntry{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      serverName,
-				InputSchema: common.ExtractToolInputSchema(t),
-			})
-		}
-
-		// Compute checksum and add to cache
-		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-		cache.AddServerTools(serverName, toolEntries, checksum)
-		slog.Info("added tools to persistent cache", "component", "cache", "server", serverName, "count", len(toolEntries))
-
-		// Update status to healthy
-		SetServerStatus(serverName, cache.ServerStatus{
-			Name:      serverName,
-			Status:    "healthy",
-			ToolCount: len(toolEntries),
-			LastCheck: time.Now().UTC().Format(time.RFC3339),
-		})
-	}
-
-	// Save the updated cache
-	if err := cache.SaveCache(); err != nil {
-		slog.Error("failed to save persistent cache", "component", "cache", "error", err)
-	}
-}
-
-// keysOf returns the keys of a map for logging
-func keysOf(m map[string]config.MCPServerConfig) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	return keys
+	// Personal mode no longer supported
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // ListProviderModelsHandler handles GET /api/providers/{providerId}/models

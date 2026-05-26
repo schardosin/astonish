@@ -233,6 +233,36 @@ func (b *IncusBackend) SessionState(ctx context.Context, sessionID string) (Sess
 	return b.observeState(entry.ContainerName), nil
 }
 
+// WaitForSessionReady polls until the session's container is Running.
+// On Incus this is nearly instant since CreateSession starts the container
+// synchronously, but we poll for robustness.
+func (b *IncusBackend) WaitForSessionReady(ctx context.Context, sessionID string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	entry := b.sessions.Get(sessionID)
+	if entry == nil {
+		return fmt.Errorf("WaitForSessionReady: session %q not found", sessionID)
+	}
+	// Fast path: already running
+	if b.client.IsRunning(entry.ContainerName) {
+		return nil
+	}
+	// Poll with backoff (should rarely be needed for Incus)
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("WaitForSessionReady(%s): %w", sessionID, ctx.Err())
+		case <-ticker.C:
+			if b.client.IsRunning(entry.ContainerName) {
+				return nil
+			}
+		}
+	}
+}
+
 // ListSessions returns sessions matching the filter.
 func (b *IncusBackend) ListSessions(ctx context.Context, filter SessionFilter) ([]*Session, error) {
 	if ctx.Err() != nil {
@@ -346,6 +376,29 @@ func (b *IncusBackend) ExecInteractive(ctx context.Context, sessionID string, op
 	})
 	if err != nil {
 		return nil, fmt.Errorf("ExecInteractive(%s): %w", sessionID, err)
+	}
+	return &incusExecStream{proc: proc}, nil
+}
+
+// ExecStreaming starts a non-interactive streaming process (no PTY).
+func (b *IncusBackend) ExecStreaming(ctx context.Context, sessionID string, opts ExecStreamSpec) (ExecStream, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	entry := b.sessions.Get(sessionID)
+	if entry == nil {
+		return nil, fmt.Errorf("ExecStreaming: session %q not found", sessionID)
+	}
+	if len(opts.Command) == 0 {
+		return nil, errors.New("ExecStreaming: Command is required")
+	}
+	proc, err := incus.ExecNonInteractive(b.client, entry.ContainerName, opts.Command, incus.ExecOpts{
+		WorkDir:        opts.WorkDir,
+		Env:            opts.Env,
+		SeparateStderr: opts.SeparateStderr,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ExecStreaming(%s): %w", sessionID, err)
 	}
 	return &incusExecStream{proc: proc}, nil
 }

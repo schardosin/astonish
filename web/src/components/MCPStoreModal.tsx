@@ -26,6 +26,7 @@ interface MCPStoreModalProps {
   onClose: () => void
   onInstall?: (server: MCPServer) => void
   teamSlug?: string
+  scope?: string  // 'team' | 'platform' | undefined (org default)
 }
 
 // API functions for MCP Store
@@ -36,10 +37,11 @@ const _fetchMCPStore = async (query = ''): Promise<{ servers: MCPServer[]; sourc
   return res.json()
 }
 
-const installMCPServer = async (mcpId: string, env: Record<string, string> = {}, teamSlug?: string): Promise<Record<string, unknown>> => {
+const installMCPServer = async (mcpId: string, env: Record<string, string> = {}, teamSlug?: string, scope?: string): Promise<Record<string, unknown>> => {
   const encodedId = encodeURIComponent(mcpId).replace(/%2F/g, '/')
-  const url = teamSlug
-    ? `/api/mcp-store/${encodedId}/install?scope=team`
+  const scopeParam = scope || (teamSlug ? 'team' : '')
+  const url = scopeParam
+    ? `/api/mcp-store/${encodedId}/install?scope=${scopeParam}`
     : `/api/mcp-store/${encodedId}/install`
   const res = await teamFetch(url, {
     method: 'POST',
@@ -54,7 +56,7 @@ const installMCPServer = async (mcpId: string, env: Record<string, string> = {},
   return res.json()
 }
 
-export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug }: MCPStoreModalProps) {
+export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug, scope }: MCPStoreModalProps) {
   const [servers, setServers] = useState<MCPServer[]>([])
   const [sources, setSources] = useState<string[]>([]) // Available sources for dropdown
   const [selectedSource, setSelectedSource] = useState('all') // Current source filter
@@ -115,7 +117,7 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug }: 
     setInstallSuccess(null)
     try {
       const envToSend = { ...envOverrides }
-      await installMCPServer(server.mcpId, envToSend, teamSlug)
+      await installMCPServer(server.mcpId, envToSend, teamSlug, scope)
       setInstallSuccess(server.mcpId)
       setEnvOverrides({})
       if (onInstall) onInstall(server)

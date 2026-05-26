@@ -41,6 +41,43 @@ type TenantRouter interface {
 	DecommissionOrg(ctx context.Context, orgID string) error
 }
 
+// PlatformBackend is the combined interface used by platform-mode components
+// (auth, channels, setup) that need access to both platform-level stores and
+// tenant routing. Both pgstore.PGStore and sqlitestore.SQLiteStore implement this.
+type PlatformBackend interface {
+	PlatformStore
+	TenantRouter
+	// InstanceSuffix returns the instance suffix for database naming.
+	// Returns empty string for SQLite mode (directory-based isolation).
+	InstanceSuffix() string
+
+	// --- Settings ---
+	PlatformSettings() PlatformSettingsStore
+	OrgSettings(orgSlug string) OrgSettingsStore
+	PlatformMCPServers() MCPServerStore
+
+	// --- Embeddings ---
+	SetEmbedFunc(fn EmbedFunc)
+	GetEmbedFunc() EmbedFunc
+
+	// --- Sandbox ---
+	SandboxLayers() LayerStore
+	SandboxTemplates() SandboxTemplateStore
+
+	// --- Secrets ---
+	// SecretGetter returns a function that resolves secrets from the platform
+	// secrets table. Used by daemon and API layers for provider keys, channel
+	// tokens, and MCP server credentials.
+	SecretGetter() func(string) string
+
+	// --- Lifecycle ---
+	// MigrateAll runs pending migrations on all databases (platform + org + team).
+	MigrateAll(ctx context.Context) error
+
+	// CleanupExpired removes expired transient records (device sessions, link codes).
+	CleanupExpired(ctx context.Context) error
+}
+
 // OrgDataStore is the root of all data access within an organization.
 // In personal mode, this is the only store needed (backed by the local filesystem).
 type OrgDataStore interface {
@@ -362,4 +399,26 @@ type AuditFilter struct {
 	Until     time.Time
 	Limit     int
 	Offset    int
+}
+
+// --------------------------------------------------------------------------
+// Link code store (channel linking)
+// --------------------------------------------------------------------------
+
+// LinkCode represents a pending channel-linking verification code.
+type LinkCode struct {
+	Code      string    `json:"code"`
+	UserID    string    `json:"user_id"`
+	Email     string    `json:"email"`
+	Channel   string    `json:"channel"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// LinkCodeStore manages pending link codes for channel verification flows.
+// Both pgstore and sqlitestore implement this interface.
+type LinkCodeStore interface {
+	Generate(ctx context.Context, code, userID, email, channel string) error
+	Consume(ctx context.Context, code string) (*LinkCode, error)
+	Cleanup(ctx context.Context) error
 }

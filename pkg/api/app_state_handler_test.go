@@ -1,202 +1,80 @@
 package api
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
-	"time"
 )
 
-// setupTestAppsDir creates a temporary directory structure that mirrors
-// ~/.config/astonish/apps/ and redirects os.UserConfigDir() to it
-// via XDG_CONFIG_HOME.
-func setupTestAppsDir(t *testing.T) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-	appsDir := filepath.Join(tmpDir, "astonish", "apps")
-	if err := os.MkdirAll(appsDir, 0755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	return appsDir
-}
-
-func TestCloseAndDeleteAppDB(t *testing.T) {
-	appsDir := setupTestAppsDir(t)
-
-	// Create fake .db, .db-wal, .db-shm files
-	slug := "my_app"
-	for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
-		path := filepath.Join(appsDir, slug+suffix)
-		if err := os.WriteFile(path, []byte("test"), 0644); err != nil {
-			t.Fatalf("WriteFile(%s): %v", suffix, err)
-		}
+func TestTruncateSQL(t *testing.T) {
+	short := "SELECT * FROM users"
+	if got := truncateSQL(short); got != short {
+		t.Errorf("truncateSQL(%q) = %q, want %q", short, got, short)
 	}
 
-	// Verify files exist
-	for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
-		path := filepath.Join(appsDir, slug+suffix)
-		if _, err := os.Stat(path); err != nil {
-			t.Fatalf("expected %s to exist before cleanup", path)
-		}
+	long := "SELECT very_long_column_name_1, very_long_column_name_2, very_long_column_name_3 FROM extremely_long_table_name WHERE condition = 'test'"
+	got := truncateSQL(long)
+	if len(got) > 103 { // 100 + "..."
+		t.Errorf("truncateSQL should truncate to ~103 chars, got %d", len(got))
 	}
-
-	// Run cleanup
-	if err := CloseAndDeleteAppDB("My App"); err != nil {
-		t.Fatalf("CloseAndDeleteAppDB: %v", err)
-	}
-
-	// Verify all files are gone
-	for _, suffix := range []string{".db", ".db-wal", ".db-shm"} {
-		path := filepath.Join(appsDir, slug+suffix)
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Errorf("expected %s to be deleted, but it still exists", path)
-		}
+	if got[len(got)-3:] != "..." {
+		t.Error("truncated SQL should end with ...")
 	}
 }
 
-func TestCloseAndDeleteAppDB_NoFiles(t *testing.T) {
-	setupTestAppsDir(t)
+func TestSqliteToPostgres(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{
+			name:     "PRAGMA returns empty",
+			input:    "PRAGMA journal_mode=WAL",
+			expected: "",
+		},
+		{
+			name:     "question marks replaced",
+			input:    "SELECT * FROM t WHERE a = ? AND b = ?",
+			expected: "SELECT * FROM t WHERE a = $1 AND b = $2",
+		},
+		{
+			name:     "AUTOINCREMENT replaced",
+			input:    "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT)",
+			expected: "CREATE TABLE t (id INTEGER PRIMARY KEY GENERATED ALWAYS AS IDENTITY)",
+		},
+		{
+			name:     "DATETIME DEFAULT CURRENT_TIMESTAMP replaced",
+			input:    "CREATE TABLE t (created DATETIME DEFAULT CURRENT_TIMESTAMP)",
+			expected: "CREATE TABLE t (created TIMESTAMPTZ DEFAULT now())",
+		},
+	}
 
-	// Should not error when no .db files exist
-	if err := CloseAndDeleteAppDB("nonexistent"); err != nil {
-		t.Errorf("CloseAndDeleteAppDB for nonexistent app should not error, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sqliteToPostgres(tt.input)
+			if got != tt.expected {
+				t.Errorf("sqliteToPostgres(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
 	}
 }
 
-func TestCleanupOrphanAppDBs(t *testing.T) {
-	appsDir := setupTestAppsDir(t)
-
-	// Create an orphaned .db (no matching .yaml, old mtime)
-	orphanDB := filepath.Join(appsDir, "orphan_app.db")
-	orphanWAL := filepath.Join(appsDir, "orphan_app.db-wal")
-	if err := os.WriteFile(orphanDB, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(orphanWAL, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	// Set mtime to 10 days ago
-	oldTime := time.Now().Add(-10 * 24 * time.Hour)
-	os.Chtimes(orphanDB, oldTime, oldTime)
-	os.Chtimes(orphanWAL, oldTime, oldTime)
-
-	// Create a non-orphaned .db (has matching .yaml)
-	savedDB := filepath.Join(appsDir, "saved_app.db")
-	savedYAML := filepath.Join(appsDir, "saved_app.yaml")
-	if err := os.WriteFile(savedDB, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(savedYAML, []byte("name: Saved App"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	os.Chtimes(savedDB, oldTime, oldTime)
-
-	// Create a recent orphaned .db (no matching .yaml, but recent)
-	recentDB := filepath.Join(appsDir, "recent_app.db")
-	if err := os.WriteFile(recentDB, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	// mtime is now — should NOT be cleaned up
-
-	// Run cleanup with 7-day threshold
-	cleaned := CleanupOrphanAppDBs(7 * 24 * time.Hour)
-
-	if cleaned != 1 {
-		t.Errorf("expected 1 cleaned, got %d", cleaned)
+func TestReplaceQuestionMarks(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"SELECT ?", "SELECT $1"},
+		{"INSERT INTO t VALUES (?, ?, ?)", "INSERT INTO t VALUES ($1, $2, $3)"},
+		{"SELECT '?' FROM t WHERE x = ?", "SELECT '?' FROM t WHERE x = $1"},
+		{`SELECT "?" FROM t WHERE x = ?`, `SELECT "?" FROM t WHERE x = $1`},
 	}
 
-	// Orphaned old .db should be gone
-	if _, err := os.Stat(orphanDB); !os.IsNotExist(err) {
-		t.Error("orphan_app.db should have been deleted")
-	}
-	if _, err := os.Stat(orphanWAL); !os.IsNotExist(err) {
-		t.Error("orphan_app.db-wal should have been deleted")
-	}
-
-	// Saved app .db should still exist
-	if _, err := os.Stat(savedDB); err != nil {
-		t.Error("saved_app.db should still exist (has matching .yaml)")
-	}
-
-	// Recent orphan .db should still exist
-	if _, err := os.Stat(recentDB); err != nil {
-		t.Error("recent_app.db should still exist (too recent)")
-	}
-}
-
-func TestCleanupOrphanAppDBs_EmptyDir(t *testing.T) {
-	setupTestAppsDir(t)
-
-	// Should return 0 with no files
-	cleaned := CleanupOrphanAppDBs(7 * 24 * time.Hour)
-	if cleaned != 0 {
-		t.Errorf("expected 0 cleaned, got %d", cleaned)
-	}
-}
-
-func TestCleanupSessionAppDBs(t *testing.T) {
-	appsDir := setupTestAppsDir(t)
-
-	sessionID := "37062e2d-631e-47c1-8a22-a98f8b52266a"
-
-	// Create session-scoped .db files (simulating slugified "session:{id}:{title}")
-	// Slugify("session:37062e2d-...:Todo App") = "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app"
-	sessionDB1 := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app.db")
-	sessionDB1WAL := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_todo_app.db-wal")
-	sessionDB2 := filepath.Join(appsDir, "session_37062e2d_631e_47c1_8a22_a98f8b52266a_weather_dash.db")
-
-	for _, p := range []string{sessionDB1, sessionDB1WAL, sessionDB2} {
-		if err := os.WriteFile(p, []byte("test"), 0644); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// Create a .db for a different session — should NOT be removed
-	otherDB := filepath.Join(appsDir, "session_aaaa_bbbb_cccc_other_app.db")
-	if err := os.WriteFile(otherDB, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a saved app .db — should NOT be removed
-	savedDB := filepath.Join(appsDir, "my_saved_app.db")
-	if err := os.WriteFile(savedDB, []byte("test"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	cleaned := CleanupSessionAppDBs(sessionID)
-
-	if cleaned != 2 {
-		t.Errorf("expected 2 cleaned, got %d", cleaned)
-	}
-
-	// Session DBs should be gone
-	if _, err := os.Stat(sessionDB1); !os.IsNotExist(err) {
-		t.Error("session todo_app.db should have been deleted")
-	}
-	if _, err := os.Stat(sessionDB1WAL); !os.IsNotExist(err) {
-		t.Error("session todo_app.db-wal should have been deleted")
-	}
-	if _, err := os.Stat(sessionDB2); !os.IsNotExist(err) {
-		t.Error("session weather_dash.db should have been deleted")
-	}
-
-	// Other session's DB should still exist
-	if _, err := os.Stat(otherDB); err != nil {
-		t.Error("other session's .db should still exist")
-	}
-
-	// Saved app DB should still exist
-	if _, err := os.Stat(savedDB); err != nil {
-		t.Error("saved app .db should still exist")
-	}
-}
-
-func TestCleanupSessionAppDBs_EmptySessionID(t *testing.T) {
-	setupTestAppsDir(t)
-
-	cleaned := CleanupSessionAppDBs("")
-	if cleaned != 0 {
-		t.Errorf("expected 0 for empty sessionID, got %d", cleaned)
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := replaceQuestionMarks(tt.input)
+			if got != tt.expected {
+				t.Errorf("replaceQuestionMarks(%q) = %q, want %q", tt.input, got, tt.expected)
+			}
+		})
 	}
 }

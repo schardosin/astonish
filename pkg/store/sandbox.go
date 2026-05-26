@@ -125,6 +125,39 @@ type SandboxTemplateStore interface {
 	// ListRoots returns templates with no parent (only the global "@base"
 	// qualifies today). Useful for admin tools.
 	ListRoots(ctx context.Context) ([]*SandboxTemplate, error)
+
+	// --- @base configuration helpers ---
+
+	// GetBaseConfig returns the current @base template's configuration and
+	// metadata. Returns nil, nil if @base does not exist.
+	GetBaseConfig(ctx context.Context) (*BaseConfigInfo, error)
+
+	// SetBaseConfig updates the @base template's top_layer_id and
+	// configuration JSON. Called after a successful BuildTemplate run.
+	SetBaseConfig(ctx context.Context, newLayerID string, configJSON []byte, configuredBy string) error
+
+	// GetBaseTopLayerID returns the current top_layer_id of @base.
+	// Returns empty string if not found or NULL.
+	GetBaseTopLayerID(ctx context.Context) (string, error)
+
+	// AcquireBuildLock attempts to acquire a non-blocking build lock.
+	// Returns (true, releaseFunc, nil) if acquired, (false, nil, nil) if
+	// another build is already in progress. The caller MUST call releaseFunc
+	// when the build is complete.
+	AcquireBuildLock(ctx context.Context) (acquired bool, release func(), err error)
+
+	// IsBuildInProgress returns true if a build is currently in progress.
+	IsBuildInProgress(ctx context.Context) (bool, error)
+}
+
+// BaseConfigInfo holds the @base template's configuration and metadata.
+type BaseConfigInfo struct {
+	LayerID      string
+	SizeBytes    int64
+	ConfigJSON   []byte // nil if never configured
+	ConfiguredBy string
+	ConfiguredAt *time.Time
+	UpdatedAt    time.Time
 }
 
 // --------------------------------------------------------------------------

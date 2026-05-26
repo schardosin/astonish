@@ -647,6 +647,71 @@ func (b *K8sBackend) SessionState(ctx context.Context, sessionID string) (sandbo
 	return podPhaseToSessionState(pod), nil
 }
 
+// sessionReadyTimeout caps how long WaitForSessionReady polls. This
+// covers image pull + PVC bind + overlay composition on first use.
+const sessionReadyTimeout = 2 * time.Minute
+
+// sessionReadyPollInterval is the poll cadence for WaitForSessionReady.
+const sessionReadyPollInterval = 500 * time.Millisecond
+
+// WaitForSessionReady polls the session's pod until it reaches Running phase.
+// Returns an error if the pod enters a terminal phase (Failed/Succeeded),
+// the timeout is exceeded, or the context is cancelled.
+func (b *K8sBackend) WaitForSessionReady(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if b.client == nil {
+		return fmt.Errorf("WaitForSessionReady: %w", ErrNotImplementedYet)
+	}
+
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("WaitForSessionReady(%s): lookup: %w", sessionID, err)
+	}
+	if rec == nil {
+		return fmt.Errorf("WaitForSessionReady: session %q not found", sessionID)
+	}
+
+	podName := rec.PodName
+	if podName == "" {
+		podName = podNameForSession(sessionID)
+	}
+
+	deadline := time.Now().Add(sessionReadyTimeout)
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("WaitForSessionReady(%s): %w", sessionID, err)
+		}
+		pod, err := b.client.CoreV1().Pods(b.cfg.Namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				// Pod not yet visible — may be a propagation delay
+				if time.Now().After(deadline) {
+					return fmt.Errorf("WaitForSessionReady(%s): pod %q not found within timeout", sessionID, podName)
+				}
+			} else {
+				return fmt.Errorf("WaitForSessionReady(%s): get pod: %w", sessionID, err)
+			}
+		} else {
+			switch pod.Status.Phase {
+			case corev1.PodRunning:
+				return nil
+			case corev1.PodFailed, corev1.PodSucceeded:
+				return fmt.Errorf("WaitForSessionReady(%s): pod reached terminal phase %s", sessionID, pod.Status.Phase)
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("WaitForSessionReady(%s): pod did not reach Running within %s", sessionID, sessionReadyTimeout)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("WaitForSessionReady(%s): %w", sessionID, ctx.Err())
+		case <-time.After(sessionReadyPollInterval):
+		}
+	}
+}
+
 // ListSessions enumerates pods in the configured namespace that carry
 // the session type label, materialising each as a sandbox.Session.
 // Filter fields are applied client-side where a server-side label

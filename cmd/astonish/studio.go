@@ -1,7 +1,6 @@
 package astonish
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -66,9 +65,6 @@ func handleStudioCommand(args []string) error {
 	if mcpCfg, err := config.LoadMCPConfig(); err == nil {
 		config.SetupMCPEnv(mcpCfg)
 	}
-
-	// Initialize tools cache (MCP tools loaded once at startup)
-	api.InitToolsCache(context.Background())
 
 	return launcher.RunStudio(*port)
 }

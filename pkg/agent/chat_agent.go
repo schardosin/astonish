@@ -10,7 +10,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
@@ -61,8 +60,6 @@ type ChatAgent struct {
 	FlowDistiller *FlowDistiller // Distiller for trace-to-YAML conversion
 
 	// Memory and knowledge
-	MemoryManager             *memory.Manager               // Persistent memory manager
-	MemoryReflector           *MemoryReflector              // Post-task memory reflection (nil = disabled, personal mode)
 	PlatformReflector         *PlatformReflector            // Post-task memory reflection for platform mode (nil = disabled)
 	KnowledgeSearch           KnowledgeSearchFunc           // Auto-retrieve relevant knowledge per turn (nil = disabled)
 	KnowledgeSearchByCategory KnowledgeSearchByCategoryFunc // Auto-retrieve guidance docs per turn (nil = disabled)
@@ -502,12 +499,17 @@ func (c *ChatAgent) extractAndStripImages(output map[string]any) map[string]any 
 func isMCPServerAccessible(ctx context.Context, serverName string) bool {
 	stores := store.MCPServerStoresFromContext(ctx)
 	if stores == nil {
-		return true // personal mode — no filtering
+		return true // no stores in context — allow all
 	}
 	// Standard servers (Tavily, Brave, etc.) are always accessible when installed.
-	// They are never stored in the DB but are injected at runtime.
 	if config.IsStandardServerInstalled(serverName) {
 		return true
+	}
+	// Check all three tiers: platform → org → team
+	if stores.Platform != nil {
+		if s, _ := stores.Platform.Get(ctx, serverName); s != nil {
+			return s.IsEnabled()
+		}
 	}
 	if stores.Org != nil {
 		if s, _ := stores.Org.Get(ctx, serverName); s != nil {

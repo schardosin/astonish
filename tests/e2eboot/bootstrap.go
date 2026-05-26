@@ -26,6 +26,7 @@ import (
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 )
 
 const (
@@ -39,8 +40,10 @@ const (
 type Harness struct {
 	BaseURL     string
 	Token       string
-	PgStore     *pgstore.PGStore
-	PlatformDSN string
+	PgStore     *pgstore.PGStore         // non-nil in PG mode, nil in SQLite mode
+	SQLiteStore *sqlitestore.SQLiteStore  // non-nil in SQLite mode, nil in PG mode
+	DataDir     string                   // SQLite data directory (empty in PG mode)
+	PlatformDSN string                   // PG platform DSN (empty in SQLite mode)
 	Suffix      string
 	BaseDSN     string
 
@@ -58,6 +61,21 @@ type Harness struct {
 	SharedMode bool
 }
 
+// PlatformBackend returns the store.PlatformBackend regardless of whether
+// the harness is backed by PG or SQLite. Use this in code that needs to
+// work with both backends (e.g., seed.go).
+func (h *Harness) PlatformBackend() store.PlatformBackend {
+	if h.PgStore != nil {
+		return h.PgStore
+	}
+	return h.SQLiteStore
+}
+
+// IsSQLite returns true if this harness is using the SQLite backend.
+func (h *Harness) IsSQLite() bool {
+	return h.SQLiteStore != nil
+}
+
 // Bootstrap sets up a full platform instance for a single E2E test.
 // It creates a fresh Postgres database (suffix derived from test name),
 // starts a real StudioServer, seeds the provider, registers a user, and
@@ -70,6 +88,11 @@ type Harness struct {
 // If ASTONISH_TEST_DSN is unset, the test is skipped.
 func Bootstrap(t *testing.T) *Harness {
 	t.Helper()
+
+	// SQLite backend: entirely different bootstrap path — no PG required.
+	if os.Getenv("ASTONISH_E2E_BACKEND") == "sqlite" {
+		return bootstrapSQLite(t)
+	}
 
 	dsn := os.Getenv("ASTONISH_TEST_DSN")
 	if dsn == "" {
@@ -134,6 +157,9 @@ func Bootstrap(t *testing.T) *Harness {
 		t.Fatalf("[e2eboot] NewPlatformServices: %v", err)
 	}
 	t.Cleanup(func() { pgStore.Close() })
+
+	// Initialize local embedding model for hybrid vector+keyword memory search.
+	initEmbedFunc(t, pgStore)
 
 	// Seed provider in platform settings
 	seedProvider(t, ctx, pgStore, apiKey)

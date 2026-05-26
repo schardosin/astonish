@@ -14,7 +14,6 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // Seed materializes the standard multi-tenant test layout on top of an
@@ -146,42 +145,42 @@ func tryAttachToExistingSeed(t *testing.T, ctx context.Context, h *Harness,
 	aliceEmail, bobEmail, carolEmail, daveEmail, eveEmail string) *SeedResult {
 	t.Helper()
 
-	acmeOrg, err := h.PgStore.Organizations().GetBySlug(ctx, acmeSlug)
+	acmeOrg, err := h.PlatformBackend().Organizations().GetBySlug(ctx, acmeSlug)
 	if err != nil || acmeOrg == nil {
 		return nil
 	}
-	globexOrg, err := h.PgStore.Organizations().GetBySlug(ctx, globexSlug)
+	globexOrg, err := h.PlatformBackend().Organizations().GetBySlug(ctx, globexSlug)
 	if err != nil || globexOrg == nil {
 		return nil
 	}
 
-	aliceUser, err := h.PgStore.Users().GetByEmail(ctx, aliceEmail)
+	aliceUser, err := h.PlatformBackend().Users().GetByEmail(ctx, aliceEmail)
 	if err != nil || aliceUser == nil {
 		return nil
 	}
-	bobUser, err := h.PgStore.Users().GetByEmail(ctx, bobEmail)
+	bobUser, err := h.PlatformBackend().Users().GetByEmail(ctx, bobEmail)
 	if err != nil || bobUser == nil {
 		return nil
 	}
-	carolUser, err := h.PgStore.Users().GetByEmail(ctx, carolEmail)
+	carolUser, err := h.PlatformBackend().Users().GetByEmail(ctx, carolEmail)
 	if err != nil || carolUser == nil {
 		return nil
 	}
-	daveUser, err := h.PgStore.Users().GetByEmail(ctx, daveEmail)
+	daveUser, err := h.PlatformBackend().Users().GetByEmail(ctx, daveEmail)
 	if err != nil || daveUser == nil {
 		return nil
 	}
-	eveUser, err := h.PgStore.Users().GetByEmail(ctx, eveEmail)
+	eveUser, err := h.PlatformBackend().Users().GetByEmail(ctx, eveEmail)
 	if err != nil || eveUser == nil {
 		return nil
 	}
 
 	// Verify teams exist in their respective org schemas.
-	acmeOds, err := h.PgStore.ForOrg(acmeSlug)
+	acmeOds, err := h.PlatformBackend().ForOrg(acmeSlug)
 	if err != nil {
 		return nil
 	}
-	globexOds, err := h.PgStore.ForOrg(globexSlug)
+	globexOds, err := h.PlatformBackend().ForOrg(globexSlug)
 	if err != nil {
 		return nil
 	}
@@ -222,10 +221,10 @@ func provisionOrg(t *testing.T, ctx context.Context, h *Harness, slug, name stri
 		CreatedAt: time.Now(),
 	}
 
-	if err := h.PgStore.Organizations().Create(ctx, org); err != nil {
+	if err := h.PlatformBackend().Organizations().Create(ctx, org); err != nil {
 		t.Fatalf("[seed] create org %s: %v", slug, err)
 	}
-	if err := h.PgStore.ProvisionOrg(ctx, orgID, slug); err != nil {
+	if err := h.PlatformBackend().ProvisionOrg(ctx, orgID, slug); err != nil {
 		t.Fatalf("[seed] provision org %s: %v", slug, err)
 	}
 
@@ -234,7 +233,7 @@ func provisionOrg(t *testing.T, ctx context.Context, h *Harness, slug, name stri
 	// developer can browse it in the UI after the suite completes.
 	if !h.SharedMode {
 		t.Cleanup(func() {
-			if err := h.PgStore.DecommissionOrg(context.Background(), slug); err != nil {
+			if err := h.PlatformBackend().DecommissionOrg(context.Background(), slug); err != nil {
 				t.Logf("[seed] WARN: decommission org %s: %v", slug, err)
 			}
 		})
@@ -263,7 +262,7 @@ func createUser(t *testing.T, ctx context.Context, h *Harness, email, displayNam
 		Status:       "active",
 		CreatedAt:    time.Now(),
 	}
-	if err := h.PgStore.Users().Create(ctx, user); err != nil {
+	if err := h.PlatformBackend().Users().Create(ctx, user); err != nil {
 		t.Fatalf("[seed] create user %s: %v", email, err)
 	}
 	return userID
@@ -271,14 +270,14 @@ func createUser(t *testing.T, ctx context.Context, h *Harness, email, displayNam
 
 func addOrgMember(t *testing.T, ctx context.Context, h *Harness, userID, orgID, role string) {
 	t.Helper()
-	if err := h.PgStore.Organizations().AddMember(ctx, userID, orgID, role); err != nil {
+	if err := h.PlatformBackend().Organizations().AddMember(ctx, userID, orgID, role); err != nil {
 		t.Fatalf("[seed] add org member %s: %v", userID, err)
 	}
 }
 
 func getOrgDataStore(t *testing.T, h *Harness, orgSlug string) store.OrgDataStore {
 	t.Helper()
-	ods, err := h.PgStore.ForOrg(orgSlug)
+	ods, err := h.PlatformBackend().ForOrg(orgSlug)
 	if err != nil {
 		t.Fatalf("[seed] ForOrg(%s): %v", orgSlug, err)
 	}
@@ -292,7 +291,7 @@ func provisionTeam(t *testing.T, ctx context.Context, ods store.OrgDataStore, sl
 		ID:         teamID,
 		Name:       name,
 		Slug:       slug,
-		SchemaName: pgstore.TeamSchemaName(slug),
+		SchemaName: "team_" + slug, // PG uses this for SET search_path; SQLite ignores it
 		CreatedAt:  time.Now(),
 	}
 	if err := ods.Teams().CreateTeam(ctx, team); err != nil {

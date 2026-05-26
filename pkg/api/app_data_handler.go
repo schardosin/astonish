@@ -11,13 +11,62 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/schardosin/astonish/pkg/apps"
-	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/mcptoolset"
+	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/genai"
 )
+
+// loadAppFromStore loads an app from the request-scoped store and converts
+// the map[string]any result to a *apps.VisualApp for DataSource resolution.
+func loadAppFromStore(r *http.Request, name string) (*apps.VisualApp, error) {
+	svc := store.FromRequest(r)
+	if svc == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+
+	slug := apps.Slugify(name)
+
+	var raw any
+	var err error
+
+	// Try personal first, then team
+	if svc.PersonalApps != nil {
+		raw, err = svc.PersonalApps.Load(r.Context(), slug)
+	}
+	if (raw == nil || err != nil) && svc.Apps != nil {
+		raw, err = svc.Apps.Load(r.Context(), slug)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to load app %q: %w", name, err)
+	}
+	if raw == nil {
+		return nil, fmt.Errorf("app %q not found", name)
+	}
+
+	// Convert map[string]any → *apps.VisualApp via JSON round-trip.
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize app %q: %w", name, err)
+	}
+	var app apps.VisualApp
+	if err := json.Unmarshal(data, &app); err != nil {
+		return nil, fmt.Errorf("failed to deserialize app %q: %w", name, err)
+	}
+	return &app, nil
+}
 
 // maxResponseBodySize is the maximum number of bytes the HTTP data proxy will
 // read from an external response. This prevents out-of-memory conditions if
@@ -217,7 +266,7 @@ func AppStreamHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load the app to get data source config (for interval)
-	app, err := apps.LoadApp(name)
+	app, err := loadAppFromStore(r, name)
 	if err != nil {
 		respondError(w, http.StatusNotFound, "app not found: "+err.Error())
 		return
@@ -306,13 +355,13 @@ func sendStreamEvent(w http.ResponseWriter, flusher http.Flusher, sourceID strin
 func resolveDataSource(r *http.Request, sourceID string, args map[string]any, appName string) (any, error) {
 	// Convention-based routing
 	if strings.HasPrefix(sourceID, "mcp:") {
-		return resolveMCPSource(r.Context(), sourceID[4:], args)
+		return resolveMCPSource(r, sourceID[4:], args)
 	}
 	if strings.HasPrefix(sourceID, "http:") {
 		return resolveHTTPSource(r, sourceID[5:], args)
 	}
 	if strings.HasPrefix(sourceID, "static:") {
-		return resolveStaticSource(sourceID[7:], appName)
+		return resolveStaticSource(r, sourceID[7:], appName)
 	}
 
 	// Fallback: look up in saved app's DataSources config
@@ -323,9 +372,12 @@ func resolveDataSource(r *http.Request, sourceID string, args map[string]any, ap
 	return nil, fmt.Errorf("unknown source format: %q (expected mcp:<server>/<tool>, http:<METHOD>:<url>, or static:<key>)", sourceID)
 }
 
-// resolveMCPSource invokes an MCP tool.
+// resolveMCPSource invokes an MCP tool inside a sandbox container.
 // serverTool format: "<serverName>/<toolName>"
-func resolveMCPSource(ctx context.Context, serverTool string, args map[string]any) (any, error) {
+//
+// Security: stdio MCP servers are ALWAYS executed inside a per-user sandbox
+// container (never on the host). SSE/remote servers connect over the network.
+func resolveMCPSource(r *http.Request, serverTool string, args map[string]any) (any, error) {
 	parts := strings.SplitN(serverTool, "/", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("invalid MCP source format: expected 'server/tool', got %q", serverTool)
@@ -333,13 +385,336 @@ func resolveMCPSource(ctx context.Context, serverTool string, args map[string]an
 	serverName := parts[0]
 	toolName := parts[1]
 
-	result, err := mcp.InvokeTool(ctx, serverName, toolName, args)
-	if err != nil {
-		return nil, err
+	// Load server config from DB (3-tier platform merge)
+	mcpCfg := loadMCPConfigForRequest(r)
+	serverCfg, ok := mcpCfg.MCPServers[serverName]
+	if !ok {
+		return nil, fmt.Errorf("MCP server %q not configured", serverName)
 	}
+
+	// SSE/remote servers: direct network connection (no local exec)
+	if serverCfg.Transport == "sse" || serverCfg.URL != "" {
+		return invokeMCPToolSSE(r.Context(), serverName, toolName, serverCfg, args)
+	}
+
+	// Stdio servers: MUST run inside a sandbox container
+	appCfg, _ := config.LoadAppConfig()
+	if appCfg == nil || !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return nil, fmt.Errorf("MCP server %q requires sandbox mode (stdio transport cannot run on host)", serverName)
+	}
+
+	// Resolve the team's template (custom template takes precedence over @base)
+	templateName := ""
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, err := svc.Settings.Get(r.Context()); err == nil && settings != nil && settings.TemplateName != "" {
+			templateName = settings.TemplateName
+		}
+	}
+
+	userID := effectiveUserID(r)
+	return invokeMCPToolInContainer(r.Context(), userID, templateName, serverName, toolName, serverCfg, args)
+}
+
+// invokeMCPToolInContainer runs an MCP tool inside a per-user sandbox container.
+// The container is created on first use and destroyed after idle timeout.
+// Works for both Incus and K8s backends via the abstract sandbox.Backend interface.
+func invokeMCPToolInContainer(ctx context.Context, userID, templateName, serverName, toolName string, serverCfg config.MCPServerConfig, args map[string]any) (any, error) {
+	// Get the abstract sandbox backend (works for both Incus and K8s)
+	appCfg, _ := config.LoadAppConfig()
+	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox unavailable for app MCP: %w", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Ensure the idle watchdog is running with a reference to the backend factory
+	appMCPIdleTracker.StartIdleWatchdog(context.Background(), 10*time.Minute)
+
+	// Create/ensure per-user app session (idempotent — returns existing if present)
+	syntheticSessionID := "app-mcp-" + userID
+	if templateName == "" {
+		templateName = sandbox.BaseTemplateID
+	}
+
+	// Resolve layer chain so K8s gets content-addressed layer IDs (same as
+	// chat sessions). Without this, the pod would only mount the bare @base
+	// layer, missing any runtimes installed via "Configure Base".
+	var layerChain []string
+	if templateName != sandbox.BaseTemplateID {
+		layerChain = resolveTemplateLayerChain(ctx, templateName)
+	}
+	if len(layerChain) == 0 {
+		layerChain = resolveBaseLayerChain(ctx)
+	}
+
+	_, err = backend.CreateSession(ctx, sandbox.SessionSpec{
+		SessionID:  syntheticSessionID,
+		Type:       sandbox.SessionTypeChat,
+		TemplateID: templateName,
+		LayerChain: layerChain,
+		UserID:     userID,
+		Labels:     map[string]string{"purpose": "app-mcp"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure app MCP session for user %q: %w", userID, err)
+	}
+
+	// Wait for the session to be running before exec'ing into it.
+	// On K8s this waits for pod scheduling + image pull + overlay mount.
+	// On Incus this returns almost immediately.
+	if err := backend.WaitForSessionReady(ctx, syntheticSessionID); err != nil {
+		return nil, fmt.Errorf("app MCP session not ready for user %q: %w", userID, err)
+	}
+
+	// Mark as active immediately (prevents idle watchdog from destroying mid-request)
+	appMCPIdleTracker.touch(syntheticSessionID)
+
+	// Create backend-agnostic transport for the MCP server
+	transport, stderrBuf := sandbox.NewBackendMCPTransport(backend, syntheticSessionID, serverCfg)
+
+	// Create ADK toolset (connects to the MCP server inside the container/pod)
+	toolset, err := mcptoolset.New(mcptoolset.Config{
+		Transport: transport,
+	})
+	if err != nil {
+		transport.Close()
+		stderrStr := stderrBuf.String()
+		return nil, fmt.Errorf("failed to start MCP server %q in sandbox: %w (stderr: %s)", serverName, err, stderrStr)
+	}
+
+	// Get tools from the server
+	toolCtx := &appMCPToolContext{Context: ctx}
+	tools, err := toolset.Tools(toolCtx)
+	if err != nil {
+		transport.Close()
+		return nil, fmt.Errorf("failed to list tools from MCP server %q: %w", serverName, err)
+	}
+
+	// Find the requested tool
+	var targetTool tool.Tool
+	for _, t := range tools {
+		if declTool, ok := t.(interface {
+			Declaration() *genai.FunctionDeclaration
+		}); ok {
+			decl := declTool.Declaration()
+			if decl != nil && decl.Name == toolName {
+				targetTool = t
+				break
+			}
+		}
+	}
+	if targetTool == nil {
+		transport.Close()
+		available := make([]string, 0, len(tools))
+		for _, t := range tools {
+			if declTool, ok := t.(interface {
+				Declaration() *genai.FunctionDeclaration
+			}); ok {
+				if decl := declTool.Declaration(); decl != nil {
+					available = append(available, decl.Name)
+				}
+			}
+		}
+		return nil, fmt.Errorf("tool %q not found on MCP server %q (available: %v)", toolName, serverName, available)
+	}
+
+	// Invoke the tool
+	runner, ok := targetTool.(interface {
+		Run(tool.Context, any) (map[string]any, error)
+	})
+	if !ok {
+		transport.Close()
+		return nil, fmt.Errorf("tool %q on %q does not implement Run", toolName, serverName)
+	}
+
+	slog.Debug("app MCP invoke", "server", serverName, "tool", toolName, "session", syntheticSessionID)
+	result, err := runner.Run(toolCtx, args)
+	transport.Close()
+	if err != nil {
+		return nil, fmt.Errorf("MCP tool %q returned error: %w", toolName, err)
+	}
+
+	// Update last activity so idle watchdog knows the session is in use
+	appMCPIdleTracker.touch(syntheticSessionID)
 
 	return result, nil
 }
+
+// invokeMCPToolSSE invokes an MCP tool on a remote SSE server (no local exec).
+func invokeMCPToolSSE(ctx context.Context, serverName, toolName string, serverCfg config.MCPServerConfig, args map[string]any) (any, error) {
+	if serverCfg.URL == "" {
+		return nil, fmt.Errorf("MCP server %q has SSE transport but no URL configured", serverName)
+	}
+
+	transport := &mcpsdk.SSEClientTransport{
+		Endpoint: serverCfg.URL,
+	}
+
+	toolset, err := mcptoolset.New(mcptoolset.Config{
+		Transport: transport,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to SSE MCP server %q at %s: %w", serverName, serverCfg.URL, err)
+	}
+
+	// Get tools
+	toolCtx := &appMCPToolContext{Context: ctx}
+	tools, err := toolset.Tools(toolCtx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tools from SSE server %q: %w", serverName, err)
+	}
+
+	// Find and invoke
+	var targetTool tool.Tool
+	for _, t := range tools {
+		if declTool, ok := t.(interface {
+			Declaration() *genai.FunctionDeclaration
+		}); ok {
+			decl := declTool.Declaration()
+			if decl != nil && decl.Name == toolName {
+				targetTool = t
+				break
+			}
+		}
+	}
+	if targetTool == nil {
+		return nil, fmt.Errorf("tool %q not found on SSE server %q", toolName, serverName)
+	}
+
+	runner, ok := targetTool.(interface {
+		Run(tool.Context, any) (map[string]any, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("tool %q on %q does not implement Run", toolName, serverName)
+	}
+
+	slog.Debug("app MCP SSE invoke", "server", serverName, "tool", toolName, "url", serverCfg.URL)
+	result, err := runner.Run(toolCtx, args)
+	if err != nil {
+		return nil, fmt.Errorf("SSE MCP tool %q returned error: %w", toolName, err)
+	}
+	return result, nil
+}
+
+// --- App MCP Container Idle Management ---
+//
+// App MCP containers are per-user, created on first MCP invocation, and
+// DESTROYED (not just stopped) after an idle timeout. This is a lightweight
+// in-memory tracker separate from the NodeClientPool (which manages chat
+// session containers with stop-on-idle semantics).
+
+var appMCPIdleTracker = &appMCPTracker{
+	lastActivity: make(map[string]time.Time),
+}
+
+type appMCPTracker struct {
+	mu           sync.Mutex
+	lastActivity map[string]time.Time // syntheticSessionID → last use time
+	started      bool
+}
+
+// touch records activity for a synthetic session ID.
+func (t *appMCPTracker) touch(sessionID string) {
+	t.mu.Lock()
+	t.lastActivity[sessionID] = time.Now()
+	t.mu.Unlock()
+}
+
+// StartIdleWatchdog starts a background goroutine that destroys app MCP
+// containers after they've been idle for the given timeout.
+func (t *appMCPTracker) StartIdleWatchdog(ctx context.Context, timeout time.Duration) {
+	t.mu.Lock()
+	if t.started {
+		t.mu.Unlock()
+		return
+	}
+	t.started = true
+	t.mu.Unlock()
+
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				t.destroyIdle(timeout)
+			}
+		}
+	}()
+}
+
+func (t *appMCPTracker) destroyIdle(timeout time.Duration) {
+	t.mu.Lock()
+	now := time.Now()
+	var expired []string
+	for sid, lastUse := range t.lastActivity {
+		if now.Sub(lastUse) > timeout {
+			expired = append(expired, sid)
+		}
+	}
+	for _, sid := range expired {
+		delete(t.lastActivity, sid)
+	}
+	t.mu.Unlock()
+
+	if len(expired) == 0 {
+		return
+	}
+
+	// Get backend to destroy sessions (works for both Incus and K8s)
+	appCfg, _ := config.LoadAppConfig()
+	if appCfg == nil {
+		slog.Warn("cannot destroy idle app MCP sessions: app config not available")
+		return
+	}
+	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	if err != nil {
+		slog.Warn("cannot destroy idle app MCP sessions: backend unavailable", "error", err)
+		return
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for _, sid := range expired {
+		slog.Info("destroying idle app MCP session", "sessionID", sid)
+		if err := backend.DestroySession(ctx, sid); err != nil {
+			slog.Warn("failed to destroy idle app MCP session", "sessionID", sid, "error", err)
+		}
+	}
+}
+
+// appMCPToolContext is a minimal tool.Context for programmatic MCP tool invocation
+// from app data requests. All optional methods return zero values — this is
+// sufficient for most MCP tools which only need the embedded context.Context.
+type appMCPToolContext struct {
+	context.Context
+}
+
+func (c *appMCPToolContext) Actions() *session.EventActions       { return &session.EventActions{} }
+func (c *appMCPToolContext) Branch() string                       { return "" }
+func (c *appMCPToolContext) AgentName() string                    { return "app-data-proxy" }
+func (c *appMCPToolContext) AppName() string                      { return "astonish" }
+func (c *appMCPToolContext) Artifacts() agent.Artifacts           { return nil }
+func (c *appMCPToolContext) FunctionCallID() string               { return "" }
+func (c *appMCPToolContext) InvocationID() string                 { return "" }
+func (c *appMCPToolContext) SessionID() string                    { return "" }
+func (c *appMCPToolContext) UserID() string                       { return "" }
+func (c *appMCPToolContext) UserContent() *genai.Content          { return nil }
+func (c *appMCPToolContext) ReadonlyState() session.ReadonlyState { return nil }
+func (c *appMCPToolContext) State() session.State                 { return nil }
+func (c *appMCPToolContext) SearchMemory(_ context.Context, _ string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (c *appMCPToolContext) RequestConfirmation(_ string, _ any) error   { return nil }
+func (c *appMCPToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
 
 // credentialSuffixRe matches a @credential-name suffix at the end of a URL.
 // Only matches simple names (alphanumeric, dash, underscore) after the last @,
@@ -529,12 +904,12 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 }
 
 // resolveStaticSource returns static data from the app's DataSource config.
-func resolveStaticSource(key string, appName string) (any, error) {
+func resolveStaticSource(r *http.Request, key string, appName string) (any, error) {
 	if appName == "" {
 		return nil, fmt.Errorf("static source %q requires an app name", key)
 	}
 
-	app, err := apps.LoadApp(appName)
+	app, err := loadAppFromStore(r, appName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load app %q: %w", appName, err)
 	}
@@ -550,9 +925,9 @@ func resolveStaticSource(key string, appName string) (any, error) {
 
 // resolveAppDataSource resolves a sourceId by looking up the app's DataSource config.
 // This handles the case where sourceId is a logical name (e.g. "sales_data") and
-// the actual routing info is in the saved app's YAML.
+// the actual routing info is in the saved app's definition.
 func resolveAppDataSource(r *http.Request, sourceID string, args map[string]any, appName string) (any, error) {
-	app, err := apps.LoadApp(appName)
+	app, err := loadAppFromStore(r, appName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load app %q: %w", appName, err)
 	}
@@ -579,7 +954,7 @@ func resolveAppDataSource(r *http.Request, sourceID string, args map[string]any,
 				// Remove server/tool from args — they're routing info, not tool args
 				delete(mergedArgs, "server")
 				delete(mergedArgs, "tool")
-				return resolveMCPSource(r.Context(), server+"/"+tool, mergedArgs)
+				return resolveMCPSource(r, server+"/"+tool, mergedArgs)
 
 			case "http_api":
 				urlStr, _ := ds.Config["url"].(string)

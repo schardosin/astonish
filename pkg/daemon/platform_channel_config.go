@@ -4,15 +4,15 @@ import (
 	"context"
 
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // applyPlatformChannelConfig overlays DB-stored channel settings onto the
 // file-based AppConfig.Channels. In platform mode, PlatformSettings.Channels
 // is the authoritative source. Fields set in the DB take precedence; fields
 // not set (nil channel config) fall through to config.yaml values.
-func applyPlatformChannelConfig(pgStore *pgstore.PGStore, cfg *config.AppConfig, logger *Logger) {
-	settingsStore := pgStore.PlatformSettings()
+func applyPlatformChannelConfig(backend store.PlatformBackend, cfg *config.AppConfig, logger *Logger) {
+	settingsStore := backend.PlatformSettings()
 	settings, err := settingsStore.Get(context.Background())
 	if err != nil || settings == nil || settings.Channels == nil {
 		return

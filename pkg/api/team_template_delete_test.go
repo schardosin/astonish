@@ -90,6 +90,26 @@ func (m *mockTemplateStore) ListRoots(_ context.Context) ([]*store.SandboxTempla
 	return nil, nil
 }
 
+func (m *mockTemplateStore) GetBaseConfig(_ context.Context) (*store.BaseConfigInfo, error) {
+	return nil, nil
+}
+
+func (m *mockTemplateStore) SetBaseConfig(_ context.Context, _ string, _ []byte, _ string) error {
+	return nil
+}
+
+func (m *mockTemplateStore) GetBaseTopLayerID(_ context.Context) (string, error) {
+	return "", nil
+}
+
+func (m *mockTemplateStore) AcquireBuildLock(_ context.Context) (bool, func(), error) {
+	return true, func() {}, nil
+}
+
+func (m *mockTemplateStore) IsBuildInProgress(_ context.Context) (bool, error) {
+	return false, nil
+}
+
 func (m *mockTemplateStore) has(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

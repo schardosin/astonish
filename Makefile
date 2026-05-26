@@ -31,6 +31,7 @@ help:
 	@echo "  make test-unit       - Same as 'make test'"
 	@echo "  make test-integration - Run integration tests (needs ASTONISH_TEST_DSN)"
 	@echo "  make test-e2e        - Run E2E tests (needs live LLM + DB + e2e k8s infra)"
+	@echo "  make test-e2e-sqlite - Run E2E tests with SQLite backend (no DB needed, needs k8s)"
 	@echo "  make test-e2e-inspect - Run E2E tests in shared mode (browse sessions in UI after run)"
 	@echo "  make test-e2e-inspect-stop - Stop the inspector started by 'test-e2e-inspect'"
 	@echo "  make e2e-k8s-up      - Provision isolated k8s sandbox infra for e2e tests"
@@ -171,10 +172,46 @@ test-e2e:
 	echo "Preflight OK."
 	@echo ""
 	@echo "Running E2E tests (~26 tests, typically 5-15 min)..."
-	@set -o pipefail; go test -tags=e2e -count=1 -p 1 -timeout=15m -json ./tests/e2e/... \
+	@set -o pipefail; go test -tags=e2e -count=1 -p 1 -timeout=15m \
+		$(if $(RUN),-run $(RUN)) $(if $(VERBOSE),-v) -json ./tests/e2e/... \
 		| node tests/scenarios/stream.mjs /tmp/e2e-results.json; \
 	RESULT=$$?; \
 	node tests/scenarios/parse-run.mjs /tmp/e2e-results.json; \
+	exit $$RESULT
+
+# E2E with SQLite backend — same tests, no PostgreSQL required.
+# Still requires K8s for sandbox-dependent tests.
+test-e2e-sqlite:
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH (required for e2e sandbox preflight)"; exit 1; }
+	@CP_NS="$${ASTONISH_E2E_CONTROL_PLANE_NAMESPACE:-astonish}"; \
+	SB_NS="$${ASTONISH_E2E_SANDBOX_NAMESPACE:-astonish-sandbox}"; \
+	echo "Preflight: verifying e2e k8s infra ($$CP_NS + $$SB_NS)..."; \
+	for NS in "$$CP_NS" "$$SB_NS"; do \
+		if ! kubectl get ns "$$NS" >/dev/null 2>&1; then \
+			echo ""; \
+			echo "ERROR: e2e k8s infra not found — namespace \"$$NS\" missing."; \
+			echo "  Provision it with:    make e2e-k8s-up"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+	done; \
+	for PVC in astonish-layers astonish-uppers; do \
+		if ! kubectl get pvc -n "$$SB_NS" "$$PVC" >/dev/null 2>&1; then \
+			echo ""; \
+			echo "ERROR: e2e k8s infra incomplete — PVC \"$$PVC\" missing in namespace \"$$SB_NS\"."; \
+			echo "  Re-provision with:    make e2e-k8s-up"; \
+			echo ""; \
+			exit 1; \
+		fi; \
+	done; \
+	echo "Preflight OK."
+	@echo ""
+	@echo "Running E2E tests with SQLite backend (~26 tests, typically 5-15 min)..."
+	@set -o pipefail; ASTONISH_E2E_BACKEND=sqlite go test -tags=e2e -count=1 -p 1 -timeout=15m \
+		$(if $(RUN),-run $(RUN)) $(if $(VERBOSE),-v) -json ./tests/e2e/... \
+		| node tests/scenarios/stream.mjs /tmp/e2e-results-sqlite.json; \
+	RESULT=$$?; \
+	node tests/scenarios/parse-run.mjs /tmp/e2e-results-sqlite.json; \
 	exit $$RESULT
 
 # E2E k8s sandbox infrastructure — provision/destroy the isolated namespaces,
@@ -374,7 +411,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev
 
 # Docker Test Environment - isolated environment for running integration/E2E tests
 e2e-env-up:

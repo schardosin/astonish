@@ -247,6 +247,9 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 		return nil, fmt.Errorf("NewPlatformServices: %w", err)
 	}
 
+	// Initialize local embedding model for hybrid vector+keyword memory search.
+	initEmbedFuncCore(log, pgStore)
+
 	// Seed provider in platform settings (idempotent — Save replaces).
 	bifrostURL := opts.BifrostURL
 	if bifrostURL == "" {

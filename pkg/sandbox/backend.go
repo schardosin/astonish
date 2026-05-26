@@ -96,6 +96,19 @@ type Backend interface {
 	// never existed.
 	SessionState(ctx context.Context, sessionID string) (SessionState, error)
 
+	// WaitForSessionReady blocks until the session's container/pod is
+	// Running and ready to accept exec commands. Returns an error if
+	// the context is cancelled, the timeout expires, or the session
+	// enters a terminal failure state (e.g., pod CrashLoopBackOff).
+	//
+	// On Incus this returns almost immediately (containers start in
+	// <1s). On K8s this polls pod phase until Running (image pull,
+	// PVC bind, overlay composition may take 10-60s on first use).
+	//
+	// Callers that need to exec into a session immediately after
+	// CreateSession MUST call this first.
+	WaitForSessionReady(ctx context.Context, sessionID string) error
+
 	// ListSessions returns all sessions visible to the backend matching
 	// the filter. Fleet sessions and normal chat sessions share the same
 	// list; callers filter by Type.
@@ -111,6 +124,20 @@ type Backend interface {
 	// the caller reads/writes. The caller MUST call Close on the returned
 	// stream to release backend resources.
 	ExecInteractive(ctx context.Context, sessionID string, opts PTYSpec) (ExecStream, error)
+
+	// ExecStreaming starts a non-interactive process with streaming
+	// bidirectional stdin/stdout but NO PTY allocation. Unlike Exec, the
+	// process is long-running and the caller reads/writes incrementally.
+	// Unlike ExecInteractive, no terminal processing (echo, CR/LF
+	// translation, signal interpretation) is applied — making this
+	// suitable for machine-to-machine protocols such as MCP (JSON-RPC
+	// over stdio) and NDJSON.
+	//
+	// The caller MUST call Close on the returned stream to release
+	// backend resources. SeparateStderr in the spec, when non-nil,
+	// receives the process's stderr on a dedicated stream instead of
+	// being merged into the stdout reader.
+	ExecStreaming(ctx context.Context, sessionID string, opts ExecStreamSpec) (ExecStream, error)
 
 	// PushFile writes content to a path inside the sandbox with the given
 	// mode. Implementations MAY create missing parent directories.
@@ -323,6 +350,21 @@ type PTYSpec struct {
 
 	// SeparateStderr, when non-nil, receives stderr on a separate stream
 	// instead of being merged into stdout. Required for MCP over stdio.
+	SeparateStderr io.Writer `json:"-"`
+}
+
+// ExecStreamSpec configures a streaming non-interactive exec (no PTY).
+// Used for machine-to-machine protocols (MCP JSON-RPC, NDJSON) that
+// need a long-running bidirectional stdin/stdout stream without terminal
+// processing.
+type ExecStreamSpec struct {
+	Command []string          `json:"command"`
+	WorkDir string            `json:"work_dir,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+
+	// SeparateStderr, when non-nil, receives the process's stderr on a
+	// dedicated writer instead of being merged into the stdout reader.
+	// Critical for protocols that parse stdout as structured data.
 	SeparateStderr io.Writer `json:"-"`
 }
 

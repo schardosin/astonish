@@ -24,6 +24,12 @@ func (h *Harness) PostWithTimeout(t *testing.T, path string, body any, timeout t
 	return h.do(t, http.MethodPost, path, body, timeout)
 }
 
+// Put sends an authenticated PUT request and returns the response.
+func (h *Harness) Put(t *testing.T, path string, body any) *http.Response {
+	t.Helper()
+	return h.do(t, http.MethodPut, path, body, 30*time.Second)
+}
+
 // Get sends an authenticated GET request and returns the response.
 func (h *Harness) Get(t *testing.T, path string) *http.Response {
 	t.Helper()
@@ -45,6 +51,23 @@ func ReadBody(t *testing.T, resp *http.Response) string {
 		t.Fatalf("[e2eboot] read body: %v", err)
 	}
 	return string(data)
+}
+
+// PollUntil repeatedly calls check() every interval until it returns true or
+// the timeout expires. Useful for waiting on async operations (e.g., MCP tool
+// discovery completing in the background after an install).
+func PollUntil(t *testing.T, description string, timeout, interval time.Duration, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		if check() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("[e2eboot] PollUntil timed out after %v: %s", timeout, description)
+		}
+		time.Sleep(interval)
+	}
 }
 
 // DecodeJSON reads the response body and decodes it into dest.

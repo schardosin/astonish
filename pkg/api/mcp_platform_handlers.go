@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"sort"
 
@@ -157,7 +156,7 @@ func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async tool discovery to populate cached_tools
-	go refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server)
 
 	respondJSON(w, http.StatusCreated, map[string]string{"status": "ok", "name": req.Name})
 }
@@ -216,7 +215,7 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async tool discovery to refresh cached_tools when config changes
-	go refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server)
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": serverName})
 }
@@ -312,7 +311,7 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async background refresh
-	go refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server)
 
 	respondJSON(w, http.StatusAccepted, map[string]string{"status": "refresh_started", "name": name})
 }
@@ -505,49 +504,11 @@ func sortMCPServerItems(items []MCPServerListItem) {
 }
 
 // refreshMCPPlatformServer performs async tool discovery for a platform MCP server.
-// It starts the MCP server process, discovers its tools, then stores them in the DB.
+// It routes through asyncDiscoverAndCacheTools which runs in a goroutine with
+// a dedicated timeout, using sandbox for stdio servers and direct network for SSE.
 func refreshMCPPlatformServer(mcpStore store.MCPServerStore, server *store.MCPServer) {
-	slog.Info("starting MCP tool discovery for platform server", "server", server.Name)
-
-	tools, err := discoverMCPServerTools(server)
-	if err != nil {
-		slog.Warn("MCP tool discovery failed for platform server", "server", server.Name, "error", err)
-		return
-	}
-
-	if len(tools) == 0 {
-		slog.Warn("MCP tool discovery returned no tools", "server", server.Name)
-		return
-	}
-
-	toolsJSON, err := json.Marshal(tools)
-	if err != nil {
-		slog.Warn("failed to marshal discovered tools", "server", server.Name, "error", err)
-		return
-	}
-
-	if err := mcpStore.UpdateCachedTools(context.TODO(), server.Name, toolsJSON); err != nil {
-		slog.Warn("failed to update cached_tools in DB", "server", server.Name, "error", err)
-		return
-	}
-
-	slog.Info("MCP tool discovery completed", "server", server.Name, "tool_count", len(tools))
-}
-
-// discoverMCPServerTools starts an MCP server, lists its tools, and returns them.
-// This is the platform-mode equivalent of the personal-mode RefreshSingleServer.
-func discoverMCPServerTools(server *store.MCPServer) ([]MCPDiscoveredTool, error) {
-	// Convert store.MCPServer to config.MCPServerConfig for the manager
 	cfg := mcpServerToConfig(server)
-
-	// Use the MCP manager to discover tools
-	mgr := newSingleServerManager(server.Name, cfg)
-	if mgr == nil {
-		return nil, nil
-	}
-	defer mgr.Cleanup()
-
-	return mgr.DiscoverTools()
+	asyncDiscoverAndCacheTools(mcpStore, server.Name, cfg)
 }
 
 // MCPDiscoveredTool represents a tool discovered from an MCP server.

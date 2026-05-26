@@ -98,6 +98,7 @@ func isAuthExemptPath(path string) bool {
 	// NOTE: Does NOT include /api/platform/admin/* which requires superadmin auth.
 	if path == "/api/platform/mode" ||
 		path == "/api/platform/init" ||
+		path == "/api/platform/init/sqlite" ||
 		path == "/api/platform/init/status" {
 		return true
 	}

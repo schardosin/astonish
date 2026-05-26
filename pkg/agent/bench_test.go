@@ -5,19 +5,17 @@ import (
 	"fmt"
 	"testing"
 
-	chromem "github.com/philippgille/chromem-go"
 	"google.golang.org/adk/tool"
 )
 
 // newBenchToolIndex creates a ToolIndex for benchmarks.
 func newBenchToolIndex(b *testing.B) *ToolIndex {
 	b.Helper()
-	db := chromem.NewDB()
-	vs, err := NewChromemToolVectorStore(db, testEmbeddingFunc())
+	vs, err := NewInMemoryToolVectorStore(testEmbeddingFunc())
 	if err != nil {
 		b.Fatal(err)
 	}
-	idx, err := NewToolIndex(vs, EmbedFunc(testEmbeddingFunc()))
+	idx, err := NewToolIndex(vs, testEmbeddingFunc())
 	if err != nil {
 		b.Fatal(err)
 	}

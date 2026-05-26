@@ -33,8 +33,8 @@ import (
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -119,7 +119,7 @@ func Run(cfg RunConfig) error {
 		slog.Warn("failed to get config directory", "error", err)
 	}
 	var credStore *credentials.Store
-	isPlatformMode := appCfg.Storage.Backend == "postgres"
+	isPlatformMode := appCfg.Storage.Backend == "postgres" || appCfg.Storage.Backend == "sqlite"
 
 	// In platform container modes (api/worker), skip the file-based credential store
 	// entirely when ASTONISH_MASTER_KEY is set. All secrets come from PG — the file
@@ -158,9 +158,11 @@ func Run(cfg RunConfig) error {
 	}
 
 	// --- Initialize store.Services for dependency injection ---
-	// Backend selection: "postgres" → platform mode, everything else → personal mode.
+	// Backend selection: "postgres" → platform mode, "sqlite" → platform mode (SQLite), else → personal mode.
 	var svc *store.Services
-	var pgStore *pgstore.PGStore // non-nil only in platform mode
+	var pgStore *pgstore.PGStore         // non-nil only in postgres platform mode
+	var sqlStore *sqlitestore.SQLiteStore // non-nil only in sqlite platform mode
+	var backend platformDB               // unified interface — assigned below
 
 	if appCfg.Storage.Backend == "postgres" {
 		// Platform mode: multi-tenant PostgreSQL storage.
@@ -182,6 +184,7 @@ func Run(cfg RunConfig) error {
 			}
 		}
 		defer pgStore.Close()
+		backend = pgStore
 		logger.Printf("Storage backend: PostgreSQL (platform mode)")
 
 		// Run pending migrations on all existing team/personal schemas.
@@ -195,12 +198,12 @@ func Run(cfg RunConfig) error {
 		// Uses the same HugotEmbedder (all-MiniLM-L6-v2, 384-dim) as personal mode.
 		// Non-fatal: if embedding fails, PG stores fall back to keyword-only search.
 		{
-			embGetSecret := daemonSecretGetter(pgStore, appCfg, credStore)
+			embGetSecret := daemonSecretGetter(backend, credStore)
 			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
 			if embErr != nil {
 				logger.Printf("Warning: PG memory embedding unavailable (keyword-only search): %v", embErr)
 			} else {
-				pgStore.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+				backend.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
 					return embResult.EmbeddingFunc(ctx, text)
 				})
 				if embResult.Cleanup != nil {
@@ -209,15 +212,41 @@ func Run(cfg RunConfig) error {
 				logger.Printf("PG memory stores: hybrid vector+keyword search enabled")
 			}
 		}
-	} else {
-		// Personal mode: all stores backed by local filesystem.
-		// The Services struct is populated incrementally as subsystems come online.
-		svc = filestore.NewPersonalServices()
-		logger.Printf("Storage backend: filesystem (personal mode)")
-	}
+	} else if appCfg.Storage.Backend == "sqlite" {
+		// Platform mode with SQLite backend: multi-tenant, zero external deps.
+		dataDir := appCfg.Storage.SQLite.GetDataDir()
+		var sqlErr error
+		svc, sqlStore, sqlErr = sqlitestore.NewPlatformServices(context.Background(), dataDir)
+		if sqlErr != nil {
+			return fmt.Errorf("failed to initialize SQLite storage at %s: %w", dataDir, sqlErr)
+		}
+		defer sqlStore.Close()
+		backend = sqlStore
+		logger.Printf("Storage backend: SQLite (platform mode, dir: %s)", dataDir)
 
-	if credStore != nil && svc.Mode == store.ModePersonal {
-		filestore.SetCredentialStore(svc, credStore)
+		// Run pending migrations on all existing org/team/personal databases.
+		if err := sqlStore.MigrateAll(context.Background()); err != nil {
+			logger.Printf("Warning: SQLite migration encountered errors: %v", err)
+		}
+
+		// Initialize embedding model for SQLite memory stores (hybrid vector+keyword search).
+		{
+			embGetSecret := daemonSecretGetter(backend, credStore)
+			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
+			if embErr != nil {
+				logger.Printf("Warning: SQLite memory embedding unavailable (keyword-only search): %v", embErr)
+			} else {
+				backend.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+					return embResult.EmbeddingFunc(ctx, text)
+				})
+				if embResult.Cleanup != nil {
+					defer embResult.Cleanup()
+				}
+				logger.Printf("SQLite memory stores: hybrid vector+keyword search enabled")
+			}
+		}
+	} else {
+		return fmt.Errorf("unsupported storage backend %q: must be 'postgres' or 'sqlite'", appCfg.Storage.Backend)
 	}
 
 	// In platform mode, cascade platform and default-org provider settings
@@ -225,10 +254,10 @@ func Run(cfg RunConfig) error {
 	// This is the daemon-level equivalent of effectiveAppConfig() in HTTP handlers.
 	// Provider env vars are set here (not earlier) because in platform mode
 	// providers come exclusively from the database, not config.yaml.
-	if pgStore != nil {
-		cascadePlatformProviders(context.Background(), pgStore, appCfg, logger)
+	if backend != nil {
+		cascadePlatformProviders(context.Background(), backend, appCfg, logger)
 		// Set up provider env vars from the DB-sourced config
-		getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
+		getSecret := daemonSecretGetter(backend, credStore)
 		config.SetupAllProviderEnvFromStore(appCfg, getSecret)
 		// Override the installed secret getter to use platform_secrets.
 		// This ensures IsStandardServerInstalled() and mergeStandardServers()
@@ -236,24 +265,19 @@ func Run(cfg RunConfig) error {
 		config.SetInstalledSecretGetter(getSecret)
 	}
 
-	// Create the pgvector-backed ToolVectorStore for platform mode.
+	// Create the ToolVectorStore for platform mode.
 	// This enables dynamic tool injection (semantic tool discovery) in platform mode.
 	var platformToolVectorStore agent.ToolVectorStore
 	var platformEmbedFunc agent.EmbedFunc
-	if pgStore != nil {
-		if embedFunc := pgStore.GetEmbedFunc(); embedFunc != nil {
-			pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background())
-			if poolErr == nil {
-				vs, vsErr := pgstore.NewPGToolVectorStore(pool, embedFunc)
-				if vsErr == nil {
-					platformToolVectorStore = vs
-					platformEmbedFunc = agent.EmbedFunc(embedFunc)
-					logger.Printf("Tool discovery: pgvector-backed (platform mode)")
-				} else if cfg.Debug {
-					logger.Printf("Warning: failed to create PG tool vector store: %v", vsErr)
-				}
-			} else if cfg.Debug {
-				logger.Printf("Warning: failed to get platform pool for tool index: %v", poolErr)
+	if backend != nil {
+		if embedFunc := backend.GetEmbedFunc(); embedFunc != nil {
+			vs, vsErr := backend.NewToolVectorStore(context.Background())
+			if vsErr == nil && vs != nil {
+				platformToolVectorStore = vs
+				platformEmbedFunc = agent.EmbedFunc(embedFunc)
+				logger.Printf("Tool discovery: vector-backed (platform mode)")
+			} else if vsErr != nil && cfg.Debug {
+				logger.Printf("Warning: failed to create tool vector store: %v", vsErr)
 			}
 		}
 	}
@@ -268,7 +292,7 @@ func Run(cfg RunConfig) error {
 	// settings so that OpenCode (used as a delegate tool in fleet sessions)
 	// does not need independent configuration.
 	// Skipped in API mode — API pods don't run fleet delegates.
-	getSecret := daemonSecretGetter(pgStore, appCfg, credStore)
+	getSecret := daemonSecretGetter(backend, credStore)
 	if daemonMode != config.DaemonModeAPI {
 		if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
 			logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
@@ -282,84 +306,23 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
-	// Initialize tools cache (personal mode only — platform mode reads from DB per-request)
+	// Context for background goroutines
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
-	if svc.Mode != store.ModePlatform {
-		api.InitToolsCache(ctx)
-	}
 
 	// --- Initialize session persistence ---
-	// In personal mode: a single shared FileStore handles all sessions.
-	// In platform mode: sessions are in PostgreSQL (per-team schema).
-	// The file store is only needed in personal mode.
-	var sharedFileStore *persistentsession.FileStore
-	if pgStore == nil {
-		// Personal mode: file-based session persistence.
-		if sessDir, dirErr := config.GetSessionsDir(&appCfg.Sessions); dirErr == nil {
-			if store, fsErr := persistentsession.NewFileStore(sessDir); fsErr == nil {
-				sharedFileStore = store
-				api.SetFleetSessionStore(store)
-				filestore.SetSessionStore(svc, store)
-				logger.Printf("Session store initialized (%s)", sessDir)
-			} else {
-				logger.Printf("Warning: Failed to initialize session store: %v", fsErr)
-			}
-		} else {
-			logger.Printf("Warning: Failed to resolve sessions directory: %v", dirErr)
-		}
-	} else {
-		logger.Printf("Session store: PostgreSQL (platform mode)")
-	}
+	// Platform mode: sessions are in the database (per-team schema).
+	logger.Printf("Session store: platform mode (%s)", appCfg.Storage.Backend)
 
-	// --- Initialize device authorization for Studio ---
-	var authManager *api.AuthManager
+	// --- Initialize platform authentication for Studio ---
 	var platformAuth *api.PlatformAuth
 
-	if svc.Mode == store.ModePlatform && pgStore != nil {
-		// Platform mode: JWT-based authentication
-		platformAuth = api.NewPlatformAuth(appCfg.Storage.Auth, pgStore, appCfg.Storage)
-		if appCfg.Storage.Auth.GetJWTSecret() == "" {
-			logger.Printf("WARNING: No JWT secret configured (ASTONISH_JWT_SECRET env or storage.auth.jwt_secret config)")
-			logger.Printf("A random key has been generated — tokens will not survive daemon restarts")
-		}
-		logger.Printf("Platform authentication enabled (mode: %s)", appCfg.Storage.Auth.Mode)
-	} else if appCfg.Daemon.Auth.IsAuthEnabled() && configDir != "" {
-		// Personal mode: device authorization flow
-		authStore, authErr := api.NewAuthStore(configDir, appCfg.Daemon.Auth.GetSessionTTL())
-		if authErr != nil {
-			logger.Printf("Warning: Failed to initialize auth store: %v", authErr)
-		} else {
-			authManager = api.NewAuthManager(authStore)
-			ttlDays := appCfg.Daemon.Auth.SessionTTLDays
-			if ttlDays == 0 {
-				ttlDays = 90
-			}
-			logger.Printf("Studio device authorization enabled (session TTL: %d days)", ttlDays)
-		}
-	} else if !appCfg.Daemon.Auth.IsAuthEnabled() {
-		logger.Printf("Studio device authorization disabled by config")
+	platformAuth = api.NewPlatformAuth(appCfg.Storage.Auth, backend, appCfg.Storage)
+	if appCfg.Storage.Auth.GetJWTSecret() == "" {
+		logger.Printf("WARNING: No JWT secret configured (ASTONISH_JWT_SECRET env or storage.auth.jwt_secret config)")
+		logger.Printf("A random key has been generated — tokens will not survive daemon restarts")
 	}
-
-	// --- Start memory indexer (personal mode only) ---
-	// In personal mode: the daemon maintains a chromem-go vector index on the
-	// filesystem (~/.config/astonish/memory/vectors/). Studio's lazy-init skips
-	// IndexAll when the daemon is running, trusting it to keep the index current.
-	// In platform mode: memory is fully managed by PostgreSQL (per-team pgvector
-	// tables). The embedding function for PG is already initialized above.
-	var daemonIndexer *memory.DaemonIndexerResult
-	if pgStore == nil {
-		embGetSecret := daemonSecretGetter(pgStore, appCfg, credStore)
-		di, diErr := memory.StartDaemonIndexer(ctx, appCfg, cfg.Debug, embGetSecret)
-		if diErr != nil {
-			logger.Printf("Warning: Memory indexer failed to start: %v", diErr)
-		} else if di != nil {
-			daemonIndexer = di
-			defer di.Cleanup()
-			// Wire memory store into Services (Store for vector search)
-			filestore.SetMemoryStores(svc, di.Store, nil)
-		}
-	}
+	logger.Printf("Platform authentication enabled (mode: %s)", appCfg.Storage.Auth.Mode)
 
 	// --- Initialize shared ChatAgent if channels need it ---
 	// The scheduler is always-on by default but doesn't require a ChatAgent at startup:
@@ -394,9 +357,7 @@ func Run(cfg RunConfig) error {
 			DebugMode:               cfg.Debug,
 			AutoApprove:             true, // Channels/scheduler auto-approve all tools
 			IsDaemon:                true, // We ARE the daemon — always run indexing/watchers.
-			PlatformMode:            pgStore != nil,
-			SessionStore:            sharedFileStore,
-			DaemonIndexer:           daemonIndexer,
+			PlatformMode:            backend != nil,
 			PlatformToolVectorStore: platformToolVectorStore,
 			PlatformEmbedFunc:       platformEmbedFunc,
 		})
@@ -474,8 +435,8 @@ func Run(cfg RunConfig) error {
 		// In platform mode, overlay DB-stored channel configuration onto
 		// the file-based config. PlatformSettings.Channels is the authoritative
 		// source; config.yaml serves only as fallback for backward compatibility.
-		if pgStore != nil {
-			applyPlatformChannelConfig(pgStore, freshCfg, logger)
+		if backend != nil {
+			applyPlatformChannelConfig(backend, freshCfg, logger)
 		}
 
 		// Register Telegram if enabled
@@ -483,7 +444,7 @@ func Run(cfg RunConfig) error {
 		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
 			botToken := freshCfg.Channels.Telegram.BotToken
 			if botToken == "" {
-				botToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.telegram.bot_token")
+				botToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.telegram.bot_token")
 			}
 			if botToken == "" {
 				tgConfigError = "bot token not configured"
@@ -493,7 +454,7 @@ func Run(cfg RunConfig) error {
 				// Pass empty AllowFrom here; the background refresh populates it
 				// from user_channels immediately after channel init.
 				tgAllowFrom := freshCfg.Channels.Telegram.AllowFrom
-				if pgStore != nil {
+				if backend != nil {
 					tgAllowFrom = nil
 				}
 				tg := telegram.New(&telegram.Config{
@@ -511,7 +472,7 @@ func Run(cfg RunConfig) error {
 		if freshCfg.Channels.Email.IsEmailEnabled() {
 			emailPassword := freshCfg.Channels.Email.Password
 			if emailPassword == "" {
-				emailPassword = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.email.password")
+				emailPassword = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
 			}
 			if emailPassword == "" {
 				emailConfigError = "password not configured"
@@ -522,7 +483,7 @@ func Run(cfg RunConfig) error {
 			} else {
 				pollInterval := time.Duration(freshCfg.Channels.Email.GetPollInterval()) * time.Second
 				emailAllowFrom := freshCfg.Channels.Email.AllowFrom
-				if pgStore != nil {
+				if backend != nil {
 					emailAllowFrom = nil
 				}
 				em := emailchan.New(&emailchan.Config{
@@ -542,16 +503,7 @@ func Run(cfg RunConfig) error {
 				// Inject thread index for per-thread email sessions.
 				// Each email thread gets its own session; replies chain back
 				// to the same session via In-Reply-To / References headers.
-				if sharedFileStore != nil {
-					em.SetThreadIndex(sharedFileStore.ThreadIndex())
-				} else if pgStore != nil {
-					// Platform mode: use PG-backed thread index
-					if pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background()); poolErr == nil {
-						em.SetThreadIndex(pgstore.NewPGThreadIndex(pool))
-					} else {
-						logger.Printf("Warning: Failed to get platform pool for thread index: %v", poolErr)
-					}
-				}
+				em.SetThreadIndex(backend.NewThreadIndex())
 				mgr.Register(em)
 				logger.Printf("Email channel registered (%s)", freshCfg.Channels.Email.Address)
 			}
@@ -562,15 +514,15 @@ func Run(cfg RunConfig) error {
 		if freshCfg.Channels.Slack.IsSlackEnabled() {
 			botToken := freshCfg.Channels.Slack.BotToken
 			if botToken == "" {
-				botToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.bot_token")
+				botToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.bot_token")
 			}
 			appToken := freshCfg.Channels.Slack.AppToken
 			if appToken == "" {
-				appToken = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.app_token")
+				appToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.app_token")
 			}
 			signingSecret := freshCfg.Channels.Slack.SigningSecret
 			if signingSecret == "" {
-				signingSecret = resolveDaemonSecret(pgStore, freshCfg, factoryResult.CredentialStore, "channels.slack.signing_secret")
+				signingSecret = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.signing_secret")
 			}
 
 			mode := freshCfg.Channels.Slack.GetMode()
@@ -585,7 +537,7 @@ func Run(cfg RunConfig) error {
 				logger.Printf("Warning: Slack channel enabled (events mode) but no signing secret found")
 			} else {
 				slAllowFrom := freshCfg.Channels.Slack.AllowFrom
-				if pgStore != nil {
+				if backend != nil {
 					slAllowFrom = nil
 				}
 				sl := slackchan.New(&slackchan.Config{
@@ -639,7 +591,7 @@ func Run(cfg RunConfig) error {
 		}
 		emailPassword := cfg.Channels.Email.Password
 		if emailPassword == "" {
-			emailPassword = resolveDaemonSecret(pgStore, cfg, factoryResult.CredentialStore, "channels.email.password")
+			emailPassword = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
 		}
 		if emailPassword == "" || cfg.Channels.Email.IMAPServer == "" ||
 			cfg.Channels.Email.SMTPServer == "" || cfg.Channels.Email.Address == "" {
@@ -667,9 +619,6 @@ func Run(cfg RunConfig) error {
 	} else {
 		channelMgr = mgr
 	}
-	if channelMgr != nil && authManager != nil {
-		channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
-	}
 	api.SetChannelManager(channelMgr)
 
 	// --- Dynamic allowlist from user_channels (platform mode) ---
@@ -678,13 +627,13 @@ func Run(cfg RunConfig) error {
 	// allow_from entries are ignored — they are a personal-mode concept.
 	// A background goroutine refreshes the allowlists every 60 seconds.
 	var refreshAllowlistStop context.CancelFunc
-	if pgStore != nil && channelMgr != nil {
+	if backend != nil && channelMgr != nil {
 		refreshAllowlist := func() {
 			bgCtx := context.Background()
 			allowlists := make(map[string][]string)
 
 			// Telegram allowlist (from DB only)
-			tgLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			tgLinks, err := backend.UserChannels().ListByChannelType(bgCtx, "telegram")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Telegram allowlist from DB: %v", err)
 			} else {
@@ -696,7 +645,7 @@ func Run(cfg RunConfig) error {
 			}
 
 			// Slack allowlist (from DB only)
-			slLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "slack")
+			slLinks, err := backend.UserChannels().ListByChannelType(bgCtx, "slack")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Slack allowlist from DB: %v", err)
 			} else {
@@ -708,7 +657,7 @@ func Run(cfg RunConfig) error {
 			}
 
 			// Email allowlist (from DB only)
-			emLinks, err := pgStore.UserChannels().ListByChannelType(bgCtx, "email")
+			emLinks, err := backend.UserChannels().ListByChannelType(bgCtx, "email")
 			if err != nil {
 				logger.Printf("[channels] Failed to refresh Email allowlist from DB: %v", err)
 			} else {
@@ -745,8 +694,8 @@ func Run(cfg RunConfig) error {
 
 	// Set platform resolver for inbound channel messages (platform mode only).
 	// This enables team-scoped context injection when users message via Telegram.
-	if pgStore != nil && channelMgr != nil {
-		resolver := &channelPlatformResolver{pgStore: pgStore}
+	if backend != nil && channelMgr != nil {
+		resolver := &channelPlatformResolver{backend: backend}
 		// Wire the cross-session memory merge function if PlatformReflector is available.
 		if factoryResult != nil && factoryResult.ChatAgent != nil && factoryResult.ChatAgent.PlatformReflector != nil {
 			resolver.memorySaveOrMerge = factoryResult.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc()
@@ -756,22 +705,17 @@ func Run(cfg RunConfig) error {
 
 	// --- Link code store for code-based channel linking (platform mode) ---
 	// Allows users to link their Telegram/Slack by sending /link <code> to the bot.
-	// In platform mode, use PG-backed store for stateless horizontal scaling.
-	if pgStore != nil && channelMgr != nil {
-		var linkStore api.LinkCodeBackend
-		if pool, poolErr := pgStore.PoolManager().PlatformPool(context.Background()); poolErr == nil {
-			linkStore = api.NewPGLinkCodeBackend(pgstore.NewPGLinkCodeStore(pool))
-		} else {
-			linkStore = api.NewLinkCodeStore()
-		}
+	// In platform mode, use DB-backed store for stateless horizontal scaling.
+	if backend != nil && channelMgr != nil {
+		linkStore := api.NewDBLinkCodeBackend(backend.NewLinkCodeStore())
 		api.SetLinkCodeStore(linkStore)
 
 		// Set the link handler on the Telegram channel — bridges /link commands
 		// to the link code store and user_channels DB.
-		channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
+		channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(backend, linkStore, channelMgr))
 
 		// Set the link handler on the Slack channel.
-		channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(pgStore, linkStore, channelMgr))
+		channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(backend, linkStore, channelMgr))
 	}
 
 	// reloadChannels re-reads config, stops existing channels, and starts new
@@ -814,8 +758,7 @@ func Run(cfg RunConfig) error {
 				ModelName:               freshCfg.General.DefaultModel,
 				DebugMode:               cfg.Debug,
 				AutoApprove:             true,
-				PlatformMode:            pgStore != nil,
-				SessionStore:            sharedFileStore,
+				PlatformMode:            true,
 				PlatformToolVectorStore: platformToolVectorStore,
 				PlatformEmbedFunc:       platformEmbedFunc,
 			})
@@ -838,19 +781,16 @@ func Run(cfg RunConfig) error {
 			logger.Printf("Warning: %v", err)
 		}
 		channelMgr = mgr
-		if channelMgr != nil && authManager != nil {
-			channelMgr.SetAuthorizeFunc(authManager.AuthorizeCode)
-		}
 		api.SetChannelManager(channelMgr)
 
 		// Refresh dynamic allowlist after channel reload (platform mode).
 		// DB is the sole authority — static config allow_from is ignored.
-		if pgStore != nil && channelMgr != nil {
+		if backend != nil && channelMgr != nil {
 			bgCtx := context.Background()
 			allowlists := make(map[string][]string)
 
 			// Telegram
-			tgLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "telegram")
+			tgLinks, linkErr := backend.UserChannels().ListByChannelType(bgCtx, "telegram")
 			if linkErr == nil {
 				ids := make([]string, 0, len(tgLinks))
 				for _, link := range tgLinks {
@@ -860,7 +800,7 @@ func Run(cfg RunConfig) error {
 			}
 
 			// Slack
-			slLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "slack")
+			slLinks, linkErr := backend.UserChannels().ListByChannelType(bgCtx, "slack")
 			if linkErr == nil {
 				ids := make([]string, 0, len(slLinks))
 				for _, link := range slLinks {
@@ -870,7 +810,7 @@ func Run(cfg RunConfig) error {
 			}
 
 			// Email
-			emLinks, linkErr := pgStore.UserChannels().ListByChannelType(bgCtx, "email")
+			emLinks, linkErr := backend.UserChannels().ListByChannelType(bgCtx, "email")
 			if linkErr == nil {
 				ids := make([]string, 0, len(emLinks))
 				for _, link := range emLinks {
@@ -883,8 +823,8 @@ func Run(cfg RunConfig) error {
 		}
 
 		// Re-attach platform resolver after reload
-		if pgStore != nil && channelMgr != nil {
-			resolver := &channelPlatformResolver{pgStore: pgStore}
+		if backend != nil && channelMgr != nil {
+			resolver := &channelPlatformResolver{backend: backend}
 			if factoryResult != nil && factoryResult.ChatAgent != nil && factoryResult.ChatAgent.PlatformReflector != nil {
 				resolver.memorySaveOrMerge = factoryResult.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc()
 			}
@@ -892,11 +832,11 @@ func Run(cfg RunConfig) error {
 		}
 
 		// Re-attach link handlers after reload
-		if pgStore != nil && channelMgr != nil {
+		if backend != nil && channelMgr != nil {
 			linkStore := api.GetLinkCodeStore()
 			if linkStore != nil {
-				channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(pgStore, linkStore, channelMgr))
-				channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(pgStore, linkStore, channelMgr))
+				channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(backend, linkStore, channelMgr))
+				channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(backend, linkStore, channelMgr))
 			}
 		}
 
@@ -925,7 +865,6 @@ func Run(cfg RunConfig) error {
 
 	// --- Initialize scheduler if enabled ---
 	// Skipped in API mode — only default and worker modes run the scheduler.
-	var sched *scheduler.Scheduler
 	var mtSched *MultiTenantScheduler
 	var schedExec *scheduler.Executor
 
@@ -935,156 +874,90 @@ func Run(cfg RunConfig) error {
 	var fleetSessionStore store.SessionStore
 
 	if appCfg.Scheduler.IsSchedulerEnabled() && daemonMode != config.DaemonModeAPI {
-		var jobStore scheduler.JobStore
+		// Platform mode: use the multi-tenant scheduler that iterates
+		// all orgs → all teams on every tick. Individual job CRUD goes
+		// through the request-scoped store.SchedulerStore in API handlers.
 
-		if svc.Mode == store.ModePlatform && pgStore != nil {
-			// Platform mode: use the multi-tenant scheduler that iterates
-			// all orgs → all teams on every tick. Individual job CRUD goes
-			// through the request-scoped store.SchedulerStore in API handlers.
-
-			// Create executor with injected headless runner
-			schedExec = &scheduler.Executor{
-				AppConfig:    appCfg,
-				ProviderName: appCfg.General.DefaultProvider,
-				ModelName:    appCfg.General.DefaultModel,
-				DebugMode:    cfg.Debug,
-				RunHeadless:  makeHeadlessRunner(),
-				// FlowResolver is nil — multi-tenant path uses context-injected FlowStore
-			}
-			if factoryResult != nil {
-				schedExec.ChatAgent = factoryResult.ChatAgent
-				schedExec.SessionService = factoryResult.SessionService
-			}
+		// Create executor with injected headless runner
+		schedExec = &scheduler.Executor{
+			AppConfig:    appCfg,
+			ProviderName: appCfg.General.DefaultProvider,
+			ModelName:    appCfg.General.DefaultModel,
+			DebugMode:    cfg.Debug,
+			RunHeadless:  makeHeadlessRunner(),
+			// FlowResolver is nil — multi-tenant path uses context-injected FlowStore
+		}
+		if factoryResult != nil {
+			schedExec.ChatAgent = factoryResult.ChatAgent
+			schedExec.SessionService = factoryResult.SessionService
+		}
 
 		// Create delivery function — uses a getter to always resolve the
 		// current channelMgr, surviving channel reloads without stale closures.
 		// In platform mode, use the full delivery resolver for owner/team/members modes.
 		deliver := scheduler.NewPlatformDeliverFunc(func() *channels.ChannelManager {
 			return channelMgr
-		}, &pgDeliveryResolver{pgStore: pgStore}, log.Default())
+		}, &deliveryResolver{backend: backend}, log.Default())
 
-			// Create and start the multi-tenant scheduler
-			mtSched = NewMultiTenantScheduler(pgStore, schedExec, deliver, log.Default())
-			mtSched.Start(ctx)
+		// Create and start the multi-tenant scheduler
+		mtSched = NewMultiTenantScheduler(backend, schedExec, deliver, log.Default())
+		mtSched.Start(ctx)
 
-			// Register executor for API RunNow handler
-			api.SetExecutor(schedExec)
+		// Register executor for API RunNow handler
+		api.SetExecutor(schedExec)
 
-			// Resolve default org/team for fleet session store (backward compat)
-			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-			if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
-				teamStore := orgStore.ForTeam("general")
-				fleetSessionStore = teamStore.Sessions()
-			}
-
-			logger.Printf("Scheduler: multi-tenant (all orgs/teams)")
+		// Resolve default org/team for fleet session store (backward compat)
+		orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+		if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+			teamStore := orgStore.ForTeam("general")
+			fleetSessionStore = teamStore.Sessions()
 		}
 
-		if svc.Mode != store.ModePlatform || pgStore == nil {
-			// Personal mode: use file-based JSON store with single-instance scheduler.
-			storePath, storeErr := scheduler.DefaultStorePath()
-			if storeErr != nil {
-				logger.Printf("Warning: Failed to resolve scheduler store path: %v", storeErr)
-			} else {
-				fileStore, storeErr := scheduler.NewStore(storePath)
-				if storeErr != nil {
-					logger.Printf("Warning: Failed to initialize scheduler store: %v", storeErr)
-				} else {
-					filestore.SetSchedulerStore(svc, fileStore)
-					jobStore = fileStore
-				}
-			}
-
-			if jobStore != nil {
-				// Create executor with injected headless runner
-				schedExec = &scheduler.Executor{
-					AppConfig:    appCfg,
-					ProviderName: appCfg.General.DefaultProvider,
-					ModelName:    appCfg.General.DefaultModel,
-					DebugMode:    cfg.Debug,
-					RunHeadless:  makeHeadlessRunner(),
-				}
-				if factoryResult != nil {
-					schedExec.ChatAgent = factoryResult.ChatAgent
-					schedExec.SessionService = factoryResult.SessionService
-				}
-
-			// Create delivery function — uses a getter to always resolve the
-			// current channelMgr, surviving channel reloads without stale closures.
-			deliver := scheduler.NewDeliverFunc(func() *channels.ChannelManager {
-				return channelMgr
-			})
-
-				sched = scheduler.New(jobStore, schedExec.Execute, deliver, log.Default())
-				sched.Start(ctx)
-
-				// Make scheduler available to API handlers and LLM tools (personal mode)
-				api.SetScheduler(sched)
-				api.SetExecutor(schedExec)
-				tools.SetSchedulerAccess(newSchedulerBridge(sched))
-			}
-		}
+		logger.Printf("Scheduler: multi-tenant (all orgs/teams)")
 	}
 
 	// --- Initialize fleet plan activator ---
 	// This bridges fleet plans to the scheduler for automated polling.
 	// Requires the scheduler to be initialized.
-	// In personal mode, also requires the plan registry to be initialized.
 	// In platform mode, fleet plans are read from the database.
 	// Skipped in API mode — only default and worker modes run fleet monitors.
-	schedulerAvailable := sched != nil || mtSched != nil
-	if schedulerAvailable && daemonMode != config.DaemonModeAPI {
-		planRegAvailable := api.GetFleetPlanRegistry() != nil || pgStore != nil
-		if planRegAvailable {
-			// In platform mode without a personal-mode scheduler, create a
-			// temporary single-team scheduler bridge for fleet plan management.
-			// Fleet plans are org-level resources that get stored in the default team.
-			var fleetSchedBridge *fleetSchedulerBridge
-			if sched != nil {
-				fleetSchedBridge = newFleetSchedulerBridge(sched)
-			} else {
-				// Platform mode: create a scheduler backed by the default team's store
-				// for fleet plan job management.
-				orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-				if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
-					teamStore := orgStore.ForTeam("general")
-					fleetJobStore := newPGSchedulerAdapter(teamStore.ScheduledJobs())
-					fleetSched := scheduler.New(fleetJobStore, schedExec.Execute, nil, log.Default())
-					fleetSchedBridge = newFleetSchedulerBridge(fleetSched)
-				}
-			}
+	if mtSched != nil && daemonMode != config.DaemonModeAPI {
+		// Create a scheduler backed by the default team's store
+		// for fleet plan job management.
+		var fleetSchedBridge *fleetSchedulerBridge
+		orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+		if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+			teamStore := orgStore.ForTeam("general")
+			fleetJobStore := newPGSchedulerAdapter(teamStore.ScheduledJobs())
+			fleetSched := scheduler.New(fleetJobStore, schedExec.Execute, nil, log.Default())
+			fleetSchedBridge = newFleetSchedulerBridge(fleetSched)
+		}
 
-			if fleetSchedBridge != nil {
+		if fleetSchedBridge != nil {
 				fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
 					// Resolve tenant-scoped stores for the fleet session so sub-agents
 					// can access team drills, credentials, skills, etc. in platform mode.
 					var fleetStores *api.FleetStores
-					if pgStore != nil && fCfg.TeamSlug != "" {
+					if backend != nil && fCfg.TeamSlug != "" {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 							teamStore := orgStore.ForTeam(fCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers())
 						}
 					}
 					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore, fleetStores)
 				}
 				// Wrap the plan registry getter to satisfy fleet.PlanAccess interface.
 				// In personal mode, returns the file-based PlanRegistry.
-				// In platform mode (when pgStore != nil), returns a DB-backed adapter.
+				// In platform mode (when backend != nil), returns a DB-backed adapter.
 				planAccessFn := func() fleet.PlanAccess {
-					if pgStore != nil {
+					if backend != nil {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 							teamStore := orgStore.ForTeam("general")
-							// Get the org pool for the monitor state store
-							orgPool, poolErr := pgStore.PoolManager().OrgPool(context.Background(), orgSlug)
-							if poolErr != nil {
-								slog.Warn("failed to get org pool for monitor state", "error", poolErr)
-								return nil
-							}
 							return &dbPlanAccessAdapter{
 								store:        teamStore.FleetPlans(),
-								monitorStore: pgstore.NewPGMonitorStateStore(orgPool, pgstore.TeamSchemaName("general")),
+								monitorStore: backend.NewMonitorStateStore(orgSlug, "general"),
 							}
 						}
 					}
@@ -1108,11 +981,11 @@ func Run(cfg RunConfig) error {
 				activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
 					// Resolve tenant-scoped stores for the recovered fleet session.
 					var fleetStores *api.FleetStores
-					if pgStore != nil && rCfg.TeamSlug != "" {
+					if backend != nil && rCfg.TeamSlug != "" {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 							teamStore := orgStore.ForTeam(rCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
+							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers())
 						}
 					}
 					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore, fleetStores)
@@ -1122,12 +995,11 @@ func Run(cfg RunConfig) error {
 				// When a plan has credentials: { github: "some-store-entry" }, this
 				// resolver extracts the token from the encrypted credential store so
 				// it can be injected as GH_TOKEN into gh CLI commands.
-				if pgStore != nil {
-					// Platform mode: resolve from PG team credential store.
-					pgStoreRef := pgStore
+				if backend != nil {
+					// Platform mode: resolve from team credential store.
 					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
 						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						orgStore, orgErr := pgStoreRef.ForOrg(orgSlug)
+						orgStore, orgErr := backend.ForOrg(orgSlug)
 						if orgErr != nil {
 							slog.Warn("failed to get org store for fleet credentials", "plan", plan.Key, "error", orgErr)
 							return ""
@@ -1173,7 +1045,6 @@ func Run(cfg RunConfig) error {
 
 				logger.Printf("Fleet plan activator initialized")
 			}
-		}
 	}
 
 	// --- Wire fleet commands into channels ---
@@ -1185,9 +1056,9 @@ func Run(cfg RunConfig) error {
 			},
 			GetPlanRegistry: func() channels.FleetPlanRegistry {
 				// Platform mode: use DB store
-				if pgStore != nil {
+				if backend != nil {
 					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 						teamStore := orgStore.ForTeam("general")
 						return &dbFleetPlanRegistryAdapter{store: teamStore.FleetPlans()}
 					}
@@ -1201,9 +1072,9 @@ func Run(cfg RunConfig) error {
 			},
 			GetFleetRegistry: func() channels.FleetTemplateRegistry {
 				// Platform mode: use DB store
-				if pgStore != nil {
+				if backend != nil {
 					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 						teamStore := orgStore.ForTeam("general")
 						return &dbFleetTemplateRegistryAdapter{store: teamStore.FleetTemplates()}
 					}
@@ -1219,12 +1090,12 @@ func Run(cfg RunConfig) error {
 				// Resolve fleet plan store for platform mode
 				var fleetPlanStore store.FleetPlanStore
 				var fleetStores *api.FleetStores
-				if pgStore != nil {
+				if backend != nil {
 					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-					if orgStore, orgErr := pgStore.ForOrg(orgSlug); orgErr == nil {
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
 						teamStore := orgStore.ForTeam("general")
 						fleetPlanStore = teamStore.FleetPlans()
-						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, pgStore.PlatformMCPServers())
+						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers())
 					}
 				}
 				result, err := api.StartFleetSessionFromPlan(planKey, initialMessage, api.DefaultUserID(), "", nil, nil, "", fleetPlanStore, fleetStores)
@@ -1267,13 +1138,13 @@ func Run(cfg RunConfig) error {
 	cleanupDone := make(chan struct{})
 	go func() {
 		defer close(cleanupDone)
-		runPeriodicCleanup(ctx, appCfg, sharedFileStore, logger)
+		runPeriodicCleanup(ctx, appCfg, nil, logger)
 	}()
 
 	// Start transient table cleanup in platform mode (device_sessions, pending_link_codes).
 	// Runs every 5 minutes — these tables have short TTLs (5-10 min) and expired rows
 	// accumulate if no cleanup runs. Safe to run on any/all pods (DELETE is idempotent).
-	if pgStore != nil {
+	if backend != nil {
 		go func() {
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
@@ -1282,13 +1153,7 @@ func Run(cfg RunConfig) error {
 				case <-ctx.Done():
 					return
 				case <-ticker.C:
-					bgCtx := context.Background()
-					pool, poolErr := pgStore.PoolManager().PlatformPool(bgCtx)
-					if poolErr != nil {
-						continue
-					}
-					_, _ = pool.Exec(bgCtx, `DELETE FROM device_sessions WHERE expires_at < now()`)
-					_, _ = pool.Exec(bgCtx, `DELETE FROM pending_link_codes WHERE expires_at < now()`)
+					backend.CleanupExpired(context.Background())
 				}
 			}
 		}()
@@ -1330,19 +1195,17 @@ func Run(cfg RunConfig) error {
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	studioOpts = append(studioOpts, launcher.WithServices(svc))
-	if platformAuth != nil && pgStore != nil {
+	if platformAuth != nil && backend != nil {
 		studioOpts = append(studioOpts, launcher.WithPlatformAuth(platformAuth, pgStore))
-	} else if authManager != nil {
-		studioOpts = append(studioOpts, launcher.WithAuth(authManager))
+		if sqlStore != nil {
+			studioOpts = append(studioOpts, launcher.WithBackend(sqlStore))
+			studioOpts = append(studioOpts, launcher.WithTenantMiddleware(sqlitestore.TenantMiddleware(sqlStore)))
+			api.SetPlatformBackend(sqlStore)
+			api.SetPlatformSecrets(sqlStore.Secrets())
+		}
 	}
 	if configDir != "" {
 		studioOpts = append(studioOpts, launcher.WithConfigDir(configDir))
-	}
-	if sharedFileStore != nil {
-		studioOpts = append(studioOpts, launcher.WithSessionStore(sharedFileStore))
-	}
-	if daemonIndexer != nil {
-		studioOpts = append(studioOpts, launcher.WithDaemonIndexer(daemonIndexer))
 	}
 	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {
@@ -1388,10 +1251,6 @@ func Run(cfg RunConfig) error {
 	ctxCancel()
 
 	// Stop scheduler first (finish in-flight jobs)
-	if sched != nil {
-		logger.Printf("Stopping scheduler...")
-		sched.Stop()
-	}
 	if mtSched != nil {
 		logger.Printf("Stopping multi-tenant scheduler...")
 		mtSched.Stop()
@@ -1921,13 +1780,7 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 		}
 	}
 
-	// 2. Clean up orphaned app databases (no matching .yaml, older than 7 days)
-	cleaned := api.CleanupOrphanAppDBs(7 * 24 * time.Hour)
-	if cleaned > 0 {
-		logger.Printf("[cleanup] Removed %d orphaned app database(s)", cleaned)
-	}
-
-	// 3. Prune orphan sandbox containers
+	// 2. Prune orphan sandbox containers
 	if sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
 		var liveSessionIDs map[string]bool
 		if sessionStore != nil {
@@ -1973,9 +1826,9 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 }
 
 // cascadePlatformProviders merges platform-level and default-org provider
-// settings from the PostgreSQL store into appCfg. This gives the daemon-level
+// settings from the platform store into appCfg. This gives the daemon-level
 // channel/fleet agent access to providers configured via the admin UI.
-func cascadePlatformProviders(ctx context.Context, pgStore *pgstore.PGStore, appCfg *config.AppConfig, logger *Logger) {
+func cascadePlatformProviders(ctx context.Context, backend store.PlatformBackend, appCfg *config.AppConfig, logger *Logger) {
 	// Platform mode: providers come exclusively from the database.
 	// Clear any config.yaml residue so the DB is the sole source of truth.
 	appCfg.Providers = nil
@@ -1983,7 +1836,7 @@ func cascadePlatformProviders(ctx context.Context, pgStore *pgstore.PGStore, app
 	appCfg.General.DefaultModel = ""
 
 	// Layer 1: Platform settings
-	psStore := pgStore.PlatformSettings()
+	psStore := backend.PlatformSettings()
 	if psStore != nil {
 		if ps, err := psStore.Get(ctx); err == nil && ps != nil {
 			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
@@ -1994,7 +1847,7 @@ func cascadePlatformProviders(ctx context.Context, pgStore *pgstore.PGStore, app
 	// Layer 2: Default org settings
 	orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 	if orgSlug != "" {
-		osStore := pgStore.OrgSettings(orgSlug)
+		osStore := backend.OrgSettings(orgSlug)
 		if osStore != nil {
 			if os, err := osStore.Get(ctx); err == nil && os != nil {
 				applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)

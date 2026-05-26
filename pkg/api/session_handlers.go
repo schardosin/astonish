@@ -639,13 +639,10 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 		sandbox.TryDestroySession(appCfg, sessionID)
 		// Clean up session-scoped app databases
 		if svc.AppStateSQL != nil {
-			// Platform mode: drop all PG schemas matching the session prefix
 			prefix := "session_" + apps.Slugify(sessionID) + "_"
 			if err := svc.AppStateSQL.DropSchemasWithPrefix(r.Context(), prefix); err != nil {
-				slog.Debug("failed to drop session app PG schemas", "sessionId", sessionID, "error", err)
+				slog.Debug("failed to drop session app schemas", "sessionId", sessionID, "error", err)
 			}
-		} else if cleaned := CleanupSessionAppDBs(sessionID); cleaned > 0 {
-			slog.Debug("cleaned up session app databases", "sessionId", sessionID, "count", cleaned)
 		}
 		w.WriteHeader(http.StatusNoContent)
 		return
@@ -682,8 +679,11 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	sandbox.TryDestroySession(appCfg, sessionID)
 
 	// Best-effort: clean up session-scoped app state databases
-	if cleaned := CleanupSessionAppDBs(sessionID); cleaned > 0 {
-		slog.Debug("cleaned up session app databases", "sessionId", sessionID, "count", cleaned)
+	if svc := store.FromRequest(r); svc != nil && svc.AppStateSQL != nil {
+		prefix := "session_" + apps.Slugify(sessionID) + "_"
+		if err := svc.AppStateSQL.DropSchemasWithPrefix(r.Context(), prefix); err != nil {
+			slog.Debug("failed to drop session app schemas", "sessionId", sessionID, "error", err)
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

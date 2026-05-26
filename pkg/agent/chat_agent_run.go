@@ -674,15 +674,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		// output. Snapshot session events before launching the goroutine since
 		// the invocation context (and its session) may become invalid after
 		// the agent Run function returns.
-		if c.MemoryReflector != nil {
-			events := ctx.Session().Events()
-			reflector := c.MemoryReflector
-			go func() {
-				reflectCtx, reflectCancel := context.WithTimeout(context.Background(), 60*time.Second)
-				defer reflectCancel()
-				reflector.Reflect(reflectCtx, trace, events)
-			}()
-		} else if c.PlatformReflector != nil {
+		if c.PlatformReflector != nil {
 			// Platform mode: the reflector needs the runner context (which has
 			// MemoryStore, SessionID, UserID injected by ChatRunner). We derive
 			// a new context from the invocation context (which IS the runner ctx)

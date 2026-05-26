@@ -6,20 +6,17 @@ import (
 	"encoding/binary"
 	"math"
 	"testing"
-
-	chromem "github.com/philippgille/chromem-go"
 )
 
-// newTestToolIndex creates a ToolIndex backed by an in-memory chromem store.
+// newTestToolIndex creates a ToolIndex backed by an in-memory vector store.
 // This is the standard way to create a ToolIndex in tests.
-func newTestToolIndex(t *testing.T, ef chromem.EmbeddingFunc) *ToolIndex {
+func newTestToolIndex(t *testing.T, ef EmbedFunc) *ToolIndex {
 	t.Helper()
-	db := chromem.NewDB()
-	vs, err := NewChromemToolVectorStore(db, ef)
+	vs, err := NewInMemoryToolVectorStore(ef)
 	if err != nil {
-		t.Fatalf("NewChromemToolVectorStore: %v", err)
+		t.Fatalf("NewInMemoryToolVectorStore: %v", err)
 	}
-	idx, err := NewToolIndex(vs, EmbedFunc(ef))
+	idx, err := NewToolIndex(vs, ef)
 	if err != nil {
 		t.Fatalf("NewToolIndex: %v", err)
 	}
@@ -29,7 +26,7 @@ func newTestToolIndex(t *testing.T, ef chromem.EmbeddingFunc) *ToolIndex {
 // testEmbeddingFunc creates a deterministic embedding function for tests.
 // It uses SHA-256 of the text to produce a 384-dim vector. This doesn't
 // capture semantic similarity but allows testing the index mechanics.
-func testEmbeddingFunc() chromem.EmbeddingFunc {
+func testEmbeddingFunc() EmbedFunc {
 	return func(_ context.Context, text string) ([]float32, error) {
 		hash := sha256.Sum256([]byte(text))
 		vec := make([]float32, 384)
@@ -56,7 +53,7 @@ func testEmbeddingFunc() chromem.EmbeddingFunc {
 // testSemanticEmbeddingFunc creates a bag-of-words embedding function for tests.
 // This provides basic semantic similarity: texts sharing words will have
 // higher cosine similarity than unrelated texts.
-func testSemanticEmbeddingFunc() chromem.EmbeddingFunc {
+func testSemanticEmbeddingFunc() EmbedFunc {
 	return func(_ context.Context, text string) ([]float32, error) {
 		vec := make([]float32, 384)
 		// Hash each word and accumulate into the vector
@@ -120,8 +117,7 @@ func TestToolIndex_NewToolIndex_Errors(t *testing.T) {
 		t.Error("expected error for nil vector store")
 	}
 
-	db := chromem.NewDB()
-	vs, _ := NewChromemToolVectorStore(db, testEmbeddingFunc())
+	vs, _ := NewInMemoryToolVectorStore(testEmbeddingFunc())
 	_, err = NewToolIndex(vs, nil)
 	if err == nil {
 		t.Error("expected error for nil embedding func")

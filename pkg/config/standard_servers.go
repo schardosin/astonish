@@ -116,7 +116,8 @@ func IsStandardServerInstalled(id string) bool {
 		return true
 	}
 
-	// Check credential store via registered getter
+	// Check credential store via registered getter (reads from platform_secrets DB
+	// table with optional file-store fallback via daemonSecretGetter).
 	if getter := getInstalledSecretGetter(); getter != nil {
 		storeKey := "web_servers." + id + ".api_key"
 		if getter(storeKey) != "" {
@@ -124,15 +125,7 @@ func IsStandardServerInstalled(id string) bool {
 		}
 	}
 
-	appCfg, err := LoadAppConfig()
-	if err != nil {
-		return false
-	}
-	ws, exists := appCfg.WebServers[id]
-	if !exists {
-		return false
-	}
-	return ws.APIKey != ""
+	return false
 }
 
 // --- Optional credential store getter for IsStandardServerInstalled ---

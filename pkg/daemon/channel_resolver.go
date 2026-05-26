@@ -7,13 +7,12 @@ import (
 
 	"github.com/schardosin/astonish/pkg/channels"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // channelPlatformResolver implements channels.PlatformResolver using the
 // platform store to look up user-channel links and inject team-scoped context.
 type channelPlatformResolver struct {
-	pgStore *pgstore.PGStore
+	backend store.PlatformBackend
 
 	// memorySaveOrMerge is the cross-session memory merge function.
 	// Injected at construction time from the ChatAgent's PlatformReflector.
@@ -69,7 +68,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	hint *channels.RoutingHint,
 ) (context.Context, string, string, error) {
 	// Look up the user-channel link
-	link, err := r.pgStore.UserChannels().GetByExternalID(ctx, channelType, externalID)
+	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
 	if err != nil {
 		return ctx, "", "", fmt.Errorf("lookup failed: %w", err)
 	}
@@ -81,7 +80,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	}
 
 	// Get the user info for display name
-	user, err := r.pgStore.Users().GetByID(ctx, link.UserID)
+	user, err := r.backend.Users().GetByID(ctx, link.UserID)
 	if err != nil || user == nil {
 		return ctx, "", "", fmt.Errorf("user %s not found", link.UserID)
 	}
@@ -93,7 +92,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	}
 
 	// Get the org data store
-	orgStore, err := r.pgStore.ForOrg(orgSlug)
+	orgStore, err := r.backend.ForOrg(orgSlug)
 	if err != nil {
 		return ctx, link.UserID, user.DisplayName, fmt.Errorf("failed to resolve org %s: %w", orgSlug, err)
 	}
@@ -109,7 +108,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 		Team: teamStore.Skills(),
 	})
 	enrichedCtx = store.WithMCPServerStores(enrichedCtx, &store.MCPServerStores{
-		Platform: r.pgStore.PlatformMCPServers(),
+		Platform: r.backend.PlatformMCPServers(),
 		Org:      orgStore.OrgMCPServers(),
 		Team:     teamStore.MCPServers(),
 	})
@@ -155,7 +154,7 @@ func (r *channelPlatformResolver) validateRouting(
 	userID, orgSlug, teamSlug string,
 ) (string, string, error) {
 	// Verify org membership
-	orgs, err := r.pgStore.Organizations().GetUserOrgs(ctx, userID)
+	orgs, err := r.backend.Organizations().GetUserOrgs(ctx, userID)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to check org membership: %w", err)
 	}
@@ -171,7 +170,7 @@ func (r *channelPlatformResolver) validateRouting(
 	}
 
 	// Get teams the user belongs to in this org
-	orgDS, err := r.pgStore.ForOrg(orgSlug)
+	orgDS, err := r.backend.ForOrg(orgSlug)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to resolve org %s: %w", orgSlug, err)
 	}
@@ -196,13 +195,13 @@ func (r *channelPlatformResolver) validateRouting(
 
 // defaultRouting returns the user's first org and first team.
 func (r *channelPlatformResolver) defaultRouting(ctx context.Context, userID string) (string, string, error) {
-	orgs, err := r.pgStore.Organizations().GetUserOrgs(ctx, userID)
+	orgs, err := r.backend.Organizations().GetUserOrgs(ctx, userID)
 	if err != nil || len(orgs) == 0 {
 		return "", "", fmt.Errorf("user has no org memberships")
 	}
 	orgSlug := orgs[0].OrgSlug
 
-	orgDS, err := r.pgStore.ForOrg(orgSlug)
+	orgDS, err := r.backend.ForOrg(orgSlug)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to resolve org %s: %w", orgSlug, err)
 	}
@@ -218,7 +217,7 @@ func (r *channelPlatformResolver) defaultRouting(ctx context.Context, userID str
 // identified by a channel identity. Used by /context to show routing options.
 func (r *channelPlatformResolver) ListUserRoutes(ctx context.Context, channelType, externalID string) ([]channels.RouteOption, error) {
 	// Look up the user-channel link
-	link, err := r.pgStore.UserChannels().GetByExternalID(ctx, channelType, externalID)
+	link, err := r.backend.UserChannels().GetByExternalID(ctx, channelType, externalID)
 	if err != nil {
 		return nil, fmt.Errorf("lookup failed: %w", err)
 	}
@@ -227,14 +226,14 @@ func (r *channelPlatformResolver) ListUserRoutes(ctx context.Context, channelTyp
 	}
 
 	// Get all orgs the user belongs to
-	orgs, err := r.pgStore.Organizations().GetUserOrgs(ctx, link.UserID)
+	orgs, err := r.backend.Organizations().GetUserOrgs(ctx, link.UserID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list orgs: %w", err)
 	}
 
 	var routes []channels.RouteOption
 	for _, org := range orgs {
-		orgDS, err := r.pgStore.ForOrg(org.OrgSlug)
+		orgDS, err := r.backend.ForOrg(org.OrgSlug)
 		if err != nil {
 			continue
 		}

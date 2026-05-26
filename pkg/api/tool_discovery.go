@@ -952,6 +952,16 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 			Transport: "stdio",
 		}
 
+		// Pre-flight: ensure stdio servers can be installed (sandbox must be enabled)
+		if err := checkStdioMCPInstallable(newConfig.Transport); err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(InternetMCPInstallResponse{
+				Status: "error",
+				Error:  err.Error(),
+			})
+			return
+		}
+
 		s := &store.MCPServer{
 			Name:      serverName,
 			Command:   newConfig.Command,
@@ -970,17 +980,8 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Discover tools in background
-		servers := map[string]config.MCPServerConfig{serverName: newConfig}
-		go func() {
-			bgCtx := context.Background()
-			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
-			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
-					slog.Warn("failed to update cached_tools after internet install", "server", serverName, "error", err)
-				}
-			}
-		}()
+		// Discover tools asynchronously with timeout
+		asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig)
 
 		GetChatManager().Reset()
 
@@ -991,61 +992,11 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: file-based
-	// Load current MCP config
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("Failed to load MCP config: %v", err),
-		})
-		return
-	}
-
-	// Check if server already exists
-	if _, exists := mcpCfg.MCPServers[serverName]; exists {
-		serverName = serverName + "-" + fmt.Sprintf("%d", len(mcpCfg.MCPServers)+1)
-	}
-
-	// Create the server config
-	newServer := config.MCPServerConfig{
-		Command: req.Command,
-		Args:    req.Args,
-		Env:     req.Env,
-	}
-
-	mcpCfg.MCPServers[serverName] = newServer
-
-	if err := config.SaveMCPConfig(mcpCfg); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-			Status: "error",
-			Error:  fmt.Sprintf("Failed to save MCP config: %v", err),
-		})
-		return
-	}
-
-	// Use incremental refresh logic to avoid full reload deadlocks and timeouts
-	if err := RefreshSingleServer(context.Background(), serverName); err != nil {
-		slog.Warn("failed to refresh server", "server", serverName, "error", err)
-	}
-
-	// Reset the Studio chat agent so the next request picks up the new MCP server.
-	GetChatManager().Reset()
-
-	toolsLoaded := 0
-	cachedTools := GetCachedTools()
-	for _, t := range cachedTools {
-		if t.Source == serverName {
-			toolsLoaded++
-		}
-	}
-
+	// Personal mode no longer supported
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(InternetMCPInstallResponse{
-		Status:      "ok",
-		ToolsLoaded: toolsLoaded,
+		Status: "error",
+		Error:  "MCP server store not available",
 	})
 }
 

@@ -894,34 +894,7 @@ func GetMCPServersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: read from filesystem
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
-		return
-	}
-
-	servers := make([]MCPServerInfo, 0, len(mcpConfig.MCPServers))
-	for name, cfg := range mcpConfig.MCPServers {
-		transport := cfg.Transport
-		if transport == "" {
-			transport = "stdio"
-		}
-		servers = append(servers, MCPServerInfo{
-			Name:      name,
-			Transport: transport,
-			Command:   cfg.Command,
-			URL:       cfg.URL,
-			Enabled:   cfg.IsEnabled(),
-		})
-	}
-
-	// Sort by name
-	sort.Slice(servers, func(i, j int) bool {
-		return servers[i].Name < servers[j].Name
-	})
-
-	respondJSON(w, http.StatusOK, MCPServersListResponse{Servers: servers})
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // UpdateMCPServerRequest is the request body for PATCH /api/mcp/servers/{name}
@@ -989,53 +962,8 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: file-based
-	mcpConfig, err := config.LoadMCPConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load MCP config")
-		return
-	}
-
-	// Find server
-	serverCfg, exists := mcpConfig.MCPServers[serverName]
-	if !exists {
-		respondError(w, http.StatusNotFound, "Server not found")
-		return
-	}
-
-	// Update enabled status if provided
-	if req.Enabled != nil {
-		serverCfg.Enabled = req.Enabled
-		mcpConfig.MCPServers[serverName] = serverCfg
-
-		// Save config
-		if err := config.SaveMCPConfig(mcpConfig); err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to save MCP config")
-			return
-		}
-
-		// Reset the Studio chat agent so the next request picks up the MCP change.
-		GetChatManager().Reset()
-	}
-
-	// Build response
-	transport := serverCfg.Transport
-	if transport == "" {
-		transport = "stdio"
-	}
-
-	response := UpdateMCPServerResponse{
-		Success: true,
-		Server: MCPServerInfo{
-			Name:      serverName,
-			Transport: transport,
-			Command:   serverCfg.Command,
-			URL:       serverCfg.URL,
-			Enabled:   serverCfg.IsEnabled(),
-		},
-	}
-
-	respondJSON(w, http.StatusOK, response)
+	// Personal mode no longer supported
+	respondError(w, http.StatusServiceUnavailable, "MCP server store not available")
 }
 
 // RegisterRoutes registers the API routes on a router.
@@ -1050,7 +978,8 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 // When pg is non-nil (platform mode), TenantMiddleware is also applied after
 // store.Middleware, resolving per-request tenant stores based on the
 // TenantContext set by PlatformAuthMiddleware.
-func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore) {
+// tenantMW is an optional middleware function for per-request tenant resolution.
+func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore, tenantMW func(http.Handler) http.Handler) {
 	// Register health endpoints BEFORE middleware (they must be auth-exempt and fast).
 	router.HandleFunc("/api/healthz", HealthzHandler).Methods("GET")
 	router.HandleFunc("/api/readyz", ReadyzHandler).Methods("GET")
@@ -1066,7 +995,9 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// and AFTER PlatformAuthMiddleware (which sets TenantContext in the context).
 	// PlatformAuthMiddleware is applied outside the router (wraps the entire handler),
 	// so it always runs before router.Use() middleware.
-	if pg != nil {
+	if tenantMW != nil {
+		router.Use(tenantMW)
+	} else if pg != nil {
 		router.Use(pgstore.TenantMiddleware(pg))
 	}
 
@@ -1129,6 +1060,7 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 
 	// Platform setup endpoints (for deployment mode configuration)
 	router.HandleFunc("/api/platform/init", PlatformInitHandler).Methods("POST")
+	router.HandleFunc("/api/platform/init/sqlite", SQLitePlatformInitHandler).Methods("POST")
 	router.HandleFunc("/api/platform/init/status", PlatformInitStatusHandler).Methods("GET")
 	router.HandleFunc("/api/platform/mode", DeploymentModeHandler).Methods("GET")
 
@@ -1350,7 +1282,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// and each handler additionally verifies platform_role == "superadmin".
 	if pg != nil {
 		SetPlatformPGStore(pg)
-
+	}
+	if getPlatformBackend() != nil {
 		// User channel management (any authenticated user manages their own)
 		router.HandleFunc("/api/user/channels", handleListUserChannels).Methods("GET")
 		router.HandleFunc("/api/user/channels", handleLinkUserChannel).Methods("POST")

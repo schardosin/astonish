@@ -20,7 +20,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // orgResolver is the subset of PGStore used for resolving org data stores.
@@ -35,20 +34,20 @@ type orgResolver interface {
 type PlatformAuth struct {
 	jwt          *JWTIssuer
 	authCfg      config.PlatformAuthConfig
-	pgStore      *pgstore.PGStore
+	pgStore      store.PlatformBackend
 	storeCfg     config.StorageConfig
 	orgResolver  orgResolver // defaults to pgStore; override in tests
 }
 
 // NewPlatformAuth creates a new platform auth manager.
-func NewPlatformAuth(authCfg config.PlatformAuthConfig, pgStore *pgstore.PGStore, storeCfg config.StorageConfig) *PlatformAuth {
+func NewPlatformAuth(authCfg config.PlatformAuthConfig, backend store.PlatformBackend, storeCfg config.StorageConfig) *PlatformAuth {
 	jwtSecret := authCfg.GetJWTSecret()
 	return &PlatformAuth{
 		jwt:         NewJWTIssuer(jwtSecret, authCfg.GetAccessTokenTTL(), authCfg.GetRefreshTokenTTL()),
 		authCfg:     authCfg,
-		pgStore:     pgStore,
+		pgStore:     backend,
 		storeCfg:    storeCfg,
-		orgResolver: pgStore,
+		orgResolver: backend,
 	}
 }
 
@@ -618,7 +617,7 @@ func (pa *PlatformAuth) ensureOrgForUser(ctx context.Context, user *store.User) 
 func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User) (*store.Organization, string, error) {
 	orgSlug := pa.authCfg.GetDefaultOrgSlug()
 	orgName := pa.authCfg.GetDefaultOrgName()
-	dbName := pgstore.OrgDBName(pa.pgStore.InstanceSuffix(), orgSlug)
+	dbName := config.OrgDBName(pa.pgStore.InstanceSuffix(), orgSlug)
 
 	org := &store.Organization{
 		ID:        uuid.New().String(),
@@ -663,7 +662,7 @@ func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User)
 		ID:         uuid.New().String(),
 		Name:       "General",
 		Slug:       "general",
-		SchemaName: pgstore.TeamSchemaName("general"),
+		SchemaName: "team_general",
 		CreatedAt:  time.Now(),
 	}
 	if err := orgDataStore.Teams().CreateTeam(ctx, defaultTeam); err != nil {

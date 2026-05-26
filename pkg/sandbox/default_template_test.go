@@ -74,6 +74,21 @@ func (f *fakeTemplateStore) Resolve(context.Context, string) (*store.ResolvedTem
 func (f *fakeTemplateStore) ListRoots(context.Context) ([]*store.SandboxTemplate, error) {
 	return nil, errors.New("not implemented")
 }
+func (f *fakeTemplateStore) GetBaseConfig(context.Context) (*store.BaseConfigInfo, error) {
+	return nil, errors.New("not implemented")
+}
+func (f *fakeTemplateStore) SetBaseConfig(context.Context, string, []byte, string) error {
+	return errors.New("not implemented")
+}
+func (f *fakeTemplateStore) GetBaseTopLayerID(context.Context) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (f *fakeTemplateStore) AcquireBuildLock(context.Context) (bool, func(), error) {
+	return false, nil, errors.New("not implemented")
+}
+func (f *fakeTemplateStore) IsBuildInProgress(context.Context) (bool, error) {
+	return false, errors.New("not implemented")
+}
 
 func tpl(id, slug string, scope store.SandboxTemplateScope, owner string) *store.SandboxTemplate {
 	return &store.SandboxTemplate{

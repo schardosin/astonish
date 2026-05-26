@@ -2,6 +2,7 @@ package astonish
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"log/slog"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 )
 
 func handleSetupCommand() error {
@@ -58,7 +60,7 @@ func handleSetupCommand() error {
 	}
 
 	// --- DEPLOYMENT MODE STEP ---
-	// Ask whether the user wants personal (file-based) or platform (PostgreSQL) mode.
+	// Ask the user to choose between SQLite (default) and PostgreSQL backends.
 	// Only show this if the backend isn't already configured.
 	if cfg.Storage.Backend == "" {
 		if err := handleDeploymentModeSetup(cfg); err != nil {
@@ -1504,9 +1506,8 @@ func handleSandboxSetup() error {
 // Deployment Mode Setup
 // ---------------------------------------------------------------------------
 
-// handleDeploymentModeSetup asks the user to choose between personal and
-// platform mode. If platform is selected, it collects PostgreSQL connection
-// details, bootstraps the database, and configures the storage section.
+// handleDeploymentModeSetup asks the user to choose between SQLite (default)
+// and PostgreSQL platform backends.
 func handleDeploymentModeSetup(cfg *config.AppConfig) error {
 	clearScreen()
 
@@ -1515,10 +1516,10 @@ func handleDeploymentModeSetup(cfg *config.AppConfig) error {
 		huh.NewGroup(
 			huh.NewSelect[string]().
 				Title("How would you like to run Astonish?").
-				Description("Choose a deployment mode. You can change this later.").
+				Description("Choose a database backend. You can change this later.").
 				Options(
-					huh.NewOption("Personal — Single user, local file storage, zero infrastructure", "personal"),
-					huh.NewOption("Platform — Multi-user with PostgreSQL, teams, and authentication", "platform"),
+					huh.NewOption("SQLite — Multi-user, zero infrastructure, built-in auth (recommended)", "sqlite"),
+					huh.NewOption("PostgreSQL — Multi-user, scalable, external database", "platform"),
 				).
 				Value(&mode),
 		),
@@ -1527,17 +1528,13 @@ func handleDeploymentModeSetup(cfg *config.AppConfig) error {
 		return err
 	}
 
-	if mode == "personal" {
-		// Nothing to configure — file-based storage is the default.
-		clearScreen()
-		fmt.Println()
-		fmt.Println("  Personal mode selected. Data will be stored locally on this machine.")
-		fmt.Println()
-		return nil
+	switch mode {
+	case "sqlite":
+		return handleSQLitePlatformSetup(cfg)
+	default:
+		// Platform mode: collect PostgreSQL connection details.
+		return handlePlatformModeSetup(cfg)
 	}
-
-	// Platform mode: collect PostgreSQL connection details.
-	return handlePlatformModeSetup(cfg)
 }
 
 // handlePlatformModeSetup collects PostgreSQL connection parameters and
@@ -1691,4 +1688,157 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	fmt.Println()
 
 	return nil
+}
+
+// handleSQLitePlatformSetup collects parameters for SQLite-backed platform mode:
+// org name/slug, admin email/password. It bootstraps the platform database, provisions
+// the first org and team, generates a JWT secret and master encryption key.
+func handleSQLitePlatformSetup(cfg *config.AppConfig) error {
+	clearScreen()
+
+	orgName := "My Organization"
+	orgSlug := "my-org"
+	adminEmail := ""
+	adminPassword := ""
+	adminName := ""
+	dataDir := cfg.Storage.SQLite.GetDataDir()
+
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Data Directory").
+				Description("Where SQLite database files will be stored").
+				Value(&dataDir),
+			huh.NewInput().
+				Title("Organization Name").
+				Description("Display name for the auto-created organization").
+				Value(&orgName),
+			huh.NewInput().
+				Title("Organization Slug").
+				Description("URL-safe identifier (lowercase, hyphens allowed)").
+				Value(&orgSlug).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("slug cannot be empty")
+					}
+					for _, ch := range s {
+						if !((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+							return fmt.Errorf("must be lowercase alphanumeric with hyphens/underscores")
+						}
+					}
+					return nil
+				}),
+		),
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Admin Email").
+				Description("Email for the first (superadmin) user account").
+				Value(&adminEmail).
+				Validate(func(s string) error {
+					if s == "" {
+						return fmt.Errorf("email is required")
+					}
+					if !strings.Contains(s, "@") {
+						return fmt.Errorf("must be a valid email address")
+					}
+					return nil
+				}),
+			huh.NewInput().
+				Title("Admin Display Name").
+				Description("Display name for the admin user (optional)").
+				Value(&adminName),
+			huh.NewInput().
+				Title("Admin Password").
+				Description("Password for the admin user").
+				EchoMode(huh.EchoModePassword).
+				Value(&adminPassword).
+				Validate(func(s string) error {
+					if len(s) < 8 {
+						return fmt.Errorf("password must be at least 8 characters")
+					}
+					return nil
+				}),
+		),
+	).Run()
+	if err != nil {
+		return err
+	}
+
+	clearScreen()
+	fmt.Println()
+	fmt.Printf("  Initializing SQLite platform in %s...\n", dataDir)
+
+	// Create the SQLite store (opens/creates platform.db, runs migrations)
+	ctx := context.Background()
+	sqlStore, err := sqlitestore.New(ctx, dataDir)
+	if err != nil {
+		fmt.Println()
+		fmt.Printf("  ✗ Failed to initialize database: %v\n", err)
+		fmt.Println()
+		return err
+	}
+	defer sqlStore.Close()
+
+	// Bootstrap: create first user, org, team, and personal databases.
+	if err := sqlStore.Bootstrap(ctx, sqlitestore.BootstrapConfig{
+		Email:       adminEmail,
+		DisplayName: adminName,
+		Password:    adminPassword,
+		OrgName:     orgName,
+		OrgSlug:     orgSlug,
+		TeamName:    "General",
+		TeamSlug:    "general",
+	}); err != nil {
+		fmt.Println()
+		fmt.Printf("  ✗ Bootstrap failed: %v\n", err)
+		fmt.Println()
+		return err
+	}
+
+	fmt.Println("  ✓ Platform database initialized")
+	fmt.Println("  ✓ Organization and team created")
+	fmt.Println("  ✓ Admin user created")
+
+	// Generate a master key for secret encryption and write to .store_key
+	masterKey, err := generateMasterKey()
+	if err != nil {
+		fmt.Printf("  ⚠ Warning: could not generate master key: %v (secrets will be stored unencrypted)\n", err)
+	} else {
+		configDir, dirErr := config.GetConfigDir()
+		if dirErr == nil {
+			keyPath := configDir + "/.store_key"
+			if writeErr := os.WriteFile(keyPath, []byte(masterKey), 0600); writeErr != nil {
+				fmt.Printf("  ⚠ Warning: could not write master key to %s: %v\n", keyPath, writeErr)
+			} else {
+				fmt.Printf("  ✓ Encryption key saved to %s\n", keyPath)
+			}
+		}
+	}
+
+	// Generate JWT secret and save to config.
+	jwtSecret := config.GenerateJWTSecret()
+
+	cfg.Storage.Backend = "sqlite"
+	cfg.Storage.SQLite.DataDir = dataDir
+	cfg.Storage.Auth.Mode = "builtin"
+	cfg.Storage.Auth.JWTSecret = jwtSecret
+	cfg.Storage.Auth.DefaultOrgName = orgName
+	cfg.Storage.Auth.DefaultOrgSlug = orgSlug
+
+	fmt.Println()
+	fmt.Println("  SQLite platform mode configured.")
+	fmt.Printf("  Data directory: %s\n", dataDir)
+	fmt.Println("  You can log in via Studio with the admin email and password.")
+	fmt.Println()
+
+	return nil
+}
+
+// generateMasterKey creates a 32-byte random key encoded as hex (64 chars).
+func generateMasterKey() (string, error) {
+	key := make([]byte, 32)
+	if _, err := cryptorand.Read(key); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", key), nil
 }

@@ -11,7 +11,6 @@ import (
 
 	"github.com/gomlx/gomlx/backends"
 	"github.com/gomlx/gomlx/backends/simplego"
-	chromem "github.com/philippgille/chromem-go"
 
 	"github.com/knights-analytics/hugot"
 	"github.com/knights-analytics/hugot/pipelines"
@@ -136,9 +135,9 @@ func NewHugotEmbedder(modelsDir string, debugMode bool) (*HugotEmbedder, error) 
 // or search queries that bypass the chunker.
 const embeddingMaxChars = 1400
 
-// EmbeddingFunc returns a chromem.EmbeddingFunc that uses the local Hugot pipeline.
-// This satisfies the chromem-go interface: func(ctx, text) ([]float32, error).
-func (h *HugotEmbedder) EmbeddingFunc() chromem.EmbeddingFunc {
+// EmbeddingFunc returns an EmbeddingFunc that uses the local Hugot pipeline.
+// The returned function signature is: func(ctx, text) ([]float32, error).
+func (h *HugotEmbedder) EmbeddingFunc() EmbeddingFunc {
 	return func(ctx context.Context, text string) ([]float32, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()

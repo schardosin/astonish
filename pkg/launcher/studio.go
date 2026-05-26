@@ -14,52 +14,38 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
+
+// studioBackend is the minimal interface that StudioServer needs from the
+// platform database backend. It is a subset of daemon.platformDB and is
+// satisfied by both pgstore.PGStore and sqlitestore.SQLiteStore.
+type studioBackend interface {
+	store.PlatformBackend
+
+	// NewToolVectorStore creates a ToolVectorStore for semantic tool discovery.
+	NewToolVectorStore(ctx context.Context) (agent.ToolVectorStore, error)
+}
 
 // StudioServer wraps the HTTP server with lifecycle management.
 type StudioServer struct {
 	server        *http.Server
 	listener      net.Listener
 	port          int
-	Auth          *api.AuthManager    // nil means no auth (direct CLI mode)
 	platformAuth  *api.PlatformAuth   // non-nil in platform mode
-	pgStore       *pgstore.PGStore    // non-nil in platform mode
-	configDir     string              // personal-mode config dir
+	backend       studioBackend       // non-nil in platform mode
+	pgStore       *pgstore.PGStore    // non-nil only for PG-specific features (SSO, health, tenant MW)
+	tenantMW      func(http.Handler) http.Handler // tenant resolution middleware
+	configDir     string              // config dir for settings
 	services      *store.Services
-	sessionStore  *persistentsession.FileStore
-	daemonIndexer *memory.DaemonIndexerResult
 }
 
 // StudioOption configures optional StudioServer behavior.
 type StudioOption func(*StudioServer)
-
-// WithAuth enables device authorization on the Studio server.
-func WithAuth(am *api.AuthManager) StudioOption {
-	return func(s *StudioServer) { s.Auth = am }
-}
-
-// WithSessionStore injects a shared FileStore for session persistence.
-// When set, the Studio chat agent reuses this store instead of creating its own,
-// ensuring a single FileStore instance across the daemon process.
-func WithSessionStore(store *persistentsession.FileStore) StudioOption {
-	return func(s *StudioServer) { s.sessionStore = store }
-}
-
-// WithDaemonIndexer injects the daemon's memory indexer into the Studio server.
-// When set, the Studio chat agent reuses the daemon's Store and Indexer instead
-// of creating its own, ensuring a single chromem-go instance so that file watcher
-// updates from the daemon are immediately visible to Studio search queries.
-func WithDaemonIndexer(di *memory.DaemonIndexerResult) StudioOption {
-	return func(s *StudioServer) { s.daemonIndexer = di }
-}
 
 // WithServices injects the store.Services dependency container into the Studio server.
 // When set, every HTTP request will have Services available via store.FromRequest(r),
@@ -71,10 +57,34 @@ func WithServices(svc *store.Services) StudioOption {
 // WithPlatformAuth enables JWT-based authentication for platform (multi-tenant) mode.
 // When set, the platform auth middleware replaces the device auth middleware,
 // and platform-specific routes (register, login, teams) are registered.
+// The pg parameter is optional — when non-nil it enables PG-specific features
+// (SSO device sessions, health checks, tenant middleware). For SQLite mode pass nil
+// and provide a custom tenant MW via WithTenantMiddleware.
 func WithPlatformAuth(pa *api.PlatformAuth, pg *pgstore.PGStore) StudioOption {
 	return func(s *StudioServer) {
 		s.platformAuth = pa
 		s.pgStore = pg
+		// If pg is non-nil it also satisfies studioBackend.
+		if pg != nil {
+			s.backend = pg
+		}
+	}
+}
+
+// WithBackend sets the studioBackend for the Studio server.
+// Used in SQLite mode where pgStore is nil but we still need backend access
+// for ToolVectorStore creation and other interface methods.
+func WithBackend(b studioBackend) StudioOption {
+	return func(s *StudioServer) {
+		s.backend = b
+	}
+}
+
+// WithTenantMiddleware sets a custom tenant resolution middleware.
+// Used when the backend is not pgstore (e.g., sqlitestore).
+func WithTenantMiddleware(mw func(http.Handler) http.Handler) StudioOption {
+	return func(s *StudioServer) {
+		s.tenantMW = mw
 	}
 }
 
@@ -93,10 +103,8 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	}
 
 	// Wire Studio Chat initialization (lazy, runs on first chat request)
-	sharedStore := s.sessionStore      // capture for closure
-	sharedIndexer := s.daemonIndexer   // capture for closure
 	isPlatform := s.platformAuth != nil // capture for closure
-	pgStoreRef := s.pgStore            // capture for closure
+	backendRef := s.backend            // capture for closure
 	api.SetStudioChatInitFunc(func(ctx context.Context) (*api.StudioChatComponents, error) {
 		appCfg := api.EffectiveAppConfigFromContext(ctx, isPlatform)
 
@@ -109,20 +117,15 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			WorkspaceDir:  "",
 			IsDaemon:      false,
 			PlatformMode:  isPlatform,
-			SessionStore:  sharedStore,
-			DaemonIndexer: sharedIndexer,
 		}
 
-		// In platform mode, create pgvector-backed ToolIndex for dynamic tool discovery.
-		if isPlatform && pgStoreRef != nil {
-			if embedFunc := pgStoreRef.GetEmbedFunc(); embedFunc != nil {
-				pool, poolErr := pgStoreRef.PoolManager().PlatformPool(ctx)
-				if poolErr == nil {
-					vs, vsErr := pgstore.NewPGToolVectorStore(pool, embedFunc)
-					if vsErr == nil {
-						factoryCfg.PlatformToolVectorStore = vs
-						factoryCfg.PlatformEmbedFunc = agent.EmbedFunc(embedFunc)
-					}
+		// In platform mode, create ToolIndex for dynamic tool discovery.
+		if isPlatform && backendRef != nil {
+			if embedFunc := backendRef.GetEmbedFunc(); embedFunc != nil {
+				vs, vsErr := backendRef.NewToolVectorStore(ctx)
+				if vsErr == nil && vs != nil {
+					factoryCfg.PlatformToolVectorStore = vs
+					factoryCfg.PlatformEmbedFunc = agent.EmbedFunc(embedFunc)
 				}
 			}
 		}
@@ -146,7 +149,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			ModelName:         result.ModelName,
 			Compactor:         result.Compactor,
 			InternalToolCount: len(result.InternalTools),
-			MemoryActive:      result.MemoryManager != nil || result.MemorySearchAvailable,
+			MemoryActive:      result.MemorySearchAvailable,
 			SandboxEnabled:    sandbox.IsSandboxEnabled(&appCfg.Sandbox),
 			StartupNotices:    result.StartupNotices,
 			ShutdownSandbox:   result.ShutdownSandbox,
@@ -178,13 +181,10 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		}
 		api.SetPlatformSSOHandler(ssoHandler)
 		api.RegisterSSORoutes(router, ssoHandler)
-	} else if s.Auth != nil {
-		// Personal mode: device authorization flow
-		api.RegisterAuthRoutes(router, s.Auth)
 	}
 
 	// Register API routes (passes pgStore for platform-mode TenantMiddleware)
-	api.RegisterRoutes(router, s.services, s.pgStore)
+	api.RegisterRoutes(router, s.services, s.pgStore, s.tenantMW)
 
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
@@ -219,9 +219,6 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 	if s.platformAuth != nil {
 		// Platform mode: JWT auth (TenantMiddleware is inside the router via RegisterRoutes)
 		handler = api.PlatformAuthMiddleware(s.platformAuth, handler)
-	} else if s.Auth != nil {
-		// Personal mode: device authorization
-		handler = api.AuthMiddleware(s.Auth, handler)
 	}
 
 	// Apply rate limiting for remote (non-loopback) requests.
@@ -285,11 +282,10 @@ func (s *StudioServer) Shutdown(ctx context.Context) error {
 }
 
 // RunStudio starts the Studio web server (blocking, for CLI use).
+// In platform mode, this requires a configured backend (SQLite or PG).
+// Use the daemon's WithBackend/WithPlatformAuth options for full functionality.
 func RunStudio(port int) error {
-	// Create minimal Services for standalone mode.
-	// Stores are populated incrementally by the lazy chat init.
-	svc := filestore.NewPersonalServices()
-	studio, err := NewStudioServer(port, WithServices(svc))
+	studio, err := NewStudioServer(port, WithServices(nil))
 	if err != nil {
 		fmt.Printf("\n")
 		fmt.Printf("  Failed to start Astonish Studio\n")

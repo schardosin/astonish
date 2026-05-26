@@ -900,6 +900,7 @@ export default function MCPServersSettings({
           if (onToolsRefresh) onToolsRefresh()
         }}
         teamSlug={effectiveTeamSlug}
+        scope={effectiveScope}
       />
 
       {/* MCP Inspector Modal */}
@@ -907,6 +908,7 @@ export default function MCPServersSettings({
         <MCPInspector
           serverName={inspectServer}
           teamSlug={effectiveTeamSlug}
+          scope={effectiveScope}
           onClose={() => setInspectServer(null)}
         />
       )}

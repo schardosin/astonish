@@ -20,7 +20,6 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -1180,8 +1179,9 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 		return nil // sandbox explicitly disabled — ok
 	}
 
-	// Fleet sessions on non-Incus backends are not yet supported (Phase G).
-	// Return an actionable error instead of the misleading "Incus is not installed".
+	// Fleet sessions on non-Incus backends are not yet fully supported (Phase G).
+	// MCP tool invocation is backend-agnostic but file tools and workspace setup
+	// still use LazyNodeClient (Incus-specific). Return an actionable error.
 	kind := sandbox.BackendKind(appCfg.Sandbox.BackendKind())
 	if kind != sandbox.BackendKindIncus && kind != "" {
 		return fmt.Errorf("fleet sessions on backend %q are not yet supported; use chat sessions, or set sandbox.backend: incus", kind)
@@ -1269,9 +1269,22 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 
 	// Create sandbox-wired MCP toolsets for this fleet session.
 	// Each fleet session gets fresh LazyMCPToolset clones that route MCP server
-	// processes through the fleet's dedicated container (via ContainerMCPTransport).
+	// processes through the fleet's dedicated container/pod (via BackendMCPTransport).
 	// SSE transport servers are unaffected — they connect to remote URLs.
-	sandboxToolsets := createFleetMCPToolsets(sandboxClient, lazyNode, mcpStores)
+	fleetBackend, backendErr := sandbox.NewBackend(sandbox.BackendFactoryConfig{
+		Kind:       sandbox.BackendKind(appCfg.Sandbox.BackendKind()),
+		Client:     sandboxClient,
+		Sessions:   sessRegistry,
+		Templates:  tplRegistry,
+		DefaultLim: &limits,
+	})
+	if backendErr != nil {
+		slog.Warn("fleet: failed to create backend for MCP toolsets", "error", backendErr)
+	}
+	var sandboxToolsets []tool.Toolset
+	if fleetBackend != nil {
+		sandboxToolsets = createFleetMCPToolsets(fleetBackend, lazyNode, mcpStores)
+	}
 	if len(sandboxToolsets) > 0 {
 		fleetSession.SandboxToolsets = sandboxToolsets
 	}
@@ -1298,9 +1311,9 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 // createFleetMCPToolsets creates sandbox-wired MCP toolsets for a fleet session.
 // It loads the MCP config, creates fresh LazyMCPToolset instances from cached
 // metadata, and wires them with the fleet's LazyNodeClient so MCP server
-// processes run inside the fleet's container.
+// processes run inside the fleet's container/pod.
 // In platform mode, it reads from the DB stores; in personal mode, from the filesystem.
-func createFleetMCPToolsets(incusClient *incus.IncusClient, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
+func createFleetMCPToolsets(backend sandbox.Backend, lazyNode *sandbox.LazyNodeClient, mcpStores *store.MCPServerStores) []tool.Toolset {
 	var mcpServers map[string]config.MCPServerConfig
 
 	if mcpStores != nil {
@@ -1337,12 +1350,8 @@ func createFleetMCPToolsets(incusClient *incus.IncusClient, lazyNode *sandbox.La
 			}
 		}
 	} else {
-		// Personal mode: read from filesystem
-		mcpCfg, err := config.LoadMCPConfig()
-		if err != nil || mcpCfg == nil || len(mcpCfg.MCPServers) == 0 {
-			return nil
-		}
-		mcpServers = mcpCfg.MCPServers
+		// No MCP stores available — fleet operates without MCP tools
+		return nil
 	}
 
 	if len(mcpServers) == 0 {
@@ -1364,11 +1373,7 @@ func createFleetMCPToolsets(incusClient *incus.IncusClient, lazyNode *sandbox.La
 
 		var cachedTools []cache.ToolEntry
 		if mcpStores != nil {
-			// Platform mode: get cached tools from DB
 			cachedTools = getPlatformCachedToolsFromStores(mcpStores, name)
-		} else {
-			// Personal mode: get from file cache
-			cachedTools = cache.GetToolsForServer(name)
 		}
 		if len(cachedTools) == 0 {
 			continue
@@ -1389,7 +1394,7 @@ func createFleetMCPToolsets(incusClient *incus.IncusClient, lazyNode *sandbox.La
 		}
 
 		lt := agent.NewLazyMCPToolset(name, cachedTools, serverCfg, false)
-		lt.SetSandboxClient(lazyNode, incusClient)
+		lt.SetSandboxClient(lazyNode, backend)
 		toolsets = append(toolsets, agent.NewSanitizedToolset(lt, false))
 	}
 

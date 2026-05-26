@@ -9,7 +9,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -627,4 +630,82 @@ func (s *PGStore) SandboxSessionsForSchema(key string) store.SandboxSessionStore
 		return nil
 	}
 	return NewPGSandboxSessionStore(pool, schema)
+}
+
+// ---------------------------------------------------------------------------
+// daemon.platformDB interface methods
+// ---------------------------------------------------------------------------
+
+// SecretGetter returns a function that resolves secrets from the platform
+// secrets table. Implements store.PlatformBackend.
+func (s *PGStore) SecretGetter() func(string) string {
+	if s.secrets == nil {
+		return func(string) string { return "" }
+	}
+	return s.secrets.GetSecret
+}
+
+// MigrateAll runs pending migrations on all databases (platform + org schemas).
+// Implements store.PlatformBackend.
+func (s *PGStore) MigrateAll(ctx context.Context) error {
+	return s.MigrateAllSchemas(ctx)
+}
+
+// CleanupExpired removes expired transient records (device sessions, link codes).
+// Implements store.PlatformBackend.
+func (s *PGStore) CleanupExpired(ctx context.Context) error {
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return err
+	}
+	_, _ = pool.Exec(ctx, `DELETE FROM device_sessions WHERE expires_at < now()`)
+	_, _ = pool.Exec(ctx, `DELETE FROM pending_link_codes WHERE expires_at < now()`)
+	return nil
+}
+
+// NewToolVectorStore creates a ToolVectorStore for semantic tool discovery.
+// Uses pgvector in the platform database. Returns (nil, nil) if the embedding
+// function is not configured.
+func (s *PGStore) NewToolVectorStore(ctx context.Context) (agent.ToolVectorStore, error) {
+	if s.embedFunc == nil {
+		return nil, nil
+	}
+	pool, err := s.poolMgr.PlatformPool(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get platform pool for tool vector store: %w", err)
+	}
+	return NewPGToolVectorStore(pool, s.embedFunc)
+}
+
+// NewThreadIndex creates a thread indexer for email session routing.
+// Backed by the email_thread_index table in the platform database.
+func (s *PGStore) NewThreadIndex() session.ThreadIndexer {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for thread index", "error", err)
+		return nil
+	}
+	return NewPGThreadIndex(pool)
+}
+
+// NewLinkCodeStore creates a link code store for channel verification.
+// Backed by the pending_link_codes table in the platform database.
+func (s *PGStore) NewLinkCodeStore() store.LinkCodeStore {
+	pool, err := s.poolMgr.PlatformPool(context.Background())
+	if err != nil {
+		slog.Error("failed to get platform pool for link codes", "error", err)
+		return nil
+	}
+	return NewPGLinkCodeStore(pool)
+}
+
+// NewMonitorStateStore creates a monitor state store for fleet plan monitors.
+// Scoped to a specific org+team schema in the org database.
+func (s *PGStore) NewMonitorStateStore(orgSlug, teamSlug string) fleet.MonitorStateStore {
+	pool, err := s.poolMgr.OrgPool(context.Background(), orgSlug)
+	if err != nil {
+		slog.Error("failed to get org pool for monitor state", "org", orgSlug, "error", err)
+		return nil
+	}
+	return NewPGMonitorStateStore(pool, TeamSchemaName(teamSlug))
 }

@@ -80,7 +80,7 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 	}
 
 	// Resolve template
-	if templateName == "" {
+	if templateName == "" || templateName == BaseTemplateID {
 		templateName = BaseTemplate
 	}
 
@@ -222,7 +222,7 @@ func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistr
 	}
 
 	// Resolve template
-	if templateName == "" {
+	if templateName == "" || templateName == BaseTemplateID {
 		templateName = BaseTemplate
 	}
 

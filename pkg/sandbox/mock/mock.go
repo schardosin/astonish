@@ -345,6 +345,22 @@ func (m *MockBackend) SessionState(ctx context.Context, sessionID string) (sandb
 	return sandbox.SessionStateGone, nil
 }
 
+func (m *MockBackend) WaitForSessionReady(ctx context.Context, sessionID string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := m.injectedErr("WaitForSessionReady"); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	_, exists := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("mock.WaitForSessionReady: session %q not found", sessionID)
+	}
+	return nil
+}
+
 func (m *MockBackend) ListSessions(ctx context.Context, filter sandbox.SessionFilter) ([]*sandbox.Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -416,6 +432,22 @@ func (m *MockBackend) ExecInteractive(ctx context.Context, sessionID string, opt
 	}
 	if fn != nil {
 		return fn(sessionID, opts)
+	}
+	return newStubExecStream(), nil
+}
+
+func (m *MockBackend) ExecStreaming(ctx context.Context, sessionID string, opts sandbox.ExecStreamSpec) (sandbox.ExecStream, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := m.injectedErr("ExecStreaming"); err != nil {
+		return nil, err
+	}
+	m.mu.Lock()
+	_, exists := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !exists {
+		return nil, fmt.Errorf("mock.ExecStreaming: session %q not found", sessionID)
 	}
 	return newStubExecStream(), nil
 }

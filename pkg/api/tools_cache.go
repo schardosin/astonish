@@ -3,12 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -16,19 +14,47 @@ import (
 	"github.com/schardosin/astonish/pkg/common"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
+	"google.golang.org/adk/tool/mcptoolset"
 )
 
-// ToolsCache holds cached tool information to avoid re-initializing MCP on every request
-type ToolsCache struct {
-	tools   []ToolInfo
-	loaded  bool
-	loading bool // Tracks if a load is in progress
-	mu      sync.RWMutex
-}
+// mcpDiscoveryTimeout is the maximum duration for MCP tool discovery.
+// This covers container creation + wait-for-ready + MCP server startup +
+// tool listing. Generous to account for npm package downloads on first use.
+const mcpDiscoveryTimeout = 5 * time.Minute
 
-var globalToolsCache = &ToolsCache{}
+// asyncDiscoverAndCacheTools runs MCP tool discovery in a background goroutine
+// with a dedicated timeout (not tied to any HTTP request lifecycle). On success,
+// it writes the discovered tools to the DB via mcpStore.UpdateCachedTools.
+//
+// This is the standard pattern for all install and refresh paths. Callers save
+// the server config to the DB first, then fire this async. The HTTP response
+// returns immediately — tools appear in cached_tools within seconds to minutes.
+func asyncDiscoverAndCacheTools(mcpStore store.MCPServerStore, serverName string, serverCfg config.MCPServerConfig) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), mcpDiscoveryTimeout)
+		defer cancel()
+
+		servers := map[string]config.MCPServerConfig{serverName: serverCfg}
+		discoveredTools := discoverMCPToolsForPlatform(ctx, serverName, servers)
+		if discoveredTools == nil {
+			slog.Warn("async MCP discovery: no tools discovered", "server", serverName)
+			return
+		}
+
+		if err := mcpStore.UpdateCachedTools(ctx, serverName, discoveredTools); err != nil {
+			slog.Warn("async MCP discovery: failed to cache tools", "server", serverName, "error", err)
+			return
+		}
+
+		var toolList []json.RawMessage
+		if json.Unmarshal(discoveredTools, &toolList) == nil {
+			slog.Info("async MCP discovery: tools cached", "server", serverName, "count", len(toolList))
+		}
+	}()
+}
 
 // GetServerStatus returns the status of all MCP servers
 func GetServerStatus() []cache.ServerStatus {
@@ -75,10 +101,6 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		statuses := make([]cache.ServerStatus, 0, len(servers))
 		for _, s := range servers {
-			status := "configured"
-			if !s.IsEnabled() {
-				status = "disabled"
-			}
 			toolCount := 0
 			if s.CachedTools != nil && len(s.CachedTools) > 2 { // not empty "[]" or "null"
 				// Count tools from cached_tools JSON array
@@ -87,6 +109,14 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 					toolCount = len(tools)
 				}
 			}
+
+			status := "configured"
+			if !s.IsEnabled() {
+				status = "disabled"
+			} else if toolCount > 0 {
+				status = "healthy"
+			}
+
 			statuses = append(statuses, cache.ServerStatus{
 				Name:      s.Name,
 				Status:    status,
@@ -99,224 +129,14 @@ func MCPStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Personal mode: return from in-memory status cache
-	statuses := GetServerStatus()
-
-	response := MCPStatusResponse{
-		Servers: statuses,
-	}
-
+	// No store available — return empty status
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]interface{}{"servers": []interface{}{}})
 }
 
-// loadToolsInternal does the actual work of loading tools (must NOT hold the lock)
-func loadToolsInternal(ctx context.Context) []ToolInfo {
-	slog.Info("starting to load tools")
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	// Start with all built-in tools (internal + all category tools)
-	var allTools []ToolInfo
-	for _, decl := range tools.GetAllFlowToolDeclarations() {
-		allTools = append(allTools, ToolInfo{
-			Name:        decl.Name,
-			Description: decl.Description,
-			Source:      decl.Category,
-		})
-	}
-
-	// Get MCP tools
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		slog.Warn("failed to create mcp manager", "error", err)
-	} else {
-		if err := mcpManager.InitializeToolsets(ctx); err != nil {
-			slog.Warn("failed to initialize mcp toolsets", "error", err)
-		}
-
-		// Process init results to update server status
-		initResults := mcpManager.GetInitResults()
-		for _, result := range initResults {
-			if !result.Success {
-				SetServerStatus(result.Name, cache.ServerStatus{
-					Name:      result.Name,
-					Status:    "error",
-					Error:     result.Error,
-					ToolCount: 0,
-					LastCheck: now,
-				})
-			}
-		}
-
-		toolsets := mcpManager.GetNamedToolsets()
-
-		// Create minimal context for fetching tools
-		minimalCtx := &minimalReadonlyContext{Context: ctx}
-
-		for _, namedToolset := range toolsets {
-			serverName := namedToolset.Name
-			mcpToolsList, err := namedToolset.Toolset.Tools(minimalCtx)
-			if err != nil {
-				stderrOutput := mcp.GetStderr(namedToolset.Stderr)
-				slog.Warn("failed to get tools from server", "server", serverName, "error", err, "stderr", stderrOutput)
-				// Don't persist error status for context cancellation (transient timeout errors)
-				// These happen when the refresh times out, not when the server is broken
-				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "context canceled") {
-					errMsg := fmt.Sprintf("Failed to list tools: %v", err)
-					if stderrOutput != "" && stderrOutput != "no stderr output" {
-						errMsg = stderrOutput
-					}
-					SetServerStatus(serverName, cache.ServerStatus{
-						Name:      serverName,
-						Status:    "error",
-						Error:     errMsg,
-						ToolCount: 0,
-						LastCheck: now,
-					})
-				}
-				continue
-			}
-
-			toolCount := 0
-			for _, t := range mcpToolsList {
-				allTools = append(allTools, ToolInfo{
-					Name:        t.Name(),
-					Description: t.Description(),
-					Source:      serverName,
-				})
-				toolCount++
-			}
-
-			// Update status to healthy with tool count
-			SetServerStatus(serverName, cache.ServerStatus{
-				Name:      serverName,
-				Status:    "healthy",
-				ToolCount: toolCount,
-				LastCheck: now,
-			})
-		}
-
-		// Cleanup after fetching tool info - don't keep MCP servers running
-		mcpManager.Cleanup()
-	}
-
-	return allTools
-}
-
-// InitToolsCache initializes the tools cache at server startup
-// It tries to load from persistent cache first for fast startup
-func InitToolsCache(ctx context.Context) {
-	globalToolsCache.mu.Lock()
-
-	if globalToolsCache.loaded || globalToolsCache.loading {
-		globalToolsCache.mu.Unlock()
-		return
-	}
-
-	globalToolsCache.loading = true
-	globalToolsCache.mu.Unlock()
-
-	// Try to load from persistent cache first (fast path)
-	persistentCache, err := cache.LoadCache()
-	if err == nil && len(persistentCache.Tools) > 0 {
-		slog.Info("loading tools from persistent cache", "count", len(persistentCache.Tools))
-
-		// Start with all built-in tool declarations (always authoritative)
-		builtinDecls := tools.GetAllFlowToolDeclarations()
-		builtinNames := make(map[string]bool, len(builtinDecls))
-		var allTools []ToolInfo
-		for _, decl := range builtinDecls {
-			allTools = append(allTools, ToolInfo{
-				Name:        decl.Name,
-				Description: decl.Description,
-				Source:      decl.Category,
-			})
-			builtinNames[decl.Name] = true
-		}
-
-		// Add MCP tools from persistent cache (skip built-in tools already added)
-		for _, t := range persistentCache.Tools {
-			if builtinNames[t.Name] {
-				continue
-			}
-			allTools = append(allTools, ToolInfo{
-				Name:        t.Name,
-				Description: t.Description,
-				Source:      t.Source,
-			})
-		}
-
-		globalToolsCache.mu.Lock()
-		globalToolsCache.tools = allTools
-		globalToolsCache.loaded = true
-		globalToolsCache.loading = false
-		globalToolsCache.mu.Unlock()
-
-		slog.Info("tools cache initialized from persistent cache", "count", len(allTools))
-
-		// Validate checksums in background - refresh any changed servers
-		go validateAndRefreshChangedServers(ctx, persistentCache)
-		return
-	}
-
-	// Persistent cache is empty - do full initialization and populate cache
-	slog.Info("persistent cache empty or missing, doing full initialization")
-	allTools := loadToolsInternal(ctx)
-
-	// Store results
-	globalToolsCache.mu.Lock()
-	globalToolsCache.tools = allTools
-	globalToolsCache.loaded = true
-	globalToolsCache.loading = false
-	globalToolsCache.mu.Unlock()
-
-	// Also populate persistent cache for next time
-	go populatePersistentCache(ctx, allTools)
-
-	slog.Info("tools cache initialized", "count", len(allTools))
-}
-
-// populatePersistentCache saves tools to persistent cache grouped by server
-func populatePersistentCache(ctx context.Context, allTools []ToolInfo) {
-	// Load MCP config for checksum computation
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("could not load mcp config for checksums", "component", "cache", "error", err)
-		mcpCfg = nil
-	}
-
-	// Group tools by server
-	toolsByServer := make(map[string][]cache.ToolEntry)
-	for _, t := range allTools {
-		toolsByServer[t.Source] = append(toolsByServer[t.Source], cache.ToolEntry{
-			Name:        t.Name,
-			Description: t.Description,
-			Source:      t.Source,
-		})
-	}
-
-	// Add each server's tools in one call with computed checksum
-	for serverName, tools := range toolsByServer {
-		checksum := ""
-		if serverName == "internal" {
-			// Internal tools use a fixed checksum - they only change with code updates
-			checksum = "internal-tools-v1"
-		} else if mcpCfg != nil && mcpCfg.MCPServers != nil {
-			if serverCfg, ok := mcpCfg.MCPServers[serverName]; ok {
-				checksum = cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-			}
-		}
-		cache.AddServerTools(serverName, tools, checksum)
-		slog.Info("added tools for server to persistent cache", "component", "cache", "count", len(tools), "server", serverName, "checksum", checksum[:min(8, len(checksum))])
-	}
-
-	if err := cache.SaveCache(); err != nil {
-		slog.Warn("failed to save persistent cache", "component", "cache", "error", err)
-	} else {
-
-		slog.Info("persistent cache populated from full initialization", "component", "cache", "servers", len(toolsByServer))
-	}
-}
+// InitToolsCache is a no-op retained for backward compatibility.
+// In platform mode, tools are loaded per-request from the DB via GetCachedToolsForRequest.
+func InitToolsCache(ctx context.Context) {}
 
 // RefreshMCPServerHandler handles POST /api/mcp/{server}/refresh
 func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
@@ -345,58 +165,187 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 			Enabled:   server.Enabled,
 		}
 
-		// Run tool discovery using the existing mechanism
-		servers := map[string]config.MCPServerConfig{serverName: serverCfg}
-		go func() {
-			bgCtx := context.Background()
-			discoveredTools := discoverMCPToolsForPlatform(bgCtx, serverName, servers)
-			if discoveredTools != nil {
-				if err := mcpStore.UpdateCachedTools(bgCtx, serverName, discoveredTools); err != nil {
-					slog.Warn("failed to update cached_tools in store", "server", serverName, "error", err)
-				}
-			}
-		}()
+		// Run tool discovery asynchronously with a dedicated timeout
+		asyncDiscoverAndCacheTools(mcpStore, serverName, serverCfg)
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 		return
 	}
 
-	// Personal mode: original logic
-	// Update status to loading
-	SetServerStatus(serverName, cache.ServerStatus{
-		Name:      serverName,
-		Status:    "loading",
-		ToolCount: 0,
-		LastCheck: time.Now().UTC().Format(time.RFC3339),
+	// No MCP store available — platform mode requires the DB store
+	respondJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+		"success": false,
+		"error":   "MCP server store not available",
 	})
-
-	// Do the refresh in foreground
-	err := RefreshSingleServer(r.Context(), serverName)
-
-	response := map[string]interface{}{}
-	if err != nil {
-		response["success"] = false
-		response["error"] = err.Error()
-
-		// RefreshSingleServer might fail before updating status
-		SetServerStatus(serverName, cache.ServerStatus{
-			Name:      serverName,
-			Status:    "error",
-			Error:     err.Error(),
-			ToolCount: 0,
-			LastCheck: time.Now().UTC().Format(time.RFC3339),
-		})
-	} else {
-		response["success"] = true
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
 }
 
-// discoverMCPToolsForPlatform starts an MCP server, discovers its tools, and
-// returns the tool declarations as JSON. Returns nil on error (logged).
+// checkStdioMCPInstallable verifies that a stdio-transport MCP server can be
+// installed. Stdio servers require sandbox mode to be enabled because their
+// runtimes (npx, node, uv, python) only exist inside the sandbox overlay.
+// SSE/remote servers always pass this check.
+//
+// Call this BEFORE saving the server config to the DB. Returns nil if the
+// server can be installed, or an error describing why not.
+func checkStdioMCPInstallable(transport string) error {
+	t := strings.ToLower(transport)
+	if t == "sse" || t == "streamable-http" {
+		return nil // network-based, no sandbox needed
+	}
+
+	// Stdio: requires sandbox
+	appCfg, err := config.LoadAppConfig()
+	if err != nil || appCfg == nil {
+		return fmt.Errorf("cannot install stdio MCP server: failed to load app config")
+	}
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return fmt.Errorf("cannot install stdio MCP server: sandbox mode is not enabled (stdio servers require sandbox because their runtimes like npx/node/uv only exist inside the sandbox overlay)")
+	}
+	return nil
+}
+
+// discoverMCPToolsForPlatform discovers an MCP server's tools and returns
+// them as a JSON array. The strategy depends on transport type and sandbox
+// configuration:
+//
+//   - SSE/remote transport: connect directly over the network (no sandbox needed).
+//   - Stdio transport + sandbox enabled: spin up a temporary sandbox container,
+//     start the MCP server inside it, discover tools, then destroy the container.
+//   - Stdio transport + sandbox disabled: error — stdio servers cannot be
+//     installed without sandbox (they require npx/node/uv which live inside
+//     the sandbox).
+//
+// Returns nil on error (logged). On hard failures (sandbox unavailable),
+// returns nil and logs a warning; callers surface this as a toolError.
 func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig) json.RawMessage {
+	serverCfg, ok := servers[serverName]
+	if !ok {
+		slog.Warn("MCP discovery: server config not found", "server", serverName)
+		return nil
+	}
+
+	// SSE/streamable-http servers: connect over the network (no sandbox)
+	transport := strings.ToLower(serverCfg.Transport)
+	if transport == "sse" || transport == "streamable-http" {
+		return discoverMCPToolsOnHost(ctx, serverName, servers)
+	}
+
+	// Stdio servers: must run in sandbox
+	data, err := discoverMCPToolsInSandbox(ctx, serverName, serverCfg)
+	if err != nil {
+		slog.Warn("MCP sandbox discovery failed", "server", serverName, "error", err)
+		return nil
+	}
+	return data
+}
+
+// discoverMCPToolsInSandbox spins up a temporary sandbox container, starts
+// the MCP server inside it, lists its tools, then destroys the container.
+// This is the correct discovery path for stdio-based MCP servers when sandbox
+// is enabled (npx, node, uv, etc. only exist inside the sandbox overlay).
+//
+// The flow mirrors invokeMCPToolInContainer but uses a disposable session
+// (not per-user, not tracked by the idle watchdog). The container is always
+// destroyed on return regardless of success/failure.
+func discoverMCPToolsInSandbox(ctx context.Context, serverName string, serverCfg config.MCPServerConfig) (json.RawMessage, error) {
+	// Check sandbox availability
+	appCfg, err := config.LoadAppConfig()
+	if err != nil || appCfg == nil {
+		return nil, fmt.Errorf("cannot load app config: %w", err)
+	}
+	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
+		return nil, fmt.Errorf("sandbox is not enabled — stdio MCP servers require sandbox for tool discovery (npx/node/uv are only available inside the sandbox)")
+	}
+
+	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox backend unavailable: %w", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
+	// Create a temporary session for discovery. Use a deterministic ID based
+	// on server name so concurrent installs of the same server don't create
+	// multiple containers; the second call gets the existing one (idempotent).
+	sessionID := "mcp-discover-" + serverName
+
+	// Resolve base layer chain so the container has Node.js, Python, etc.
+	// installed via "Configure Base".
+	layerChain := resolveBaseLayerChain(ctx)
+
+	_, err = backend.CreateSession(ctx, sandbox.SessionSpec{
+		SessionID:  sessionID,
+		Type:       sandbox.SessionTypeChat,
+		TemplateID: sandbox.BaseTemplateID,
+		LayerChain: layerChain,
+		Labels:     map[string]string{"purpose": "mcp-discovery"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery session: %w", err)
+	}
+
+	// Always destroy the temporary container on exit
+	defer func() {
+		destroyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := backend.DestroySession(destroyCtx, sessionID); err != nil {
+			slog.Warn("failed to destroy MCP discovery session", "session", sessionID, "error", err)
+		}
+	}()
+
+	// Wait for the container/pod to be running
+	if err := backend.WaitForSessionReady(ctx, sessionID); err != nil {
+		return nil, fmt.Errorf("discovery session not ready: %w", err)
+	}
+
+	// Create the backend-agnostic MCP transport
+	transport, stderrBuf := sandbox.NewBackendMCPTransport(backend, sessionID, serverCfg)
+	defer transport.Close()
+
+	// Connect via ADK mcptoolset (same pattern as invokeMCPToolInContainer)
+	toolset, err := mcptoolset.New(mcptoolset.Config{
+		Transport: transport,
+	})
+	if err != nil {
+		stderrStr := stderrBuf.String()
+		return nil, fmt.Errorf("failed to start MCP server %q in sandbox: %w (stderr: %s)", serverName, err, stderrStr)
+	}
+
+	// List tools
+	toolCtx := &minimalReadonlyContext{Context: ctx}
+	mcpTools, err := toolset.Tools(toolCtx)
+	if err != nil {
+		stderrStr := stderrBuf.String()
+		return nil, fmt.Errorf("failed to list tools from MCP server %q: %w (stderr: %s)", serverName, err, stderrStr)
+	}
+
+	// Marshal tool declarations to JSON (same format as discoverMCPToolsOnHost)
+	type toolEntry struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	}
+	toolEntries := make([]toolEntry, 0, len(mcpTools))
+	for _, t := range mcpTools {
+		toolEntries = append(toolEntries, toolEntry{
+			Name:        t.Name(),
+			Description: t.Description(),
+			InputSchema: common.ExtractToolInputSchema(t),
+		})
+	}
+
+	data, err := json.Marshal(toolEntries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal discovered tools: %w", err)
+	}
+
+	slog.Info("MCP sandbox discovery: discovered tools", "server", serverName, "count", len(toolEntries))
+	return data, nil
+}
+
+// discoverMCPToolsOnHost runs MCP tool discovery on the host (no sandbox).
+// Used for SSE/streamable-http transport servers that connect over the network.
+func discoverMCPToolsOnHost(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig) json.RawMessage {
 	cfg := &config.MCPConfig{MCPServers: servers}
 	mgr := mcp.NewManagerFromConfig(cfg)
 	defer mgr.Cleanup()
@@ -408,8 +357,9 @@ func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers
 
 	// Get the tool declarations from the named toolsets
 	type toolEntry struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"inputSchema,omitempty"`
 	}
 	var toolEntries []toolEntry
 
@@ -427,6 +377,7 @@ func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers
 			toolEntries = append(toolEntries, toolEntry{
 				Name:        t.Name(),
 				Description: t.Description(),
+				InputSchema: common.ExtractToolInputSchema(t),
 			})
 		}
 	}
@@ -441,131 +392,16 @@ func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers
 		return nil
 	}
 
-	slog.Info("platform MCP refresh: discovered tools", "server", serverName, "count", len(toolEntries))
+	slog.Info("platform MCP refresh: discovered tools (host)", "server", serverName, "count", len(toolEntries))
 	return data
-}
-
-// validateAndRefreshChangedServers compares the current MCP config checksums
-// against the cached checksums and refreshes any servers that have changed
-func validateAndRefreshChangedServers(ctx context.Context, persistentCache *cache.PersistentToolsCache) {
-	mcpCfg, err := config.LoadMCPConfig()
-	if err != nil {
-		slog.Warn("could not load mcp config for validation", "component", "cache", "error", err)
-		return
-	}
-	if mcpCfg.MCPServers == nil {
-		return
-	}
-
-	// Find servers that need refreshing
-	var serversToRefresh []string
-
-	for serverName, serverCfg := range mcpCfg.MCPServers {
-		currentChecksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-		cachedChecksum := persistentCache.ServerChecksums[serverName]
-
-		if cachedChecksum == "" {
-			slog.Info("server is new, will refresh", "component", "cache", "server", serverName)
-			serversToRefresh = append(serversToRefresh, serverName)
-		} else if cachedChecksum != currentChecksum {
-			slog.Info("server config changed, will refresh", "component", "cache", "server", serverName)
-			serversToRefresh = append(serversToRefresh, serverName)
-		}
-	}
-
-	// Also check for servers in cache that were removed from config
-	for serverName := range persistentCache.ServerChecksums {
-		if _, exists := mcpCfg.MCPServers[serverName]; !exists {
-			slog.Info("server removed from config, removing from cache", "component", "cache", "server", serverName)
-			cache.RemoveServer(serverName)
-		}
-	}
-
-	if len(serversToRefresh) == 0 {
-		slog.Info("all servers are up to date, no refresh needed", "component", "cache")
-		return
-	}
-
-	slog.Info("refreshing servers", "component", "cache", "count", len(serversToRefresh), "servers", serversToRefresh)
-
-	// Initialize MCP manager and refresh each changed server
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		slog.Warn("failed to create mcp manager for refresh", "component", "cache", "error", err)
-		return
-	}
-
-	for _, serverName := range serversToRefresh {
-		namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
-		if err != nil {
-			slog.Warn("failed to initialize server", "component", "cache", "server", serverName, "error", err)
-			continue
-		}
-
-		minimalCtx := &minimalReadonlyContext{Context: ctx}
-		mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-		if err != nil {
-			slog.Warn("failed to get tools from server", "component", "cache", "server", serverName, "error", err, "stderr", mcp.GetStderr(namedToolset.Stderr))
-			continue
-		}
-
-		// Update in-memory cache
-		var newTools []ToolInfo
-		for _, t := range mcpTools {
-			newTools = append(newTools, ToolInfo{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      serverName,
-			})
-		}
-		AddServerToolsToCache(serverName, newTools)
-
-		// Update persistent cache (use mcpTools for schema access)
-		persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
-		for _, t := range mcpTools {
-			persistentTools = append(persistentTools, cache.ToolEntry{
-				Name:        t.Name(),
-				Description: t.Description(),
-				Source:      serverName,
-				InputSchema: common.ExtractToolInputSchema(t),
-			})
-		}
-		serverCfg := mcpCfg.MCPServers[serverName]
-		checksum := cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-		cache.AddServerTools(serverName, persistentTools, checksum)
-		slog.Info("refreshed server", "component", "cache", "server", serverName, "tools", len(newTools))
-	}
-
-	if err := cache.SaveCache(); err != nil {
-		slog.Warn("failed to save persistent cache after refresh", "component", "cache", "error", err)
-	} else {
-		slog.Info("persistent cache saved after refresh", "component", "cache", "servers", len(serversToRefresh))
-	}
-}
-
-// GetCachedTools returns the cached tools list (personal mode only).
-// For request-scoped tool lists that respect platform mode, use GetCachedToolsForRequest.
-func GetCachedTools() []ToolInfo {
-	globalToolsCache.mu.RLock()
-	defer globalToolsCache.mu.RUnlock()
-
-	if !globalToolsCache.loaded {
-		return nil
-	}
-
-	// Return a copy to avoid race conditions
-	result := make([]ToolInfo, len(globalToolsCache.tools))
-	copy(result, globalToolsCache.tools)
-	return result
 }
 
 // GetCachedToolsForRequest returns the cached tools appropriate for the request context.
 // In platform mode, it reads from the org+team DB stores' CachedTools.
-// In personal mode, it returns from the global in-memory cache.
 func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 	svc := store.FromRequest(r)
 	if svc == nil || svc.Mode != store.ModePlatform {
-		return GetCachedTools()
+		return nil
 	}
 
 	// Platform mode: build merged tool list from DB stores. Cascade is
@@ -685,138 +521,4 @@ func GetCachedToolsForRequest(r *http.Request) []ToolInfo {
 	}
 
 	return result
-}
-
-// AddServerToolsToCache adds tools from a specific server to the cache
-// This is used for incremental updates when installing a new MCP server
-func AddServerToolsToCache(serverName string, newTools []ToolInfo) {
-	globalToolsCache.mu.Lock()
-	defer globalToolsCache.mu.Unlock()
-
-	// Add the new tools to the existing cache
-	globalToolsCache.tools = append(globalToolsCache.tools, newTools...)
-	slog.Info("added tools to cache", "server", serverName, "added", len(newTools), "total", len(globalToolsCache.tools))
-}
-
-// RemoveServerToolsFromCache removes all tools from a specific server
-// This is used when uninstalling/deleting an MCP server
-func RemoveServerToolsFromCache(serverName string) {
-	globalToolsCache.mu.Lock()
-	defer globalToolsCache.mu.Unlock()
-
-	// Filter out tools from the specified server
-	filtered := make([]ToolInfo, 0, len(globalToolsCache.tools))
-	removedCount := 0
-	for _, t := range globalToolsCache.tools {
-		if t.Source != serverName {
-			filtered = append(filtered, t)
-		} else {
-			removedCount++
-		}
-	}
-	globalToolsCache.tools = filtered
-	slog.Info("removed tools from cache", "server", serverName, "removed", removedCount, "total", len(globalToolsCache.tools))
-}
-
-// RefreshToolsCache forces a refresh of the tools cache
-func RefreshToolsCache(ctx context.Context) {
-	slog.Info("refresh tools cache called")
-	globalToolsCache.mu.Lock()
-
-	// If already loading, skip
-	if globalToolsCache.loading {
-		slog.Debug("tools cache already loading, skipping refresh")
-		globalToolsCache.mu.Unlock()
-		return
-	}
-
-	globalToolsCache.loading = true
-	globalToolsCache.mu.Unlock()
-
-	// Use a channel to implement hard timeout
-	done := make(chan []ToolInfo, 1)
-
-	go func() {
-		// Create a context with timeout
-		timeoutCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		done <- loadToolsInternal(timeoutCtx)
-	}()
-
-	// Wait for result with hard timeout
-	select {
-	case allTools := <-done:
-		// Store results
-		globalToolsCache.mu.Lock()
-		globalToolsCache.tools = allTools
-		globalToolsCache.loaded = true
-		globalToolsCache.loading = false
-		globalToolsCache.mu.Unlock()
-		slog.Info("tools cache refreshed", "count", len(allTools))
-
-	case <-time.After(35 * time.Second):
-		// Hard timeout - just reset the flag and move on
-		slog.Warn("tools cache refresh timed out after 35s")
-		globalToolsCache.mu.Lock()
-		globalToolsCache.loading = false
-		globalToolsCache.mu.Unlock()
-	}
-}
-
-// RefreshSingleServer refreshes/adds a single server to the cache
-func RefreshSingleServer(ctx context.Context, serverName string) error {
-	slog.Info("refreshing single server", "server", serverName)
-
-	mcpManager, err := mcp.NewManager()
-	if err != nil {
-		return err
-	}
-	defer mcpManager.Cleanup()
-
-	namedToolset, err := mcpManager.InitializeSingleToolset(ctx, serverName)
-	if err != nil {
-		return err
-	}
-
-	minimalCtx := &minimalReadonlyContext{Context: ctx}
-	mcpTools, err := namedToolset.Toolset.Tools(minimalCtx)
-	if err != nil {
-		return err
-	}
-
-	// Update in-memory cache
-	var newTools []ToolInfo
-	for _, t := range mcpTools {
-		newTools = append(newTools, ToolInfo{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Source:      serverName,
-		})
-	}
-
-	// Remove old tools for this server first (in case it's an update)
-	RemoveServerToolsFromCache(serverName)
-	AddServerToolsToCache(serverName, newTools)
-
-	// Update persistent cache
-	persistentTools := make([]cache.ToolEntry, 0, len(mcpTools))
-	for _, t := range mcpTools {
-		persistentTools = append(persistentTools, cache.ToolEntry{
-			Name:        t.Name(),
-			Description: t.Description(),
-			Source:      serverName,
-			InputSchema: common.ExtractToolInputSchema(t),
-		})
-	}
-	mcpCfg, err := config.LoadMCPConfig()
-	checksum := ""
-	if err == nil && mcpCfg.MCPServers != nil {
-		serverCfg := mcpCfg.MCPServers[serverName]
-		checksum = cache.ComputeServerChecksum(serverCfg.Command, serverCfg.Args, serverCfg.Env)
-	}
-
-	cache.AddServerTools(serverName, persistentTools, checksum)
-	cache.SaveCache()
-
-	return nil
 }

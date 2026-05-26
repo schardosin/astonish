@@ -22,7 +22,7 @@ func PlatformAdminListOIDCProvidersHandler(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
@@ -76,7 +76,7 @@ func PlatformAdminCreateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
@@ -181,7 +181,7 @@ func PlatformAdminGetOIDCProviderHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
@@ -223,7 +223,7 @@ func PlatformAdminUpdateOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return
@@ -313,7 +313,7 @@ func PlatformAdminDeleteOIDCProviderHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	pgStore := getPlatformPGStore()
+	pgStore := getPlatformBackend()
 	if pgStore == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return

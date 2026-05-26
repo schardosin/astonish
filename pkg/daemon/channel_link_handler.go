@@ -9,14 +9,13 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/channels"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // buildTelegramLinkHandler returns a function suitable for TelegramChannel.LinkHandler.
 // It consumes the one-time code, creates a verified user_channel record, and refreshes
 // the channel manager's allowlist.
 func buildTelegramLinkHandler(
-	pgStore *pgstore.PGStore,
+	backend store.PlatformBackend,
 	linkStore api.LinkCodeBackend,
 	channelMgr *channels.ChannelManager,
 ) func(ctx context.Context, senderID, senderUsername, code string) (bool, string) {
@@ -33,7 +32,7 @@ func buildTelegramLinkHandler(
 		}
 
 		// Check if this external ID is already linked to another user
-		ucStore := pgStore.UserChannels()
+		ucStore := backend.UserChannels()
 		existing, err := ucStore.GetByExternalID(ctx, "telegram", senderID)
 		if err != nil {
 			return false, "An error occurred. Please try again."
@@ -80,7 +79,7 @@ func buildTelegramLinkHandler(
 // It consumes the one-time code, creates a verified user_channel record, and refreshes
 // the channel manager's allowlist.
 func buildSlackLinkHandler(
-	pgStore *pgstore.PGStore,
+	backend store.PlatformBackend,
 	linkStore api.LinkCodeBackend,
 	channelMgr *channels.ChannelManager,
 ) func(ctx context.Context, senderID, senderName, code string) (bool, string) {
@@ -97,7 +96,7 @@ func buildSlackLinkHandler(
 		}
 
 		// Check if this external ID is already linked to another user
-		ucStore := pgStore.UserChannels()
+		ucStore := backend.UserChannels()
 		existing, err := ucStore.GetByExternalID(ctx, "slack", senderID)
 		if err != nil {
 			return false, "An error occurred. Please try again."

@@ -1,18 +1,26 @@
 package memory
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
-
-	chromem "github.com/philippgille/chromem-go"
 )
+
+// EmbeddingFunc is a function that embeds a single text string into a vector.
+// This is our own type alias, decoupled from any external library.
+type EmbeddingFunc = func(ctx context.Context, text string) ([]float32, error)
 
 // EmbedderResult holds the resolved embedding function and an optional cleanup
 // function that must be called when the embedder is no longer needed.
 type EmbedderResult struct {
-	EmbeddingFunc chromem.EmbeddingFunc
+	EmbeddingFunc EmbeddingFunc
 	Cleanup       func() error // nil if no cleanup is needed (e.g., cloud API providers)
 }
 
@@ -56,7 +64,7 @@ func ResolveEmbeddingFunc(appCfg *config.AppConfig, memoryCfg *config.MemoryConf
 // resolveExplicitProvider creates an embedding function from explicit memory config.
 // This is the opt-in path for users who want to use cloud-based embedding APIs.
 // The optional getSecret function resolves keys from the credential store.
-func resolveExplicitProvider(cfg *config.MemoryConfig, getSecret config.SecretGetter) (chromem.EmbeddingFunc, error) {
+func resolveExplicitProvider(cfg *config.MemoryConfig, getSecret config.SecretGetter) (EmbeddingFunc, error) {
 	// resolveEmbeddingAPIKey checks credential store, then config, then env var.
 	resolveAPIKey := func(envVar string) string {
 		if getSecret != nil {
@@ -81,34 +89,153 @@ func resolveExplicitProvider(cfg *config.MemoryConfig, getSecret config.SecretGe
 		}
 		model := cfg.Embedding.Model
 		if model == "" {
-			model = string(chromem.EmbeddingModelOpenAI3Small)
+			model = "text-embedding-3-small"
 		}
-		return chromem.NewEmbeddingFuncOpenAI(apiKey, chromem.EmbeddingModelOpenAI(model)), nil
+		return newOpenAIEmbeddingFunc("https://api.openai.com/v1", apiKey, model), nil
 
 	case "ollama":
 		baseURL := cfg.Embedding.BaseURL
 		if baseURL == "" {
-			baseURL = "http://localhost:11434/api"
+			baseURL = "http://localhost:11434"
 		}
+		// Normalize: strip trailing /api if present (we add it in the request)
+		baseURL = strings.TrimSuffix(baseURL, "/api")
+		baseURL = strings.TrimSuffix(baseURL, "/")
 		model := cfg.Embedding.Model
 		if model == "" {
 			model = "nomic-embed-text"
 		}
-		return chromem.NewEmbeddingFuncOllama(model, baseURL), nil
+		return newOllamaEmbeddingFunc(baseURL, model), nil
 
 	case "openai-compat", "openai_compat":
 		baseURL := cfg.Embedding.BaseURL
 		if baseURL == "" {
 			return nil, fmt.Errorf("OpenAI-compatible embedding requires a base_url")
 		}
+		baseURL = strings.TrimSuffix(baseURL, "/")
 		apiKey := resolveAPIKey("")
 		model := cfg.Embedding.Model
 		if model == "" {
 			model = "text-embedding-3-small"
 		}
-		return chromem.NewEmbeddingFuncOpenAICompat(baseURL, apiKey, model, nil), nil
+		return newOpenAIEmbeddingFunc(baseURL, apiKey, model), nil
 
 	default:
 		return nil, fmt.Errorf("unsupported embedding provider: %s (supported: openai, ollama, openai-compat)", cfg.Embedding.Provider)
+	}
+}
+
+// --- OpenAI-compatible embedding client ---
+
+// openAIEmbeddingRequest is the request body for POST /v1/embeddings.
+type openAIEmbeddingRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+// openAIEmbeddingResponse is the response from POST /v1/embeddings.
+type openAIEmbeddingResponse struct {
+	Data []struct {
+		Embedding []float32 `json:"embedding"`
+	} `json:"data"`
+}
+
+// newOpenAIEmbeddingFunc returns an EmbeddingFunc that calls an OpenAI-compatible
+// /v1/embeddings endpoint. Works for OpenAI, Azure OpenAI, and any compatible API.
+func newOpenAIEmbeddingFunc(baseURL, apiKey, model string) EmbeddingFunc {
+	return func(ctx context.Context, text string) ([]float32, error) {
+		reqBody := openAIEmbeddingRequest{
+			Model: model,
+			Input: text,
+		}
+		body, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
+		}
+
+		url := baseURL + "/embeddings"
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create embedding request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if apiKey != "" {
+			req.Header.Set("Authorization", "Bearer "+apiKey)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("embedding request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("embedding API returned status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var result openAIEmbeddingResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode embedding response: %w", err)
+		}
+		if len(result.Data) == 0 || len(result.Data[0].Embedding) == 0 {
+			return nil, fmt.Errorf("embedding response contained no data")
+		}
+		return result.Data[0].Embedding, nil
+	}
+}
+
+// --- Ollama embedding client ---
+
+// ollamaEmbeddingRequest is the request body for POST /api/embeddings.
+type ollamaEmbeddingRequest struct {
+	Model  string `json:"model"`
+	Prompt string `json:"prompt"`
+}
+
+// ollamaEmbeddingResponse is the response from POST /api/embeddings.
+type ollamaEmbeddingResponse struct {
+	Embedding []float32 `json:"embedding"`
+}
+
+// newOllamaEmbeddingFunc returns an EmbeddingFunc that calls Ollama's
+// /api/embeddings endpoint.
+func newOllamaEmbeddingFunc(baseURL, model string) EmbeddingFunc {
+	return func(ctx context.Context, text string) ([]float32, error) {
+		reqBody := ollamaEmbeddingRequest{
+			Model:  model,
+			Prompt: text,
+		}
+		body, err := json.Marshal(reqBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal ollama embedding request: %w", err)
+		}
+
+		url := baseURL + "/api/embeddings"
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create ollama embedding request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("ollama embedding request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			return nil, fmt.Errorf("ollama embedding API returned status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var result ollamaEmbeddingResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return nil, fmt.Errorf("failed to decode ollama embedding response: %w", err)
+		}
+		if len(result.Embedding) == 0 {
+			return nil, fmt.Errorf("ollama embedding response contained no data")
+		}
+		return result.Embedding, nil
 	}
 }

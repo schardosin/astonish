@@ -4,8 +4,8 @@ import "context"
 
 // EmbedFunc generates a vector embedding for a text string.
 // Returns a float32 slice (e.g., 384-dim for all-MiniLM-L6-v2).
-// This is the store-level abstraction; callers can wrap HugotEmbedder,
-// chromem.EmbeddingFunc, or any other embedding provider into this type.
+// This is the store-level abstraction; callers can wrap HugotEmbedder
+// or any other embedding provider into this type.
 type EmbedFunc func(ctx context.Context, text string) ([]float32, error)
 
 // MemoryScope identifies the knowledge tier for a memory entry.
@@ -45,7 +45,6 @@ type MemorySearchResult struct {
 
 // MemoryStore provides access to the vector + BM25 memory search system.
 //
-// In personal mode, this wraps the existing memory.Store directly.
 // In platform mode, queries target the appropriate schema (personal/team/org).
 type MemoryStore interface {
 	// Search performs a hybrid vector + keyword search.
@@ -97,8 +96,6 @@ type ThreeTierSearcher interface {
 
 // MemoryManager provides higher-level memory operations: loading the core
 // memory file, appending to it, and managing knowledge files.
-//
-// In personal mode, this wraps the existing memory.Manager directly.
 type MemoryManager interface {
 	// Load returns the contents of the core MEMORY.md file.
 	Load(ctx context.Context) (string, error)

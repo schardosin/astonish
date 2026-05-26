@@ -15,31 +15,31 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// platformAdminGuard checks platform admin auth and resolves the PGStore.
-// Returns (admin, pgStore) or writes an HTTP error and returns (nil, nil).
-func platformAdminGuard(w http.ResponseWriter, r *http.Request) (*PlatformUser, *pgstore.PGStore) {
+// platformAdminGuard checks platform admin auth and resolves the platform backend.
+// Returns (admin, backend) or writes an HTTP error and returns (nil, nil).
+func platformAdminGuard(w http.ResponseWriter, r *http.Request) (*PlatformUser, store.PlatformBackend) {
 	admin := RequirePlatformAdmin(w, r)
 	if admin == nil {
 		return nil, nil
 	}
-	pgStore := getPlatformPGStore()
-	if pgStore == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		respondError(w, http.StatusInternalServerError, "platform store not available")
 		return nil, nil
 	}
-	return admin, pgStore
+	return admin, backend
 }
 
 // --- Organization Endpoints ---
 
 // PlatformAdminListOrgsHandler handles GET /api/platform/admin/orgs
 func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
-	orgs, err := pgStore.Organizations().List(r.Context())
+	orgs, err := backend.Organizations().List(r.Context())
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list organizations")
 		return
@@ -66,12 +66,12 @@ func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
 			CreatedAt: org.CreatedAt,
 		}
 		// Get member count
-		members, err := pgStore.Organizations().ListMembers(r.Context(), org.ID)
+		members, err := backend.Organizations().ListMembers(r.Context(), org.ID)
 		if err == nil {
 			entry.MemberCount = len(members)
 		}
 		// Get team count from org data store
-		if orgDS, err := pgStore.ForOrg(org.Slug); err == nil {
+		if orgDS, err := backend.ForOrg(org.Slug); err == nil {
 			if teams, err := orgDS.Teams().ListTeams(r.Context()); err == nil {
 				entry.TeamCount = len(teams)
 			}
@@ -84,8 +84,8 @@ func PlatformAdminListOrgsHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateOrgHandler handles POST /api/platform/admin/orgs
 func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -115,9 +115,15 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Check slug uniqueness
-	if existing, _ := pgStore.Organizations().GetBySlug(ctx, req.Slug); existing != nil {
+	if existing, _ := backend.Organizations().GetBySlug(ctx, req.Slug); existing != nil {
 		respondError(w, http.StatusConflict, fmt.Sprintf("organization with slug %q already exists", req.Slug))
 		return
+	}
+
+	// Compute DB name: only meaningful for PostgreSQL backend.
+	dbName := ""
+	if suffix := backend.InstanceSuffix(); suffix != "" {
+		dbName = pgstore.OrgDBName(suffix, req.Slug)
 	}
 
 	// Create org record
@@ -125,31 +131,36 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 		ID:        uuid.New().String(),
 		Name:      req.Name,
 		Slug:      req.Slug,
-		DBName:    pgstore.OrgDBName(pgStore.InstanceSuffix(), req.Slug),
+		DBName:    dbName,
 		Status:    "active",
 		CreatedAt: time.Now(),
 	}
-	if err := pgStore.Organizations().Create(ctx, org); err != nil {
+	if err := backend.Organizations().Create(ctx, org); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create organization: %v", err))
 		return
 	}
 
 	// Provision org database
-	if err := pgStore.ProvisionOrg(ctx, org.ID, req.Slug); err != nil {
+	if err := backend.ProvisionOrg(ctx, org.ID, req.Slug); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to provision org database: %v", err))
 		return
 	}
 
 	// Create default "General" team
-	orgDS, err := pgStore.ForOrg(req.Slug)
+	orgDS, err := backend.ForOrg(req.Slug)
 	if err != nil {
 		slog.Warn("failed to connect to new org DB for team creation", "error", err)
 	} else {
+		// Schema name only meaningful for PG
+		schemaName := ""
+		if backend.InstanceSuffix() != "" {
+			schemaName = pgstore.TeamSchemaName("general")
+		}
 		defaultTeam := &store.Team{
 			ID:         uuid.New().String(),
 			Name:       "General",
 			Slug:       "general",
-			SchemaName: pgstore.TeamSchemaName("general"),
+			SchemaName: schemaName,
 			CreatedAt:  time.Now(),
 		}
 		if err := orgDS.Teams().CreateTeam(ctx, defaultTeam); err != nil {
@@ -161,9 +172,9 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 			// If owner email is specified, add them to the org and team
 			if req.OwnerEmail != "" {
-				user, _ := pgStore.Users().GetByEmail(ctx, req.OwnerEmail)
+				user, _ := backend.Users().GetByEmail(ctx, req.OwnerEmail)
 				if user != nil {
-					_ = pgStore.Organizations().AddMember(ctx, user.ID, org.ID, "owner")
+					_ = backend.Organizations().AddMember(ctx, user.ID, org.ID, "owner")
 					_ = orgDS.Teams().AddMember(ctx, &store.TeamMembership{
 						UserID:   user.ID,
 						TeamID:   defaultTeam.ID,
@@ -184,26 +195,26 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetOrgHandler handles GET /api/platform/admin/orgs/{slug}
 func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
 	slug := mux.Vars(r)["slug"]
 
 	ctx := r.Context()
-	org, err := pgStore.Organizations().GetBySlug(ctx, slug)
+	org, err := backend.Organizations().GetBySlug(ctx, slug)
 	if err != nil || org == nil {
 		respondError(w, http.StatusNotFound, "organization not found")
 		return
 	}
 
 	// Get members
-	members, _ := pgStore.Organizations().ListMembers(ctx, org.ID)
+	members, _ := backend.Organizations().ListMembers(ctx, org.ID)
 
 	// Get teams
 	var teams []*store.Team
-	if orgDS, err := pgStore.ForOrg(slug); err == nil {
+	if orgDS, err := backend.ForOrg(slug); err == nil {
 		teams, _ = orgDS.Teams().ListTeams(ctx)
 	}
 
@@ -216,8 +227,8 @@ func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateOrgHandler handles PATCH /api/platform/admin/orgs/{slug}
 func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -232,7 +243,7 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	org, err := pgStore.Organizations().GetBySlug(ctx, slug)
+	org, err := backend.Organizations().GetBySlug(ctx, slug)
 	if err != nil || org == nil {
 		respondError(w, http.StatusNotFound, "organization not found")
 		return
@@ -251,7 +262,7 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := pgStore.Organizations().Update(ctx, org); err != nil {
+	if err := backend.Organizations().Update(ctx, org); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update organization")
 		return
 	}
@@ -262,15 +273,15 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 // PlatformAdminDeleteOrgHandler handles DELETE /api/platform/admin/orgs/{slug}
 // Permanently deletes an org — only allowed if status is 'suspended'.
 func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
 	slug := mux.Vars(r)["slug"]
 
 	ctx := r.Context()
-	org, err := pgStore.Organizations().GetBySlug(ctx, slug)
+	org, err := backend.Organizations().GetBySlug(ctx, slug)
 	if err != nil || org == nil {
 		respondError(w, http.StatusNotFound, "organization not found")
 		return
@@ -282,13 +293,13 @@ func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Decommission (drops the org database)
-	if err := pgStore.DecommissionOrg(ctx, slug); err != nil {
+	if err := backend.DecommissionOrg(ctx, slug); err != nil {
 		slog.Warn("failed to decommission org database", "slug", slug, "error", err)
 	}
 
 	// Update status to decommissioned
 	org.Status = "decommissioned"
-	_ = pgStore.Organizations().Update(ctx, org)
+	_ = backend.Organizations().Update(ctx, org)
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"message": fmt.Sprintf("Organization %q permanently deleted", slug),
@@ -300,13 +311,13 @@ func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminListUsersHandler handles GET /api/platform/admin/users
 func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
 	ctx := r.Context()
-	users, err := pgStore.Users().List(ctx)
+	users, err := backend.Users().List(ctx)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list users")
 		return
@@ -333,7 +344,7 @@ func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
 			Status:       u.Status,
 			CreatedAt:    u.CreatedAt,
 		}
-		orgs, _ := pgStore.Organizations().GetUserOrgs(ctx, u.ID)
+		orgs, _ := backend.Organizations().GetUserOrgs(ctx, u.ID)
 		entry.Orgs = orgs
 		entries = append(entries, entry)
 	}
@@ -343,8 +354,8 @@ func PlatformAdminListUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminCreateUserHandler handles POST /api/platform/admin/users
 func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -366,7 +377,7 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Check email uniqueness
-	if existing, _ := pgStore.Users().GetByEmail(ctx, req.Email); existing != nil {
+	if existing, _ := backend.Users().GetByEmail(ctx, req.Email); existing != nil {
 		respondError(w, http.StatusConflict, "a user with this email already exists")
 		return
 	}
@@ -391,7 +402,7 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:    time.Now(),
 	}
 
-	if err := pgStore.Users().Create(ctx, user); err != nil {
+	if err := backend.Users().Create(ctx, user); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create user: %v", err))
 		return
 	}
@@ -404,21 +415,21 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminGetUserHandler handles GET /api/platform/admin/users/{id}
 func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
 	userID := mux.Vars(r)["id"]
 
 	ctx := r.Context()
-	user, err := pgStore.Users().GetByID(ctx, userID)
+	user, err := backend.Users().GetByID(ctx, userID)
 	if err != nil || user == nil {
 		respondError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
-	orgs, _ := pgStore.Organizations().GetUserOrgs(ctx, userID)
+	orgs, _ := backend.Organizations().GetUserOrgs(ctx, userID)
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"user": user,
@@ -428,8 +439,8 @@ func PlatformAdminGetUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminUpdateUserHandler handles PATCH /api/platform/admin/users/{id}
 func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -446,7 +457,7 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	user, err := pgStore.Users().GetByID(ctx, userID)
+	user, err := backend.Users().GetByID(ctx, userID)
 	if err != nil || user == nil {
 		respondError(w, http.StatusNotFound, "user not found")
 		return
@@ -480,7 +491,7 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// Prevent demoting the last superadmin
 		if newRole == "" && user.PlatformRole == "superadmin" {
-			count, _ := pgStore.Users().CountByPlatformRole(ctx, "superadmin")
+			count, _ := backend.Users().CountByPlatformRole(ctx, "superadmin")
 			if count <= 1 {
 				respondError(w, http.StatusBadRequest, "cannot demote the last platform superadmin")
 				return
@@ -489,7 +500,7 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 		user.PlatformRole = newRole
 	}
 
-	if err := pgStore.Users().Update(ctx, user); err != nil {
+	if err := backend.Users().Update(ctx, user); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update user")
 		return
 	}
@@ -499,8 +510,8 @@ func PlatformAdminUpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminDeleteUserHandler handles DELETE /api/platform/admin/users/{id}
 func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
-	admin, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	admin, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -513,7 +524,7 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	user, err := pgStore.Users().GetByID(ctx, userID)
+	user, err := backend.Users().GetByID(ctx, userID)
 	if err != nil || user == nil {
 		respondError(w, http.StatusNotFound, "user not found")
 		return
@@ -521,14 +532,14 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Cannot delete the last superadmin
 	if user.PlatformRole == "superadmin" {
-		count, _ := pgStore.Users().CountByPlatformRole(ctx, "superadmin")
+		count, _ := backend.Users().CountByPlatformRole(ctx, "superadmin")
 		if count <= 1 {
 			respondError(w, http.StatusBadRequest, "cannot delete the last platform superadmin")
 			return
 		}
 	}
 
-	if err := pgStore.Users().Delete(ctx, userID); err != nil {
+	if err := backend.Users().Delete(ctx, userID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
@@ -541,8 +552,8 @@ func PlatformAdminDeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminAddUserToOrgHandler handles POST /api/platform/admin/users/{id}/orgs
 func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -568,28 +579,28 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Verify user exists
-	user, err := pgStore.Users().GetByID(ctx, userID)
+	user, err := backend.Users().GetByID(ctx, userID)
 	if err != nil || user == nil {
 		respondError(w, http.StatusNotFound, "user not found")
 		return
 	}
 
 	// Verify org exists
-	org, err := pgStore.Organizations().GetBySlug(ctx, req.OrgSlug)
+	org, err := backend.Organizations().GetBySlug(ctx, req.OrgSlug)
 	if err != nil || org == nil {
 		respondError(w, http.StatusNotFound, "organization not found")
 		return
 	}
 
 	// Add membership
-	if err := pgStore.Organizations().AddMember(ctx, userID, org.ID, req.Role); err != nil {
+	if err := backend.Organizations().AddMember(ctx, userID, org.ID, req.Role); err != nil {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to add user to org: %v", err))
 		return
 	}
 
 	// Add to team if specified
 	if req.TeamSlug != "" {
-		if orgDS, err := pgStore.ForOrg(req.OrgSlug); err == nil {
+		if orgDS, err := backend.ForOrg(req.OrgSlug); err == nil {
 			teams, _ := orgDS.Teams().ListTeams(ctx)
 			for _, t := range teams {
 				if t.Slug == req.TeamSlug {
@@ -613,8 +624,8 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 
 // PlatformAdminRemoveUserFromOrgHandler handles DELETE /api/platform/admin/users/{id}/orgs/{slug}
 func PlatformAdminRemoveUserFromOrgHandler(w http.ResponseWriter, r *http.Request) {
-	_, pgStore := platformAdminGuard(w, r)
-	if pgStore == nil {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
 		return
 	}
 
@@ -623,13 +634,13 @@ func PlatformAdminRemoveUserFromOrgHandler(w http.ResponseWriter, r *http.Reques
 	orgSlug := vars["slug"]
 
 	ctx := r.Context()
-	org, err := pgStore.Organizations().GetBySlug(ctx, orgSlug)
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
 	if err != nil || org == nil {
 		respondError(w, http.StatusNotFound, "organization not found")
 		return
 	}
 
-	if err := pgStore.Organizations().RemoveMember(ctx, userID, org.ID); err != nil {
+	if err := backend.Organizations().RemoveMember(ctx, userID, org.ID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to remove user from org")
 		return
 	}
@@ -664,14 +675,54 @@ func slugifyOrgName(name string) string {
 	return s
 }
 
-// getPlatformPGStore returns the platform PGStore singleton.
+// --- Platform backend singleton ---
+
+// platformBackendInstance holds the platform store backend (PGStore or SQLiteStore).
+// It's set during daemon initialization via SetPlatformBackend or SetPlatformPGStore.
+var platformBackendInstance store.PlatformBackend
+
+// getPlatformPGStore returns the platform PGStore singleton (legacy accessor).
 // It's set during daemon initialization.
 var platformPGStoreInstance *pgstore.PGStore
 
 func SetPlatformPGStore(pg *pgstore.PGStore) {
 	platformPGStoreInstance = pg
+	platformBackendInstance = pg
+	if pg != nil {
+		platformSecretsInstance = pg.PlatformSecrets()
+	}
 }
 
 func getPlatformPGStore() *pgstore.PGStore {
 	return platformPGStoreInstance
+}
+
+// SetPlatformBackend sets the platform backend (SQLiteStore or PGStore).
+func SetPlatformBackend(backend store.PlatformBackend) {
+	platformBackendInstance = backend
+}
+
+// getPlatformBackend returns the platform backend singleton.
+func getPlatformBackend() store.PlatformBackend {
+	return platformBackendInstance
+}
+
+// platformSecrets is the interface satisfied by both PG and SQLite secret stores.
+type platformSecrets interface {
+	GetSecret(key string) string
+	SetSecret(key, value string) error
+	RemoveSecret(key string) error
+}
+
+// platformSecretsInstance holds the resolved secret store (set at startup).
+var platformSecretsInstance platformSecrets
+
+// SetPlatformSecrets registers the platform secrets store (PG or SQLite).
+func SetPlatformSecrets(s platformSecrets) {
+	platformSecretsInstance = s
+}
+
+// getPlatformSecrets returns the platform secrets store, or nil if unavailable.
+func getPlatformSecrets() platformSecrets {
+	return platformSecretsInstance
 }

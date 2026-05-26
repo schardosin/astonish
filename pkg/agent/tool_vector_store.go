@@ -14,7 +14,7 @@ var (
 
 // ToolVectorStore abstracts vector storage for the ToolIndex.
 // Implementations:
-//   - chromemToolVectorStore: wraps chromem-go Collection (personal mode)
+//   - inMemoryToolVectorStore: in-memory brute-force search (tests/development)
 //   - pgToolVectorStore: uses pgvector in PostgreSQL (platform mode)
 //
 // The ToolIndex uses this interface for storing tool description embeddings

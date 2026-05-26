@@ -18,7 +18,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/memory"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -146,7 +145,6 @@ type SubAgentManager struct {
 	ToolGroups      map[string]*ToolGroup        // Named tool groups for sub-agent tool resolution
 	FleetTools      []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
 	SessionService  adksession.Service           // Session persistence
-	MemoryManager   *memory.Manager              // Memory manager for context injection (nil = disabled)
 	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
 	Redactor        *credentials.Redactor          // Redacts credential values from tool outputs (nil = disabled)
 	CredentialStore credentials.CredentialResolver // Credential store for placeholder substitution (nil = disabled)
@@ -1134,16 +1132,6 @@ func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTas
 		}
 		if childToolSet["browser_navigate"] {
 			sb.WriteString("- **Browser tools** (`browser_navigate`, `browser_snapshot`, etc.) — for navigating websites to get live/current data (prices, availability, dynamic content). Prefer browser when the task requires what a site shows *right now*, not what was indexed days ago.\n")
-		}
-	}
-
-	// Load and inject memory content if available
-	if m.MemoryManager != nil {
-		memContent, err := m.MemoryManager.Load()
-		if err == nil && memContent != "" {
-			sb.WriteString("\n## Context (from persistent memory)\n")
-			sb.WriteString(EscapeCurlyPlaceholders(memContent))
-			sb.WriteString("\n")
 		}
 	}
 

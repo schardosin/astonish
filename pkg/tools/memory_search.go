@@ -3,7 +3,6 @@ package tools
 import (
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/memory"
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -15,13 +14,6 @@ type MemorySearchArgs struct {
 	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum number of results to return (default 6)"`
 }
 
-// MemorySearchResult is returned from memory search.
-type MemorySearchResult struct {
-	Results []memory.SearchResult `json:"results"`
-	Count   int                   `json:"count"`
-	Message string                `json:"message,omitempty"`
-}
-
 // PlatformMemorySearchResult is returned from memory search in platform mode.
 // Uses store.MemorySearchResult which includes scope information.
 type PlatformMemorySearchResult struct {
@@ -30,17 +22,16 @@ type PlatformMemorySearchResult struct {
 	Message string                     `json:"message,omitempty"`
 }
 
-// MemorySearch performs hybrid search (vector + BM25) across indexed memory files.
-// In platform mode, it checks the tool context for a PG-backed ThreeTierSearcher
-// (injected by ChatRunner.InjectMemoryStores). Falls back to the file-based
-// memory store for personal mode or when no PG store is available in context.
-func MemorySearch(memStore *memory.Store) func(ctx tool.Context, args MemorySearchArgs) (any, error) {
+// MemorySearch creates the memory_search handler. In platform mode it routes to
+// PG-backed stores from the request context. The memStore parameter is kept for
+// API compatibility but is unused (always nil in platform mode).
+func MemorySearch() func(ctx tool.Context, args MemorySearchArgs) (any, error) {
 	return func(ctx tool.Context, args MemorySearchArgs) (any, error) {
 		if args.Query == "" {
 			return nil, fmt.Errorf("query is required")
 		}
 
-		// In platform mode, prefer the PG-backed three-tier searcher from context.
+		// Platform mode: prefer the PG-backed three-tier searcher from context.
 		if searcher := store.ThreeTierSearcherFromContext(ctx); searcher != nil {
 			return platformMemorySearch(ctx, args, searcher, nil)
 		}
@@ -49,36 +40,10 @@ func MemorySearch(memStore *memory.Store) func(ctx tool.Context, args MemorySear
 			return platformMemorySearch(ctx, args, nil, ms)
 		}
 
-		// Personal mode: use the file-based chromem-go store.
-		if memStore == nil {
-			return MemorySearchResult{
-				Results: []memory.SearchResult{},
-				Count:   0,
-				Message: "Memory search is not available.",
-			}, nil
-		}
-
-		maxResults := args.MaxResults
-		if maxResults <= 0 {
-			maxResults = memStore.Config().MaxResults
-		}
-
-		results, err := memStore.SearchHybrid(ctx, args.Query, maxResults, memStore.Config().MinScore)
-		if err != nil {
-			return nil, fmt.Errorf("memory search failed: %w", err)
-		}
-
-		if len(results) == 0 {
-			return MemorySearchResult{
-				Results: []memory.SearchResult{},
-				Count:   0,
-				Message: "No matching results found in memory.",
-			}, nil
-		}
-
-		return MemorySearchResult{
-			Results: results,
-			Count:   len(results),
+		return PlatformMemorySearchResult{
+			Results: []store.MemorySearchResult{},
+			Count:   0,
+			Message: "Memory search is not available.",
 		}, nil
 	}
 }
@@ -136,18 +101,17 @@ func PlatformMemorySearch(searcher store.ThreeTierSearcher, fallback store.Memor
 	}
 }
 
-// NewMemorySearchTool creates the memory_search tool using the given store.
+// NewMemorySearchTool creates the memory_search tool.
 // In platform mode, the tool checks the context for PG-backed stores
-// (injected by ChatRunner.InjectMemoryStores) before falling back to the
-// file-based chromem-go store.
-func NewMemorySearchTool(memStore *memory.Store) (tool.Tool, error) {
+// (injected by ChatRunner.InjectMemoryStores).
+func NewMemorySearchTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "memory_search",
 		Description: "Search memory for relevant knowledge. Use before answering questions " +
 			"about prior decisions, preferences, facts, project details, or past conversations. " +
 			"Returns scored snippets with file path and line references. " +
 			"Use memory_get to read more context around a search result.",
-	}, MemorySearch(memStore))
+	}, MemorySearch())
 }
 
 // NewPlatformMemorySearchTool creates the memory_search tool for platform mode.

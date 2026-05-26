@@ -440,10 +440,131 @@ func (b *IncusBackend) PullFile(ctx context.Context, sessionID, path string) (io
 // Templates (§3.3)
 // ---------------------------------------------------------------------------
 
-// BuildTemplate creates a new template from scratch. Requires Phase A layer
-// store semantics; returns ErrUnsupportedInPhaseB2 today.
+// BuildTemplate creates a new template layer by running build steps directly
+// inside the @base template container and re-snapshotting it. The snapshot's
+// rootfs is then hashed to produce a content-addressed layer artifact for the
+// platform's layer store.
+//
+// Unlike the K8s backend (which uses a throwaway overlay builder pod), the
+// Incus backend modifies @base in-place because:
+//   - Incus sessions use @base's snapshot as the overlay lower layer
+//   - The snapshot IS the source of truth (no CephFS layer DAG)
+//   - Running steps directly avoids the complexity of merging overlays
+//
+// If any step fails, @base is left in a potentially modified but un-snapshotted
+// state. The caller should handle this (e.g., re-init sandbox).
 func (b *IncusBackend) BuildTemplate(ctx context.Context, spec TemplateBuildSpec) (*TemplateArtifact, error) {
-	return nil, ErrUnsupportedInPhaseB2
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if spec.TemplateID == "" {
+		return nil, errors.New("BuildTemplate: TemplateID is required")
+	}
+	if len(spec.Steps) == 0 {
+		return nil, errors.New("BuildTemplate: at least one build step is required")
+	}
+
+	// Verify @base exists.
+	baseName := TemplateName(BaseTemplate)
+	if !b.client.InstanceExists(baseName) {
+		return nil, fmt.Errorf("BuildTemplate: base template does not exist; run 'astonish sandbox init' first")
+	}
+
+	// Start @base directly (it may already be stopped from a previous snapshot).
+	if !b.client.IsRunning(baseName) {
+		if err := b.client.StartInstance(baseName); err != nil {
+			return nil, fmt.Errorf("BuildTemplate: start @base: %w", err)
+		}
+	}
+	if err := waitForReady(b.client, baseName, 60*time.Second); err != nil {
+		return nil, fmt.Errorf("BuildTemplate: @base not ready: %w", err)
+	}
+
+	// Wait for network connectivity (DHCP + DNS).
+	if err := waitForNetwork(b.client, baseName, 30*time.Second); err != nil {
+		return nil, fmt.Errorf("BuildTemplate: network not ready: %w", err)
+	}
+
+	// Execute build steps sequentially inside @base.
+	for i, step := range spec.Steps {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		exitCode, err := b.client.ExecSimple(baseName, []string{"/bin/sh", "-c", step})
+		if err != nil {
+			return nil, fmt.Errorf("BuildTemplate: step %d (%q): %w", i+1, truncate(step, 120), err)
+		}
+		if exitCode != 0 {
+			return nil, fmt.Errorf("BuildTemplate: step %d (%q) exited with code %d", i+1, truncate(step, 120), exitCode)
+		}
+	}
+
+	// Stop @base and re-snapshot (SnapshotTemplate handles stop, shift, snapshot).
+	if err := SnapshotTemplate(b.client, b.templates, BaseTemplate); err != nil {
+		return nil, fmt.Errorf("BuildTemplate: re-snapshot @base: %w", err)
+	}
+
+	// Compute a content hash of the snapshot rootfs for the layer artifact.
+	// We hash the snapshot directory listing (fast, deterministic) rather than
+	// tar-ing the entire multi-GB rootfs.
+	poolName, err := GetPoolForProfile(b.client)
+	if err != nil {
+		return nil, fmt.Errorf("BuildTemplate: get storage pool: %w", err)
+	}
+	poolPath, err := GetPoolSourcePath(b.client, poolName)
+	if err != nil {
+		return nil, fmt.Errorf("BuildTemplate: get pool path: %w", err)
+	}
+	snapshotRootfs := SnapshotRootfsPath(poolPath, BaseTemplate)
+
+	artifact, err := hashSnapshotRootfs(snapshotRootfs)
+	if err != nil {
+		return nil, fmt.Errorf("BuildTemplate: hash snapshot: %w", err)
+	}
+
+	artifact.CephFSPath = snapshotRootfs
+	if len(spec.ParentLayers) > 0 {
+		artifact.ParentLayer = spec.ParentLayers[len(spec.ParentLayers)-1]
+	}
+
+	return artifact, nil
+}
+
+// hashSnapshotRootfs computes a fast content hash of the @base snapshot rootfs.
+// Instead of tar-ing the entire multi-GB rootfs (which would be slow), we hash
+// a listing of file paths + sizes + mtimes. This gives a stable identifier that
+// changes whenever the rootfs content changes.
+func hashSnapshotRootfs(snapshotRootfs string) (*TemplateArtifact, error) {
+	// Use find + stat to produce a deterministic listing, then SHA-256 it.
+	// This is fast (~1s for a full OS rootfs) and produces a reproducible hash.
+	script := fmt.Sprintf(`set -e
+ROOTFS=%q
+if [ ! -d "$ROOTFS" ]; then
+  echo "SHA=0000000000000000000000000000000000000000000000000000000000000000"
+  echo "SIZE=0"
+  exit 0
+fi
+SHA=$(find "$ROOTFS" -printf '%%P %%s %%T@\n' 2>/dev/null | LC_ALL=C sort | sha256sum | awk '{print $1}')
+SIZE=$(du -sb "$ROOTFS" | awk '{print $1}')
+echo "SHA=$SHA"
+echo "SIZE=$SIZE"
+`, snapshotRootfs)
+
+	out, err := incus.ExecOnSandboxHost([]string{"sh", "-c", script})
+	if err != nil {
+		return nil, fmt.Errorf("hash script failed: %w (output: %s)", err, string(out))
+	}
+
+	sha, size, err := parseIncusCaptureOutput(string(out))
+	if err != nil {
+		return nil, fmt.Errorf("parse hash output: %w (output: %s)", err, string(out))
+	}
+
+	return &TemplateArtifact{
+		LayerID:   sha,
+		SizeBytes: size,
+		CreatedAt: time.Now().UTC(),
+	}, nil
 }
 
 // SaveSessionAsTemplate captures the upper layer of a running session.
@@ -718,3 +839,50 @@ func (s *incusExecStream) Write(p []byte) (int, error) { return s.proc.Stdin.Wri
 func (s *incusExecStream) Resize(rows, cols int) error { return s.proc.Resize(cols, rows) }
 func (s *incusExecStream) Wait() (int, error)          { return s.proc.Wait() }
 func (s *incusExecStream) Close() error                { return s.proc.Close() }
+
+// ---------------------------------------------------------------------------
+// BuildTemplate helpers
+// ---------------------------------------------------------------------------
+
+// waitForNetwork polls the container until DNS resolution works or the timeout
+// expires. This is needed because overlay containers start almost instantly but
+// DHCP and DNS resolver setup happen asynchronously after boot.
+func waitForNetwork(client *IncusClient, containerName string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		// Try DNS resolution — a reliable indicator of full network readiness.
+		exitCode, err := client.ExecSimple(containerName, []string{
+			"sh", "-c", "getent hosts deb.debian.org >/dev/null 2>&1 || getent hosts archive.ubuntu.com >/dev/null 2>&1",
+		})
+		if err == nil && exitCode == 0 {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout waiting for network in container %q", containerName)
+}
+
+// parseIncusCaptureOutput extracts SHA= and SIZE= lines from the capture
+// script's stdout. Same protocol as K8s captureUpperAsLayer.
+func parseIncusCaptureOutput(output string) (sha string, size int64, err error) {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "SHA="):
+			sha = strings.TrimPrefix(line, "SHA=")
+		case strings.HasPrefix(line, "SIZE="):
+			v := strings.TrimPrefix(line, "SIZE=")
+			n, perr := fmt.Sscanf(v, "%d", &size)
+			if perr != nil || n != 1 {
+				return "", 0, fmt.Errorf("SIZE= is not an integer: %q", v)
+			}
+		}
+	}
+	if sha == "" {
+		return "", 0, errors.New("SHA= line missing from capture output")
+	}
+	if len(sha) != 64 {
+		return "", 0, fmt.Errorf("SHA= value %q is not a valid 64-char hex hash", sha)
+	}
+	return sha, size, nil
+}

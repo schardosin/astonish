@@ -101,13 +101,15 @@ func (s *sqliteUserStore) ListByOrg(ctx context.Context, orgID string) ([]*store
 	for rows.Next() {
 		uw := &store.UserWithRole{}
 		var pwHash, oidcSub, oidcIss, platformRole, lastLogin, joinedAt sql.NullString
+		var createdAt string
 		err := rows.Scan(
 			&uw.ID, &uw.Email, &uw.DisplayName, &pwHash, &oidcSub, &oidcIss,
-			&platformRole, &uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &joinedAt,
+			&platformRole, &uw.Status, &createdAt, &lastLogin, &uw.Role, &joinedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("scan user with role: %w", err)
 		}
+		uw.CreatedAt = parseTime(createdAt)
 		uw.PasswordHash = pwHash.String
 		uw.OIDCSubject = oidcSub.String
 		uw.OIDCIssuer = oidcIss.String
@@ -269,13 +271,15 @@ func (s *sqliteOrgStore) ListMembers(ctx context.Context, orgID string) ([]*stor
 	for rows.Next() {
 		uw := &store.UserWithRole{}
 		var pwHash, oidcSub, oidcIss, platformRole, lastLogin, joinedAt sql.NullString
+		var createdAt string
 		err := rows.Scan(
 			&uw.ID, &uw.Email, &uw.DisplayName, &pwHash, &oidcSub, &oidcIss,
-			&platformRole, &uw.Status, &uw.CreatedAt, &lastLogin, &uw.Role, &joinedAt,
+			&platformRole, &uw.Status, &createdAt, &lastLogin, &uw.Role, &joinedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
+		uw.CreatedAt = parseTime(createdAt)
 		uw.PasswordHash = pwHash.String
 		uw.OIDCSubject = oidcSub.String
 		uw.OIDCIssuer = oidcIss.String

@@ -189,8 +189,10 @@ func (s *pgSandboxSessionStore) Put(ctx context.Context, sess *store.SandboxSess
 	}
 	// Normalize "@base" literal to the well-known UUID for the DB column
 	// (template_id is typed UUID; the K8s backend uses "@base" in-memory).
+	// Also handle "base" (the Incus container slug) which lifecycle.go passes
+	// after resolving BaseTemplateID → BaseTemplate for container naming.
 	templateID := sess.TemplateID
-	if templateID == "@base" {
+	if templateID == "@base" || templateID == "base" {
 		templateID = baseTemplateUUID
 	}
 	ports, err := encodePorts(sess.ExposedPorts)

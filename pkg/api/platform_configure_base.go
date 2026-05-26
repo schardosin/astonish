@@ -115,6 +115,16 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		cfg.Architecture = "amd64"
 	}
 
+	// Determine target distro from sandbox backend kind.
+	// Incus containers use Ubuntu Noble; K8s uses Debian Bookworm.
+	if cfg.Distro == "" {
+		appCfg := effectiveAppConfig(r)
+		if appCfg != nil && !appCfg.Sandbox.IsK8sBackend() {
+			cfg.Distro = string(sandbox.DistroUbuntuNoble)
+		}
+		// If K8s or unknown, leave empty — Render() defaults to Bookworm.
+	}
+
 	// Validate.
 	if err := cfg.Validate(); err != nil {
 		respondError(w, http.StatusBadRequest, err.Error())

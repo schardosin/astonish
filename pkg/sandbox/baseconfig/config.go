@@ -35,6 +35,12 @@ type BaseConfig struct {
 	// Typically "amd64" or "arm64". Mapped to Incus-style "x86_64" / "aarch64"
 	// internally for BrowserContainerInstallCommands.
 	Architecture string `json:"architecture" yaml:"architecture"`
+
+	// Distro: the Linux distribution of the target container. Determines
+	// package names (e.g., libasound2 vs libasound2t64). When empty,
+	// defaults to DistroDebianBookworm (K8s sandbox-base). Set to
+	// DistroUbuntuNoble when building on Incus.
+	Distro string `json:"distro,omitempty" yaml:"distro,omitempty"`
 }
 
 // BrowserConfig controls browser installation in the base template.

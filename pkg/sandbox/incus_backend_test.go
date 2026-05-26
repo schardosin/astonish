@@ -89,14 +89,22 @@ func TestIncusBackendCapabilities(t *testing.T) {
 	}
 }
 
-// TestIncusBackendTemplatePhaseB2 documents that the three template methods
-// that depend on Phase A semantics return the sentinel error today.
+// TestIncusBackendTemplatePhaseB2 documents that SaveSessionAsTemplate
+// (which depends on Phase A semantics) returns the sentinel error today.
+// BuildTemplate is now fully implemented and validates its inputs instead.
 func TestIncusBackendTemplatePhaseB2(t *testing.T) {
 	b := &IncusBackend{}
 	ctx := context.Background()
 
-	if _, err := b.BuildTemplate(ctx, TemplateBuildSpec{}); !errors.Is(err, ErrUnsupportedInPhaseB2) {
-		t.Errorf("BuildTemplate: got %v, want ErrUnsupportedInPhaseB2", err)
+	// BuildTemplate with empty spec returns a validation error (TemplateID required).
+	if _, err := b.BuildTemplate(ctx, TemplateBuildSpec{}); err == nil ||
+		!strings.Contains(err.Error(), "TemplateID is required") {
+		t.Errorf("BuildTemplate empty spec: got %v, want 'TemplateID is required'", err)
+	}
+	// BuildTemplate with TemplateID but no steps returns a validation error.
+	if _, err := b.BuildTemplate(ctx, TemplateBuildSpec{TemplateID: "test"}); err == nil ||
+		!strings.Contains(err.Error(), "at least one build step is required") {
+		t.Errorf("BuildTemplate no steps: got %v, want 'at least one build step is required'", err)
 	}
 	if _, err := b.SaveSessionAsTemplate(ctx, "ignored"); !errors.Is(err, ErrUnsupportedInPhaseB2) {
 		t.Errorf("SaveSessionAsTemplate: got %v, want ErrUnsupportedInPhaseB2", err)

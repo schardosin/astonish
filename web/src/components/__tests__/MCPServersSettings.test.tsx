@@ -156,7 +156,7 @@ describe('MCPServersSettings scope forwarding', () => {
         setMcpServerArgs={() => {}}
         setMcpHasChanges={() => {}}
         standardServers={[
-          { id: 'tavily', displayName: 'Tavily', description: 'Web search', installed: true, isDefault: false, envVars: [{ name: 'TAVILY_API_KEY', required: true }], capabilities: { webSearch: true, webExtract: false } }
+          { id: 'tavily', displayName: 'Tavily', installed: true, isDefault: false, envVars: [{ name: 'TAVILY_API_KEY', required: true }], capabilities: { webSearch: true, webExtract: false } }
         ]}
         saving={false}
         setSaving={() => {}}

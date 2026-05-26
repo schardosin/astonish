@@ -5,12 +5,11 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/sandbox/k8s"
 )
 
 // Render produces the ordered list of shell command strings suitable for
-// K8sBackend.BuildTemplate(TemplateBuildSpec.Steps). Each entry is passed to
-// `/bin/sh -c <step>` inside the builder pod.
+// Backend.BuildTemplate(TemplateBuildSpec.Steps). Each entry is passed to
+// `/bin/sh -c <step>` inside the builder container/pod.
 //
 // The order mirrors the personal-mode wizard:
 //   1. Core tools (apt packages, node, python, uv, docker)
@@ -53,15 +52,19 @@ func (c *BaseConfig) Render() ([]string, error) {
 	}
 
 	// 3. Browser install
-	// K8s sandbox-base is debian:bookworm-slim (see docker/sandbox-base/Dockerfile);
-	// package names differ from the Ubuntu noble Incus default.
+	// Package names vary by distro: K8s sandbox-base is Debian Bookworm,
+	// Incus @base is Ubuntu Noble. Use c.Distro (defaults to Bookworm if empty).
 	engine := c.Browser.Engine
 	if engine == "" {
 		engine = "none"
 	}
 	if sandbox.IsContainerCompatibleEngine(engine) {
 		arch := c.archForBrowser()
-		for _, argv := range sandbox.BrowserContainerInstallCommands(engine, arch, k8s.SandboxBaseDistro) {
+		distro := sandbox.LinuxDistro(c.Distro)
+		if distro == "" {
+			distro = sandbox.DistroDebianBookworm
+		}
+		for _, argv := range sandbox.BrowserContainerInstallCommands(engine, arch, distro) {
 			steps = append(steps, shellJoin(argv))
 		}
 	}

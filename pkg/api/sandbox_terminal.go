@@ -86,13 +86,22 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	defer ws.Close()
 
 	// Start interactive shell via the Backend interface.
-	// The command uses the astonish-shell wrapper (baked into
-	// sandbox-base) which chroots into the composed overlay at
-	// /sandbox/rootfs before launching bash. Without this, kubectl
-	// exec lands in the pod's base namespace and writes bypass the
-	// fuse-overlayfs upper — causing layer captures to be empty.
+	//
+	// K8s: kubectl exec lands in the pod's base namespace (bare Debian),
+	//   not PID 1's chroot (/sandbox/rootfs where runtimes are installed).
+	//   The astonish-shell wrapper does `exec chroot /sandbox/rootfs "$@"`
+	//   to enter the composed overlay.
+	//
+	// Incus: the overlay IS the container's root filesystem — no chroot
+	//   needed. Commands execute directly in the correct namespace.
+	var shellCmd []string
+	if backend.Kind() == sandbox.BackendKindK8s {
+		shellCmd = []string{"/usr/local/bin/astonish-shell"}
+	} else {
+		shellCmd = []string{"/bin/bash", "-l"}
+	}
 	stream, err := teamTemplateExecInteractive(r.Context(), backend, tc.TeamSlug, sandbox.PTYSpec{
-		Command: []string{"/usr/local/bin/astonish-shell"},
+		Command: shellCmd,
 		Rows:    24,
 		Cols:    80,
 	})

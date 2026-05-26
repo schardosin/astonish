@@ -268,9 +268,11 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 		}
 	}
 
-	// Common: create browser user (KasmVNC cannot run as root)
+	// Common: create browser user (KasmVNC cannot run as root).
+	// Use "id" guard to make this idempotent — the user may already exist
+	// when re-configuring an existing @base template.
 	cmds = append(cmds,
-		[]string{"useradd", "-m", "-s", "/bin/bash", "browser"},
+		[]string{"sh", "-c", "id browser >/dev/null 2>&1 || useradd -m -s /bin/bash browser"},
 	)
 
 	// Map Incus server architecture to Debian package architecture.

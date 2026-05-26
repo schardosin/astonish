@@ -264,14 +264,28 @@ func discoverMCPToolsInSandbox(ctx context.Context, serverName string, serverCfg
 		defer cleanup()
 	}
 
-	// Create a temporary session for discovery. Use a deterministic ID based
-	// on server name so concurrent installs of the same server don't create
-	// multiple containers; the second call gets the existing one (idempotent).
-	sessionID := "mcp-discover-" + serverName
-
 	// Resolve base layer chain so the container has Node.js, Python, etc.
 	// installed via "Configure Base".
 	layerChain := resolveBaseLayerChain(ctx)
+
+	// Include the top layer hash in the session ID so that a stale pod
+	// (created before Configure Base installed Node.js) is never reused.
+	// K8s CreateSession is idempotent: if a pod with the same name exists
+	// it is reused regardless of its layer chain. By incorporating the
+	// layer hash, a new Configure Base build naturally creates a different
+	// pod name, bypassing any stale/terminating pod.
+	sessionID := "mcp-discover-" + serverName
+	if len(layerChain) > 0 {
+		topLayer := layerChain[len(layerChain)-1]
+		if len(topLayer) > 8 {
+			topLayer = topLayer[:8]
+		}
+		sessionID += "-" + topLayer
+	}
+
+	// Best-effort destroy of any existing pod with this ID (e.g. leftover
+	// from a prior discovery attempt that was interrupted).
+	_ = backend.DestroySession(ctx, sessionID)
 
 	_, err = backend.CreateSession(ctx, sandbox.SessionSpec{
 		SessionID:  sessionID,

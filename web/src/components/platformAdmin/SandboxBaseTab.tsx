@@ -74,7 +74,6 @@ export default function SandboxBaseTab() {
       optional_tools: selectedTools,
       browser: { engine: browserEngine },
       extra_steps: extraSteps.trim() ? extraSteps.trim().split('\n').filter(l => l.trim()) : undefined,
-      architecture: 'amd64',
     }
 
     const { abort } = api.configureBase({

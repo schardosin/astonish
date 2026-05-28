@@ -24,7 +24,7 @@ export interface BaseConfig {
     fingerprint_seed?: string
   }
   extra_steps?: string[]
-  architecture: string
+  architecture?: string
 }
 
 export interface BaseConfigSummary {

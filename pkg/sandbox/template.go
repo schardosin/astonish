@@ -38,6 +38,12 @@ var CoreTools = []string{
 // tool because it's required for containerized MCP servers (stdio transport).
 func CoreToolInstallCommands() [][]string {
 	return [][]string{
+		// Enable the 'universe' component on Ubuntu (Noble). Many packages
+		// needed by KasmVNC (libswitch-perl, libhash-merge-simple-perl, etc.)
+		// live in universe, which is not enabled by default in Incus base images.
+		// This is a safe no-op on Debian (file does not exist → both commands
+		// fail → || true).
+		{"sh", "-c", "grep -q 'Components:.*universe' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || sed -i '/^Components:/ s/$/ universe/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true"},
 		{"apt-get", "update"},
 		{"apt-get", "install", "-y",
 			"git", "curl", "wget", "jq", "unzip", "build-essential",
@@ -60,7 +66,9 @@ func CoreToolInstallCommands() [][]string {
 		{"sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"},
 		// Clean up apt cache
 		{"apt-get", "clean"},
-		{"rm", "-rf", "/var/lib/apt/lists/*"},
+		// Use sh -c so the shell expands the glob (shellJoin would single-quote
+		// the * and turn this into a literal filename match).
+		{"sh", "-c", "rm -rf /var/lib/apt/lists/*"},
 	}
 }
 

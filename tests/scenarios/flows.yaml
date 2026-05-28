@@ -84,14 +84,15 @@ scenarios:
   # ---------------------------------------------------------------------------
 
   - id: FLOWS-007
-    title: "Create, list, read, and delete a flow via API"
-    user_story: |
-      As a user, I create a flow (POST), verify it appears in the list
-      (GET), read it by name (GET), then delete it (DELETE) and confirm
-      it's gone.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "Create, list, read, and delete a flow via API"
+     user_story: |
+       As a user, I create a flow (PUT /api/agents), verify it appears in the list
+       (GET /api/agents), read it by name (GET), then delete it (DELETE) and confirm
+       it's gone.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/flows/flows_crud_test.go::TestE2E_Flows_CRUD"
 
   - id: FLOWS-008
     title: "Flow YAML validation rejects invalid input"

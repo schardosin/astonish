@@ -52,6 +52,11 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/tests/e2eboot"
+
+	// Register sandbox backends so Configure Base, MCP stdio discovery,
+	// and other sandbox-dependent E2E features work.
+	_ "github.com/schardosin/astonish/pkg/sandbox/k8s"
+	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
 )
 
 func main() {

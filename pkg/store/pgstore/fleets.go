@@ -153,15 +153,22 @@ func (f *pgFleetPlanStore) GetPlan(ctx context.Context, key string) (any, bool) 
 		return nil, false
 	}
 
+	// Try typed unmarshal first (supports fleet session start / lifecycle).
 	var plan fleet.FleetPlan
-	if err := json.Unmarshal(defJSON, &plan); err != nil {
+	if err := json.Unmarshal(defJSON, &plan); err == nil {
+		plan.Key = key
+		if createdBy != nil {
+			plan.CreatedBy = *createdBy
+		}
+		return &plan, true
+	}
+
+	// Fallback: generic unmarshal for loosely-structured plans (e.g. test payloads with agents:[]).
+	var result interface{}
+	if err := json.Unmarshal(defJSON, &result); err != nil {
 		return nil, false
 	}
-	plan.Key = key
-	if createdBy != nil {
-		plan.CreatedBy = *createdBy
-	}
-	return &plan, true
+	return result, true
 }
 
 func (f *pgFleetPlanStore) ListPlans(ctx context.Context) []store.FleetPlanSummary {

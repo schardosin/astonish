@@ -101,9 +101,31 @@ func (h *Harness) do(t *testing.T, method, path string, body any, timeout time.D
 	req.Header.Set("X-Astonish-Team", "general")
 
 	client := &http.Client{Timeout: timeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("[e2eboot] %s %s: %v", method, path, err)
-	}
-	return resp
-}
+ 	resp, err := client.Do(req)
+ 	if err != nil {
+ 		t.Fatalf("[e2eboot] %s %s: %v", method, path, err)
+ 	}
+ 	return resp
+ }
+
+ // PutRaw sends an authenticated PUT with a raw string body and custom Content-Type.
+ // Useful for YAML endpoints (drills, etc.).
+ func (h *Harness) PutRaw(t *testing.T, path string, contentType, body string) *http.Response {
+ 	t.Helper()
+
+ 	url := h.BaseURL + path
+ 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader([]byte(body)))
+ 	if err != nil {
+ 		t.Fatalf("[e2eboot] create raw request: %v", err)
+ 	}
+ 	req.Header.Set("Content-Type", contentType)
+ 	req.Header.Set("Authorization", "Bearer "+h.Token)
+ 	req.Header.Set("X-Astonish-Team", "general")
+
+ 	client := &http.Client{Timeout: 30 * time.Second}
+ 	resp, err := client.Do(req)
+ 	if err != nil {
+ 		t.Fatalf("[e2eboot] PUT %s: %v", path, err)
+ 	}
+ 	return resp
+ }

@@ -12,33 +12,36 @@ scenarios:
   # ---------------------------------------------------------------------------
 
   - id: DRILL-001
-    title: "Create a drill suite with config"
-    user_story: |
-      As a user, I create a drill suite with a name, target flow/URL,
-      and infrastructure config. It is persisted and appears in the
-      suites list.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "Create a drill suite with config"
+     user_story: |
+       As a user, I create a drill suite with a name, target flow/URL,
+       and infrastructure config. It is persisted and appears in the
+       suites list.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/drill/drill_crud_test.go::TestE2E_DrillSuite_CRUD"
 
   - id: DRILL-002
-    title: "List, read, and delete a drill suite"
-    user_story: |
-      As a user, I create a suite, verify it in the list API, read its
-      config, delete it, and confirm it's gone.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "List, read, and delete a drill suite"
+     user_story: |
+       As a user, I create a suite, verify it in the list API, read its
+       config, delete it, and confirm it's gone.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/drill/drill_crud_test.go::TestE2E_DrillSuite_CRUD"
 
   - id: DRILL-003
-    title: "Add drills to a suite"
-    user_story: |
-      As a user, I add drill scenarios to an existing suite (either
-      manually via API or via AI generation). The drills are persisted
-      with steps and assertions.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "Add drills to a suite"
+     user_story: |
+       As a user, I add drill scenarios to an existing suite (either
+       manually via API or via AI generation). The drills are persisted
+       with steps and assertions.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/drill/drill_crud_test.go::TestE2E_DrillSuite_CRUD"
 
   # ---------------------------------------------------------------------------
   # Execution

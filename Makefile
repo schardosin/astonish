@@ -235,7 +235,10 @@ e2e-k8s-up:
 	helm upgrade --install $(E2E_K8S_RELEASE) deploy/helm/astonish \
 		-n $(E2E_K8S_NS) --create-namespace \
 		-f deploy/helm/astonish/values-e2e.yaml \
+		--history-max=3 \
 		--wait --timeout=10m
+	@echo "Patching NFS server (if present) to tolerate disk-pressure (prevents cleanup deadlock)..."
+	-kubectl -n nfs-system patch deployment nfs-server --type=json -p='[{"op":"add","path":"/spec/template/spec/tolerations/-","value":{"key":"node.kubernetes.io/disk-pressure","effect":"NoSchedule","operator":"Exists"}}]' 2>/dev/null || true
 	@echo "Verifying seeded @base layer..."
 	@E2E_K8S_SANDBOX_NS=$(E2E_K8S_SANDBOX_NS) scripts/verify-e2e-seed.sh
 	@echo "E2E k8s infra ready."
@@ -248,6 +251,10 @@ e2e-k8s-down:
 	-kubectl delete pods --all -n $(E2E_K8S_SANDBOX_NS) --force --grace-period=0 --ignore-not-found 2>/dev/null
 	-kubectl delete ns $(E2E_K8S_NS) --ignore-not-found
 	-kubectl delete ns $(E2E_K8S_SANDBOX_NS) --ignore-not-found
+	@echo "Pruning unused containerd images on nodes (best effort)..."
+	-for node in $$(kubectl get nodes -o name 2>/dev/null); do \
+		kubectl debug $$node -it --image=alpine -- chroot /host sh -c 'crictl rmi --prune 2>/dev/null || true' 2>/dev/null || true; \
+	done
 	@echo "E2E k8s infra removed."
 
 # E2E inspector mode — long-lived single-instance for post-run UI inspection.

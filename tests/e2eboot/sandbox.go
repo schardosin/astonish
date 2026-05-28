@@ -138,4 +138,76 @@ func SweepAllPods(t *testing.T) {
 	} else {
 		t.Logf("[e2eboot] SweepAllPods: cleaned sandbox namespace %s", ns)
 	}
+
+	// Sweep orphan staging directories left by crashed template builder pods.
+	// This is critical to prevent unbounded growth on the layers PVC.
+	// Note: We deliberately do NOT sweep layer directories here. Both the raw
+	// @base rootfs and the "Configure Base" platform layer are created during
+	// `make e2e-k8s-up` and are meant to survive across multiple test runs
+	// within the same infra provisioning. Sweeping them would force every test
+	// that needs a sandbox to re-run the expensive base configuration build.
+	SweepStagingDirs(t)
+}
+
+// SweepStagingDirs removes __staging-* directories from the astonish-layers PVC.
+// These are left behind when template builder pods are killed (OOM, node pressure, timeout).
+// We spawn a short-lived alpine pod that mounts the PVC and does the rm.
+func SweepStagingDirs(t *testing.T) {
+	t.Helper()
+	ns := SandboxNamespace()
+	podName := fmt.Sprintf("sweep-staging-%d", time.Now().UnixNano()%100000000)
+
+	// Use a one-shot pod that mounts the layers PVC directly.
+	overrides := `{"spec":{"restartPolicy":"Never","containers":[{"name":"sweep","image":"alpine:3.21","command":["sh","-c","rm -rf /layers/__staging-* 2>/dev/null; echo 'staging cleaned'"],"volumeMounts":[{"name":"layers","mountPath":"/layers"}]}],"volumes":[{"name":"layers","persistentVolumeClaim":{"claimName":"astonish-layers"}}]}}`
+
+	cmd := exec.Command("kubectl", "run", podName,
+		"--image=alpine:3.21",
+		"--restart=Never",
+		"-n", ns,
+		"--rm", "-it",
+		"--overrides", overrides,
+		"--", "sh", "-c", "sleep 1")
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Non-fatal — the cluster may be under pressure; log and continue.
+		t.Logf("[e2eboot] SweepStagingDirs: %v (output: %s)", err, strings.TrimSpace(string(out)))
+	} else {
+		t.Logf("[e2eboot] SweepStagingDirs: cleaned __staging-* from layers PVC in %s", ns)
+	}
+}
+
+// SweepOrphanLayers aggressively removes layer directories on the astonish-layers PVC
+// except for the well-known @base layer and the platform "Configure Base" layer.
+//
+// IMPORTANT: This function is **not** called automatically by SweepAllPods.
+// Both @base (raw OS image) and the platform base layer (created by "Configure Base"
+// during make e2e-k8s-up or on first use) are infrastructure and are intended to
+// survive across multiple test runs within one e2e-k8s-up provisioning.
+//
+// Use this function only for manual recovery when you want to wipe all custom layers.
+func SweepOrphanLayers(t *testing.T) {
+	t.Helper()
+	ns := SandboxNamespace()
+	podName := fmt.Sprintf("sweep-layers-%d", time.Now().UnixNano()%100000000)
+
+	// Remove everything except:
+	//   - the sacred raw @base layer (UUID form and the @base directory)
+	//   - any layer that is still referenced (we leave that to the GC reconciler in prod)
+	overrides := `{"spec":{"restartPolicy":"Never","containers":[{"name":"sweep","image":"alpine:3.21","command":["sh","-c","find /layers -mindepth 1 -maxdepth 1 ! -name 'a0000000-0000-4000-8000-000000000001' ! -name '@base' -exec rm -rf {} + 2>/dev/null; echo 'orphan layers cleaned'"],"volumeMounts":[{"name":"layers","mountPath":"/layers"}]}],"volumes":[{"name":"layers","persistentVolumeClaim":{"claimName":"astonish-layers"}}]}}`
+
+	cmd := exec.Command("kubectl", "run", podName,
+		"--image=alpine:3.21",
+		"--restart=Never",
+		"-n", ns,
+		"--rm", "-it",
+		"--overrides", overrides,
+		"--", "sh", "-c", "sleep 2")
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Logf("[e2eboot] SweepOrphanLayers: %v (output: %s)", err, strings.TrimSpace(string(out)))
+	} else {
+		t.Logf("[e2eboot] SweepOrphanLayers: cleaned unreferenced layers from PVC in %s", ns)
+	}
 }

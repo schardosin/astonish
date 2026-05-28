@@ -1185,6 +1185,30 @@ func Run(cfg RunConfig) error {
 					PlatformPool:     platformPool,
 					PGStore:          pgStore,
 					Layers:           pgStore.SandboxLayers(),
+					SandboxSessionsQuerier: func(ctx context.Context) (map[string]bool, error) {
+						if pgStore == nil {
+							return nil, nil
+						}
+						schemas, err := pgStore.ListTeamSchemas(ctx)
+						if err != nil {
+							return nil, err
+						}
+						result := make(map[string]bool)
+						for _, schema := range schemas {
+							sessStore := pgStore.SandboxSessionsForSchema(schema)
+							if sessStore == nil {
+								continue
+							}
+							sessions, err := sessStore.List(ctx, store.SandboxSessionFilter{})
+							if err != nil {
+								continue
+							}
+							for _, s := range sessions {
+								result[s.SessionID] = true
+							}
+						}
+						return result, nil
+					},
 				})
 			} else {
 				logger.Printf("[gc-reconciler] Failed to create K8s client: %v (GC reconciler disabled)", csErr)

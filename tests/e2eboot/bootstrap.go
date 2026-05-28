@@ -120,15 +120,16 @@ func Bootstrap(t *testing.T) *Harness {
 	ctx := context.Background()
 	suffix := deriveSuffix(t.Name())
 
-	// Drop any leftover databases from a previous failed run
-	dropDBs(t, ctx, dsn, suffix)
+	// Drop any leftover databases from a previous failed run (ALL dbs with this suffix,
+	// including leaked org dbs like _acme/_globex from prior crashes).
+	DropAllDBsWithSuffix(ctx, dsn, suffix, t)
 
 	// Bootstrap fresh platform
 	t.Logf("[e2eboot] Bootstrapping platform (suffix=%s)...", suffix)
 	if err := pgstore.BootstrapPlatform(ctx, dsn, suffix); err != nil {
 		t.Fatalf("[e2eboot] BootstrapPlatform: %v", err)
 	}
-	t.Cleanup(func() { dropDBs(t, ctx, dsn, suffix) })
+	t.Cleanup(func() { DropAllDBsWithSuffix(ctx, dsn, suffix, t) })
 
 	// Write temp config.yaml
 	configDir := t.TempDir()

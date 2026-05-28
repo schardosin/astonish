@@ -7,7 +7,9 @@
 //  1. Acquires a PG advisory lock so only one pod runs the reconciler.
 //  2. Reclaims orphan layer directories from the layers PVC.
 //  3. Reclaims orphan upper directories from the uppers PVC.
-//  4. Cleans up __staging-* directories from crashed template builders.
+//  4. Cleans up __staging-* directories from crashed template builders (skipping active ones).
+//  5. Prunes orphan session/fleet pods whose session no longer exists in any team DB.
+//  6. Cleans up stale (Succeeded/Failed) gc-ls/gc-rm pods older than 1h.
 //
 // The reconciler is leader-elected via pg_try_advisory_lock so it's safe
 // to run in multi-replica deployments without double-deleting.
@@ -66,6 +68,11 @@ type GCReconcilerConfig struct {
 
 	// Layers is the layer store for ref_count queries and row deletion.
 	Layers store.LayerStore
+
+	// SandboxSessionsQuerier returns all known sandbox session IDs (across all teams).
+	// If non-nil, the reconciler periodically prunes orphan session/fleet pods
+	// whose session no longer exists in any team schema.
+	SandboxSessionsQuerier func(ctx context.Context) (map[string]bool, error)
 }
 
 // advisoryLockID is a stable hash for the reconciler's PG advisory lock.
@@ -137,11 +144,17 @@ func runGCCycle(ctx context.Context, cfg GCReconcilerConfig) {
 	layersReclaimed := gcReclaimLayers(ctx, cfg)
 	uppersReclaimed := gcReclaimUppers(ctx, cfg)
 	stagingReclaimed := gcReclaimStaging(ctx, cfg)
+	orphanLayerDirs := gcReclaimOrphanLayerDirs(ctx, cfg)
+	orphanPodsPruned := gcPruneOrphanPods(ctx, cfg)
+	staleGCPods := gcCleanupStaleGCPods(ctx, cfg)
 
 	slog.Info("gc-reconciler: cycle complete",
 		"layers_reclaimed", layersReclaimed,
 		"uppers_reclaimed", uppersReclaimed,
 		"staging_reclaimed", stagingReclaimed,
+		"orphan_layer_dirs", orphanLayerDirs,
+		"orphan_pods_pruned", orphanPodsPruned,
+		"stale_gc_pods", staleGCPods,
 		"duration", time.Since(start).Round(time.Millisecond),
 	)
 }
@@ -248,6 +261,7 @@ func gcReclaimUppers(ctx context.Context, cfg GCReconcilerConfig) int {
 
 // gcReclaimStaging lists __staging-* directories on the layers PVC
 // (left behind by crashed template-builder pods) and removes them.
+// It skips staging directories that belong to still-running builder pods.
 func gcReclaimStaging(ctx context.Context, cfg GCReconcilerConfig) int {
 	if cfg.Client == nil {
 		return 0
@@ -259,11 +273,38 @@ func gcReclaimStaging(ctx context.Context, cfg GCReconcilerConfig) int {
 		return 0
 	}
 
+	// Collect names of currently running (or pending) template builder pods.
+	runningBuilders := map[string]bool{}
+	if pods, listErr := cfg.Client.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelType + "=" + typeTemplateBuilder,
+	}); listErr == nil {
+		for i := range pods.Items {
+			p := &pods.Items[i]
+			if p.Status.Phase == corev1.PodRunning || p.Status.Phase == corev1.PodPending {
+				runningBuilders[p.Name] = true
+			}
+		}
+	}
+
 	var staging []string
 	for _, d := range dirs {
-		if strings.HasPrefix(d, "__staging-") {
-			staging = append(staging, d)
+		if !strings.HasPrefix(d, "__staging-") {
+			continue
 		}
+		// d = "__staging-<podName>-<nano>"
+		rest := strings.TrimPrefix(d, "__staging-")
+		// Skip if any running builder pod name is a prefix of the rest (i.e. rest starts with "<podName>-")
+		skip := false
+		for name := range runningBuilders {
+			if strings.HasPrefix(rest, name+"-") {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		staging = append(staging, d)
 	}
 
 	if len(staging) == 0 {
@@ -276,6 +317,147 @@ func gcReclaimStaging(ctx context.Context, cfg GCReconcilerConfig) int {
 	}
 
 	return len(staging)
+}
+
+// gcReclaimOrphanLayerDirs detects layer directories that exist on disk but have
+// no corresponding row in the sandbox_layers table. This catches drift caused by
+// failed PutLayer, manual row deletion, or bugs.
+func gcReclaimOrphanLayerDirs(ctx context.Context, cfg GCReconcilerConfig) int {
+	if cfg.Layers == nil || cfg.Client == nil {
+		return 0
+	}
+
+	dirs, err := gcListDirs(ctx, cfg.Client, cfg.Namespace, cfg.LayersPVCName, "/mnt/layers")
+	if err != nil {
+		slog.Warn("gc-reconciler: failed to list layer dirs for drift scan", "error", err)
+		return 0
+	}
+
+	// Filter to plausible layer UUIDs, exclude staging and the sacred @base.
+	var candidates []string
+	for _, d := range dirs {
+		if strings.HasPrefix(d, "__staging-") {
+			continue
+		}
+		if d == "a0000000-0000-4000-8000-000000000001" {
+			continue
+		}
+		// Rough UUID check
+		if len(d) == 36 && strings.Count(d, "-") == 4 {
+			candidates = append(candidates, d)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return 0
+	}
+
+	known := make(map[string]bool)
+	rows, err := cfg.Layers.ListAll(ctx)
+	if err != nil {
+		slog.Warn("gc-reconciler: ListAll failed during drift scan", "error", err)
+		return 0
+	}
+	for _, r := range rows {
+		known[r.LayerID] = true
+	}
+
+	var orphans []string
+	for _, d := range candidates {
+		if !known[d] {
+			orphans = append(orphans, d)
+		}
+	}
+
+	if len(orphans) == 0 {
+		return 0
+	}
+
+	if err := gcDeleteDirs(ctx, cfg.Client, cfg.Namespace, cfg.LayersPVCName, "/mnt/layers", orphans); err != nil {
+		slog.Warn("gc-reconciler: failed to delete orphan layer dirs", "error", err)
+		return 0
+	}
+
+	return len(orphans)
+}
+
+// gcPruneOrphanPods lists session/fleet pods and deletes those whose session ID
+// is no longer present in any team schema (and older than 1h).
+func gcPruneOrphanPods(ctx context.Context, cfg GCReconcilerConfig) int {
+	if cfg.Client == nil || cfg.SandboxSessionsQuerier == nil {
+		return 0
+	}
+	if ctx.Err() != nil {
+		return 0
+	}
+
+	known, err := cfg.SandboxSessionsQuerier(ctx)
+	if err != nil {
+		slog.Warn("gc-reconciler: SandboxSessionsQuerier failed", "error", err)
+		return 0
+	}
+
+	selector := labelType + " in (" + typeSession + "," + typeFleet + ")"
+	list, err := cfg.Client.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		slog.Warn("gc-reconciler: failed to list session/fleet pods", "error", err)
+		return 0
+	}
+
+	pruned := 0
+	for i := range list.Items {
+		p := &list.Items[i]
+		sid := p.Labels[labelSessionID]
+		if sid == "" {
+			continue
+		}
+		if known[sid] {
+			continue
+		}
+		created := p.CreationTimestamp.Time
+		if time.Since(created) < time.Hour {
+			continue
+		}
+
+		slog.Info("gc-reconciler: pruning orphan sandbox pod",
+			"pod", p.Name, "session", sid, "age", time.Since(created).Round(time.Minute))
+
+		delErr := cfg.Client.CoreV1().Pods(cfg.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{})
+		if delErr != nil && !apierrors.IsNotFound(delErr) {
+			slog.Warn("gc-reconciler: failed to delete orphan pod", "pod", p.Name, "error", delErr)
+			continue
+		}
+		pruned++
+	}
+	return pruned
+}
+
+// gcCleanupStaleGCPods deletes old completed/failed gc-ls / gc-rm pods (>1h).
+func gcCleanupStaleGCPods(ctx context.Context, cfg GCReconcilerConfig) int {
+	if cfg.Client == nil {
+		return 0
+	}
+
+	selector := labelType + " in (gc-list,gc-rm)"
+	list, err := cfg.Client.CoreV1().Pods(cfg.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return 0
+	}
+
+	cleaned := 0
+	for i := range list.Items {
+		p := &list.Items[i]
+		if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
+			continue
+		}
+		created := p.CreationTimestamp.Time
+		if time.Since(created) < time.Hour {
+			continue
+		}
+		_ = cfg.Client.CoreV1().Pods(cfg.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{})
+		cleaned++
+	}
+	return cleaned
 }
 
 // ---------------------------------------------------------------------------

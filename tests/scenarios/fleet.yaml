@@ -12,23 +12,25 @@ scenarios:
   # ---------------------------------------------------------------------------
 
   - id: FLEET-001
-    title: "Create a fleet plan from a template"
-    user_story: |
-      As a user, I select a template, configure agents and communication
-      flow, and save it as a new plan. The plan is persisted and appears
-      in the plans list.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "Create a fleet plan from a template"
+     user_story: |
+       As a user, I select a template, configure agents and communication
+       flow, and save it as a new plan. The plan is persisted and appears
+       in the plans list.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/fleet/fleet_crud_test.go::TestE2E_FleetPlan_CRUD"
 
   - id: FLEET-002
-    title: "List, read, and delete a fleet plan"
-    user_story: |
-      As a user, I create a plan, verify it in the list API, read its
-      full config, delete it, and confirm it's gone.
-    priority: P0
-    status: missing
-    test_refs: []
+     title: "List, read, and delete a fleet plan"
+     user_story: |
+       As a user, I create a plan, verify it in the list API, read its
+       full config, delete it, and confirm it's gone.
+     priority: P0
+     status: covered
+     test_refs:
+       - "tests/e2e/fleet/fleet_crud_test.go::TestE2E_FleetPlan_CRUD"
 
   - id: FLEET-003
     title: "Duplicate a fleet plan"

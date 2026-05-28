@@ -1,17 +1,9 @@
 # Multi-stage build for Astonish
-# Provides a clean, standalone container
+# Web frontend is built natively on the CI runner (before Docker build)
+# to avoid slow/hanging Vite builds under QEMU emulation for arm64.
+# The pre-built web/dist is included via the build context.
 
-# Stage 1: Build web UI first
-FROM node:22-alpine AS web-builder
-
-WORKDIR /app/web
-COPY web/package*.json ./
-RUN npm ci
-COPY web/ ./
-# Remove any old dist versions and build fresh
-RUN rm -rf ./dist && npm run build
-
-# Stage 2: Build Go binary with embedded UI
+# Stage 1: Build Go binary with embedded UI
 FROM golang:1.26-alpine AS builder
 
 WORKDIR /app
@@ -23,19 +15,14 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source code
+# Copy source code (includes pre-built web/dist from native runner build)
 COPY . .
-
-# Remove any local web/dist (may have multiple old versions)
-# Then copy the fresh build from web-builder
-RUN rm -rf ./web/dist
-COPY --from=web-builder /app/web/dist ./web/dist
 
 # Build with embedded UI (CGO disabled for static binary)
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION}" -o astonish .
 
-# Stage 3: Final minimal image
+# Stage 2: Final minimal image
 FROM alpine:3.19
 
 # Install certificates, Node.js (includes npx), Python3, uv (includes uvx), and git

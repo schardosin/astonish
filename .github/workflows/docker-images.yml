@@ -73,6 +73,20 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
 
+      # Build frontend natively on the runner (avoids slow/hanging Vite build under QEMU arm64)
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 

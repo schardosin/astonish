@@ -7,9 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/agent"
@@ -1528,26 +1526,6 @@ func browserConfigFromApp(appCfg *config.AppConfig) browser.BrowserConfig {
 		KasmVNCPort:         b.KasmVNCPort,
 		KasmVNCPassword:     b.KasmVNCPassword,
 	})
-}
-
-// isDaemonRunning checks whether the astonish daemon is currently running
-// by reading the PID file and probing the process with signal 0.
-// This avoids importing the daemon package (which would create an import cycle).
-func isDaemonRunning() bool {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return false
-	}
-	pidPath := filepath.Join(configDir, "astonish", "daemon.pid")
-	data, err := os.ReadFile(pidPath)
-	if err != nil {
-		return false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil {
-		return false
-	}
-	return isProcessRunning(pid)
 }
 
 // loadMCPConfig loads MCP server configurations based on deployment mode.

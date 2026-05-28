@@ -51,6 +51,7 @@ func (s *sqliteAppStore) Save(ctx context.Context, app any) (string, error) {
 	now := formatTime(time.Now())
 
 	_, err = s.db.ExecContext(ctx,
+		//nolint:gosec // s.table is a private struct field set at construction from a trusted constant, never from user input
 		`INSERT INTO `+s.table+` (id, slug, name, description, code, version, session_id, data_sources, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(slug) DO UPDATE SET
@@ -102,12 +103,14 @@ func (s *sqliteAppStore) Load(ctx context.Context, slug string) (any, error) {
 }
 
 func (s *sqliteAppStore) Delete(ctx context.Context, slug string) error {
+	//nolint:gosec // s.table is a private struct field set at construction from a trusted constant
 	_, err := s.db.ExecContext(ctx, `DELETE FROM `+s.table+` WHERE slug = ?`, slug)
 	return err
 }
 
 func (s *sqliteAppStore) List(ctx context.Context) ([]store.AppListItem, error) {
 	rows, err := s.db.QueryContext(ctx,
+		//nolint:gosec // s.table is a private struct field set at construction from a trusted constant
 		`SELECT slug, COALESCE(description,''), COALESCE(version,1), updated_at FROM `+s.table+` ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err

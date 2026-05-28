@@ -34,6 +34,7 @@ func (s *sqliteAuditStore) Log(ctx context.Context, entry *store.AuditEntry) err
 }
 
 func (s *sqliteAuditStore) Query(ctx context.Context, filter store.AuditFilter) ([]*store.AuditEntry, error) {
+	//nolint:gosec // s.table is a private struct field set at construction from a trusted constant
 	query := fmt.Sprintf(`SELECT id, timestamp, user_id, action, resource, detail, ip_address, session_id FROM %s WHERE 1=1`, s.table)
 	var args []interface{}
 

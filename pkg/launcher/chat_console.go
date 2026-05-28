@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -30,10 +29,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 )
-
-// consoleThinkTagRe strips <think>/<thinking> blocks that some models emit in
-// title-generation responses.
-var consoleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
 
 // ChatConsoleConfig contains configuration for the chat console launcher.
 type ChatConsoleConfig struct {

@@ -112,13 +112,6 @@ func (vi *vectorIndex) remove(id string) {
 	vi.mu.Unlock()
 }
 
-// count returns the number of indexed vectors.
-func (vi *vectorIndex) count() int {
-	vi.mu.RLock()
-	defer vi.mu.RUnlock()
-	return len(vi.vectors)
-}
-
 // isLoaded returns whether the index has been populated from the database.
 func (vi *vectorIndex) isLoaded() bool {
 	vi.mu.RLock()

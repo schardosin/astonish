@@ -172,6 +172,7 @@ func (m *sqliteMemoryStore) loadResults(ctx context.Context, scored []scoredResu
 		scoreMap[r.ID] = r.Score
 	}
 
+	//nolint:gosec // m.table and m.createdByColumn are private struct fields set at construction from trusted constants
 	sqlStr := fmt.Sprintf(
 		`SELECT id, chunk_text, category, source_path, metadata, %s, session_id, created_at
 		 FROM %s WHERE id IN (%s)`,

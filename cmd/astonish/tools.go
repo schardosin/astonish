@@ -845,14 +845,3 @@ func handleToolsSearchCommand(args []string) error {
 	fmt.Println("during chat to search the tool index.")
 	return nil
 }
-
-// truncateToolDesc shortens a tool description for display.
-func truncateToolDesc(s string, maxLen int) string {
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		s = s[:idx]
-	}
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}

@@ -179,6 +179,10 @@ func (nc *NodeClient) Call(toolName string, args map[string]interface{}) (json.R
 	if nc.closed {
 		return nil, fmt.Errorf("node client is closed")
 	}
+	if nc.scanner == nil || nc.stdin == nil {
+		// Defensive: previous stop may have left us in bad state; try restart
+		nc.started = false
+	}
 
 	// Auto-start or restart if needed
 	if !nc.started {
@@ -211,9 +215,10 @@ func (nc *NodeClient) Call(toolName string, args map[string]interface{}) (json.R
 	// Read response
 	if !nc.scanner.Scan() {
 		// Node stdout closed — process likely crashed
+		scanErr := nc.scanner.Err()
 		nc.stopLocked()
-		if err := nc.scanner.Err(); err != nil {
-			return nil, fmt.Errorf("node stdout error: %w", err)
+		if scanErr != nil {
+			return nil, fmt.Errorf("node stdout error: %w", scanErr)
 		}
 		return nil, fmt.Errorf("node process exited unexpectedly")
 	}

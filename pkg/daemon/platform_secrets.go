@@ -2,12 +2,14 @@ package daemon
 
 import (
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
 )
 
 // daemonSecretGetter returns a SecretGetter function from the platform backend.
 // In platform mode it reads from the platform_secrets table; falls back to
 // the file-based credential store if available.
-func daemonSecretGetter(backend platformDB, fileStore secretGetter) config.SecretGetter {
+// fileStore may be nil (e.g. when the encrypted store could not be opened after upgrade).
+func daemonSecretGetter(backend platformDB, fileStore *credentials.Store) config.SecretGetter {
 	if backend != nil {
 		dbGetter := backend.SecretGetter()
 		if fileStore != nil {
@@ -28,15 +30,10 @@ func daemonSecretGetter(backend platformDB, fileStore secretGetter) config.Secre
 }
 
 // resolveDaemonSecret resolves a single secret key using the backend + fallback.
-func resolveDaemonSecret(backend platformDB, fileStore secretGetter, key string) string {
+func resolveDaemonSecret(backend platformDB, fileStore *credentials.Store, key string) string {
 	getter := daemonSecretGetter(backend, fileStore)
 	if getter == nil {
 		return ""
 	}
 	return getter(key)
-}
-
-// secretGetter is satisfied by *credentials.Store.
-type secretGetter interface {
-	GetSecret(key string) string
 }

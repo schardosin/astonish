@@ -391,8 +391,14 @@ func (s *Store) SetSecretBatch(secrets map[string]string) error {
 // GetSecret retrieves a flat secret value by key.
 // Returns empty string if not found.
 func (s *Store) GetSecret(key string) string {
+	if s == nil {
+		return ""
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.data == nil || s.data.Secrets == nil {
+		return ""
+	}
 	return s.data.Secrets[key]
 }
 

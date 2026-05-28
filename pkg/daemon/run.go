@@ -98,19 +98,11 @@ func Run(cfg RunConfig) error {
 	log.SetOutput(logger)
 	log.SetFlags(0) // Logger adds its own timestamps
 
-	logger.Printf("Astonish daemon starting (port: %d, pid: %d, mode: %s)", port, os.Getpid(), daemonMode)
-
-	// Write PID file (only in default mode — multi-instance modes skip it)
-	var pidPath string
-	if daemonMode == config.DaemonModeDefault {
-		pidPath, err = DefaultPIDPath()
-		if err != nil {
-			return fmt.Errorf("failed to resolve PID path: %w", err)
-		}
-		if err := WritePID(pidPath); err != nil {
-			return fmt.Errorf("failed to write PID file: %w", err)
-		}
-		defer RemovePID(pidPath)
+	// Back-compat for users upgrading from v2 (personal mode).
+	// "file" and empty backend are no longer supported; default to sqlite (zero-config).
+	if appCfg.Storage.Backend == "" || appCfg.Storage.Backend == "file" {
+		appCfg.Storage.Backend = "sqlite"
+		logger.Printf("Storage backend defaulted to 'sqlite' (zero-config platform mode)")
 	}
 
 	// Set up provider environment variables (credential store → config → env fallback)
@@ -158,7 +150,7 @@ func Run(cfg RunConfig) error {
 	}
 
 	// --- Initialize store.Services for dependency injection ---
-	// Backend selection: "postgres" → platform mode, "sqlite" → platform mode (SQLite), else → personal mode.
+	// Backend selection: "postgres" or "sqlite" (both platform mode). Legacy "file"/empty defaulted above.
 	var svc *store.Services
 	var pgStore *pgstore.PGStore         // non-nil only in postgres platform mode
 	var sqlStore *sqlitestore.SQLiteStore // non-nil only in sqlite platform mode

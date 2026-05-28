@@ -198,6 +198,10 @@ func (m *MockBackend) Kind() sandbox.BackendKind {
 	return sandbox.BackendKindMock
 }
 
+func (m *MockBackend) ServerArchitecture() string {
+	return "amd64" // tests can override BaseConfig.Architecture explicitly when needed
+}
+
 func (m *MockBackend) Capabilities() sandbox.BackendCapabilities {
 	m.mu.Lock()
 	defer m.mu.Unlock()

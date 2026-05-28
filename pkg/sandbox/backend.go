@@ -218,6 +218,12 @@ type Backend interface {
 	// Kind returns a stable identifier for this backend implementation
 	// ("incus", "k8s", "mock"). Useful for logging/metrics labels.
 	Kind() BackendKind
+
+	// ServerArchitecture returns the native architecture ("amd64" or "arm64")
+	// of containers/pods managed by this backend. Used during base template
+	// builds (especially for architecture-specific packages such as the
+	// KasmVNC .deb) when the caller does not explicitly specify one.
+	ServerArchitecture() string
 }
 
 // ---------------------------------------------------------------------------

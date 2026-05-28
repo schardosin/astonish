@@ -110,9 +110,21 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Default architecture if not set.
+	// Get the sandbox backend early so we can detect its native architecture
+	// for architecture-specific package selection (e.g. KasmVNC .deb) when
+	// the caller did not explicitly provide one. This is critical on
+	// Apple Silicon macOS with Docker+Incus, where containers are arm64.
+	sbBackendForArch, cleanupForArch, err := sandboxBackendForRequest(r)
+	if cleanupForArch != nil {
+		defer cleanupForArch()
+	}
+	if err == nil && cfg.Architecture == "" {
+		if arch := sbBackendForArch.ServerArchitecture(); arch != "" {
+			cfg.Architecture = arch
+		}
+	}
 	if cfg.Architecture == "" {
-		cfg.Architecture = "amd64"
+		cfg.Architecture = "amd64" // final fallback
 	}
 
 	// Determine target distro from sandbox backend kind.

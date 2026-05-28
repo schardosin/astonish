@@ -91,6 +91,24 @@ var _ Backend = (*IncusBackend)(nil)
 // Kind returns the backend identifier.
 func (b *IncusBackend) Kind() BackendKind { return BackendKindIncus }
 
+// ServerArchitecture returns the architecture of the Incus server
+// (normalized to "amd64" or "arm64"). This is the architecture of containers
+// it will create.
+func (b *IncusBackend) ServerArchitecture() string {
+	arch, err := b.client.ServerArchitecture()
+	if err != nil {
+		return "amd64" // conservative fallback
+	}
+	switch arch {
+	case "aarch64", "arm64":
+		return "arm64"
+	case "x86_64", "amd64":
+		return "amd64"
+	default:
+		return "amd64"
+	}
+}
+
 // Capabilities reports the feature flags of the Incus backend.
 func (b *IncusBackend) Capabilities() BackendCapabilities {
 	return BackendCapabilities{
@@ -486,16 +504,18 @@ func (b *IncusBackend) BuildTemplate(ctx context.Context, spec TemplateBuildSpec
 	}
 
 	// Execute build steps sequentially inside @base.
+	// Use ExecWithOutput so we capture the real stderr/stdout (critical for
+	// diagnosing apt-get failures, pip errors, etc. during base template builds).
 	for i, step := range spec.Steps {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
-		exitCode, err := b.client.ExecSimple(baseName, []string{"/bin/sh", "-c", step})
+		exitCode, output, err := incus.ExecWithOutput(b.client, baseName, []string{"/bin/sh", "-c", step})
 		if err != nil {
-			return nil, fmt.Errorf("BuildTemplate: step %d (%q): %w", i+1, truncate(step, 120), err)
+			return nil, fmt.Errorf("BuildTemplate: step %d (%q): %w\nOutput:\n%s", i+1, truncate(step, 120), err, output)
 		}
 		if exitCode != 0 {
-			return nil, fmt.Errorf("BuildTemplate: step %d (%q) exited with code %d", i+1, truncate(step, 120), exitCode)
+			return nil, fmt.Errorf("BuildTemplate: step %d (%q) exited with code %d\nOutput:\n%s", i+1, truncate(step, 120), exitCode, output)
 		}
 	}
 

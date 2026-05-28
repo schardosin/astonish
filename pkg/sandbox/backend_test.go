@@ -132,3 +132,5 @@ func (*interfaceTestStub) Health(ctx context.Context) (*BackendHealth, error) {
 	return nil, nil
 }
 func (*interfaceTestStub) Kind() BackendKind { return BackendKindMock }
+
+func (*interfaceTestStub) ServerArchitecture() string { return "amd64" }

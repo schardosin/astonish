@@ -30,7 +30,7 @@ const (
 	BrowserProfileMountPath = "/home/browser/.config/chromium"
 
 	// kasmVNCVersion is the KasmVNC release version to install.
-	kasmVNCVersion = "1.3.3"
+	kasmVNCVersion = "1.4.0"
 )
 
 // LinuxDistro identifies the Linux distribution of the container's base image,

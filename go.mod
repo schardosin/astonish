@@ -35,7 +35,7 @@ require (
 	github.com/ysmood/gson v0.7.3
 	github.com/yuin/goldmark v1.8.2
 	go.starlark.net v0.0.0-20260326113308-fadfc96def35
-	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto v0.52.0
 	golang.org/x/image v0.39.0
 	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.36.0

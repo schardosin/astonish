@@ -399,7 +399,7 @@ func (o *pgOrgDataStore) OrgMemories() store.MemoryStore {
 }
 
 func (o *pgOrgDataStore) OrgSkills() store.SkillStore {
-	return &pgSkillStore{pool: o.pool, schema: "public", table: "org_skills"}
+	return &pgSkillStore{pool: o.pool, schema: "public", table: "org_skills", filesTable: "org_skill_files"}
 }
 
 func (o *pgOrgDataStore) OrgMCPServers() store.MCPServerStore {
@@ -502,7 +502,7 @@ func (t *pgTeamDataStore) DrillReports() store.DrillReportStore {
 }
 
 func (t *pgTeamDataStore) Skills() store.SkillStore {
-	return &pgSkillStore{pool: t.pool, schema: t.schema(), table: "skills"}
+	return &pgSkillStore{pool: t.pool, schema: t.schema(), table: "skills", filesTable: "skill_files"}
 }
 
 func (t *pgTeamDataStore) MCPServers() store.MCPServerStore {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, Eye, Pencil, X, Loader2, CheckCircle, XCircle } from 'lucide-react'
+import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
 import CodeMirror from '@uiw/react-codemirror'
@@ -130,6 +130,19 @@ const deleteSkillApi = async (name: string, scope?: string, teamSlug?: string): 
   return res.json()
 }
 
+const deleteSkillFileApi = async (name: string, path: string, filename: string, scope?: string, teamSlug?: string): Promise<void> => {
+  const params = scope ? `?scope=${scope}` : ''
+  const res = await teamFetch(
+    `/api/skills/${encodeURIComponent(name)}/file${params}&path=${encodeURIComponent(path)}&filename=${encodeURIComponent(filename)}`,
+    { method: 'DELETE' },
+    teamSlug
+  )
+  if (!res.ok) {
+    const data = await res.json().catch(() => null)
+    throw new Error(data?.error || 'Failed to delete file')
+  }
+}
+
 // Scope badge colors
 function ScopeBadge({ scope }: { scope: string }) {
   const colors: Record<string, { bg: string, fg: string }> = {
@@ -176,6 +189,15 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Multi-file editor state
   const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
   const [currentFilename, setCurrentFilename] = useState('SKILL.md')
+
+  // Sidebar add-file form
+  const [showAddFile, setShowAddFile] = useState(false)
+  const [newFileDir, setNewFileDir] = useState<'scripts' | 'references' | 'templates' | ''>('scripts')
+  const [newFileName, setNewFileName] = useState('')
+  const [addFileError, setAddFileError] = useState<string | null>(null)
+
+  // Inline delete confirmation for auxiliary files
+  const [pendingDeleteFile, setPendingDeleteFile] = useState<{ path: string; filename: string } | null>(null)
 
   // Choose CodeMirror language extension based on current file
   const getLanguageExtension = (filename: string) => {
@@ -271,6 +293,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorSuccess(false)
     setCurrentFilePath('')
     setCurrentFilename('SKILL.md')
+    setShowAddFile(false)
+    setPendingDeleteFile(null)
+    setAddFileError(null)
     try {
       const data = await fetchSkillContent(name, skillScope || scope, teamSlug)
       setActiveSkill(data)
@@ -307,6 +332,57 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       setEditorError(err.message)
     } finally {
       setEditorLoading(false)
+    }
+  }
+
+  // Add a new auxiliary file from the sidebar form
+  const handleAddFile = async () => {
+    if (!activeSkill || !newFileName.trim()) return
+    setAddFileError(null)
+    const p = newFileDir
+    const fn = newFileName.trim()
+
+    try {
+      const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+      await teamFetch(
+        `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
+        { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
+        teamSlug
+      )
+      // Refresh
+      const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+      setActiveSkill(refreshed)
+      await switchToFile(p, fn)
+      // Reset form + any pending delete
+      setNewFileName('')
+      setShowAddFile(false)
+      setAddFileError(null)
+      setPendingDeleteFile(null)
+    } catch (e: any) {
+      setAddFileError(e.message)
+    }
+  }
+
+  // Delete an auxiliary file (called after inline confirmation)
+  const handleDeleteFile = async (path: string, filename: string) => {
+    if (!activeSkill) return
+    try {
+      await deleteSkillFileApi(activeSkill.name, path, filename, activeSkill.scope || scope, teamSlug)
+      setPendingDeleteFile(null)
+
+      // Refresh file list
+      const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+      setActiveSkill(refreshed)
+
+      // If we just deleted the file we were viewing, switch back to SKILL.md
+      if (currentFilePath === path && currentFilename === filename) {
+        setCurrentFilePath('')
+        setCurrentFilename('SKILL.md')
+        setEditorContent(activeSkill.raw_file || '')
+      }
+    } catch (e: any) {
+      setEditorError(e.message)
+      setPendingDeleteFile(null)
     }
   }
 
@@ -391,6 +467,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorSuccess(false)
     setCurrentFilePath('')
     setCurrentFilename('SKILL.md')
+    setShowAddFile(false)
+    setPendingDeleteFile(null)
+    setAddFileError(null)
   }
 
   // Group skills by scope for platform mode display
@@ -401,26 +480,66 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Full-screen editor mode
   if (editorMode) {
+    const fileGroups = ['scripts', 'references', 'templates', ''] as const
+
+    const renderFileItem = (f: { path: string; filename: string; size?: number; is_executable?: boolean }, isActive: boolean) => {
+      const isPendingDelete = pendingDeleteFile && pendingDeleteFile.path === f.path && pendingDeleteFile.filename === f.filename
+      if (isPendingDelete) {
+        return (
+          <div key={`${f.path}/${f.filename}`} className="ml-6 flex items-center gap-2 px-2 py-0.5 rounded bg-red-900/30 text-red-300 text-xs">
+            <span>Delete {f.filename}?</span>
+            <button onClick={() => handleDeleteFile(f.path, f.filename)} className="px-2 py-0.5 rounded bg-red-600 hover:bg-red-500 text-white text-[10px]">Yes</button>
+            <button onClick={() => setPendingDeleteFile(null)} className="px-2 py-0.5 rounded hover:bg-gray-700 text-[10px]">Cancel</button>
+          </div>
+        )
+      }
+      return (
+        <div
+          key={`${f.path}/${f.filename}`}
+          onClick={() => switchToFile(f.path, f.filename)}
+          className={`group flex items-center justify-between px-2 py-1 rounded cursor-pointer text-sm ${isActive ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            <FileText size={14} className="flex-shrink-0" />
+            <span className="truncate">{f.filename}</span>
+            {f.is_executable && <span className="text-[10px] opacity-70">⚡</span>}
+          </div>
+          <div className="flex items-center gap-1 text-[10px] opacity-60">
+            {f.size && <span>{Math.round(f.size / 1024)}k</span>}
+            {activeSkill?.editable && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setPendingDeleteFile({ path: f.path, filename: f.filename }) }}
+                className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-red-400"
+                title="Delete file"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="flex flex-col h-full" style={{ margin: '-24px', height: 'calc(100% + 48px)' }}>
         {/* Editor header */}
-        <div className="flex items-center justify-between px-6 py-3 border-b flex-shrink-0" style={sectionBorderStyle}>
-          <div className="flex items-center gap-3">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b flex-shrink-0" style={sectionBorderStyle}>
+          <div className="flex items-center gap-3 min-w-0">
             <button
               onClick={closeEditor}
-              className="p-1.5 rounded-lg transition-colors hover:bg-gray-600/30"
+              className="p-1.5 rounded-lg transition-colors hover:bg-gray-600/30 flex-shrink-0"
               style={{ color: 'var(--text-muted)' }}
             >
               <X size={18} />
             </button>
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
                   {activeSkill?.name}
                 </span>
                 {activeSkill?.scope && <ScopeBadge scope={activeSkill.scope} />}
                 {!activeSkill?.scope && (
-                  <span className="text-xs px-2 py-0.5 rounded" style={{
+                  <span className="text-xs px-2 py-0.5 rounded flex-shrink-0" style={{
                     background: activeSkill?.source === 'bundled' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(34, 197, 94, 0.15)',
                     color: activeSkill?.source === 'bundled' ? '#a855f7' : '#22c55e'
                   }}>
@@ -428,113 +547,23 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                   </span>
                 )}
                 {editorMode === 'view' && (
-                  <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'rgba(100,100,100,0.2)', color: 'var(--text-muted)' }}>
+                  <span className="text-xs px-2 py-0.5 rounded flex-shrink-0" style={{ background: 'rgba(100,100,100,0.2)', color: 'var(--text-muted)' }}>
                     read-only
                   </span>
                 )}
               </div>
-               <div className="text-xs" style={hintStyle}>
-                 {activeSkill?.description}
-                 {activeSkill?.files && activeSkill.files.length > 0 && (
-                   <span className="ml-2 text-[10px] opacity-70">+ {activeSkill.files.length} file{activeSkill.files.length > 1 ? 's' : ''}</span>
-                 )}
-               </div>
-
-               {/* Multi-file file tree (MVP) - always visible in editor for multi-file skills */}
-               <div className="mt-2 text-xs border rounded p-2" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}>
-                 <div className="font-medium mb-1 flex items-center justify-between">
-                   <span>Files in this skill</span>
-                   {activeSkill?.editable && (
-                     <button
-                       onClick={async () => {
-                         const fname = prompt('New file (e.g. scripts/helper.sh or references/api.md):')
-                         if (!fname) return
-                         const lastSlash = fname.lastIndexOf('/')
-                         const p = lastSlash > 0 ? fname.substring(0, lastSlash) : ''
-                         const fn = lastSlash > 0 ? fname.substring(lastSlash + 1) : fname
-                         try {
-                           const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
-                           await teamFetch(
-                             `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
-                             { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
-                             teamSlug
-                           )
-                           const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-                           setActiveSkill(refreshed)
-                           await switchToFile(p, fn)
-                         } catch (e: any) { setEditorError(e.message) }
-                       }}
-                       className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
-                     >
-                       + Add File
-                     </button>
-                   )}
-                 </div>
-
-                 {/* File list */}
-                 <div className="pl-1 space-y-0.5 text-xs">
-                   {/* Always show SKILL.md */}
-                   <div
-                     onClick={() => {
-                       setCurrentFilePath('')
-                       setCurrentFilename('SKILL.md')
-                       setEditorContent(activeSkill?.raw_file || '')
-                     }}
-                     className={`cursor-pointer px-1 rounded flex items-center justify-between ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
-                   >
-                     <span>SKILL.md</span>
-                     <span className="text-[10px] opacity-60">(main)</span>
-                   </div>
-
-                   {/* Other files if any */}
-                   {(activeSkill?.files || []).length > 0 ? (
-                     <>
-                       {['scripts', 'references', 'templates', ''].map(group => {
-                         const gFiles = (activeSkill?.files || []).filter(f => (f.path || '') === group)
-                         if (gFiles.length === 0) return null
-                         return (
-                           <div key={group} className="ml-3 mt-0.5">
-                             {group && <div className="text-[10px] text-gray-500 leading-none mb-0.5">{group}/</div>}
-                             {gFiles.map((f, i) => {
-                               const isActive = currentFilePath === f.path && currentFilename === f.filename
-                               return (
-                                 <div
-                                   key={i}
-                                   onClick={() => switchToFile(f.path, f.filename)}
-                                   className={`cursor-pointer px-1 rounded flex items-center justify-between ${isActive ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
-                                 >
-                                   <span>{f.filename}</span>
-                                   <span className="flex items-center gap-1 text-[10px] opacity-70">
-                                     {f.is_executable && '⚡'}
-                                     {f.size && Math.round(f.size / 1024) + 'k'}
-                                     {activeSkill?.editable && currentFilename === f.filename && (
-                                       <button
-                                         onClick={(e) => {
-                                           e.stopPropagation()
-                                           if (!confirm(`Delete ${f.filename}?`)) return
-                                           // TODO: call delete endpoint here
-                                         }}
-                                         className="hover:text-red-400 px-1"
-                                       >
-                                         ✕
-                                       </button>
-                                     )}
-                                   </span>
-                                 </div>
-                               )
-                             })}
-                           </div>
-                         )
-                       })}
-                     </>
-                   ) : (
-                     <div className="ml-3 text-[10px] text-gray-500 italic">No additional files yet. Click "+ Add File" to create scripts/, references/, etc.</div>
-                   )}
-                 </div>
-               </div>
+              {/* Breadcrumb for current file */}
+              <div className="text-xs mt-0.5 flex items-center gap-1" style={hintStyle}>
+                <span>{activeSkill?.name}</span>
+                <span>/</span>
+                {currentFilePath && <span>{currentFilePath}/</span>}
+                <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{currentFilename}</span>
+                {currentFilename === 'SKILL.md' && <span className="opacity-50">(main)</span>}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+
+          <div className="flex items-center gap-2 flex-shrink-0">
             {editorSuccess && (
               <span className="flex items-center gap-1 text-green-400 text-sm">
                 <Check size={14} /> Saved
@@ -567,34 +596,140 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
             )}
           </div>
         </div>
-        {/* Editor body */}
-        <div className="flex-1 overflow-hidden">
-          {editorLoading ? (
-            <div className="flex items-center justify-center h-full">
-              <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+
+        {/* Sidebar + Editor split */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* LEFT FILE SIDEBAR */}
+          <div className="w-56 border-r flex flex-col shrink-0" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+            {/* Sidebar header */}
+            <div className="px-3 py-2 text-xs font-semibold border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+              <div className="flex items-center gap-1.5">
+                <FolderOpen size={14} />
+                <span>Files</span>
+              </div>
+              {activeSkill?.editable && (
+                <button
+                  onClick={() => { setShowAddFile(!showAddFile); setAddFileError(null) }}
+                  className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1"
+                >
+                  <Plus size={12} /> Add
+                </button>
+              )}
             </div>
-           ) : (
-             <CodeMirror
-              value={editorContent}
-              onChange={editorMode === 'edit' ? (value: string) => setEditorContent(value) : undefined}
-              readOnly={editorMode === 'view'}
-              height="100%"
-              className="h-full"
-              extensions={[
-                getLanguageExtension(currentFilename),
-                search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
-                highlightSelectionMatches(),
-                keymap.of(searchKeymap),
-              ]}
-              theme={theme === 'dark' ? 'dark' : 'light'}
-              basicSetup={{
-                lineNumbers: true,
-                highlightActiveLineGutter: true,
-                highlightActiveLine: true,
-                foldGutter: true,
-              }}
-            />
-          )}
+
+            {/* File tree */}
+            <div className="flex-1 overflow-y-auto p-1 text-sm space-y-0.5" style={{ color: 'var(--text-primary)' }}>
+              {/* SKILL.md - always first */}
+              <div
+                onClick={() => {
+                  setCurrentFilePath('')
+                  setCurrentFilename('SKILL.md')
+                  setEditorContent(activeSkill?.raw_file || '')
+                }}
+                className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
+              >
+                <FileText size={14} />
+                <span className="font-medium">SKILL.md</span>
+                <span className="ml-auto text-[10px] opacity-60">main</span>
+              </div>
+
+              {/* Grouped auxiliary files */}
+              {fileGroups.map(group => {
+                const gFiles = (activeSkill?.files || []).filter(f => (f.path || '') === group)
+                if (gFiles.length === 0) return null
+                return (
+                  <div key={group} className="mt-1">
+                    {group && (
+                      <div className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-gray-400 font-medium">
+                        <ChevronDown size={12} /> {group}/
+                      </div>
+                    )}
+                    <div className={group ? 'ml-3' : ''}>
+                      {gFiles.map(f => renderFileItem(f, currentFilePath === f.path && currentFilename === f.filename))}
+                    </div>
+                  </div>
+                )
+              })}
+
+              {/* Empty state */}
+              {(!activeSkill?.files || activeSkill.files.length === 0) && (
+                <div className="px-2 py-3 text-[11px] text-gray-400 italic">
+                  No extra files yet.<br />Use "+ Add" to create scripts/, references/, etc.
+                </div>
+              )}
+            </div>
+
+            {/* Add file form (bottom of sidebar) */}
+            {showAddFile && activeSkill?.editable && (
+              <div className="p-2 border-t text-xs flex-shrink-0" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-tertiary)' }}>
+                <div className="mb-1.5 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>Add new file</div>
+
+                {/* Directory quick picks */}
+                <div className="flex gap-1 mb-1.5">
+                  {(['scripts', 'references', 'templates', ''] as const).map(d => (
+                    <button
+                      key={d}
+                      onClick={() => setNewFileDir(d)}
+                      className={`px-2 py-0.5 rounded text-[10px] ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                    >
+                      {d || 'root'}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex gap-1">
+                  <input
+                    type="text"
+                    value={newFileName}
+                    onChange={(e) => setNewFileName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
+                    placeholder="filename.sh"
+                    className="flex-1 px-2 py-1 text-xs rounded bg-gray-900 border border-gray-700 focus:outline-none focus:border-purple-500"
+                    style={{ color: 'var(--text-primary)' }}
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleAddFile}
+                    disabled={!newFileName.trim()}
+                    className="px-3 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white"
+                  >
+                    Add
+                  </button>
+                </div>
+                {addFileError && <div className="text-red-400 text-[10px] mt-1">{addFileError}</div>}
+              </div>
+            )}
+          </div>
+
+          {/* MAIN EDITOR AREA */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {editorLoading ? (
+              <div className="flex items-center justify-center h-full">
+                <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+              </div>
+            ) : (
+              <CodeMirror
+                value={editorContent}
+                onChange={editorMode === 'edit' ? (value: string) => setEditorContent(value) : undefined}
+                readOnly={editorMode === 'view'}
+                height="100%"
+                className="h-full"
+                extensions={[
+                  getLanguageExtension(currentFilename),
+                  search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
+                  highlightSelectionMatches(),
+                  keymap.of(searchKeymap),
+                ]}
+                theme={theme === 'dark' ? 'dark' : 'light'}
+                basicSetup={{
+                  lineNumbers: true,
+                  highlightActiveLineGutter: true,
+                  highlightActiveLine: true,
+                  foldGutter: true,
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
     )

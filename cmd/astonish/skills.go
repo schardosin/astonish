@@ -1,14 +1,19 @@
 package astonish
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 )
 
 func handleSkillsCommand(args []string) error {
@@ -204,6 +209,56 @@ func handleSkillsInstall(input string) error {
 	if err != nil {
 		slog.Warn("failed to load app config", "error", err)
 	}
+
+	// Detect platform mode
+	isPlatform := false
+	var platformStore store.SkillStore
+	var platformOrgStore store.SkillStore
+
+	if appCfg != nil && (appCfg.Storage.Backend == "sqlite" || appCfg.Storage.Backend == "postgres") {
+		isPlatform = true
+
+		ctx := context.Background()
+		if appCfg.Storage.Backend == "sqlite" {
+			dataDir := appCfg.Storage.SQLite.GetDataDir()
+			if dataDir == "" {
+				home, _ := os.UserHomeDir()
+				dataDir = home + "/.config/astonish/data"
+			}
+			svc, _, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+			if err != nil {
+				return fmt.Errorf("failed to open platform SQLite: %w", err)
+			}
+			// Note: we intentionally do not close the stores here
+			if svc != nil {
+				platformOrgStore = svc.Skills
+				// For CLI we prefer team if available, but for global install we use org for simplicity
+				platformStore = svc.TeamSkills
+				if platformStore == nil {
+					platformStore = platformOrgStore
+				}
+			}
+		} else if appCfg.Storage.Backend == "postgres" {
+			svc, _, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+			if err != nil {
+				return fmt.Errorf("failed to open platform Postgres: %w", err)
+			}
+			if svc != nil {
+				platformOrgStore = svc.Skills
+				platformStore = svc.TeamSkills
+				if platformStore == nil {
+					platformStore = platformOrgStore
+				}
+			}
+		}
+	}
+
+	if isPlatform {
+		fmt.Printf("Platform mode detected — installing into database...\n")
+		return installToPlatformStores(slug, platformStore, platformOrgStore)
+	}
+
+	// === Personal mode (existing behavior) ===
 	var skillsCfg config.SkillsConfig
 	if appCfg != nil {
 		skillsCfg = appCfg.Skills
@@ -214,10 +269,8 @@ func handleSkillsInstall(input string) error {
 		return fmt.Errorf("could not determine user skills directory")
 	}
 
-	// Check if skill already exists
 	existingDir := fmt.Sprintf("%s/%s", destDir, slug)
 	if _, err := os.Stat(existingDir); err == nil {
-		// Read existing _meta.json for version comparison
 		if meta, err := skills.ReadClawHubMeta(existingDir); err == nil {
 			fmt.Printf("Skill %q already installed (version: %s)\n", slug, meta.Version)
 		} else {
@@ -247,7 +300,6 @@ func handleSkillsInstall(input string) error {
 		}
 	}
 
-	// Check eligibility of the installed skill
 	skillPath := fmt.Sprintf("%s/SKILL.md", result.SkillDir)
 	if data, err := os.ReadFile(skillPath); err == nil {
 		if skill, err := skills.ParseSkillFile(skillPath, data); err == nil {
@@ -258,6 +310,122 @@ func handleSkillsInstall(input string) error {
 				fmt.Printf("\nStatus: ineligible (missing: %s)\n", strings.Join(missing, ", "))
 			}
 		}
+	}
+
+	return nil
+}
+
+// installToPlatformStores installs a ClawHub skill into the platform database stores.
+func installToPlatformStores(slug string, teamStore, orgStore store.SkillStore) error {
+	// For platform installs we use a temp dir just for download
+	tmpDir, err := os.MkdirTemp("", "astonish-clawhub-*")
+	if err != nil {
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	fmt.Printf("Downloading %q from ClawHub...\n", slug)
+
+	result, err := skills.DownloadFromClawHub(slug, tmpDir)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+
+	// Read SKILL.md
+	skillPath := fmt.Sprintf("%s/%s/SKILL.md", tmpDir, slug)
+	skillData, err := os.ReadFile(skillPath)
+	if err != nil {
+		return fmt.Errorf("read SKILL.md: %w", err)
+	}
+
+	parsed, err := skills.ParseSkillFile(skillPath, skillData)
+	if err != nil {
+		return fmt.Errorf("parse SKILL.md: %w", err)
+	}
+
+	// Choose target store (prefer team if available)
+	targetStore := teamStore
+	scope := "team"
+	if targetStore == nil {
+		targetStore = orgStore
+		scope = "org"
+	}
+	if targetStore == nil {
+		return fmt.Errorf("no platform skill store available")
+	}
+
+	// Save main skill
+	skill := &store.Skill{
+		Name:        parsed.Name,
+		Description: parsed.Description,
+		Content:     string(skillData),
+		OS:          parsed.OS,
+		RequireBins: parsed.RequireBins,
+		RequireEnv:  parsed.RequireEnv,
+		Metadata:    parsed.Metadata,
+	}
+
+	if err := targetStore.Save(context.Background(), skill); err != nil {
+		return fmt.Errorf("save skill to platform: %w", err)
+	}
+
+	// Save auxiliary files
+	filesSaved := 0
+	skillDir := fmt.Sprintf("%s/%s", tmpDir, slug)
+
+	err = filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+
+		rel, _ := filepath.Rel(skillDir, path)
+		rel = filepath.ToSlash(rel)
+
+		if rel == "SKILL.md" || rel == "_meta.json" {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		dir := filepath.Dir(rel)
+		if dir == "." {
+			dir = ""
+		}
+		fname := filepath.Base(rel)
+
+		sf := &store.SkillFile{
+			Path:         dir,
+			Filename:     fname,
+			Content:      string(content),
+			IsExecutable: info.Mode().Perm()&0111 != 0,
+			SizeBytes:    info.Size(),
+		}
+
+		if err := targetStore.SaveFile(context.Background(), parsed.Name, sf); err != nil {
+			slog.Warn("failed to save auxiliary file", "file", rel, "error", err)
+			return nil
+		}
+		filesSaved++
+		return nil
+	})
+	if err != nil {
+		slog.Warn("error walking skill files", "error", err)
+	}
+
+	fmt.Printf("\nInstalled to platform (%s scope): %s\n", scope, parsed.Name)
+	if result.Version != "" {
+		fmt.Printf("Version: %s\n", result.Version)
+	}
+	fmt.Printf("Main skill + %d auxiliary files saved to database.\n", filesSaved)
+
+	// Eligibility check
+	if parsed.IsEligible() {
+		fmt.Println("Status: eligible")
+	} else {
+		fmt.Printf("Status: ineligible (missing: %s)\n", strings.Join(parsed.MissingRequirements(), ", "))
 	}
 
 	return nil

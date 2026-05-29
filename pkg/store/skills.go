@@ -17,6 +17,21 @@ type Skill struct {
 	CreatedBy   string      `json:"-" yaml:"-"` // User ID (UUID) — required for PG inserts
 }
 
+// SkillFile represents one auxiliary file belonging to a skill
+// (e.g. scripts/deploy.sh, references/api.md, templates/report.md).
+// These are stored separately from the main SKILL.md content.
+type SkillFile struct {
+	ID           string `json:"id"`
+	SkillID      string `json:"skill_id"`
+	Path         string `json:"path"`         // e.g. "scripts" or ""
+	Filename     string `json:"filename"`     // e.g. "deploy.sh"
+	Content      string `json:"content"`
+	IsExecutable bool   `json:"is_executable"`
+	SizeBytes    int64  `json:"size_bytes"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+}
+
 // SkillStore manages skill definitions.
 //
 // In personal mode, this wraps the existing skills.LoadSkills function.
@@ -36,4 +51,18 @@ type SkillStore interface {
 
 	// List returns all skill names and their sources.
 	List(ctx context.Context) ([]Skill, error)
+
+	// --- Multi-file support (Phase 1 of ClawHub multi-file skills) ---
+
+	// ListFiles returns all auxiliary files belonging to a skill.
+	ListFiles(ctx context.Context, skillName string) ([]SkillFile, error)
+
+	// GetFile retrieves one specific auxiliary file for a skill.
+	GetFile(ctx context.Context, skillName, path, filename string) (*SkillFile, error)
+
+	// SaveFile creates or updates an auxiliary file for a skill.
+	SaveFile(ctx context.Context, skillName string, file *SkillFile) error
+
+	// DeleteFile removes one auxiliary file from a skill.
+	DeleteFile(ctx context.Context, skillName, path, filename string) error
 }

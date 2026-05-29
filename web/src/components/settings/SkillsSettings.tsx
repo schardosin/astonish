@@ -476,7 +476,6 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                              teamSlug
                            )
                            if (!res.ok) throw new Error('Failed to create file')
-                           // Refresh
                            const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
                            setActiveSkill(refreshed)
                            await switchToFile(p, fn)
@@ -487,6 +486,35 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                        className="text-xs px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
                      >
                        + Add File
+                     </button>
+                   )}
+
+                   {/* Delete current auxiliary file (MVP) */}
+                   {activeSkill?.editable && currentFilename !== 'SKILL.md' && (
+                     <button
+                       onClick={async () => {
+                         if (!confirm(`Delete ${currentFilename}?`)) return
+                         try {
+                           const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+                           const res = await teamFetch(
+                             `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(currentFilePath)}&filename=${encodeURIComponent(currentFilename)}`,
+                             { method: 'DELETE' },
+                             teamSlug
+                           )
+                           if (!res.ok) throw new Error('Failed to delete file')
+                           const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+                           setActiveSkill(refreshed)
+                           // Go back to main SKILL.md
+                           setCurrentFilePath('')
+                           setCurrentFilename('SKILL.md')
+                           setEditorContent(refreshed.raw_file)
+                         } catch (e: any) {
+                           setEditorError(e.message)
+                         }
+                       }}
+                       className="text-xs px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white"
+                     >
+                       Delete File
                      </button>
                    )}
                  </div>

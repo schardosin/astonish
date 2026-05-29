@@ -5,6 +5,8 @@ import { teamFetch } from '../../api/teamContext'
 import CodeMirror from '@uiw/react-codemirror'
 import { markdown } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
+import { javascript } from '@codemirror/lang-javascript'
+import { python } from '@codemirror/lang-python'
 import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
 import { keymap, EditorView } from '@codemirror/view'
 
@@ -174,6 +176,17 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Multi-file editor state
   const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
   const [currentFilename, setCurrentFilename] = useState('SKILL.md')
+
+  // Choose CodeMirror language extension based on current file
+  const getLanguageExtension = (filename: string) => {
+    const lower = filename.toLowerCase()
+    if (lower.endsWith('.sh') || lower.endsWith('.bash')) return []
+    if (lower.endsWith('.py')) return python()
+    if (lower.endsWith('.js') || lower.endsWith('.ts') || lower.endsWith('.jsx') || lower.endsWith('.tsx')) return javascript()
+    if (lower.endsWith('.json')) return javascript()
+    if (lower.endsWith('.md')) return markdown({ codeLanguages: languages })
+    return markdown({ codeLanguages: languages })
+  }
 
   // Create skill modal
   const [showCreate, setShowCreate] = useState(false)
@@ -571,7 +584,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
               height="100%"
               className="h-full"
               extensions={[
-                markdown({ codeLanguages: languages }),
+                getLanguageExtension(currentFilename),
                 search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
                 highlightSelectionMatches(),
                 keymap.of(searchKeymap),

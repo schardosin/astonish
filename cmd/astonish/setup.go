@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider/xai"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/store/sqlitestore"
 )
@@ -71,6 +73,33 @@ func handleSetupCommand() error {
 			return err
 		}
 	}
+
+	// Make provider setup optional (like web search tools).
+	{
+		var setupProvider bool
+		clearScreen()
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("Configure AI Provider?").
+					Description("An AI provider is required for the agent.\nYou can configure (or change) it later in the Studio under Settings → Providers.").
+					Affirmative("Yes, configure now").
+					Negative("Skip for now").
+					Value(&setupProvider),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		if !setupProvider {
+			printSuccess("Provider setup skipped. You can configure it in the Studio after logging in.")
+			// Continue with web tools, browser, sandbox init etc.
+			// (the rest of the function will still run)
+			goto afterProvider
+		}
+	}
+
+afterProvider:
 
 	// Build list of existing providers with their types
 	var existingOptions []huh.Option[string]
@@ -340,7 +369,8 @@ SaveConfig:
 	// In platform mode, save provider config to the platform database.
 	// This must happen BEFORE saveProviderSecretsToStore, which scrubs secrets from pCfg.
 	// The platform settings store has its own secret extraction/encryption pipeline.
-	if cfg.Storage.Backend == "postgres" && cfg.Storage.Postgres.PlatformDSN != "" {
+	// Works for both SQLite (default) and Postgres.
+	if cfg.Storage.Backend == "postgres" || cfg.Storage.Backend == "sqlite" {
 		if err := saveProviderToPlatformDB(cfg, selectedInstance, pCfg); err != nil {
 			fmt.Printf("Warning: Failed to save provider to platform database: %v\n", err)
 			fmt.Println("You may need to configure the provider via Studio settings.")
@@ -533,16 +563,39 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg config.ProviderConfig) error {
 	ctx := context.Background()
 
-	poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
-	defer poolMgr.Close()
+	var settingsStore store.PlatformSettingsStore
 
-	pool, err := poolMgr.PlatformPool(ctx)
-	if err != nil {
-		return fmt.Errorf("connect to platform DB: %w", err)
+	if cfg.Storage.Backend == "postgres" {
+		if cfg.Storage.Postgres.PlatformDSN == "" {
+			return fmt.Errorf("postgres platform DSN not configured")
+		}
+		poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
+		defer poolMgr.Close()
+
+		pool, err := poolMgr.PlatformPool(ctx)
+		if err != nil {
+			return fmt.Errorf("connect to platform DB: %w", err)
+		}
+
+		secrets := pgstore.NewPlatformSecretStore(poolMgr)
+		settingsStore = pgstore.NewPGPlatformSettingsStore(pool, secrets)
+	} else if cfg.Storage.Backend == "sqlite" {
+		dataDir := cfg.Storage.SQLite.GetDataDir()
+		if dataDir == "" {
+			home, _ := os.UserHomeDir()
+			dataDir = filepath.Join(home, ".config", "astonish", "data")
+		}
+
+		_, sqlStore, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+		if err != nil {
+			return fmt.Errorf("open sqlite platform services: %w", err)
+		}
+		defer sqlStore.Close()
+
+		settingsStore = sqlStore.PlatformSettings()
+	} else {
+		return fmt.Errorf("unsupported storage backend for platform provider save: %s", cfg.Storage.Backend)
 	}
-
-	secrets := pgstore.NewPlatformSecretStore(poolMgr)
-	settingsStore := pgstore.NewPGPlatformSettingsStore(pool, secrets)
 
 	// Load existing settings (preserve any already-configured providers).
 	settings, err := settingsStore.Get(ctx)
@@ -1465,10 +1518,43 @@ func handleSandboxSetup() error {
 			return fmt.Errorf("failed to connect to Incus: %w", err)
 		}
 
-		// Check if base template already exists
+		// Check if base template already exists.
+		// In platform mode (especially Docker+Incus on macOS), the Docker volume
+		// persists across image/container deletions, so the old astn-tpl-base may
+		// still be present. Ask the user if they want to rebuild.
 		containerName := incus.TemplateName(incus.BaseTemplate)
 		if client.InstanceExists(containerName) {
-			return nil
+			var rebuild bool
+			clearScreen()
+			err := huh.NewForm(
+				huh.NewGroup(
+					huh.NewConfirm().
+						Title("Base sandbox template already exists").
+						Description(
+							"A base template (astn-tpl-base) was found from a previous installation.\n"+
+								"It may be stale, built for a different architecture, or incomplete.\n\n"+
+								"Rebuild it from scratch now? This will delete the existing template\n"+
+								"and re-install all core tools and browser support.",
+						).
+						Affirmative("Yes, rebuild").
+						Negative("Keep existing").
+						Value(&rebuild),
+				),
+			).Run()
+			if err != nil {
+				return err
+			}
+
+			if !rebuild {
+				printSuccess("Keeping existing base template. You can update it later via the Studio (Platform Admin → Sandbox → Configure Base).")
+				return nil
+			}
+
+			// User chose to rebuild — remove the existing container so InitBaseTemplate creates fresh.
+			fmt.Println("Removing existing base template for fresh rebuild...")
+			if err := client.StopAndDeleteInstance(containerName); err != nil {
+				return fmt.Errorf("failed to remove existing base template: %w", err)
+			}
 		}
 
 		registry, err := sandbox.NewTemplateRegistry()

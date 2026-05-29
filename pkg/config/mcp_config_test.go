@@ -353,33 +353,16 @@ func TestMergeStandardServersWithConfig_HyphenatedToolName(t *testing.T) {
 	}
 }
 
-// TestMergeStandardServersWithConfig_NilAppCfgFallsBackToFile verifies that
-// passing nil appCfg falls back to LoadAppConfig() behavior (backward compat).
-func TestMergeStandardServersWithConfig_NilAppCfgFallsBackToFile(t *testing.T) {
-	// Set up a temp config dir with a config.yaml that has web_search_tool.
-	configDir := setupTempConfigDir(t)
-
-	configYAML := `general:
-  web_search_tool: "tavily:tavily_search"
-`
-	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0644); err != nil {
-		t.Fatalf("failed to write test config.yaml: %v", err)
-	}
-
-	originalGetter := getInstalledSecretGetter()
-	SetInstalledSecretGetter(func(key string) string {
-		if key == "web_servers.tavily.api_key" {
-			return "file-based-key"
-		}
-		return ""
-	})
-	defer SetInstalledSecretGetter(originalGetter)
-
+// TestMergeStandardServersWithConfig_NilAppCfgNoFileFallback verifies that
+// when nil is passed (platform contexts that didn't supply effective config),
+// we do NOT fall back to file-based config for secret-requiring servers (no more
+// file-based implementation in platform mode). Only keyless servers are injected.
+func TestMergeStandardServersWithConfig_NilAppCfgNoFileFallback(t *testing.T) {
 	cfg := &MCPConfig{MCPServers: make(map[string]MCPServerConfig)}
-	// nil appCfg → reads from file
 	MergeStandardServersWithConfig(cfg, nil)
 
-	if _, ok := cfg.MCPServers["tavily"]; !ok {
-		t.Fatal("tavily should be injected when nil appCfg falls back to file with web_search_tool set")
+	// Tavily (secret-based web) should NOT be present.
+	if _, ok := cfg.MCPServers["tavily"]; ok {
+		t.Fatal("tavily (secret server) should NOT be injected when nil appCfg is passed — no file fallback")
 	}
 }

@@ -3,7 +3,6 @@ package config
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,11 +94,10 @@ func mergeStandardServers(cfg *MCPConfig) {
 // Keyless servers are always injected — they need no setup.
 func mergeStandardServersWithConfig(cfg *MCPConfig, appCfg *AppConfig) {
 	if appCfg == nil {
-		var err error
-		appCfg, err = LoadAppConfig()
-		if err != nil {
-			slog.Warn("failed to load app config for MCP server merge", "error", err)
-		}
+		// In platform mode, callers must pass the effective AppConfig (from DB).
+		// We no longer fall back to loading file-based config.yaml here.
+		// Only keyless standard servers will be injected.
+		appCfg = &AppConfig{}
 	}
 	getter := getInstalledSecretGetter()
 

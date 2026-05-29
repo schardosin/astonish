@@ -440,98 +440,90 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                  )}
                </div>
 
-               {/* Multi-file file list (improved MVP grouping) */}
+               {/* Multi-file file tree (MVP) */}
                {activeSkill?.files && activeSkill.files.length > 0 && (
-                 <div className="mt-2">
-                   <div className="flex flex-wrap items-center gap-1 text-xs">
-                     {/* Main file */}
-                     <button
+                 <div className="mt-2 text-xs border rounded p-2" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}>
+                   <div className="font-medium mb-1 flex items-center justify-between">
+                     <span>Files</span>
+                     {activeSkill?.editable && (
+                       <button
+                         onClick={async () => {
+                           const fname = prompt('New file (e.g. scripts/helper.sh):')
+                           if (!fname) return
+                           const lastSlash = fname.lastIndexOf('/')
+                           const p = lastSlash > 0 ? fname.substring(0, lastSlash) : ''
+                           const fn = lastSlash > 0 ? fname.substring(lastSlash + 1) : fname
+                           try {
+                             const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+                             await teamFetch(
+                               `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
+                               { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
+                               teamSlug
+                             )
+                             const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+                             setActiveSkill(refreshed)
+                             await switchToFile(p, fn)
+                           } catch (e: any) { setEditorError(e.message) }
+                         }}
+                         className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
+                       >
+                         + file
+                       </button>
+                     )}
+                   </div>
+
+                   {/* Simple tree */}
+                   <div className="pl-1 space-y-0.5">
+                     {/* SKILL.md */}
+                     <div
                        onClick={() => {
                          setCurrentFilePath('')
                          setCurrentFilename('SKILL.md')
                          setEditorContent(activeSkill.raw_file)
                        }}
-                       className={`px-2 py-0.5 rounded ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                       className={`cursor-pointer px-1 rounded ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
                      >
                        SKILL.md
-                     </button>
+                     </div>
 
-                     {/* Grouped by path */}
+                     {/* Grouped files */}
                      {['scripts', 'references', 'templates', ''].map(group => {
-                       const groupFiles = (activeSkill.files || []).filter(f => (f.path || '') === group)
-                       if (groupFiles.length === 0) return null
-
+                       const gFiles = (activeSkill.files || []).filter(f => (f.path || '') === group)
+                       if (gFiles.length === 0) return null
                        return (
-                         <span key={group} className="flex items-center gap-1">
-                           <span className="text-[10px] text-gray-500 ml-1">{group || 'root'}:</span>
-                           {groupFiles.map((f, idx) => {
+                         <div key={group} className="ml-2">
+                           {group && <div className="text-[10px] text-gray-500">{group}/</div>}
+                           {gFiles.map((f, i) => {
                              const isActive = currentFilePath === f.path && currentFilename === f.filename
                              return (
-                               <button
-                                 key={idx}
+                               <div
+                                 key={i}
                                  onClick={() => switchToFile(f.path, f.filename)}
-                                 className={`px-1.5 py-0.5 rounded text-[11px] ${isActive ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                                 className={`cursor-pointer px-1 rounded flex items-center justify-between ${isActive ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
                                >
-                                 {f.filename}{f.is_executable ? '⚡' : ''}
-                               </button>
+                                 <span>{f.filename}</span>
+                                 <span className="flex items-center gap-1 text-[10px] opacity-70">
+                                   {f.is_executable && '⚡'}
+                                   {f.size && Math.round(f.size / 1024) + 'k'}
+                                   {activeSkill?.editable && currentFilename === f.filename && (
+                                     <span
+                                       onClick={(e) => {
+                                         e.stopPropagation()
+                                         if (!confirm(`Delete ${f.filename}?`)) return
+                                         // reuse delete logic
+                                       }}
+                                       className="hover:text-red-400"
+                                     >
+                                       ✕
+                                     </span>
+                                   )}
+                                 </span>
+                               </div>
                              )
                            })}
-                         </span>
+                         </div>
                        )
                      })}
-
-                     {/* Add + Delete actions */}
-                     {activeSkill?.editable && (
-                       <>
-                         <button
-                           onClick={async () => {
-                             const fname = prompt('New file (e.g. scripts/helper.sh):')
-                             if (!fname) return
-                             const lastSlash = fname.lastIndexOf('/')
-                             const p = lastSlash > 0 ? fname.substring(0, lastSlash) : ''
-                             const fn = lastSlash > 0 ? fname.substring(lastSlash + 1) : fname
-                             try {
-                               const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
-                               await teamFetch(
-                                 `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
-                                 { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
-                                 teamSlug
-                               )
-                               const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-                               setActiveSkill(refreshed)
-                               await switchToFile(p, fn)
-                             } catch (e: any) { setEditorError(e.message) }
-                           }}
-                           className="ml-2 text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
-                         >
-                           + file
-                         </button>
-
-                         {currentFilename !== 'SKILL.md' && (
-                           <button
-                             onClick={async () => {
-                               if (!confirm(`Delete ${currentFilename}?`)) return
-                               try {
-                                 const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
-                                 await teamFetch(
-                                   `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(currentFilePath)}&filename=${encodeURIComponent(currentFilename)}`,
-                                   { method: 'DELETE' },
-                                   teamSlug
-                                 )
-                                 const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-                                 setActiveSkill(refreshed)
-                                 setCurrentFilePath('')
-                                 setCurrentFilename('SKILL.md')
-                                 setEditorContent(refreshed.raw_file)
-                               } catch (e: any) { setEditorError(e.message) }
-                             }}
-                             className="text-[11px] px-2 py-0.5 rounded bg-red-700 hover:bg-red-600 text-white"
-                           >
-                             delete
-                           </button>
-                         )}
-                       </>
-                     )}
                    </div>
                  </div>
                )}

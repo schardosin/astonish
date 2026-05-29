@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
@@ -199,6 +199,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Inline delete confirmation for auxiliary files
   const [pendingDeleteFile, setPendingDeleteFile] = useState<{ path: string; filename: string } | null>(null)
 
+  // Ref for the Add File popover (for click-outside dismissal)
+  const addPopoverRef = useRef<HTMLDivElement>(null)
+
   // Choose CodeMirror language extension based on current file
   const getLanguageExtension = (filename: string) => {
     const lower = filename.toLowerCase()
@@ -265,6 +268,34 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   useEffect(() => {
     loadSkills()
   }, [loadSkills])
+
+  // Close Add File popover on outside click or Escape
+  useEffect(() => {
+    if (!showAddFile) return
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (addPopoverRef.current && !addPopoverRef.current.contains(e.target as Node)) {
+        // Also ignore clicks on the "+ Add" button itself (the toggle handles it)
+        setShowAddFile(false)
+        setAddFileError(null)
+      }
+    }
+
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowAddFile(false)
+        setAddFileError(null)
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [showAddFile])
 
   const handleSaveConfig = async () => {
     setSaving(true)
@@ -599,107 +630,120 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
         {/* Sidebar + Editor split */}
         <div className="flex flex-1 overflow-hidden">
-          {/* LEFT FILE SIDEBAR */}
-          <div className="w-56 border-r flex flex-col shrink-0" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-            {/* Sidebar header */}
-            <div className="px-3 py-2 text-xs font-semibold border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
-              <div className="flex items-center gap-1.5">
-                <FolderOpen size={14} />
-                <span>Files</span>
-              </div>
-              {activeSkill?.editable && (
-                <button
-                  onClick={() => { setShowAddFile(!showAddFile); setAddFileError(null) }}
-                  className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1"
-                >
-                  <Plus size={12} /> Add
-                </button>
-              )}
-            </div>
+           {/* LEFT FILE SIDEBAR */}
+           <div className="w-56 border-r flex flex-col shrink-0" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+             {/* Sidebar header (relative so the Add popover can be absolutely positioned) */}
+             <div className="px-3 py-2 text-xs font-semibold border-b flex items-center justify-between flex-shrink-0 relative" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+               <div className="flex items-center gap-1.5">
+                 <FolderOpen size={14} />
+                 <span>Files</span>
+               </div>
+               {activeSkill?.editable && (
+                 <button
+                   onClick={() => { setShowAddFile(!showAddFile); setAddFileError(null) }}
+                   className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1"
+                 >
+                   <Plus size={12} /> Add
+                 </button>
+               )}
 
-            {/* File tree */}
-            <div className="flex-1 overflow-y-auto p-1 text-sm space-y-0.5" style={{ color: 'var(--text-primary)' }}>
-              {/* SKILL.md - always first */}
-              <div
-                onClick={() => {
-                  setCurrentFilePath('')
-                  setCurrentFilename('SKILL.md')
-                  setEditorContent(activeSkill?.raw_file || '')
-                }}
-                className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
-              >
-                <FileText size={14} />
-                <span className="font-medium">SKILL.md</span>
-                <span className="ml-auto text-[10px] opacity-60">main</span>
-              </div>
+               {/* Floating Add File popover (not constrained by sidebar width/height) */}
+               {showAddFile && activeSkill?.editable && (
+                 <div
+                   ref={addPopoverRef}
+                   className="absolute top-full left-0 mt-1 z-50 w-72 p-3 rounded-lg shadow-xl border text-xs"
+                   style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                 >
+                   <div className="flex items-center justify-between mb-2">
+                     <div className="font-medium" style={{ color: 'var(--text-secondary)' }}>Add new file</div>
+                     <button
+                       onClick={() => { setShowAddFile(false); setAddFileError(null) }}
+                       className="p-1 -mr-1 rounded hover:bg-gray-700"
+                       style={{ color: 'var(--text-muted)' }}
+                     >
+                       <X size={14} />
+                     </button>
+                   </div>
 
-              {/* Grouped auxiliary files */}
-              {fileGroups.map(group => {
-                const gFiles = (activeSkill?.files || []).filter(f => (f.path || '') === group)
-                if (gFiles.length === 0) return null
-                return (
-                  <div key={group} className="mt-1">
-                    {group && (
-                      <div className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-gray-400 font-medium">
-                        <ChevronDown size={12} /> {group}/
-                      </div>
-                    )}
-                    <div className={group ? 'ml-3' : ''}>
-                      {gFiles.map(f => renderFileItem(f, currentFilePath === f.path && currentFilename === f.filename))}
-                    </div>
-                  </div>
-                )
-              })}
+                   {/* Directory quick picks */}
+                   <div className="flex gap-1 mb-2">
+                     {(['scripts', 'references', 'templates', ''] as const).map(d => (
+                       <button
+                         key={d}
+                         onClick={() => setNewFileDir(d)}
+                         className={`px-2 py-0.5 rounded text-[10px] ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                       >
+                         {d || 'root'}
+                       </button>
+                     ))}
+                   </div>
 
-              {/* Empty state */}
-              {(!activeSkill?.files || activeSkill.files.length === 0) && (
-                <div className="px-2 py-3 text-[11px] text-gray-400 italic">
-                  No extra files yet.<br />Use "+ Add" to create scripts/, references/, etc.
-                </div>
-              )}
-            </div>
+                   <div className="flex gap-1">
+                     <input
+                       type="text"
+                       value={newFileName}
+                       onChange={(e) => setNewFileName(e.target.value)}
+                       onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
+                       placeholder="filename.sh"
+                       className="flex-1 px-2 py-1 text-xs rounded bg-gray-900 border border-gray-700 focus:outline-none focus:border-purple-500"
+                       style={{ color: 'var(--text-primary)' }}
+                       autoFocus
+                     />
+                     <button
+                       onClick={handleAddFile}
+                       disabled={!newFileName.trim()}
+                       className="px-3 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white"
+                     >
+                       Add
+                     </button>
+                   </div>
+                   {addFileError && <div className="text-red-400 text-[10px] mt-1.5">{addFileError}</div>}
+                 </div>
+               )}
+             </div>
 
-            {/* Add file form (bottom of sidebar) */}
-            {showAddFile && activeSkill?.editable && (
-              <div className="p-2 border-t text-xs flex-shrink-0" style={{ borderColor: 'var(--border-color)', background: 'var(--bg-tertiary)' }}>
-                <div className="mb-1.5 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>Add new file</div>
+             {/* File tree */}
+             <div className="flex-1 overflow-y-auto p-1 text-sm space-y-0.5" style={{ color: 'var(--text-primary)' }}>
+               {/* SKILL.md - always first */}
+               <div
+                 onClick={() => {
+                   setCurrentFilePath('')
+                   setCurrentFilename('SKILL.md')
+                   setEditorContent(activeSkill?.raw_file || '')
+                 }}
+                 className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
+               >
+                 <FileText size={14} />
+                 <span className="font-medium">SKILL.md</span>
+                 <span className="ml-auto text-[10px] opacity-60">main</span>
+               </div>
 
-                {/* Directory quick picks */}
-                <div className="flex gap-1 mb-1.5">
-                  {(['scripts', 'references', 'templates', ''] as const).map(d => (
-                    <button
-                      key={d}
-                      onClick={() => setNewFileDir(d)}
-                      className={`px-2 py-0.5 rounded text-[10px] ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
-                    >
-                      {d || 'root'}
-                    </button>
-                  ))}
-                </div>
+               {/* Grouped auxiliary files */}
+               {fileGroups.map(group => {
+                 const gFiles = (activeSkill?.files || []).filter(f => (f.path || '') === group)
+                 if (gFiles.length === 0) return null
+                 return (
+                   <div key={group} className="mt-1">
+                     {group && (
+                       <div className="flex items-center gap-1 px-2 py-0.5 text-[11px] text-gray-400 font-medium">
+                         <ChevronDown size={12} /> {group}/
+                       </div>
+                     )}
+                     <div className={group ? 'ml-3' : ''}>
+                       {gFiles.map(f => renderFileItem(f, currentFilePath === f.path && currentFilename === f.filename))}
+                     </div>
+                   </div>
+                 )
+               })}
 
-                <div className="flex gap-1">
-                  <input
-                    type="text"
-                    value={newFileName}
-                    onChange={(e) => setNewFileName(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
-                    placeholder="filename.sh"
-                    className="flex-1 px-2 py-1 text-xs rounded bg-gray-900 border border-gray-700 focus:outline-none focus:border-purple-500"
-                    style={{ color: 'var(--text-primary)' }}
-                    autoFocus
-                  />
-                  <button
-                    onClick={handleAddFile}
-                    disabled={!newFileName.trim()}
-                    className="px-3 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white"
-                  >
-                    Add
-                  </button>
-                </div>
-                {addFileError && <div className="text-red-400 text-[10px] mt-1">{addFileError}</div>}
-              </div>
-            )}
-          </div>
+               {/* Empty state */}
+               {(!activeSkill?.files || activeSkill.files.length === 0) && (
+                 <div className="px-2 py-3 text-[11px] text-gray-400 italic">
+                   No extra files yet.<br />Use "+ Add" to create scripts/, references/, etc.
+                 </div>
+               )}
+             </div>
+           </div>
 
           {/* MAIN EDITOR AREA */}
           <div className="flex-1 flex flex-col overflow-hidden">

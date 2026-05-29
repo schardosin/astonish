@@ -1340,7 +1340,7 @@ export default function SettingsPage({
         </div>
 
         {/* Content */}
-        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' || activeSection === 'knowledge' || activeSection.endsWith('-skills') || activeSection === 'skills' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
+        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' || activeSection === 'knowledge' || activeSection.endsWith('-skills') || activeSection === 'skills' ? 'flex-1 overflow-hidden flex flex-col' : 'flex-1 overflow-y-auto flex flex-col'}>
           {/* Team sections */}
           {activeSection.startsWith('team-') && resolvedTeamSlug && selectedTeam && user && (
             <TeamContent

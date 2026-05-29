@@ -11,8 +11,9 @@ import (
 
 // sqliteSkillStore implements store.SkillStore.
 type sqliteSkillStore struct {
-	db    *sql.DB
-	table string // "skills" or "org_skills"
+	db         *sql.DB
+	table      string // "skills" or "org_skills"
+	filesTable string // "skill_files" or "org_skill_files"
 }
 
 func (s *sqliteSkillStore) LoadAll(ctx context.Context) ([]store.Skill, error) {
@@ -90,4 +91,101 @@ func parseStoredSkillSQLite(name, rawContent string) *store.Skill {
 		Content:     rawContent,
 		Source:      "custom",
 	}
+}
+
+// --- Multi-file support methods (skill_files table) ---
+
+func (s *sqliteSkillStore) ListFiles(ctx context.Context, skillName string) ([]store.SkillFile, error) {
+	// First resolve skill ID from name
+	var skillID string
+	err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, s.table), skillName).Scan(&skillID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at
+		FROM %s
+		WHERE skill_id = ?
+		ORDER BY path, filename`, s.filesTable), skillID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []store.SkillFile
+	for rows.Next() {
+		var f store.SkillFile
+		if err := rows.Scan(&f.ID, &f.SkillID, &f.Path, &f.Filename, &f.Content, &f.IsExecutable, &f.SizeBytes, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+func (s *sqliteSkillStore) GetFile(ctx context.Context, skillName, path, filename string) (*store.SkillFile, error) {
+	var skillID string
+	err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, s.table), skillName).Scan(&skillID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	row := s.db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at
+		FROM %s
+		WHERE skill_id = ? AND path = ? AND filename = ?`, s.filesTable),
+		skillID, path, filename)
+
+	var f store.SkillFile
+	if err := row.Scan(&f.ID, &f.SkillID, &f.Path, &f.Filename, &f.Content, &f.IsExecutable, &f.SizeBytes, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (s *sqliteSkillStore) SaveFile(ctx context.Context, skillName string, file *store.SkillFile) error {
+	var skillID string
+	err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, s.table), skillName).Scan(&skillID)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		INSERT INTO %s (id, skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at)
+		VALUES (hex(randomblob(16)), ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		ON CONFLICT(skill_id, path, filename) DO UPDATE SET
+			content = excluded.content,
+			is_executable = excluded.is_executable,
+			size_bytes = excluded.size_bytes,
+			updated_at = datetime('now')`, s.filesTable),
+		skillID, file.Path, file.Filename, file.Content, file.IsExecutable, file.SizeBytes)
+	return err
+}
+
+func (s *sqliteSkillStore) DeleteFile(ctx context.Context, skillName, path, filename string) error {
+	var skillID string
+	err := s.db.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT id FROM %s WHERE name = ?`, s.table), skillName).Scan(&skillID)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE skill_id = ? AND path = ? AND filename = ?`, s.filesTable),
+		skillID, path, filename)
+	return err
 }

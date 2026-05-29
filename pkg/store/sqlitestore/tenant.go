@@ -81,7 +81,7 @@ func (o *sqliteOrgDataStore) OrgMemories() store.MemoryStore {
 }
 
 func (o *sqliteOrgDataStore) OrgSkills() store.SkillStore {
-	return &sqliteSkillStore{db: o.db, table: "org_skills"}
+	return &sqliteSkillStore{db: o.db, table: "org_skills", filesTable: "org_skill_files"}
 }
 
 func (o *sqliteOrgDataStore) OrgMCPServers() store.MCPServerStore {
@@ -208,7 +208,7 @@ func (t *sqliteTeamDataStore) Flows() store.FlowStore {
 }
 
 func (t *sqliteTeamDataStore) Skills() store.SkillStore {
-	return &sqliteSkillStore{db: t.db, table: "skills"}
+	return &sqliteSkillStore{db: t.db, table: "skills", filesTable: "skill_files"}
 }
 
 func (t *sqliteTeamDataStore) MCPServers() store.MCPServerStore {

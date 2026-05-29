@@ -4,71 +4,81 @@ import (
 	"context"
 
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
 )
 
-// applyPlatformChannelConfig overlays DB-stored channel settings onto the
-// file-based AppConfig.Channels. In platform mode, PlatformSettings.Channels
-// is the authoritative source. Fields set in the DB take precedence; fields
-// not set (nil channel config) fall through to config.yaml values.
-func applyPlatformChannelConfig(backend store.PlatformBackend, cfg *config.AppConfig, logger *Logger) {
+// loadChannelsConfigFromDB returns channel configuration sourced exclusively
+// from the platform database (PlatformSettings.Channels + platform_secrets).
+// This is the single source of truth for channels in platform mode (SQLite or Postgres).
+//
+// Non-secret fields (servers, addresses, poll intervals, etc.) come from
+// PlatformChannelSettings in the platform_settings table.
+//
+// Secrets (bot tokens, passwords, signing secrets, etc.) are NOT populated here.
+// Callers must resolve them on demand using resolveDaemonSecret(backend, credStore, key)
+// so that the latest encrypted values are always used.
+func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.ChannelsConfig {
+	out := config.ChannelsConfig{}
+
+	if backend == nil {
+		return out
+	}
+
 	settingsStore := backend.PlatformSettings()
 	settings, err := settingsStore.Get(context.Background())
 	if err != nil || settings == nil || settings.Channels == nil {
-		return
+		return out
 	}
 
 	ch := settings.Channels
 
-	// Telegram: only has enabled flag (secrets come from platform_secrets)
+	// Telegram: only the enabled flag is stored as non-secret config.
 	if ch.Telegram != nil {
 		enabled := ch.Telegram.Enabled
-		cfg.Channels.Telegram.Enabled = &enabled
-		logger.Printf("[channels] Platform config: Telegram enabled=%v", enabled)
+		out.Telegram.Enabled = &enabled
+		if enabled {
+			logger.Printf("[channels] DB config: Telegram enabled")
+		}
 	}
 
-	// Email: has many non-secret config fields
+	// Email: full non-secret configuration
 	if ch.Email != nil {
 		enabled := ch.Email.Enabled
-		cfg.Channels.Email.Enabled = &enabled
-		if ch.Email.Provider != "" {
-			cfg.Channels.Email.Provider = ch.Email.Provider
+		out.Email.Enabled = &enabled
+		out.Email.Provider = ch.Email.Provider
+		out.Email.IMAPServer = ch.Email.IMAPServer
+		out.Email.SMTPServer = ch.Email.SMTPServer
+		out.Email.Address = ch.Email.Address
+		out.Email.Username = ch.Email.Username
+		out.Email.PollInterval = ch.Email.PollInterval
+		out.Email.Folder = ch.Email.Folder
+		out.Email.MarkRead = ch.Email.MarkRead
+		out.Email.MaxBodyChars = ch.Email.MaxBodyChars
+
+		if enabled {
+			logger.Printf("[channels] DB config: Email enabled address=%s imap=%s smtp=%s",
+				out.Email.Address, out.Email.IMAPServer, out.Email.SMTPServer)
 		}
-		if ch.Email.IMAPServer != "" {
-			cfg.Channels.Email.IMAPServer = ch.Email.IMAPServer
-		}
-		if ch.Email.SMTPServer != "" {
-			cfg.Channels.Email.SMTPServer = ch.Email.SMTPServer
-		}
-		if ch.Email.Address != "" {
-			cfg.Channels.Email.Address = ch.Email.Address
-		}
-		if ch.Email.Username != "" {
-			cfg.Channels.Email.Username = ch.Email.Username
-		}
-		if ch.Email.PollInterval > 0 {
-			cfg.Channels.Email.PollInterval = ch.Email.PollInterval
-		}
-		if ch.Email.Folder != "" {
-			cfg.Channels.Email.Folder = ch.Email.Folder
-		}
-		if ch.Email.MarkRead != nil {
-			cfg.Channels.Email.MarkRead = ch.Email.MarkRead
-		}
-		if ch.Email.MaxBodyChars > 0 {
-			cfg.Channels.Email.MaxBodyChars = ch.Email.MaxBodyChars
-		}
-		logger.Printf("[channels] Platform config: Email enabled=%v, address=%s, imap=%s, smtp=%s",
-			enabled, cfg.Channels.Email.Address, cfg.Channels.Email.IMAPServer, cfg.Channels.Email.SMTPServer)
 	}
 
-	// Slack: mode is the main non-secret config field
+	// Slack
 	if ch.Slack != nil {
 		enabled := ch.Slack.Enabled
-		cfg.Channels.Slack.Enabled = &enabled
-		if ch.Slack.Mode != "" {
-			cfg.Channels.Slack.Mode = ch.Slack.Mode
+		out.Slack.Enabled = &enabled
+		out.Slack.Mode = ch.Slack.Mode
+
+		if enabled {
+			logger.Printf("[channels] DB config: Slack enabled mode=%s", out.Slack.GetMode())
 		}
-		logger.Printf("[channels] Platform config: Slack enabled=%v, mode=%s", enabled, cfg.Channels.Slack.GetMode())
 	}
+
+	return out
 }
+
+// anyChannelEnabled returns true if at least one channel has its Enabled flag set.
+func anyChannelEnabled(ch config.ChannelsConfig) bool {
+	return ch.Telegram.IsTelegramEnabled() ||
+		ch.Email.IsEmailEnabled() ||
+		ch.Slack.IsSlackEnabled()
+}
+
+

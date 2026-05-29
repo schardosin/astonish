@@ -336,7 +336,10 @@ func Run(cfg RunConfig) error {
 		}
 	}()
 
-	needsChatAgent := appCfg.Channels.IsChannelsEnabled() && daemonMode != config.DaemonModeAPI
+	// Channel configuration now lives exclusively in the platform DB (SQLite or Postgres).
+	// We consult it early to decide whether we need a ChatAgent for channels/scheduler.
+	dbChannelsAtStartup := loadChannelsConfigFromDB(backend, logger)
+	needsChatAgent := anyChannelEnabled(dbChannelsAtStartup) && daemonMode != config.DaemonModeAPI
 
 	if needsChatAgent {
 		logger.Printf("Initializing ChatAgent for channels...")
@@ -362,11 +365,13 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
-	// initChannels creates (or recreates) the ChannelManager from fresh config.
-	// It registers and starts all enabled channel adapters. The ChatAgent and
-	// factoryResult are reused — only channel adapters are recycled.
+	// initChannels creates (or recreates) the ChannelManager.
+	// Channel configuration is now read exclusively from the platform DB.
+	// The *config.AppConfig parameter is kept only for sandbox settings (temporary).
 	initChannels := func(freshCfg *config.AppConfig) (*channels.ChannelManager, error) {
-		if !freshCfg.Channels.IsChannelsEnabled() {
+		// Load the authoritative channel configuration from the DB (single source of truth).
+		chCfg := loadChannelsConfigFromDB(backend, logger)
+		if !anyChannelEnabled(chCfg) {
 			return nil, nil
 		}
 		if factoryResult == nil {
@@ -424,20 +429,10 @@ func Run(cfg RunConfig) error {
 		mgr.BrowserPDF = pdfBrowserMgr
 		defer pdfBrowserMgr.Cleanup()
 
-		// In platform mode, overlay DB-stored channel configuration onto
-		// the file-based config. PlatformSettings.Channels is the authoritative
-		// source; config.yaml serves only as fallback for backward compatibility.
-		if backend != nil {
-			applyPlatformChannelConfig(backend, freshCfg, logger)
-		}
-
-		// Register Telegram if enabled
+		// Register Telegram if enabled (config comes exclusively from the platform DB)
 		var tgConfigError string
-		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
-			botToken := freshCfg.Channels.Telegram.BotToken
-			if botToken == "" {
-				botToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.telegram.bot_token")
-			}
+		if chCfg.Telegram.IsTelegramEnabled() {
+			botToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.telegram.bot_token")
 			if botToken == "" {
 				tgConfigError = "bot token not configured"
 				logger.Printf("Warning: Telegram enabled but no bot token found")
@@ -445,7 +440,7 @@ func Run(cfg RunConfig) error {
 				// In platform mode, the DB is the sole authority for allowlists.
 				// Pass empty AllowFrom here; the background refresh populates it
 				// from user_channels immediately after channel init.
-				tgAllowFrom := freshCfg.Channels.Telegram.AllowFrom
+				tgAllowFrom := chCfg.Telegram.AllowFrom
 				if backend != nil {
 					tgAllowFrom = nil
 				}
@@ -459,37 +454,34 @@ func Run(cfg RunConfig) error {
 			}
 		}
 
-		// Register Email channel (inbound polling) only if explicitly enabled
+		// Register Email channel (inbound polling) only if explicitly enabled (DB is source of truth)
 		var emailConfigError string
-		if freshCfg.Channels.Email.IsEmailEnabled() {
-			emailPassword := freshCfg.Channels.Email.Password
-			if emailPassword == "" {
-				emailPassword = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
-			}
+		if chCfg.Email.IsEmailEnabled() {
+			emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
 			if emailPassword == "" {
 				emailConfigError = "password not configured"
 				logger.Printf("Warning: Email channel enabled but no password found")
-			} else if freshCfg.Channels.Email.IMAPServer == "" || freshCfg.Channels.Email.SMTPServer == "" {
+			} else if chCfg.Email.IMAPServer == "" || chCfg.Email.SMTPServer == "" {
 				emailConfigError = "IMAP/SMTP servers not configured"
 				logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
 			} else {
-				pollInterval := time.Duration(freshCfg.Channels.Email.GetPollInterval()) * time.Second
-				emailAllowFrom := freshCfg.Channels.Email.AllowFrom
+				pollInterval := time.Duration(chCfg.Email.GetPollInterval()) * time.Second
+				emailAllowFrom := chCfg.Email.AllowFrom
 				if backend != nil {
 					emailAllowFrom = nil
 				}
 				em := emailchan.New(&emailchan.Config{
-					Provider:     freshCfg.Channels.Email.Provider,
-					IMAPServer:   freshCfg.Channels.Email.IMAPServer,
-					SMTPServer:   freshCfg.Channels.Email.SMTPServer,
-					Address:      freshCfg.Channels.Email.Address,
-					Username:     freshCfg.Channels.Email.Username,
+					Provider:     chCfg.Email.Provider,
+					IMAPServer:   chCfg.Email.IMAPServer,
+					SMTPServer:   chCfg.Email.SMTPServer,
+					Address:      chCfg.Email.Address,
+					Username:     chCfg.Email.Username,
 					Password:     emailPassword,
 					PollInterval: pollInterval,
 					AllowFrom:    emailAllowFrom,
-					Folder:       freshCfg.Channels.Email.Folder,
-					MarkRead:     freshCfg.Channels.Email.IsMarkRead(),
-					MaxBodyChars: freshCfg.Channels.Email.MaxBodyChars,
+					Folder:       chCfg.Email.Folder,
+					MarkRead:     chCfg.Email.IsMarkRead(),
+					MaxBodyChars: chCfg.Email.MaxBodyChars,
 					Commands:     mgr.Commands(),
 				}, log.Default())
 				// Inject thread index for per-thread email sessions.
@@ -497,27 +489,18 @@ func Run(cfg RunConfig) error {
 				// to the same session via In-Reply-To / References headers.
 				em.SetThreadIndex(backend.NewThreadIndex())
 				mgr.Register(em)
-				logger.Printf("Email channel registered (%s)", freshCfg.Channels.Email.Address)
+				logger.Printf("Email channel registered (%s)", chCfg.Email.Address)
 			}
 		}
 
-		// Register Slack if enabled
+		// Register Slack if enabled (DB is source of truth)
 		var slackConfigError string
-		if freshCfg.Channels.Slack.IsSlackEnabled() {
-			botToken := freshCfg.Channels.Slack.BotToken
-			if botToken == "" {
-				botToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.bot_token")
-			}
-			appToken := freshCfg.Channels.Slack.AppToken
-			if appToken == "" {
-				appToken = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.app_token")
-			}
-			signingSecret := freshCfg.Channels.Slack.SigningSecret
-			if signingSecret == "" {
-				signingSecret = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.signing_secret")
-			}
+		if chCfg.Slack.IsSlackEnabled() {
+			botToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.bot_token")
+			appToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.app_token")
+			signingSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.slack.signing_secret")
 
-			mode := freshCfg.Channels.Slack.GetMode()
+			mode := chCfg.Slack.GetMode()
 			if mode == "socket" && botToken == "" {
 				slackConfigError = "bot_token not configured"
 				logger.Printf("Warning: Slack channel enabled (socket mode) but no bot token found")
@@ -528,17 +511,17 @@ func Run(cfg RunConfig) error {
 				slackConfigError = "signing_secret not configured for events mode"
 				logger.Printf("Warning: Slack channel enabled (events mode) but no signing secret found")
 			} else {
-				slAllowFrom := freshCfg.Channels.Slack.AllowFrom
+				slAllowFrom := chCfg.Slack.AllowFrom
 				if backend != nil {
 					slAllowFrom = nil
 				}
 				sl := slackchan.New(&slackchan.Config{
-					Mode:         mode,
-					BotToken:     botToken,
-					AppToken:     appToken,
+					Mode:          mode,
+					BotToken:      botToken,
+					AppToken:      appToken,
 					SigningSecret: signingSecret,
-					AllowFrom:    slAllowFrom,
-					Commands:     mgr.Commands(),
+					AllowFrom:     slAllowFrom,
+					Commands:      mgr.Commands(),
 				}, log.Default())
 				mgr.Register(sl)
 				logger.Printf("Slack channel registered (mode: %s)", mode)
@@ -553,13 +536,13 @@ func Run(cfg RunConfig) error {
 		// Report channel config statuses to the API layer so that
 		// GET /api/channels/status includes enabled-but-not-started channels.
 		cfgStatuses := map[string]api.ChannelConfigStatus{}
-		if freshCfg.Channels.Telegram.IsTelegramEnabled() {
+		if chCfg.Telegram.IsTelegramEnabled() {
 			cfgStatuses["telegram"] = api.ChannelConfigStatus{Enabled: true, Error: tgConfigError}
 		}
-		if freshCfg.Channels.Email.IsEmailEnabled() {
+		if chCfg.Email.IsEmailEnabled() {
 			cfgStatuses["email"] = api.ChannelConfigStatus{Enabled: true, Error: emailConfigError}
 		}
-		if freshCfg.Channels.Slack.IsSlackEnabled() {
+		if chCfg.Slack.IsSlackEnabled() {
 			cfgStatuses["slack"] = api.ChannelConfigStatus{Enabled: true, Error: slackConfigError}
 		}
 		api.SetChannelConfigStatuses(cfgStatuses)
@@ -568,11 +551,9 @@ func Run(cfg RunConfig) error {
 	}
 
 	// initEmailTools initializes email tools whenever valid IMAP/SMTP
-	// credentials are configured, regardless of whether the email channel is
-	// enabled. This allows the agent to use email_list, email_read,
-	// email_search, email_send, email_wait, etc. during autonomous flows
-	// (e.g. web portal registration) without requiring the polling channel.
-	initEmailTools := func(cfg *config.AppConfig) {
+	// credentials are configured (from the platform DB), regardless of whether
+	// the email channel adapter itself is enabled.
+	initEmailTools := func() {
 		if factoryResult == nil {
 			return
 		}
@@ -581,31 +562,31 @@ func Run(cfg RunConfig) error {
 		if tools.HasEmailClient() {
 			return
 		}
-		emailPassword := cfg.Channels.Email.Password
-		if emailPassword == "" {
-			emailPassword = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
-		}
-		if emailPassword == "" || cfg.Channels.Email.IMAPServer == "" ||
-			cfg.Channels.Email.SMTPServer == "" || cfg.Channels.Email.Address == "" {
+
+		emailCh := loadChannelsConfigFromDB(backend, logger).Email
+		emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
+		if emailPassword == "" || emailCh.IMAPServer == "" ||
+			emailCh.SMTPServer == "" || emailCh.Address == "" {
 			return
 		}
 		setupEmailTools(&emailToolConfig{
-			Provider:     cfg.Channels.Email.Provider,
-			IMAPServer:   cfg.Channels.Email.IMAPServer,
-			SMTPServer:   cfg.Channels.Email.SMTPServer,
-			Address:      cfg.Channels.Email.Address,
-			Username:     cfg.Channels.Email.Username,
+			Provider:     emailCh.Provider,
+			IMAPServer:   emailCh.IMAPServer,
+			SMTPServer:   emailCh.SMTPServer,
+			Address:      emailCh.Address,
+			Username:     emailCh.Username,
 			Password:     emailPassword,
-			Folder:       cfg.Channels.Email.Folder,
-			MaxBodyChars: cfg.Channels.Email.MaxBodyChars,
+			Folder:       emailCh.Folder,
+			MaxBodyChars: emailCh.MaxBodyChars,
 		})
-		logger.Printf("Email tools initialized (%s)", cfg.Channels.Email.Address)
+		logger.Printf("Email tools initialized (%s)", emailCh.Address)
 	}
 
 	// --- Initialize email tools (independent of channel enabled state) ---
-	initEmailTools(appCfg)
+	// Email tools now read their config exclusively from the platform DB.
+	initEmailTools()
 
-	// --- Initialize channel manager if channels are enabled ---
+	// --- Initialize channel manager (reads exclusively from platform DB) ---
 	if mgr, err := initChannels(appCfg); err != nil {
 		logger.Printf("Warning: %v", err)
 	} else {
@@ -741,8 +722,10 @@ func Run(cfg RunConfig) error {
 			}
 		}
 
-		// Lazy-init ChatAgent if channels are now enabled but weren't at startup
-		if freshCfg.Channels.IsChannelsEnabled() && factoryResult == nil {
+		// Lazy-init ChatAgent if channels are now enabled (in DB) but weren't at startup.
+		// We check the platform DB directly instead of config.yaml.
+		reloadChCfg := loadChannelsConfigFromDB(backend, logger)
+		if anyChannelEnabled(reloadChCfg) && factoryResult == nil {
 			logger.Printf("Initializing ChatAgent for newly enabled channels...")
 			fr, factoryErr := launcher.NewWiredChatAgent(ctx, &launcher.ChatFactoryConfig{
 				AppConfig:               freshCfg,
@@ -764,10 +747,10 @@ func Run(cfg RunConfig) error {
 			// the current factoryResult at shutdown time.
 		}
 
-		// Refresh email tools (runs independently of channel state)
-		initEmailTools(freshCfg)
+		// Refresh email tools and channels from the platform DB (single source of truth).
+		initEmailTools()
 
-		// Create fresh channel manager with new config
+		// Create fresh channel manager with new config (reads channels from DB)
 		mgr, err := initChannels(freshCfg)
 		if err != nil {
 			logger.Printf("Warning: %v", err)

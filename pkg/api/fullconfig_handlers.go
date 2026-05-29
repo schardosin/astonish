@@ -441,6 +441,7 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	store := getAPICredentialStore()
+	_ = store // may be used by other sections (scheduler, browser, etc.)
 	needsRestart := false
 
 	if req.Chat != nil {
@@ -511,63 +512,13 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.Channels != nil {
-		chEnabled := req.Channels.Enabled
-		tgEnabled := req.Channels.Telegram.Enabled
-		emEnabled := req.Channels.Email.Enabled
-		emMarkRead := req.Channels.Email.MarkRead
-
-		tgToken := req.Channels.Telegram.BotToken
-		if isMaskedValue(tgToken) {
-			tgToken = resolveTelegramToken(cfg, store)
-		}
-
-		emPassword := req.Channels.Email.Password
-		if isMaskedValue(emPassword) {
-			emPassword = resolveEmailPassword(cfg, store)
-		}
-
-		cfg.Channels = config.ChannelsConfig{
-			Enabled: &chEnabled,
-			Telegram: config.TelegramConfig{
-				Enabled:   &tgEnabled,
-				BotToken:  tgToken,
-				AllowFrom: req.Channels.Telegram.AllowFrom,
-			},
-			Email: config.EmailConfig{
-				Enabled:      &emEnabled,
-				Provider:     req.Channels.Email.Provider,
-				IMAPServer:   req.Channels.Email.IMAPServer,
-				SMTPServer:   req.Channels.Email.SMTPServer,
-				Address:      req.Channels.Email.Address,
-				Username:     req.Channels.Email.Username,
-				Password:     emPassword,
-				PollInterval: req.Channels.Email.PollInterval,
-				AllowFrom:    req.Channels.Email.AllowFrom,
-				Folder:       req.Channels.Email.Folder,
-				MarkRead:     &emMarkRead,
-				MaxBodyChars: req.Channels.Email.MaxBodyChars,
-			},
-		}
-
-		if store != nil {
-			secrets := make(map[string]string)
-			if tgToken != "" && !isMaskedValue(tgToken) {
-				secrets["channels.telegram.bot_token"] = tgToken
-			}
-			if emPassword != "" && !isMaskedValue(emPassword) {
-				secrets["channels.email.password"] = emPassword
-			}
-			if len(secrets) > 0 {
-				if err := store.SetSecretBatch(secrets); err != nil {
-					slog.Warn("failed to save channel secrets", "error", err)
-				} else {
-					cfg.Channels.Telegram.BotToken = ""
-					cfg.Channels.Email.Password = ""
-				}
-			}
-		}
-	}
+	// Channels configuration is no longer accepted via /api/settings/full.
+	// In platform mode it must be managed exclusively through the Platform Admin
+	// Channels UI (or astonish channels CLI), which writes to the platform DB.
+	// The channels section has been removed from this endpoint.
+	// Channels are intentionally ignored here (see comment above).
+	// Any attempt to send channels in the request is dropped on the floor
+	// to prevent accidental writes to config.yaml.
 
 	if req.Scheduler != nil {
 		enabled := req.Scheduler.Enabled

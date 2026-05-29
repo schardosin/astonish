@@ -49,6 +49,20 @@ type SkillContentUpdateRequest struct {
 	RawFile string `json:"raw_file"`
 }
 
+// SkillFileInfo represents metadata about one auxiliary file belonging to a skill.
+type SkillFileInfo struct {
+	Path         string `json:"path"`
+	Filename     string `json:"filename"`
+	Size         int64  `json:"size"`
+	IsExecutable bool   `json:"is_executable"`
+}
+
+// SkillFilesResponse is the response for GET /api/skills/{name}/files
+type SkillFilesResponse struct {
+	Name  string          `json:"name"`
+	Files []SkillFileInfo `json:"files"`
+}
+
 // SkillsListResponse is the response for GET /api/skills.
 type SkillsListResponse struct {
 	Skills      []SkillListItem `json:"skills"`
@@ -139,6 +153,56 @@ func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found", name))
+}
+
+// ListSkillFilesHandler handles GET /api/skills/{name}/files
+// Returns the list of auxiliary files for a skill (from skill_files table in platform mode,
+// or from the skill directory in personal mode).
+func ListSkillFilesHandler(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	scope := r.URL.Query().Get("scope")
+
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		// Platform mode
+		var skillStore store.SkillStore
+		if scope == "team" && svc.TeamSkills != nil {
+			skillStore = svc.TeamSkills
+		} else if scope == "org" && svc.Skills != nil {
+			skillStore = svc.Skills
+		} else if svc.TeamSkills != nil {
+			skillStore = svc.TeamSkills // default to team
+		} else {
+			skillStore = svc.Skills
+		}
+
+		if skillStore == nil {
+			respondError(w, http.StatusNotFound, "No skill store available for scope")
+			return
+		}
+
+		files, err := skillStore.ListFiles(r.Context(), name)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to list skill files: "+err.Error())
+			return
+		}
+
+		resp := SkillFilesResponse{Name: name}
+		for _, f := range files {
+			resp.Files = append(resp.Files, SkillFileInfo{
+				Path:         f.Path,
+				Filename:     f.Filename,
+				Size:         f.SizeBytes,
+				IsExecutable: f.IsExecutable,
+			})
+		}
+		respondJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	// Personal mode fallback: try to read from filesystem (best effort)
+	// For now we return empty — full personal multi-file support can be added later.
+	respondJSON(w, http.StatusOK, SkillFilesResponse{Name: name, Files: []SkillFileInfo{}})
 }
 
 // UpdateSkillContentHandler handles PUT /api/skills/{name}/content

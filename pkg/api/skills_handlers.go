@@ -205,6 +205,63 @@ func ListSkillFilesHandler(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, SkillFilesResponse{Name: name, Files: []SkillFileInfo{}})
 }
 
+// GetSkillFileHandler handles GET /api/skills/{name}/file?path=...&filename=...
+// Returns the content of one auxiliary file.
+func GetSkillFileHandler(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	path := r.URL.Query().Get("path")
+	filename := r.URL.Query().Get("filename")
+
+	if filename == "" {
+		respondError(w, http.StatusBadRequest, "filename query parameter is required")
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		var skillStore store.SkillStore
+		scope := r.URL.Query().Get("scope")
+		if scope == "team" && svc.TeamSkills != nil {
+			skillStore = svc.TeamSkills
+		} else if scope == "org" && svc.Skills != nil {
+			skillStore = svc.Skills
+		} else if svc.TeamSkills != nil {
+			skillStore = svc.TeamSkills
+		} else {
+			skillStore = svc.Skills
+		}
+
+		if skillStore == nil {
+			respondError(w, http.StatusNotFound, "No skill store available")
+			return
+		}
+
+		f, err := skillStore.GetFile(r.Context(), name, path, filename)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to get skill file: "+err.Error())
+			return
+		}
+		if f == nil {
+			respondError(w, http.StatusNotFound, "File not found")
+			return
+		}
+
+		// For now return as JSON (later we can support raw content type)
+		resp := map[string]any{
+			"name":          name,
+			"path":          f.Path,
+			"filename":      f.Filename,
+			"content":       f.Content,
+			"is_executable": f.IsExecutable,
+			"size":          f.SizeBytes,
+		}
+		respondJSON(w, http.StatusOK, resp)
+		return
+	}
+
+	respondError(w, http.StatusNotImplemented, "File retrieval not yet supported in personal mode")
+}
+
 // UpdateSkillContentHandler handles PUT /api/skills/{name}/content
 //
 // Query params:

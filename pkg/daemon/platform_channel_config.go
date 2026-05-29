@@ -35,7 +35,7 @@ func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.Channel
 	if ch.Telegram != nil {
 		enabled := ch.Telegram.Enabled
 		out.Telegram.Enabled = &enabled
-		if enabled {
+		if enabled && logger != nil {
 			logger.Printf("[channels] DB config: Telegram enabled")
 		}
 	}
@@ -54,7 +54,7 @@ func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.Channel
 		out.Email.MarkRead = ch.Email.MarkRead
 		out.Email.MaxBodyChars = ch.Email.MaxBodyChars
 
-		if enabled {
+		if enabled && logger != nil {
 			logger.Printf("[channels] DB config: Email enabled address=%s imap=%s smtp=%s",
 				out.Email.Address, out.Email.IMAPServer, out.Email.SMTPServer)
 		}
@@ -66,7 +66,7 @@ func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.Channel
 		out.Slack.Enabled = &enabled
 		out.Slack.Mode = ch.Slack.Mode
 
-		if enabled {
+		if enabled && logger != nil {
 			logger.Printf("[channels] DB config: Slack enabled mode=%s", out.Slack.GetMode())
 		}
 	}

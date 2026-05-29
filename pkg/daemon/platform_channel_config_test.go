@@ -1,0 +1,206 @@
+package daemon
+
+import (
+	"context"
+	"testing"
+
+	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+)
+
+func TestLoadChannelsConfigFromDB_NilBackend(t *testing.T) {
+	cfg := loadChannelsConfigFromDB(nil, nil)
+	if anyChannelEnabled(cfg) {
+		t.Error("expected no channels enabled for nil backend")
+	}
+}
+
+func TestLoadChannelsConfigFromDB_NoSettings(t *testing.T) {
+	tmp := t.TempDir()
+	_, sqlStore, err := sqlitestore.NewPlatformServices(context.Background(), tmp)
+	if err != nil {
+		t.Fatalf("NewPlatformServices: %v", err)
+	}
+	defer sqlStore.Close()
+
+	cfg := loadChannelsConfigFromDB(sqlStore, nil)
+	if anyChannelEnabled(cfg) {
+		t.Error("expected no channels when nothing stored in DB")
+	}
+}
+
+func TestLoadChannelsConfigFromDB_TelegramEnabled(t *testing.T) {
+	tmp := t.TempDir()
+	_, sqlStore, err := sqlitestore.NewPlatformServices(context.Background(), tmp)
+	if err != nil {
+		t.Fatalf("NewPlatformServices: %v", err)
+	}
+	defer sqlStore.Close()
+
+	settings := &store.PlatformSettings{
+		Channels: &store.PlatformChannelSettings{
+			Telegram: &store.PlatformTelegramConfig{Enabled: true},
+		},
+	}
+	if err := sqlStore.PlatformSettings().Save(context.Background(), settings); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	cfg := loadChannelsConfigFromDB(sqlStore, nil)
+	if !cfg.Telegram.IsTelegramEnabled() {
+		t.Error("expected Telegram to be enabled")
+	}
+	if !anyChannelEnabled(cfg) {
+		t.Error("expected anyChannelEnabled to be true")
+	}
+	if cfg.Email.IsEmailEnabled() || cfg.Slack.IsSlackEnabled() {
+		t.Error("expected only Telegram enabled")
+	}
+}
+
+func TestLoadChannelsConfigFromDB_EmailFullConfig(t *testing.T) {
+	tmp := t.TempDir()
+	_, sqlStore, err := sqlitestore.NewPlatformServices(context.Background(), tmp)
+	if err != nil {
+		t.Fatalf("NewPlatformServices: %v", err)
+	}
+	defer sqlStore.Close()
+
+	markRead := true
+	settings := &store.PlatformSettings{
+		Channels: &store.PlatformChannelSettings{
+			Email: &store.PlatformEmailConfig{
+				Enabled:      true,
+				Provider:     "imap",
+				IMAPServer:   "imap.example.com:993",
+				SMTPServer:   "smtp.example.com:587",
+				Address:      "bot@example.com",
+				Username:     "bot",
+				PollInterval: 45,
+				Folder:       "INBOX",
+				MarkRead:     &markRead,
+				MaxBodyChars: 5000,
+			},
+		},
+	}
+	if err := sqlStore.PlatformSettings().Save(context.Background(), settings); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	cfg := loadChannelsConfigFromDB(sqlStore, nil)
+	if !cfg.Email.IsEmailEnabled() {
+		t.Fatal("expected Email enabled")
+	}
+	e := cfg.Email
+	if e.Provider != "imap" || e.IMAPServer != "imap.example.com:993" || e.Address != "bot@example.com" {
+		t.Errorf("unexpected email fields: %+v", e)
+	}
+	if e.GetPollInterval() != 45 {
+		t.Errorf("expected poll interval 45, got %d", e.GetPollInterval())
+	}
+	if !anyChannelEnabled(cfg) {
+		t.Error("expected anyChannelEnabled true")
+	}
+}
+
+func TestLoadChannelsConfigFromDB_SlackEnabled(t *testing.T) {
+	tmp := t.TempDir()
+	_, sqlStore, err := sqlitestore.NewPlatformServices(context.Background(), tmp)
+	if err != nil {
+		t.Fatalf("NewPlatformServices: %v", err)
+	}
+	defer sqlStore.Close()
+
+	settings := &store.PlatformSettings{
+		Channels: &store.PlatformChannelSettings{
+			Slack: &store.PlatformSlackConfig{
+				Enabled: true,
+				Mode:    "events",
+			},
+		},
+	}
+	if err := sqlStore.PlatformSettings().Save(context.Background(), settings); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	cfg := loadChannelsConfigFromDB(sqlStore, nil)
+	if !cfg.Slack.IsSlackEnabled() {
+		t.Fatal("expected Slack enabled")
+	}
+	if cfg.Slack.GetMode() != "events" {
+		t.Errorf("expected mode events, got %s", cfg.Slack.GetMode())
+	}
+	if !anyChannelEnabled(cfg) {
+		t.Error("expected anyChannelEnabled true")
+	}
+}
+
+func TestLoadChannelsConfigFromDB_AllDisabled(t *testing.T) {
+	tmp := t.TempDir()
+	_, sqlStore, err := sqlitestore.NewPlatformServices(context.Background(), tmp)
+	if err != nil {
+		t.Fatalf("NewPlatformServices: %v", err)
+	}
+	defer sqlStore.Close()
+
+	settings := &store.PlatformSettings{
+		Channels: &store.PlatformChannelSettings{
+			Telegram: &store.PlatformTelegramConfig{Enabled: false},
+			Email:    &store.PlatformEmailConfig{Enabled: false},
+			Slack:    &store.PlatformSlackConfig{Enabled: false},
+		},
+	}
+	if err := sqlStore.PlatformSettings().Save(context.Background(), settings); err != nil {
+		t.Fatalf("Save settings: %v", err)
+	}
+
+	cfg := loadChannelsConfigFromDB(sqlStore, nil)
+	if anyChannelEnabled(cfg) {
+		t.Error("expected anyChannelEnabled false when all are explicitly disabled")
+	}
+}
+
+func TestAnyChannelEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.ChannelsConfig
+		want bool
+	}{
+		{"empty", config.ChannelsConfig{}, false},
+		{"telegram only", func() config.ChannelsConfig {
+			en := true
+			c := config.ChannelsConfig{}
+			c.Telegram.Enabled = &en
+			return c
+		}(), true},
+		{"email only", func() config.ChannelsConfig {
+			en := true
+			c := config.ChannelsConfig{}
+			c.Email.Enabled = &en
+			return c
+		}(), true},
+		{"slack only", func() config.ChannelsConfig {
+			en := true
+			c := config.ChannelsConfig{}
+			c.Slack.Enabled = &en
+			return c
+		}(), true},
+		{"all disabled", func() config.ChannelsConfig {
+			f := false
+			c := config.ChannelsConfig{}
+			c.Telegram.Enabled = &f
+			c.Email.Enabled = &f
+			c.Slack.Enabled = &f
+			return c
+		}(), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := anyChannelEnabled(tt.cfg); got != tt.want {
+				t.Errorf("anyChannelEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

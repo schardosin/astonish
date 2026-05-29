@@ -34,14 +34,15 @@ type SkillListItem struct {
 
 // SkillContentResponse is the response for GET /api/skills/{name}/content.
 type SkillContentResponse struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	Source      string `json:"source"`
-	Scope       string `json:"scope,omitempty"`
-	Content     string `json:"content"`
-	RawFile     string `json:"raw_file"`
-	FilePath    string `json:"file_path,omitempty"`
-	Editable    bool   `json:"editable"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Source      string            `json:"source"`
+	Scope       string            `json:"scope,omitempty"`
+	Content     string            `json:"content"`
+	RawFile     string            `json:"raw_file"`
+	FilePath    string            `json:"file_path,omitempty"`
+	Editable    bool              `json:"editable"`
+	Files       []SkillFileInfo   `json:"files,omitempty"` // Multi-file support (new)
 }
 
 // SkillContentUpdateRequest is the request for PUT /api/skills/{name}/content.
@@ -153,6 +154,29 @@ func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 				FilePath:    s.FilePath,
 				Editable:    s.Source != "bundled",
 			}
+
+			// Populate files list for multi-file skills (if store supports it)
+			if svc != nil {
+				var st store.SkillStore
+				if scope == "team" && svc.TeamSkills != nil {
+					st = svc.TeamSkills
+				} else if svc.Skills != nil {
+					st = svc.Skills
+				}
+				if st != nil {
+					if files, err := st.ListFiles(r.Context(), name); err == nil {
+						for _, f := range files {
+							resp.Files = append(resp.Files, SkillFileInfo{
+								Path:         f.Path,
+								Filename:     f.Filename,
+								Size:         f.SizeBytes,
+								IsExecutable: f.IsExecutable,
+							})
+						}
+					}
+				}
+			}
+
 			respondJSON(w, http.StatusOK, resp)
 			return
 		}

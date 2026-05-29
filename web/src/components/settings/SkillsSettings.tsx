@@ -170,6 +170,10 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const [editorError, setEditorError] = useState<string | null>(null)
   const [editorSuccess, setEditorSuccess] = useState(false)
 
+  // Multi-file editor state
+  const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
+  const [currentFilename, setCurrentFilename] = useState('SKILL.md')
+
   // Create skill modal
   const [showCreate, setShowCreate] = useState(false)
   const [newSkillName, setNewSkillName] = useState('')
@@ -251,11 +255,40 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorLoading(true)
     setEditorError(null)
     setEditorSuccess(false)
+    setCurrentFilePath('')
+    setCurrentFilename('SKILL.md')
     try {
       const data = await fetchSkillContent(name, skillScope || scope, teamSlug)
       setActiveSkill(data)
       setEditorContent(data.raw_file)
       setEditorMode(mode)
+    } catch (err: any) {
+      setEditorError(err.message)
+    } finally {
+      setEditorLoading(false)
+    }
+  }
+
+  // Switch to editing a different file within the current skill (MVP multi-file support)
+  const switchToFile = async (path: string, filename: string) => {
+    if (!activeSkill) return
+
+    setEditorLoading(true)
+    setEditorError(null)
+
+    try {
+      const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+      const res = await teamFetch(
+        `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(path)}&filename=${encodeURIComponent(filename)}`,
+        undefined,
+        teamSlug
+      )
+      if (!res.ok) throw new Error('Failed to load file')
+
+      const fileData = await res.json()
+      setCurrentFilePath(path)
+      setCurrentFilename(filename)
+      setEditorContent(fileData.content || '')
     } catch (err: any) {
       setEditorError(err.message)
     } finally {
@@ -269,10 +302,35 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorError(null)
     setEditorSuccess(false)
     try {
-      await saveSkillContent(activeSkill.name, editorContent, activeSkill.scope || scope, teamSlug)
+      if (currentFilename === 'SKILL.md' && currentFilePath === '') {
+        // Saving the main SKILL.md
+        await saveSkillContent(activeSkill.name, editorContent, activeSkill.scope || scope, teamSlug)
+      } else {
+        // Saving an auxiliary file
+        const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+        const res = await teamFetch(
+          `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(currentFilePath)}&filename=${encodeURIComponent(currentFilename)}`,
+          {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: editorContent,
+              is_executable: false // TODO: detect from file extension or UI
+            })
+          },
+          teamSlug
+        )
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          throw new Error(errData.error || 'Failed to save file')
+        }
+      }
       setEditorSuccess(true)
       setTimeout(() => setEditorSuccess(false), 2000)
       loadSkills()
+      // Refresh the file list
+      const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+      setActiveSkill(refreshed)
     } catch (err: any) {
       setEditorError(err.message)
     } finally {
@@ -317,6 +375,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorContent('')
     setEditorError(null)
     setEditorSuccess(false)
+    setCurrentFilePath('')
+    setCurrentFilename('SKILL.md')
   }
 
   // Group skills by scope for platform mode display
@@ -365,6 +425,35 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                    <span className="ml-2 text-[10px] opacity-70">+ {activeSkill.files.length} file{activeSkill.files.length > 1 ? 's' : ''}</span>
                  )}
                </div>
+
+               {/* Simple multi-file switcher (MVP) */}
+               {activeSkill?.files && activeSkill.files.length > 0 && (
+                 <div className="flex flex-wrap gap-1 mt-1">
+                   <button
+                     onClick={() => {
+                       setCurrentFilePath('')
+                       setCurrentFilename('SKILL.md')
+                       setEditorContent(activeSkill.raw_file)
+                     }}
+                     className={`text-xs px-2 py-0.5 rounded ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                   >
+                     SKILL.md
+                   </button>
+                   {activeSkill.files.map((f, idx) => {
+                     const fullName = f.path ? `${f.path}/${f.filename}` : f.filename
+                     const isActive = currentFilePath === f.path && currentFilename === f.filename
+                     return (
+                       <button
+                         key={idx}
+                         onClick={() => switchToFile(f.path, f.filename)}
+                         className={`text-xs px-2 py-0.5 rounded ${isActive ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
+                       >
+                         {fullName}{f.is_executable ? ' ⚡' : ''}
+                       </button>
+                     )
+                   })}
+                 </div>
+               )}
             </div>
           </div>
           <div className="flex items-center gap-2">

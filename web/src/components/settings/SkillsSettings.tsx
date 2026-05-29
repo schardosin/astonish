@@ -440,93 +440,98 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                  )}
                </div>
 
-               {/* Multi-file file tree (MVP) */}
-               {activeSkill?.files && activeSkill.files.length > 0 && (
-                 <div className="mt-2 text-xs border rounded p-2" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}>
-                   <div className="font-medium mb-1 flex items-center justify-between">
-                     <span>Files</span>
-                     {activeSkill?.editable && (
-                       <button
-                         onClick={async () => {
-                           const fname = prompt('New file (e.g. scripts/helper.sh):')
-                           if (!fname) return
-                           const lastSlash = fname.lastIndexOf('/')
-                           const p = lastSlash > 0 ? fname.substring(0, lastSlash) : ''
-                           const fn = lastSlash > 0 ? fname.substring(lastSlash + 1) : fname
-                           try {
-                             const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
-                             await teamFetch(
-                               `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
-                               { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
-                               teamSlug
-                             )
-                             const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-                             setActiveSkill(refreshed)
-                             await switchToFile(p, fn)
-                           } catch (e: any) { setEditorError(e.message) }
-                         }}
-                         className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
-                       >
-                         + file
-                       </button>
-                     )}
-                   </div>
-
-                   {/* Simple tree */}
-                   <div className="pl-1 space-y-0.5">
-                     {/* SKILL.md */}
-                     <div
-                       onClick={() => {
-                         setCurrentFilePath('')
-                         setCurrentFilename('SKILL.md')
-                         setEditorContent(activeSkill.raw_file)
+               {/* Multi-file file tree (MVP) - always visible in editor for multi-file skills */}
+               <div className="mt-2 text-xs border rounded p-2" style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}>
+                 <div className="font-medium mb-1 flex items-center justify-between">
+                   <span>Files in this skill</span>
+                   {activeSkill?.editable && (
+                     <button
+                       onClick={async () => {
+                         const fname = prompt('New file (e.g. scripts/helper.sh or references/api.md):')
+                         if (!fname) return
+                         const lastSlash = fname.lastIndexOf('/')
+                         const p = lastSlash > 0 ? fname.substring(0, lastSlash) : ''
+                         const fn = lastSlash > 0 ? fname.substring(lastSlash + 1) : fname
+                         try {
+                           const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+                           await teamFetch(
+                             `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
+                             { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
+                             teamSlug
+                           )
+                           const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+                           setActiveSkill(refreshed)
+                           await switchToFile(p, fn)
+                         } catch (e: any) { setEditorError(e.message) }
                        }}
-                       className={`cursor-pointer px-1 rounded ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
+                       className="text-[10px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white"
                      >
-                       SKILL.md
-                     </div>
-
-                     {/* Grouped files */}
-                     {['scripts', 'references', 'templates', ''].map(group => {
-                       const gFiles = (activeSkill.files || []).filter(f => (f.path || '') === group)
-                       if (gFiles.length === 0) return null
-                       return (
-                         <div key={group} className="ml-2">
-                           {group && <div className="text-[10px] text-gray-500">{group}/</div>}
-                           {gFiles.map((f, i) => {
-                             const isActive = currentFilePath === f.path && currentFilename === f.filename
-                             return (
-                               <div
-                                 key={i}
-                                 onClick={() => switchToFile(f.path, f.filename)}
-                                 className={`cursor-pointer px-1 rounded flex items-center justify-between ${isActive ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
-                               >
-                                 <span>{f.filename}</span>
-                                 <span className="flex items-center gap-1 text-[10px] opacity-70">
-                                   {f.is_executable && '⚡'}
-                                   {f.size && Math.round(f.size / 1024) + 'k'}
-                                   {activeSkill?.editable && currentFilename === f.filename && (
-                                     <span
-                                       onClick={(e) => {
-                                         e.stopPropagation()
-                                         if (!confirm(`Delete ${f.filename}?`)) return
-                                         // reuse delete logic
-                                       }}
-                                       className="hover:text-red-400"
-                                     >
-                                       ✕
-                                     </span>
-                                   )}
-                                 </span>
-                               </div>
-                             )
-                           })}
-                         </div>
-                       )
-                     })}
-                   </div>
+                       + Add File
+                     </button>
+                   )}
                  </div>
-               )}
+
+                 {/* File list */}
+                 <div className="pl-1 space-y-0.5 text-xs">
+                   {/* Always show SKILL.md */}
+                   <div
+                     onClick={() => {
+                       setCurrentFilePath('')
+                       setCurrentFilename('SKILL.md')
+                       setEditorContent(activeSkill?.raw_file || '')
+                     }}
+                     className={`cursor-pointer px-1 rounded flex items-center justify-between ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
+                   >
+                     <span>SKILL.md</span>
+                     <span className="text-[10px] opacity-60">(main)</span>
+                   </div>
+
+                   {/* Other files if any */}
+                   {(activeSkill?.files || []).length > 0 ? (
+                     <>
+                       {['scripts', 'references', 'templates', ''].map(group => {
+                         const gFiles = (activeSkill?.files || []).filter(f => (f.path || '') === group)
+                         if (gFiles.length === 0) return null
+                         return (
+                           <div key={group} className="ml-3 mt-0.5">
+                             {group && <div className="text-[10px] text-gray-500 leading-none mb-0.5">{group}/</div>}
+                             {gFiles.map((f, i) => {
+                               const isActive = currentFilePath === f.path && currentFilename === f.filename
+                               return (
+                                 <div
+                                   key={i}
+                                   onClick={() => switchToFile(f.path, f.filename)}
+                                   className={`cursor-pointer px-1 rounded flex items-center justify-between ${isActive ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
+                                 >
+                                   <span>{f.filename}</span>
+                                   <span className="flex items-center gap-1 text-[10px] opacity-70">
+                                     {f.is_executable && '⚡'}
+                                     {f.size && Math.round(f.size / 1024) + 'k'}
+                                     {activeSkill?.editable && currentFilename === f.filename && (
+                                       <button
+                                         onClick={(e) => {
+                                           e.stopPropagation()
+                                           if (!confirm(`Delete ${f.filename}?`)) return
+                                           // TODO: call delete endpoint here
+                                         }}
+                                         className="hover:text-red-400 px-1"
+                                       >
+                                         ✕
+                                       </button>
+                                     )}
+                                   </span>
+                                 </div>
+                               )
+                             })}
+                           </div>
+                         )
+                       })}
+                     </>
+                   ) : (
+                     <div className="ml-3 text-[10px] text-gray-500 italic">No additional files yet. Click "+ Add File" to create scripts/, references/, etc.</div>
+                   )}
+                 </div>
+               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">

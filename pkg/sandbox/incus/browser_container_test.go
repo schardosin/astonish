@@ -79,7 +79,8 @@ func TestIsContainerCompatibleEngine(t *testing.T) {
 
 // TestBrowserContainerInstallCommands_SharedCommands verifies that commands
 // shared across all engines are present: browser user creation, KasmVNC
-// config, SSL cert with correct permissions, socat, and runuser usage.
+// config (with explicit user-owned cert paths), openssl cert generation
+// into /home/browser/.vnc/, socat, and runuser usage.
 func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 	for _, engine := range []string{"default", "cloakbrowser"} {
 		t.Run(engine, func(t *testing.T) {
@@ -94,14 +95,13 @@ func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 			assertContainsStr(t, flat, "require_ssl: false", "SSL disabled in KasmVNC config")
 			assertContainsStr(t, flat, "use_ipv6: false", "IPv6 disabled in KasmVNC config")
 
-			// SSL cert: must be chmod 644 root:root (NOT 640 root:ssl-cert)
-			assertContainsCmd(t, cmds, "chmod", "SSL cert chmod")
-			assertCmdSequence(t, cmds, []string{"chmod", "644"}, "SSL key must be world-readable (644)")
-			assertCmdSequence(t, cmds, []string{"chown", "root:root"}, "SSL key must be owned by root:root")
-
-			// SSL cert generation
-			assertContainsStr(t, flat, "make-ssl-cert", "SSL cert generation via make-ssl-cert")
-			assertContainsStr(t, flat, "openssl req", "SSL cert fallback via openssl")
+			// SSL cert is now generated with openssl directly into the browser
+			// user's .vnc directory (avoids unprivileged container restrictions
+			// on /etc/ssl/private/). Key is 600, owned by browser:browser.
+			assertContainsStr(t, flat, "snakeoil.key", "snakeoil private key written to user .vnc dir")
+			assertContainsStr(t, flat, "snakeoil.pem", "snakeoil cert written to user .vnc dir")
+			assertContainsStr(t, flat, "openssl req -x509", "cert generated with raw openssl (no make-ssl-cert)")
+			assertCmdSequence(t, cmds, []string{"chmod", "600", "snakeoil.key"}, "snakeoil key must be 600")
 
 			// socat installed (for CDP port forwarding)
 			assertContainsStr(t, flat, "socat", "socat package for CDP bridge")
@@ -112,15 +112,11 @@ func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 			// KasmVNC password setup
 			assertContainsStr(t, flat, "kasmvncpasswd", "KasmVNC password pre-creation")
 
-			// No ssl-cert group dependency for browser user (the file is 644 root:root)
-			for _, cmd := range cmds {
-				joined := strings.Join(cmd, " ")
-				if strings.Contains(joined, "usermod") && strings.Contains(joined, "ssl-cert") {
-					t.Error("browser user should NOT be added to ssl-cert group (file is 644 root:root)")
-				}
-			}
+			// No ssl-cert group at all anymore — the cert lives in the browser
+			// user's own directory with direct ownership, no group gymnastics.
+			assertNotContainsStr(t, flat, "ssl-cert", "no references to ssl-cert group or package")
 
-			// Cleanup
+			// apt-get clean at the end of the browser install sequence
 			assertContainsCmd(t, cmds, "apt-get", "apt-get clean")
 		})
 	}
@@ -561,4 +557,12 @@ func assertCmdSequence(t *testing.T, cmds [][]string, tokens []string, desc stri
 		}
 	}
 	t.Errorf("%s: expected command containing %v in sequence", desc, tokens)
+}
+
+// assertNotContainsStr fails if s contains substr.
+func assertNotContainsStr(t *testing.T, s, substr, desc string) {
+	t.Helper()
+	if strings.Contains(s, substr) {
+		t.Errorf("%s: did not expect to find %q in commands", desc, substr)
+	}
 }

@@ -187,8 +187,10 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 			deps.libjpegTurbo, "libwebp-dev", "libssl3",
 			"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 			"x11-xserver-utils",
-			// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
-			"ssl-cert",
+			// openssl for generating the KasmVNC snakeoil cert directly into
+			// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
+			// on /etc/ssl/private/).
+			"openssl",
 			// CDP port forwarding (Chromium binds DevTools to loopback only)
 			"socat",
 			// Utilities
@@ -223,8 +225,10 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					deps.libjpegTurbo, "libwebp-dev", "libssl3",
 					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 					"x11-xserver-utils",
-					// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
-					"ssl-cert",
+					// openssl for generating the KasmVNC snakeoil cert directly into
+					// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
+					// on /etc/ssl/private/).
+					"openssl",
 					// CDP port forwarding (Chromium binds DevTools to loopback only)
 					"socat",
 					// Utilities
@@ -257,8 +261,10 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					deps.libjpegTurbo, "libwebp-dev", "libssl3",
 					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 					"x11-xserver-utils",
-					// SSL cert for KasmVNC (provides ssl-cert group + snakeoil certs)
-					"ssl-cert",
+					// openssl for generating the KasmVNC snakeoil cert directly into
+					// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
+					// on /etc/ssl/private/).
+					"openssl",
 					// CDP port forwarding (Chromium binds DevTools to loopback only)
 					"socat",
 					// Utilities
@@ -297,31 +303,29 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 		[]string{"apt-get", "install", "-y", "/tmp/kasmvnc.deb"},
 		// Clean up the .deb
 		[]string{"rm", "-f", "/tmp/kasmvnc.deb"},
-		// Ensure the SSL snakeoil certificate exists. KasmVNC validates the
-		// cert path at startup even when require_ssl is false. The ssl-cert
-		// package's postinst may fail silently in unprivileged containers, so
-		// regenerate explicitly. Fall back to raw openssl if make-ssl-cert fails.
-		// This MUST run at template creation time — session containers on
-		// overlayfs cannot modify /etc/ssl/private/ due to user namespace
-		// restrictions on copy-up operations.
+		// Create the browser user's .vnc directory (owned by the browser user)
+		// BEFORE generating the cert. This directory is writable by us and
+		// survives into session containers.
+		[]string{"install", "-d", "-o", "browser", "-g", "browser", "-m", "755", "/home/browser/.vnc"},
+		// Generate a self-signed cert directly into the user-owned .vnc
+		// directory. We never touch /etc/ssl/private because in unprivileged
+		// Incus containers (Docker+Incus on macOS, and some native setups)
+		// the directory lives on a lower overlayfs layer and chmod/chown
+		// fails with "Operation not permitted".
+		//
+		// KasmVNC validates that its configured cert files exist at startup
+		// even when require_ssl=false. Pointing it at user-owned files in
+		// /home/browser/.vnc/ makes this work reliably in all container modes.
+		// The cert is never actually used for TLS (the exec tunnel terminates
+		// TLS before it reaches the container).
 		[]string{"sh", "-c",
-			`make-ssl-cert generate-default-snakeoil --force-overwrite 2>/dev/null || ` +
-				`openssl req -x509 -newkey rsa:2048 ` +
-				`-keyout /etc/ssl/private/ssl-cert-snakeoil.key ` +
-				`-out /etc/ssl/certs/ssl-cert-snakeoil.pem ` +
-				`-days 3650 -nodes -subj '/CN=localhost' 2>/dev/null`,
+			`openssl req -x509 -newkey rsa:2048 ` +
+				`-keyout /home/browser/.vnc/snakeoil.key ` +
+				`-out /home/browser/.vnc/snakeoil.pem ` +
+				`-days 3650 -nodes -subj '/CN=localhost' 2>/dev/null && ` +
+				`chown browser:browser /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem && ` +
+				`chmod 600 /home/browser/.vnc/snakeoil.key`,
 		},
-		// Force the key + directory world-readable, owned by root:root.
-		// On Docker+Incus (macOS), the ssl-cert group GID can become
-		// unmapped (nobody:nogroup) after UID shifting, leaving the file
-		// unreadable by all users — even root inside the unprivileged
-		// container can't chmod it back. Using root:root + 644 avoids
-		// any group-based UID mapping issues entirely. Safe because SSL
-		// is disabled (require_ssl: false) and the container is isolated
-		// behind the exec tunnel.
-		[]string{"chmod", "755", "/etc/ssl/private"},
-		[]string{"chmod", "644", "/etc/ssl/private/ssl-cert-snakeoil.key"},
-		[]string{"chown", "root:root", "/etc/ssl/private/ssl-cert-snakeoil.key"},
 	)
 
 	// Common: configure KasmVNC for headless/non-interactive operation.
@@ -335,12 +339,10 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 	// the perspective of non-mapped users. We create files as root and set
 	// ownership explicitly with chown.
 	cmds = append(cmds,
-		// Create the .vnc directory as root with correct ownership
-		[]string{"install", "-d", "-o", "browser", "-g", "browser", "-m", "755", "/home/browser/.vnc"},
-		// Write kasmvnc.yaml: disable SSL (internal proxy handles TLS),
-		// disable IPv6 (KasmVNC can't bind the same port on both IPv4 and
-		// IPv6 simultaneously — upstream bug kasmtech/KasmVNC#183),
-		// disable the interactive prompt, and bind to all interfaces.
+		// Write kasmvnc.yaml with SSL disabled (TLS is terminated by the
+		// astonish exec tunnel) and explicit paths to the user-owned cert
+		// we just generated. This is the key change that makes base template
+		// builds succeed on unprivileged Incus (Apple Silicon + Docker).
 		[]string{"sh", "-c", `cat > /home/browser/.vnc/kasmvnc.yaml << 'KASMCFG'
 network:
   protocol: http
@@ -349,6 +351,8 @@ network:
   use_ipv6: false
   ssl:
     require_ssl: false
+    pem_certificate: /home/browser/.vnc/snakeoil.pem
+    pem_key: /home/browser/.vnc/snakeoil.key
 user_session:
   concurrent_connections_prompt: false
 logging:

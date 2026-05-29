@@ -29,6 +29,7 @@ interface ActiveSkill {
   source: string
   scope?: string
   description?: string
+  files?: Array<{ path: string; filename: string; size?: number; is_executable?: boolean }>
 }
 
 interface SkillsForm {
@@ -63,9 +64,28 @@ const fetchSkills = async (scope?: string, teamSlug?: string): Promise<{ skills:
 
 const fetchSkillContent = async (name: string, scope?: string, teamSlug?: string): Promise<ActiveSkill> => {
   const params = scope ? `?scope=${scope}` : ''
-  const res = await teamFetch(`/api/skills/${encodeURIComponent(name)}/content${params}`, undefined, teamSlug)
-  if (!res.ok) throw new Error('Failed to fetch skill content')
-  return res.json()
+  const [contentRes, filesRes] = await Promise.all([
+    teamFetch(`/api/skills/${encodeURIComponent(name)}/content${params}`, undefined, teamSlug),
+    teamFetch(`/api/skills/${encodeURIComponent(name)}/files${params}`, undefined, teamSlug)
+  ])
+
+  if (!contentRes.ok) throw new Error('Failed to fetch skill content')
+
+  const data = await contentRes.json()
+
+  // Attach files list if available
+  if (filesRes.ok) {
+    try {
+      const filesData = await filesRes.json()
+      if (filesData.files && Array.isArray(filesData.files)) {
+        data.files = filesData.files
+      }
+    } catch {
+      // ignore files fetch failure
+    }
+  }
+
+  return data
 }
 
 const saveSkillContent = async (name: string, rawFile: string, scope?: string, teamSlug?: string): Promise<Record<string, any>> => {
@@ -339,7 +359,12 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                   </span>
                 )}
               </div>
-              <div className="text-xs" style={hintStyle}>{activeSkill?.description}</div>
+               <div className="text-xs" style={hintStyle}>
+                 {activeSkill?.description}
+                 {activeSkill?.files && activeSkill.files.length > 0 && (
+                   <span className="ml-2 text-[10px] opacity-70">+ {activeSkill.files.length} file{activeSkill.files.length > 1 ? 's' : ''}</span>
+                 )}
+               </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -381,8 +406,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
             <div className="flex items-center justify-center h-full">
               <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
             </div>
-          ) : (
-            <CodeMirror
+           ) : (
+             <CodeMirror
               value={editorContent}
               onChange={editorMode === 'edit' ? (value: string) => setEditorContent(value) : undefined}
               readOnly={editorMode === 'view'}

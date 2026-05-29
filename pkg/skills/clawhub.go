@@ -130,24 +130,32 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 		SkillDir: skillDir,
 	}
 
-	// Extract all files
+	// Extract all files, preserving directory structure (scripts/, references/, etc.)
 	for _, f := range zipReader.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 
-		// Sanitize the filename — strip any leading directory components from zip
-		name := filepath.Base(f.Name)
-		if name == "" || name == "." || name == ".." {
+		// Clean the path inside the zip
+		cleanName := filepath.ToSlash(f.Name)
+		if strings.HasPrefix(cleanName, "/") {
+			cleanName = cleanName[1:]
+		}
+
+		if cleanName == "" || strings.HasPrefix(cleanName, ".") {
 			continue
 		}
 
-		outPath := filepath.Join(skillDir, name)
-		if err := extractZipFile(f, outPath); err != nil {
-			return nil, fmt.Errorf("extract %s: %w", name, err)
+		outPath := filepath.Join(skillDir, cleanName)
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			return nil, fmt.Errorf("create dir for %s: %w", cleanName, err)
 		}
 
-		result.Files = append(result.Files, name)
+		if err := extractZipFile(f, outPath); err != nil {
+			return nil, fmt.Errorf("extract %s: %w", cleanName, err)
+		}
+
+		result.Files = append(result.Files, cleanName)
 		result.FilesCount++
 	}
 

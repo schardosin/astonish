@@ -19,6 +19,7 @@ interface Skill {
   editable: boolean
   require_bins?: string[]
   missing?: string[]
+  has_directory?: boolean   // New: indicates the skill has auxiliary files
 }
 
 interface ActiveSkill {
@@ -981,18 +982,23 @@ function SkillRow({ skill, showScope, onView, onEdit, onDelete }: SkillRowProps)
 
       {/* Name and description */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
-            {skill.name}
-          </span>
-          {showScope && skill.scope && <ScopeBadge scope={skill.scope} />}
-          {skill.require_bins?.length && skill.require_bins.length > 0 && !skill.eligible && (
-            <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0"
-              style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171' }}>
-              missing: {(skill.missing || []).join(', ')}
-            </span>
-          )}
-        </div>
+         <div className="flex items-center gap-2">
+           <span className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+             {skill.name}
+           </span>
+           {showScope && skill.scope && <ScopeBadge scope={skill.scope} />}
+           {skill.has_directory && (
+             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300" title="This skill contains multiple files (scripts, references, etc.)">
+               multi-file
+             </span>
+           )}
+           {skill.require_bins?.length && skill.require_bins.length > 0 && !skill.eligible && (
+             <span className="text-xs px-1.5 py-0.5 rounded flex-shrink-0"
+               style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#f87171' }}>
+               missing: {(skill.missing || []).join(', ')}
+             </span>
+           )}
+         </div>
         <div className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
           {skill.description}
         </div>

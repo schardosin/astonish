@@ -75,7 +75,37 @@ func handleSetupCommand() error {
 	}
 
 	// Make provider setup optional (like web search tools).
-	{
+	// First check if providers already exist in the platform DB (sqlite or postgres).
+	hasExisting, _ := platformHasProviders(cfg)
+	if !hasExisting {
+		hasExisting = len(cfg.Providers) > 0
+	}
+
+	configureProvider := false
+	if hasExisting {
+		// Already configured in platform DB or config — offer reconfigure.
+		var reconfigure bool
+		clearScreen()
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewConfirm().
+					Title("AI Provider Already Configured").
+					Description("A provider is already set up.\nYou can reconfigure it now or keep the current settings.").
+					Affirmative("Reconfigure").
+					Negative("Keep current").
+					Value(&reconfigure),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
+		if reconfigure {
+			configureProvider = true
+		} else {
+			printSuccess("Keeping existing provider configuration.")
+		}
+	} else {
+		// Nothing configured yet — offer to set one up now or skip.
 		var setupProvider bool
 		clearScreen()
 		err = huh.NewForm(
@@ -91,62 +121,60 @@ func handleSetupCommand() error {
 		if err != nil {
 			return err
 		}
-		if !setupProvider {
+		if setupProvider {
+			configureProvider = true
+		} else {
 			printSuccess("Provider setup skipped. You can configure it in the Studio after logging in.")
-			// Continue with web tools, browser, sandbox init etc.
-			// (the rest of the function will still run)
-			goto afterProvider
 		}
 	}
 
-afterProvider:
+	if configureProvider {
+		// Build list of existing providers with their types
+		var existingOptions []huh.Option[string]
+		existingProviderTypes := make(map[string]string)
 
-	// Build list of existing providers with their types
-	var existingOptions []huh.Option[string]
-	existingProviderTypes := make(map[string]string)
-
-	for name, pCfg := range cfg.Providers {
-		providerType := config.GetProviderType(name, pCfg)
-		displayName := provider.GetProviderDisplayName(providerType)
-		if displayName == "" {
-			displayName = name
+		for name, pCfg := range cfg.Providers {
+			providerType := config.GetProviderType(name, pCfg)
+			displayName := provider.GetProviderDisplayName(providerType)
+			if displayName == "" {
+				displayName = name
+			}
+			label := fmt.Sprintf("%s (%s)", name, displayName)
+			existingOptions = append(existingOptions, huh.NewOption(label, name))
+			existingProviderTypes[name] = providerType
 		}
-		label := fmt.Sprintf("%s (%s)", name, displayName)
-		existingOptions = append(existingOptions, huh.NewOption(label, name))
-		existingProviderTypes[name] = providerType
-	}
 
-	// Sort existing options by name
-	sort.Slice(existingOptions, func(i, j int) bool {
-		return existingOptions[i].Value < existingOptions[j].Value
-	})
+		// Sort existing options by name
+		sort.Slice(existingOptions, func(i, j int) bool {
+			return existingOptions[i].Value < existingOptions[j].Value
+		})
 
-	// Add "Add new provider" option at the end
-	const addNewValue = "__add_new__"
-	existingOptions = append(existingOptions, huh.NewOption("+ Add new provider", addNewValue))
+		// Add "Add new provider" option at the end
+		const addNewValue = "__add_new__"
+		existingOptions = append(existingOptions, huh.NewOption("+ Add new provider", addNewValue))
 
-	// --- STEP 1: Select existing or add new ---
-	var selectedInstance string
-	clearScreen()
-	err = huh.NewForm(
-		huh.NewGroup(
-			huh.NewSelect[string]().
-				Title("Select a provider instance to configure").
-				Description("Choose an existing provider or add a new one").
-				Options(existingOptions...).
-				Value(&selectedInstance),
-		),
-	).Run()
-	if err != nil {
-		return err
-	}
+		// --- STEP 1: Select existing or add new ---
+		var selectedInstance string
+		clearScreen()
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title("Select a provider instance to configure").
+					Description("Choose an existing provider or add a new one").
+					Options(existingOptions...).
+					Value(&selectedInstance),
+			),
+		).Run()
+		if err != nil {
+			return err
+		}
 
-	var isNewProvider bool
-	var selectedProviderID string
+		var isNewProvider bool
+		var selectedProviderID string
 
-	if selectedInstance == addNewValue {
-		isNewProvider = true
-		// --- STEP 2: Provider Type (for new provider) ---
+		if selectedInstance == addNewValue {
+			isNewProvider = true
+			// --- STEP 2: Provider Type (for new provider) ---
 		selectedProviderID = selectProviderType()
 		// Initialize provider config for new provider
 		cfg.Providers[addNewValue] = make(config.ProviderConfig)
@@ -393,6 +421,7 @@ SaveConfig:
 		displayName = selectedProviderID
 	}
 	printSuccess(fmt.Sprintf("%s (%s) configured successfully!", selectedInstance, displayName))
+	}
 
 	// --- Web Tool Setup ---
 	if err := handleWebToolSetup(); err != nil {
@@ -554,6 +583,53 @@ func runSAPAICoreForm(pCfg config.ProviderConfig) {
 	pCfg["auth_url"] = authURL
 	pCfg["base_url"] = baseURL
 	pCfg["resource_group"] = resourceGroup
+}
+
+// platformHasProviders returns whether any providers are already configured
+// in the platform database (for sqlite or postgres backends).
+// It falls back to checking cfg.Providers for file-based legacy cases.
+func platformHasProviders(cfg *config.AppConfig) (bool, error) {
+	ctx := context.Background()
+
+	var settingsStore store.PlatformSettingsStore
+
+	if cfg.Storage.Backend == "postgres" {
+		if cfg.Storage.Postgres.PlatformDSN == "" {
+			return false, nil
+		}
+		poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
+		defer poolMgr.Close()
+
+		pool, err := poolMgr.PlatformPool(ctx)
+		if err != nil {
+			return false, err
+		}
+		secrets := pgstore.NewPlatformSecretStore(poolMgr)
+		settingsStore = pgstore.NewPGPlatformSettingsStore(pool, secrets)
+	} else if cfg.Storage.Backend == "sqlite" {
+		dataDir := cfg.Storage.SQLite.GetDataDir()
+		if dataDir == "" {
+			home, _ := os.UserHomeDir()
+			dataDir = filepath.Join(home, ".config", "astonish", "data")
+		}
+		_, sqlStore, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+		if err != nil {
+			return false, err
+		}
+		defer sqlStore.Close()
+		settingsStore = sqlStore.PlatformSettings()
+	} else {
+		return false, nil
+	}
+
+	settings, err := settingsStore.Get(ctx)
+	if err != nil || settings == nil {
+		return false, err
+	}
+	if len(settings.Providers) > 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // saveProviderToPlatformDB saves the provider configuration to the platform

@@ -63,6 +63,12 @@ type SkillFilesResponse struct {
 	Files []SkillFileInfo `json:"files"`
 }
 
+// SaveSkillFileRequest is the request body for saving an auxiliary skill file.
+type SaveSkillFileRequest struct {
+	Content       string `json:"content"`
+	IsExecutable  bool   `json:"is_executable"`
+}
+
 // SkillsListResponse is the response for GET /api/skills.
 type SkillsListResponse struct {
 	Skills      []SkillListItem `json:"skills"`
@@ -260,6 +266,83 @@ func GetSkillFileHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondError(w, http.StatusNotImplemented, "File retrieval not yet supported in personal mode")
+}
+
+// SaveSkillFileHandler handles PUT /api/skills/{name}/file?path=...&filename=...
+// Creates or updates an auxiliary file for a skill.
+func SaveSkillFileHandler(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	path := r.URL.Query().Get("path")
+	filename := r.URL.Query().Get("filename")
+
+	if filename == "" {
+		respondError(w, http.StatusBadRequest, "filename query parameter is required")
+		return
+	}
+
+	var req SaveSkillFileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		scope := r.URL.Query().Get("scope")
+		targetStore := resolveSkillStoreForWrite(w, r, svc, scope)
+		if targetStore == nil {
+			return
+		}
+
+		file := &store.SkillFile{
+			Path:         path,
+			Filename:     filename,
+			Content:      req.Content,
+			IsExecutable: req.IsExecutable,
+			SizeBytes:    int64(len(req.Content)),
+		}
+
+		if err := targetStore.SaveFile(r.Context(), name, file); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to save skill file: "+err.Error())
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	respondError(w, http.StatusNotImplemented, "Saving skill files not yet supported in personal mode")
+}
+
+// DeleteSkillFileHandler handles DELETE /api/skills/{name}/file?path=...&filename=...
+func DeleteSkillFileHandler(w http.ResponseWriter, r *http.Request) {
+	name := mux.Vars(r)["name"]
+	path := r.URL.Query().Get("path")
+	filename := r.URL.Query().Get("filename")
+
+	if filename == "" {
+		respondError(w, http.StatusBadRequest, "filename query parameter is required")
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+		scope := r.URL.Query().Get("scope")
+		targetStore := resolveSkillStoreForWrite(w, r, svc, scope)
+		if targetStore == nil {
+			return
+		}
+
+		if err := targetStore.DeleteFile(r.Context(), name, path, filename); err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to delete skill file: "+err.Error())
+			return
+		}
+
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	respondError(w, http.StatusNotImplemented, "Deleting skill files not yet supported in personal mode")
 }
 
 // UpdateSkillContentHandler handles PUT /api/skills/{name}/content

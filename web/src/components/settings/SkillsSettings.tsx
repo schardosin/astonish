@@ -130,13 +130,18 @@ const deleteSkillApi = async (name: string, scope?: string, teamSlug?: string): 
   return res.json()
 }
 
+// Safe query string builder for skill file endpoints (prevents malformed &path=... when no scope)
+const buildSkillFileUrl = (name: string, path: string, filename: string, scope?: string): string => {
+  const params = new URLSearchParams()
+  if (scope) params.set('scope', scope)
+  params.set('path', path)
+  params.set('filename', filename)
+  return `/api/skills/${encodeURIComponent(name)}/file?${params.toString()}`
+}
+
 const deleteSkillFileApi = async (name: string, path: string, filename: string, scope?: string, teamSlug?: string): Promise<void> => {
-  const params = scope ? `?scope=${scope}` : ''
-  const res = await teamFetch(
-    `/api/skills/${encodeURIComponent(name)}/file${params}&path=${encodeURIComponent(path)}&filename=${encodeURIComponent(filename)}`,
-    { method: 'DELETE' },
-    teamSlug
-  )
+  const url = buildSkillFileUrl(name, path, filename, scope)
+  const res = await teamFetch(url, { method: 'DELETE' }, teamSlug)
   if (!res.ok) {
     const data = await res.json().catch(() => null)
     throw new Error(data?.error || 'Failed to delete file')
@@ -192,7 +197,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Sidebar add-file form
   const [showAddFile, setShowAddFile] = useState(false)
-  const [newFileDir, setNewFileDir] = useState<'scripts' | 'references' | 'templates' | ''>('scripts')
+  const [newFileDir, setNewFileDir] = useState<string>('scripts')
   const [newFileName, setNewFileName] = useState('')
   const [addFileError, setAddFileError] = useState<string | null>(null)
 
@@ -316,12 +321,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorError(null)
 
     try {
-      const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
-      const res = await teamFetch(
-        `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(path)}&filename=${encodeURIComponent(filename)}`,
-        undefined,
-        teamSlug
-      )
+      const url = buildSkillFileUrl(activeSkill.name, path, filename, activeSkill.scope)
+      const res = await teamFetch(url, undefined, teamSlug)
       if (!res.ok) throw new Error('Failed to load file')
 
       const fileData = await res.json()
@@ -343,9 +344,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     const fn = newFileName.trim()
 
     try {
-      const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+      const url = buildSkillFileUrl(activeSkill.name, p, fn, activeSkill.scope)
       await teamFetch(
-        `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(p)}&filename=${encodeURIComponent(fn)}`,
+        url,
         { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content: '' }) },
         teamSlug
       )
@@ -397,9 +398,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
         await saveSkillContent(activeSkill.name, editorContent, activeSkill.scope || scope, teamSlug)
       } else {
         // Saving an auxiliary file
-        const params = activeSkill.scope ? `?scope=${activeSkill.scope}` : ''
+        const url = buildSkillFileUrl(activeSkill.name, currentFilePath, currentFilename, activeSkill.scope)
         const res = await teamFetch(
-          `/api/skills/${encodeURIComponent(activeSkill.name)}/file${params}&path=${encodeURIComponent(currentFilePath)}&filename=${encodeURIComponent(currentFilename)}`,
+          url,
           {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -705,27 +706,37 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                </div>
 
                <div className="space-y-4">
-                 {/* Directory */}
-                 <div>
-                   <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                     Directory
-                   </label>
-                   <div className="flex gap-2 flex-wrap">
-                     {(['scripts', 'references', 'templates', ''] as const).map(d => (
-                       <button
-                         key={d}
-                         type="button"
-                         onClick={() => setNewFileDir(d)}
-                         className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
-                       >
-                         {d || 'root'}
-                       </button>
-                     ))}
-                   </div>
-                   <p className="text-xs mt-1" style={hintStyle}>
-                     Choose where the file will live inside the skill.
-                   </p>
-                 </div>
+                  {/* Directory */}
+                  <div>
+                    <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                      Directory
+                    </label>
+                    {/* Quick picks */}
+                    <div className="flex gap-2 flex-wrap mb-2">
+                      {(['scripts', 'references', 'templates', ''] as const).map(d => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => setNewFileDir(d)}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
+                        >
+                          {d || 'root'}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Custom / editable path */}
+                    <input
+                      type="text"
+                      value={newFileDir}
+                      onChange={(e) => setNewFileDir(e.target.value)}
+                      placeholder="scripts or configs/subdir (leave empty for root)"
+                      className={inputClass + ' font-mono text-sm'}
+                      style={inputStyle}
+                    />
+                    <p className="text-xs mt-1" style={hintStyle}>
+                      Use a quick pick or type any custom path (e.g. configs, lib/helpers).
+                    </p>
+                  </div>
 
                  {/* Filename */}
                  <div>

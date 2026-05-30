@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
@@ -199,9 +199,6 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Inline delete confirmation for auxiliary files
   const [pendingDeleteFile, setPendingDeleteFile] = useState<{ path: string; filename: string } | null>(null)
 
-  // Ref for the Add File popover (for click-outside dismissal)
-  const addPopoverRef = useRef<HTMLDivElement>(null)
-
   // Choose CodeMirror language extension based on current file
   const getLanguageExtension = (filename: string) => {
     const lower = filename.toLowerCase()
@@ -268,34 +265,6 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   useEffect(() => {
     loadSkills()
   }, [loadSkills])
-
-  // Close Add File popover on outside click or Escape
-  useEffect(() => {
-    if (!showAddFile) return
-
-    const handleClickOutside = (e: MouseEvent) => {
-      if (addPopoverRef.current && !addPopoverRef.current.contains(e.target as Node)) {
-        // Also ignore clicks on the "+ Add" button itself (the toggle handles it)
-        setShowAddFile(false)
-        setAddFileError(null)
-      }
-    }
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setShowAddFile(false)
-        setAddFileError(null)
-      }
-    }
-
-    document.addEventListener('mousedown', handleClickOutside)
-    document.addEventListener('keydown', handleEscape)
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
-      document.removeEventListener('keydown', handleEscape)
-    }
-  }, [showAddFile])
 
   const handleSaveConfig = async () => {
     setSaving(true)
@@ -632,73 +601,19 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
         <div className="flex flex-1 overflow-hidden">
            {/* LEFT FILE SIDEBAR */}
            <div className="w-56 border-r flex flex-col shrink-0" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-             {/* Sidebar header (relative so the Add popover can be absolutely positioned) */}
-             <div className="px-3 py-2 text-xs font-semibold border-b flex items-center justify-between flex-shrink-0 relative" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+             {/* Sidebar header */}
+             <div className="px-3 py-2 text-xs font-semibold border-b flex items-center justify-between flex-shrink-0" style={{ borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
                <div className="flex items-center gap-1.5">
                  <FolderOpen size={14} />
                  <span>Files</span>
                </div>
                {activeSkill?.editable && (
                  <button
-                   onClick={() => { setShowAddFile(!showAddFile); setAddFileError(null) }}
+                   onClick={() => { setShowAddFile(true); setAddFileError(null); setNewFileName(''); setNewFileDir('scripts') }}
                    className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1"
                  >
                    <Plus size={12} /> Add
                  </button>
-               )}
-
-               {/* Floating Add File popover (not constrained by sidebar width/height) */}
-               {showAddFile && activeSkill?.editable && (
-                 <div
-                   ref={addPopoverRef}
-                   className="absolute top-full left-0 mt-1 z-50 w-72 p-3 rounded-lg shadow-xl border text-xs"
-                   style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
-                 >
-                   <div className="flex items-center justify-between mb-2">
-                     <div className="font-medium" style={{ color: 'var(--text-secondary)' }}>Add new file</div>
-                     <button
-                       onClick={() => { setShowAddFile(false); setAddFileError(null) }}
-                       className="p-1 -mr-1 rounded hover:bg-gray-700"
-                       style={{ color: 'var(--text-muted)' }}
-                     >
-                       <X size={14} />
-                     </button>
-                   </div>
-
-                   {/* Directory quick picks */}
-                   <div className="flex gap-1 mb-2">
-                     {(['scripts', 'references', 'templates', ''] as const).map(d => (
-                       <button
-                         key={d}
-                         onClick={() => setNewFileDir(d)}
-                         className={`px-2 py-0.5 rounded text-[10px] ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
-                       >
-                         {d || 'root'}
-                       </button>
-                     ))}
-                   </div>
-
-                   <div className="flex gap-1">
-                     <input
-                       type="text"
-                       value={newFileName}
-                       onChange={(e) => setNewFileName(e.target.value)}
-                       onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
-                       placeholder="filename.sh"
-                       className="flex-1 px-2 py-1 text-xs rounded bg-gray-900 border border-gray-700 focus:outline-none focus:border-purple-500"
-                       style={{ color: 'var(--text-primary)' }}
-                       autoFocus
-                     />
-                     <button
-                       onClick={handleAddFile}
-                       disabled={!newFileName.trim()}
-                       className="px-3 rounded bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white"
-                     >
-                       Add
-                     </button>
-                   </div>
-                   {addFileError && <div className="text-red-400 text-[10px] mt-1.5">{addFileError}</div>}
-                 </div>
                )}
              </div>
 
@@ -1104,6 +1019,92 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                 style={{ background: '#ef4444' }}
               >
                 <Trash2 size={14} /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add New File Modal */}
+      {showAddFile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }} onClick={() => { setShowAddFile(false); setAddFileError(null) }}>
+          <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>Add New File</h3>
+              <button onClick={() => { setShowAddFile(false); setAddFileError(null) }} className="p-1.5 rounded-lg hover:bg-gray-600/30" style={{ color: 'var(--text-muted)' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Directory */}
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                  Directory
+                </label>
+                <div className="flex gap-2 flex-wrap">
+                  {(['scripts', 'references', 'templates', ''] as const).map(d => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setNewFileDir(d)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
+                    >
+                      {d || 'root'}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs mt-1" style={hintStyle}>
+                  Choose where the file will live inside the skill.
+                </p>
+              </div>
+
+              {/* Filename */}
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
+                  Filename
+                </label>
+                <input
+                  type="text"
+                  value={newFileName}
+                  onChange={(e) => setNewFileName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
+                  placeholder="deploy.sh"
+                  className={inputClass + ' font-mono'}
+                  style={inputStyle}
+                  autoFocus
+                />
+                <p className="text-xs mt-1" style={hintStyle}>
+                  Include extension (e.g. .sh, .py, .md, .json). Lowercase recommended.
+                </p>
+              </div>
+
+              {addFileError && (
+                <div className="flex items-center gap-2 p-2 rounded-lg text-sm"
+                  style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
+                  <AlertCircle size={14} /> {addFileError}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 mt-6">
+              <button
+                onClick={() => { setShowAddFile(false); setAddFileError(null) }}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddFile}
+                disabled={!newFileName.trim()}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                style={saveButtonStyle}
+              >
+                <Plus size={14} />
+                Add File
               </button>
             </div>
           </div>

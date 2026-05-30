@@ -531,7 +531,9 @@ func (lnc *LazyNodeClient) isContainerGone(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "no longer exists") ||
 		strings.Contains(msg, "Instance not found") ||
-		strings.Contains(msg, "closed pipe") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "write to node stdin") ||
+		strings.Contains(msg, "node stdout") ||
 		strings.Contains(msg, "template layer not visible")
 }
 

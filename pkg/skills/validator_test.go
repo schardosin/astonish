@@ -454,3 +454,10 @@ func TestIsUsableStatus(t *testing.T) {
 		}
 	}
 }
+
+func TestDetermineValidationStatus_NilResult(t *testing.T) {
+	status := DetermineValidationStatus(nil, nil, "hash")
+	if status != ValidationStatusUnknown {
+		t.Errorf("expected %q for nil result, got %q", ValidationStatusUnknown, status)
+	}
+}

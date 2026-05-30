@@ -2,11 +2,13 @@ package skills
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -231,7 +233,12 @@ If the skill content references auxiliary files using filesystem paths (e.g., "r
 
 ## Skill Name: `)
 	sb.WriteString(skillName)
-	sb.WriteString("\n\n## Skill Content:\n```\n")
+
+	// Use a randomized fence delimiter to prevent prompt injection.
+	// A malicious skill cannot predict this suffix, so it cannot craft content
+	// that "escapes" the code block to inject instructions into the LLM.
+	fenceID := randomFenceID()
+	sb.WriteString("\n\n## Skill Content:\n```" + fenceID + "\n")
 	sb.WriteString(content)
 	sb.WriteString("\n```\n\n")
 
@@ -457,6 +464,27 @@ func ContentHash(content string) string {
 	return hex.EncodeToString(h[:16]) // 32 hex chars — sufficient for change detection
 }
 
+// CompositeContentHash computes a hash that covers both the main skill content
+// and all auxiliary file contents. This ensures that modifying an auxiliary file
+// (e.g., scripts/deploy.sh) invalidates existing acknowledgments.
+// fileHashes should be pre-computed hashes of each auxiliary file's content.
+func CompositeContentHash(mainContent string, fileHashes []string) string {
+	if len(fileHashes) == 0 {
+		return ContentHash(mainContent)
+	}
+
+	h := sha256.New()
+	h.Write([]byte(mainContent))
+	// Sort for deterministic ordering regardless of file enumeration order
+	sorted := make([]string, len(fileHashes))
+	copy(sorted, fileHashes)
+	sort.Strings(sorted)
+	for _, fh := range sorted {
+		h.Write([]byte(fh))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:16])
+}
+
 // CriticalIssuesAcknowledged checks whether all critical issues in the result
 // have valid matching acknowledgments for the given content hash.
 // Returns true if there are no critical issues or all are acknowledged.
@@ -494,8 +522,12 @@ func CriticalIssuesAcknowledged(issues []ValidationIssue, acks []AcknowledgedRis
 
 // DetermineValidationStatus determines the appropriate validation status
 // given a validation result and acknowledged risks.
+// Returns ValidationStatusUnknown if result is nil (validation never ran).
 func DetermineValidationStatus(result *ValidationResult, acks []AcknowledgedRisk, contentHash string) string {
-	if result == nil || len(result.Issues) == 0 {
+	if result == nil {
+		return ValidationStatusUnknown
+	}
+	if len(result.Issues) == 0 {
 		return ValidationStatusClean
 	}
 
@@ -517,4 +549,16 @@ func IsUsableStatus(status string) bool {
 		return true
 	}
 	return false
+}
+
+// randomFenceID generates a random hex string for use as a code fence delimiter.
+// This prevents prompt injection by making it impossible for skill content to
+// predict and close the fence early.
+func randomFenceID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to a fixed but unlikely fence if random fails
+		return "SKILL_VALIDATE_FENCE"
+	}
+	return "SKILL_" + hex.EncodeToString(b)
 }

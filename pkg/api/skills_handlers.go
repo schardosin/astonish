@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -17,6 +18,30 @@ import (
 	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
 )
+
+// validationRateLimit tracks the last validation time per skill to prevent
+// abuse (each validation triggers an LLM call with cost implications).
+var (
+	validationRateMu    sync.Mutex
+	validationRateMap   = make(map[string]time.Time) // key: "scope:name"
+	validationRateLimit = 60 * time.Second
+)
+
+// canValidateSkill checks if a skill can be validated (rate limit not exceeded).
+// Returns true if allowed, false if rate-limited.
+func canValidateSkill(scope, name string) bool {
+	key := scope + ":" + name
+	validationRateMu.Lock()
+	defer validationRateMu.Unlock()
+
+	if last, ok := validationRateMap[key]; ok {
+		if time.Since(last) < validationRateLimit {
+			return false
+		}
+	}
+	validationRateMap[key] = time.Now()
+	return true
+}
 
 // SkillListItem represents a skill in the listing response.
 type SkillListItem struct {
@@ -200,9 +225,10 @@ type InstallSkillResponse struct {
 }
 
 func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // 16 KiB — only name + scope
 	var req CreateSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -845,7 +871,20 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 	// Post-save: run validation to determine status and persist issues
 	var validation *skills.ValidationResult
 	validationStatus := skills.ValidationStatusUnknown
-	contentHash := skills.ContentHash(rawFile)
+
+	// Compute composite hash including auxiliary files
+	savedFiles, _ := targetStore.ListFiles(r.Context(), parsed.Name)
+	fileHashes := make([]string, 0, len(savedFiles))
+	filePaths := make([]string, 0, len(savedFiles))
+	for _, f := range savedFiles {
+		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+		if f.Path != "" {
+			filePaths = append(filePaths, f.Path+"/"+f.Filename)
+		} else {
+			filePaths = append(filePaths, f.Filename)
+		}
+	}
+	contentHash := skills.CompositeContentHash(rawFile, fileHashes)
 
 	// If content hasn't changed, carry forward existing acknowledgments
 	var carryForwardAcks []skills.AcknowledgedRisk
@@ -856,15 +895,6 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 	llmProvider := getValidationLLMProvider(r)
 	if llmProvider != nil {
 		body := extractSkillBody(rawFile)
-		files, _ := targetStore.ListFiles(r.Context(), parsed.Name)
-		filePaths := make([]string, 0, len(files))
-		for _, f := range files {
-			if f.Path != "" {
-				filePaths = append(filePaths, f.Path+"/"+f.Filename)
-			} else {
-				filePaths = append(filePaths, f.Filename)
-			}
-		}
 		result, err := skills.ValidateSkill(r.Context(), skills.ValidatorConfig{
 			SkillName: parsed.Name,
 			Content:   body,
@@ -941,9 +971,10 @@ func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 // appropriate platform store (team preferred). This is the preferred path
 // for CLI in remote mode.
 func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64*1024) // 64 KiB — URL + optional config
 	var req InstallSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -991,14 +1022,16 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	// Download into a temp directory on the server
 	tmpDir, err := os.MkdirTemp("", "astonish-clawhub-install-*")
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to create temp dir: "+err.Error())
+		slog.Error("failed to create temp dir for ClawHub install", "error", err)
+		respondError(w, http.StatusInternalServerError, "server error during install")
 		return
 	}
 	defer os.RemoveAll(tmpDir)
 
 	result, err := skills.DownloadFromClawHub(slug, tmpDir)
 	if err != nil {
-		respondError(w, http.StatusBadGateway, "download from ClawHub failed: "+err.Error())
+		slog.Warn("ClawHub download failed", "slug", slug, "error", err)
+		respondError(w, http.StatusBadGateway, "download from ClawHub failed")
 		return
 	}
 
@@ -1006,7 +1039,8 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	skillPath := filepath.Join(tmpDir, slug, "SKILL.md")
 	skillData, err := os.ReadFile(skillPath)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "SKILL.md not found in package: "+err.Error())
+		slog.Warn("SKILL.md not found in ClawHub package", "slug", slug, "path", skillPath, "error", err)
+		respondError(w, http.StatusInternalServerError, "SKILL.md not found in package")
 		return
 	}
 
@@ -1109,14 +1143,25 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("skill validation failed during install", "skill", parsed.Name, "error", err)
 		} else {
 			validation = result
-			validationStatus = skills.DetermineValidationStatus(result, nil, skills.ContentHash(string(skillData)))
+			// Composite hash includes auxiliary file contents
+			fileHashes := make([]string, 0, len(savedFiles))
+			for _, f := range savedFiles {
+				fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+			}
+			installHash := skills.CompositeContentHash(string(skillData), fileHashes)
+			validationStatus = skills.DetermineValidationStatus(result, nil, installHash)
 		}
 	}
 
 	// Persist validation status
+	savedFilesForHash, _ := targetStore.ListFiles(r.Context(), parsed.Name)
+	installFileHashes := make([]string, 0, len(savedFilesForHash))
+	for _, f := range savedFilesForHash {
+		installFileHashes = append(installFileHashes, skills.ContentHash(f.Content))
+	}
 	valMeta := skills.ValidationMeta{
 		LastValidatedAt: time.Now().UTC().Format(time.RFC3339),
-		ContentHash:     skills.ContentHash(string(skillData)),
+		ContentHash:     skills.CompositeContentHash(string(skillData), installFileHashes),
 	}
 	valMetaJSON, _ := json.Marshal(valMeta)
 	if err := targetStore.UpdateValidationStatus(r.Context(), parsed.Name, validationStatus, string(valMetaJSON)); err != nil {
@@ -1276,12 +1321,24 @@ type ValidateSkillResponse struct {
 // Persists the resulting validation_status to the database, which controls
 // whether the skill can be used at runtime.
 func ValidateSkillHandler(w http.ResponseWriter, r *http.Request) {
+	// Authorization: only team/org admins can trigger validation (costs LLM tokens)
+	if !IsTeamAdmin(r) {
+		respondError(w, http.StatusForbidden, "only team or org admins can trigger skill validation")
+		return
+	}
+
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
+	// Rate limiting: prevent abuse (one validation per skill per 60 seconds)
+	if !canValidateSkill(scope, name) {
+		respondError(w, http.StatusTooManyRequests, "skill was validated recently — please wait before retrying")
+		return
+	}
+
 	svc := store.FromRequest(r)
 	if svc == nil || (svc.Skills == nil && svc.TeamSkills == nil) {
-		respondError(w, http.StatusNotFound, "No skill store available")
+		respondError(w, http.StatusNotFound, "no skill store available")
 		return
 	}
 
@@ -1352,8 +1409,14 @@ func ValidateSkillHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine new validation status
-	contentHash := skills.ContentHash(skill.Content)
+	// Determine new validation status.
+	// Use composite hash that includes auxiliary file contents — modifying
+	// an auxiliary file invalidates existing acknowledgments.
+	fileHashes := make([]string, 0, len(files))
+	for _, f := range files {
+		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+	}
+	contentHash := skills.CompositeContentHash(skill.Content, fileHashes)
 
 	// Load existing acknowledged risks from validation_meta (if any)
 	var existingMeta skills.ValidationMeta
@@ -1400,13 +1463,21 @@ type AcknowledgeSkillResponse struct {
 // Records a user's acknowledgment of a specific critical validation issue.
 // After acknowledgment, checks if all critical issues are now acknowledged —
 // if yes, transitions the skill to "acknowledged" (usable at runtime).
+// Requires team/org admin authorization.
 func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
+	// Authorization: only team/org admins can acknowledge critical security risks
+	if !IsTeamAdmin(r) {
+		respondError(w, http.StatusForbidden, "only team or org admins can acknowledge skill risks")
+		return
+	}
+
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
+	r.Body = http.MaxBytesReader(w, r.Body, 16*1024) // 16 KiB — type + message
 	var req AcknowledgeSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	if req.Message == "" || req.Type == "" {
@@ -1457,7 +1528,13 @@ func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(skill.ValidationMeta), &meta)
 	}
 
-	contentHash := skills.ContentHash(skill.Content)
+	// Compute composite hash including auxiliary files
+	auxFiles, _ := skillStore.ListFiles(r.Context(), name)
+	fileHashes := make([]string, 0, len(auxFiles))
+	for _, f := range auxFiles {
+		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+	}
+	contentHash := skills.CompositeContentHash(skill.Content, fileHashes)
 
 	// Verify the acknowledgment is for the current content (hash matches)
 	if meta.ContentHash != "" && meta.ContentHash != contentHash {
@@ -1486,7 +1563,8 @@ func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
 	// Persist updated meta + status
 	valMetaJSON, _ := json.Marshal(meta)
 	if err := skillStore.UpdateValidationStatus(r.Context(), name, newStatus, string(valMetaJSON)); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to update validation status: "+err.Error())
+		slog.Error("failed to update validation status", "skill", name, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to update validation status")
 		return
 	}
 

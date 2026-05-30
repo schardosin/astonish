@@ -29,10 +29,28 @@ var (
 
 // canValidateSkill checks if a skill can be validated (rate limit not exceeded).
 // Returns true if allowed, false if rate-limited.
+//
+// The key is normalized: empty scope → "team" (the default). This prevents
+// bypass via alternating scope parameter values. Note that "team" and "org"
+// are distinct skill namespaces (different stores, different data), so the
+// same skill name in different scopes legitimately needs separate rate slots.
 func canValidateSkill(scope, name string) bool {
+	if scope == "" {
+		scope = "team"
+	}
 	key := scope + ":" + name
 	validationRateMu.Lock()
 	defer validationRateMu.Unlock()
+
+	// Prune stale entries (simple inline cleanup — at most once per call)
+	if len(validationRateMap) > 1000 {
+		now := time.Now()
+		for k, v := range validationRateMap {
+			if now.Sub(v) > 5*time.Minute {
+				delete(validationRateMap, k)
+			}
+		}
+	}
 
 	if last, ok := validationRateMap[key]; ok {
 		if time.Since(last) < validationRateLimit {
@@ -325,15 +343,32 @@ func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found", name))
 }
 
-// validateSkillFilePath checks path and filename for traversal attempts.
+// validateSkillFilePath checks path and filename for traversal and injection attempts.
 // Returns true if valid, false (and writes error response) if invalid.
 func validateSkillFilePath(w http.ResponseWriter, path, filename string) bool {
-	if strings.Contains(path, "..") || strings.HasPrefix(path, "/") {
-		respondError(w, http.StatusBadRequest, "invalid path: must not contain '..' or start with '/'")
+	// Length limits
+	if len(path) > 255 || len(filename) > 255 {
+		respondError(w, http.StatusBadRequest, "path or filename exceeds maximum length (255)")
 		return false
 	}
+	// Null byte injection
+	if strings.ContainsRune(path, 0) || strings.ContainsRune(filename, 0) {
+		respondError(w, http.StatusBadRequest, "invalid characters in path or filename")
+		return false
+	}
+	// Path traversal and absolute path
+	if strings.Contains(path, "..") || strings.HasPrefix(path, "/") || strings.Contains(path, "\\") {
+		respondError(w, http.StatusBadRequest, "invalid path: must not contain '..', '\\', or start with '/'")
+		return false
+	}
+	// Filename: no separators or traversal
 	if strings.Contains(filename, "/") || strings.Contains(filename, "\\") || strings.Contains(filename, "..") {
 		respondError(w, http.StatusBadRequest, "invalid filename: must not contain '/', '\\', or '..'")
+		return false
+	}
+	// Empty filename
+	if filename == "" {
+		respondError(w, http.StatusBadRequest, "filename must not be empty")
 		return false
 	}
 	return true
@@ -341,6 +376,15 @@ func validateSkillFilePath(w http.ResponseWriter, path, filename string) bool {
 
 // ListSkillFilesHandler handles GET /api/skills/{name}/files
 func ListSkillFilesHandler(w http.ResponseWriter, r *http.Request) {
+	// Auth: Any authenticated team member can read skill files. Skills are
+	// available at runtime to all team members, so file content is not more
+	// privileged than the skill itself. Write operations require admin (see
+	// resolveSkillStoreForWrite).
+	if GetPlatformUser(r) == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
@@ -358,13 +402,14 @@ func ListSkillFilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if skillStore == nil {
-			respondError(w, http.StatusNotFound, "No skill store available for scope")
+			respondError(w, http.StatusNotFound, "no skill store available for scope")
 			return
 		}
 
 		files, err := skillStore.ListFiles(r.Context(), name)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to list skill files: "+err.Error())
+			slog.Error("failed to list skill files", "skill", name, "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to list skill files")
 			return
 		}
 
@@ -386,6 +431,12 @@ func ListSkillFilesHandler(w http.ResponseWriter, r *http.Request) {
 
 // GetSkillFileHandler handles GET /api/skills/{name}/file?path=...&filename=...
 func GetSkillFileHandler(w http.ResponseWriter, r *http.Request) {
+	// Auth: Any authenticated team member can read skill files (see ListSkillFilesHandler).
+	if GetPlatformUser(r) == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	name := mux.Vars(r)["name"]
 	path := r.URL.Query().Get("path")
 	filename := r.URL.Query().Get("filename")
@@ -413,17 +464,18 @@ func GetSkillFileHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if skillStore == nil {
-			respondError(w, http.StatusNotFound, "No skill store available")
+			respondError(w, http.StatusNotFound, "no skill store available")
 			return
 		}
 
 		file, err := skillStore.GetFile(r.Context(), name, path, filename)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to get skill file: "+err.Error())
+			slog.Error("failed to get skill file", "skill", name, "path", path, "filename", filename, "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to get skill file")
 			return
 		}
 		if file == nil {
-			respondError(w, http.StatusNotFound, "File not found")
+			respondError(w, http.StatusNotFound, "file not found")
 			return
 		}
 
@@ -877,7 +929,7 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 	fileHashes := make([]string, 0, len(savedFiles))
 	filePaths := make([]string, 0, len(savedFiles))
 	for _, f := range savedFiles {
-		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+		fileHashes = append(fileHashes, skillFileHash(f))
 		if f.Path != "" {
 			filePaths = append(filePaths, f.Path+"/"+f.Filename)
 		} else {
@@ -1121,18 +1173,22 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	var validation *skills.ValidationResult
 	validationStatus := skills.ValidationStatusUnknown
 
+	// Load saved auxiliary files once (used for both validation and hash computation)
+	savedFiles, _ := targetStore.ListFiles(r.Context(), parsed.Name)
+	filePaths := make([]string, 0, len(savedFiles))
+	fileHashes := make([]string, 0, len(savedFiles))
+	for _, f := range savedFiles {
+		fileHashes = append(fileHashes, skillFileHash(f))
+		if f.Path != "" {
+			filePaths = append(filePaths, f.Path+"/"+f.Filename)
+		} else {
+			filePaths = append(filePaths, f.Filename)
+		}
+	}
+	installHash := skills.CompositeContentHash(string(skillData), fileHashes)
+
 	if llmProvider := getValidationLLMProvider(r); llmProvider != nil {
 		body := extractSkillBody(string(skillData))
-		// Build file paths list from what we saved
-		savedFiles, _ := targetStore.ListFiles(r.Context(), parsed.Name)
-		filePaths := make([]string, 0, len(savedFiles))
-		for _, f := range savedFiles {
-			if f.Path != "" {
-				filePaths = append(filePaths, f.Path+"/"+f.Filename)
-			} else {
-				filePaths = append(filePaths, f.Filename)
-			}
-		}
 		result, err := skills.ValidateSkill(r.Context(), skills.ValidatorConfig{
 			SkillName: parsed.Name,
 			Content:   body,
@@ -1143,25 +1199,14 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("skill validation failed during install", "skill", parsed.Name, "error", err)
 		} else {
 			validation = result
-			// Composite hash includes auxiliary file contents
-			fileHashes := make([]string, 0, len(savedFiles))
-			for _, f := range savedFiles {
-				fileHashes = append(fileHashes, skills.ContentHash(f.Content))
-			}
-			installHash := skills.CompositeContentHash(string(skillData), fileHashes)
 			validationStatus = skills.DetermineValidationStatus(result, nil, installHash)
 		}
 	}
 
 	// Persist validation status
-	savedFilesForHash, _ := targetStore.ListFiles(r.Context(), parsed.Name)
-	installFileHashes := make([]string, 0, len(savedFilesForHash))
-	for _, f := range savedFilesForHash {
-		installFileHashes = append(installFileHashes, skills.ContentHash(f.Content))
-	}
 	valMeta := skills.ValidationMeta{
 		LastValidatedAt: time.Now().UTC().Format(time.RFC3339),
-		ContentHash:     skills.CompositeContentHash(string(skillData), installFileHashes),
+		ContentHash:     installHash,
 	}
 	valMetaJSON, _ := json.Marshal(valMeta)
 	if err := targetStore.UpdateValidationStatus(r.Context(), parsed.Name, validationStatus, string(valMetaJSON)); err != nil {
@@ -1414,7 +1459,7 @@ func ValidateSkillHandler(w http.ResponseWriter, r *http.Request) {
 	// an auxiliary file invalidates existing acknowledgments.
 	fileHashes := make([]string, 0, len(files))
 	for _, f := range files {
-		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+		fileHashes = append(fileHashes, skillFileHash(f))
 	}
 	contentHash := skills.CompositeContentHash(skill.Content, fileHashes)
 
@@ -1532,7 +1577,7 @@ func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
 	auxFiles, _ := skillStore.ListFiles(r.Context(), name)
 	fileHashes := make([]string, 0, len(auxFiles))
 	for _, f := range auxFiles {
-		fileHashes = append(fileHashes, skills.ContentHash(f.Content))
+		fileHashes = append(fileHashes, skillFileHash(f))
 	}
 	contentHash := skills.CompositeContentHash(skill.Content, fileHashes)
 
@@ -1540,6 +1585,26 @@ func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
 	if meta.ContentHash != "" && meta.ContentHash != contentHash {
 		respondError(w, http.StatusConflict, "Skill content has changed since validation — please re-validate first")
 		return
+	}
+
+	// Cap: prevent unbounded growth of acknowledged risks
+	const maxAcksPerSkill = 50
+	if len(meta.AcknowledgedRisks) >= maxAcksPerSkill {
+		respondError(w, http.StatusConflict, "acknowledgment limit reached (max 50 per skill)")
+		return
+	}
+
+	// Deduplication: check if this exact acknowledgment already exists
+	for _, existing := range meta.AcknowledgedRisks {
+		if existing.Type == req.Type && existing.Message == req.Message && existing.ContentHash == contentHash {
+			// Already acknowledged — return success idempotently
+			respondJSON(w, http.StatusOK, AcknowledgeSkillResponse{
+				Status:           "ok",
+				ValidationStatus: skill.ValidationStatus,
+				Acknowledgment:   &existing,
+			})
+			return
+		}
 	}
 
 	// Add the acknowledgment
@@ -1651,4 +1716,121 @@ func extractSkillBody(rawContent string) string {
 		}
 	}
 	return content
+}
+
+// ForceSkillStatusHandler handles POST /api/skills/{name}/force-status
+// Allows an admin to manually set a skill's validation status. This is the
+// escape hatch for platforms without an LLM configured — skills that cannot
+// be automatically validated can be manually approved by an admin.
+//
+// Only accepts transitions to "acknowledged" (admin accepts responsibility).
+// Cannot be used to set "clean" or "warnings" — those require actual validation.
+func ForceSkillStatusHandler(w http.ResponseWriter, r *http.Request) {
+	if !IsTeamAdmin(r) {
+		respondError(w, http.StatusForbidden, "only team or org admins can force skill status")
+		return
+	}
+
+	name := mux.Vars(r)["name"]
+	scope := r.URL.Query().Get("scope")
+
+	r.Body = http.MaxBytesReader(w, r.Body, 4*1024)
+	var req struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Only allow forcing to "acknowledged" — admin explicitly accepts responsibility
+	if req.Status != skills.ValidationStatusAcknowledged {
+		respondError(w, http.StatusBadRequest, "can only force status to 'acknowledged'")
+		return
+	}
+	if req.Reason == "" {
+		respondError(w, http.StatusBadRequest, "reason is required when forcing status")
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil || (svc.Skills == nil && svc.TeamSkills == nil) {
+		respondError(w, http.StatusNotFound, "no skill store available")
+		return
+	}
+
+	var skillStore store.SkillStore
+	if scope == "team" && svc.TeamSkills != nil {
+		skillStore = svc.TeamSkills
+	} else if scope == "org" && svc.Skills != nil {
+		skillStore = svc.Skills
+	} else if svc.TeamSkills != nil {
+		skillStore = svc.TeamSkills
+	} else {
+		skillStore = svc.Skills
+	}
+
+	if skillStore == nil {
+		respondError(w, http.StatusNotFound, "no skill store available for scope")
+		return
+	}
+
+	skill, err := skillStore.Get(r.Context(), name)
+	if err != nil || skill == nil {
+		respondError(w, http.StatusNotFound, fmt.Sprintf("skill %q not found", name))
+		return
+	}
+
+	// Build validation meta — record who forced this and why
+	userID := ""
+	userEmail := ""
+	if pu := GetPlatformUser(r); pu != nil {
+		userID = pu.ID
+		userEmail = pu.Email
+	}
+
+	var meta skills.ValidationMeta
+	if skill.ValidationMeta != "" {
+		_ = json.Unmarshal([]byte(skill.ValidationMeta), &meta)
+	}
+
+	// Compute composite hash
+	auxFiles, _ := skillStore.ListFiles(r.Context(), name)
+	fileHashes := make([]string, 0, len(auxFiles))
+	for _, f := range auxFiles {
+		fileHashes = append(fileHashes, skillFileHash(f))
+	}
+	contentHash := skills.CompositeContentHash(skill.Content, fileHashes)
+
+	meta.ContentHash = contentHash
+	meta.LastValidatedAt = time.Now().UTC().Format(time.RFC3339)
+	// Add a synthetic acknowledgment recording the force
+	meta.AcknowledgedRisks = append(meta.AcknowledgedRisks, skills.AcknowledgedRisk{
+		Message:             "Admin forced status: " + req.Reason,
+		Type:                "admin_override",
+		AcknowledgedBy:      userID,
+		AcknowledgedByEmail: userEmail,
+		AcknowledgedAt:      time.Now().UTC().Format(time.RFC3339),
+		ContentHash:         contentHash,
+	})
+
+	valMetaJSON, _ := json.Marshal(meta)
+	if err := skillStore.UpdateValidationStatus(r.Context(), name, skills.ValidationStatusAcknowledged, string(valMetaJSON)); err != nil {
+		slog.Error("failed to force validation status", "skill", name, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to update validation status")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status":            "ok",
+		"validation_status": skills.ValidationStatusAcknowledged,
+	})
+}
+
+// skillFileHash computes a hash of a skill file that includes its path and filename.
+// This ensures that renaming a file (without changing content) or swapping file
+// contents between two paths both invalidate the composite hash.
+func skillFileHash(f store.SkillFile) string {
+	return skills.ContentHash(f.Path + "/" + f.Filename + "\x00" + f.Content)
 }

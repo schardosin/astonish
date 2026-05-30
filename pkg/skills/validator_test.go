@@ -241,7 +241,10 @@ func TestBuildValidationPrompt_IncludesManifest(t *testing.T) {
 	files := []string{"scripts/deploy.sh", "references/api.md"}
 	preScan := PreScanFindings{}
 
-	prompt := buildValidationPrompt("my-skill", "# Content", files, preScan)
+	prompt, err := buildValidationPrompt("my-skill", "# Content", files, preScan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if !contains(prompt, "scripts/deploy.sh") {
 		t.Error("prompt should include manifest file paths")
@@ -264,7 +267,10 @@ func TestBuildValidationPrompt_IncludesPreScanFindings(t *testing.T) {
 		},
 	}
 
-	prompt := buildValidationPrompt("test", "# Content", nil, preScan)
+	prompt, err := buildValidationPrompt("test", "# Content", nil, preScan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if !contains(prompt, "scripts/deploy.sh") {
 		t.Error("prompt should include pre-scan file path findings")

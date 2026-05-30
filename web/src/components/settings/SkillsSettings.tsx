@@ -195,6 +195,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const [editorSaving, setEditorSaving] = useState(false)
   const [editorError, setEditorError] = useState<string | null>(null)
   const [editorSuccess, setEditorSuccess] = useState(false)
+  const [acknowledging, setAcknowledging] = useState<string | null>(null) // issue key being acknowledged
 
   // Multi-file editor state
   const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
@@ -345,6 +346,11 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const switchToFile = async (path: string, filename: string) => {
     if (!activeSkill) return
 
+    // Guard: warn user about unsaved changes before switching
+    if (editorContent !== loadedContent) {
+      if (!window.confirm('You have unsaved changes. Discard and switch files?')) return
+    }
+
     setEditorLoading(true)
     setEditorError(null)
 
@@ -479,9 +485,13 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       setLoadedContent(editorContent) // Reset dirty tracking after successful save
       setTimeout(() => setEditorSuccess(false), 2000)
       loadSkills()
-      // Refresh the file list
-      const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-      setActiveSkill(refreshed)
+      // Refresh skill data — isolated so save success isn't masked by refresh failure
+      try {
+        const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+        setActiveSkill(refreshed)
+      } catch {
+        // Refresh failed but save succeeded — don't show error
+      }
     } catch (err: any) {
       setEditorError(err.message)
     } finally {
@@ -535,8 +545,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   }
 
   const handleApplyFix = (suggestion: { old_content: string; new_content: string }) => {
-    if (!suggestion.old_content || !suggestion.new_content) return
-    const updated = editorContent.replace(suggestion.old_content, suggestion.new_content)
+    if (!suggestion.old_content) return // old_content required; new_content can be empty (deletion)
+    const updated = editorContent.replace(suggestion.old_content, suggestion.new_content ?? '')
     if (updated !== editorContent) {
       setEditorContent(updated)
       // Remove the applied issue from the list
@@ -552,6 +562,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   const handleAcknowledgeRisk = async (issue: any) => {
     if (!activeSkill) return
+    const issueKey = `${issue.type}:${issue.message}`
+    setAcknowledging(issueKey)
     try {
       const params = (activeSkill.scope || scope) ? `?scope=${activeSkill.scope || scope}` : ''
       const res = await teamFetch(
@@ -594,6 +606,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       loadSkills()
     } catch (err: any) {
       setEditorError('Failed to acknowledge risk: ' + err.message)
+    } finally {
+      setAcknowledging(null)
     }
   }
 
@@ -837,10 +851,11 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                       {issue.severity === 'critical' && !matchingAck && (
                         <button
                           onClick={() => handleAcknowledgeRisk(issue)}
-                          className="text-xs px-2 py-0.5 rounded transition-colors bg-orange-600/80 hover:bg-orange-600 text-white"
+                          disabled={acknowledging === `${issue.type}:${issue.message}`}
+                          className="text-xs px-2 py-0.5 rounded transition-colors bg-orange-600/80 hover:bg-orange-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Accept this risk — you understand the security implications"
                         >
-                          Acknowledge Risk
+                          {acknowledging === `${issue.type}:${issue.message}` ? 'Acknowledging...' : 'Acknowledge Risk'}
                         </button>
                       )}
                       {matchingAck && (
@@ -887,6 +902,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                {/* SKILL.md - always first */}
                <div
                  onClick={() => {
+                   if (editorContent !== loadedContent) {
+                     if (!window.confirm('You have unsaved changes. Discard and switch files?')) return
+                   }
                    setCurrentFilePath('')
                    setCurrentFilename('SKILL.md')
                    setEditorContent(activeSkill?.raw_file || '')

@@ -90,8 +90,15 @@ func ParseClawHubInput(input string) (string, error) {
 }
 
 // DownloadFromClawHub downloads a skill from ClawHub and extracts it to destDir/{slug}/.
+//
+// SSRF note: This function is NOT vulnerable to SSRF because:
+//   - The base URL (clawHubDownloadURL) is a compile-time constant pointing to the
+//     official Convex endpoint. The user-supplied slug is ONLY used as a query
+//     parameter value (URL-escaped via url.QueryEscape), never as a hostname or path.
+//   - ParseClawHubInput validates input formats and extracts only slug strings,
+//     never arbitrary URLs that could redirect the download to internal services.
 func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
-	// Build download URL
+	// Build download URL — slug is query-escaped, base URL is hardcoded constant.
 	downloadURL := fmt.Sprintf("%s?slug=%s", clawHubDownloadURL, url.QueryEscape(slug))
 
 	resp, err := http.Get(downloadURL) //nolint:gosec // URL is constructed from constant base + user slug

@@ -59,7 +59,10 @@ func ValidateSkill(ctx context.Context, cfg ValidatorConfig) (*ValidationResult,
 	preScan := runPreScan(cfg.Content, cfg.Files)
 
 	// Phase 2: AI analysis with pre-scan findings as context
-	prompt := buildValidationPrompt(cfg.SkillName, cfg.Content, cfg.Files, preScan)
+	prompt, err := buildValidationPrompt(cfg.SkillName, cfg.Content, cfg.Files, preScan)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build validation prompt: %w", err)
+	}
 
 	response, err := cfg.LLM.EvaluateText(ctx, prompt)
 	if err != nil {
@@ -216,7 +219,7 @@ func matchesManifest(detected string, manifestFiles []string) bool {
 
 // --- AI Prompt Construction ---
 
-func buildValidationPrompt(skillName, content string, files []string, preScan PreScanFindings) string {
+func buildValidationPrompt(skillName, content string, files []string, preScan PreScanFindings) (string, error) {
 	var sb strings.Builder
 
 	sb.WriteString(`You are a security and quality auditor for AI agent skills. These skills are loaded by AI agents that follow the instructions literally.
@@ -237,7 +240,10 @@ If the skill content references auxiliary files using filesystem paths (e.g., "r
 	// Use a randomized fence delimiter to prevent prompt injection.
 	// A malicious skill cannot predict this suffix, so it cannot craft content
 	// that "escapes" the code block to inject instructions into the LLM.
-	fenceID := randomFenceID()
+	fenceID, err := randomFenceID()
+	if err != nil {
+		return "", err
+	}
 	sb.WriteString("\n\n## Skill Content:\n```" + fenceID + "\n")
 	sb.WriteString(content)
 	sb.WriteString("\n```\n\n")
@@ -262,7 +268,9 @@ If the skill content references auxiliary files using filesystem paths (e.g., "r
 		if len(preScan.FilePathsInContent) > 0 {
 			sb.WriteString("### File paths in content that match auxiliary files:\n")
 			for _, fp := range preScan.FilePathsInContent {
-				sb.WriteString(fmt.Sprintf("- Line %d: `%s` (context: \"%s\")\n", fp.Line, fp.Path, fp.Context))
+				// Truncate context to prevent prompt injection via crafted file paths
+				ctx := truncateStr(fp.Context, 200)
+				sb.WriteString(fmt.Sprintf("- Line %d: `%s` (context: \"%s\")\n", fp.Line, truncateStr(fp.Path, 100), ctx))
 			}
 			sb.WriteString("\n")
 		}
@@ -270,7 +278,8 @@ If the skill content references auxiliary files using filesystem paths (e.g., "r
 		if len(preScan.DangerousPatterns) > 0 {
 			sb.WriteString("### Potentially dangerous patterns detected:\n")
 			for _, dp := range preScan.DangerousPatterns {
-				sb.WriteString(fmt.Sprintf("- Line %d: `%s` — %s\n", dp.Line, dp.Match, dp.Reason))
+				// Truncate match text to prevent prompt injection
+				sb.WriteString(fmt.Sprintf("- Line %d: `%s` — %s\n", dp.Line, truncateStr(dp.Match, 100), truncateStr(dp.Reason, 200)))
 			}
 			sb.WriteString("\n")
 		}
@@ -317,7 +326,7 @@ Set "suggestion" to null if no automatic fix is possible.
 If the skill is clean (no issues), return: []
 `)
 
-	return sb.String()
+	return sb.String(), nil
 }
 
 // --- Response Parsing ---
@@ -553,12 +562,23 @@ func IsUsableStatus(status string) bool {
 
 // randomFenceID generates a random hex string for use as a code fence delimiter.
 // This prevents prompt injection by making it impossible for skill content to
-// predict and close the fence early.
-func randomFenceID() string {
+// predict and close the fence early. Returns an error if crypto/rand fails —
+// callers must NOT fall back to a predictable value.
+func randomFenceID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback to a fixed but unlikely fence if random fails
-		return "SKILL_VALIDATE_FENCE"
+		return "", fmt.Errorf("crypto/rand failed: %w", err)
 	}
-	return "SKILL_" + hex.EncodeToString(b)
+	return "SKILL_" + hex.EncodeToString(b), nil
+}
+
+// truncateStr truncates s to maxLen characters, appending "…" if truncated.
+func truncateStr(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }

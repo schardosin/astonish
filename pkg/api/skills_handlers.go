@@ -1168,29 +1168,6 @@ func deleteSkillPlatform(w http.ResponseWriter, targetStore store.SkillStore, na
 
 // --- Shared helpers ---
 
-func skillsToListItems(loaded []skills.Skill) []SkillListItem {
-	items := make([]SkillListItem, 0, len(loaded))
-	for _, s := range loaded {
-		item := SkillListItem{
-			Name:         s.Name,
-			Description:  s.Description,
-			Source:       s.Source,
-			Eligible:     s.IsEligible(),
-			Editable:     s.Source != "bundled",
-			RequireBins:  s.RequireBins,
-			RequireEnv:   s.RequireEnv,
-			OS:           s.OS,
-			FilePath:     s.FilePath,
-			HasDirectory: s.Directory != "",
-		}
-		if !item.Eligible {
-			item.Missing = s.MissingRequirements()
-		}
-		items = append(items, item)
-	}
-	return items
-}
-
 func skillToListItem(name, description, source, scope string, eligible bool, missing, requireBins, requireEnv, osNames []string, filePath string, hasDirectory, editable bool) SkillListItem {
 	item := SkillListItem{
 		Name:         name,
@@ -1236,17 +1213,6 @@ func storeSkillToListItem(s *store.Skill) SkillListItem {
 		OS:               parsed.OS,
 		ValidationStatus: s.ValidationStatus,
 	}
-}
-
-func reconstructRawFile(s *skills.Skill) string {
-	// If we have the file path, read the raw file from disk
-	if s.FilePath != "" {
-		data, err := os.ReadFile(s.FilePath)
-		if err == nil {
-			return string(data)
-		}
-	}
-	return reconstructRawFileFromSkillPkg(s)
 }
 
 func reconstructRawFileFromSkillPkg(s *skills.Skill) string {

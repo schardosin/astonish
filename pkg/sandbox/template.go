@@ -21,6 +21,11 @@ import (
 // DefaultBaseImage is the default image used for the @base template.
 const DefaultBaseImage = "ubuntu/24.04"
 
+// OverlaySentinelPath is a file written into the template during setup.
+// Its presence inside a running container verifies the overlay template layer
+// is properly mounted. If missing, the overlay is stale or broken.
+const OverlaySentinelPath = "/etc/astonish-overlay-ok"
+
 // CoreTools are the tools installed in the @base template during setup.
 var CoreTools = []string{
 	"git",
@@ -64,6 +69,10 @@ func CoreToolInstallCommands() [][]string {
 		{"apt-get", "install", "-y", "nodejs"},
 		// Install uv (Python package manager) — provides uvx
 		{"sh", "-c", "curl -LsSf https://astral.sh/uv/install.sh | sh"},
+		// Write sentinel file used by container health checks to verify the
+		// template layer is visible through the overlay. If this file is
+		// missing at runtime, the overlay mount is stale or broken.
+		{"sh", "-c", "echo 'astonish-template-ready' > /etc/astonish-overlay-ok"},
 		// Clean up apt cache
 		{"apt-get", "clean"},
 		// Use sh -c so the shell expands the glob (shellJoin would single-quote
@@ -503,10 +512,37 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 	// deleting it here without synchronization causes "Failed to exec /sbin/init".
 	templateSnapshotMu.Lock()
 
+	// CRITICAL: Stop dependent containers BEFORE deleting the snapshot.
+	// The old snapshot directory inode will be gone after DeleteSnapshot.
+	// Any container still running with an overlay referencing the old inode
+	// would see an empty lowerdir (stale dentry cache). By stopping them
+	// first, we guarantee no container can observe the stale state.
+	var dependentOverlays []*DependentOverlay
+	poolName, poolErr := GetPoolForProfile(client)
+	if poolErr == nil {
+		poolPath, pathErr := GetPoolSourcePath(client, poolName)
+		if pathErr == nil {
+			snapPath := SnapshotRootfsPath(poolPath, name)
+			overlays, findErr := FindDependentOverlays(snapPath)
+			if findErr != nil {
+				slog.Warn("failed to find dependent overlays", "component", "sandbox", "error", findErr)
+			} else if len(overlays) > 0 {
+				slog.Info("stopping dependent containers before snapshot recreation",
+					"component", "sandbox", "count", len(overlays))
+				StopDependentContainers(client, overlays)
+				dependentOverlays = overlays
+			}
+		}
+	}
+
 	// Delete existing snapshot if present
 	if client.HasSnapshot(containerName, SnapshotName) {
 		fmt.Println("Removing existing snapshot...")
 		if err := client.DeleteSnapshot(containerName, SnapshotName); err != nil {
+			// Restart containers we stopped before returning the error
+			if dependentOverlays != nil {
+				RestartDependentContainers(client, dependentOverlays)
+			}
 			templateSnapshotMu.Unlock()
 			return fmt.Errorf("failed to delete old snapshot: %w", err)
 		}
@@ -521,26 +557,19 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 	// Create new snapshot (captures the shifted UIDs)
 	fmt.Println("Creating snapshot...")
 	if err := client.CreateSnapshot(containerName, SnapshotName); err != nil {
+		// Restart containers we stopped before returning the error
+		if dependentOverlays != nil {
+			RestartDependentContainers(client, dependentOverlays)
+		}
 		templateSnapshotMu.Unlock()
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
 
-	// Remount all overlay mounts that depend on the base snapshot.
-	// The old snapshot directory was deleted (old inode gone) and a new one
-	// created (new inode). Existing overlay mounts still reference the old
-	// inode via the kernel's mount table, so they see an empty directory.
-	// We must unmount+remount each one so the kernel resolves the path to
-	// the new inode. This runs while templateSnapshotMu is still held to
-	// prevent new overlays from being created mid-remount.
-	poolName, poolErr := GetPoolForProfile(client)
-	if poolErr == nil {
-		poolPath, pathErr := GetPoolSourcePath(client, poolName)
-		if pathErr == nil {
-			snapPath := SnapshotRootfsPath(poolPath, name)
-			if remountErr := RemountDependentOverlays(client, snapPath); remountErr != nil {
-				slog.Warn("failed to remount dependent overlays", "component", "sandbox", "error", remountErr)
-			}
-		}
+	// Remount overlays with fresh inode references (the new snapshot has a
+	// new inode at the same path), then restart the containers we stopped.
+	if dependentOverlays != nil {
+		RemountOverlays(client, dependentOverlays)
+		RestartDependentContainers(client, dependentOverlays)
 	}
 
 	templateSnapshotMu.Unlock()

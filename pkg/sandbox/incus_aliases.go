@@ -167,6 +167,22 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 	return incus.RemountDependentOverlays(client, snapshotPath)
 }
 
+// DependentOverlay describes an overlay mount affected by a snapshot change.
+type DependentOverlay = incus.DependentOverlay
+
+func FindDependentOverlays(snapshotPath string) ([]*DependentOverlay, error) {
+	return incus.FindDependentOverlays(snapshotPath)
+}
+func StopDependentContainers(client *IncusClient, overlays []*DependentOverlay) {
+	incus.StopDependentContainers(client, overlays)
+}
+func RemountOverlays(client *IncusClient, overlays []*DependentOverlay) {
+	incus.RemountOverlays(client, overlays)
+}
+func RestartDependentContainers(client *IncusClient, overlays []*DependentOverlay) {
+	incus.RestartDependentContainers(client, overlays)
+}
+
 // ---------------------------------------------------------------------------
 // Docker / host-exec helpers
 // ---------------------------------------------------------------------------

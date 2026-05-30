@@ -98,6 +98,15 @@ func (nc *NodeClient) startLocked() error {
 		if err := nc.client.StartInstance(nc.containerName); err != nil {
 			return fmt.Errorf("failed to restart stopped container %q: %w", nc.containerName, err)
 		}
+		// Verify the template layer is intact after restart. A template refresh
+		// may have force-stopped this container and left a stale overlay mount.
+		// Without this check, the node starts but tool calls see empty /usr/bin/.
+		exitCode, _ := nc.client.ExecSimple(nc.containerName, []string{"test", "-f", OverlaySentinelPath})
+		if exitCode != 0 {
+			// Template layer missing — stale overlay. Stop and signal for full recovery.
+			_ = nc.client.StopInstance(nc.containerName, true)
+			return fmt.Errorf("container %q template layer not visible (stale overlay)", nc.containerName)
+		}
 	}
 
 	cmd := []string{BinaryDestPath, "node"}
@@ -505,15 +514,21 @@ func (lnc *LazyNodeClient) callOnce(sessionID, toolName string, args map[string]
 }
 
 // isContainerGone returns true if the error indicates the container was
-// destroyed or no longer exists. This covers errors from both startLocked()
-// (explicit "no longer exists" check) and the Incus API ("Instance not found").
+// destroyed, no longer exists, or has a broken filesystem (stale overlay).
+// This covers errors from:
+//   - startLocked() explicit "no longer exists" check
+//   - the Incus API ("Instance not found")
+//   - pipe breaks from external force-stop (template refresh, admin action)
+//   - stale overlay detection ("template layer not visible")
 func (lnc *LazyNodeClient) isContainerGone(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "no longer exists") ||
-		strings.Contains(msg, "Instance not found")
+		strings.Contains(msg, "Instance not found") ||
+		strings.Contains(msg, "closed pipe") ||
+		strings.Contains(msg, "template layer not visible")
 }
 
 // resetForRetry tears down the current state and re-initializes the container

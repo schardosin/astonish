@@ -332,15 +332,6 @@ func FilterEligible(skills []Skill) []Skill {
 	return eligible
 }
 
-func containsStr(ss []string, s string) bool {
-	for _, v := range ss {
-		if strings.EqualFold(v, s) {
-			return true
-		}
-	}
-	return false
-}
-
 func sortSkills(skills []Skill) {
 	for i := 0; i < len(skills); i++ {
 		for j := i + 1; j < len(skills); j++ {

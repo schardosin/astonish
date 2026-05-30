@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -49,7 +50,10 @@ func (s *pgSkillStore) Get(ctx context.Context, name string) (*store.Skill, erro
 
 	var dbName, rawContent, valStatus, valMeta string
 	if err := row.Scan(&dbName, &rawContent, &valStatus, &valMeta); err != nil {
-		return nil, fmt.Errorf("skill not found: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // not found — consistent with SQLite store contract
+		}
+		return nil, fmt.Errorf("skill query error: %w", err)
 	}
 
 	skill := parseStoredSkill(dbName, rawContent)

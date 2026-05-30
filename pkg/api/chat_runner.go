@@ -139,9 +139,13 @@ func (cr *ChatRunner) InjectSkillIndex(index string) {
 	if index == "" {
 		return
 	}
+	// Clone-and-replace pattern: never mutate a PromptOverrides that may be
+	// shared via context. Create a new struct with the updated field.
 	po := agent.PromptOverridesFromContext(cr.ctx)
 	if po != nil {
-		po.SkillIndex = index
+		newPO := *po // shallow copy
+		newPO.SkillIndex = index
+		cr.ctx = agent.WithPromptOverrides(cr.ctx, &newPO)
 	} else {
 		cr.ctx = agent.WithPromptOverrides(cr.ctx, &agent.PromptOverrides{
 			SkillIndex: index,

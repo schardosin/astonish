@@ -184,7 +184,14 @@ func handleSkillsInstall(input string) error {
 	if resp.Description != "" {
 		fmt.Printf("Description: %s\n", resp.Description)
 	}
-	fmt.Println("Status: eligible (server-side check not re-run here)")
+	valStatus := resp.ValidationStatus
+	if valStatus == "" {
+		valStatus = "unknown"
+	}
+	fmt.Printf("Validation: %s\n", valStatus)
+	if resp.Status == "installed_blocked" {
+		fmt.Println("  ⚠ Skill is blocked at runtime until validated/acknowledged in Settings → Skills.")
+	}
 
 	return nil
 }

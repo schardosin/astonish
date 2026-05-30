@@ -30,15 +30,18 @@ var (
 // canValidateSkill checks if a skill can be validated (rate limit not exceeded).
 // Returns true if allowed, false if rate-limited.
 //
-// The key is normalized: empty scope → "team" (the default). This prevents
-// bypass via alternating scope parameter values. Note that "team" and "org"
-// are distinct skill namespaces (different stores, different data), so the
-// same skill name in different scopes legitimately needs separate rate slots.
-func canValidateSkill(scope, name string) bool {
+// The key is tenant-scoped to prevent cross-tenant collisions in multi-tenant
+// deployments. Empty scope normalizes to "team" (the default). Note that "team"
+// and "org" are distinct skill namespaces (different stores, different data), so
+// the same skill name in different scopes legitimately needs separate rate slots.
+func canValidateSkill(teamSlug, scope, name string) bool {
 	if scope == "" {
 		scope = "team"
 	}
-	key := scope + ":" + name
+	if teamSlug == "" {
+		teamSlug = "_"
+	}
+	key := teamSlug + ":" + scope + ":" + name
 	validationRateMu.Lock()
 	defer validationRateMu.Unlock()
 
@@ -1131,7 +1134,14 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Walk and save all auxiliary files (supports multi-file skills)
+	// Enforce limits to prevent abuse: max 100 files, 1 MiB per file, 10 MiB total.
+	const (
+		maxInstallFiles     = 100
+		maxInstallFileSize  = 1 << 20  // 1 MiB per file
+		maxInstallTotalSize = 10 << 20 // 10 MiB aggregate
+	)
 	filesSaved := 0
+	var totalSize int64
 	skillDir := filepath.Join(tmpDir, slug)
 
 	err = filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
@@ -1143,6 +1153,23 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 
 		if rel == "SKILL.md" || rel == "_meta.json" {
 			return nil
+		}
+
+		// Enforce per-file size limit
+		if info.Size() > maxInstallFileSize {
+			slog.Warn("skipping oversized file during install", "file", rel, "size", info.Size())
+			return nil
+		}
+
+		// Enforce aggregate size limit
+		totalSize += info.Size()
+		if totalSize > maxInstallTotalSize {
+			return fmt.Errorf("total file size exceeds %d bytes limit", maxInstallTotalSize)
+		}
+
+		// Enforce file count limit
+		if filesSaved >= maxInstallFiles {
+			return fmt.Errorf("file count exceeds %d limit", maxInstallFiles)
 		}
 
 		content, err := os.ReadFile(path)
@@ -1242,8 +1269,8 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 func deleteSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore store.SkillStore, name, scope string) {
 	ctx := r.Context()
 	// Verify it exists in this store
-	_, err := targetStore.Get(ctx, name)
-	if err != nil {
+	skill, err := targetStore.Get(ctx, name)
+	if err != nil || skill == nil {
 		// Check if it's a bundled skill
 		bundled, _ := skills.LoadBundledSkills()
 		for _, s := range bundled {
@@ -1385,7 +1412,7 @@ func ValidateSkillHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
 	// Rate limiting: prevent abuse (one validation per skill per 60 seconds)
-	if !canValidateSkill(scope, name) {
+	if !canValidateSkill(effectiveTeamSlug(r), scope, name) {
 		respondError(w, http.StatusTooManyRequests, "skill was validated recently — please wait before retrying")
 		return
 	}
@@ -1674,7 +1701,10 @@ func AcknowledgeSkillHandler(w http.ResponseWriter, r *http.Request) {
 // Uses the ChatManager's LLM if already initialized, otherwise creates one
 // directly from the effective platform config (provider cascade).
 func getValidationLLMProvider(r *http.Request) skills.LLMProvider {
-	// Fast path: use the already-initialized chat LLM
+	// Fast path: use the already-initialized chat LLM.
+	// NOTE: We snapshot comp under the lock. Even if another goroutine replaces
+	// cm.components after we release the lock, our reference remains valid (GC
+	// keeps it alive). The LLM pointer is safe to use after unlock.
 	cm := GetChatManager()
 	cm.mu.Lock()
 	comp := cm.components

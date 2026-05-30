@@ -519,9 +519,13 @@ func SnapshotTemplate(client *IncusClient, registry *TemplateRegistry, name stri
 	// first, we guarantee no container can observe the stale state.
 	var dependentOverlays []*DependentOverlay
 	poolName, poolErr := GetPoolForProfile(client)
-	if poolErr == nil {
+	if poolErr != nil {
+		slog.Warn("failed to resolve storage pool for overlay cleanup", "component", "sandbox", "error", poolErr)
+	} else {
 		poolPath, pathErr := GetPoolSourcePath(client, poolName)
-		if pathErr == nil {
+		if pathErr != nil {
+			slog.Warn("failed to get pool source path for overlay cleanup", "component", "sandbox", "pool", poolName, "error", pathErr)
+		} else {
 			snapPath := SnapshotRootfsPath(poolPath, name)
 			overlays, findErr := FindDependentOverlays(snapPath)
 			if findErr != nil {

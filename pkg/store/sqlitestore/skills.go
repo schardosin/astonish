@@ -64,7 +64,7 @@ func (s *sqliteSkillStore) Delete(ctx context.Context, name string) error {
 func (s *sqliteSkillStore) UpdateValidationStatus(ctx context.Context, name, status, meta string) error {
 	_, err := s.db.ExecContext(ctx,
 		fmt.Sprintf(`UPDATE %s SET validation_status = ?, validation_meta = ?, updated_at = datetime('now') WHERE name = ?`, s.table),
-		status, meta, name)
+		status, nilStr(meta), name)
 	return err
 }
 

@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -201,13 +202,15 @@ func handlePlatformSkillLookup(ctx tool.Context, store store.SkillStore, skill *
 	}
 
 	if filePath != "" {
-		// Validate for path traversal
-		if strings.Contains(filePath, "..") || strings.HasPrefix(filePath, "/") {
+		// Canonicalize and validate for path traversal
+		cleaned := filepath.ToSlash(filepath.Clean(filePath))
+		if cleaned != filePath || strings.Contains(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
 			return SkillLookupResult{
 				Name:  skill.Name,
-				Error: "invalid file path: must not contain '..' or start with '/'",
+				Error: "invalid file path: must be a clean relative path without '..' or leading '/'",
 			}
 		}
+		filePath = cleaned
 
 		// Specific file requested
 		// Normalize path/filename

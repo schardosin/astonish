@@ -220,6 +220,14 @@ func matchesManifest(detected string, manifestFiles []string) bool {
 
 // --- AI Prompt Construction ---
 
+// buildValidationPrompt constructs the LLM prompt for skill validation.
+//
+// PROMPT INJECTION MITIGATION: The skill content is included raw in the prompt
+// (it must be for the LLM to analyze), but the response is never auto-applied.
+// All suggestions go through the UI validation panel where an admin must manually
+// review and click "Apply" for each fix. Additionally, pre-scan findings are
+// truncated (match: 100 chars, context: 200 chars) to limit content that could
+// be crafted to manipulate the LLM's output format.
 func buildValidationPrompt(skillName, content string, files []string, preScan PreScanFindings) (string, error) {
 	var sb strings.Builder
 

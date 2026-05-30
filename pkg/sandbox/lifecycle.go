@@ -107,6 +107,10 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		sessRegistry.Remove(sessionID)
 	}
 
+	// BOUNDED RETRY: This label is reached at most once per function call.
+	// After recreation, if the health check fails again (line ~181), we return
+	// an error — never goto recreate a second time. The outer caller
+	// (LazyNodeClient.Call) also limits retries to exactly 1.
 recreate:
 
 	// Resolve template
@@ -277,6 +281,8 @@ func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistr
 		sessRegistry.Remove(sessionID)
 	}
 
+	// BOUNDED RETRY: Same as EnsureSessionContainer — at most one recreation
+	// attempt per call. Post-recreation health check failure returns an error.
 recreateOrg:
 	// Resolve template
 	if templateName == "" || templateName == BaseTemplateID {

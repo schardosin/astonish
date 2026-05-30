@@ -1161,6 +1161,8 @@ func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillS
 	// 1. Bundled skills (always available)
 	if bundled, err := skills.LoadBundledSkills(); err == nil {
 		all = append(all, bundled...)
+	} else {
+		slog.Warn("failed to load bundled skills for index", "error", err)
 	}
 
 	// 2. Org skills (if store available)
@@ -1199,15 +1201,20 @@ func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillS
 		return ""
 	}
 
-	// Deduplicate preferring later entries (team > org > bundled)
-	seen := make(map[string]bool)
+	// Deduplicate preferring later entries (team > org > bundled).
+	// Reverse-iterate and collect, then reverse to preserve original order — O(n).
+	seen := make(map[string]bool, len(all))
 	var deduped []skills.Skill
 	for i := len(all) - 1; i >= 0; i-- {
 		name := strings.ToLower(all[i].Name)
 		if !seen[name] {
 			seen[name] = true
-			deduped = append([]skills.Skill{all[i]}, deduped...)
+			deduped = append(deduped, all[i])
 		}
+	}
+	// Reverse to restore bundled → org → team display order
+	for i, j := 0, len(deduped)-1; i < j; i, j = i+1, j-1 {
+		deduped[i], deduped[j] = deduped[j], deduped[i]
 	}
 
 	return skills.BuildSkillIndex(deduped)

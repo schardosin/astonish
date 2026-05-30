@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // --- Session API ---
@@ -289,12 +290,13 @@ func (c *Client) ListDrillSuites() ([]DrillSuite, error) {
 
 // InstallSkillResponse matches the server response from POST /api/skills/install
 type InstallSkillResponse struct {
-	Status      string `json:"status"`
-	Name        string `json:"name"`
-	Scope       string `json:"scope"`
-	FilesSaved  int    `json:"files_saved"`
-	Version     string `json:"version,omitempty"`
-	Description string `json:"description,omitempty"`
+	Status           string `json:"status"`
+	Name             string `json:"name"`
+	Scope            string `json:"scope"`
+	FilesSaved       int    `json:"files_saved"`
+	Version          string `json:"version,omitempty"`
+	Description      string `json:"description,omitempty"`
+	ValidationStatus string `json:"validation_status,omitempty"`
 }
 
 // InstallSkill tells the remote server to download and install a skill from ClawHub
@@ -349,7 +351,7 @@ type SkillContentResponse struct {
 // GetSkillContent fetches the full SKILL.md (and metadata) for a skill.
 func (c *Client) GetSkillContent(name string) (*SkillContentResponse, error) {
 	var resp SkillContentResponse
-	path := fmt.Sprintf("/api/skills/%s/content", name)
+	path := fmt.Sprintf("/api/skills/%s/content", url.PathEscape(name))
 	if err := c.DoJSON("GET", path, nil, &resp); err != nil {
 		return nil, err
 	}

@@ -197,7 +197,6 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Sidebar add-file form
   const [showAddFile, setShowAddFile] = useState(false)
-  const [newFileDir, setNewFileDir] = useState<string>('scripts')
   const [newFileName, setNewFileName] = useState('')
   const [addFileError, setAddFileError] = useState<string | null>(null)
 
@@ -340,8 +339,15 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const handleAddFile = async () => {
     if (!activeSkill || !newFileName.trim()) return
     setAddFileError(null)
-    const p = newFileDir
-    const fn = newFileName.trim()
+    const raw = newFileName.trim()
+    const lastSlash = raw.lastIndexOf('/')
+    const p = lastSlash > 0 ? raw.substring(0, lastSlash) : ''
+    const fn = lastSlash > 0 ? raw.substring(lastSlash + 1) : raw
+
+    if (!fn) {
+      setAddFileError('Path must end with a filename')
+      return
+    }
 
     try {
       const url = buildSkillFileUrl(activeSkill.name, p, fn, activeSkill.scope)
@@ -481,7 +487,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Full-screen editor mode
   if (editorMode) {
-    const fileGroups = ['scripts', 'references', 'templates', ''] as const
+    const allPaths = [...new Set((activeSkill?.files || []).map(f => f.path || ''))]
+    const fileGroups = allPaths.filter(g => g !== '').sort().concat(allPaths.includes('') ? [''] : [])
 
     const renderFileItem = (f: { path: string; filename: string; size?: number; is_executable?: boolean }, isActive: boolean) => {
       const isPendingDelete = pendingDeleteFile && pendingDeleteFile.path === f.path && pendingDeleteFile.filename === f.filename
@@ -610,7 +617,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                </div>
                {activeSkill?.editable && (
                  <button
-                   onClick={() => { setShowAddFile(true); setAddFileError(null); setNewFileName(''); setNewFileDir('scripts') }}
+                    onClick={() => { setShowAddFile(true); setAddFileError(null); setNewFileName('') }}
                    className="text-[11px] px-2 py-0.5 rounded bg-emerald-700 hover:bg-emerald-600 text-white flex items-center gap-1"
                  >
                    <Plus size={12} /> Add
@@ -705,60 +712,28 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                  </button>
                </div>
 
-               <div className="space-y-4">
-                  {/* Directory */}
+                <div className="space-y-4">
+                  {/* Full relative path */}
                   <div>
                     <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                      Directory
+                      File Path
                     </label>
-                    {/* Quick picks */}
-                    <div className="flex gap-2 flex-wrap mb-2">
-                      {(['scripts', 'references', 'templates', ''] as const).map(d => (
-                        <button
-                          key={d}
-                          type="button"
-                          onClick={() => setNewFileDir(d)}
-                          className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${newFileDir === d ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-white'}`}
-                        >
-                          {d || 'root'}
-                        </button>
-                      ))}
-                    </div>
-                    {/* Custom / editable path */}
                     <input
                       type="text"
-                      value={newFileDir}
-                      onChange={(e) => setNewFileDir(e.target.value)}
-                      placeholder="scripts or configs/subdir (leave empty for root)"
-                      className={inputClass + ' font-mono text-sm'}
+                      value={newFileName}
+                      onChange={(e) => setNewFileName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
+                      placeholder="scripts/deploy.sh"
+                      className={inputClass + ' font-mono'}
                       style={inputStyle}
+                      autoFocus
                     />
                     <p className="text-xs mt-1" style={hintStyle}>
-                      Use a quick pick or type any custom path (e.g. configs, lib/helpers).
+                      Full relative path including filename (e.g. scripts/deploy.sh, references/api.md, config.json).
                     </p>
                   </div>
 
-                 {/* Filename */}
-                 <div>
-                   <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>
-                     Filename
-                   </label>
-                   <input
-                     type="text"
-                     value={newFileName}
-                     onChange={(e) => setNewFileName(e.target.value)}
-                     onKeyDown={(e) => { if (e.key === 'Enter' && newFileName.trim()) handleAddFile() }}
-                     placeholder="deploy.sh"
-                     className={inputClass + ' font-mono'}
-                     style={inputStyle}
-                     autoFocus
-                   />
-                   <p className="text-xs mt-1" style={hintStyle}>
-                     Include extension (e.g. .sh, .py, .md, .json). Lowercase recommended.
-                   </p>
-                 </div>
-
-                 {addFileError && (
+                  {addFileError && (
                    <div className="flex items-center gap-2 p-2 rounded-lg text-sm"
                      style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
                      <AlertCircle size={14} /> {addFileError}

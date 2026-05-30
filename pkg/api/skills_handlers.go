@@ -444,6 +444,21 @@ type CreateSkillRequest struct {
 	Scope string `json:"scope,omitempty"` // "team" or "org" (platform mode)
 }
 
+// InstallSkillRequest is the request for POST /api/skills/install
+type InstallSkillRequest struct {
+	Input string `json:"input"` // slug, clawhub:slug, or full URL
+}
+
+// InstallSkillResponse is the response for successful ClawHub install via server.
+type InstallSkillResponse struct {
+	Status      string `json:"status"`
+	Name        string `json:"name"`
+	Scope       string `json:"scope"`
+	FilesSaved  int    `json:"files_saved"`
+	Version     string `json:"version,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
 func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 	var req CreateSkillRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -888,6 +903,164 @@ func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// InstallSkillHandler handles POST /api/skills/install
+// It downloads a skill from ClawHub on the server and installs it into the
+// appropriate platform store (team preferred). This is the preferred path
+// for CLI in remote mode.
+func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
+	var req InstallSkillRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+
+	input := strings.TrimSpace(req.Input)
+	if input == "" {
+		respondError(w, http.StatusBadRequest, "input is required")
+		return
+	}
+
+	slug, err := skills.ParseClawHubInput(input)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid input: "+err.Error())
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil || (svc.TeamSkills == nil && svc.Skills == nil) {
+		respondError(w, http.StatusNotImplemented, "Skill installation not available in this context")
+		return
+	}
+
+	// Default to team scope (requires team admin). Fall back to org only if no team store.
+	targetStore := resolveSkillStoreForWrite(w, r, svc, "team")
+	scope := "team"
+	if targetStore == nil {
+		// resolve already responded with error for team case
+		// try org as fallback only if team store truly unavailable
+		if svc.Skills != nil {
+			// For org we need to re-check org admin explicitly
+			user := GetPlatformUser(r)
+			if user == nil {
+				respondError(w, http.StatusUnauthorized, "Authentication required")
+				return
+			}
+			if !CanManageOrg(user) {
+				respondError(w, http.StatusForbidden, "Organization admin access required to install org skills")
+				return
+			}
+			targetStore = svc.Skills
+			scope = "org"
+		} else {
+			return
+		}
+	}
+
+	// Download into a temp directory on the server
+	tmpDir, err := os.MkdirTemp("", "astonish-clawhub-install-*")
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create temp dir: "+err.Error())
+		return
+	}
+	defer os.RemoveAll(tmpDir)
+
+	result, err := skills.DownloadFromClawHub(slug, tmpDir)
+	if err != nil {
+		respondError(w, http.StatusBadGateway, "download from ClawHub failed: "+err.Error())
+		return
+	}
+
+	// Read and parse main SKILL.md
+	skillPath := filepath.Join(tmpDir, slug, "SKILL.md")
+	skillData, err := os.ReadFile(skillPath)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "SKILL.md not found in package: "+err.Error())
+		return
+	}
+
+	parsed, err := skills.ParseSkillFile(skillPath, skillData)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "failed to parse SKILL.md: "+err.Error())
+		return
+	}
+
+	userID := ""
+	if pu := GetPlatformUser(r); pu != nil {
+		userID = pu.ID
+	}
+
+	// Save the main skill definition
+	skill := &store.Skill{
+		Name:        parsed.Name,
+		Description: parsed.Description,
+		Content:     string(skillData),
+		OS:          parsed.OS,
+		RequireBins: parsed.RequireBins,
+		RequireEnv:  parsed.RequireEnv,
+		Metadata:    parsed.Metadata,
+		CreatedBy:   userID,
+	}
+	if err := targetStore.Save(r.Context(), skill); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save skill: "+err.Error())
+		return
+	}
+
+	// Walk and save all auxiliary files (supports multi-file skills)
+	filesSaved := 0
+	skillDir := filepath.Join(tmpDir, slug)
+
+	err = filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		rel, _ := filepath.Rel(skillDir, path)
+		rel = filepath.ToSlash(rel)
+
+		if rel == "SKILL.md" || rel == "_meta.json" {
+			return nil
+		}
+
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		dir := filepath.Dir(rel)
+		if dir == "." {
+			dir = ""
+		}
+		fname := filepath.Base(rel)
+
+		sf := &store.SkillFile{
+			Path:         dir,
+			Filename:     fname,
+			Content:      string(content),
+			IsExecutable: info.Mode().Perm()&0111 != 0,
+			SizeBytes:    info.Size(),
+		}
+
+		if err := targetStore.SaveFile(r.Context(), parsed.Name, sf); err != nil {
+			slog.Warn("failed to save auxiliary file during server install", "file", rel, "error", err)
+			return nil
+		}
+		filesSaved++
+		return nil
+	})
+	if err != nil {
+		slog.Warn("error walking skill files during server install", "error", err)
+	}
+
+	resp := InstallSkillResponse{
+		Status:      "ok",
+		Name:        parsed.Name,
+		Scope:       scope,
+		FilesSaved:  filesSaved,
+		Version:     result.Version,
+		Description: parsed.Description,
+	}
+	respondJSON(w, http.StatusOK, resp)
 }
 
 // deleteSkillPlatform deletes a skill from the given store.

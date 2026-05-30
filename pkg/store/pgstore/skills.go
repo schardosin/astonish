@@ -135,11 +135,11 @@ func (s *pgSkillStore) ListFiles(ctx context.Context, skillName string) ([]store
 		return nil, err
 	}
 
-	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
-		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at
-		FROM %s
-		WHERE skill_id = $1
-		ORDER BY path, filename`, s.filesTableName()), skillID)
+ 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+ 		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at::text, updated_at::text
+ 		FROM %s
+ 		WHERE skill_id = $1
+ 		ORDER BY path, filename`, s.filesTableName()), skillID)
 	if err != nil {
 		return nil, err
 	}
@@ -167,11 +167,11 @@ func (s *pgSkillStore) GetFile(ctx context.Context, skillName, path, filename st
 		return nil, err
 	}
 
-	row := s.pool.QueryRow(ctx, fmt.Sprintf(`
-		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at
-		FROM %s
-		WHERE skill_id = $1 AND path = $2 AND filename = $3`, s.filesTableName()),
-		skillID, path, filename)
+ 	row := s.pool.QueryRow(ctx, fmt.Sprintf(`
+ 		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at::text, updated_at::text
+ 		FROM %s
+ 		WHERE skill_id = $1 AND path = $2 AND filename = $3`, s.filesTableName()),
+ 		skillID, path, filename)
 
 	var f store.SkillFile
 	if err := row.Scan(&f.ID, &f.SkillID, &f.Path, &f.Filename, &f.Content, &f.IsExecutable, &f.SizeBytes, &f.CreatedAt, &f.UpdatedAt); err != nil {

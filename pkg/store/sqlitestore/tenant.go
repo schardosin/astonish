@@ -36,6 +36,11 @@ func (o *sqliteOrgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
 		return nil
 	}
 
+	// Ensure schema is up-to-date (idempotent; runs at most once per team per process).
+	if mErr := migrate(context.Background(), db, migrationTeam); mErr != nil {
+		slog.Error("migrate team database", "team", teamSlug, "error", mErr)
+	}
+
 	ts := &sqliteTeamDataStore{
 		db:        db,
 		teamSlug:  teamSlug,
@@ -57,6 +62,11 @@ func (o *sqliteOrgDataStore) ForUser(userID string) store.PersonalDataStore {
 	if err != nil {
 		slog.Error("open personal database", "user", userID, "error", err)
 		return nil
+	}
+
+	// Ensure schema is up-to-date (idempotent; runs at most once per user per process).
+	if mErr := migrate(context.Background(), db, migrationPersonal); mErr != nil {
+		slog.Error("migrate personal database", "user", userID, "error", mErr)
 	}
 
 	ps := &sqlitePersonalDataStore{

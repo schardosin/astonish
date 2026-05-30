@@ -209,8 +209,9 @@ func matchesManifest(detected string, manifestFiles []string) bool {
 		if detected == mf {
 			return true
 		}
-		// Suffix match (detected could be a shorter version)
-		if strings.HasSuffix(mf, "/"+detected) || strings.HasSuffix(mf, detected) {
+		// Path-boundary suffix match: detected "deploy.sh" matches
+		// "scripts/deploy.sh" but NOT "old-deploy.sh"
+		if strings.HasSuffix(mf, "/"+detected) {
 			return true
 		}
 	}

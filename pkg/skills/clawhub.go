@@ -114,10 +114,15 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 		return nil, fmt.Errorf("ClawHub returned HTTP %d", resp.StatusCode)
 	}
 
-	// Read the zip into memory
-	body, err := io.ReadAll(resp.Body)
+	// Read the zip into memory with a size limit to prevent OOM from
+	// malicious or compromised upstream responses.
+	const maxDownloadSize = 50 << 20 // 50 MiB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(body)) > maxDownloadSize {
+		return nil, fmt.Errorf("ClawHub response exceeds %d MiB size limit", maxDownloadSize>>20)
 	}
 
 	// Open zip archive

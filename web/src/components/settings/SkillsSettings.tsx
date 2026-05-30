@@ -253,6 +253,17 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Dirty tracking: Save button only enabled when content has changed
   const isDirty = editorContent !== loadedContent
 
+  // Protect unsaved changes from accidental browser navigation
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (editorContent !== loadedContent) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [editorContent, loadedContent])
+
   useEffect(() => {
     if (config && showConfig) {
       setForm({
@@ -501,6 +512,10 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   const handleValidateSkill = async () => {
     if (!activeSkill) return
+    // Validation runs against server-saved content — warn if editor has unsaved changes
+    if (editorContent !== loadedContent) {
+      if (!window.confirm('You have unsaved changes. Validation runs against the last saved version. Continue anyway?')) return
+    }
     setValidating(true)
     setValidationResults(null)
     setValidationVisible(false)
@@ -546,6 +561,10 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   const handleApplyFix = (suggestion: { old_content: string; new_content: string }) => {
     if (!suggestion.old_content) return // old_content required; new_content can be empty (deletion)
+    // NOTE: We intentionally use replace() (first occurrence only), NOT replaceAll().
+    // The validator generates old_content snippets that are meant to be unique within
+    // the skill content. Using replaceAll() would be more dangerous — if a snippet
+    // accidentally matches multiple locations, it would blindly change all of them.
     const updated = editorContent.replace(suggestion.old_content, suggestion.new_content ?? '')
     if (updated !== editorContent) {
       setEditorContent(updated)
@@ -643,6 +662,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   }
 
   const closeEditor = () => {
+    if (editorContent !== loadedContent) {
+      if (!window.confirm('You have unsaved changes. Discard?')) return
+    }
     setActiveSkill(null)
     setEditorMode(null)
     setEditorContent('')

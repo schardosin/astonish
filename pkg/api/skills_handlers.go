@@ -138,7 +138,7 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
 		// Platform mode: scope-aware listing (only supported mode)
-		items, err := listSkillsPlatform(svc, scope)
+		items, err := listSkillsPlatform(r.Context(), svc, scope)
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, "Failed to load skills: "+err.Error())
 			return
@@ -163,6 +163,13 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 //   - scope=org: look in org store only
 //   - (empty): try team → org → bundled
 func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
+	// Auth: Any authenticated team member can read skill content (consistent
+	// with ListSkillFilesHandler/GetSkillFileHandler).
+	if GetPlatformUser(r) == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
 
@@ -335,7 +342,7 @@ func DeleteSkillHandler(w http.ResponseWriter, r *http.Request) {
 		if targetStore == nil {
 			return // auth error already written
 		}
-		deleteSkillPlatform(w, targetStore, name, scope)
+		deleteSkillPlatform(w, r, targetStore, name, scope)
 		return
 	}
 
@@ -627,23 +634,23 @@ func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *stor
 
 // listSkillsPlatform loads skills with three-tier merge: bundled → org → team.
 // Team skills override org skills of the same name; org skills override bundled.
-func listSkillsPlatform(svc *store.Services, scope string) ([]SkillListItem, error) {
+func listSkillsPlatform(ctx context.Context, svc *store.Services, scope string) ([]SkillListItem, error) {
 	switch scope {
 	case "team":
-		return listSkillsFromStore(svc.TeamSkills, "team")
+		return listSkillsFromStore(ctx, svc.TeamSkills, "team")
 	case "org":
-		return listSkillsOrgWithBundled(svc.Skills)
+		return listSkillsOrgWithBundled(ctx, svc.Skills)
 	default:
-		return listSkillsMerged(svc)
+		return listSkillsMerged(ctx, svc)
 	}
 }
 
 // listSkillsFromStore lists skills from a single store with given scope label.
-func listSkillsFromStore(skillStore store.SkillStore, scope string) ([]SkillListItem, error) {
+func listSkillsFromStore(ctx context.Context, skillStore store.SkillStore, scope string) ([]SkillListItem, error) {
 	if skillStore == nil {
 		return []SkillListItem{}, nil
 	}
-	pgSkills, err := skillStore.List(context.TODO())
+	pgSkills, err := skillStore.List(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load %s skills: %w", scope, err)
 	}
@@ -659,7 +666,7 @@ func listSkillsFromStore(skillStore store.SkillStore, scope string) ([]SkillList
 }
 
 // listSkillsOrgWithBundled lists org skills + bundled (org overrides bundled).
-func listSkillsOrgWithBundled(orgStore store.SkillStore) ([]SkillListItem, error) {
+func listSkillsOrgWithBundled(ctx context.Context, orgStore store.SkillStore) ([]SkillListItem, error) {
 	// Load bundled
 	bundled, err := skills.LoadBundledSkills()
 	if err != nil {
@@ -674,7 +681,7 @@ func listSkillsOrgWithBundled(orgStore store.SkillStore) ([]SkillListItem, error
 
 	// Org customs override bundled
 	if orgStore != nil {
-		pgSkills, err := orgStore.List(context.TODO())
+		pgSkills, err := orgStore.List(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("load org skills: %w", err)
 		}
@@ -695,7 +702,7 @@ func listSkillsOrgWithBundled(orgStore store.SkillStore) ([]SkillListItem, error
 }
 
 // listSkillsMerged returns all skills merged: bundled → org → team (team wins).
-func listSkillsMerged(svc *store.Services) ([]SkillListItem, error) {
+func listSkillsMerged(ctx context.Context, svc *store.Services) ([]SkillListItem, error) {
 	// Load bundled
 	bundled, err := skills.LoadBundledSkills()
 	if err != nil {
@@ -710,7 +717,7 @@ func listSkillsMerged(svc *store.Services) ([]SkillListItem, error) {
 
 	// Org customs override bundled
 	if svc.Skills != nil {
-		pgSkills, err := svc.Skills.List(context.TODO())
+		pgSkills, err := svc.Skills.List(ctx)
 		if err != nil {
 			slog.Warn("failed to load org skills", "error", err)
 		} else {
@@ -725,7 +732,7 @@ func listSkillsMerged(svc *store.Services) ([]SkillListItem, error) {
 
 	// Team customs override org and bundled
 	if svc.TeamSkills != nil {
-		teamSkills, err := svc.TeamSkills.List(context.TODO())
+		teamSkills, err := svc.TeamSkills.List(ctx)
 		if err != nil {
 			slog.Warn("failed to load team skills", "error", err)
 		} else {
@@ -1232,24 +1239,26 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // deleteSkillPlatform deletes a skill from the given store.
-func deleteSkillPlatform(w http.ResponseWriter, targetStore store.SkillStore, name, scope string) {
+func deleteSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore store.SkillStore, name, scope string) {
+	ctx := r.Context()
 	// Verify it exists in this store
-	_, err := targetStore.Get(context.TODO(), name)
+	_, err := targetStore.Get(ctx, name)
 	if err != nil {
 		// Check if it's a bundled skill
 		bundled, _ := skills.LoadBundledSkills()
 		for _, s := range bundled {
 			if strings.EqualFold(s.Name, name) {
-				respondError(w, http.StatusForbidden, "Cannot delete bundled skills")
+				respondError(w, http.StatusForbidden, "cannot delete bundled skills")
 				return
 			}
 		}
-		respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in %s store", name, scope))
+		respondError(w, http.StatusNotFound, fmt.Sprintf("skill %q not found in %s store", name, scope))
 		return
 	}
 
-	if err := targetStore.Delete(context.TODO(), name); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to delete skill: "+err.Error())
+	if err := targetStore.Delete(ctx, name); err != nil {
+		slog.Error("failed to delete skill", "skill", name, "scope", scope, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to delete skill")
 		return
 	}
 

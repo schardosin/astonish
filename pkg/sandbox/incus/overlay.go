@@ -48,6 +48,17 @@ func OverlayUpperDir(containerName string) string {
 //   - Custom template (BasedOn=@base): stacked = template-upper:@base-snapshot-rootfs
 //     (template customizations on top, @base OS underneath)
 func ResolveLowerLayers(poolPath, templateName string, registry *tmplmeta.TemplateRegistry) (string, error) {
+	return resolveLowerLayersInner(poolPath, templateName, registry, 0)
+}
+
+// maxTemplateChainDepth prevents infinite recursion from circular BasedOn chains.
+const maxTemplateChainDepth = 10
+
+func resolveLowerLayersInner(poolPath, templateName string, registry *tmplmeta.TemplateRegistry, depth int) (string, error) {
+	if depth > maxTemplateChainDepth {
+		return "", fmt.Errorf("template chain exceeds maximum depth (%d) — possible circular BasedOn reference", maxTemplateChainDepth)
+	}
+
 	// For @base, just return the snapshot rootfs path
 	if templateName == BaseTemplate {
 		lower := SnapshotRootfsPath(poolPath, BaseTemplate)
@@ -87,7 +98,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *tmplmeta.Templa
 		basedOn = BaseTemplate
 	}
 
-	baseLower, err := ResolveLowerLayers(poolPath, basedOn, registry)
+	baseLower, err := resolveLowerLayersInner(poolPath, basedOn, registry, depth+1)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve base %q for template %q: %w", basedOn, templateName, err)
 	}

@@ -216,11 +216,19 @@ func handlePlatformSkillLookup(ctx tool.Context, store store.SkillStore, skill *
 			dir = filePath[:idx]
 			name = filePath[idx+1:]
 		}
-		if f, err := store.GetFile(ctx, skill.Name, dir, name); err == nil && f != nil {
+		f, err := store.GetFile(ctx, skill.Name, dir, name)
+		if err != nil {
+			// DB error — distinct from "file not found"
 			return SkillLookupResult{
-				Name:     skill.Name,
-				File:     filePath,
-				Content:  f.Content,
+				Name:  skill.Name,
+				Error: fmt.Sprintf("failed to load file %q from skill %q (database error)", filePath, skill.Name),
+			}
+		}
+		if f != nil {
+			return SkillLookupResult{
+				Name:      skill.Name,
+				File:      filePath,
+				Content:   f.Content,
 				Directory: "", // not meaningful for DB-backed files
 			}
 		}

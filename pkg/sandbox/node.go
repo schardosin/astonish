@@ -101,11 +101,15 @@ func (nc *NodeClient) startLocked() error {
 		// Verify the template layer is intact after restart. A template refresh
 		// may have force-stopped this container and left a stale overlay mount.
 		// Without this check, the node starts but tool calls see empty /usr/bin/.
+		// Check sentinel first, fall back to /usr/bin/git for pre-sentinel templates.
 		exitCode, _ := nc.client.ExecSimple(nc.containerName, []string{"test", "-f", OverlaySentinelPath})
 		if exitCode != 0 {
-			// Template layer missing — stale overlay. Stop and signal for full recovery.
-			_ = nc.client.StopInstance(nc.containerName, true)
-			return fmt.Errorf("container %q template layer not visible (stale overlay)", nc.containerName)
+			exitCode, _ = nc.client.ExecSimple(nc.containerName, []string{"test", "-x", "/usr/bin/git"})
+			if exitCode != 0 {
+				// Template layer missing — stale overlay. Stop and signal for full recovery.
+				_ = nc.client.StopInstance(nc.containerName, true)
+				return fmt.Errorf("container %q template layer not visible (stale overlay)", nc.containerName)
+			}
 		}
 	}
 

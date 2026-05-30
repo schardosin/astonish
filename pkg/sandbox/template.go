@@ -891,6 +891,15 @@ func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		return fmt.Errorf("failed to push astonish binary: %w", err)
 	}
 
+	// Ensure the overlay sentinel file exists. This file is checked by
+	// verifyContainerHealth to detect stale overlays. Templates created before
+	// this code was added won't have it, so we write it on every refresh.
+	if exitCode, _ := client.ExecSimple(containerName, []string{
+		"sh", "-c", "echo 'astonish-template-ready' > " + OverlaySentinelPath,
+	}); exitCode != 0 {
+		slog.Warn("failed to write overlay sentinel file", "component", "sandbox", "template", name)
+	}
+
 	// Compute the binary hash for tracking
 	hash, hashErr := ComputeBinaryHash()
 

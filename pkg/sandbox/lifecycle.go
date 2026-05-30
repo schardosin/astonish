@@ -413,15 +413,24 @@ func verifyContainerHealth(client *IncusClient, containerName string) error {
 	}
 
 	// Check 2: Verify the template layer is visible through the overlay.
-	// The sentinel file is written during template setup (CoreToolInstallCommands)
-	// and lives in the lowerdir (template snapshot). If it's missing, the overlay
-	// mount is referencing a stale/deleted inode — the template layer is invisible.
+	// Primary check: sentinel file written during template setup/refresh.
+	// Fallback: /usr/bin/git (installed by CoreToolInstallCommands in all templates).
+	// The fallback handles templates created before the sentinel was introduced.
 	exitCode, err = client.ExecSimple(containerName, []string{"test", "-f", OverlaySentinelPath})
 	if err != nil {
 		return fmt.Errorf("cannot execute template layer check in %q: %w", containerName, err)
 	}
 	if exitCode != 0 {
-		return fmt.Errorf("container %q template layer not visible (%s missing — stale overlay)", containerName, OverlaySentinelPath)
+		// Sentinel missing — could be a pre-sentinel template. Check /usr/bin/git as fallback.
+		exitCode, err = client.ExecSimple(containerName, []string{"test", "-x", "/usr/bin/git"})
+		if err != nil {
+			return fmt.Errorf("cannot execute fallback template layer check in %q: %w", containerName, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("container %q template layer not visible (%s and /usr/bin/git both missing — stale overlay)", containerName, OverlaySentinelPath)
+		}
+		// /usr/bin/git exists but sentinel doesn't — template predates sentinel.
+		// This is OK; the sentinel will appear after the next refresh.
 	}
 
 	return nil

@@ -219,6 +219,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			if po.SessionContext != "" {
 				promptBuilder.SessionContext = po.SessionContext
 			}
+			if po.SkillIndex != "" {
+				promptBuilder.SkillIndex = po.SkillIndex
+			}
 		}
 
 		// Per-team tool restrictions: filter disabled tools from the prompt builder

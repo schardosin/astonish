@@ -4,17 +4,19 @@ import "context"
 
 // Skill represents an operational knowledge skill.
 type Skill struct {
-	Name        string      `json:"name" yaml:"name"`
-	Description string      `json:"description" yaml:"description"`
-	OS          []string    `json:"os,omitempty" yaml:"os,omitempty"`
-	RequireBins []string    `json:"require_bins,omitempty" yaml:"require_bins,omitempty"`
-	RequireEnv  []string    `json:"require_env,omitempty" yaml:"require_env,omitempty"`
-	Metadata    interface{} `json:"metadata,omitempty" yaml:"metadata,omitempty"`
-	Content     string      `json:"-" yaml:"-"`
-	FilePath    string      `json:"-" yaml:"-"`
-	Source      string      `json:"-" yaml:"-"`
-	Directory   string      `json:"-" yaml:"-"`
-	CreatedBy   string      `json:"-" yaml:"-"` // User ID (UUID) — required for PG inserts
+	Name             string      `json:"name" yaml:"name"`
+	Description      string      `json:"description" yaml:"description"`
+	OS               []string    `json:"os,omitempty" yaml:"os,omitempty"`
+	RequireBins      []string    `json:"require_bins,omitempty" yaml:"require_bins,omitempty"`
+	RequireEnv       []string    `json:"require_env,omitempty" yaml:"require_env,omitempty"`
+	Metadata         interface{} `json:"metadata,omitempty" yaml:"metadata,omitempty"`
+	Content          string      `json:"-" yaml:"-"`
+	FilePath         string      `json:"-" yaml:"-"`
+	Source           string      `json:"-" yaml:"-"`
+	Directory        string      `json:"-" yaml:"-"`
+	CreatedBy        string      `json:"-" yaml:"-"` // User ID (UUID) — required for PG inserts
+	ValidationStatus string      `json:"validation_status,omitempty" yaml:"-"`
+	ValidationMeta   string      `json:"-" yaml:"-"` // Raw JSON stored in DB
 }
 
 // SkillFile represents one auxiliary file belonging to a skill
@@ -34,8 +36,7 @@ type SkillFile struct {
 
 // SkillStore manages skill definitions.
 //
-// In personal mode, this wraps the existing skills.LoadSkills function.
-// In platform mode, skills can be org-level or team-level.
+// In platform mode, skills can be org-level or team-level (loaded via SkillStore).
 type SkillStore interface {
 	// LoadAll loads all available skills from all sources.
 	LoadAll(ctx context.Context) ([]Skill, error)
@@ -51,6 +52,9 @@ type SkillStore interface {
 
 	// List returns all skill names and their sources.
 	List(ctx context.Context) ([]Skill, error)
+
+	// UpdateValidationStatus updates the validation_status and validation_meta for a skill.
+	UpdateValidationStatus(ctx context.Context, name, status, meta string) error
 
 	// --- Multi-file support (Phase 1 of ClawHub multi-file skills) ---
 

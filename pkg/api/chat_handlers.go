@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
+	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
@@ -738,6 +739,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// in addition to bundled skills.
 	if svc := store.FromRequest(r); svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
 		runner.InjectSkillStores(svc.Skills, svc.TeamSkills)
+
+		// Build and inject a merged skill index (bundled + org + team) so the LLM
+		// sees custom platform skills in the "Available Skills" section of the system prompt.
+		if merged := buildMergedSkillIndex(r.Context(), svc.Skills, svc.TeamSkills); merged != "" {
+			runner.InjectSkillIndex(merged)
+		}
 	}
 
 	// Inject tenant-scoped MCP server stores into the runner context so that
@@ -1142,4 +1149,66 @@ func extractAppFromSystemContext(systemContext string) (code, title string) {
 	}
 	title = extractComponentTitle(code)
 	return code, title
+}
+
+// buildMergedSkillIndex builds a skill index string containing bundled skills
+// plus any org-level and team-level skills from the platform DB.
+// This is used to populate the "Available Skills" section in the system prompt
+// so the LLM knows about custom platform skills and will call skill_lookup for them.
+func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillStore) string {
+	var all []skills.Skill
+
+	// 1. Bundled skills (always available)
+	if bundled, err := skills.LoadBundledSkills(); err == nil {
+		all = append(all, bundled...)
+	}
+
+	// 2. Org skills (if store available)
+	if orgStore != nil {
+		if orgSkills, err := orgStore.LoadAll(ctx); err == nil {
+			for _, s := range orgSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "org",
+				})
+			}
+		}
+	}
+
+	// 3. Team skills (highest priority, can override org/bundled names)
+	if teamStore != nil {
+		if teamSkills, err := teamStore.LoadAll(ctx); err == nil {
+			for _, s := range teamSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "team",
+				})
+			}
+		}
+	}
+
+	if len(all) == 0 {
+		return ""
+	}
+
+	// Deduplicate preferring later entries (team > org > bundled)
+	seen := make(map[string]bool)
+	var deduped []skills.Skill
+	for i := len(all) - 1; i >= 0; i-- {
+		name := strings.ToLower(all[i].Name)
+		if !seen[name] {
+			seen[name] = true
+			deduped = append([]skills.Skill{all[i]}, deduped...)
+		}
+	}
+
+	return skills.BuildSkillIndex(deduped)
 }

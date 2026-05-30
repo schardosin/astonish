@@ -97,22 +97,10 @@ func WatchSkillDirs(ctx context.Context, cfg WatcherConfig) error {
 			slog.Debug("skill change detected, re-syncing to memory", "component", "skills-watcher")
 		}
 
-		allSkills, err := LoadSkills(cfg.UserDir, cfg.ExtraDirs, cfg.WorkspaceDir, cfg.Allowlist)
-		if err != nil {
-			if cfg.DebugMode {
-				slog.Debug("error loading skills", "component", "skills-watcher", "error", err)
-			}
-			return
-		}
-
-		if err := SyncSkillsToMemory(allSkills, cfg.MemoryDir); err != nil {
-			if cfg.DebugMode {
-				slog.Debug("error syncing skills to memory", "component", "skills-watcher", "error", err)
-			}
-		} else if cfg.DebugMode {
-			eligible := FilterEligible(allSkills)
-			slog.Debug("synced skills to memory", "component", "skills-watcher", "eligible", len(eligible))
-		}
+		// File-based skill loading removed in v3 (platform DB is the only source).
+		// The skills watcher for user directories is disabled.
+		_ = cfg // suppress unused warning
+		return
 	}
 
 	for {

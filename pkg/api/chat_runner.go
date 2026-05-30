@@ -131,6 +131,24 @@ func (cr *ChatRunner) InjectSkillStores(org, team store.SkillStore) {
 	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Org: org, Team: team})
 }
 
+// InjectSkillIndex sets a per-request merged skill index (bundled + org + team)
+// that will be used in the system prompt for this run. This makes custom platform
+// skills visible to the LLM in the "Available Skills" section.
+// Must be called before Run().
+func (cr *ChatRunner) InjectSkillIndex(index string) {
+	if index == "" {
+		return
+	}
+	po := agent.PromptOverridesFromContext(cr.ctx)
+	if po != nil {
+		po.SkillIndex = index
+	} else {
+		cr.ctx = agent.WithPromptOverrides(cr.ctx, &agent.PromptOverrides{
+			SkillIndex: index,
+		})
+	}
+}
+
 // InjectSchedulerStore adds a tenant-scoped scheduler store to the runner's context
 // so that the schedule_job and list_scheduled_jobs tools can operate on the
 // correct team's jobs in platform mode. Must be called before Run().

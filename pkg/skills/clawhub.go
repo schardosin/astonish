@@ -147,6 +147,12 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 		}
 
 		outPath := filepath.Join(skillDir, cleanName)
+
+		// Zip slip defense: ensure resolved path stays within skillDir
+		if !strings.HasPrefix(filepath.Clean(outPath), filepath.Clean(skillDir)+string(os.PathSeparator)) {
+			continue // path traversal attempt — skip this entry
+		}
+
 		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
 			return nil, fmt.Errorf("create dir for %s: %w", cleanName, err)
 		}

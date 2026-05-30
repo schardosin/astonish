@@ -43,26 +43,37 @@ func (s *pgSkillStore) LoadAll(ctx context.Context) ([]store.Skill, error) {
 
 func (s *pgSkillStore) Get(ctx context.Context, name string) (*store.Skill, error) {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT name, content FROM %s WHERE name = $1`, s.tableName()),
+		`SELECT name, content, COALESCE(validation_status, 'unknown'), COALESCE(validation_meta::text, '') FROM %s WHERE name = $1`, s.tableName()),
 		name,
 	)
 
-	var dbName, rawContent string
-	if err := row.Scan(&dbName, &rawContent); err != nil {
+	var dbName, rawContent, valStatus, valMeta string
+	if err := row.Scan(&dbName, &rawContent, &valStatus, &valMeta); err != nil {
 		return nil, fmt.Errorf("skill not found: %w", err)
 	}
 
-	return parseStoredSkill(dbName, rawContent), nil
+	skill := parseStoredSkill(dbName, rawContent)
+	skill.ValidationStatus = valStatus
+	skill.ValidationMeta = valMeta
+	return skill, nil
 }
 
 func (s *pgSkillStore) Save(ctx context.Context, skill *store.Skill) error {
+	valStatus := skill.ValidationStatus
+	if valStatus == "" {
+		valStatus = "unknown"
+	}
+	valMeta := skill.ValidationMeta
+	if valMeta == "" {
+		valMeta = "{}"
+	}
 	// content holds the full raw SKILL.md (frontmatter + body).
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (name, content, frontmatter, created_by, updated_at)
-		 VALUES ($1, $2, '{}'::jsonb, $3, now())
-		 ON CONFLICT (name) DO UPDATE SET content = $2, updated_at = now()`,
+		`INSERT INTO %s (name, content, frontmatter, validation_status, validation_meta, created_by, updated_at)
+		 VALUES ($1, $2, '{}'::jsonb, $3, $4::jsonb, $5, now())
+		 ON CONFLICT (name) DO UPDATE SET content = $2, validation_status = $3, validation_meta = $4::jsonb, updated_at = now()`,
 		s.tableName()),
-		skill.Name, skill.Content, skill.CreatedBy,
+		skill.Name, skill.Content, valStatus, valMeta, skill.CreatedBy,
 	)
 	return err
 }
@@ -75,9 +86,20 @@ func (s *pgSkillStore) Delete(ctx context.Context, name string) error {
 	return err
 }
 
+func (s *pgSkillStore) UpdateValidationStatus(ctx context.Context, name, status, meta string) error {
+	if meta == "" {
+		meta = "{}"
+	}
+	_, err := s.pool.Exec(ctx, fmt.Sprintf(
+		`UPDATE %s SET validation_status = $1, validation_meta = $2::jsonb, updated_at = now() WHERE name = $3`, s.tableName()),
+		status, meta, name,
+	)
+	return err
+}
+
 func (s *pgSkillStore) List(ctx context.Context) ([]store.Skill, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
-		`SELECT name, content FROM %s ORDER BY name`, s.tableName()),
+		`SELECT name, content, COALESCE(validation_status, 'unknown') FROM %s ORDER BY name`, s.tableName()),
 	)
 	if err != nil {
 		return nil, err
@@ -86,11 +108,13 @@ func (s *pgSkillStore) List(ctx context.Context) ([]store.Skill, error) {
 
 	var result []store.Skill
 	for rows.Next() {
-		var dbName, rawContent string
-		if err := rows.Scan(&dbName, &rawContent); err != nil {
+		var dbName, rawContent, valStatus string
+		if err := rows.Scan(&dbName, &rawContent, &valStatus); err != nil {
 			return nil, err
 		}
-		result = append(result, *parseStoredSkill(dbName, rawContent))
+		skill := parseStoredSkill(dbName, rawContent)
+		skill.ValidationStatus = valStatus
+		result = append(result, *skill)
 	}
 	return result, rows.Err()
 }

@@ -82,6 +82,7 @@ type PromptOverrides struct {
 	ChannelHints   string // Channel-specific output constraints
 	SchedulerHints string // Scheduler-specific output constraints
 	SessionContext string // Per-turn session context (fleet wizard, etc.)
+	SkillIndex     string // Per-request merged skill index (bundled + org + team)
 }
 
 type promptOverridesKey struct{}

@@ -1110,6 +1110,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	router.HandleFunc("/api/skills/{name}/file", GetSkillFileHandler).Methods("GET")
 	router.HandleFunc("/api/skills/{name}/file", SaveSkillFileHandler).Methods("PUT")
 	router.HandleFunc("/api/skills/{name}/file", DeleteSkillFileHandler).Methods("DELETE")
+	router.HandleFunc("/api/skills/{name}/validate", ValidateSkillHandler).Methods("POST")
+	router.HandleFunc("/api/skills/{name}/acknowledge", AcknowledgeSkillHandler).Methods("POST")
 	router.HandleFunc("/api/skills/{name}", DeleteSkillHandler).Methods("DELETE")
 
 	// MCP Platform endpoints (multi-tenant MCP server management)

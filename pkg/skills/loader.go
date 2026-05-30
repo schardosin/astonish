@@ -236,37 +236,9 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 // Later sources override earlier ones by skill name.
 // The workspaceDir parameter is kept for API compatibility but is no longer used
 // (project-local skills were removed — all skills live in the config directory).
-func LoadSkills(userDir string, extraDirs []string, _ string, allowlist []string) ([]Skill, error) {
-	byName := make(map[string]*Skill)
-
-	// 1. Bundled skills (embedded in binary)
-	if err := loadBundledSkills(byName); err != nil {
-		return nil, fmt.Errorf("load bundled skills: %w", err)
-	}
-
-	// 2. User skills
-	if userDir != "" {
-		loadSkillsFromDir(userDir, "user", byName)
-	}
-
-	// 3. Extra directories
-	for _, dir := range extraDirs {
-		loadSkillsFromDir(dir, "extra", byName)
-	}
-
-	// Apply allowlist filter
-	var result []Skill
-	for _, skill := range byName {
-		if len(allowlist) > 0 && !containsStr(allowlist, skill.Name) {
-			continue
-		}
-		result = append(result, *skill)
-	}
-
-	// Sort by name for deterministic output
-	sortSkills(result)
-	return result, nil
-}
+// LoadSkills was the file-based loader for personal mode.
+// It has been removed in v3 (platform DB is the only source of truth for custom skills).
+// Use LoadBundledSkills() for the static index + platform SkillStore.LoadAll() for org/team skills.
 
 // LoadBundledSkills returns only the skills embedded in the binary.
 // Used by platform mode to overlay bundled skills on top of PG-stored custom skills.

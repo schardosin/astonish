@@ -179,7 +179,17 @@ func NewSkillLookupTool(allSkills []skills.Skill) (tool.Tool, error) {
 
 // handlePlatformSkillLookup handles skill_lookup for skills coming from platform stores (DB).
 // It supports fetching specific auxiliary files and returns a files manifest when loading the main skill.
+// SECURITY: Skills with non-usable validation_status are blocked at runtime.
 func handlePlatformSkillLookup(ctx tool.Context, store store.SkillStore, skill *store.Skill, args SkillLookupArgs) SkillLookupResult {
+	// Runtime validation gate — only skills with usable status can be loaded
+	if !skills.IsUsableStatus(skill.ValidationStatus) {
+		return SkillLookupResult{
+			Name: skill.Name,
+			Error: fmt.Sprintf("Skill %q is blocked (validation_status: %q). "+
+				"A team member must validate and acknowledge any critical security issues "+
+				"in Settings → Skills before this skill can be used.", skill.Name, skill.ValidationStatus),
+		}
+	}
 	// Determine if user asked for a specific file
 	filePath := strings.TrimSpace(args.File)
 	if filePath == "" && args.Filename != "" {
@@ -191,6 +201,14 @@ func handlePlatformSkillLookup(ctx tool.Context, store store.SkillStore, skill *
 	}
 
 	if filePath != "" {
+		// Validate for path traversal
+		if strings.Contains(filePath, "..") || strings.HasPrefix(filePath, "/") {
+			return SkillLookupResult{
+				Name:  skill.Name,
+				Error: "invalid file path: must not contain '..' or start with '/'",
+			}
+		}
+
 		// Specific file requested
 		// Normalize path/filename
 		dir, name := "", filePath

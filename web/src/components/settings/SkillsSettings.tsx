@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen } from 'lucide-react'
+import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
 import CodeMirror from '@uiw/react-codemirror'
@@ -22,6 +22,7 @@ interface Skill {
   require_bins?: string[]
   missing?: string[]
   has_directory?: boolean   // New: indicates the skill has auxiliary files
+  validation_status?: string // "unknown", "clean", "warnings", "blocked", "acknowledged"
 }
 
 interface ActiveSkill {
@@ -33,6 +34,9 @@ interface ActiveSkill {
   scope?: string
   description?: string
   files?: Array<{ path: string; filename: string; size?: number; is_executable?: boolean }>
+  validation_status?: string
+  validation?: { issues: any[] }
+  acknowledged_risks?: Array<{ message: string; type: string; acknowledged_by: string; acknowledged_by_email: string; acknowledged_at: string; content_hash: string }>
 }
 
 interface SkillsForm {
@@ -98,11 +102,11 @@ const saveSkillContent = async (name: string, rawFile: string, scope?: string, t
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ raw_file: rawFile })
   }, teamSlug)
+  const data = await res.json().catch(() => null)
   if (!res.ok) {
-    const data = await res.json().catch(() => null)
     throw new Error(data?.error || 'Failed to save skill')
   }
-  return res.json()
+  return data || {}
 }
 
 const createSkillApi = async (name: string, scope?: string, teamSlug?: string): Promise<Record<string, any>> => {
@@ -185,6 +189,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Editor state
   const [activeSkill, setActiveSkill] = useState<ActiveSkill | null>(null)
   const [editorContent, setEditorContent] = useState('')
+  const [loadedContent, setLoadedContent] = useState('') // Track original content for dirty detection
   const [editorMode, setEditorMode] = useState<'view' | 'edit' | null>(null)
   const [editorLoading, setEditorLoading] = useState(false)
   const [editorSaving, setEditorSaving] = useState(false)
@@ -202,6 +207,12 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Inline delete confirmation for auxiliary files
   const [pendingDeleteFile, setPendingDeleteFile] = useState<{ path: string; filename: string } | null>(null)
+
+  // Validation state
+  const [validating, setValidating] = useState(false)
+  const [validationResults, setValidationResults] = useState<any[] | null>(null)
+  const [validationVisible, setValidationVisible] = useState(false)
+  const [validationBlocked, setValidationBlocked] = useState(false) // True when skill has unresolved critical issues
 
   // Choose CodeMirror language extension based on current file
   const getLanguageExtension = (filename: string) => {
@@ -237,6 +248,9 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const effectiveCanManage = canManage !== undefined
     ? canManage
     : scope === 'team' ? isTeamAdmin : scope === 'org' ? isOrgAdmin : true
+
+  // Dirty tracking: Save button only enabled when content has changed
+  const isDirty = editorContent !== loadedContent
 
   useEffect(() => {
     if (config && showConfig) {
@@ -300,11 +314,26 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setShowAddFile(false)
     setPendingDeleteFile(null)
     setAddFileError(null)
+    setValidationResults(null)
+    setValidationVisible(false)
+    setValidationBlocked(false)
     try {
       const data = await fetchSkillContent(name, skillScope || scope, teamSlug)
       setActiveSkill(data)
       setEditorContent(data.raw_file)
+      setLoadedContent(data.raw_file)
       setEditorMode(mode)
+      // Show persisted validation issues if they exist
+      if (data.validation?.issues && data.validation.issues.length > 0) {
+        setValidationResults(data.validation.issues)
+        setValidationVisible(true)
+        // Only mark as blocked if there are unacknowledged critical issues
+        const acks = data.acknowledged_risks || []
+        const hasUnackedCritical = data.validation.issues.some((i: any) =>
+          i.severity === 'critical' && !acks.some((a: any) => a.message === i.message && a.type === i.type)
+        )
+        setValidationBlocked(hasUnackedCritical)
+      }
     } catch (err: any) {
       setEditorError(err.message)
     } finally {
@@ -328,6 +357,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       setCurrentFilePath(path)
       setCurrentFilename(filename)
       setEditorContent(fileData.content || '')
+      setLoadedContent(fileData.content || '')
     } catch (err: any) {
       setEditorError(err.message)
     } finally {
@@ -385,7 +415,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       if (currentFilePath === path && currentFilename === filename) {
         setCurrentFilePath('')
         setCurrentFilename('SKILL.md')
-        setEditorContent(activeSkill.raw_file || '')
+        setEditorContent(refreshed.raw_file || '')
+        setLoadedContent(refreshed.raw_file || '')
       }
     } catch (e: any) {
       setEditorError(e.message)
@@ -400,8 +431,30 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setEditorSuccess(false)
     try {
       if (currentFilename === 'SKILL.md' && currentFilePath === '') {
-        // Saving the main SKILL.md
-        await saveSkillContent(activeSkill.name, editorContent, activeSkill.scope || scope, teamSlug)
+        // Saving the main SKILL.md — validation runs post-save on backend
+        const result = await saveSkillContent(
+          activeSkill.name, editorContent, activeSkill.scope || scope, teamSlug
+        )
+
+        // Show validation results from post-save validation
+        if (result.validation?.issues && result.validation.issues.length > 0) {
+          setValidationResults(result.validation.issues)
+          setValidationVisible(true)
+          const acks = result.acknowledged_risks || []
+          const hasUnackedCritical = result.validation.issues.some((i: any) =>
+            i.severity === 'critical' && !acks.some((a: any) => a.message === i.message && a.type === i.type)
+          )
+          setValidationBlocked(hasUnackedCritical)
+        } else {
+          // Clean validation or no issues
+          setValidationResults(null)
+          setValidationVisible(false)
+          setValidationBlocked(false)
+        }
+        // Update local validation status + acknowledged_risks
+        if (result.validation_status) {
+          setActiveSkill({ ...activeSkill, validation_status: result.validation_status, raw_file: editorContent, acknowledged_risks: result.acknowledged_risks || activeSkill.acknowledged_risks })
+        }
       } else {
         // Saving an auxiliary file
         const url = buildSkillFileUrl(activeSkill.name, currentFilePath, currentFilename, activeSkill.scope)
@@ -423,6 +476,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
         }
       }
       setEditorSuccess(true)
+      setLoadedContent(editorContent) // Reset dirty tracking after successful save
       setTimeout(() => setEditorSuccess(false), 2000)
       loadSkills()
       // Refresh the file list
@@ -432,6 +486,114 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       setEditorError(err.message)
     } finally {
       setEditorSaving(false)
+    }
+  }
+
+  const handleValidateSkill = async () => {
+    if (!activeSkill) return
+    setValidating(true)
+    setValidationResults(null)
+    setValidationVisible(false)
+    setValidationBlocked(false)
+    try {
+      const params = (activeSkill.scope || scope) ? `?scope=${activeSkill.scope || scope}` : ''
+      const res = await teamFetch(
+        `/api/skills/${encodeURIComponent(activeSkill.name)}/validate${params}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } },
+        teamSlug
+      )
+      if (!res.ok) {
+        throw new Error('Validation request failed')
+      }
+      const data = await res.json()
+      if (data.status === 'skipped') {
+        setEditorError('Validation unavailable — no AI provider configured. Skills cannot be used without validation.')
+        return
+      }
+      // Update local validation status from persisted result
+      if (data.validation_status && activeSkill) {
+        setActiveSkill({ ...activeSkill, validation_status: data.validation_status })
+      }
+      if (data.validation && data.validation.issues && data.validation.issues.length > 0) {
+        setValidationResults(data.validation.issues)
+        setValidationVisible(true)
+        const hasCritical = data.validation.issues.some((i: any) => i.severity === 'critical')
+        setValidationBlocked(hasCritical)
+      } else {
+        setValidationResults([])
+        setValidationVisible(true)
+        // Auto-hide "no issues" after 3 seconds
+        setTimeout(() => setValidationVisible(false), 3000)
+      }
+      // Refresh the skills list to show updated badge
+      loadSkills()
+    } catch (err: any) {
+      setEditorError('Validation failed: ' + err.message)
+    } finally {
+      setValidating(false)
+    }
+  }
+
+  const handleApplyFix = (suggestion: { old_content: string; new_content: string }) => {
+    if (!suggestion.old_content || !suggestion.new_content) return
+    const updated = editorContent.replace(suggestion.old_content, suggestion.new_content)
+    if (updated !== editorContent) {
+      setEditorContent(updated)
+      // Remove the applied issue from the list
+      if (validationResults) {
+        setValidationResults(validationResults.filter(
+          (issue) => !(issue.suggestion && issue.suggestion.old_content === suggestion.old_content)
+        ))
+      }
+    } else {
+      setEditorError('Could not apply fix — content mismatch')
+    }
+  }
+
+  const handleAcknowledgeRisk = async (issue: any) => {
+    if (!activeSkill) return
+    try {
+      const params = (activeSkill.scope || scope) ? `?scope=${activeSkill.scope || scope}` : ''
+      const res = await teamFetch(
+        `/api/skills/${encodeURIComponent(activeSkill.name)}/acknowledge${params}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: issue.message, type: issue.type })
+        },
+        teamSlug
+      )
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}))
+        setEditorError(errData.error || 'Failed to acknowledge risk')
+        return
+      }
+      const data = await res.json()
+
+      // Add the new ack to activeSkill.acknowledged_risks for immediate UI update
+      const existingAcks = activeSkill.acknowledged_risks || []
+      const newAck = data.acknowledgment || { message: issue.message, type: issue.type, acknowledged_by_email: '', acknowledged_at: new Date().toISOString() }
+      const updatedAcks = [...existingAcks, newAck]
+
+      // Check if there are still unacknowledged critical issues
+      if (validationResults) {
+        const hasUnackedCritical = validationResults.some((i: any) =>
+          i.severity === 'critical' && !updatedAcks.some((a: any) => a.message === i.message && a.type === i.type)
+        )
+        setValidationBlocked(hasUnackedCritical)
+      }
+
+      // Update local state with new ack and validation status
+      setActiveSkill({
+        ...activeSkill,
+        validation_status: data.validation_status || activeSkill.validation_status,
+        acknowledged_risks: updatedAcks
+      })
+
+      // Refresh the skills list to show updated badge
+      loadSkills()
+    } catch (err: any) {
+      setEditorError('Failed to acknowledge risk: ' + err.message)
     }
   }
 
@@ -470,6 +632,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
     setActiveSkill(null)
     setEditorMode(null)
     setEditorContent('')
+    setLoadedContent('')
     setEditorError(null)
     setEditorSuccess(false)
     setCurrentFilePath('')
@@ -594,16 +757,110 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
             {editorMode === 'edit' && (
               <button
                 onClick={handleSaveSkill}
-                disabled={editorSaving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+                disabled={editorSaving || !isDirty}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white text-sm font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={saveButtonStyle}
+                title={!isDirty ? 'No changes to save' : 'Save changes'}
               >
                 <Save size={14} />
                 {editorSaving ? 'Saving...' : 'Save'}
               </button>
             )}
+            {editorMode === 'edit' && (
+              <button
+                onClick={handleValidateSkill}
+                disabled={validating}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-all"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+              >
+                <AlertCircle size={14} />
+                {validating ? 'Validating...' : 'Validate'}
+              </button>
+            )}
           </div>
         </div>
+
+        {/* Validation Results Panel */}
+        {validationVisible && validationResults !== null && (
+          <div className="border-b px-4 py-3" style={{ background: validationBlocked ? 'rgba(239, 68, 68, 0.05)' : 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
+            {validationResults.length === 0 ? (
+              <span className="flex items-center gap-1.5 text-sm text-green-400">
+                <Check size={14} /> No issues found — skill is validated and usable
+              </span>
+            ) : (
+            <div>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm font-medium" style={{ color: validationBlocked ? '#f87171' : 'var(--text-primary)' }}>
+                {validationBlocked ? '⛔ Blocked — ' : ''}Validation Issues ({validationResults.length})
+              </span>
+              <div className="flex items-center gap-2">
+                {!validationBlocked && (
+                  <button
+                    onClick={() => { setValidationVisible(false); setValidationBlocked(false) }}
+                    className="text-xs px-2 py-0.5 rounded"
+                    style={{ color: 'var(--text-secondary)' }}
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="space-y-2 max-h-48 overflow-y-auto">
+              {validationResults.map((issue, idx) => {
+                // Check if this critical issue has already been acknowledged
+                const acks = activeSkill?.acknowledged_risks || []
+                const matchingAck = issue.severity === 'critical'
+                  ? acks.find((a: any) => a.message === issue.message && a.type === issue.type)
+                  : null
+
+                return (
+                <div key={idx} className="flex items-start gap-2 text-sm rounded-lg p-2" style={{ background: 'var(--bg-primary)', border: `1px solid ${issue.severity === 'critical' && !matchingAck ? 'rgba(239, 68, 68, 0.3)' : 'var(--border-color)'}` }}>
+                  <span className={`shrink-0 px-1.5 py-0.5 rounded text-xs font-medium ${
+                    issue.severity === 'critical' && !matchingAck ? 'bg-red-500/20 text-red-400' :
+                    issue.severity === 'critical' && matchingAck ? 'bg-green-500/20 text-green-400' :
+                    issue.severity === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
+                    'bg-blue-500/20 text-blue-400'
+                  }`}>
+                    {issue.severity === 'critical' && matchingAck ? 'acknowledged' : issue.severity}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <p style={{ color: 'var(--text-primary)' }}>{issue.message}</p>
+                    <div className="flex items-center gap-2 mt-1">
+                      {issue.suggestion && !matchingAck && (
+                        <button
+                          onClick={() => handleApplyFix(issue.suggestion)}
+                          className="text-xs px-2 py-1 rounded transition-colors bg-purple-600/80 hover:bg-purple-600 text-white font-medium"
+                        >
+                          Apply Fix
+                        </button>
+                      )}
+                      {issue.severity === 'critical' && !matchingAck && (
+                        <button
+                          onClick={() => handleAcknowledgeRisk(issue)}
+                          className="text-xs px-2 py-0.5 rounded transition-colors bg-orange-600/80 hover:bg-orange-600 text-white"
+                          title="Accept this risk — you understand the security implications"
+                        >
+                          Acknowledge Risk
+                        </button>
+                      )}
+                      {matchingAck && (
+                        <span className="text-xs" style={{ color: 'var(--text-tertiary)' }}>
+                          Acknowledged by {matchingAck.acknowledged_by_email || 'unknown'} on {new Date(matchingAck.acknowledged_at).toLocaleDateString()}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="text-xs shrink-0" style={{ color: 'var(--text-tertiary)' }}>
+                    {issue.type}
+                  </span>
+                </div>
+                )
+              })}
+            </div>
+            </div>
+            )}
+          </div>
+        )}
 
         {/* Sidebar + Editor split */}
         <div className="flex flex-1 overflow-hidden">
@@ -633,6 +890,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                    setCurrentFilePath('')
                    setCurrentFilename('SKILL.md')
                    setEditorContent(activeSkill?.raw_file || '')
+                   setLoadedContent(activeSkill?.raw_file || '')
                  }}
                  className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
                >
@@ -1142,6 +1400,11 @@ interface SkillRowProps {
 }
 
 function SkillRow({ skill, showScope, onView, onEdit, onDelete }: SkillRowProps) {
+  const isBlocked = skill.validation_status === 'blocked' || skill.validation_status === 'unknown'
+  const isValidated = skill.validation_status === 'clean' || skill.validation_status === 'warnings' || skill.validation_status === 'acknowledged'
+  // Bundled skills are always trusted
+  const isBundled = skill.source === 'bundled'
+
   return (
     <div
       className="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors group"
@@ -1168,6 +1431,21 @@ function SkillRow({ skill, showScope, onView, onEdit, onDelete }: SkillRowProps)
            {skill.has_directory && (
              <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/40 text-blue-300" title="This skill contains multiple files (scripts, references, etc.)">
                multi-file
+             </span>
+           )}
+           {/* Validation status badge — only for non-bundled skills */}
+           {!isBundled && isBlocked && (
+             <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/40 text-red-300 flex items-center gap-1"
+               title={skill.validation_status === 'unknown' ? 'Not validated — must be validated before use' : 'Blocked — critical security issues need review'}>
+               <ShieldAlert size={10} />
+               {skill.validation_status === 'unknown' ? 'unvalidated' : 'blocked'}
+             </span>
+           )}
+           {!isBundled && isValidated && (
+             <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-300 flex items-center gap-1"
+               title={skill.validation_status === 'acknowledged' ? 'Validated — risks acknowledged' : 'Validated'}>
+               <ShieldCheck size={10} />
+               {skill.validation_status === 'acknowledged' ? 'acknowledged' : 'validated'}
              </span>
            )}
            {skill.require_bins?.length && skill.require_bins.length > 0 && !skill.eligible && (

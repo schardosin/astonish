@@ -197,6 +197,13 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const [editorSuccess, setEditorSuccess] = useState(false)
   const [acknowledging, setAcknowledging] = useState<string | null>(null) // issue key being acknowledged
   const saveIdRef = useRef(0) // Monotonic counter to discard stale save completions
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
+
+  // Cleanup pending timers on unmount
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => { timers.forEach(id => clearTimeout(id)) }
+  }, [])
 
   // Multi-file editor state
   const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
@@ -312,7 +319,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       await saveFullConfigSection('skills', saveData as unknown as Record<string, unknown>)
       setSaveSuccess(true)
       if (onSaved) onSaved()
-      setTimeout(() => setSaveSuccess(false), 2000)
+      const t = setTimeout(() => { setSaveSuccess(false); timersRef.current.delete(t) }, 2000)
+      timersRef.current.add(t)
     } catch (err: any) {
       setError(err.message)
     } finally {
@@ -501,7 +509,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
       if (saveIdRef.current !== currentSaveId) return
       setEditorSuccess(true)
       setLoadedContent(savedContent) // Reset dirty tracking after successful save
-      setTimeout(() => setEditorSuccess(false), 2000)
+      const t2 = setTimeout(() => { setEditorSuccess(false); timersRef.current.delete(t2) }, 2000)
+      timersRef.current.add(t2)
       loadSkills()
       // Refresh skill data — isolated so save success isn't masked by refresh failure
       try {
@@ -561,7 +570,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
         setValidationResults([])
         setValidationVisible(true)
         // Auto-hide "no issues" after 3 seconds
-        setTimeout(() => setValidationVisible(false), 3000)
+        const t3 = setTimeout(() => { setValidationVisible(false); timersRef.current.delete(t3) }, 3000)
+        timersRef.current.add(t3)
       }
       // Refresh the skills list to show updated badge
       loadSkills()
@@ -936,14 +946,26 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
              <div className="flex-1 overflow-y-auto p-1 text-sm space-y-0.5" style={{ color: 'var(--text-primary)' }}>
                {/* SKILL.md - always first */}
                <div
-                 onClick={() => {
+                 onClick={async () => {
+                   if (currentFilename === 'SKILL.md' && currentFilePath === '') return // already active
                    if (editorContent !== loadedContent) {
                      if (!window.confirm('You have unsaved changes. Discard and switch files?')) return
                    }
                    setCurrentFilePath('')
                    setCurrentFilename('SKILL.md')
-                   setEditorContent(activeSkill?.raw_file || '')
-                   setLoadedContent(activeSkill?.raw_file || '')
+                   // Re-fetch to avoid stale content if another user edited SKILL.md
+                   if (activeSkill) {
+                     try {
+                       const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
+                       setActiveSkill(refreshed)
+                       setEditorContent(refreshed.raw_file || '')
+                       setLoadedContent(refreshed.raw_file || '')
+                     } catch {
+                       // Fallback to cached value if fetch fails
+                       setEditorContent(activeSkill.raw_file || '')
+                       setLoadedContent(activeSkill.raw_file || '')
+                     }
+                   }
                  }}
                  className={`group flex items-center gap-1.5 px-2 py-1 rounded cursor-pointer ${currentFilename === 'SKILL.md' ? 'bg-purple-600 text-white' : 'hover:bg-gray-800/60'}`}
                >

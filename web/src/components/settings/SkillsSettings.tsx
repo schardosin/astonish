@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Save, AlertCircle, Check, Plus, Trash2, ChevronRight, ChevronDown, Eye, Pencil, X, Loader2, CheckCircle, XCircle, FileText, FolderOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { saveFullConfigSection, inputClass, inputStyle, labelStyle, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
@@ -196,6 +196,7 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   const [editorError, setEditorError] = useState<string | null>(null)
   const [editorSuccess, setEditorSuccess] = useState(false)
   const [acknowledging, setAcknowledging] = useState<string | null>(null) // issue key being acknowledged
+  const saveIdRef = useRef(0) // Monotonic counter to discard stale save completions
 
   // Multi-file editor state
   const [currentFilePath, setCurrentFilePath] = useState('')      // '' for SKILL.md
@@ -252,17 +253,19 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   // Dirty tracking: Save button only enabled when content has changed
   const isDirty = editorContent !== loadedContent
+  const isDirtyRef = useRef(isDirty)
+  useEffect(() => { isDirtyRef.current = isDirty }, [isDirty])
 
   // Protect unsaved changes from accidental browser navigation
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
-      if (editorContent !== loadedContent) {
+      if (isDirtyRef.current) {
         e.preventDefault()
       }
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [editorContent, loadedContent])
+  }, [])
 
   useEffect(() => {
     if (config && showConfig) {
@@ -443,9 +446,11 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
 
   const handleSaveSkill = async () => {
     if (!activeSkill) return
+    const currentSaveId = ++saveIdRef.current
     setEditorSaving(true)
     setEditorError(null)
     setEditorSuccess(false)
+    const savedContent = editorContent // Snapshot content at save time
     try {
       if (currentFilename === 'SKILL.md' && currentFilePath === '') {
         // Saving the main SKILL.md — validation runs post-save on backend
@@ -492,21 +497,29 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
           throw new Error(errData.error || 'Failed to save file')
         }
       }
+      // Discard stale completion if user switched files during save
+      if (saveIdRef.current !== currentSaveId) return
       setEditorSuccess(true)
-      setLoadedContent(editorContent) // Reset dirty tracking after successful save
+      setLoadedContent(savedContent) // Reset dirty tracking after successful save
       setTimeout(() => setEditorSuccess(false), 2000)
       loadSkills()
       // Refresh skill data — isolated so save success isn't masked by refresh failure
       try {
         const refreshed = await fetchSkillContent(activeSkill.name, activeSkill.scope || scope, teamSlug)
-        setActiveSkill(refreshed)
+        if (saveIdRef.current === currentSaveId) {
+          setActiveSkill(refreshed)
+        }
       } catch {
         // Refresh failed but save succeeded — don't show error
       }
     } catch (err: any) {
-      setEditorError(err.message)
+      if (saveIdRef.current === currentSaveId) {
+        setEditorError(err.message)
+      }
     } finally {
-      setEditorSaving(false)
+      if (saveIdRef.current === currentSaveId) {
+        setEditorSaving(false)
+      }
     }
   }
 

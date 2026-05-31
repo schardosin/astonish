@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
@@ -143,7 +144,8 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 		// Platform mode: scope-aware listing (only supported mode)
 		items, err := listSkillsPlatform(r.Context(), svc, scope)
 		if err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to load skills: "+err.Error())
+			slog.Error("failed to load skills", "error", err)
+			respondError(w, http.StatusInternalServerError, "Failed to load skills")
 			return
 		}
 		resp := SkillsListResponse{
@@ -314,12 +316,14 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to create skill directory: "+err.Error())
+		slog.Error("failed to create skill directory", "dir", skillDir, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to create skill directory")
 		return
 	}
 
 	if err := os.WriteFile(skillFile, []byte(skills.NewSkillTemplate(name)), 0644); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to write skill file: "+err.Error())
+		slog.Error("failed to write skill file", "file", skillFile, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to write skill file")
 		return
 	}
 
@@ -536,7 +540,8 @@ func SaveSkillFileHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := targetStore.SaveFile(r.Context(), name, file); err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to save skill file: "+err.Error())
+			slog.Error("failed to save skill file", "skill", name, "error", err)
+			respondError(w, http.StatusInternalServerError, "Failed to save skill file")
 			return
 		}
 
@@ -575,7 +580,8 @@ func DeleteSkillFileHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := targetStore.DeleteFile(r.Context(), name, path, filename); err != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to delete skill file: "+err.Error())
+			slog.Error("failed to delete skill file", "skill", name, "file", filename, "error", err)
+			respondError(w, http.StatusInternalServerError, "Failed to delete skill file")
 			return
 		}
 
@@ -926,7 +932,8 @@ func updateSkillContentPlatform(w http.ResponseWriter, r *http.Request, targetSt
 		ValidationMeta:   "",
 	}
 	if err := targetStore.Save(r.Context(), skill); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to save skill: "+err.Error())
+		slog.Error("failed to save skill", "skill", name, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to save skill")
 		return
 	}
 
@@ -1021,7 +1028,8 @@ func createSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 	}
 
 	if err := targetStore.Save(r.Context(), skill); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to create skill: "+err.Error())
+		slog.Error("failed to create skill", "skill", name, "error", err)
+		respondError(w, http.StatusInternalServerError, "Failed to create skill")
 		return
 	}
 
@@ -1129,7 +1137,8 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 		CreatedBy:   userID,
 	}
 	if err := targetStore.Save(r.Context(), skill); err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to save skill: "+err.Error())
+		slog.Error("failed to save skill during install", "skill", parsed.Name, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to save skill")
 		return
 	}
 
@@ -1144,8 +1153,17 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	var totalSize int64
 	skillDir := filepath.Join(tmpDir, slug)
 
-	err = filepath.Walk(skillDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	err = filepath.WalkDir(skillDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		// Defense-in-depth: skip symlinks (zip extraction shouldn't create them,
+		// but protect against compromised temp directories)
+		if d.Type()&fs.ModeSymlink != 0 {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(skillDir, path)
@@ -1223,7 +1241,7 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 
 	if llmProvider := getValidationLLMProvider(r); llmProvider != nil {
 		body := extractSkillBody(string(skillData))
-		result, err := skills.ValidateSkill(r.Context(), skills.ValidatorConfig{
+		valResult, err := skills.ValidateSkill(r.Context(), skills.ValidatorConfig{
 			SkillName: parsed.Name,
 			Content:   body,
 			Files:     filePaths,
@@ -1232,8 +1250,8 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("skill validation failed during install", "skill", parsed.Name, "error", err)
 		} else {
-			validation = result
-			validationStatus = skills.DetermineValidationStatus(result, nil, installHash)
+			validation = valResult
+			validationStatus = skills.DetermineValidationStatus(valResult, nil, installHash)
 		}
 	}
 

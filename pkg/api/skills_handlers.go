@@ -1153,6 +1153,16 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 	var totalSize int64
 	skillDir := filepath.Join(tmpDir, slug)
 
+	// Use os.OpenRoot to scope all file reads to skillDir, preventing symlink
+	// TOCTOU traversal attacks (gosec G122).
+	skillRoot, err := os.OpenRoot(skillDir)
+	if err != nil {
+		slog.Error("failed to open skill directory root", "dir", skillDir, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to read skill files")
+		return
+	}
+	defer skillRoot.Close()
+
 	err = filepath.WalkDir(skillDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
@@ -1190,7 +1200,7 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 			return fmt.Errorf("file count exceeds %d limit", maxInstallFiles)
 		}
 
-		content, err := os.ReadFile(path)
+		content, err := skillRoot.ReadFile(rel)
 		if err != nil {
 			return err
 		}

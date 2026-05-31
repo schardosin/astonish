@@ -48,6 +48,17 @@ func OverlayUpperDir(containerName string) string {
 //   - Custom template (BasedOn=@base): stacked = template-upper:@base-snapshot-rootfs
 //     (template customizations on top, @base OS underneath)
 func ResolveLowerLayers(poolPath, templateName string, registry *tmplmeta.TemplateRegistry) (string, error) {
+	return resolveLowerLayersInner(poolPath, templateName, registry, 0)
+}
+
+// maxTemplateChainDepth prevents infinite recursion from circular BasedOn chains.
+const maxTemplateChainDepth = 10
+
+func resolveLowerLayersInner(poolPath, templateName string, registry *tmplmeta.TemplateRegistry, depth int) (string, error) {
+	if depth > maxTemplateChainDepth {
+		return "", fmt.Errorf("template chain exceeds maximum depth (%d) — possible circular BasedOn reference", maxTemplateChainDepth)
+	}
+
 	// For @base, just return the snapshot rootfs path
 	if templateName == BaseTemplate {
 		lower := SnapshotRootfsPath(poolPath, BaseTemplate)
@@ -87,7 +98,7 @@ func ResolveLowerLayers(poolPath, templateName string, registry *tmplmeta.Templa
 		basedOn = BaseTemplate
 	}
 
-	baseLower, err := ResolveLowerLayers(poolPath, basedOn, registry)
+	baseLower, err := resolveLowerLayersInner(poolPath, basedOn, registry, depth+1)
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve base %q for template %q: %w", basedOn, templateName, err)
 	}
@@ -559,35 +570,25 @@ func CleanupAllOverlays() {
 	}
 }
 
-// RemountDependentOverlays finds all overlay mounts whose lowerdir includes
-// the given path and remounts them. This is critical after a base snapshot is
-// recreated (delete + create): the old directory inode is gone, so existing
-// overlay mounts that referenced it as a lowerdir become stale (empty rootfs).
-//
-// The function parses /proc/mounts, identifies affected overlays, stops any
-// running containers that use the mount (umount fails on busy mounts),
-// unmounts, recreates the work directory (overlayfs requires a clean workdir
-// after remount), remounts with the same options, and restarts stopped containers.
-//
-// For unprivileged containers, the remounted overlay also needs the Incus
-// idmap state re-seeded so the container can start without a slow shift pass.
-//
-// This MUST be called while templateSnapshotMu is held (write lock) to prevent
-// new overlay mounts from being created between the snapshot swap and remount.
-func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
+// DependentOverlay describes an overlay mount that depends on a template
+// snapshot and may need to be stopped/remounted when the snapshot is recreated.
+type DependentOverlay struct {
+	Mountpoint    string
+	ContainerName string
+	Opts          string
+	WasRunning    bool
+}
+
+// FindDependentOverlays enumerates all overlay mounts whose lowerdir includes
+// the given snapshotPath. Returns the list of affected mounts for subsequent
+// stop/remount/restart operations.
+func FindDependentOverlays(snapshotPath string) ([]*DependentOverlay, error) {
 	data, err := ReadMountsOnSandboxHost()
 	if err != nil {
-		return fmt.Errorf("failed to read mounts: %w", err)
+		return nil, fmt.Errorf("failed to read mounts: %w", err)
 	}
 
-	type overlayMount struct {
-		mountpoint    string
-		containerName string
-		opts          string
-		wasRunning    bool
-	}
-
-	var affected []*overlayMount
+	var affected []*DependentOverlay
 
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		fields := bytes.Fields(line)
@@ -612,45 +613,53 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 			continue
 		}
 
-		affected = append(affected, &overlayMount{
-			mountpoint:    mountpoint,
-			containerName: containerName,
-			opts:          opts,
+		affected = append(affected, &DependentOverlay{
+			Mountpoint:    mountpoint,
+			ContainerName: containerName,
+			Opts:          opts,
 		})
 	}
 
-	if len(affected) == 0 {
-		return nil
-	}
+	return affected, nil
+}
 
-	slog.Info("remounting overlays after snapshot recreation", "component", "sandbox", "count", len(affected), "snapshot_path", snapshotPath)
-
-	// Phase 1: stop running containers so we can unmount their rootfs
-	for _, m := range affected {
-		if m.containerName != "" && client.IsRunning(m.containerName) {
-			slog.Info("stopping container for overlay remount", "component", "sandbox", "container", m.containerName)
-			if err := client.StopInstance(m.containerName, true); err != nil {
-				slog.Warn("failed to stop container for overlay remount", "component", "sandbox", "container", m.containerName, "error", err)
+// StopDependentContainers force-stops all running containers in the dependent
+// overlay list. This MUST be called BEFORE deleting a snapshot to prevent
+// containers from seeing a stale overlay (empty lowerdir) during the window
+// between snapshot deletion and remount.
+func StopDependentContainers(client *IncusClient, overlays []*DependentOverlay) {
+	for _, m := range overlays {
+		if m.ContainerName != "" && client.IsRunning(m.ContainerName) {
+			slog.Info("stopping container for overlay remount", "component", "sandbox", "container", m.ContainerName)
+			if err := client.StopInstance(m.ContainerName, true); err != nil {
+				slog.Warn("failed to stop container for overlay remount", "component", "sandbox", "container", m.ContainerName, "error", err)
 				continue
 			}
-			m.wasRunning = true
+			m.WasRunning = true
 		}
 	}
+}
 
-	// Phase 2: unmount + remount each overlay
-	for _, m := range affected {
-		if err := UmountOnSandboxHost(m.mountpoint); err != nil {
-			slog.Warn("failed to unmount stale overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
+// RemountOverlays unmounts stale overlays and remounts them with fresh inode
+// references. This MUST be called AFTER the new snapshot is created so the
+// kernel resolves the lowerdir path to the new inode.
+//
+// For unprivileged containers, the remounted overlay also needs the Incus
+// idmap state re-seeded so the container can start without a slow shift pass.
+func RemountOverlays(client *IncusClient, overlays []*DependentOverlay) {
+	for _, m := range overlays {
+		if err := UmountOnSandboxHost(m.Mountpoint); err != nil {
+			slog.Warn("failed to unmount stale overlay", "component", "sandbox", "mountpoint", m.Mountpoint, "error", err)
 			continue
 		}
 
 		// Parse original mount options to get the paths for remount
-		lowerDir := extractMountOpt(m.opts, "lowerdir")
-		upperDir := extractMountOpt(m.opts, "upperdir")
-		workDir := extractMountOpt(m.opts, "workdir")
+		lowerDir := extractMountOpt(m.Opts, "lowerdir")
+		upperDir := extractMountOpt(m.Opts, "upperdir")
+		workDir := extractMountOpt(m.Opts, "workdir")
 
 		if lowerDir == "" || upperDir == "" || workDir == "" {
-			slog.Warn("could not parse overlay opts, skipping remount", "component", "sandbox", "mountpoint", m.mountpoint)
+			slog.Warn("could not parse overlay opts, skipping remount", "component", "sandbox", "mountpoint", m.Mountpoint)
 			continue
 		}
 
@@ -665,32 +674,63 @@ func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
 
 		// Remount overlay with same options
 		newOpts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerDir, upperDir, workDir)
-		if err := MountOverlayOnSandboxHost(newOpts, m.mountpoint); err != nil {
-			slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.mountpoint, "error", err)
+		if err := MountOverlayOnSandboxHost(newOpts, m.Mountpoint); err != nil {
+			slog.Error("failed to remount overlay", "component", "sandbox", "mountpoint", m.Mountpoint, "error", err)
 			continue
 		}
 
 		// For unprivileged containers, re-seed the idmap state so the
 		// container can start without a slow shift pass.
 		if !IsPrivileged() {
-			if err := reshiftOverlayUIDs(client, m.containerName); err != nil {
+			if err := reshiftOverlayUIDs(client, m.ContainerName); err != nil {
 				slog.Warn("failed to re-shift UIDs after remount", "component", "sandbox",
-					"container", m.containerName, "error", err)
+					"container", m.ContainerName, "error", err)
 			}
 		}
 
-		slog.Info("remounted overlay", "component", "sandbox", "container", m.containerName)
+		slog.Info("remounted overlay", "component", "sandbox", "container", m.ContainerName)
 	}
+}
 
-	// Phase 3: restart containers that were running before
-	for _, m := range affected {
-		if m.wasRunning && m.containerName != "" {
-			slog.Info("restarting container after overlay remount", "component", "sandbox", "container", m.containerName)
-			if err := client.StartInstance(m.containerName); err != nil {
-				slog.Warn("failed to restart container after overlay remount", "component", "sandbox", "container", m.containerName, "error", err)
+// RestartDependentContainers restarts containers that were previously stopped
+// for overlay remounting. Only containers marked WasRunning are restarted.
+func RestartDependentContainers(client *IncusClient, overlays []*DependentOverlay) {
+	for _, m := range overlays {
+		if m.WasRunning && m.ContainerName != "" {
+			slog.Info("restarting container after overlay remount", "component", "sandbox", "container", m.ContainerName)
+			if err := client.StartInstance(m.ContainerName); err != nil {
+				slog.Warn("failed to restart container after overlay remount", "component", "sandbox", "container", m.ContainerName, "error", err)
 			}
 		}
 	}
+}
+
+// RemountDependentOverlays finds all overlay mounts whose lowerdir includes
+// the given path and remounts them. This is the legacy all-in-one function
+// that combines Find + Stop + Remount + Restart.
+//
+// DEPRECATED: New code should use the composable phase functions directly
+// (FindDependentOverlays, StopDependentContainers, RemountOverlays,
+// RestartDependentContainers) to ensure containers are stopped BEFORE
+// snapshot deletion, eliminating the stale-overlay race window.
+//
+// This MUST be called while templateSnapshotMu is held (write lock) to prevent
+// new overlay mounts from being created between the snapshot swap and remount.
+func RemountDependentOverlays(client *IncusClient, snapshotPath string) error {
+	overlays, err := FindDependentOverlays(snapshotPath)
+	if err != nil {
+		return err
+	}
+
+	if len(overlays) == 0 {
+		return nil
+	}
+
+	slog.Info("remounting overlays after snapshot recreation", "component", "sandbox", "count", len(overlays), "snapshot_path", snapshotPath)
+
+	StopDependentContainers(client, overlays)
+	RemountOverlays(client, overlays)
+	RestartDependentContainers(client, overlays)
 
 	return nil
 }

@@ -86,7 +86,7 @@ func Execute() error {
 		mustNotBeRemote("credential")
 		return handleCredentialCommand(os.Args[2:])
 	case "skills":
-		mustNotBeRemote("skills")
+		mustBeRemote("skills")
 		return handleSkillsCommand(os.Args[2:])
 	case "drill", "test":
 		return handleDrillCommand(os.Args[2:])
@@ -158,6 +158,19 @@ func mustNotBeRemote(cmd string) {
 		fmt.Fprintf(os.Stderr, "Open %s in your browser instead.\n", url)
 	}
 	fmt.Fprintf(os.Stderr, "Use 'astonish logout' to disconnect and return to personal mode.\n")
+	os.Exit(1)
+}
+
+// mustBeRemote exits with an error if the CLI is not connected to a remote server.
+// Skills now require remote mode (org/team scope) because they are stored in the
+// platform database and require an authenticated user to resolve org membership
+// and admin privileges.
+func mustBeRemote(cmd string) {
+	if client.IsRemoteMode() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Error: '%s' is only available when connected to a remote server.\n", cmd)
+	fmt.Fprintf(os.Stderr, "Run 'astonish login' first.\n")
 	os.Exit(1)
 }
 

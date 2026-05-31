@@ -235,14 +235,16 @@ export default function SettingsContent({
         <SubAgentsSettings config={fullConfig.sub_agents} onSaved={onSaved} />
       )}
       {activeSection === 'skills' && fullConfig && (
-        <SkillsSettings
-          config={fullConfig.skills}
-          onSaved={onSaved}
-          theme={theme}
-          scope={isPlatformMode ? 'org' : undefined}
-          isPlatform={isPlatformMode}
-          canManage={isPlatformMode ? isOrgAdmin : true}
-        />
+        <div className="flex-1 overflow-hidden p-6 flex flex-col">
+          <SkillsSettings
+            config={fullConfig.skills}
+            onSaved={onSaved}
+            theme={theme}
+            scope={isPlatformMode ? 'org' : undefined}
+            isPlatform={isPlatformMode}
+            canManage={isPlatformMode ? isOrgAdmin : true}
+          />
+        </div>
       )}
       {activeSection === 'scheduler' && fullConfig && (
         <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} />

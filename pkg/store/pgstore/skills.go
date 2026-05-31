@@ -2,6 +2,7 @@ package pgstore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -19,13 +20,22 @@ import (
 // The `frontmatter` JSONB column is maintained as a search/filter index but
 // is not used as the source of truth.
 type pgSkillStore struct {
-	pool   *pgxpool.Pool
-	schema string
-	table  string // "org_skills" for org-level
+	pool       *pgxpool.Pool
+	schema     string
+	table      string // "skills" or "org_skills"
+	filesTable string // "skill_files" or "org_skill_files"
 }
 
 func (s *pgSkillStore) tableName() string {
 	return pgx.Identifier{s.schema, s.table}.Sanitize()
+}
+
+func (s *pgSkillStore) filesTableName() string {
+	if s.schema == "public" {
+		// org level
+		return pgx.Identifier{"public", s.filesTable}.Sanitize()
+	}
+	return pgx.Identifier{s.schema, s.filesTable}.Sanitize()
 }
 
 func (s *pgSkillStore) LoadAll(ctx context.Context) ([]store.Skill, error) {
@@ -34,26 +44,40 @@ func (s *pgSkillStore) LoadAll(ctx context.Context) ([]store.Skill, error) {
 
 func (s *pgSkillStore) Get(ctx context.Context, name string) (*store.Skill, error) {
 	row := s.pool.QueryRow(ctx, fmt.Sprintf(
-		`SELECT name, content FROM %s WHERE name = $1`, s.tableName()),
+		`SELECT name, content, COALESCE(validation_status, 'unknown'), COALESCE(validation_meta::text, '') FROM %s WHERE name = $1`, s.tableName()),
 		name,
 	)
 
-	var dbName, rawContent string
-	if err := row.Scan(&dbName, &rawContent); err != nil {
-		return nil, fmt.Errorf("skill not found: %w", err)
+	var dbName, rawContent, valStatus, valMeta string
+	if err := row.Scan(&dbName, &rawContent, &valStatus, &valMeta); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // not found — consistent with SQLite store contract
+		}
+		return nil, fmt.Errorf("skill query error: %w", err)
 	}
 
-	return parseStoredSkill(dbName, rawContent), nil
+	skill := parseStoredSkill(dbName, rawContent)
+	skill.ValidationStatus = valStatus
+	skill.ValidationMeta = valMeta
+	return skill, nil
 }
 
 func (s *pgSkillStore) Save(ctx context.Context, skill *store.Skill) error {
+	valStatus := skill.ValidationStatus
+	if valStatus == "" {
+		valStatus = "unknown"
+	}
+	valMeta := skill.ValidationMeta
+	if valMeta == "" {
+		valMeta = "{}"
+	}
 	// content holds the full raw SKILL.md (frontmatter + body).
 	_, err := s.pool.Exec(ctx, fmt.Sprintf(
-		`INSERT INTO %s (name, content, frontmatter, created_by, updated_at)
-		 VALUES ($1, $2, '{}'::jsonb, $3, now())
-		 ON CONFLICT (name) DO UPDATE SET content = $2, updated_at = now()`,
+		`INSERT INTO %s (name, content, frontmatter, validation_status, validation_meta, created_by, updated_at)
+		 VALUES ($1, $2, '{}'::jsonb, $3, $4::jsonb, $5, now())
+		 ON CONFLICT (name) DO UPDATE SET content = $2, validation_status = $3, validation_meta = $4::jsonb, updated_at = now()`,
 		s.tableName()),
-		skill.Name, skill.Content, skill.CreatedBy,
+		skill.Name, skill.Content, valStatus, valMeta, skill.CreatedBy,
 	)
 	return err
 }
@@ -66,9 +90,20 @@ func (s *pgSkillStore) Delete(ctx context.Context, name string) error {
 	return err
 }
 
+func (s *pgSkillStore) UpdateValidationStatus(ctx context.Context, name, status, meta string) error {
+	if meta == "" {
+		meta = "{}"
+	}
+	_, err := s.pool.Exec(ctx, fmt.Sprintf(
+		`UPDATE %s SET validation_status = $1, validation_meta = $2::jsonb, updated_at = now() WHERE name = $3`, s.tableName()),
+		status, meta, name,
+	)
+	return err
+}
+
 func (s *pgSkillStore) List(ctx context.Context) ([]store.Skill, error) {
 	rows, err := s.pool.Query(ctx, fmt.Sprintf(
-		`SELECT name, content FROM %s ORDER BY name`, s.tableName()),
+		`SELECT name, content, COALESCE(validation_status, 'unknown') FROM %s ORDER BY name`, s.tableName()),
 	)
 	if err != nil {
 		return nil, err
@@ -77,11 +112,13 @@ func (s *pgSkillStore) List(ctx context.Context) ([]store.Skill, error) {
 
 	var result []store.Skill
 	for rows.Next() {
-		var dbName, rawContent string
-		if err := rows.Scan(&dbName, &rawContent); err != nil {
+		var dbName, rawContent, valStatus string
+		if err := rows.Scan(&dbName, &rawContent, &valStatus); err != nil {
 			return nil, err
 		}
-		result = append(result, *parseStoredSkill(dbName, rawContent))
+		skill := parseStoredSkill(dbName, rawContent)
+		skill.ValidationStatus = valStatus
+		result = append(result, *skill)
 	}
 	return result, rows.Err()
 }
@@ -110,4 +147,103 @@ func parseStoredSkill(name, rawContent string) *store.Skill {
 		Content:     rawContent, // Keep full raw file for reconstructRawFile
 		Source:      "custom",
 	}
+}
+
+// --- Multi-file support methods ---
+
+func (s *pgSkillStore) ListFiles(ctx context.Context, skillName string) ([]store.SkillFile, error) {
+	// Resolve skill ID
+	var skillID string
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT id FROM %s WHERE name = $1`, s.tableName()), skillName).Scan(&skillID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+ 	rows, err := s.pool.Query(ctx, fmt.Sprintf(`
+ 		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at::text, updated_at::text
+ 		FROM %s
+ 		WHERE skill_id = $1
+ 		ORDER BY path, filename`, s.filesTableName()), skillID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []store.SkillFile
+	for rows.Next() {
+		var f store.SkillFile
+		if err := rows.Scan(&f.ID, &f.SkillID, &f.Path, &f.Filename, &f.Content, &f.IsExecutable, &f.SizeBytes, &f.CreatedAt, &f.UpdatedAt); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+func (s *pgSkillStore) GetFile(ctx context.Context, skillName, path, filename string) (*store.SkillFile, error) {
+	var skillID string
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT id FROM %s WHERE name = $1`, s.tableName()), skillName).Scan(&skillID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+ 	row := s.pool.QueryRow(ctx, fmt.Sprintf(`
+ 		SELECT id, skill_id, path, filename, content, is_executable, size_bytes, created_at::text, updated_at::text
+ 		FROM %s
+ 		WHERE skill_id = $1 AND path = $2 AND filename = $3`, s.filesTableName()),
+ 		skillID, path, filename)
+
+	var f store.SkillFile
+	if err := row.Scan(&f.ID, &f.SkillID, &f.Path, &f.Filename, &f.Content, &f.IsExecutable, &f.SizeBytes, &f.CreatedAt, &f.UpdatedAt); err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &f, nil
+}
+
+func (s *pgSkillStore) SaveFile(ctx context.Context, skillName string, file *store.SkillFile) error {
+	var skillID string
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT id FROM %s WHERE name = $1`, s.tableName()), skillName).Scan(&skillID)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.pool.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO %s (skill_id, path, filename, content, is_executable, size_bytes, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+		ON CONFLICT (skill_id, path, filename) DO UPDATE SET
+			content = EXCLUDED.content,
+			is_executable = EXCLUDED.is_executable,
+			size_bytes = EXCLUDED.size_bytes,
+			updated_at = now()`,
+		s.filesTableName()),
+		skillID, file.Path, file.Filename, file.Content, file.IsExecutable, file.SizeBytes)
+	return err
+}
+
+func (s *pgSkillStore) DeleteFile(ctx context.Context, skillName, path, filename string) error {
+	var skillID string
+	err := s.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT id FROM %s WHERE name = $1`, s.tableName()), skillName).Scan(&skillID)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.pool.Exec(ctx, fmt.Sprintf(`
+		DELETE FROM %s
+		WHERE skill_id = $1 AND path = $2 AND filename = $3`,
+		s.filesTableName()),
+		skillID, path, filename)
+	return err
 }

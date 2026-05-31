@@ -90,8 +90,15 @@ func ParseClawHubInput(input string) (string, error) {
 }
 
 // DownloadFromClawHub downloads a skill from ClawHub and extracts it to destDir/{slug}/.
+//
+// SSRF note: This function is NOT vulnerable to SSRF because:
+//   - The base URL (clawHubDownloadURL) is a compile-time constant pointing to the
+//     official Convex endpoint. The user-supplied slug is ONLY used as a query
+//     parameter value (URL-escaped via url.QueryEscape), never as a hostname or path.
+//   - ParseClawHubInput validates input formats and extracts only slug strings,
+//     never arbitrary URLs that could redirect the download to internal services.
 func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
-	// Build download URL
+	// Build download URL — slug is query-escaped, base URL is hardcoded constant.
 	downloadURL := fmt.Sprintf("%s?slug=%s", clawHubDownloadURL, url.QueryEscape(slug))
 
 	resp, err := http.Get(downloadURL) //nolint:gosec // URL is constructed from constant base + user slug
@@ -107,10 +114,15 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 		return nil, fmt.Errorf("ClawHub returned HTTP %d", resp.StatusCode)
 	}
 
-	// Read the zip into memory
-	body, err := io.ReadAll(resp.Body)
+	// Read the zip into memory with a size limit to prevent OOM from
+	// malicious or compromised upstream responses.
+	const maxDownloadSize = 50 << 20 // 50 MiB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if int64(len(body)) > maxDownloadSize {
+		return nil, fmt.Errorf("ClawHub response exceeds %d MiB size limit", maxDownloadSize>>20)
 	}
 
 	// Open zip archive
@@ -130,24 +142,38 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 		SkillDir: skillDir,
 	}
 
-	// Extract all files
+	// Extract all files, preserving directory structure (scripts/, references/, etc.)
 	for _, f := range zipReader.File {
 		if f.FileInfo().IsDir() {
 			continue
 		}
 
-		// Sanitize the filename — strip any leading directory components from zip
-		name := filepath.Base(f.Name)
-		if name == "" || name == "." || name == ".." {
+		// Clean the path inside the zip
+		cleanName := filepath.ToSlash(f.Name)
+		if strings.HasPrefix(cleanName, "/") {
+			cleanName = cleanName[1:]
+		}
+
+		if cleanName == "" || strings.HasPrefix(cleanName, ".") {
 			continue
 		}
 
-		outPath := filepath.Join(skillDir, name)
-		if err := extractZipFile(f, outPath); err != nil {
-			return nil, fmt.Errorf("extract %s: %w", name, err)
+		outPath := filepath.Join(skillDir, cleanName)
+
+		// Zip slip defense: ensure resolved path stays within skillDir
+		if !strings.HasPrefix(filepath.Clean(outPath), filepath.Clean(skillDir)+string(os.PathSeparator)) {
+			continue // path traversal attempt — skip this entry
 		}
 
-		result.Files = append(result.Files, name)
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			return nil, fmt.Errorf("create dir for %s: %w", cleanName, err)
+		}
+
+		if err := extractZipFile(f, outPath); err != nil {
+			return nil, fmt.Errorf("extract %s: %w", cleanName, err)
+		}
+
+		result.Files = append(result.Files, cleanName)
 		result.FilesCount++
 	}
 

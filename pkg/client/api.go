@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 // --- Session API ---
@@ -285,6 +286,88 @@ func (c *Client) ListDrillSuites() ([]DrillSuite, error) {
 		return nil, err
 	}
 	return suites, nil
+}
+
+// InstallSkillResponse matches the server response from POST /api/skills/install
+type InstallSkillResponse struct {
+	Status           string `json:"status"`
+	Name             string `json:"name"`
+	Scope            string `json:"scope"`
+	FilesSaved       int    `json:"files_saved"`
+	Version          string `json:"version,omitempty"`
+	Description      string `json:"description,omitempty"`
+	ValidationStatus string `json:"validation_status,omitempty"`
+}
+
+// InstallSkill tells the remote server to download and install a skill from ClawHub
+// into the user's current team (or org) scope. The server performs the download.
+func (c *Client) InstallSkill(input string) (*InstallSkillResponse, error) {
+	body := map[string]string{"input": input}
+	var resp InstallSkillResponse
+	if err := c.DoJSON("POST", "/api/skills/install", body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SkillInfo is a minimal view for CLI listing.
+type SkillInfo struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Source      string   `json:"source"`
+	Scope       string   `json:"scope,omitempty"`
+	Eligible    bool     `json:"eligible"`
+	Missing     []string `json:"missing,omitempty"`
+	Editable    bool     `json:"editable"`
+}
+
+// ListSkillsResponse from GET /api/skills
+type ListSkillsResponse struct {
+	Skills      []SkillInfo `json:"skills"`
+	IsTeamAdmin bool        `json:"is_team_admin"`
+	IsOrgAdmin  bool        `json:"is_org_admin"`
+}
+
+// ListSkills fetches the merged list of skills visible to the current user
+// (bundled + org + team).
+func (c *Client) ListSkills() (*ListSkillsResponse, error) {
+	var resp ListSkillsResponse
+	if err := c.DoJSON("GET", "/api/skills", nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// SkillContentResponse mirrors the server response for a skill's full content.
+type SkillContentResponse struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Source      string `json:"source"`
+	Content     string `json:"content"`
+	RawFile     string `json:"raw_file"`
+	Editable    bool   `json:"editable"`
+}
+
+// GetSkillContent fetches the full SKILL.md (and metadata) for a skill.
+func (c *Client) GetSkillContent(name string) (*SkillContentResponse, error) {
+	var resp SkillContentResponse
+	path := fmt.Sprintf("/api/skills/%s/content", url.PathEscape(name))
+	if err := c.DoJSON("GET", path, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// CreateSkillRequest for POST /api/skills
+type CreateSkillRequest struct {
+	Name  string `json:"name"`
+	Scope string `json:"scope,omitempty"`
+}
+
+// CreateSkill creates a new empty skill in the platform (team or org scope).
+func (c *Client) CreateSkill(name string, scope string) error {
+	body := CreateSkillRequest{Name: name, Scope: scope}
+	return c.DoJSON("POST", "/api/skills", body, nil)
 }
 
 // --- Utility ---

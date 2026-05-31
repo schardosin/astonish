@@ -33,6 +33,21 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 		containerName := entry.ContainerName
 
 		if client.IsRunning(containerName) {
+			// Verify the overlay is healthy — a stale overlay (e.g., from a
+			// template refresh that raced with this container) would leave
+			// /usr/bin/ empty. Fail fast so the caller can destroy and recreate.
+			if err := verifyContainerHealth(client, containerName); err != nil {
+				slog.Warn("running container failed health check, destroying for recreation",
+					"component", "sandbox", "container", containerName, "error", err)
+				if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+					if delErr := client.DeleteInstance(containerName); delErr != nil {
+						slog.Warn("fallback delete also failed", "component", "sandbox", "container", containerName, "error", delErr)
+					}
+				}
+				sessRegistry.Remove(sessionID)
+				// Fall through to recreation below
+				goto recreate
+			}
 			return containerName, nil
 		}
 
@@ -72,12 +87,31 @@ func EnsureSessionContainer(client *IncusClient, sessRegistry *SessionRegistry, 
 			if err != nil {
 				return "", fmt.Errorf("failed to start existing session container %q: %w", containerName, err)
 			}
+
+			// Verify the template layer is intact after restart.
+			if err := verifyContainerHealth(client, containerName); err != nil {
+				slog.Warn("restarted container failed health check, destroying for recreation",
+					"component", "sandbox", "container", containerName, "error", err)
+				if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+					if delErr := client.DeleteInstance(containerName); delErr != nil {
+						slog.Warn("fallback delete also failed", "component", "sandbox", "container", containerName, "error", delErr)
+					}
+				}
+				sessRegistry.Remove(sessionID)
+				goto recreate
+			}
 			return containerName, nil
 		}
 
 		// Container was registered but no longer exists — clean up and recreate
 		sessRegistry.Remove(sessionID)
 	}
+
+	// BOUNDED RETRY: This label is reached at most once per function call.
+	// After recreation, if the health check fails again (line ~181), we return
+	// an error — never goto recreate a second time. The outer caller
+	// (LazyNodeClient.Call) also limits retries to exactly 1.
+recreate:
 
 	// Resolve template
 	if templateName == "" || templateName == BaseTemplateID {
@@ -189,6 +223,19 @@ func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistr
 		containerName := entry.ContainerName
 
 		if client.IsRunning(containerName) {
+			// Verify the overlay is healthy — a stale overlay would leave
+			// /usr/bin/ empty. Fail fast so the caller can destroy and recreate.
+			if err := verifyContainerHealth(client, containerName); err != nil {
+				slog.Warn("running container failed health check, destroying for recreation",
+					"component", "sandbox", "container", containerName, "error", err)
+				if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+					if delErr := client.DeleteInstance(containerName); delErr != nil {
+						slog.Warn("fallback delete also failed", "component", "sandbox", "container", containerName, "error", delErr)
+					}
+				}
+				sessRegistry.Remove(sessionID)
+				goto recreateOrg
+			}
 			return containerName, nil
 		}
 
@@ -214,6 +261,19 @@ func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistr
 			if err != nil {
 				return "", fmt.Errorf("failed to start existing session container %q: %w", containerName, err)
 			}
+
+			// Verify the template layer is intact after restart.
+			if err := verifyContainerHealth(client, containerName); err != nil {
+				slog.Warn("restarted container failed health check, destroying for recreation",
+					"component", "sandbox", "container", containerName, "error", err)
+				if destroyErr := destroyOverlayContainer(client, containerName); destroyErr != nil {
+					if delErr := client.DeleteInstance(containerName); delErr != nil {
+						slog.Warn("fallback delete also failed", "component", "sandbox", "container", containerName, "error", delErr)
+					}
+				}
+				sessRegistry.Remove(sessionID)
+				goto recreateOrg
+			}
 			return containerName, nil
 		}
 
@@ -221,6 +281,9 @@ func EnsureOrgSessionContainer(client *IncusClient, sessRegistry *SessionRegistr
 		sessRegistry.Remove(sessionID)
 	}
 
+	// BOUNDED RETRY: Same as EnsureSessionContainer — at most one recreation
+	// attempt per call. Post-recreation health check failure returns an error.
+recreateOrg:
 	// Resolve template
 	if templateName == "" || templateName == BaseTemplateID {
 		templateName = BaseTemplate
@@ -346,6 +409,7 @@ func destroyOverlayContainer(client *IncusClient, containerName string) error {
 // overlay shell image). This catches the case where the overlay mount failed
 // silently and the container is running with an empty filesystem.
 func verifyContainerHealth(client *IncusClient, containerName string) error {
+	// Check 1: Verify the base overlay is functional (the tiny image layer).
 	exitCode, err := client.ExecSimple(containerName, []string{"test", "-x", "/bin/sh"})
 	if err != nil {
 		return fmt.Errorf("cannot execute health check in %q: %w", containerName, err)
@@ -353,6 +417,28 @@ func verifyContainerHealth(client *IncusClient, containerName string) error {
 	if exitCode != 0 {
 		return fmt.Errorf("container %q appears to have an empty rootfs (overlay may not be mounted)", containerName)
 	}
+
+	// Check 2: Verify the template layer is visible through the overlay.
+	// Primary check: sentinel file written during template setup/refresh.
+	// Fallback: /usr/bin/git (installed by CoreToolInstallCommands in all templates).
+	// The fallback handles templates created before the sentinel was introduced.
+	exitCode, err = client.ExecSimple(containerName, []string{"test", "-f", OverlaySentinelPath})
+	if err != nil {
+		return fmt.Errorf("cannot execute template layer check in %q: %w", containerName, err)
+	}
+	if exitCode != 0 {
+		// Sentinel missing — could be a pre-sentinel template. Check /usr/bin/git as fallback.
+		exitCode, err = client.ExecSimple(containerName, []string{"test", "-x", "/usr/bin/git"})
+		if err != nil {
+			return fmt.Errorf("cannot execute fallback template layer check in %q: %w", containerName, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("container %q template layer not visible (%s and /usr/bin/git both missing — stale overlay)", containerName, OverlaySentinelPath)
+		}
+		// /usr/bin/git exists but sentinel doesn't — template predates sentinel.
+		// This is OK; the sentinel will appear after the next refresh.
+	}
+
 	return nil
 }
 

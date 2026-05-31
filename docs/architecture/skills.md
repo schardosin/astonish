@@ -129,3 +129,9 @@ Skills are indexed in the same vector store as other memory documents, under the
 - **Agent Engine**: Skill content is injected into the system prompt via Tier 3 dynamic knowledge. The skill index (Tier 1) lists available skills.
 - **Configuration**: Skill directory is configured in app config. Custom skill paths can be added.
 - **Daemon**: Skill indexer initializes at daemon startup with fsnotify watcher.
+
+## Multi-File ClawHub Skills (Planned)
+
+The current system stores only the main `SKILL.md` content per skill. A future enhancement will add full support for the standard ClawHub multi-file layout (`scripts/`, `references/`, etc.) using a dedicated `skill_files` table, an enhanced `skill_lookup` tool, and a new `skill_tree` tool.
+
+See: [skills-multi-file-clawhub-support.md](./skills-multi-file-clawhub-support.md) for the detailed design and implementation plan.

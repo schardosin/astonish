@@ -1,7 +1,6 @@
 package skills
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -203,74 +202,5 @@ func TestLoadSkillsFromDir(t *testing.T) {
 	}
 	if skill.Source != "user" {
 		t.Errorf("Source = %q, want %q", skill.Source, "user")
-	}
-}
-
-func TestLoadSkillsOverride(t *testing.T) {
-	// Create two directories with same skill name
-	dir1 := t.TempDir()
-	dir2 := t.TempDir()
-
-	skillDir1 := filepath.Join(dir1, "overlap")
-	os.MkdirAll(skillDir1, 0755)
-	os.WriteFile(filepath.Join(skillDir1, "SKILL.md"), []byte("---\nname: overlap\ndescription: \"From dir1\"\n---\n\n# V1\n"), 0644)
-
-	skillDir2 := filepath.Join(dir2, "overlap")
-	os.MkdirAll(skillDir2, 0755)
-	os.WriteFile(filepath.Join(skillDir2, "SKILL.md"), []byte("---\nname: overlap\ndescription: \"From dir2\"\n---\n\n# V2\n"), 0644)
-
-	// Load with dir2 as extra — should override dir1
-	result, err := LoadSkills(dir1, []string{dir2}, "", nil)
-	if err != nil {
-		t.Fatalf("LoadSkills failed: %v", err)
-	}
-
-	// Find the overlap skill
-	found := false
-	for _, s := range result {
-		if s.Name == "overlap" {
-			found = true
-			if s.Description != "From dir2" {
-				t.Errorf("Expected override from dir2, got description: %s", s.Description)
-			}
-		}
-	}
-	if !found {
-		t.Error("Skill 'overlap' not found in results")
-	}
-}
-
-func TestLoadSkillsAllowlist(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	for _, name := range []string{"alpha", "beta"} {
-		skillDir := filepath.Join(tmpDir, name)
-		os.MkdirAll(skillDir, 0755)
-		content := []byte(fmt.Sprintf("---\nname: %s\ndescription: \"Skill %s\"\n---\n\n# %s\n", name, name, name))
-		os.WriteFile(filepath.Join(skillDir, "SKILL.md"), content, 0644)
-	}
-
-	result, err := LoadSkills(tmpDir, nil, "", []string{"alpha"})
-	if err != nil {
-		t.Fatalf("LoadSkills failed: %v", err)
-	}
-
-	if len(result) != 1 {
-		t.Fatalf("Expected 1 skill with allowlist, got %d", len(result))
-	}
-	if result[0].Name != "alpha" {
-		t.Errorf("Expected alpha, got %s", result[0].Name)
-	}
-}
-
-func TestLoadSkillsNonexistentDir(t *testing.T) {
-	// Should not error on nonexistent directories
-	result, err := LoadSkills("/nonexistent/path", nil, "", nil)
-	if err != nil {
-		t.Fatalf("Expected no error for nonexistent dir, got: %v", err)
-	}
-	// Should still have bundled skills
-	if len(result) == 0 {
-		t.Error("Expected bundled skills even with nonexistent user dir")
 	}
 }

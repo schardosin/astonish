@@ -1059,11 +1059,21 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
     )
   }
 
+  // Skills tab needs full viewport height for its embedded full-screen editor
+  if (tabId === 'skills') {
+    return (
+      <div className="flex-1 overflow-hidden p-6 flex flex-col">
+        <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+          <SkillsSettings config={fullConfig?.skills || null} onSaved={handleSaved} theme={theme} isPlatform canManage={canManageTeam} teamSlug={teamSlug} />
+        </Suspense>
+      </div>
+    )
+  }
+
   return (
     <div className="flex-1 overflow-y-auto p-6">
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
         {tabId === 'providers' && <TeamProvidersTab teamSlug={teamSlug} />}
-        {tabId === 'skills' && <SkillsSettings config={fullConfig?.skills || null} onSaved={handleSaved} theme={theme} isPlatform canManage={canManageTeam} teamSlug={teamSlug} />}
         {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
         {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={handleSaved} teamSlug={teamSlug} />}
         {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
@@ -1330,7 +1340,7 @@ export default function SettingsPage({
         </div>
 
         {/* Content */}
-        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' || activeSection === 'knowledge' ? 'flex-1 overflow-hidden' : 'flex-1 overflow-y-auto'}>
+        <div className={activeSection === 'mcp' || activeSection === 'team-mcp' || activeSection === 'knowledge' || activeSection.endsWith('-skills') || activeSection === 'skills' ? 'flex-1 overflow-hidden flex flex-col' : 'flex-1 overflow-y-auto flex flex-col'}>
           {/* Team sections */}
           {activeSection.startsWith('team-') && resolvedTeamSlug && selectedTeam && user && (
             <TeamContent
@@ -1372,7 +1382,9 @@ export default function SettingsPage({
 
           {activeSection === 'org-skills' && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
-              <SkillsSettings config={null} onSaved={() => {}} theme={theme} scope="org" isPlatform canManage={isAdmin} teamSlug={resolvedTeamSlug} />
+              <div className="flex-1 overflow-hidden p-6 flex flex-col h-full">
+                <SkillsSettings config={null} onSaved={() => {}} theme={theme} scope="org" isPlatform canManage={isAdmin} teamSlug={resolvedTeamSlug} />
+              </div>
             </Suspense>
           )}
 
@@ -1413,7 +1425,7 @@ export default function SettingsPage({
 
           {/* System / preferences sections (delegated to SettingsContent) */}
           {isSystemSection && (
-            <div className={activeSection === 'mcp' || activeSection === 'knowledge' ? 'h-full flex flex-col' : 'p-6'}>
+            <div className={activeSection === 'mcp' || activeSection === 'knowledge' || activeSection === 'skills' ? 'h-full flex flex-col' : 'p-6'}>
               <SettingsContent
                 activeSection={activeSection}
                 settings={data.settings}

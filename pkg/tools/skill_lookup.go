@@ -3,6 +3,7 @@ package tools
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -14,18 +15,23 @@ import (
 
 // SkillLookupArgs defines the arguments for the skill_lookup tool.
 type SkillLookupArgs struct {
-	Name string `json:"name" jsonschema:"Skill name from the Available Skills list (e.g. github, docker, git)"`
+	Name     string `json:"name" jsonschema:"Skill name from the Available Skills list (e.g. github, docker, git)"`
+	File     string `json:"file,omitempty" jsonschema:"Optional relative path to a specific file within the skill (e.g. 'scripts/deploy.sh' or 'references/api.md'). If omitted, returns the main SKILL.md plus a files manifest."`
+	Path     string `json:"path,omitempty" jsonschema:"Alternative to 'file': directory part (e.g. 'scripts')"`
+	Filename string `json:"filename,omitempty" jsonschema:"Alternative to 'file': filename part (e.g. 'deploy.sh')"`
 }
 
 // SkillLookupResult is returned from skill_lookup.
 type SkillLookupResult struct {
-	Name                string   `json:"name"`
-	Description         string   `json:"description"`
-	Content             string   `json:"content"`
-	Directory           string   `json:"directory,omitempty"`            // Absolute path to skill dir (for supplementary files)
-	Files               []string `json:"files,omitempty"`                // Files in skill directory
-	MissingRequirements []string `json:"missing_requirements,omitempty"` // Unmet requirements (empty if eligible)
-	Error               string   `json:"error,omitempty"`
+	Name                string              `json:"name"`
+	Description         string              `json:"description"`
+	Content             string              `json:"content"`
+	File                string              `json:"file,omitempty"`       // When a specific file was requested
+	Directory           string              `json:"directory,omitempty"`  // Legacy (disk-based skills)
+	Files               []string            `json:"files,omitempty"`      // Flat list of files (for compatibility)
+	FilesManifest       map[string][]string `json:"files_manifest,omitempty"` // Structured: path -> [filenames]
+	MissingRequirements []string            `json:"missing_requirements,omitempty"`
+	Error               string              `json:"error,omitempty"`
 }
 
 // SkillLookup returns full skill content by name.
@@ -55,13 +61,13 @@ func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLook
 				// Team store takes highest priority
 				if ss.Team != nil {
 					if skill, err := ss.Team.Get(ctx, name); err == nil && skill != nil {
-						return storeSkillToResult(skill), nil
+						return handlePlatformSkillLookup(ctx, ss.Team, skill, args), nil
 					}
 				}
 				// Then org store
 				if ss.Org != nil {
 					if skill, err := ss.Org.Get(ctx, name); err == nil && skill != nil {
-						return storeSkillToResult(skill), nil
+						return handlePlatformSkillLookup(ctx, ss.Org, skill, args), nil
 					}
 				}
 			}
@@ -170,4 +176,92 @@ func NewSkillLookupTool(allSkills []skills.Skill) (tool.Tool, error) {
 			"If a skill references environment variables for auth, resolve them from the credential store. " +
 			"Check the Available Skills list in the system prompt for valid skill names.",
 	}, SkillLookup(allSkills))
+}
+
+// handlePlatformSkillLookup handles skill_lookup for skills coming from platform stores (DB).
+// It supports fetching specific auxiliary files and returns a files manifest when loading the main skill.
+// SECURITY: Skills with non-usable validation_status are blocked at runtime.
+func handlePlatformSkillLookup(ctx tool.Context, store store.SkillStore, skill *store.Skill, args SkillLookupArgs) SkillLookupResult {
+	// Runtime validation gate — only skills with usable status can be loaded
+	if !skills.IsUsableStatus(skill.ValidationStatus) {
+		return SkillLookupResult{
+			Name: skill.Name,
+			Error: fmt.Sprintf("Skill %q is blocked (validation_status: %q). "+
+				"A team member must validate and acknowledge any critical security issues "+
+				"in Settings → Skills before this skill can be used.", skill.Name, skill.ValidationStatus),
+		}
+	}
+	// Determine if user asked for a specific file
+	filePath := strings.TrimSpace(args.File)
+	if filePath == "" && args.Filename != "" {
+		if args.Path != "" {
+			filePath = args.Path + "/" + args.Filename
+		} else {
+			filePath = args.Filename
+		}
+	}
+
+	if filePath != "" {
+		// Canonicalize and validate for path traversal
+		cleaned := filepath.ToSlash(filepath.Clean(filePath))
+		if cleaned != filePath || strings.Contains(cleaned, "..") || strings.HasPrefix(cleaned, "/") {
+			return SkillLookupResult{
+				Name:  skill.Name,
+				Error: "invalid file path: must be a clean relative path without '..' or leading '/'",
+			}
+		}
+		filePath = cleaned
+
+		// Specific file requested
+		// Normalize path/filename
+		dir, name := "", filePath
+		if idx := strings.LastIndex(filePath, "/"); idx != -1 {
+			dir = filePath[:idx]
+			name = filePath[idx+1:]
+		}
+		f, err := store.GetFile(ctx, skill.Name, dir, name)
+		if err != nil {
+			// DB error — distinct from "file not found"
+			return SkillLookupResult{
+				Name:  skill.Name,
+				Error: fmt.Sprintf("failed to load file %q from skill %q (database error)", filePath, skill.Name),
+			}
+		}
+		if f != nil {
+			return SkillLookupResult{
+				Name:      skill.Name,
+				File:      filePath,
+				Content:   f.Content,
+				Directory: "", // not meaningful for DB-backed files
+			}
+		}
+		// File not found
+		return SkillLookupResult{
+			Name:  skill.Name,
+			Error: fmt.Sprintf("file %q not found in skill %q", filePath, skill.Name),
+		}
+	}
+
+	// Default: return main skill content + files manifest
+	result := storeSkillToResult(skill)
+
+	// Attach files manifest from the new skill_files table
+	if files, err := store.ListFiles(ctx, skill.Name); err == nil && len(files) > 0 {
+		manifest := make(map[string][]string)
+		for _, f := range files {
+			manifest[f.Path] = append(manifest[f.Path], f.Filename)
+		}
+		// For backward compat with existing result shape, also populate flat Files list
+		for _, f := range files {
+			full := f.Filename
+			if f.Path != "" {
+				full = f.Path + "/" + f.Filename
+			}
+			result.Files = append(result.Files, full)
+		}
+		// Also expose structured manifest (new field)
+		result.FilesManifest = manifest
+	}
+
+	return result
 }

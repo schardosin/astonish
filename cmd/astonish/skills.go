@@ -2,12 +2,11 @@ package astonish
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"strings"
 	"text/tabwriter"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/skills"
 )
 
@@ -39,45 +38,28 @@ func handleSkillsCommand(args []string) error {
 	default:
 		fmt.Println("usage: astonish skills {list,show,check,create,install}")
 		fmt.Println("")
-		fmt.Println("  list              List all available skills")
-		fmt.Println("  show <name>       Show full skill content")
-		fmt.Println("  check             Check which skills are eligible")
-		fmt.Println("  create <name>     Create a new skill from template")
-		fmt.Println("  install <input>   Install a skill from ClawHub")
+		fmt.Println("  list              List all available skills (from platform)")
+		fmt.Println("  show <name>       Show full skill content from platform")
+		fmt.Println("  check             Check eligibility of platform skills")
+		fmt.Println("  create <name>     Create a new custom skill in your team/org")
+		fmt.Println("  install <input>   Install a skill from ClawHub (server-side)")
 		fmt.Println("                    Accepts: slug, clawhub:slug, or full URL")
 		return fmt.Errorf("unknown skills command: %s", args[0])
 	}
 }
 
-func loadAllSkills() ([]skills.Skill, error) {
-	appCfg, err := config.LoadAppConfig()
-	if err != nil {
-		slog.Warn("failed to load app config", "error", err)
-	}
-	var skillsCfg config.SkillsConfig
-	if appCfg != nil {
-		skillsCfg = appCfg.Skills
-	}
-
-	workDir, wdErr := os.Getwd()
-	if wdErr != nil {
-		slog.Warn("failed to get working directory", "error", wdErr)
-	}
-	return skills.LoadSkills(
-		skillsCfg.GetUserSkillsDir(),
-		skillsCfg.ExtraDirs,
-		workDir,
-		skillsCfg.Allowlist,
-	)
-}
-
 func handleSkillsList() error {
-	allSkills, err := loadAllSkills()
+	c, err := client.New()
 	if err != nil {
-		return fmt.Errorf("failed to load skills: %w", err)
+		return fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	if len(allSkills) == 0 {
+	resp, err := c.ListSkills()
+	if err != nil {
+		return fmt.Errorf("failed to list skills from platform: %w", err)
+	}
+
+	if len(resp.Skills) == 0 {
 		fmt.Println("No skills found.")
 		return nil
 	}
@@ -86,11 +68,14 @@ func handleSkillsList() error {
 	fmt.Fprintln(w, "NAME\tDESCRIPTION\tSOURCE\tSTATUS")
 
 	eligible := 0
-	for _, s := range allSkills {
+	for _, s := range resp.Skills {
 		status := "eligible"
-		if !s.IsEligible() {
-			missing := s.MissingRequirements()
-			status = fmt.Sprintf("missing: %s", strings.Join(missing, ", "))
+		if !s.Eligible {
+			if len(s.Missing) > 0 {
+				status = fmt.Sprintf("missing: %s", strings.Join(s.Missing, ", "))
+			} else {
+				status = "ineligible"
+			}
 		} else {
 			eligible++
 		}
@@ -98,58 +83,56 @@ func handleSkillsList() error {
 	}
 	w.Flush()
 
-	fmt.Printf("\n%d eligible, %d total\n", eligible, len(allSkills))
+	fmt.Printf("\n%d eligible, %d total\n", eligible, len(resp.Skills))
 	return nil
 }
 
 func handleSkillsShow(name string) error {
-	allSkills, err := loadAllSkills()
+	c, err := client.New()
 	if err != nil {
-		return fmt.Errorf("failed to load skills: %w", err)
+		return fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	for _, s := range allSkills {
-		if strings.EqualFold(s.Name, name) {
-			fmt.Printf("# %s\n\n", s.Name)
-			fmt.Printf("Description: %s\n", s.Description)
-			fmt.Printf("Source: %s\n", s.Source)
-			if len(s.OS) > 0 {
-				fmt.Printf("OS: %s\n", strings.Join(s.OS, ", "))
-			}
-			if len(s.RequireBins) > 0 {
-				fmt.Printf("Requires: %s\n", strings.Join(s.RequireBins, ", "))
-			}
-			if len(s.RequireEnv) > 0 {
-				fmt.Printf("Env: %s\n", strings.Join(s.RequireEnv, ", "))
-			}
-			fmt.Printf("Eligible: %v\n", s.IsEligible())
-			fmt.Printf("\n---\n\n%s\n", s.Content)
-			return nil
-		}
+	content, err := c.GetSkillContent(name)
+	if err != nil {
+		return fmt.Errorf("failed to fetch skill %q: %w", name, err)
 	}
 
-	return fmt.Errorf("skill %q not found", name)
+	fmt.Printf("# %s\n\n", content.Name)
+	fmt.Printf("Description: %s\n", content.Description)
+	fmt.Printf("Source: %s\n", content.Source)
+	fmt.Printf("Editable: %v\n", content.Editable)
+	fmt.Printf("\n---\n\n%s\n", content.Content)
+	return nil
 }
 
 func handleSkillsCheck() error {
-	allSkills, err := loadAllSkills()
+	c, err := client.New()
 	if err != nil {
-		return fmt.Errorf("failed to load skills: %w", err)
+		return fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	if len(allSkills) == 0 {
+	resp, err := c.ListSkills()
+	if err != nil {
+		return fmt.Errorf("failed to list skills: %w", err)
+	}
+
+	if len(resp.Skills) == 0 {
 		fmt.Println("No skills found.")
 		return nil
 	}
 
 	eligible := 0
 	ineligible := 0
-	for _, s := range allSkills {
-		if s.IsEligible() {
+	for _, s := range resp.Skills {
+		if s.Eligible {
 			fmt.Printf("  ✓ %s\n", s.Name)
 			eligible++
 		} else {
-			missing := s.MissingRequirements()
+			missing := s.Missing
+			if len(missing) == 0 {
+				missing = []string{"unknown"}
+			}
 			fmt.Printf("  ✗ %s (missing: %s)\n", s.Name, strings.Join(missing, ", "))
 			ineligible++
 		}
@@ -160,104 +143,54 @@ func handleSkillsCheck() error {
 }
 
 func handleSkillsCreate(name string) error {
-	appCfg, err := config.LoadAppConfig()
+	c, err := client.New()
 	if err != nil {
-		slog.Warn("failed to load app config", "error", err)
-	}
-	var skillsCfg config.SkillsConfig
-	if appCfg != nil {
-		skillsCfg = appCfg.Skills
+		return fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	userDir := skillsCfg.GetUserSkillsDir()
-	if userDir == "" {
-		return fmt.Errorf("could not determine user skills directory")
+	// Default to team scope on the server
+	if err := c.CreateSkill(name, "team"); err != nil {
+		return fmt.Errorf("failed to create skill on platform: %w", err)
 	}
 
-	skillDir := fmt.Sprintf("%s/%s", userDir, name)
-	skillFile := fmt.Sprintf("%s/SKILL.md", skillDir)
-
-	if _, err := os.Stat(skillFile); err == nil {
-		return fmt.Errorf("skill %q already exists at %s", name, skillFile)
-	}
-
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		return fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	if err := os.WriteFile(skillFile, []byte(skills.NewSkillTemplate(name)), 0644); err != nil {
-		return fmt.Errorf("failed to write skill file: %w", err)
-	}
-
-	fmt.Printf("Created skill template: %s\n", skillFile)
-	fmt.Println("Edit the SKILL.md file to add your skill content.")
+	fmt.Printf("Created skill '%s' in your team (platform).\n", name)
+	fmt.Println("Use the Studio UI or PUT /api/skills/{name}/content to edit it.")
 	return nil
 }
 
 func handleSkillsInstall(input string) error {
-	slug, err := skills.ParseClawHubInput(input)
-	if err != nil {
+	// Optional early validation on client side (nice error messages)
+	if _, err := skills.ParseClawHubInput(input); err != nil {
 		return fmt.Errorf("invalid input: %w", err)
 	}
 
-	appCfg, err := config.LoadAppConfig()
+	c, err := client.New()
 	if err != nil {
-		slog.Warn("failed to load app config", "error", err)
-	}
-	var skillsCfg config.SkillsConfig
-	if appCfg != nil {
-		skillsCfg = appCfg.Skills
+		return fmt.Errorf("failed to create API client: %w", err)
 	}
 
-	destDir := skillsCfg.GetUserSkillsDir()
-	if destDir == "" {
-		return fmt.Errorf("could not determine user skills directory")
-	}
+	fmt.Printf("Requesting server to install %q from ClawHub...\n", input)
 
-	// Check if skill already exists
-	existingDir := fmt.Sprintf("%s/%s", destDir, slug)
-	if _, err := os.Stat(existingDir); err == nil {
-		// Read existing _meta.json for version comparison
-		if meta, err := skills.ReadClawHubMeta(existingDir); err == nil {
-			fmt.Printf("Skill %q already installed (version: %s)\n", slug, meta.Version)
-		} else {
-			fmt.Printf("Skill %q already exists at %s\n", slug, existingDir)
-		}
-		fmt.Println("Reinstalling (overwriting existing files)...")
-	}
-
-	fmt.Printf("Downloading %q from ClawHub...\n", slug)
-
-	result, err := skills.DownloadFromClawHub(slug, destDir)
+	resp, err := c.InstallSkill(input)
 	if err != nil {
 		return fmt.Errorf("install failed: %w", err)
 	}
 
-	fmt.Printf("\nInstalled: %s\n", result.Name)
-	if result.Version != "" {
-		fmt.Printf("Version:   %s\n", result.Version)
+	fmt.Printf("\nInstalled to platform (%s scope): %s\n", resp.Scope, resp.Name)
+	if resp.Version != "" {
+		fmt.Printf("Version: %s\n", resp.Version)
 	}
-	fmt.Printf("Files:     %d\n", result.FilesCount)
-	fmt.Printf("Location:  %s\n", result.SkillDir)
-
-	if result.FilesCount > 0 {
-		fmt.Println("\nFiles:")
-		for _, f := range result.Files {
-			fmt.Printf("  %s\n", f)
-		}
+	fmt.Printf("Main skill + %d auxiliary files saved to database.\n", resp.FilesSaved)
+	if resp.Description != "" {
+		fmt.Printf("Description: %s\n", resp.Description)
 	}
-
-	// Check eligibility of the installed skill
-	skillPath := fmt.Sprintf("%s/SKILL.md", result.SkillDir)
-	if data, err := os.ReadFile(skillPath); err == nil {
-		if skill, err := skills.ParseSkillFile(skillPath, data); err == nil {
-			if skill.IsEligible() {
-				fmt.Printf("\nStatus: eligible\n")
-			} else {
-				missing := skill.MissingRequirements()
-				fmt.Printf("\nStatus: ineligible (missing: %s)\n", strings.Join(missing, ", "))
-			}
-		}
+	valStatus := resp.ValidationStatus
+	if valStatus == "" {
+		valStatus = "unknown"
+	}
+	fmt.Printf("Validation: %s\n", valStatus)
+	if resp.Status == "installed_blocked" {
+		fmt.Println("  ⚠ Skill is blocked at runtime until validated/acknowledged in Settings → Skills.")
 	}
 
 	return nil

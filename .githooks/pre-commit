@@ -1,11 +1,79 @@
 #!/bin/sh
-# Pre-commit hook to run golangci-lint
+# Pre-commit hook: golangci-lint + Atlas migration integrity check.
 # Install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+# ============================================================================
+# 1. Atlas migration integrity check
+# ============================================================================
+
+STAGED_SCHEMA_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^schema/.*\.sql$' || true)
+STAGED_MIGRATION_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '^pkg/store/.*/migrations/.*\.sql$' || true)
+
+# If schema files changed but no migration files are staged, warn the developer
+if [ -n "$STAGED_SCHEMA_FILES" ] && [ -z "$STAGED_MIGRATION_FILES" ]; then
+    echo ""
+    echo "⚠️  Schema files changed but no migrations staged!"
+    echo "   Changed schemas:"
+    for F in $STAGED_SCHEMA_FILES; do
+        echo "     $F"
+    done
+    echo ""
+    echo "   Generate migrations with:"
+    echo "     make migrate-diff ENV=<scope>_<dialect> NAME=<description>"
+    echo ""
+    echo "   Environments: platform_pg, platform_lite, org_pg, org_lite,"
+    echo "                 team_pg, team_lite, personal_pg, personal_lite"
+    echo ""
+    echo "   Then stage the generated files and re-commit."
+    echo "   To skip this check: git commit --no-verify"
+    echo ""
+    exit 1
+fi
+
+# If migration files are staged, validate atlas.sum integrity
+if [ -n "$STAGED_MIGRATION_FILES" ]; then
+    if command -v atlas > /dev/null 2>&1; then
+        echo "Validating migration integrity..."
+        FAIL=0
+        for DIR in \
+            pkg/store/pgstore/migrations/platform \
+            pkg/store/pgstore/migrations/org \
+            pkg/store/pgstore/migrations/team \
+            pkg/store/pgstore/migrations/personal \
+            pkg/store/sqlitestore/migrations/platform \
+            pkg/store/sqlitestore/migrations/org \
+            pkg/store/sqlitestore/migrations/team \
+            pkg/store/sqlitestore/migrations/personal; do
+            # Only check dirs that have staged changes
+            if echo "$STAGED_MIGRATION_FILES" | grep -q "^$DIR/"; then
+                if [ -f "$DIR/atlas.sum" ]; then
+                    if ! atlas migrate validate --dir "file://$DIR" 2>/dev/null; then
+                        echo "❌ Invalid atlas.sum in $DIR"
+                        echo "   Run: atlas migrate hash --dir 'file://$DIR'"
+                        FAIL=1
+                    fi
+                fi
+            fi
+        done
+        if [ $FAIL -eq 1 ]; then
+            echo ""
+            echo "Fix atlas.sum files and re-stage before committing."
+            exit 1
+        fi
+        echo "✓ Migration integrity OK"
+    else
+        echo "⚠️  atlas CLI not found, skipping migration integrity check"
+    fi
+fi
+
+# ============================================================================
+# 2. Go lint check
+# ============================================================================
 
 echo "Running golangci-lint..."
 
 # Check if golangci-lint is installed
-if ! command -v golangci-lint &> /dev/null; then
+if ! command -v golangci-lint > /dev/null 2>&1; then
     echo "⚠️  golangci-lint not found, skipping lint check"
     echo "   Install with: brew install golangci-lint"
     exit 0

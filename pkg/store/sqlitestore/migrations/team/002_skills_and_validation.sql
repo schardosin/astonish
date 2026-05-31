@@ -1,6 +1,4 @@
--- Migration 002: Add skill_files table for multi-file skill support
--- This enables storing auxiliary files (scripts/, references/, templates/, etc.)
--- alongside the main SKILL.md for a skill.
+-- Migration 002: Multi-file skill support + validation status
 
 CREATE TABLE IF NOT EXISTS skill_files (
     id            TEXT PRIMARY KEY,
@@ -17,3 +15,8 @@ CREATE TABLE IF NOT EXISTS skill_files (
 
 CREATE INDEX IF NOT EXISTS idx_skill_files_skill_id ON skill_files(skill_id);
 CREATE INDEX IF NOT EXISTS idx_skill_files_path ON skill_files(path);
+
+-- Validation status tracking: skills start as 'unknown' and must be explicitly
+-- validated before they can be used at runtime (security enforcement).
+ALTER TABLE skills ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE skills ADD COLUMN validation_meta TEXT;

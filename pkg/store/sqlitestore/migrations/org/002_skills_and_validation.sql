@@ -1,4 +1,4 @@
--- Migration 002: Add org_skill_files table for multi-file skill support (org level)
+-- Migration 002: Multi-file skill support + validation status
 
 CREATE TABLE IF NOT EXISTS org_skill_files (
     id            TEXT PRIMARY KEY,
@@ -15,3 +15,8 @@ CREATE TABLE IF NOT EXISTS org_skill_files (
 
 CREATE INDEX IF NOT EXISTS idx_org_skill_files_skill_id ON org_skill_files(skill_id);
 CREATE INDEX IF NOT EXISTS idx_org_skill_files_path ON org_skill_files(path);
+
+-- Validation status tracking: skills start as 'unknown' and must be explicitly
+-- validated before they can be used at runtime (security enforcement).
+ALTER TABLE org_skills ADD COLUMN validation_status TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE org_skills ADD COLUMN validation_meta TEXT;

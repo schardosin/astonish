@@ -50,3 +50,39 @@ jobs:
         # Informational: unfixed third-party vulns (e.g. incus) cause exit 3
         # which cannot be suppressed. Fail only on fixable vulns by reviewing output.
         continue-on-error: true
+
+  migrate-verify:
+    name: migration-drift-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install Atlas CLI
+        run: curl -sSf https://atlasgo.sh | sh
+
+      - name: Validate migration integrity (atlas.sum)
+        run: |
+          FAIL=0
+          for DIR in \
+            pkg/store/pgstore/migrations/platform \
+            pkg/store/pgstore/migrations/org \
+            pkg/store/pgstore/migrations/team \
+            pkg/store/pgstore/migrations/personal \
+            pkg/store/sqlitestore/migrations/platform \
+            pkg/store/sqlitestore/migrations/org \
+            pkg/store/sqlitestore/migrations/team \
+            pkg/store/sqlitestore/migrations/personal; do
+            echo "Validating $DIR..."
+            if ! atlas migrate validate --dir "file://$DIR" 2>&1; then
+              echo "INVALID: $DIR"
+              FAIL=1
+            fi
+          done
+          if [ $FAIL -eq 1 ]; then
+            echo ""
+            echo "Migration integrity check failed."
+            echo "Run: atlas migrate hash --dir 'file://<dir>' to fix."
+            exit 1
+          fi
+          echo "All migration directories validated."

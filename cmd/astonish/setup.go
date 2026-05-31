@@ -72,6 +72,13 @@ func handleSetupCommand() error {
 			}
 			return err
 		}
+		// Save config immediately after backend setup. This ensures that if the
+		// user aborts during provider configuration (the next step), the backend
+		// choice (sqlite/postgres) is persisted. On next run, the wizard won't
+		// re-enter deployment mode setup and won't re-run Bootstrap.
+		if err := config.SaveAppConfig(cfg); err != nil {
+			return fmt.Errorf("error saving config after backend setup: %w", err)
+		}
 	}
 
 	// Make provider setup optional (like web search tools).

@@ -10,7 +10,7 @@
 [![Documentation](https://img.shields.io/badge/Documentation-Astonish-purple.svg)](https://schardosin.github.io/astonish/)
 [![Lint](https://github.com/schardosin/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/lint.yml)
 [![Build Status](https://github.com/schardosin/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/schardosin/astonish/actions/workflows/build.yml)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/schardosin/astonish)](https://goreportcard.com/report/github.com/schardosin/astonish)
 
 </div>
@@ -402,7 +402,7 @@ Built with care by an engineer who studied what worked, took the best ideas, and
 - [Full Documentation](https://schardosin.github.io/astonish/)
 - [Testing Guide](docs/TESTING.md) — How to run and write tests (1,650+ tests across 4 layers)
 - [Submit a Pull Request](https://github.com/schardosin/astonish/pulls)
-- **License**: AGPL-3.0
+- **License**: Apache-2.0
 
 <div align="center">
 <b><a href="https://github.com/schardosin/astonish">Star us on GitHub</a></b>

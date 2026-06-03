@@ -568,8 +568,9 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 
 	info["telegram"] = map[string]any{
 		"bot_username": botUsername,
-		"configured":   tgConnected, // bot is actually authenticated and has a username
-		"enabled":      tgEnabled,   // channel is enabled in config
+		"configured":   tgConnected || tgEnabled, // admin has set up the channel (may still be connecting)
+		"connected":    tgConnected,              // bot is actually authenticated right now
+		"enabled":      tgEnabled,                // channel is enabled in config
 		"error":        tgError,
 	}
 
@@ -586,8 +587,9 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info["email"] = map[string]any{
-		"configured": emailConnected,
-		"enabled":    emailEnabled,
+		"configured": emailConnected || emailEnabled, // admin has set up the channel (may still be connecting)
+		"connected":  emailConnected,                 // IMAP is actually connected right now
+		"enabled":    emailEnabled,                   // channel is enabled in config
 		"error":      emailError,
 		"address":    emailAddress,
 	}
@@ -614,8 +616,9 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 
 	info["slack"] = map[string]any{
 		"bot_user_id": slackBotUserID,
-		"configured":  slackConnected,
-		"enabled":     slackEnabled,
+		"configured":  slackConnected || slackEnabled, // admin has set up the channel (may still be connecting)
+		"connected":   slackConnected,                 // bot is actually connected right now
+		"enabled":     slackEnabled,                   // channel is enabled in config
 		"error":       slackError,
 	}
 

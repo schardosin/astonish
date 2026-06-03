@@ -310,6 +310,8 @@ func Run(cfg RunConfig) error {
 	var platformAuth *api.PlatformAuth
 
 	platformAuth = api.NewPlatformAuth(appCfg.Storage.Auth, backend, appCfg.Storage)
+	// Wire up link code store for registration email verification
+	platformAuth.SetLinkCodeStoreForAuth(backend.NewLinkCodeStore())
 	if appCfg.Storage.Auth.GetJWTSecret() == "" {
 		logger.Printf("WARNING: No JWT secret configured (ASTONISH_JWT_SECRET env or storage.auth.jwt_secret config)")
 		logger.Printf("A random key has been generated — tokens will not survive daemon restarts")
@@ -550,16 +552,12 @@ func Run(cfg RunConfig) error {
 		return mgr, nil
 	}
 
-	// initEmailTools initializes email tools whenever valid IMAP/SMTP
-	// credentials are configured (from the platform DB), regardless of whether
-	// the email channel adapter itself is enabled.
+	// initEmailTools initializes (or refreshes) email tools whenever valid
+	// IMAP/SMTP credentials are configured (from the platform DB), regardless
+	// of whether the email channel adapter itself is enabled.
+	// Called both at startup and during reloads to pick up credential changes.
 	initEmailTools := func() {
 		if factoryResult == nil {
-			return
-		}
-		// If the factory already initialized the email client (both console and
-		// daemon paths), skip to avoid creating a redundant second client.
-		if tools.HasEmailClient() {
 			return
 		}
 

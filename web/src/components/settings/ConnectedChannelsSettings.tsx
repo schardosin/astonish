@@ -19,11 +19,13 @@ interface ChannelInfo {
   telegram: {
     bot_username: string
     configured: boolean
+    connected: boolean
     enabled: boolean
     error: string
   }
   email?: {
     configured: boolean
+    connected: boolean
     enabled: boolean
     error: string
     address?: string
@@ -31,6 +33,7 @@ interface ChannelInfo {
   slack?: {
     bot_user_id: string
     configured: boolean
+    connected: boolean
     enabled: boolean
     error: string
   }
@@ -302,7 +305,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                 )}
               </div>
               <div className="flex items-center gap-1.5">
-                {channelInfo.telegram?.enabled ? (
+                {(channelInfo.telegram?.connected || channelInfo.telegram?.enabled) && !channelInfo.telegram?.error ? (
                   <span className="flex items-center gap-1 text-xs" style={{ color: '#22c55e' }}>
                     <CheckCircle size={12} /> Running
                   </span>
@@ -335,7 +338,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                     )}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {channelInfo.email.enabled ? (
+                    {(channelInfo.email.connected || channelInfo.email.enabled) && !channelInfo.email.error ? (
                       <span className="flex items-center gap-1 text-xs" style={{ color: '#22c55e' }}>
                         <CheckCircle size={12} /> Running
                       </span>
@@ -370,7 +373,7 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
                     )}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    {channelInfo.slack.enabled ? (
+                    {(channelInfo.slack.connected || channelInfo.slack.enabled) && !channelInfo.slack.error ? (
                       <span className="flex items-center gap-1 text-xs" style={{ color: '#22c55e' }}>
                         <CheckCircle size={12} /> Running
                       </span>

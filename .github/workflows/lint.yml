@@ -51,38 +51,26 @@ jobs:
         # which cannot be suppressed. Fail only on fixable vulns by reviewing output.
         continue-on-error: true
 
-  migrate-verify:
-    name: migration-drift-check
+  ent-verify:
+    name: ent-generated-code-check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Install Atlas CLI
-        run: curl -sSf https://atlasgo.sh | sh
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
 
-      - name: Validate migration integrity (atlas.sum)
+      - name: Regenerate Ent code
+        run: make ent-generate
+
+      - name: Check for uncommitted changes
         run: |
-          FAIL=0
-          for DIR in \
-            pkg/store/pgstore/migrations/platform \
-            pkg/store/pgstore/migrations/org \
-            pkg/store/pgstore/migrations/team \
-            pkg/store/pgstore/migrations/personal \
-            pkg/store/sqlitestore/migrations/platform \
-            pkg/store/sqlitestore/migrations/org \
-            pkg/store/sqlitestore/migrations/team \
-            pkg/store/sqlitestore/migrations/personal; do
-            echo "Validating $DIR..."
-            if ! atlas migrate validate --dir "file://$DIR" 2>&1; then
-              echo "INVALID: $DIR"
-              FAIL=1
-            fi
-          done
-          if [ $FAIL -eq 1 ]; then
+          if ! git diff --exit-code ent/; then
             echo ""
-            echo "Migration integrity check failed."
-            echo "Run: atlas migrate hash --dir 'file://<dir>' to fix."
+            echo "ERROR: Ent generated code is out of date."
+            echo "Run 'make ent-generate' and commit the result."
             exit 1
           fi
-          echo "All migration directories validated."

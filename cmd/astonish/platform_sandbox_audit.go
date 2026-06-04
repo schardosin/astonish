@@ -14,8 +14,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/config"
 	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 )
 
 // handlePlatformSandboxAudit audits both sandbox PVCs for orphaned data by
@@ -114,13 +113,16 @@ func handlePlatformSandboxAudit(args []string) error {
 
 	// --- Phase 2: Query PG for tracked layers and sessions ---
 	pgCfg := appCfg.Storage.Postgres
-	_, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
+	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            pgCfg.PlatformDSN,
+		InstanceSuffix: pgCfg.InstanceSuffix,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to platform DB: %w", err)
 	}
-	defer pgStore.Close()
+	defer es.Close()
 
-	layers := pgStore.SandboxLayers()
+	layers := es.SandboxLayers()
 	allLayers, err := layers.ListAll(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list layers from PG: %w", err)
@@ -140,8 +142,8 @@ func handlePlatformSandboxAudit(args []string) error {
 		}
 	}
 
-	// Get all known session IDs from all team schemas.
-	knownSessionIDs, err := getAllSessionIDs(ctx, pgStore)
+	// Get all known session IDs from all team databases.
+	knownSessionIDs, err := getAllSessionIDs(ctx, es)
 	if err != nil {
 		return fmt.Errorf("failed to list sessions from PG: %w", err)
 	}
@@ -552,29 +554,9 @@ func waitForPodComplete(ctx context.Context, cs kubernetes.Interface, namespace,
 	}
 }
 
-// getAllSessionIDs queries all team schemas for session IDs.
-func getAllSessionIDs(ctx context.Context, pgStore *pgstore.PGStore) (map[string]bool, error) {
-	schemas, err := pgStore.ListTeamSchemas(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[string]bool)
-	for _, schema := range schemas {
-		sessStore := pgStore.SandboxSessionsForSchema(schema)
-		if sessStore == nil {
-			continue
-		}
-		sessions, err := sessStore.List(ctx, store.SandboxSessionFilter{})
-		if err != nil {
-			// Non-fatal: some schemas might not have the sessions table yet.
-			continue
-		}
-		for _, s := range sessions {
-			result[s.SessionID] = true
-		}
-	}
-	return result, nil
+// getAllSessionIDs queries all team databases for session IDs.
+func getAllSessionIDs(ctx context.Context, es *entstore.Store) (map[string]bool, error) {
+	return es.AllSandboxSessionIDs(ctx)
 }
 
 func filterEmpty(ss []string) []string {

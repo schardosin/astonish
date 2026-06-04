@@ -9,9 +9,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
@@ -33,8 +36,7 @@ import (
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
-	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 	"github.com/schardosin/astonish/pkg/tools"
 )
 
@@ -152,93 +154,65 @@ func Run(cfg RunConfig) error {
 	// --- Initialize store.Services for dependency injection ---
 	// Backend selection: "postgres" or "sqlite" (both platform mode). Legacy "file"/empty defaulted above.
 	var svc *store.Services
-	var pgStore *pgstore.PGStore         // non-nil only in postgres platform mode
-	var sqlStore *sqlitestore.SQLiteStore // non-nil only in sqlite platform mode
-	var backend platformDB               // unified interface — assigned below
+	var entStore *entstore.Store
+	var backend platformDB // unified interface — assigned below
 
-	if appCfg.Storage.Backend == "postgres" {
-		// Platform mode: multi-tenant PostgreSQL storage.
-		var pgErr error
-		svc, pgStore, pgErr = pgstore.NewPlatformServices(context.Background(), appCfg.Storage.Postgres)
-		if pgErr != nil {
-			// Auto-init: if the platform DB is not yet initialized, attempt
-			// BootstrapPlatform() and retry. This handles the case where
-			// config was saved (e.g. by the setup wizard) but the user didn't
-			// run `astonish platform init` separately.
-			logger.Printf("Platform store init failed, attempting auto-bootstrap: %v", pgErr)
-			if bootstrapErr := pgstore.BootstrapPlatform(context.Background(), appCfg.Storage.Postgres.GetPlatformDSN(), appCfg.Storage.Postgres.InstanceSuffix); bootstrapErr != nil {
-				return fmt.Errorf("failed to initialize platform storage: %w (auto-bootstrap also failed: %v)", pgErr, bootstrapErr)
+	// Both "postgres" and "sqlite" now use the unified entstore.
+	entCfg := entstore.Config{
+		InstanceSuffix: appCfg.Storage.Postgres.InstanceSuffix,
+	}
+
+	switch appCfg.Storage.Backend {
+	case "postgres":
+		entCfg.DSN = appCfg.Storage.Postgres.GetPlatformDSN()
+	case "sqlite":
+		entCfg.DSN = "file:" + filepath.Join(appCfg.Storage.SQLite.GetDataDir(), "platform.db")
+		entCfg.DataDir = appCfg.Storage.SQLite.GetDataDir()
+	default:
+		return fmt.Errorf("unsupported storage backend %q: must be 'postgres' or 'sqlite'", appCfg.Storage.Backend)
+	}
+
+	svc, entStore, err = entstore.NewPlatformServices(context.Background(), entCfg)
+	if err != nil {
+		// Auto-bootstrap for postgres mode
+		if appCfg.Storage.Backend == "postgres" {
+			logger.Printf("Platform store init failed, attempting auto-bootstrap: %v", err)
+			if bootstrapErr := entstore.BootstrapPlatform(context.Background(), entCfg); bootstrapErr != nil {
+				return fmt.Errorf("failed to initialize platform storage: %w (auto-bootstrap also failed: %v)", err, bootstrapErr)
 			}
 			logger.Printf("Auto-bootstrap succeeded, retrying platform store init")
-			svc, pgStore, pgErr = pgstore.NewPlatformServices(context.Background(), appCfg.Storage.Postgres)
-			if pgErr != nil {
-				return fmt.Errorf("failed to initialize platform storage after auto-bootstrap: %w", pgErr)
+			svc, entStore, err = entstore.NewPlatformServices(context.Background(), entCfg)
+			if err != nil {
+				return fmt.Errorf("failed to initialize platform storage after auto-bootstrap: %w", err)
 			}
+		} else {
+			return fmt.Errorf("failed to initialize storage: %w", err)
 		}
-		defer pgStore.Close()
-		backend = pgStore
-		logger.Printf("Storage backend: PostgreSQL (platform mode)")
+	}
+	defer entStore.Close()
+	backend = entStore
+	logger.Printf("Storage backend: %s (platform mode)", appCfg.Storage.Backend)
 
-		// Run pending migrations on all existing team/personal schemas.
-		// This ensures that schema changes from new migrations (e.g., new columns)
-		// are applied to schemas created before those migrations existed.
-		if err := pgStore.MigrateAllSchemas(context.Background()); err != nil {
-			logger.Printf("Warning: schema migration encountered errors: %v", err)
-		}
+	// Run migrations
+	if err := entStore.MigrateAllSchemas(context.Background()); err != nil {
+		logger.Printf("Warning: migration errors: %v", err)
+	}
 
-		// Initialize embedding model for PG memory stores (hybrid vector+keyword search).
-		// Uses the same HugotEmbedder (all-MiniLM-L6-v2, 384-dim) as personal mode.
-		// Non-fatal: if embedding fails, PG stores fall back to keyword-only search.
-		{
-			embGetSecret := daemonSecretGetter(backend, credStore)
-			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
-			if embErr != nil {
-				logger.Printf("Warning: PG memory embedding unavailable (keyword-only search): %v", embErr)
-			} else {
-				backend.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
-					return embResult.EmbeddingFunc(ctx, text)
-				})
-				if embResult.Cleanup != nil {
-					defer embResult.Cleanup()
-				}
-				logger.Printf("PG memory stores: hybrid vector+keyword search enabled")
+	// Initialize embedding
+	{
+		embGetSecret := daemonSecretGetter(backend, credStore)
+		embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
+		if embErr != nil {
+			logger.Printf("Warning: embedding unavailable (keyword-only search): %v", embErr)
+		} else {
+			backend.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
+				return embResult.EmbeddingFunc(ctx, text)
+			})
+			if embResult.Cleanup != nil {
+				defer embResult.Cleanup()
 			}
+			logger.Printf("Memory stores: hybrid vector+keyword search enabled")
 		}
-	} else if appCfg.Storage.Backend == "sqlite" {
-		// Platform mode with SQLite backend: multi-tenant, zero external deps.
-		dataDir := appCfg.Storage.SQLite.GetDataDir()
-		var sqlErr error
-		svc, sqlStore, sqlErr = sqlitestore.NewPlatformServices(context.Background(), dataDir)
-		if sqlErr != nil {
-			return fmt.Errorf("failed to initialize SQLite storage at %s: %w", dataDir, sqlErr)
-		}
-		defer sqlStore.Close()
-		backend = sqlStore
-		logger.Printf("Storage backend: SQLite (platform mode, dir: %s)", dataDir)
-
-		// Run pending migrations on all existing org/team/personal databases.
-		if err := sqlStore.MigrateAll(context.Background()); err != nil {
-			logger.Printf("Warning: SQLite migration encountered errors: %v", err)
-		}
-
-		// Initialize embedding model for SQLite memory stores (hybrid vector+keyword search).
-		{
-			embGetSecret := daemonSecretGetter(backend, credStore)
-			embResult, embErr := memory.ResolveEmbeddingFunc(appCfg, &appCfg.Memory, cfg.Debug, embGetSecret)
-			if embErr != nil {
-				logger.Printf("Warning: SQLite memory embedding unavailable (keyword-only search): %v", embErr)
-			} else {
-				backend.SetEmbedFunc(func(ctx context.Context, text string) ([]float32, error) {
-					return embResult.EmbeddingFunc(ctx, text)
-				})
-				if embResult.Cleanup != nil {
-					defer embResult.Cleanup()
-				}
-				logger.Printf("SQLite memory stores: hybrid vector+keyword search enabled")
-			}
-		}
-	} else {
-		return fmt.Errorf("unsupported storage backend %q: must be 'postgres' or 'sqlite'", appCfg.Storage.Backend)
 	}
 
 	// In platform mode, cascade platform and default-org provider settings
@@ -246,31 +220,27 @@ func Run(cfg RunConfig) error {
 	// This is the daemon-level equivalent of effectiveAppConfig() in HTTP handlers.
 	// Provider env vars are set here (not earlier) because in platform mode
 	// providers come exclusively from the database, not config.yaml.
-	if backend != nil {
-		cascadePlatformProviders(context.Background(), backend, appCfg, logger)
-		// Set up provider env vars from the DB-sourced config
-		getSecret := daemonSecretGetter(backend, credStore)
-		config.SetupAllProviderEnvFromStore(appCfg, getSecret)
-		// Override the installed secret getter to use platform_secrets.
-		// This ensures IsStandardServerInstalled() and mergeStandardServers()
-		// resolve API keys from the DB in platform mode (not the file-based store).
-		config.SetInstalledSecretGetter(getSecret)
-	}
+	cascadePlatformProviders(context.Background(), backend, appCfg, logger)
+	// Set up provider env vars from the DB-sourced config
+	getSecret := daemonSecretGetter(backend, credStore)
+	config.SetupAllProviderEnvFromStore(appCfg, getSecret)
+	// Override the installed secret getter to use platform_secrets.
+	// This ensures IsStandardServerInstalled() and mergeStandardServers()
+	// resolve API keys from the DB in platform mode (not the file-based store).
+	config.SetInstalledSecretGetter(getSecret)
 
 	// Create the ToolVectorStore for platform mode.
 	// This enables dynamic tool injection (semantic tool discovery) in platform mode.
 	var platformToolVectorStore agent.ToolVectorStore
 	var platformEmbedFunc agent.EmbedFunc
-	if backend != nil {
-		if embedFunc := backend.GetEmbedFunc(); embedFunc != nil {
-			vs, vsErr := backend.NewToolVectorStore(context.Background())
-			if vsErr == nil && vs != nil {
-				platformToolVectorStore = vs
-				platformEmbedFunc = agent.EmbedFunc(embedFunc)
-				logger.Printf("Tool discovery: vector-backed (platform mode)")
-			} else if vsErr != nil && cfg.Debug {
-				logger.Printf("Warning: failed to create tool vector store: %v", vsErr)
-			}
+	if embedFunc := backend.GetEmbedFunc(); embedFunc != nil {
+		vs, vsErr := backend.NewToolVectorStore(context.Background())
+		if vsErr == nil && vs != nil {
+			platformToolVectorStore = vs
+			platformEmbedFunc = agent.EmbedFunc(embedFunc)
+			logger.Printf("Tool discovery: vector-backed (platform mode)")
+		} else if vsErr != nil && cfg.Debug {
+			logger.Printf("Warning: failed to create tool vector store: %v", vsErr)
 		}
 	}
 
@@ -284,7 +254,7 @@ func Run(cfg RunConfig) error {
 	// settings so that OpenCode (used as a delegate tool in fleet sessions)
 	// does not need independent configuration.
 	// Skipped in API mode — API pods don't run fleet delegates.
-	getSecret := daemonSecretGetter(backend, credStore)
+	getSecret = daemonSecretGetter(backend, credStore)
 	if daemonMode != config.DaemonModeAPI {
 		if ocResult, ocErr := config.GenerateOpenCodeConfig(appCfg, getSecret); ocErr != nil {
 			logger.Printf("Warning: Failed to generate OpenCode config: %v", ocErr)
@@ -354,7 +324,7 @@ func Run(cfg RunConfig) error {
 			DebugMode:               cfg.Debug,
 			AutoApprove:             true, // Channels/scheduler auto-approve all tools
 			IsDaemon:                true, // We ARE the daemon — always run indexing/watchers.
-			PlatformMode:            backend != nil,
+			PlatformMode:            true,
 			PlatformToolVectorStore: platformToolVectorStore,
 			PlatformEmbedFunc:       platformEmbedFunc,
 		})
@@ -1134,9 +1104,10 @@ func Run(cfg RunConfig) error {
 
 	// Start sandbox GC reconciler in platform mode with K8s backend.
 	// Periodically reclaims orphan layers, uppers, and staging directories.
-	if pgStore != nil && sandbox.BackendKind(appCfg.Sandbox.BackendKind()) == sandbox.BackendKindK8s {
-		platformPool, poolErr := pgStore.PoolManager().PlatformPool(ctx)
+	if appCfg.Storage.Backend == "postgres" && sandbox.BackendKind(appCfg.Sandbox.BackendKind()) == sandbox.BackendKindK8s {
+		platformPool, poolErr := pgxpool.New(ctx, entCfg.DSN)
 		if poolErr == nil {
+			defer platformPool.Close()
 			cs, _, csErr := k8sbackend.NewClientFromOptions(k8sbackend.LoadConfigOptions{
 				KubeconfigPath: appCfg.Sandbox.Kubernetes.KubeconfigPath,
 				Context:        appCfg.Sandbox.Kubernetes.Context,
@@ -1156,31 +1127,9 @@ func Run(cfg RunConfig) error {
 					UppersPVCName:    appCfg.Sandbox.Kubernetes.UppersPVCName,
 					Client:           cs,
 					PlatformPool:     platformPool,
-					PGStore:          pgStore,
-					Layers:           pgStore.SandboxLayers(),
+					Layers:           entStore.SandboxLayers(),
 					SandboxSessionsQuerier: func(ctx context.Context) (map[string]bool, error) {
-						if pgStore == nil {
-							return nil, nil
-						}
-						schemas, err := pgStore.ListTeamSchemas(ctx)
-						if err != nil {
-							return nil, err
-						}
-						result := make(map[string]bool)
-						for _, schema := range schemas {
-							sessStore := pgStore.SandboxSessionsForSchema(schema)
-							if sessStore == nil {
-								continue
-							}
-							sessions, err := sessStore.List(ctx, store.SandboxSessionFilter{})
-							if err != nil {
-								continue
-							}
-							for _, s := range sessions {
-								result[s.SessionID] = true
-							}
-						}
-						return result, nil
+						return entStore.AllSandboxSessionIDs(ctx)
 					},
 				})
 			} else {
@@ -1193,13 +1142,11 @@ func Run(cfg RunConfig) error {
 	var studioOpts []launcher.StudioOption
 	studioOpts = append(studioOpts, launcher.WithServices(svc))
 	if platformAuth != nil && backend != nil {
-		studioOpts = append(studioOpts, launcher.WithPlatformAuth(platformAuth, pgStore))
-		if sqlStore != nil {
-			studioOpts = append(studioOpts, launcher.WithBackend(sqlStore))
-			studioOpts = append(studioOpts, launcher.WithTenantMiddleware(sqlitestore.TenantMiddleware(sqlStore)))
-			api.SetPlatformBackend(sqlStore)
-			api.SetPlatformSecrets(sqlStore.Secrets())
-		}
+		studioOpts = append(studioOpts, launcher.WithPlatformAuth(platformAuth, entStore))
+		studioOpts = append(studioOpts, launcher.WithBackend(entStore))
+		studioOpts = append(studioOpts, launcher.WithTenantMiddleware(entstore.TenantMiddleware(entStore)))
+		api.SetPlatformBackend(entStore)
+		api.SetPlatformSecrets(entStore.Secrets())
 	}
 	if configDir != "" {
 		studioOpts = append(studioOpts, launcher.WithConfigDir(configDir))

@@ -9,18 +9,17 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 // ---------------------------------------------------------------------------
-// Test infrastructure: real Postgres, isolated schema per test.
+// Test infrastructure: real Postgres, isolated database per test.
 //
-// Env: ASTONISH_TEST_DSN must point to a Postgres instance (any DB name —
-// the test creates & drops its own schema). Example:
+// Env: ASTONISH_TEST_DSN must point to a Postgres instance. Example:
 //   export ASTONISH_TEST_DSN="postgres://postgres:554252@192.168.1.196:5432/astonish_dxmtlc_platform"
 // ---------------------------------------------------------------------------
 
@@ -33,76 +32,79 @@ func mustTestDSN(t *testing.T) string {
 	return dsn
 }
 
-// setupChainTestSchema creates a fresh schema, applies platform migrations,
-// and returns a pooled connection pinned to that schema plus the schema name.
-// The schema is dropped on test cleanup.
-func setupChainTestSchema(t *testing.T) *pgxpool.Pool {
+// setupChainTestDB creates a fresh database via entstore.BootstrapPlatform,
+// returns the entstore.Store, and drops the DB on test cleanup.
+func setupChainTestDB(t *testing.T) *entstore.Store {
 	t.Helper()
 	dsn := mustTestDSN(t)
 	ctx := context.Background()
 
-	// Bootstrap: create schema via a temporary connection.
-	bootConn, err := pgx.Connect(ctx, dsn)
+	// Create a unique suffix for this test.
+	suffix := fmt.Sprintf("chaintest_%s", sanitizeName(t.Name()))
+
+	// Build the platform DSN.
+	dbName := fmt.Sprintf("astonish_%s_platform", suffix)
+	platformDSN, err := pgutil.ReplaceDSNDatabase(dsn, dbName)
 	if err != nil {
-		t.Fatalf("connect: %v", err)
+		t.Fatalf("ReplaceDSNDatabase: %v", err)
 	}
-	schema := fmt.Sprintf("chain_test_%s", t.Name())
-	// Sanitize: replace non-alphanum with underscore.
-	sanitized := ""
-	for _, c := range schema {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-			sanitized += string(c)
-		} else {
-			sanitized += "_"
-		}
+
+	// Drop any leftover from a prior run.
+	dropTestDB(t, dsn, dbName)
+
+	// Bootstrap.
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
+		DSN:            platformDSN,
+		InstanceSuffix: suffix,
+	}); err != nil {
+		t.Fatalf("BootstrapPlatform: %v", err)
 	}
-	schema = sanitized
-	if _, err := bootConn.Exec(ctx,
-		fmt.Sprintf("CREATE SCHEMA %s", pgx.Identifier{schema}.Sanitize()),
-	); err != nil {
-		bootConn.Close(ctx)
-		t.Fatalf("create schema: %v", err)
-	}
-	t.Cleanup(func() {
-		conn2, err := pgx.Connect(context.Background(), dsn)
-		if err == nil {
-			_, _ = conn2.Exec(context.Background(),
-				fmt.Sprintf("DROP SCHEMA %s CASCADE", pgx.Identifier{schema}.Sanitize()))
-			conn2.Close(context.Background())
-		}
+	t.Cleanup(func() { dropTestDB(t, dsn, dbName) })
+
+	// Open the store.
+	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            platformDSN,
+		InstanceSuffix: suffix,
 	})
-
-	// Apply platform migrations pinned to the schema.
-	if _, err := bootConn.Exec(ctx,
-		fmt.Sprintf("SET search_path TO %s, public", pgx.Identifier{schema}.Sanitize()),
-	); err != nil {
-		bootConn.Close(ctx)
-		t.Fatalf("pin migration search_path: %v", err)
-	}
-	if err := pgstore.Migrate(ctx, bootConn, pgstore.MigrationPlatform, schema); err != nil {
-		bootConn.Close(ctx)
-		t.Fatalf("migrate: %v", err)
-	}
-	bootConn.Close(ctx)
-
-	// Build a dedicated pool pinned to the test schema.
-	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		t.Fatalf("parse DSN: %v", err)
+		t.Fatalf("NewPlatformServices: %v", err)
 	}
-	cfg.MaxConns = 4
-	cfg.AfterConnect = func(ctx context.Context, c *pgx.Conn) error {
-		_, err := c.Exec(ctx,
-			fmt.Sprintf("SET search_path TO %s, public", pgx.Identifier{schema}.Sanitize()),
-		)
-		return err
-	}
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	t.Cleanup(func() { es.Close() })
+
+	return es
+}
+
+func dropTestDB(t *testing.T, baseDSN, dbName string) {
+	t.Helper()
+	adminDSN, err := pgutil.ReplaceDSNDatabase(baseDSN, "postgres")
 	if err != nil {
-		t.Fatalf("pool: %v", err)
+		return
 	}
-	t.Cleanup(pool.Close)
-	return pool
+	conn, err := pgx.Connect(context.Background(), adminDSN)
+	if err != nil {
+		return
+	}
+	defer conn.Close(context.Background())
+	_, _ = conn.Exec(context.Background(),
+		fmt.Sprintf("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s'", dbName))
+	_, _ = conn.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s", dbName))
+}
+
+func sanitizeName(name string) string {
+	result := ""
+	for _, c := range name {
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' {
+			result += string(c)
+		} else if c >= 'A' && c <= 'Z' {
+			result += string(c + 32)
+		} else {
+			result += "_"
+		}
+	}
+	if len(result) > 40 {
+		result = result[:40]
+	}
+	return result
 }
 
 // helpers to construct store pointers
@@ -112,8 +114,8 @@ func strPtr(s string) *string { return &s }
 // Integration test: 4 scenarios
 //
 // These validate the full layer-chain resolution pipeline against a real
-// Postgres instance with the actual schema and seed data. Each test modifies
-// only its own isolated schema.
+// Postgres instance with the actual schema and seed data. Each test uses
+// its own isolated database.
 //
 // The scenarios mirror the user acceptance matrix:
 //   1. Fresh install, no team template      → backend default ["@base"]
@@ -123,13 +125,12 @@ func strPtr(s string) *string { return &s }
 // ---------------------------------------------------------------------------
 
 func TestChainScenario1_FreshInstall_NoTeam(t *testing.T) {
-	pool := setupChainTestSchema(t)
+	es := setupChainTestDB(t)
 	ctx := context.Background()
 
-	tplStore := pgstore.NewPGSandboxTemplateStoreDirect(pool)
-	templates := pgstore.NewPGSandboxTemplateStore(pool)
+	tplStore := es.SandboxTemplates()
 
-	// After migration 005, @base.top_layer_id = '@base' (sentinel).
+	// After bootstrap, @base.top_layer_id = '@base' (sentinel).
 	// resolveBaseLayerChain must return nil (sentinel filtered).
 	baseChain := resolveBaseLayerChainWith(ctx, tplStore)
 	if baseChain != nil {
@@ -137,22 +138,18 @@ func TestChainScenario1_FreshInstall_NoTeam(t *testing.T) {
 	}
 
 	// No team template exists → resolveTemplateLayerChain must return nil.
-	teamChain := resolveTemplateLayerChainWith(ctx, templates, "team-general")
+	teamChain := resolveTemplateLayerChainWith(ctx, tplStore, "team-general")
 	if teamChain != nil {
 		t.Errorf("Scenario 1: resolveTemplateLayerChain = %v, want nil", teamChain)
 	}
-
-	// Effective chat chain: backend default ["@base"] (SessionSpec.LayerChain
-	// falls through to spec.TemplateID when empty — tested in session.go:180).
 }
 
 func TestChainScenario2_ConfiguredBase_NoTeam(t *testing.T) {
-	pool := setupChainTestSchema(t)
+	es := setupChainTestDB(t)
 	ctx := context.Background()
 
-	tplStore := pgstore.NewPGSandboxTemplateStoreDirect(pool)
-	templates := pgstore.NewPGSandboxTemplateStore(pool)
-	layers := pgstore.NewPGLayerStore(pool)
+	tplStore := es.SandboxTemplates()
+	layers := es.SandboxLayers()
 
 	// Simulate Configure Base: insert a new layer, update @base's top_layer_id.
 	configuredTop := "aabbccdd1234567890abcdef1234567890abcdef1234567890abcdef12345678"
@@ -175,21 +172,18 @@ func TestChainScenario2_ConfiguredBase_NoTeam(t *testing.T) {
 	}
 
 	// No team template → nil.
-	teamChain := resolveTemplateLayerChainWith(ctx, templates, "team-general")
+	teamChain := resolveTemplateLayerChainWith(ctx, tplStore, "team-general")
 	if teamChain != nil {
 		t.Errorf("Scenario 2: resolveTemplateLayerChain = %v, want nil", teamChain)
 	}
-
-	// Effective chat chain: ["@base", configuredTop] via InjectSandboxLayerChainIfEmpty.
 }
 
 func TestChainScenario3_ConfiguredBase_TeamTemplate(t *testing.T) {
-	pool := setupChainTestSchema(t)
+	es := setupChainTestDB(t)
 	ctx := context.Background()
 
-	tplStore := pgstore.NewPGSandboxTemplateStoreDirect(pool)
-	templates := pgstore.NewPGSandboxTemplateStore(pool)
-	layers := pgstore.NewPGLayerStore(pool)
+	tplStore := es.SandboxTemplates()
+	layers := es.SandboxLayers()
 
 	// 1. Configure base.
 	configuredTop := "1111111111111111111111111111111111111111111111111111111111111111"
@@ -216,7 +210,7 @@ func TestChainScenario3_ConfiguredBase_TeamTemplate(t *testing.T) {
 	}
 
 	// 3. Create team template with parent=@base (well-known UUID).
-	baseID := getBaseTemplateID(t, ctx, templates)
+	baseID := getBaseTemplateID(t, ctx, tplStore)
 	teamTpl := &store.SandboxTemplate{
 		Slug:             "team-general",
 		Scope:            store.SandboxTemplateScopeTeam,
@@ -226,7 +220,7 @@ func TestChainScenario3_ConfiguredBase_TeamTemplate(t *testing.T) {
 		TopLayerID:       &teamTop,
 		Version:          1,
 	}
-	if err := templates.Create(ctx, teamTpl); err != nil {
+	if err := tplStore.Create(ctx, teamTpl); err != nil {
 		t.Fatalf("Create team template: %v", err)
 	}
 
@@ -238,26 +232,21 @@ func TestChainScenario3_ConfiguredBase_TeamTemplate(t *testing.T) {
 	}
 
 	// resolveTemplateLayerChain → ["@base", configuredTop, teamTop].
-	teamChain := resolveTemplateLayerChainWith(ctx, templates, "team-general")
+	teamChain := resolveTemplateLayerChainWith(ctx, tplStore, "team-general")
 	wantTeam := []string{sandbox.BaseTemplateID, configuredTop, teamTop}
 	if !slicesEqual(teamChain, wantTeam) {
 		t.Errorf("Scenario 3: resolveTemplateLayerChain = %v, want %v", teamChain, wantTeam)
 	}
-
-	// Effective chat chain: team chain wins (InjectSandboxLayerChain is called
-	// before InjectSandboxLayerChainIfEmpty, so the non-nil team chain takes
-	// precedence).
 }
 
 func TestChainScenario4_FreshInstall_TeamTemplate(t *testing.T) {
-	pool := setupChainTestSchema(t)
+	es := setupChainTestDB(t)
 	ctx := context.Background()
 
-	tplStore := pgstore.NewPGSandboxTemplateStoreDirect(pool)
-	templates := pgstore.NewPGSandboxTemplateStore(pool)
-	layers := pgstore.NewPGLayerStore(pool)
+	tplStore := es.SandboxTemplates()
+	layers := es.SandboxLayers()
 
-	// @base is un-configured (top_layer_id = '@base' sentinel from migration).
+	// @base is un-configured (top_layer_id = '@base' sentinel from bootstrap).
 
 	// Create team layer.
 	teamTop := "3333333333333333333333333333333333333333333333333333333333333333"
@@ -271,7 +260,7 @@ func TestChainScenario4_FreshInstall_TeamTemplate(t *testing.T) {
 	}
 
 	// Create team template with parent=@base.
-	baseID := getBaseTemplateID(t, ctx, templates)
+	baseID := getBaseTemplateID(t, ctx, tplStore)
 	teamTpl := &store.SandboxTemplate{
 		Slug:             "team-general",
 		Scope:            store.SandboxTemplateScopeTeam,
@@ -281,7 +270,7 @@ func TestChainScenario4_FreshInstall_TeamTemplate(t *testing.T) {
 		TopLayerID:       &teamTop,
 		Version:          1,
 	}
-	if err := templates.Create(ctx, teamTpl); err != nil {
+	if err := tplStore.Create(ctx, teamTpl); err != nil {
 		t.Fatalf("Create team template: %v", err)
 	}
 
@@ -292,14 +281,11 @@ func TestChainScenario4_FreshInstall_TeamTemplate(t *testing.T) {
 	}
 
 	// resolveTemplateLayerChain → ["@base", teamTop].
-	// The sentinel in CTE result is filtered; only teamTop survives.
-	teamChain := resolveTemplateLayerChainWith(ctx, templates, "team-general")
+	teamChain := resolveTemplateLayerChainWith(ctx, tplStore, "team-general")
 	wantTeam := []string{sandbox.BaseTemplateID, teamTop}
 	if !slicesEqual(teamChain, wantTeam) {
 		t.Errorf("Scenario 4: resolveTemplateLayerChain = %v, want %v", teamChain, wantTeam)
 	}
-
-	// Effective chat chain: ["@base", teamTop] — team chain wins, base is nil.
 }
 
 // ---------------------------------------------------------------------------
@@ -307,7 +293,7 @@ func TestChainScenario4_FreshInstall_TeamTemplate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // getBaseTemplateID retrieves the well-known @base template's UUID from the
-// platform schema (seeded by migration 005).
+// platform database (seeded by entstore.BootstrapPlatform).
 func getBaseTemplateID(t *testing.T, ctx context.Context, templates store.SandboxTemplateStore) string {
 	t.Helper()
 	roots, err := templates.ListRoots(ctx)
@@ -319,6 +305,6 @@ func getBaseTemplateID(t *testing.T, ctx context.Context, templates store.Sandbo
 			return r.ID
 		}
 	}
-	t.Fatal("@base template not found after migration")
+	t.Fatal("@base template not found after bootstrap")
 	return ""
 }

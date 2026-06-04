@@ -21,7 +21,8 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 // CoreLogger is the minimal logger interface BootstrapPlatformCore needs.
@@ -56,7 +57,7 @@ type CoreOptions struct {
 type CoreHarness struct {
 	BaseURL     string
 	Token       string
-	PgStore     *pgstore.PGStore
+	Store       *entstore.Store
 	Services    *store.Services
 	Studio      *launcher.StudioServer
 	PlatformDSN string
@@ -64,7 +65,7 @@ type CoreHarness struct {
 	BaseDSN     string
 }
 
-// Shutdown closes the StudioServer and PGStore. It does NOT drop databases.
+// Shutdown closes the StudioServer and Store. It does NOT drop databases.
 // Idempotent.
 func (h *CoreHarness) Shutdown(ctx context.Context) {
 	if h.Studio != nil {
@@ -73,9 +74,9 @@ func (h *CoreHarness) Shutdown(ctx context.Context) {
 		_ = h.Studio.Shutdown(shutdownCtx)
 		h.Studio = nil
 	}
-	if h.PgStore != nil {
-		h.PgStore.Close()
-		h.PgStore = nil
+	if h.Store != nil {
+		h.Store.Close()
+		h.Store = nil
 	}
 }
 
@@ -85,7 +86,7 @@ func DropDBs(ctx context.Context, baseDSN, suffix string, log CoreLogger) {
 	if log == nil {
 		log = stdoutLogger{}
 	}
-	adminDSN, err := pgstore.ReplaceDSNDatabase(baseDSN, "postgres")
+	adminDSN, err := pgutil.ReplaceDSNDatabase(baseDSN, "postgres")
 	if err != nil {
 		log.Logf("[e2eboot] WARN: ReplaceDSNDatabase for admin: %v", err)
 		return
@@ -124,7 +125,7 @@ func DropAllDBsWithSuffix(ctx context.Context, baseDSN, suffix string, log CoreL
 	if log == nil {
 		log = stdoutLogger{}
 	}
-	adminDSN, err := pgstore.ReplaceDSNDatabase(baseDSN, "postgres")
+	adminDSN, err := pgutil.ReplaceDSNDatabase(baseDSN, "postgres")
 	if err != nil {
 		log.Logf("[e2eboot] WARN: ReplaceDSNDatabase for admin: %v", err)
 		return
@@ -199,13 +200,12 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	}
 
 	log.Logf("[e2eboot] Bootstrapping platform (suffix=%s)...", opts.Suffix)
-	if err := pgstore.BootstrapPlatform(ctx, opts.BaseDSN, opts.Suffix); err != nil {
-		return nil, fmt.Errorf("BootstrapPlatform: %w", err)
-	}
-
 	platformDSN, err := buildPlatformDSN(opts.BaseDSN, opts.Suffix)
 	if err != nil {
 		return nil, err
+	}
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: opts.Suffix}); err != nil {
+		return nil, fmt.Errorf("BootstrapPlatform: %w", err)
 	}
 
 	if err := os.MkdirAll(opts.ConfigDir, 0755); err != nil {
@@ -230,25 +230,16 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	// targeted suites can override.
 	setEnvE2EMasterKey(log)
 
-	pgCfg := config.PostgresConfig{
-		PlatformDSN:    platformDSN,
+	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            platformDSN,
 		InstanceSuffix: opts.Suffix,
-		// Cap connections per-org pool aggressively. The inspector keeps
-		// every test's org DB pools alive simultaneously, and PG's
-		// max_connections is finite. With ~26 tests × 2 orgs each =
-		// ~52 long-lived pools. Default PG max_connections=100 means
-		// we get ~1 conn per pool. 2/0 keeps headroom for the platform
-		// pool + worker. Tests are sequential, so concurrency is low.
-		MaxOpenConns: 2,
-		MaxIdleConns: 0,
-	}
-	svc, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("NewPlatformServices: %w", err)
 	}
 
 	// Initialize local embedding model for hybrid vector+keyword memory search.
-	initEmbedFuncCore(log, pgStore)
+	initEmbedFuncCore(log, esStore)
 
 	// Seed provider in platform settings (idempotent — Save replaces).
 	bifrostURL := opts.BifrostURL
@@ -258,8 +249,8 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 			bifrostURL = "https://bifrost.local.muxpie.com"
 		}
 	}
-	if err := seedProviderCore(ctx, pgStore, opts.APIKey, bifrostURL); err != nil {
-		pgStore.Close()
+	if err := seedProviderCore(ctx, esStore, opts.APIKey, bifrostURL); err != nil {
+		esStore.Close()
 		return nil, err
 	}
 	log.Logf("[e2eboot] Seeded Bifrost provider in platform settings")
@@ -267,17 +258,20 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	authCfg := config.PlatformAuthConfig{JWTSecret: opts.JWTSecret}
 	storageCfg := config.StorageConfig{
 		Backend:  "postgres",
-		Postgres: pgCfg,
+		Postgres: config.PostgresConfig{
+			PlatformDSN:    platformDSN,
+			InstanceSuffix: opts.Suffix,
+		},
 		Auth:     authCfg,
 	}
-	platformAuth := api.NewPlatformAuth(authCfg, pgStore, storageCfg)
+	platformAuth := api.NewPlatformAuth(authCfg, esStore, storageCfg)
 
 	studio, err := launcher.NewStudioServer(opts.Port,
 		launcher.WithServices(svc),
-		launcher.WithPlatformAuth(platformAuth, pgStore),
+		launcher.WithPlatformAuth(platformAuth, esStore),
 	)
 	if err != nil {
-		pgStore.Close()
+		esStore.Close()
 		return nil, fmt.Errorf("NewStudioServer: %w", err)
 	}
 
@@ -305,7 +299,7 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		_ = studio.Shutdown(shutdownCtx)
 		cancel()
-		pgStore.Close()
+		esStore.Close()
 		return nil, fmt.Errorf("login bootstrap user: %w", err)
 	}
 	log.Logf("[e2eboot] Authenticated bootstrap user")
@@ -313,7 +307,7 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	return &CoreHarness{
 		BaseURL:     baseURL,
 		Token:       token,
-		PgStore:     pgStore,
+		Store:       esStore,
 		Services:    svc,
 		Studio:      studio,
 		PlatformDSN: platformDSN,
@@ -325,11 +319,11 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 // buildPlatformDSN derives the platform DSN for a given suffix.
 func buildPlatformDSN(baseDSN, suffix string) (string, error) {
 	dbName := config.PlatformDBName(suffix)
-	return pgstore.ReplaceDSNDatabase(baseDSN, dbName)
+	return pgutil.ReplaceDSNDatabase(baseDSN, dbName)
 }
 
 // seedProviderCore is the testing.T-free equivalent of seedProvider.
-func seedProviderCore(ctx context.Context, pgStore *pgstore.PGStore, apiKey, bifrostURL string) error {
+func seedProviderCore(ctx context.Context, esStore *entstore.Store, apiKey, bifrostURL string) error {
 	settings := &store.PlatformSettings{
 		DefaultProvider: "Bifrost",
 		DefaultModel:    "sapaicore/anthropic--claude-4.6-opus",
@@ -341,7 +335,7 @@ func seedProviderCore(ctx context.Context, pgStore *pgstore.PGStore, apiKey, bif
 			},
 		},
 	}
-	if err := pgStore.PlatformSettings().Save(ctx, settings); err != nil {
+	if err := esStore.PlatformSettings().Save(ctx, settings); err != nil {
 		return fmt.Errorf("save platform settings: %w", err)
 	}
 	return nil

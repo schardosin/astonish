@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"regexp"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -37,6 +40,7 @@ type PlatformAuth struct {
 	pgStore      store.PlatformBackend
 	storeCfg     config.StorageConfig
 	orgResolver  orgResolver // defaults to pgStore; override in tests
+	linkCodes    store.LinkCodeStore
 }
 
 // NewPlatformAuth creates a new platform auth manager.
@@ -49,6 +53,11 @@ func NewPlatformAuth(authCfg config.PlatformAuthConfig, backend store.PlatformBa
 		storeCfg:    storeCfg,
 		orgResolver: backend,
 	}
+}
+
+// SetLinkCodeStoreForAuth sets the link code store for registration email verification.
+func (pa *PlatformAuth) SetLinkCodeStoreForAuth(lcs store.LinkCodeStore) {
+	pa.linkCodes = lcs
 }
 
 // JWTIssuer returns the JWT issuer for use by middleware.
@@ -65,6 +74,8 @@ func RegisterPlatformAuthRoutes(router *mux.Router, pa *PlatformAuth) {
 	router.HandleFunc("/api/auth/logout", pa.handleLogout).Methods("POST")
 	router.HandleFunc("/api/auth/me", pa.handleMe).Methods("GET")
 	router.HandleFunc("/api/auth/setup-status", pa.handleSetupStatus).Methods("GET")
+	router.HandleFunc("/api/auth/verify-email", pa.handleVerifyEmail).Methods("POST")
+	router.HandleFunc("/api/auth/resend-verification", pa.handleResendVerification).Methods("POST")
 }
 
 // --- Handler: POST /api/auth/register ---
@@ -155,13 +166,25 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if this is the first user (org bootstrap)
+	orgCount, _ := pa.pgStore.Organizations().Count(ctx)
+	isFirstUser := orgCount == 0
+
+	// Determine initial status:
+	// - First user: always "active" (bootstrap, no one to verify against)
+	// - Subsequent users: "pending_verification" if email verification is required
+	initialStatus := "active"
+	if !isFirstUser && pa.authCfg.IsEmailVerificationRequired() {
+		initialStatus = "pending_verification"
+	}
+
 	// Create user
 	user := &store.User{
 		ID:           uuid.New().String(),
 		Email:        strings.ToLower(strings.TrimSpace(req.Email)),
 		DisplayName:  strings.TrimSpace(req.DisplayName),
 		PasswordHash: string(hash),
-		Status:       "active",
+		Status:       initialStatus,
 		CreatedAt:    time.Now(),
 	}
 
@@ -171,16 +194,43 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auto-provision org if this is the first user
-	org, role, err := pa.ensureOrgForUser(ctx, user)
-	if err != nil {
-		slog.Error("failed to provision org for user", "user", user.ID, "error", err)
-		respondError(w, http.StatusInternalServerError, "failed to provision organization")
+	// First user: auto-provision org + team (bootstrap flow, unchanged)
+	if isFirstUser {
+		org, role, err := pa.provisionFirstOrg(ctx, user)
+		if err != nil {
+			slog.Error("failed to provision org for first user", "user", user.ID, "error", err)
+			respondError(w, http.StatusInternalServerError, "failed to provision organization")
+			return
+		}
+		// Issue tokens and respond — first user gets full access immediately
+		pa.issueTokensAndRespond(w, r, user, org, role)
 		return
 	}
 
-	// Issue tokens and set cookies
-	pa.issueTokensAndRespond(w, r, user, org, role)
+	// Non-first user: do NOT auto-assign to any org or team.
+	// Team admins will add them later via POST /api/teams/{slug}/members.
+
+	if pa.authCfg.IsEmailVerificationRequired() {
+		// Send verification code
+		if err := pa.sendRegistrationVerificationCode(ctx, user); err != nil {
+			slog.Error("failed to send verification code", "email", user.Email, "error", err)
+			// Non-fatal: user is created, they can request resend
+		}
+		respondJSON(w, http.StatusCreated, map[string]any{
+			"requires_verification": true,
+			"email":                 user.Email,
+			"message":               "Please check your email for a verification code.",
+		})
+		return
+	}
+
+	// Email verification not required: account is active but has no org/team
+	respondJSON(w, http.StatusCreated, map[string]any{
+		"requires_verification": false,
+		"no_team":               true,
+		"email":                 user.Email,
+		"message":               "Account created. A team administrator must add you to a team before you can access resources.",
+	})
 }
 
 // --- Handler: POST /api/auth/login ---
@@ -215,6 +265,15 @@ func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check account status
+	if user.Status == "pending_verification" {
+		respondJSON(w, http.StatusForbidden, map[string]any{
+			"error":                 "email_not_verified",
+			"message":              "Please verify your email address before logging in.",
+			"requires_verification": true,
+			"email":                user.Email,
+		})
+		return
+	}
 	if user.Status != "active" {
 		respondError(w, http.StatusForbidden, "account is suspended")
 		return
@@ -238,7 +297,16 @@ func (pa *PlatformAuth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	// Get user's org memberships
 	orgs, err := pa.pgStore.Organizations().GetUserOrgs(ctx, user.ID)
 	if err != nil || len(orgs) == 0 {
-		respondError(w, http.StatusInternalServerError, "user has no organization membership")
+		// User is active but has no org/team — they need a team admin to add them
+		respondJSON(w, http.StatusOK, map[string]any{
+			"error":   "no_team_membership",
+			"message": "Your account is active but you have not been added to any team yet. Please contact a team administrator.",
+			"user": map[string]any{
+				"id":           user.ID,
+				"email":        user.Email,
+				"display_name": user.DisplayName,
+			},
+		})
 		return
 	}
 
@@ -578,41 +646,6 @@ func (pa *PlatformAuth) handleSetupStatus(w http.ResponseWriter, r *http.Request
 
 // --- Internal helpers ---
 
-// ensureOrgForUser handles org provisioning and membership for a new user.
-// If no org exists, one is auto-created (first-user setup).
-// If an org exists, the user is added as a member (when registration is allowed).
-func (pa *PlatformAuth) ensureOrgForUser(ctx context.Context, user *store.User) (*store.Organization, string, error) {
-	orgStore := pa.pgStore.Organizations()
-
-	// Check if any org exists
-	count, err := orgStore.Count(ctx)
-	if err != nil {
-		return nil, "", fmt.Errorf("failed to count orgs: %w", err)
-	}
-
-	if count == 0 {
-		// First user: auto-provision organization
-		return pa.provisionFirstOrg(ctx, user)
-	}
-
-	// Org exists: add user as member to the default org
-	slug := pa.authCfg.GetDefaultOrgSlug()
-	org, err := orgStore.GetBySlug(ctx, slug)
-	if err != nil {
-		return nil, "", fmt.Errorf("default org %q not found: %w", slug, err)
-	}
-
-	role := "member"
-	if err := orgStore.AddMember(ctx, user.ID, org.ID, role); err != nil {
-		return nil, "", fmt.Errorf("failed to add user to org: %w", err)
-	}
-
-	// Create default team membership
-	pa.ensureDefaultTeamMembership(ctx, user.ID, org)
-
-	return org, role, nil
-}
-
 // provisionFirstOrg creates the default org, team, and makes the user an owner.
 func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User) (*store.Organization, string, error) {
 	orgSlug := pa.authCfg.GetDefaultOrgSlug()
@@ -698,38 +731,6 @@ func (pa *PlatformAuth) provisionFirstOrg(ctx context.Context, user *store.User)
 	)
 
 	return org, role, nil
-}
-
-// ensureDefaultTeamMembership adds a new user to the default team if they're not already a member.
-func (pa *PlatformAuth) ensureDefaultTeamMembership(ctx context.Context, userID string, org *store.Organization) {
-	orgDataStore, err := pa.pgStore.ForOrg(org.Slug)
-	if err != nil {
-		return
-	}
-
-	// Find the "general" team (or first team)
-	teams, err := orgDataStore.Teams().ListTeams(ctx)
-	if err != nil || len(teams) == 0 {
-		return
-	}
-
-	defaultTeam := teams[0]
-	for _, t := range teams {
-		if t.Slug == "general" {
-			defaultTeam = t
-			break
-		}
-	}
-
-	_ = orgDataStore.Teams().AddMember(ctx, &store.TeamMembership{
-		UserID:   userID,
-		TeamID:   defaultTeam.ID,
-		Role:     "member",
-		JoinedAt: time.Now(),
-	})
-
-	// Provision personal schema for the user
-	_ = orgDataStore.ProvisionPersonalSchema(ctx, userID)
 }
 
 // resolveDefaultTeam finds the user's default team slug within an org.
@@ -1002,6 +1003,154 @@ func clearAuthCookies(w http.ResponseWriter) {
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 	})
+}
+
+// --- Handler: POST /api/auth/verify-email ---
+
+type verifyEmailRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
+func (pa *PlatformAuth) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
+	var req verifyEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Email == "" || req.Code == "" {
+		respondError(w, http.StatusBadRequest, "email and code are required")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Find the user
+	user, err := pa.pgStore.Users().GetByEmail(ctx, strings.ToLower(strings.TrimSpace(req.Email)))
+	if err != nil || user == nil {
+		respondError(w, http.StatusNotFound, "user not found")
+		return
+	}
+
+	if user.Status != "pending_verification" {
+		respondError(w, http.StatusBadRequest, "account is not pending verification")
+		return
+	}
+
+	if pa.linkCodes == nil {
+		respondError(w, http.StatusInternalServerError, "verification service unavailable")
+		return
+	}
+
+	// Consume the code (Consume already checks expiry)
+	linkCode, err := pa.linkCodes.Consume(ctx, strings.TrimSpace(req.Code))
+	if err != nil || linkCode == nil {
+		respondError(w, http.StatusBadRequest, "invalid or expired verification code")
+		return
+	}
+
+	// Validate the code belongs to this user and is for registration
+	if linkCode.UserID != user.ID || linkCode.Channel != "registration" {
+		respondError(w, http.StatusBadRequest, "invalid or expired verification code")
+		return
+	}
+
+	// Promote user status to active
+	user.Status = "active"
+	if err := pa.pgStore.Users().Update(ctx, user); err != nil {
+		slog.Error("failed to activate user after verification", "user", user.ID, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to activate account")
+		return
+	}
+
+	slog.Info("user email verified", "user", user.Email)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"verified": true,
+		"email":    user.Email,
+		"message":  "Email verified successfully. A team administrator must add you to a team before you can access resources.",
+	})
+}
+
+// --- Handler: POST /api/auth/resend-verification ---
+
+type resendVerificationRequest struct {
+	Email string `json:"email"`
+}
+
+func (pa *PlatformAuth) handleResendVerification(w http.ResponseWriter, r *http.Request) {
+	var req resendVerificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Use a generic success message to avoid revealing whether the email exists
+	successMsg := "If an account with that email exists and is pending verification, a new code has been sent."
+
+	user, err := pa.pgStore.Users().GetByEmail(ctx, strings.ToLower(strings.TrimSpace(req.Email)))
+	if err != nil || user == nil {
+		respondJSON(w, http.StatusOK, map[string]any{"message": successMsg})
+		return
+	}
+
+	if user.Status != "pending_verification" {
+		respondJSON(w, http.StatusOK, map[string]any{"message": successMsg})
+		return
+	}
+
+	if err := pa.sendRegistrationVerificationCode(ctx, user); err != nil {
+		slog.Error("failed to resend verification code", "email", user.Email, "error", err)
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"message": successMsg})
+}
+
+// --- Email verification helpers ---
+
+const registrationCodeTTL = 10 * time.Minute
+
+// sendRegistrationVerificationCode generates a 6-digit code, stores it, and emails it.
+func (pa *PlatformAuth) sendRegistrationVerificationCode(ctx context.Context, user *store.User) error {
+	if pa.linkCodes == nil {
+		return fmt.Errorf("link code store not configured")
+	}
+
+	code := generateRegistrationCode()
+
+	// Store code with "registration" channel and 10-minute TTL
+	if err := pa.linkCodes.GenerateWithTTL(ctx, code, user.ID, user.Email, "registration", registrationCodeTTL); err != nil {
+		return fmt.Errorf("failed to store verification code: %w", err)
+	}
+
+	// Send email
+	if !mailer.IsConfigured() {
+		slog.Warn("mailer not configured; verification code cannot be sent",
+			"email", user.Email, "code", code)
+		return fmt.Errorf("mailer not configured")
+	}
+
+	mailer.SendAsync(ctx, mailer.RegistrationVerification{
+		Recipient:   user.Email,
+		DisplayName: user.DisplayName,
+		Code:        code,
+		ExpiryMin:   10,
+	})
+	return nil
+}
+
+// generateRegistrationCode creates a 6-digit numeric code.
+func generateRegistrationCode() string {
+	n, _ := rand.Int(rand.Reader, big.NewInt(999999))
+	return fmt.Sprintf("%06d", n.Int64())
 }
 
 // --- Validation helpers ---

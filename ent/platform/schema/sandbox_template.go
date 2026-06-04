@@ -1,0 +1,105 @@
+package schema
+
+import (
+	"time"
+
+	"entgo.io/ent"
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/entsql"
+	"entgo.io/ent/schema"
+	"entgo.io/ent/schema/edge"
+	"entgo.io/ent/schema/field"
+	"entgo.io/ent/schema/index"
+	"github.com/google/uuid"
+)
+
+// SandboxTemplate holds the schema for the sandbox_templates table.
+type SandboxTemplate struct {
+	ent.Schema
+}
+
+func (SandboxTemplate) Fields() []ent.Field {
+	return []ent.Field{
+		field.UUID("id", uuid.UUID{}).
+			Default(uuid.New),
+		field.String("slug").
+			NotEmpty(),
+		field.Enum("scope").
+			Values("global", "org", "team", "personal").
+			Default("global"),
+		field.String("owner_id").
+			Default(""),
+		field.String("purpose").
+			Default(""),
+		field.String("name").
+			NotEmpty(),
+		field.String("description").
+			Default(""),
+		field.UUID("parent_template_id", uuid.UUID{}).
+			Optional().
+			Nillable(),
+		field.String("top_layer_id").
+			Optional().
+			Nillable(),
+		field.JSON("base_config", map[string]any{}).
+			Optional(),
+		field.UUID("configured_by", uuid.UUID{}).
+			Optional().
+			Nillable(),
+		field.Time("configured_at").
+			Optional().
+			Nillable(),
+		field.Int("version").
+			Default(1),
+		field.UUID("created_by", uuid.UUID{}).
+			Optional().
+			Nillable(),
+		field.Time("created_at").
+			Default(time.Now).
+			Immutable().
+			Annotations(&entsql.Annotation{
+				DefaultExprs: map[string]string{
+					dialect.Postgres: "now()",
+					dialect.SQLite:   "(datetime('now'))",
+				},
+			}),
+		field.Time("updated_at").
+			Default(time.Now).
+			UpdateDefault(time.Now).
+			Annotations(&entsql.Annotation{
+				DefaultExprs: map[string]string{
+					dialect.Postgres: "now()",
+					dialect.SQLite:   "(datetime('now'))",
+				},
+			}),
+	}
+}
+
+func (SandboxTemplate) Edges() []ent.Edge {
+	return []ent.Edge{
+		// Self-referencing parent
+		edge.To("children", SandboxTemplate.Type).
+			From("parent").
+			Field("parent_template_id").
+			Unique(),
+		// Layer reference
+		edge.From("layer", SandboxLayer.Type).
+			Ref("templates").
+			Field("top_layer_id").
+			Unique(),
+	}
+}
+
+func (SandboxTemplate) Indexes() []ent.Index {
+	return []ent.Index{
+		index.Fields("scope", "owner_id", "slug").Unique(),
+		index.Fields("scope", "owner_id"),
+		index.Fields("parent_template_id"),
+	}
+}
+
+func (SandboxTemplate) Annotations() []schema.Annotation {
+	return []schema.Annotation{
+		entsql.Table("sandbox_templates"),
+	}
+}

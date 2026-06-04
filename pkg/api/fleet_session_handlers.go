@@ -740,7 +740,10 @@ func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read persisted fleet sessions from the team Sessions store.
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
+		// Fleet sessions are team-level resources — list ALL sessions regardless
+		// of creator (pass empty userID to skip the user filter). The FleetKey
+		// filter below ensures only fleet sessions are returned.
+		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, "")
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
 			return

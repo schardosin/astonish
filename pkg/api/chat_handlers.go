@@ -21,7 +21,6 @@ import (
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -811,7 +810,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	runner.InjectUserID(userID)
 
 	// Inject org/team slugs so tools can resolve team membership in platform mode.
-	if tc := pgstore.TenantContextFrom(r.Context()); tc != nil {
+	if tc := store.TenantContextFrom(r.Context()); tc != nil {
 		runner.InjectTenantSlugs(tc.OrgSlug, tc.TeamSlug)
 	}
 

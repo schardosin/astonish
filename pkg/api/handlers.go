@@ -16,7 +16,6 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/flowstore"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
@@ -979,11 +978,11 @@ func UpdateMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 // store.Middleware, resolving per-request tenant stores based on the
 // TenantContext set by PlatformAuthMiddleware.
 // tenantMW is an optional middleware function for per-request tenant resolution.
-func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore, tenantMW func(http.Handler) http.Handler) {
+func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.PlatformBackend, tenantMW func(http.Handler) http.Handler) {
 	// Register health endpoints BEFORE middleware (they must be auth-exempt and fast).
 	router.HandleFunc("/api/healthz", HealthzHandler).Methods("GET")
 	router.HandleFunc("/api/readyz", ReadyzHandler).Methods("GET")
-	SetHealthPGStore(pg)
+	SetHealthBackend(backend)
 
 	// Apply store middleware so every API handler can access Services via context.
 	if svc != nil {
@@ -997,8 +996,6 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// so it always runs before router.Use() middleware.
 	if tenantMW != nil {
 		router.Use(tenantMW)
-	} else if pg != nil {
-		router.Use(pgstore.TenantMiddleware(pg))
 	}
 
 	// Audit middleware logs API requests in platform mode.
@@ -1288,8 +1285,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, pg *pgstore.PGStore
 	// Platform admin endpoints (superadmin only, platform mode)
 	// These are NOT in the auth bypass list — PlatformAuthMiddleware runs first,
 	// and each handler additionally verifies platform_role == "superadmin".
-	if pg != nil {
-		SetPlatformPGStore(pg)
+	if backend != nil {
+		SetPlatformBackend(backend)
 	}
 	if getPlatformBackend() != nil {
 		// User channel management (any authenticated user manages their own)

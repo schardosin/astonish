@@ -77,3 +77,8 @@ schema/*/*.atlas.sql
 
 # Atlas resolved migration dirs (temporary, used during diff only)
 pkg/store/pgstore/migrations/*/.resolved/
+pkg/store/sqlitestore/migrations/*/.resolved/
+
+# Dev migration files (overwritten on each build, never commit)
+pkg/store/pgstore/migrations/*/999_dev.sql
+pkg/store/sqlitestore/migrations/*/999_dev.sql

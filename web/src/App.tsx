@@ -1481,10 +1481,12 @@ layout:
   return (
     <>
       {/* Platform Auth Gate — only in platform mode */}
-      {isPlatformMode && !auth.isAuthenticated && !auth.isLoading && isPlatformChecked && (
+      {isPlatformMode && (!auth.isAuthenticated || auth.pendingVerificationEmail || auth.noTeamMembership) && !auth.isLoading && isPlatformChecked && (
         <LoginPage
           onLogin={async (email, password) => { await auth.login(email, password) }}
           onRegister={async (email, password, displayName) => { await auth.register(email, password, displayName) }}
+          pendingVerificationEmail={auth.pendingVerificationEmail}
+          noTeamMembership={auth.noTeamMembership}
         />
       )}
 

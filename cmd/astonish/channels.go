@@ -19,7 +19,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/daemon"
 	emailPkg "github.com/schardosin/astonish/pkg/email"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	slackPkg "github.com/slack-go/slack"
@@ -249,11 +249,13 @@ func handleTelegramSetup() error {
 	// Save bot token to the appropriate store based on mode
 	if isPlatform {
 		// Platform mode: store in platform_secrets table (DB)
-		_, pgStore, pgErr := pgstore.NewPlatformServices(context.Background(), cfg.Storage.Postgres)
-		if pgErr != nil {
-			return fmt.Errorf("failed to connect to platform database: %w", pgErr)
+		entCfg := entstore.Config{DSN: cfg.Storage.Postgres.GetPlatformDSN(), InstanceSuffix: cfg.Storage.Postgres.InstanceSuffix}
+		_, es, entErr := entstore.NewPlatformServices(context.Background(), entCfg)
+		if entErr != nil {
+			return fmt.Errorf("failed to connect to platform database: %w", entErr)
 		}
-		if setErr := pgStore.PlatformSecrets().SetSecret("channels.telegram.bot_token", botToken); setErr != nil {
+		defer es.Close()
+		if setErr := es.Secrets().SetSecret("channels.telegram.bot_token", botToken); setErr != nil {
 			return fmt.Errorf("failed to store bot token in platform database: %w", setErr)
 		}
 		fmt.Println("  Bot token stored in platform database.")
@@ -785,20 +787,22 @@ func handleSlackSetup() error {
 	// Save secrets to the appropriate store based on mode
 	if isPlatform {
 		// Platform mode: store in platform_secrets table (DB)
-		_, pgStore, pgErr := pgstore.NewPlatformServices(context.Background(), cfg.Storage.Postgres)
-		if pgErr != nil {
-			return fmt.Errorf("failed to connect to platform database: %w", pgErr)
+		entCfg := entstore.Config{DSN: cfg.Storage.Postgres.GetPlatformDSN(), InstanceSuffix: cfg.Storage.Postgres.InstanceSuffix}
+		_, es, entErr := entstore.NewPlatformServices(context.Background(), entCfg)
+		if entErr != nil {
+			return fmt.Errorf("failed to connect to platform database: %w", entErr)
 		}
-		if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.bot_token", botToken); setErr != nil {
+		defer es.Close()
+		if setErr := es.Secrets().SetSecret("channels.slack.bot_token", botToken); setErr != nil {
 			return fmt.Errorf("failed to store bot token in platform database: %w", setErr)
 		}
 		if mode == "socket" && appToken != "" {
-			if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.app_token", appToken); setErr != nil {
+			if setErr := es.Secrets().SetSecret("channels.slack.app_token", appToken); setErr != nil {
 				return fmt.Errorf("failed to store app token in platform database: %w", setErr)
 			}
 		}
 		if mode == "events" && signingSecret != "" {
-			if setErr := pgStore.PlatformSecrets().SetSecret("channels.slack.signing_secret", signingSecret); setErr != nil {
+			if setErr := es.Secrets().SetSecret("channels.slack.signing_secret", signingSecret); setErr != nil {
 				return fmt.Errorf("failed to store signing secret in platform database: %w", setErr)
 			}
 		}

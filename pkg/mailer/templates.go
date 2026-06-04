@@ -130,3 +130,48 @@ func (m TeamAdded) HTMLBody() string {
 		button("Sign in to Astonish", m.AppURL)
 	return wrapHTML(inner)
 }
+
+// ---------------------------------------------------------------------------
+// RegistrationVerification — sent when a new user signs up via builtin auth.
+// ---------------------------------------------------------------------------
+
+// RegistrationVerification is sent when a new user signs up via builtin auth
+// and must verify their email address before the account becomes active.
+type RegistrationVerification struct {
+	Recipient   string // email address
+	DisplayName string
+	Code        string // 6-digit code
+	ExpiryMin   int    // expiry in minutes
+}
+
+func (m RegistrationVerification) To() []string { return []string{m.Recipient} }
+
+func (m RegistrationVerification) Subject() string {
+	return "Verify your email address — Astonish"
+}
+
+func (m RegistrationVerification) TextBody() string {
+	return fmt.Sprintf(`Hi %s,
+
+Your email verification code is:
+
+    %s
+
+Enter this code to complete your registration.
+
+This code expires in %d minutes. If you did not create an account, please ignore this email.
+
+— Astonish`, m.DisplayName, m.Code, m.ExpiryMin)
+}
+
+func (m RegistrationVerification) HTMLBody() string {
+	inner := heading("Verify your email address") +
+		paragraph(fmt.Sprintf("Hi %s,", m.DisplayName)) +
+		paragraph("Your verification code is:") +
+		fmt.Sprintf(`<div style="text-align: center; margin: 24px 0;">
+  <span style="font-size: 32px; font-weight: bold; letter-spacing: 6px; font-family: monospace; background: #f3f4f6; padding: 12px 24px; border-radius: 8px; border: 1px solid #e5e7eb; color: #1f2937;">%s</span>
+</div>`, m.Code) +
+		paragraph("Enter this code to complete your registration.") +
+		fmt.Sprintf(`<p style="color: #6b7280; font-size: 13px; margin: 0;">This code expires in %d minutes. If you did not create an account, please ignore this email.</p>`, m.ExpiryMin)
+	return wrapHTML(inner)
+}

@@ -7,7 +7,7 @@
 #
 # Prerequisites:
 #   - atlas CLI installed (curl -sSf https://atlasgo.sh | sh)
-#   - Docker running (for postgres dev database)
+#   - ASTONISH_TEST_DSN or ATLAS_PG_DEV_URL set (for PG envs)
 #
 # Usage:
 #   ./scripts/atlas-baseline.sh
@@ -20,11 +20,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 echo "Baselining Atlas migration state..."
 echo "Root: $ROOT"
 echo ""
-
-# Preprocess {{schema}} → public for team/personal PG
-echo "Preprocessing schema placeholders..."
-sed 's/{{schema}}/public/g' "$ROOT/schema/team/schema.pg.sql" > "$ROOT/schema/team/schema.pg.resolved.sql"
-sed 's/{{schema}}/public/g' "$ROOT/schema/personal/schema.pg.sql" > "$ROOT/schema/personal/schema.pg.resolved.sql"
 
 cd "$ROOT"
 
@@ -42,5 +37,5 @@ echo "Done! atlas.sum files created in each migration directory."
 echo ""
 echo "Next steps:"
 echo "  1. Review the generated atlas.sum files"
-echo "  2. git add pkg/store/*/migrations/*/atlas.sum"
+echo "  2. git add pkg/store/migrations/*/atlas.sum"
 echo "  3. git commit -m 'chore: baseline atlas migration checksums'"

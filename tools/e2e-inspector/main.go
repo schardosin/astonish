@@ -50,7 +50,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 	"github.com/schardosin/astonish/tests/e2eboot"
 
 	// Register sandbox backends so Configure Base, MCP stdio discovery,
@@ -398,7 +398,7 @@ func runInfo() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	platformDSN, err := pgstore.ReplaceDSNDatabase(state.BaseDSN, config.PlatformDBName(state.Suffix))
+	platformDSN, err := pgutil.ReplaceDSNDatabase(state.BaseDSN, config.PlatformDBName(state.Suffix))
 	if err != nil {
 		fail("derive platform DSN: %v", err)
 	}

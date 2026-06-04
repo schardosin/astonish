@@ -5,15 +5,20 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
+
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
-	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 // PlatformInitRequest is the request body for POST /api/platform/init.
@@ -108,14 +113,14 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	suffix := config.GenerateInstanceSuffix()
 
 	// Build a temporary DSN (pointing to any DB on the host — we'll create the real one).
-	tempDSN := pgstore.BuildDSN(req.Host, req.Port, req.User, req.Password, "postgres", req.SSLMode)
+	tempDSN := pgutil.BuildDSN(req.Host, req.Port, req.User, req.Password, "postgres", req.SSLMode)
 
 	// Check for suffix collision (extremely unlikely, but handle it)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
 		if checkErr != nil {
 			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 				Error: "Failed to check database existence: " + cleanPGError(checkErr.Error()),
@@ -130,10 +135,14 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build the platform DSN with the actual platform DB name.
 	platformDBName := config.PlatformDBName(suffix)
-	platformDSN := pgstore.BuildDSN(req.Host, req.Port, req.User, req.Password, platformDBName, req.SSLMode)
+	platformDSN := pgutil.BuildDSN(req.Host, req.Port, req.User, req.Password, platformDBName, req.SSLMode)
 
-	// Bootstrap: create DB, roles, and run migrations.
-	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
+	// Bootstrap: create DB and run migrations via entstore.
+	entCfg := entstore.Config{
+		DSN:            platformDSN,
+		InstanceSuffix: suffix,
+	}
+	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to initialize platform database: " + cleanPGError(err.Error()),
 		})
@@ -257,28 +266,120 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	// Create the SQLite store (opens/creates platform.db, runs migrations).
-	sqlStore, err := sqlitestore.New(ctx, dataDir)
-	if err != nil {
+	// Bootstrap: create SQLite platform database and run schema migrations.
+	entCfg := entstore.Config{
+		DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+		DataDir: dataDir,
+	}
+	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to initialize SQLite database: " + err.Error(),
 		})
 		return
 	}
-	defer sqlStore.Close()
 
-	// Bootstrap: create first user, org, team.
-	if err := sqlStore.Bootstrap(ctx, sqlitestore.BootstrapConfig{
-		Email:       req.AdminEmail,
-		DisplayName: req.AdminName,
-		Password:    req.AdminPassword,
-		OrgName:     req.OrgName,
-		OrgSlug:     req.OrgSlug,
-		TeamName:    "General",
-		TeamSlug:    "general",
-	}); err != nil {
+	// Open the store to seed admin user, org, and team.
+	entStore, err := entstore.New(ctx, entCfg)
+	if err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
-			Error: "Failed to bootstrap platform: " + err.Error(),
+			Error: "Failed to open SQLite database after bootstrap: " + err.Error(),
+		})
+		return
+	}
+	defer entStore.Close()
+
+	// Seed admin user.
+	now := time.Now()
+	adminDisplayName := req.AdminName
+	if adminDisplayName == "" {
+		adminDisplayName = req.AdminEmail
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.AdminPassword), bcrypt.DefaultCost)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to hash admin password: " + err.Error(),
+		})
+		return
+	}
+	userID := uuid.New().String()
+	adminUser := &store.User{
+		ID:           userID,
+		Email:        req.AdminEmail,
+		DisplayName:  adminDisplayName,
+		PasswordHash: string(hash),
+		PlatformRole: "superadmin",
+		Status:       "active",
+		CreatedAt:    now,
+	}
+	if err := entStore.Users().Create(ctx, adminUser); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to create admin user: " + err.Error(),
+		})
+		return
+	}
+
+	// Seed organization.
+	orgID := uuid.New().String()
+	org := &store.Organization{
+		ID:        orgID,
+		Name:      req.OrgName,
+		Slug:      req.OrgSlug,
+		CreatedAt: now,
+	}
+	if err := entStore.Organizations().Create(ctx, org); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to create organization: " + err.Error(),
+		})
+		return
+	}
+
+	// Add admin as org owner.
+	if err := entStore.Organizations().AddMember(ctx, userID, orgID, "owner"); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to add org membership: " + err.Error(),
+		})
+		return
+	}
+
+	// Provision org.
+	if err := entStore.ProvisionOrg(ctx, orgID, req.OrgSlug); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: fmt.Sprintf("Failed to provision org: %v", err),
+		})
+		return
+	}
+
+	// Create default team.
+	orgStore, err := entStore.ForOrg(req.OrgSlug)
+	if err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to open org store: " + err.Error(),
+		})
+		return
+	}
+	team := &store.Team{
+		ID:        uuid.New().String(),
+		Name:      "General",
+		Slug:      "general",
+		CreatedAt: now,
+	}
+	if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to create team: " + err.Error(),
+		})
+		return
+	}
+
+	// Provision team and personal schema.
+	if err := orgStore.ProvisionTeam(ctx, "general"); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: fmt.Sprintf("Failed to provision team: %v", err),
+		})
+		return
+	}
+	if err := orgStore.ProvisionPersonalSchema(ctx, userID); err != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: fmt.Sprintf("Failed to provision personal schema: %v", err),
 		})
 		return
 	}
@@ -361,10 +462,14 @@ func PlatformInitStatusHandler(w http.ResponseWriter, _ *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		_, pgStore, pgErr := pgstore.NewPlatformServices(ctx, cfg.Storage.Postgres)
+		entCfg := entstore.Config{
+			DSN:            cfg.Storage.Postgres.GetPlatformDSN(),
+			InstanceSuffix: cfg.Storage.Postgres.InstanceSuffix,
+		}
+		_, entS, pgErr := entstore.NewPlatformServices(ctx, entCfg)
 		if pgErr == nil {
 			initialized = true
-			pgStore.Close()
+			entS.Close()
 		}
 	} else if cfg.Storage.IsSQLite() {
 		// Check that the platform.db exists and is accessible.
@@ -372,10 +477,14 @@ func PlatformInitStatusHandler(w http.ResponseWriter, _ *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		sqlStore, sqlErr := sqlitestore.New(ctx, dataDir)
+		entCfg := entstore.Config{
+			DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+			DataDir: dataDir,
+		}
+		s, sqlErr := entstore.New(ctx, entCfg)
 		if sqlErr == nil {
 			initialized = true
-			sqlStore.Close()
+			s.Close()
 		}
 	}
 

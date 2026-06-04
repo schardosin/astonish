@@ -13,7 +13,8 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 // bootstrapShared is invoked when ASTONISH_E2E_KEEP_ALIVE=1. Instead of
@@ -54,25 +55,21 @@ func bootstrapShared(t *testing.T, baseDSN string) *Harness {
 
 	ctx := context.Background()
 
-	// Open a per-test PG connection pool to the same platform DB the inspector
+	// Open a per-test connection pool to the same platform DB the inspector
 	// is using. Tests use this to seed orgs/teams/users via the existing
 	// seed.go helpers. The pool is closed when the test finishes.
-	platformDSN, err := pgstore.ReplaceDSNDatabase(baseDSN, config.PlatformDBName(state.Suffix))
+	platformDSN, err := pgutil.ReplaceDSNDatabase(baseDSN, config.PlatformDBName(state.Suffix))
 	if err != nil {
 		t.Fatalf("[e2eboot] derive platform DSN: %v", err)
 	}
-	pgCfg := config.PostgresConfig{
-		PlatformDSN:    platformDSN,
+	_, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            platformDSN,
 		InstanceSuffix: state.Suffix,
-		// Match the inspector's pool sizing — see platform_core.go.
-		MaxOpenConns: 2,
-		MaxIdleConns: 0,
-	}
-	_, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
+	})
 	if err != nil {
 		t.Fatalf("[e2eboot] NewPlatformServices (shared): %v", err)
 	}
-	t.Cleanup(func() { pgStore.Close() })
+	t.Cleanup(func() { esStore.Close() })
 
 	// Login the bootstrap user to get a fresh token (its old token may be
 	// expired by now). The bootstrap user is shared across all tests but
@@ -96,7 +93,7 @@ func bootstrapShared(t *testing.T, baseDSN string) *Harness {
 	return &Harness{
 		BaseURL:       state.BaseURL,
 		Token:         token,
-		PgStore:       pgStore,
+		Store:         esStore,
 		PlatformDSN:   platformDSN,
 		Suffix:        state.Suffix,
 		BaseDSN:       baseDSN,

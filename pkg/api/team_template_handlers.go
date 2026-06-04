@@ -9,7 +9,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // --- Team Template API ---
@@ -39,7 +38,7 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -102,7 +101,7 @@ func TeamTemplateCreateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -177,7 +176,7 @@ func TeamTemplateSaveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -449,7 +448,7 @@ func TeamTemplateRestoreHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -525,7 +524,7 @@ func TeamTemplateDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -578,7 +577,7 @@ func TeamTemplateStartHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return
@@ -624,7 +623,7 @@ func TeamTemplatePackagesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return

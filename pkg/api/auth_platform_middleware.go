@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // PlatformAuthMiddleware returns an HTTP middleware that validates JWT tokens
@@ -179,12 +178,12 @@ func (pa *PlatformAuth) checkTeamAccess(ctx context.Context, claims *PlatformCla
 
 // buildAuthenticatedContext constructs a request context with TenantContext and PlatformUser.
 func buildAuthenticatedContext(ctx context.Context, claims *PlatformClaims, teamSlug string) context.Context {
-	tc := &pgstore.TenantContext{
+	tc := &store.TenantContext{
 		OrgSlug:  claims.OrgSlug,
 		TeamSlug: teamSlug,
 		UserID:   claims.UserID,
 	}
-	ctx = pgstore.WithTenantContext(ctx, tc)
+	ctx = store.WithTenantContext(ctx, tc)
 	ctx = WithPlatformUser(ctx, &PlatformUser{
 		ID:           claims.UserID,
 		Email:        claims.Email,

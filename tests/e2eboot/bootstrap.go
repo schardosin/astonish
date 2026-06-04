@@ -25,8 +25,8 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
-	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 const (
@@ -40,8 +40,7 @@ const (
 type Harness struct {
 	BaseURL     string
 	Token       string
-	PgStore     *pgstore.PGStore         // non-nil in PG mode, nil in SQLite mode
-	SQLiteStore *sqlitestore.SQLiteStore  // non-nil in SQLite mode, nil in PG mode
+	Store       *entstore.Store          // unified store (PG or SQLite)
 	DataDir     string                   // SQLite data directory (empty in PG mode)
 	PlatformDSN string                   // PG platform DSN (empty in SQLite mode)
 	Suffix      string
@@ -65,15 +64,12 @@ type Harness struct {
 // the harness is backed by PG or SQLite. Use this in code that needs to
 // work with both backends (e.g., seed.go).
 func (h *Harness) PlatformBackend() store.PlatformBackend {
-	if h.PgStore != nil {
-		return h.PgStore
-	}
-	return h.SQLiteStore
+	return h.Store
 }
 
 // IsSQLite returns true if this harness is using the SQLite backend.
 func (h *Harness) IsSQLite() bool {
-	return h.SQLiteStore != nil
+	return h.Store != nil && h.Store.Dialect() == entstore.DialectSQLite
 }
 
 // Bootstrap sets up a full platform instance for a single E2E test.
@@ -126,7 +122,8 @@ func Bootstrap(t *testing.T) *Harness {
 
 	// Bootstrap fresh platform
 	t.Logf("[e2eboot] Bootstrapping platform (suffix=%s)...", suffix)
-	if err := pgstore.BootstrapPlatform(ctx, dsn, suffix); err != nil {
+	platformDSN := buildDSN(t, dsn, suffix)
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: suffix}); err != nil {
 		t.Fatalf("[e2eboot] BootstrapPlatform: %v", err)
 	}
 	t.Cleanup(func() { DropAllDBsWithSuffix(ctx, dsn, suffix, t) })
@@ -138,7 +135,6 @@ func Bootstrap(t *testing.T) *Harness {
 		t.Fatalf("[e2eboot] mkdir config dir: %v", err)
 	}
 
-	platformDSN := buildDSN(t, dsn, suffix)
 	writeConfig(t, astonishDir, platformDSN, suffix)
 	t.Setenv("XDG_CONFIG_HOME", configDir)
 
@@ -153,22 +149,21 @@ func Bootstrap(t *testing.T) *Harness {
 		t.Setenv("ASTONISH_MASTER_KEY", e2eFixedMasterKeyHex)
 	}
 
-	// Connect PGStore
-	pgCfg := config.PostgresConfig{
-		PlatformDSN:    platformDSN,
+	// Connect entstore
+	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            platformDSN,
 		InstanceSuffix: suffix,
-	}
-	svc, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
+	})
 	if err != nil {
 		t.Fatalf("[e2eboot] NewPlatformServices: %v", err)
 	}
-	t.Cleanup(func() { pgStore.Close() })
+	t.Cleanup(func() { esStore.Close() })
 
 	// Initialize local embedding model for hybrid vector+keyword memory search.
-	initEmbedFunc(t, pgStore)
+	initEmbedFunc(t, esStore)
 
 	// Seed provider in platform settings
-	seedProvider(t, ctx, pgStore, apiKey)
+	seedProvider(t, ctx, esStore, apiKey)
 
 	// Create PlatformAuth
 	authCfg := config.PlatformAuthConfig{
@@ -176,15 +171,18 @@ func Bootstrap(t *testing.T) *Harness {
 	}
 	storageCfg := config.StorageConfig{
 		Backend:  "postgres",
-		Postgres: pgCfg,
+		Postgres: config.PostgresConfig{
+			PlatformDSN:    platformDSN,
+			InstanceSuffix: suffix,
+		},
 		Auth:     authCfg,
 	}
-	platformAuth := api.NewPlatformAuth(authCfg, pgStore, storageCfg)
+	platformAuth := api.NewPlatformAuth(authCfg, esStore, storageCfg)
 
 	// Start server
 	studio, err := launcher.NewStudioServer(0,
 		launcher.WithServices(svc),
-		launcher.WithPlatformAuth(platformAuth, pgStore),
+		launcher.WithPlatformAuth(platformAuth, esStore),
 	)
 	if err != nil {
 		t.Fatalf("[e2eboot] NewStudioServer: %v", err)
@@ -215,7 +213,7 @@ func Bootstrap(t *testing.T) *Harness {
 	return &Harness{
 		BaseURL:     baseURL,
 		Token:       token,
-		PgStore:     pgStore,
+		Store:       esStore,
 		PlatformDSN: platformDSN,
 		Suffix:      suffix,
 		BaseDSN:     dsn,
@@ -246,7 +244,7 @@ func resolveAPIKey() string {
 func buildDSN(t *testing.T, baseDSN, suffix string) string {
 	t.Helper()
 	dbName := config.PlatformDBName(suffix)
-	result, err := pgstore.ReplaceDSNDatabase(baseDSN, dbName)
+	result, err := pgutil.ReplaceDSNDatabase(baseDSN, dbName)
 	if err != nil {
 		t.Fatalf("[e2eboot] ReplaceDSNDatabase: %v", err)
 	}
@@ -255,7 +253,7 @@ func buildDSN(t *testing.T, baseDSN, suffix string) string {
 
 func dropDBs(t *testing.T, ctx context.Context, baseDSN, suffix string) {
 	t.Helper()
-	adminDSN, err := pgstore.ReplaceDSNDatabase(baseDSN, "postgres")
+	adminDSN, err := pgutil.ReplaceDSNDatabase(baseDSN, "postgres")
 	if err != nil {
 		t.Logf("[e2eboot] WARN: ReplaceDSNDatabase for admin: %v", err)
 		return
@@ -283,7 +281,7 @@ func dropDBs(t *testing.T, ctx context.Context, baseDSN, suffix string) {
 	}
 }
 
-func seedProvider(t *testing.T, ctx context.Context, pgStore *pgstore.PGStore, apiKey string) {
+func seedProvider(t *testing.T, ctx context.Context, esStore *entstore.Store, apiKey string) {
 	t.Helper()
 
 	bifrostURL := os.Getenv("BIFROST_BASE_URL")
@@ -303,7 +301,7 @@ func seedProvider(t *testing.T, ctx context.Context, pgStore *pgstore.PGStore, a
 		},
 	}
 
-	if err := pgStore.PlatformSettings().Save(ctx, settings); err != nil {
+	if err := esStore.PlatformSettings().Save(ctx, settings); err != nil {
 		t.Fatalf("[e2eboot] seed platform provider: %v", err)
 	}
 	t.Log("[e2eboot] Seeded Bifrost provider in platform settings")

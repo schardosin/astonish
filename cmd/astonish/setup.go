@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -31,8 +33,9 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
-	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func handleSetupCommand() error {
@@ -604,27 +607,30 @@ func platformHasProviders(cfg *config.AppConfig) (bool, error) {
 		if cfg.Storage.Postgres.PlatformDSN == "" {
 			return false, nil
 		}
-		poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
-		defer poolMgr.Close()
-
-		pool, err := poolMgr.PlatformPool(ctx)
+		_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+			DSN:            cfg.Storage.Postgres.PlatformDSN,
+			InstanceSuffix: cfg.Storage.Postgres.InstanceSuffix,
+		})
 		if err != nil {
 			return false, err
 		}
-		secrets := pgstore.NewPlatformSecretStore(poolMgr)
-		settingsStore = pgstore.NewPGPlatformSettingsStore(pool, secrets)
+		defer es.Close()
+		settingsStore = es.PlatformSettings()
 	} else if cfg.Storage.Backend == "sqlite" {
 		dataDir := cfg.Storage.SQLite.GetDataDir()
 		if dataDir == "" {
 			home, _ := os.UserHomeDir()
 			dataDir = filepath.Join(home, ".config", "astonish", "data")
 		}
-		_, sqlStore, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+		_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+			DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+			DataDir: dataDir,
+		})
 		if err != nil {
 			return false, err
 		}
-		defer sqlStore.Close()
-		settingsStore = sqlStore.PlatformSettings()
+		defer es.Close()
+		settingsStore = es.PlatformSettings()
 	} else {
 		return false, nil
 	}
@@ -652,16 +658,15 @@ func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg c
 		if cfg.Storage.Postgres.PlatformDSN == "" {
 			return fmt.Errorf("postgres platform DSN not configured")
 		}
-		poolMgr := pgstore.NewPoolManager(cfg.Storage.Postgres.PlatformDSN, cfg.Storage.Postgres)
-		defer poolMgr.Close()
-
-		pool, err := poolMgr.PlatformPool(ctx)
+		_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+			DSN:            cfg.Storage.Postgres.PlatformDSN,
+			InstanceSuffix: cfg.Storage.Postgres.InstanceSuffix,
+		})
 		if err != nil {
 			return fmt.Errorf("connect to platform DB: %w", err)
 		}
-
-		secrets := pgstore.NewPlatformSecretStore(poolMgr)
-		settingsStore = pgstore.NewPGPlatformSettingsStore(pool, secrets)
+		defer es.Close()
+		settingsStore = es.PlatformSettings()
 	} else if cfg.Storage.Backend == "sqlite" {
 		dataDir := cfg.Storage.SQLite.GetDataDir()
 		if dataDir == "" {
@@ -669,13 +674,16 @@ func saveProviderToPlatformDB(cfg *config.AppConfig, instanceName string, pCfg c
 			dataDir = filepath.Join(home, ".config", "astonish", "data")
 		}
 
-		_, sqlStore, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+		_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+			DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+			DataDir: dataDir,
+		})
 		if err != nil {
 			return fmt.Errorf("open sqlite platform services: %w", err)
 		}
-		defer sqlStore.Close()
+		defer es.Close()
 
-		settingsStore = sqlStore.PlatformSettings()
+		settingsStore = es.PlatformSettings()
 	} else {
 		return fmt.Errorf("unsupported storage backend for platform provider save: %s", cfg.Storage.Backend)
 	}
@@ -1788,12 +1796,12 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	suffix := config.GenerateInstanceSuffix()
 
 	// Build a temporary DSN to check for collisions.
-	tempDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
+	tempDSN := pgutil.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
 
 	// Check for suffix collision (extremely unlikely).
 	ctx := context.Background()
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
 		if checkErr != nil {
 			return fmt.Errorf("failed to check database existence: %w", checkErr)
 		}
@@ -1805,14 +1813,17 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 
 	// Build DSN with the actual platform DB name.
 	platformDBName := config.PlatformDBName(suffix)
-	platformDSN := pgstore.BuildDSN(pgHost, port, pgUser, pgPassword, platformDBName, pgSSLMode)
+	platformDSN := pgutil.BuildDSN(pgHost, port, pgUser, pgPassword, platformDBName, pgSSLMode)
 
 	clearScreen()
 	fmt.Println()
 	fmt.Printf("  Connecting to PostgreSQL at %s:%d...\n", pgHost, port)
 
 	// Bootstrap the platform database.
-	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
+		DSN:            platformDSN,
+		InstanceSuffix: suffix,
+	}); err != nil {
 		fmt.Println()
 		fmt.Printf("  ✗ Failed: %v\n", err)
 		fmt.Println()
@@ -1937,31 +1948,123 @@ func handleSQLitePlatformSetup(cfg *config.AppConfig) error {
 	fmt.Println()
 	fmt.Printf("  Initializing SQLite platform in %s...\n", dataDir)
 
-	// Create the SQLite store (opens/creates platform.db, runs migrations)
+	// Bootstrap the platform schema via entstore.
 	ctx := context.Background()
-	sqlStore, err := sqlitestore.New(ctx, dataDir)
-	if err != nil {
+	entCfg := entstore.Config{
+		DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+		DataDir: dataDir,
+	}
+	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
 		fmt.Println()
 		fmt.Printf("  ✗ Failed to initialize database: %v\n", err)
 		fmt.Println()
 		return err
 	}
-	defer sqlStore.Close()
 
-	// Bootstrap: create first user, org, team, and personal databases.
-	if err := sqlStore.Bootstrap(ctx, sqlitestore.BootstrapConfig{
-		Email:       adminEmail,
-		DisplayName: adminName,
-		Password:    adminPassword,
-		OrgName:     orgName,
-		OrgSlug:     orgSlug,
-		TeamName:    "General",
-		TeamSlug:    "general",
-	}); err != nil {
+	// Open the store and seed initial admin user, org, team, and personal databases.
+	_, es, err := entstore.NewPlatformServices(ctx, entCfg)
+	if err != nil {
 		fmt.Println()
-		fmt.Printf("  ✗ Bootstrap failed: %v\n", err)
+		fmt.Printf("  ✗ Failed to open platform services: %v\n", err)
 		fmt.Println()
 		return err
+	}
+	defer es.Close()
+
+	now := time.Now()
+
+	// Step 1: Create admin user (or retrieve existing one by email).
+	var userID string
+	existingUser, err := es.Users().GetByEmail(ctx, adminEmail)
+	if err != nil {
+		return fmt.Errorf("check existing user: %w", err)
+	}
+	if existingUser != nil {
+		userID = existingUser.ID
+	} else {
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			return fmt.Errorf("hash password: %w", err)
+		}
+		userID = uuid.New().String()
+		user := &store.User{
+			ID:           userID,
+			Email:        adminEmail,
+			DisplayName:  adminName,
+			PasswordHash: string(hash),
+			PlatformRole: "superadmin",
+			Status:       "active",
+			CreatedAt:    now,
+		}
+		if err := es.Users().Create(ctx, user); err != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
+	}
+
+	// Step 2: Create organization (or retrieve existing one by slug).
+	var orgID string
+	existingOrg, err := es.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil {
+		return fmt.Errorf("check existing org: %w", err)
+	}
+	if existingOrg != nil {
+		orgID = existingOrg.ID
+	} else {
+		orgID = uuid.New().String()
+		org := &store.Organization{
+			ID:        orgID,
+			Name:      orgName,
+			Slug:      orgSlug,
+			Status:    "active",
+			CreatedAt: now,
+		}
+		if err := es.Organizations().Create(ctx, org); err != nil {
+			return fmt.Errorf("create organization: %w", err)
+		}
+	}
+
+	// Step 3: Create membership.
+	if err := es.Organizations().AddMember(ctx, userID, orgID, "owner"); err != nil {
+		return fmt.Errorf("add org membership: %w", err)
+	}
+
+	// Step 4: Provision org data directory and database.
+	if err := es.ProvisionOrg(ctx, orgID, orgSlug); err != nil {
+		return fmt.Errorf("provision org: %w", err)
+	}
+
+	// Step 5: Open org store and create team if needed.
+	orgStore, err := es.ForOrg(orgSlug)
+	if err != nil {
+		return fmt.Errorf("open org store: %w", err)
+	}
+
+	teamSlug := "general"
+	teamName := "General"
+	existingTeam, err := orgStore.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil {
+		return fmt.Errorf("check existing team: %w", err)
+	}
+	if existingTeam == nil {
+		team := &store.Team{
+			ID:        uuid.New().String(),
+			Name:      teamName,
+			Slug:      teamSlug,
+			CreatedAt: now,
+		}
+		if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
+			return fmt.Errorf("create team: %w", err)
+		}
+	}
+
+	// Step 6: Provision team database.
+	if err := orgStore.ProvisionTeam(ctx, teamSlug); err != nil {
+		return fmt.Errorf("provision team: %w", err)
+	}
+
+	// Step 7: Provision personal database.
+	if err := orgStore.ProvisionPersonalSchema(ctx, userID); err != nil {
+		return fmt.Errorf("provision personal schema: %w", err)
 	}
 
 	fmt.Println("  ✓ Platform database initialized")

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -28,11 +29,191 @@ func (ms *personalMemoryStore) Search(ctx context.Context, query string, maxResu
 }
 
 func (ms *personalMemoryStore) SearchByCategory(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	if ms.dialect == DialectPostgres {
+		return ms.hybridSearch(ctx, query, maxResults, minScore, category)
+	}
+	// SQLite: text-based fallback.
+	return ms.textSearch(ctx, query, maxResults, category)
+}
+
+func (ms *personalMemoryStore) hybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	var vectorResults, keywordResults []store.MemorySearchResult
+
+	// 1. Vector search (semantic similarity).
+	if ms.embedFunc != nil {
+		results, err := ms.vectorSearch(ctx, query, maxResults, minScore, category)
+		if err == nil {
+			vectorResults = results
+		}
+	}
+
+	// 2. tsvector search (keyword matching).
+	if query != "" {
+		results, err := ms.tsvectorSearch(ctx, query, maxResults, category)
+		if err == nil {
+			keywordResults = results
+		}
+	}
+
+	// 3. Merge + dedup by ID, keep best score.
+	return mergeMemoryResults(vectorResults, keywordResults, maxResults), nil
+}
+
+func (ms *personalMemoryStore) vectorSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	embedding, err := ms.embedFunc(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("generate query embedding: %w", err)
+	}
+
+	vecStr := float32SliceToPGVectorString(embedding)
+
+	var rows *sql.Rows
+	if category != "" {
+		rows, err = ms.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				1 - (embedding <=> $1::vector) AS score
+			FROM memories
+			WHERE category = $2
+			ORDER BY embedding <=> $1::vector
+			LIMIT $3`,
+			vecStr, category, maxResults)
+	} else {
+		rows, err = ms.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				1 - (embedding <=> $1::vector) AS score
+			FROM memories
+			ORDER BY embedding <=> $1::vector
+			LIMIT $2`,
+			vecStr, maxResults)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("vector search query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var (
+			id        uuid.UUID
+			chunkText string
+			cat       sql.NullString
+			srcPath   sql.NullString
+			createdBy sql.NullString
+			sessionID sql.NullString
+			createdAt time.Time
+			score     float64
+		)
+		if err := rows.Scan(&id, &chunkText, &cat, &srcPath, &createdBy, &sessionID, &createdAt, &score); err != nil {
+			continue
+		}
+		if score < minScore {
+			continue
+		}
+		r := store.MemorySearchResult{
+			ID:        id.String(),
+			Snippet:   chunkText,
+			Score:     score,
+			Scope:     "personal",
+			CreatedAt: createdAt.Format(time.RFC3339),
+		}
+		if cat.Valid {
+			r.Category = cat.String
+		}
+		if srcPath.Valid {
+			r.Path = srcPath.String
+		}
+		if createdBy.Valid {
+			r.CreatedBy = createdBy.String
+		}
+		if sessionID.Valid {
+			r.SessionID = sessionID.String
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (ms *personalMemoryStore) tsvectorSearch(ctx context.Context, query string, maxResults int, category string) ([]store.MemorySearchResult, error) {
+	orQuery := buildORTsquery(query)
+	if orQuery == "" {
+		return nil, nil
+	}
+
+	var rows *sql.Rows
+	var err error
+	if category != "" {
+		rows, err = ms.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				ts_rank(tsv, websearch_to_tsquery('english', $1)) AS score
+			FROM memories
+			WHERE tsv @@ websearch_to_tsquery('english', $1) AND category = $2
+			ORDER BY score DESC
+			LIMIT $3`,
+			orQuery, category, maxResults)
+	} else {
+		rows, err = ms.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				ts_rank(tsv, websearch_to_tsquery('english', $1)) AS score
+			FROM memories
+			WHERE tsv @@ websearch_to_tsquery('english', $1)
+			ORDER BY score DESC
+			LIMIT $2`,
+			orQuery, maxResults)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tsvector search query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var (
+			id        uuid.UUID
+			chunkText string
+			cat       sql.NullString
+			srcPath   sql.NullString
+			createdBy sql.NullString
+			sessionID sql.NullString
+			createdAt time.Time
+			score     float64
+		)
+		if err := rows.Scan(&id, &chunkText, &cat, &srcPath, &createdBy, &sessionID, &createdAt, &score); err != nil {
+			continue
+		}
+		// Apply floor score (see tsvectorFloorScore doc in team_memories.go).
+		if score < tsvectorFloorScore {
+			score = tsvectorFloorScore
+		}
+		r := store.MemorySearchResult{
+			ID:        id.String(),
+			Snippet:   chunkText,
+			Score:     score,
+			Scope:     "personal",
+			CreatedAt: createdAt.Format(time.RFC3339),
+		}
+		if cat.Valid {
+			r.Category = cat.String
+		}
+		if srcPath.Valid {
+			r.Path = srcPath.String
+		}
+		if createdBy.Valid {
+			r.CreatedBy = createdBy.String
+		}
+		if sessionID.Valid {
+			r.SessionID = sessionID.String
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
+}
+
+func (ms *personalMemoryStore) textSearch(ctx context.Context, query string, maxResults int, category string) ([]store.MemorySearchResult, error) {
 	q := ms.client.Memory.Query()
 	if category != "" {
 		q = q.Where(memory.CategoryEQ(category))
 	}
-	q = q.Limit(maxResults)
+	q = q.Limit(maxResults).Order(memory.ByCreatedAt())
 
 	ents, err := q.All(ctx)
 	if err != nil {

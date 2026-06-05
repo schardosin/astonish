@@ -354,7 +354,7 @@ func TestE2E_Chat_MarkdownWithMarkerIsReport(t *testing.T) {
 	h := e2eboot.Bootstrap(t)
 
 	body := map[string]any{
-		"message":     "Write me a short report (2-3 lines) about TypeScript and save it to /tmp/e2e-ts-summary.md.",
+		"message":     "Write a 2-line report about TypeScript. Save it to /tmp/e2e-ts-summary.md using write_file, then emit an astonish-report fence with that path. Both steps are required.",
 		"autoApprove": true,
 	}
 	events := h.SSE(t, "/api/studio/chat", body, 120*time.Second)

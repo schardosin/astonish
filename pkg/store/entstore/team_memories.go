@@ -4,6 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,6 +26,12 @@ type teamMemoryStore struct {
 
 var _ store.MemoryStore = (*teamMemoryStore)(nil)
 
+// tsvectorFloorScore is the minimum score assigned to any tsvector keyword
+// match. ts_rank() returns very small values (0.01–0.1) but any keyword hit
+// is a high-precision signal. This floor ensures results survive the 0.3
+// minScore threshold applied by three-tier search.
+const tsvectorFloorScore = 0.5
+
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -36,17 +45,110 @@ func (m *teamMemoryStore) SearchByCategory(ctx context.Context, query string, ma
 }
 
 func (m *teamMemoryStore) searchInternal(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
-	// Try vector search if embedding function is available and we're on postgres.
-	if m.embedFunc != nil && m.dialect == DialectPostgres {
+	if m.dialect == DialectPostgres {
+		return m.hybridSearch(ctx, query, maxResults, minScore, category)
+	}
+	// SQLite: text-based only.
+	return m.textSearch(ctx, query, maxResults, category)
+}
+
+func (m *teamMemoryStore) hybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	var vectorResults, keywordResults []store.MemorySearchResult
+
+	// 1. Vector search (semantic similarity).
+	if m.embedFunc != nil {
 		results, err := m.vectorSearch(ctx, query, maxResults, minScore, category)
 		if err == nil {
-			return results, nil
+			vectorResults = results
 		}
-		// Fall through to text search on error.
 	}
 
-	// Fallback: text-based search using LIKE.
-	return m.textSearch(ctx, query, maxResults, category)
+	// 2. tsvector search (keyword matching).
+	if query != "" {
+		results, err := m.tsvectorSearch(ctx, query, maxResults, category)
+		if err == nil {
+			keywordResults = results
+		}
+	}
+
+	// 3. Merge + dedup by ID, keep best score.
+	return mergeMemoryResults(vectorResults, keywordResults, maxResults), nil
+}
+
+func (m *teamMemoryStore) tsvectorSearch(ctx context.Context, query string, maxResults int, category string) ([]store.MemorySearchResult, error) {
+	orQuery := buildORTsquery(query)
+	if orQuery == "" {
+		return nil, nil
+	}
+
+	var rows *sql.Rows
+	var err error
+	if category != "" {
+		rows, err = m.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				ts_rank(tsv, websearch_to_tsquery('english', $1)) AS score
+			FROM memories
+			WHERE tsv @@ websearch_to_tsquery('english', $1) AND category = $2
+			ORDER BY score DESC
+			LIMIT $3`,
+			orQuery, category, maxResults)
+	} else {
+		rows, err = m.db.QueryContext(ctx,
+			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
+				ts_rank(tsv, websearch_to_tsquery('english', $1)) AS score
+			FROM memories
+			WHERE tsv @@ websearch_to_tsquery('english', $1)
+			ORDER BY score DESC
+			LIMIT $2`,
+			orQuery, maxResults)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("tsvector search query: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var (
+			id        uuid.UUID
+			chunkText string
+			cat       sql.NullString
+			srcPath   sql.NullString
+			createdBy sql.NullString
+			sessionID sql.NullString
+			createdAt time.Time
+			score     float64
+		)
+		if err := rows.Scan(&id, &chunkText, &cat, &srcPath, &createdBy, &sessionID, &createdAt, &score); err != nil {
+			continue
+		}
+		// ts_rank returns very small values (0.01–0.1). Since any tsvector
+		// match is a high-precision keyword hit, apply a floor score so these
+		// results survive downstream minScore filtering (typically 0.3).
+		if score < tsvectorFloorScore {
+			score = tsvectorFloorScore
+		}
+		r := store.MemorySearchResult{
+			ID:        id.String(),
+			Snippet:   chunkText,
+			Score:     score,
+			CreatedAt: createdAt.Format(time.RFC3339),
+		}
+		if cat.Valid {
+			r.Category = cat.String
+		}
+		if srcPath.Valid {
+			r.Path = srcPath.String
+		}
+		if createdBy.Valid {
+			r.CreatedBy = createdBy.String
+		}
+		if sessionID.Valid {
+			r.SessionID = sessionID.String
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }
 
 func (m *teamMemoryStore) vectorSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
@@ -369,4 +471,76 @@ func entMemoryToResult(e *teament.Memory) store.MemorySearchResult {
 	return r
 }
 
+// mergeMemoryResults combines vector and keyword search results, deduplicating
+// by ID and keeping the higher score. Results are sorted by score descending.
+func mergeMemoryResults(vector, keyword []store.MemorySearchResult, maxResults int) []store.MemorySearchResult {
+	seen := make(map[string]int) // ID → index in merged
+	var merged []store.MemorySearchResult
+
+	// Add vector results first (cosine similarity scores 0–1).
+	for _, r := range vector {
+		seen[r.ID] = len(merged)
+		merged = append(merged, r)
+	}
+
+	// Add keyword results, dedup by ID (keep higher score).
+	for _, r := range keyword {
+		if idx, exists := seen[r.ID]; exists {
+			if r.Score > merged[idx].Score {
+				merged[idx].Score = r.Score
+			}
+		} else {
+			seen[r.ID] = len(merged)
+			merged = append(merged, r)
+		}
+	}
+
+	// Sort by score descending.
+	sort.Slice(merged, func(i, j int) bool {
+		return merged[i].Score > merged[j].Score
+	})
+
+	if len(merged) > maxResults {
+		merged = merged[:maxResults]
+	}
+	return merged
+}
+
+// tsvectorWordRe matches contiguous alphanumeric/hyphen tokens for tsquery
+// construction. Hyphens are kept so identifiers like "pve-prod-01" stay intact.
+var tsvectorWordRe = regexp.MustCompile(`[a-zA-Z0-9][\w-]*`)
+
+// buildORTsquery constructs a tsquery string with OR semantics from natural
+// language text. Example: "Proxmox server pve-prod-01" → uses
+// websearch_to_tsquery which implicitly ORs unquoted words when we reformat.
+//
+// Instead of relying on plainto_tsquery (AND semantics) we extract meaningful
+// tokens and join them with " or " for websearch_to_tsquery, which produces
+// OR-connected lexemes. This ensures that a document matching ANY of the
+// query terms is returned.
+func buildORTsquery(text string) string {
+	words := tsvectorWordRe.FindAllString(text, -1)
+	// Filter out very short tokens (1 char) and common stop words.
+	var filtered []string
+	for _, w := range words {
+		if len(w) <= 1 {
+			continue
+		}
+		filtered = append(filtered, strings.ToLower(w))
+	}
+	if len(filtered) == 0 {
+		return ""
+	}
+	// Deduplicate.
+	seen := make(map[string]struct{})
+	var unique []string
+	for _, w := range filtered {
+		if _, ok := seen[w]; !ok {
+			seen[w] = struct{}{}
+			unique = append(unique, w)
+		}
+	}
+	// Join with " or " for websearch_to_tsquery syntax.
+	return strings.Join(unique, " or ")
+}
 

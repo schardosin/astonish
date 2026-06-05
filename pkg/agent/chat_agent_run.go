@@ -110,7 +110,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 				// Partition 2: Everything else (memory, skills, flows, knowledge)
 				if c.KnowledgeSearch != nil {
-					knowledgeResults, err := c.KnowledgeSearch(ctx, searchQuery, bm25Query, 5, 0.1)
+					knowledgeResults, err := c.KnowledgeSearch(ctx, searchQuery, bm25Query, 5, 0.3)
 					if err != nil {
 						if c.DebugMode {
 							slog.Debug("knowledge search failed", "component", "chat", "error", err)

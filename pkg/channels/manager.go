@@ -57,6 +57,12 @@ type ChannelManager struct {
 	pendingContexts   map[string]string
 	pendingContextsMu sync.Mutex
 
+	// Pending pinned tool groups: maps session key -> tool group names.
+	// Used alongside pendingContexts for wizard sessions that need specific
+	// tool groups to stay available across all turns.
+	pendingPinnedToolGroups   map[string][]string
+	pendingPinnedToolGroupsMu sync.Mutex
+
 	// ReadFileFunc reads a file given a session ID and file path. When sandbox
 	// is enabled, the file may live inside a container rather than on the host
 	// filesystem. The daemon injects a closure that tries the host first, then
@@ -177,6 +183,7 @@ type FleetTemplateSummary struct {
 type FleetTemplateWithWizard struct {
 	Name               string
 	WizardSystemPrompt string
+	PinnedToolGroups   []string
 }
 
 // FleetSessionStartResult is the result of starting a fleet session.
@@ -208,12 +215,13 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 	m := &ChannelManager{
 		channels:        make(map[string]Channel),
 		router:          NewRouter(),
-		agent:           chatAgent,
-		sessSvc:         sessSvc,
-		commands:        DefaultCommands(),
-		logger:          logger,
-		activeFleets:    make(map[string]string),
-		pendingContexts: make(map[string]string),
+		agent:                   chatAgent,
+		sessSvc:                 sessSvc,
+		commands:                DefaultCommands(),
+		logger:                  logger,
+		activeFleets:            make(map[string]string),
+		pendingContexts:         make(map[string]string),
+		pendingPinnedToolGroups: make(map[string][]string),
 	}
 	if cfg != nil {
 		m.providerName = cfg.ProviderName
@@ -519,6 +527,18 @@ func (m *ChannelManager) SetSessionContext(sessionKey, ctx string) {
 	m.pendingContexts[sessionKey] = ctx
 }
 
+// SetPinnedToolGroups sets one-shot pinned tool groups to inject on the next
+// regular chat message for the given session key. Used alongside SetSessionContext
+// for wizard sessions that need specific tool groups to remain available.
+func (m *ChannelManager) SetPinnedToolGroups(sessionKey string, groups []string) {
+	m.pendingPinnedToolGroupsMu.Lock()
+	defer m.pendingPinnedToolGroupsMu.Unlock()
+	if m.pendingPinnedToolGroups == nil {
+		m.pendingPinnedToolGroups = make(map[string][]string)
+	}
+	m.pendingPinnedToolGroups[sessionKey] = groups
+}
+
 // consumeSessionContext retrieves and clears a pending session context.
 func (m *ChannelManager) consumeSessionContext(sessionKey string) string {
 	m.pendingContextsMu.Lock()
@@ -526,6 +546,18 @@ func (m *ChannelManager) consumeSessionContext(sessionKey string) string {
 	ctx := m.pendingContexts[sessionKey]
 	delete(m.pendingContexts, sessionKey)
 	return ctx
+}
+
+// consumePinnedToolGroups retrieves and clears pending pinned tool groups.
+func (m *ChannelManager) consumePinnedToolGroups(sessionKey string) []string {
+	m.pendingPinnedToolGroupsMu.Lock()
+	defer m.pendingPinnedToolGroupsMu.Unlock()
+	if m.pendingPinnedToolGroups == nil {
+		return nil
+	}
+	groups := m.pendingPinnedToolGroups[sessionKey]
+	delete(m.pendingPinnedToolGroups, sessionKey)
+	return groups
 }
 
 // handleInbound processes an inbound message from any channel.
@@ -592,6 +624,9 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	}
 	if sessionCtx := m.consumeSessionContext(route.SessionKey); sessionCtx != "" {
 		overrides.SessionContext = agent.EscapeCurlyPlaceholders(sessionCtx)
+	}
+	if pinnedGroups := m.consumePinnedToolGroups(route.SessionKey); len(pinnedGroups) > 0 {
+		overrides.PinnedToolGroups = pinnedGroups
 	}
 	ctx = agent.WithPromptOverrides(ctx, overrides)
 

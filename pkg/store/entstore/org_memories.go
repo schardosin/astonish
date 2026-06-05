@@ -86,18 +86,40 @@ func (ms *orgMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) erro
 	}
 
 	// Generate embedding if embed function is available.
+	var newEmb []float32
 	if ms.embedFunc != nil && entry.Content != "" {
 		embedding, err := ms.embedFunc(ctx, entry.Content)
 		if err == nil && len(embedding) > 0 {
-			create.SetEmbedding(float32SliceToBytes(embedding))
+			newEmb = embedding
+			if ms.dialect == DialectSQLite {
+				create.SetEmbedding(float32SliceToBytes(embedding))
+			}
 		}
 	}
 
-	// Generate TSV for keyword search.
-	create.SetTsv(entry.Content)
+	// On SQLite, store raw text for LIKE-based keyword search.
+	// On PG, the tsvector trigger generates this from chunk_text.
+	if ms.dialect == DialectSQLite {
+		create.SetTsv(entry.Content)
+	}
 
-	_, err := create.Save(ctx)
-	return err
+	saved, err := create.Save(ctx)
+	if err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if newEmb != nil && ms.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(newEmb)
+		_, err = ms.db.ExecContext(ctx,
+			`UPDATE org_memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, saved.ID)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (ms *orgMemoryStore) Get(ctx context.Context, id string) (*store.MemorySearchResult, error) {
@@ -132,16 +154,37 @@ func (ms *orgMemoryStore) Update(ctx context.Context, id string, content string,
 	}
 
 	// Re-generate embedding if content changed.
+	var newEmb []float32
 	if ms.embedFunc != nil && content != "" {
 		embedding, err := ms.embedFunc(ctx, content)
 		if err == nil && len(embedding) > 0 {
-			update.SetEmbedding(float32SliceToBytes(embedding))
+			newEmb = embedding
+			if ms.dialect == DialectSQLite {
+				update.SetEmbedding(float32SliceToBytes(embedding))
+			}
 		}
 	}
 
-	update.SetTsv(content)
+	if ms.dialect == DialectSQLite {
+		update.SetTsv(content)
+	}
 
-	return update.Exec(ctx)
+	if err := update.Exec(ctx); err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if newEmb != nil && ms.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(newEmb)
+		_, err = ms.db.ExecContext(ctx,
+			`UPDATE org_memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, uid)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (ms *orgMemoryStore) Delete(ctx context.Context, id string) error {
@@ -226,11 +269,29 @@ func orgMemoryToSearchResult(e *orgent.OrgMemory) store.MemorySearchResult {
 	return r
 }
 
-// float32SliceToBytes converts a []float32 to []byte for storage.
+// float32SliceToBytes converts a []float32 to []byte for SQLite BLOB storage.
 func float32SliceToBytes(v []float32) []byte {
 	buf := make([]byte, len(v)*4)
 	for i, f := range v {
 		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(f))
 	}
 	return buf
+}
+
+// float32SliceToPGVectorString converts a []float32 to pgvector text format string: [f1,f2,...,fN]
+// This format is passed as a string parameter with ::vector cast in SQL queries.
+func float32SliceToPGVectorString(v []float32) string {
+	if len(v) == 0 {
+		return "[]"
+	}
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, f := range v {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(fmt.Sprintf("%g", f))
+	}
+	b.WriteByte(']')
+	return b.String()
 }

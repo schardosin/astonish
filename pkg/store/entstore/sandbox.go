@@ -187,9 +187,16 @@ type sandboxTemplateStore struct {
 }
 
 func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTemplate) error {
-	id, err := uuid.Parse(tpl.ID)
-	if err != nil {
-		return fmt.Errorf("invalid template ID: %w", err)
+	var id uuid.UUID
+	if tpl.ID == "" {
+		id = uuid.New()
+		tpl.ID = id.String()
+	} else {
+		var err error
+		id, err = uuid.Parse(tpl.ID)
+		if err != nil {
+			return fmt.Errorf("invalid template ID: %w", err)
+		}
 	}
 
 	create := ts.client.SandboxTemplate.Create().
@@ -229,7 +236,7 @@ func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTe
 		create.SetUpdatedAt(tpl.UpdatedAt)
 	}
 
-	_, err = create.Save(ctx)
+	_, err := create.Save(ctx)
 	return err
 }
 

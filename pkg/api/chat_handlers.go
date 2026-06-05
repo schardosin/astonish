@@ -29,10 +29,11 @@ import (
 
 // StudioChatRequest is the request body for POST /api/studio/chat.
 type StudioChatRequest struct {
-	SessionID     string `json:"sessionId,omitempty"`
-	Message       string `json:"message"`
-	AutoApprove   bool   `json:"autoApprove,omitempty"`
-	SystemContext string `json:"systemContext,omitempty"` // per-turn system instructions (not shown to user)
+	SessionID        string   `json:"sessionId,omitempty"`
+	Message          string   `json:"message"`
+	AutoApprove      bool     `json:"autoApprove,omitempty"`
+	SystemContext    string   `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
+	PinnedToolGroups []string `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -421,6 +422,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
 						eventData["wizard_description"] = cfg.PlanWizard.Description
 						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
+							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
+						}
 						wizardFound = true
 					}
 				}
@@ -430,6 +434,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 					if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
 						eventData["wizard_description"] = cfg.PlanWizard.Description
 						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
+						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
+							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
+						}
 					}
 				}
 			}
@@ -847,7 +854,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer registry.Unregister(sessionID)
 		defer cm.unregisterStream(sessionID)
-		runner.Run(chatAgent, sessionService, comp.LLM, titleSetter, userMsg, msg, req.AutoApprove, req.SystemContext)
+		runner.Run(chatAgent, sessionService, comp.LLM, titleSetter, userMsg, msg, req.AutoApprove, req.SystemContext, req.PinnedToolGroups)
 	}()
 
 	// Become an SSE viewer: subscribe to the runner and forward events to the browser.

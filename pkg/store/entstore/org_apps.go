@@ -30,6 +30,9 @@ func (as *orgAppStore) Save(ctx context.Context, app any) (string, error) {
 
 	// Extract slug and name from the definition.
 	slug, _ := def["slug"].(string)
+	if slug == "" {
+		slug, _ = def["name"].(string)
+	}
 	name, _ := def["name"].(string)
 	description, _ := def["description"].(string)
 

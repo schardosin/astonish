@@ -30,10 +30,16 @@ func (as *personalAppStore) Save(ctx context.Context, appDef any) (string, error
 	}
 
 	slug, _ := def["slug"].(string)
+	if slug == "" {
+		slug, _ = def["name"].(string)
+	}
 	name, _ := def["name"].(string)
 	description, _ := def["description"].(string)
 	code, _ := def["code"].(string)
 	sessionID, _ := def["session_id"].(string)
+	if sessionID == "" {
+		sessionID, _ = def["sessionId"].(string)
+	}
 
 	if slug == "" {
 		return "", fmt.Errorf("app definition must include a slug")

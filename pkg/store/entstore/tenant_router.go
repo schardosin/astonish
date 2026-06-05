@@ -202,6 +202,11 @@ func (s *Store) provisionOrgPostgres(ctx context.Context, slug string) error {
 	defer db.Close()
 	defer client.Close()
 
+	// Pre-create the pgvector extension so Schema.Create can use vector(384) columns.
+	if _, err := db.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+		return fmt.Errorf("create vector extension in org db: %w", err)
+	}
+
 	if err := client.Schema.Create(ctx); err != nil {
 		return fmt.Errorf("migrate org schema: %w", err)
 	}
@@ -772,6 +777,12 @@ func (t *teamDataStore) Memories() store.MemoryStore {
 func (t *teamDataStore) Credentials() store.CredentialStore   { return &teamCredentialStore{client: t.client, credKey: t.parentOrg.getOrCreateCredentialKey()} }
 func (t *teamDataStore) Apps() store.AppStore                 { return &teamAppStore{client: t.client} }
 func (t *teamDataStore) AppState() store.AppStateStore        { return &teamAppStateStore{client: t.client} }
+func (t *teamDataStore) AppStateSQL() store.AppStateSQLStore {
+	if t.parentOrg.dialect == DialectPostgres {
+		return &pgAppStateSQLStore{db: t.db, teamSchema: teamSchemaName(t.teamSlug)}
+	}
+	return newSQLiteAppStateSQLStore(filepath.Join(t.parentOrg.parentStore.dataDir, "orgs", t.parentOrg.orgSlug, "teams", t.teamSlug))
+}
 func (t *teamDataStore) Flows() store.FlowStore               { return &teamFlowStore{client: t.client} }
 func (t *teamDataStore) Skills() store.SkillStore             { return &teamSkillStore{client: t.client} }
 func (t *teamDataStore) MCPServers() store.MCPServerStore     { return &teamMCPServerStore{client: t.client} }

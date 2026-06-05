@@ -3,6 +3,13 @@ description: Full software development lifecycle with autonomous agent team
 
 plan_wizard:
   description: "Let's configure a software development fleet plan. I'll ask you about the communication channel, artifact destinations, credentials, and any behavior customizations."
+  pinned_tool_groups:
+    - fleet
+    - sandbox_templates
+    - drill
+    - credentials
+    - browser
+    - process
   system_prompt: |
     You are guiding the user through creating a fleet plan based on the "software-dev"
     fleet template. The base_fleet_key is "software-dev". Do NOT ask which template to

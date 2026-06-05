@@ -116,6 +116,7 @@ type TeamDataStore interface {
 	Credentials() CredentialStore
 	Apps() AppStore
 	AppState() AppStateStore
+	AppStateSQL() AppStateSQLStore
 	Flows() FlowStore
 	Skills() SkillStore
 	MCPServers() MCPServerStore

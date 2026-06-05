@@ -3,6 +3,8 @@ package entstore
 import (
 	"context"
 
+	"gopkg.in/yaml.v3"
+
 	personalent "github.com/schardosin/astonish/ent/personal"
 	"github.com/schardosin/astonish/ent/personal/flow"
 	"github.com/schardosin/astonish/pkg/store"
@@ -68,6 +70,15 @@ func (fs *personalFlowStore) GetFlow(ctx context.Context, name string) (string, 
 }
 
 func (fs *personalFlowStore) SaveFlow(ctx context.Context, name string, yamlContent string) error {
+	// Parse YAML to extract metadata (description, type) for listing.
+	var def map[string]any
+	_ = yaml.Unmarshal([]byte(yamlContent), &def)
+
+	flowType := ""
+	if t, ok := def["type"].(string); ok {
+		flowType = t
+	}
+
 	// Check if flow exists.
 	existing, err := fs.client.Flow.Query().
 		Where(flow.NameEQ(name)).
@@ -77,15 +88,27 @@ func (fs *personalFlowStore) SaveFlow(ctx context.Context, name string, yamlCont
 	}
 
 	if existing != nil {
-		return existing.Update().
-			SetYamlContent(yamlContent).
-			Exec(ctx)
+		update := existing.Update().
+			SetYamlContent(yamlContent)
+		if def != nil {
+			update.SetDefinition(def)
+		}
+		if flowType != "" {
+			update.SetType(flowType)
+		}
+		return update.Exec(ctx)
 	}
 
-	_, err = fs.client.Flow.Create().
+	create := fs.client.Flow.Create().
 		SetName(name).
-		SetYamlContent(yamlContent).
-		Save(ctx)
+		SetYamlContent(yamlContent)
+	if def != nil {
+		create.SetDefinition(def)
+	}
+	if flowType != "" {
+		create.SetType(flowType)
+	}
+	_, err = create.Save(ctx)
 	return err
 }
 

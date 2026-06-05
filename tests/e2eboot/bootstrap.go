@@ -183,6 +183,7 @@ func Bootstrap(t *testing.T) *Harness {
 	studio, err := launcher.NewStudioServer(0,
 		launcher.WithServices(svc),
 		launcher.WithPlatformAuth(platformAuth, esStore),
+		launcher.WithTenantMiddleware(entstore.TenantMiddleware(esStore)),
 	)
 	if err != nil {
 		t.Fatalf("[e2eboot] NewStudioServer: %v", err)

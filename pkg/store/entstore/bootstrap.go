@@ -81,6 +81,11 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	}
 	defer s.Close()
 
+	// Pre-create the pgvector extension so Schema.Create can use vector(384) columns.
+	if _, err := s.platformDB.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+		return fmt.Errorf("create vector extension: %w", err)
+	}
+
 	if err := s.platformClient.Schema.Create(ctx,
 		platformmigrate.WithDropColumn(true),
 		platformmigrate.WithDropIndex(true),

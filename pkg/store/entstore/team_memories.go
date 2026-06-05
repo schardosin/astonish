@@ -55,7 +55,7 @@ func (m *teamMemoryStore) vectorSearch(ctx context.Context, query string, maxRes
 		return nil, fmt.Errorf("generate query embedding: %w", err)
 	}
 
-	embBytes := float32SliceToBytes(embedding)
+	vecStr := float32SliceToPGVectorString(embedding)
 
 	var rows *sql.Rows
 	if category != "" {
@@ -66,7 +66,7 @@ func (m *teamMemoryStore) vectorSearch(ctx context.Context, query string, maxRes
 			WHERE category = $2
 			ORDER BY embedding <=> $1::vector
 			LIMIT $3`,
-			embBytes, category, maxResults)
+			vecStr, category, maxResults)
 	} else {
 		rows, err = m.db.QueryContext(ctx,
 			`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at,
@@ -74,7 +74,7 @@ func (m *teamMemoryStore) vectorSearch(ctx context.Context, query string, maxRes
 			FROM memories
 			ORDER BY embedding <=> $1::vector
 			LIMIT $2`,
-			embBytes, maxResults)
+			vecStr, maxResults)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("vector search query: %w", err)
@@ -182,15 +182,35 @@ func (m *teamMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) erro
 		}
 	}
 
-	if entry.Embedding != nil {
+	// On SQLite, store embedding as raw bytes via Ent.
+	// On PG, we must use raw SQL because Ent sends []byte as bytea, not vector text.
+	if entry.Embedding != nil && m.dialect == DialectSQLite {
 		create.SetEmbedding(float32SliceToBytes(entry.Embedding))
 	}
 
-	// Set TSV for keyword search (store raw text for now).
-	create.SetTsv(entry.Content)
+	// On SQLite, store raw text for LIKE-based keyword search.
+	// On PG, the tsvector trigger generates this from chunk_text.
+	if m.dialect == DialectSQLite {
+		create.SetTsv(entry.Content)
+	}
 
-	_, err := create.Save(ctx)
-	return err
+	saved, err := create.Save(ctx)
+	if err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if entry.Embedding != nil && m.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(entry.Embedding)
+		_, err = m.db.ExecContext(ctx,
+			`UPDATE memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, saved.ID)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (m *teamMemoryStore) Get(ctx context.Context, id string) (*store.MemorySearchResult, error) {
@@ -218,8 +238,11 @@ func (m *teamMemoryStore) Update(ctx context.Context, id string, content string,
 	}
 
 	update := m.client.Memory.UpdateOneID(uid).
-		SetChunkText(content).
-		SetTsv(content)
+		SetChunkText(content)
+
+	if m.dialect == DialectSQLite {
+		update.SetTsv(content)
+	}
 
 	if category != "" {
 		update.SetCategory(category)
@@ -228,14 +251,33 @@ func (m *teamMemoryStore) Update(ctx context.Context, id string, content string,
 	}
 
 	// Re-generate embedding if function is available.
+	var newEmb []float32
 	if m.embedFunc != nil {
 		emb, err := m.embedFunc(ctx, content)
 		if err == nil {
-			update.SetEmbedding(float32SliceToBytes(emb))
+			newEmb = emb
+			if m.dialect == DialectSQLite {
+				update.SetEmbedding(float32SliceToBytes(emb))
+			}
 		}
 	}
 
-	return update.Exec(ctx)
+	if err := update.Exec(ctx); err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if newEmb != nil && m.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(newEmb)
+		_, err = m.db.ExecContext(ctx,
+			`UPDATE memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, uid)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (m *teamMemoryStore) Delete(ctx context.Context, id string) error {

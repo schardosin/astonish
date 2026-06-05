@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -306,6 +307,7 @@ func persistTeamTemplateArtifact(ctx context.Context, backend store.PlatformBack
 	} else {
 		// 3b. New template — create with parent = @base.
 		tpl := &store.SandboxTemplate{
+			ID:               uuid.New().String(),
 			Slug:             templateSlug,
 			Scope:            store.SandboxTemplateScopeTeam,
 			OwnerID:          teamSlug,

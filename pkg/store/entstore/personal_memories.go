@@ -77,18 +77,40 @@ func (ms *personalMemoryStore) Add(ctx context.Context, entry store.MemoryEntry)
 	}
 
 	// Generate embedding if embed function is available.
+	var newEmb []float32
 	if ms.embedFunc != nil && entry.Content != "" {
 		embedding, err := ms.embedFunc(ctx, entry.Content)
 		if err == nil && len(embedding) > 0 {
-			create.SetEmbedding(float32SliceToBytes(embedding))
+			newEmb = embedding
+			if ms.dialect == DialectSQLite {
+				create.SetEmbedding(float32SliceToBytes(embedding))
+			}
 		}
 	}
 
-	// Generate TSV for keyword search.
-	create.SetTsv(entry.Content)
+	// On SQLite, store raw text for LIKE-based keyword search.
+	// On PG, the tsvector trigger generates this from chunk_text.
+	if ms.dialect == DialectSQLite {
+		create.SetTsv(entry.Content)
+	}
 
-	_, err := create.Save(ctx)
-	return err
+	saved, err := create.Save(ctx)
+	if err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if newEmb != nil && ms.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(newEmb)
+		_, err = ms.db.ExecContext(ctx,
+			`UPDATE memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, saved.ID)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (ms *personalMemoryStore) Get(ctx context.Context, id string) (*store.MemorySearchResult, error) {
@@ -123,16 +145,37 @@ func (ms *personalMemoryStore) Update(ctx context.Context, id string, content st
 	}
 
 	// Re-generate embedding.
+	var newEmb []float32
 	if ms.embedFunc != nil && content != "" {
 		embedding, err := ms.embedFunc(ctx, content)
 		if err == nil && len(embedding) > 0 {
-			update.SetEmbedding(float32SliceToBytes(embedding))
+			newEmb = embedding
+			if ms.dialect == DialectSQLite {
+				update.SetEmbedding(float32SliceToBytes(embedding))
+			}
 		}
 	}
 
-	update.SetTsv(content)
+	if ms.dialect == DialectSQLite {
+		update.SetTsv(content)
+	}
 
-	return update.Exec(ctx)
+	if err := update.Exec(ctx); err != nil {
+		return err
+	}
+
+	// On PG, update embedding via raw SQL with vector text format.
+	if newEmb != nil && ms.dialect == DialectPostgres {
+		vecStr := float32SliceToPGVectorString(newEmb)
+		_, err = ms.db.ExecContext(ctx,
+			`UPDATE memories SET embedding = $1::vector WHERE id = $2`,
+			vecStr, uid)
+		if err != nil {
+			return fmt.Errorf("set embedding: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (ms *personalMemoryStore) Delete(ctx context.Context, id string) error {

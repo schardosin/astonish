@@ -49,6 +49,7 @@ export interface ConnectChatParams {
   sessionId?: string
   message?: string
   systemContext?: string
+  pinnedToolGroups?: string[]
   autoApprove?: boolean
   onEvent: SSEEventCallback
   onError?: ErrorCallback
@@ -100,7 +101,7 @@ export async function fetchSubtaskEvents(sessionId: string, taskName: string): P
   return data.events || []
 }
 
-export function connectChat({ sessionId, message, systemContext, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
+export function connectChat({ sessionId, message, systemContext, pinnedToolGroups, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
@@ -112,6 +113,9 @@ export function connectChat({ sessionId, message, systemContext, autoApprove, on
       }
       if (systemContext) {
         body.systemContext = systemContext
+      }
+      if (pinnedToolGroups && pinnedToolGroups.length > 0) {
+        body.pinnedToolGroups = pinnedToolGroups
       }
       const response = await teamFetch(`${API_BASE}/chat`, {
         method: 'POST',

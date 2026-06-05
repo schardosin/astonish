@@ -146,6 +146,7 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				reqSvc.TeamMCPServers = teamStore.MCPServers()
 				reqSvc.Settings = teamStore.Settings()
 				reqSvc.AppState = teamStore.AppState()
+				reqSvc.AppStateSQL = teamStore.AppStateSQL()
 
 				// Wire personal stores
 				if tc.UserID != "" {

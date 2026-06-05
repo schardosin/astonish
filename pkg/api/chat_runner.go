@@ -278,6 +278,7 @@ func (cr *ChatRunner) Run(
 	msg string,
 	autoApprove bool,
 	systemContext string,
+	pinnedToolGroups []string,
 ) {
 	defer func() {
 		cr.doneMu.Lock()
@@ -342,9 +343,10 @@ func (cr *ChatRunner) Run(
 
 	// Inject per-turn session context via context overrides (thread-safe).
 	// Run() clones the SystemPromptBuilder and applies these on the clone.
-	if systemContext != "" {
+	if systemContext != "" || len(pinnedToolGroups) > 0 {
 		cr.ctx = agent.WithPromptOverrides(cr.ctx, &agent.PromptOverrides{
-			SessionContext: agent.EscapeCurlyPlaceholders(systemContext),
+			SessionContext:   agent.EscapeCurlyPlaceholders(systemContext),
+			PinnedToolGroups: pinnedToolGroups,
 		})
 	}
 

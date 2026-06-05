@@ -43,12 +43,12 @@ var validSessionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._:@-]{0,127}$`)
 // Returns nil if the session is not found in any store.
 func resolveSessionStore(svc *store.Services, sessionID string) store.SessionStore {
 	if svc.PersonalSessions != nil {
-		if _, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil {
+		if meta, err := svc.PersonalSessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil {
 			return svc.PersonalSessions
 		}
 	}
 	if svc.Sessions != nil {
-		if _, err := svc.Sessions.GetSessionMeta(context.TODO(), sessionID); err == nil {
+		if meta, err := svc.Sessions.GetSessionMeta(context.TODO(), sessionID); err == nil && meta != nil {
 			return svc.Sessions
 		}
 	}
@@ -591,6 +591,13 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 
 // StudioDeleteSessionHandler handles DELETE /api/studio/sessions/{id}.
 func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("panic in StudioDeleteSessionHandler", "recover", rec)
+			respondError(w, http.StatusInternalServerError, "internal error during session deletion")
+		}
+	}()
+
 	sessionID := mux.Vars(r)["id"]
 	if !validSessionID.MatchString(sessionID) {
 		respondError(w, http.StatusBadRequest, "invalid session ID")

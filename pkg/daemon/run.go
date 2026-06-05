@@ -1440,12 +1440,15 @@ func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTempl
 		return channels.FleetTemplateWithWizard{}, false
 	}
 	var wizardPrompt string
+	var pinnedGroups []string
 	if cfg.PlanWizard != nil {
 		wizardPrompt = cfg.PlanWizard.SystemPrompt
+		pinnedGroups = cfg.PlanWizard.PinnedToolGroups
 	}
 	return channels.FleetTemplateWithWizard{
 		Name:               cfg.Name,
 		WizardSystemPrompt: wizardPrompt,
+		PinnedToolGroups:   pinnedGroups,
 	}, true
 }
 
@@ -1544,12 +1547,15 @@ func (a *dbFleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTem
 		return channels.FleetTemplateWithWizard{}, false
 	}
 	var wizardPrompt string
+	var pinnedGroups []string
 	if cfg.PlanWizard != nil {
 		wizardPrompt = cfg.PlanWizard.SystemPrompt
+		pinnedGroups = cfg.PlanWizard.PinnedToolGroups
 	}
 	return channels.FleetTemplateWithWizard{
 		Name:               cfg.Name,
 		WizardSystemPrompt: wizardPrompt,
+		PinnedToolGroups:   pinnedGroups,
 	}, true
 }
 

@@ -166,6 +166,13 @@ func (nc *NodeClient) startLocked() error {
 	}
 
 	nc.started = true
+
+	// Configure git credential helper after every successful node start (including
+	// restarts after crashes). This ensures gh CLI auth is always configured when
+	// GH_TOKEN is available, regardless of whether this is the first start or a
+	// recovery restart. The call is idempotent and fast (~200ms).
+	configureGitCredentialHelper(nc.client, nc.containerName, nc.Env)
+
 	return nil
 }
 
@@ -443,19 +450,24 @@ func (lnc *LazyNodeClient) initBackground(sessionID string) {
 	// Record initial activity so the idle watchdog doesn't immediately stop
 	// a freshly-created container.
 	lnc.lastActivity.Store(time.Now().Unix())
+}
 
-	// If GH_TOKEN is available, configure git credential helper in the background.
-	// gh auth setup-git configures git to use `gh` as a credential helper, which
-	// reads GH_TOKEN from the environment. This enables `git clone` of private repos.
-	if ghToken := lnc.Env["GH_TOKEN"]; ghToken != "" {
-		go func() {
-			_, err := ExecSimpleWithEnv(lnc.incusClient, containerName,
-				[]string{"sh", "-c", "command -v gh >/dev/null 2>&1 && gh auth setup-git"},
-				map[string]string{"GH_TOKEN": ghToken})
-			if err != nil {
-				slog.Warn("failed to run gh auth setup-git", "component", "sandbox", "container", containerName, "error", err)
-			}
-		}()
+// configureGitCredentialHelper runs `gh auth setup-git` inside the container
+// if GH_TOKEN is available in the env map. This configures git to use `gh` as
+// a credential helper so that git clone/push to private repos works seamlessly.
+//
+// Called synchronously during container init AND after node process restarts
+// to ensure the credential helper is always configured.
+func configureGitCredentialHelper(client *IncusClient, containerName string, env map[string]string) {
+	ghToken := env["GH_TOKEN"]
+	if ghToken == "" {
+		return
+	}
+	_, err := ExecSimpleWithEnv(client, containerName,
+		[]string{"sh", "-c", "command -v gh >/dev/null 2>&1 && gh auth setup-git"},
+		map[string]string{"GH_TOKEN": ghToken})
+	if err != nil {
+		slog.Warn("failed to run gh auth setup-git", "component", "sandbox", "container", containerName, "error", err)
 	}
 }
 

@@ -444,6 +444,20 @@ func (idx *ToolIndex) GetToolEntry(toolName string) *ToolEntry {
 	return nil
 }
 
+// GetToolsByGroup returns all tool entries belonging to the given group name.
+// Returns nil if the group has no tools registered.
+func (idx *ToolIndex) GetToolsByGroup(groupName string) []ToolEntry {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	var results []ToolEntry
+	for _, entry := range idx.toolRegistry {
+		if entry.GroupName == groupName {
+			results = append(results, entry)
+		}
+	}
+	return results
+}
+
 // ---------------------------------------------------------------------------
 // BM25 keyword search
 // ---------------------------------------------------------------------------

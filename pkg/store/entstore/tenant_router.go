@@ -216,6 +216,11 @@ func (s *Store) provisionOrgPostgres(ctx context.Context, slug string) error {
 		return fmt.Errorf("apply org pg extras: %w", err)
 	}
 
+	// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+	if err := s.applySQLiteExtras(ctx, ScopeOrg, db); err != nil {
+		return fmt.Errorf("apply org sqlite extras: %w", err)
+	}
+
 	// Apply grants for app role.
 	if err := pgutil.ApplyGrants(ctx, db, "org"); err != nil {
 		return fmt.Errorf("apply org grants: %w", err)
@@ -422,12 +427,18 @@ func (o *orgDataStore) ForUser(userID string) store.PersonalDataStore {
 }
 
 func (o *orgDataStore) OrgMemories() store.MemoryStore {
-	return &orgMemoryStore{
+	ms := &orgMemoryStore{
 		client:    o.client,
 		db:        o.db,
 		dialect:   o.dialect,
 		embedFunc: o.embedFunc,
+		table:     "org_memories",
 	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "org_memories_fts"
+	}
+	return ms
 }
 
 func (o *orgDataStore) OrgSkills() store.SkillStore {
@@ -475,6 +486,11 @@ func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
 		// Apply PG-specific extras (indexes, triggers).
 		if err := o.parentStore.applyPGExtras(ctx, ScopeTeam, db); err != nil {
 			return fmt.Errorf("apply team pg extras: %w", err)
+		}
+
+		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+		if err := o.parentStore.applySQLiteExtras(ctx, ScopeTeam, db); err != nil {
+			return fmt.Errorf("apply team sqlite extras: %w", err)
 		}
 
 		// Apply grants for app role.
@@ -542,6 +558,11 @@ func (o *orgDataStore) ProvisionPersonalSchema(ctx context.Context, userID strin
 		// Apply PG-specific extras (indexes, triggers).
 		if err := o.parentStore.applyPGExtras(ctx, ScopePersonal, db); err != nil {
 			return fmt.Errorf("apply personal pg extras: %w", err)
+		}
+
+		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+		if err := o.parentStore.applySQLiteExtras(ctx, ScopePersonal, db); err != nil {
+			return fmt.Errorf("apply personal sqlite extras: %w", err)
 		}
 
 		// Apply grants for app role.
@@ -772,7 +793,18 @@ func (t *teamDataStore) Sessions() store.SessionStore {
 	return &teamSessionStore{client: t.client}
 }
 func (t *teamDataStore) Memories() store.MemoryStore {
-	return &teamMemoryStore{client: t.client, db: t.db, dialect: t.parentOrg.dialect, embedFunc: t.parentOrg.embedFunc}
+	ms := &teamMemoryStore{
+		client:    t.client,
+		db:        t.db,
+		dialect:   t.parentOrg.dialect,
+		embedFunc: t.parentOrg.embedFunc,
+		table:     "memories",
+	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "memories_fts"
+	}
+	return ms
 }
 func (t *teamDataStore) Credentials() store.CredentialStore   { return &teamCredentialStore{client: t.client, credKey: t.parentOrg.getOrCreateCredentialKey()} }
 func (t *teamDataStore) Apps() store.AppStore                 { return &teamAppStore{client: t.client} }
@@ -807,12 +839,18 @@ type personalDataStore struct {
 }
 
 func (p *personalDataStore) Memories() store.MemoryStore {
-	return &personalMemoryStore{
+	ms := &personalMemoryStore{
 		client:    p.client,
 		db:        p.db,
 		dialect:   p.dialect,
 		embedFunc: p.embedFunc,
+		table:     "memories",
 	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "memories_fts"
+	}
+	return ms
 }
 func (p *personalDataStore) Apps() store.AppStore               { return &personalAppStore{client: p.client} }
 func (p *personalDataStore) Sessions() store.SessionStore       { return &personalSessionStore{client: p.client} }

@@ -37,6 +37,10 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 		); err != nil {
 			return fmt.Errorf("schema create: %w", err)
 		}
+		// Seed platform defaults (e.g. @base sandbox template).
+		if err := s.applySQLiteExtras(ctx, ScopePlatform, s.platformDB); err != nil {
+			return fmt.Errorf("apply sqlite platform extras: %w", err)
+		}
 		return nil
 	}
 

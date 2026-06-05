@@ -79,6 +79,11 @@ func NewPlatformServices(ctx context.Context, cfg Config) (*store.Services, *Sto
 			s.Close()
 			return nil, nil, fmt.Errorf("auto-migrate sqlite platform: %w", err)
 		}
+		// Seed platform defaults (e.g. @base sandbox template).
+		if err := s.applySQLiteExtras(ctx, ScopePlatform, s.platformDB); err != nil {
+			s.Close()
+			return nil, nil, fmt.Errorf("apply sqlite platform extras: %w", err)
+		}
 	}
 
 	svc := &store.Services{

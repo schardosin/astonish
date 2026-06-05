@@ -22,6 +22,9 @@ type teamMemoryStore struct {
 	db        *sql.DB
 	dialect   Dialect
 	embedFunc store.EmbedFunc
+	vecIndex  *vectorIndex // in-memory vector index for SQLite
+	ftsTable  string       // FTS5 table name (SQLite only)
+	table     string       // main table name (for raw SQL)
 }
 
 var _ store.MemoryStore = (*teamMemoryStore)(nil)
@@ -48,8 +51,8 @@ func (m *teamMemoryStore) searchInternal(ctx context.Context, query string, maxR
 	if m.dialect == DialectPostgres {
 		return m.hybridSearch(ctx, query, maxResults, minScore, category)
 	}
-	// SQLite: text-based only.
-	return m.textSearch(ctx, query, maxResults, category)
+	// SQLite: FTS5 + in-memory vector hybrid search.
+	return m.sqliteHybridSearch(ctx, query, maxResults, minScore, category)
 }
 
 func (m *teamMemoryStore) hybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
@@ -249,8 +252,194 @@ func (m *teamMemoryStore) textSearch(ctx context.Context, query string, maxResul
 }
 
 // ---------------------------------------------------------------------------
-// CRUD
+// SQLite Hybrid Search (FTS5 + in-memory vector)
 // ---------------------------------------------------------------------------
+
+func (m *teamMemoryStore) sqliteHybridSearch(ctx context.Context, query string, maxResults int, minScore float64, category string) ([]store.MemorySearchResult, error) {
+	if maxResults <= 0 {
+		maxResults = 10
+	}
+
+	// Run keyword search via FTS5.
+	keywordResults := m.ftsSearch(ctx, query, maxResults*2, category)
+
+	// Run vector search if embedding function is available.
+	var vectorResults []scoredResult
+	if m.embedFunc != nil && query != "" {
+		queryVec, err := m.embedFunc(ctx, query)
+		if err == nil && queryVec != nil {
+			m.ensureVecIndexLoaded(ctx)
+			vectorResults = m.vecIndex.search(queryVec, maxResults*2, minScore)
+		}
+	}
+
+	// If both are empty, fall back to simple text search.
+	if len(keywordResults) == 0 && len(vectorResults) == 0 {
+		return m.textSearch(ctx, query, maxResults, category)
+	}
+
+	// Merge results using RRF or normalize single source.
+	var fused []scoredResult
+	switch {
+	case len(vectorResults) > 0 && len(keywordResults) > 0:
+		fused = rrfFuse(vectorResults, keywordResults, 60, maxResults)
+	case len(keywordResults) > 0:
+		fused = normalizeSingleSource(keywordResults, maxResults)
+	default:
+		if len(vectorResults) > maxResults {
+			vectorResults = vectorResults[:maxResults]
+		}
+		fused = vectorResults
+	}
+
+	// Load full records for the fused IDs.
+	return m.loadResultsByIDs(ctx, fused)
+}
+
+func (m *teamMemoryStore) ftsSearch(ctx context.Context, query string, limit int, category string) []scoredResult {
+	if query == "" || m.ftsTable == "" {
+		return nil
+	}
+
+	// Build FTS5 query: OR-join all tokens for broad matching.
+	tokens := strings.Fields(query)
+	if len(tokens) == 0 {
+		return nil
+	}
+	ftsQuery := strings.Join(tokens, " OR ")
+
+	var rows *sql.Rows
+	var err error
+	if category != "" {
+		rows, err = m.db.QueryContext(ctx,
+			fmt.Sprintf(
+				`SELECT m.id, -fts.rank AS score
+				 FROM %s fts
+				 JOIN %s m ON m.rowid = fts.rowid
+				 WHERE %s MATCH ? AND m.category = ?
+				 ORDER BY fts.rank
+				 LIMIT ?`, m.ftsTable, m.table, m.ftsTable),
+			ftsQuery, category, limit)
+	} else {
+		rows, err = m.db.QueryContext(ctx,
+			fmt.Sprintf(
+				`SELECT m.id, -fts.rank AS score
+				 FROM %s fts
+				 JOIN %s m ON m.rowid = fts.rowid
+				 WHERE %s MATCH ?
+				 ORDER BY fts.rank
+				 LIMIT ?`, m.ftsTable, m.table, m.ftsTable),
+			ftsQuery, limit)
+	}
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var results []scoredResult
+	for rows.Next() {
+		var id string
+		var score float64
+		if err := rows.Scan(&id, &score); err != nil {
+			continue
+		}
+		results = append(results, scoredResult{ID: id, Score: score})
+	}
+	return results
+}
+
+func (m *teamMemoryStore) ensureVecIndexLoaded(ctx context.Context) {
+	if m.vecIndex.isLoaded() {
+		return
+	}
+
+	rows, err := m.db.QueryContext(ctx,
+		fmt.Sprintf(`SELECT id, embedding FROM %s WHERE embedding IS NOT NULL`, m.table))
+	if err != nil {
+		m.vecIndex.markLoaded()
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var id string
+		var blob []byte
+		if err := rows.Scan(&id, &blob); err != nil {
+			continue
+		}
+		if vec := deserializeEmbedding(blob); vec != nil {
+			m.vecIndex.add(id, vec)
+		}
+	}
+	m.vecIndex.markLoaded()
+}
+
+func (m *teamMemoryStore) loadResultsByIDs(ctx context.Context, scored []scoredResult) ([]store.MemorySearchResult, error) {
+	if len(scored) == 0 {
+		return nil, nil
+	}
+
+	ids := make([]interface{}, len(scored))
+	placeholders := make([]string, len(scored))
+	scoreMap := make(map[string]float64)
+	for i, r := range scored {
+		ids[i] = r.ID
+		placeholders[i] = "?"
+		scoreMap[r.ID] = r.Score
+	}
+
+	sqlStr := fmt.Sprintf( //nolint:gosec // table name is a hardcoded constant
+		`SELECT id, chunk_text, category, source_path, created_by, session_id, created_at
+		 FROM %s WHERE id IN (%s)`,
+		m.table, strings.Join(placeholders, ","))
+
+	rows, err := m.db.QueryContext(ctx, sqlStr, ids...)
+	if err != nil {
+		return nil, fmt.Errorf("load results by IDs: %w", err)
+	}
+	defer rows.Close()
+
+	var results []store.MemorySearchResult
+	for rows.Next() {
+		var (
+			id        string
+			chunkText string
+			cat       sql.NullString
+			srcPath   sql.NullString
+			createdBy sql.NullString
+			sessionID sql.NullString
+			createdAt sql.NullString
+		)
+		if err := rows.Scan(&id, &chunkText, &cat, &srcPath, &createdBy, &sessionID, &createdAt); err != nil {
+			continue
+		}
+		r := store.MemorySearchResult{
+			ID:      id,
+			Snippet: chunkText,
+		}
+		if cat.Valid {
+			r.Category = cat.String
+		}
+		if srcPath.Valid {
+			r.Path = srcPath.String
+		}
+		if createdBy.Valid {
+			r.CreatedBy = createdBy.String
+		}
+		if sessionID.Valid {
+			r.SessionID = sessionID.String
+		}
+		if createdAt.Valid {
+			r.CreatedAt = createdAt.String
+		}
+		// Apply fused score.
+		if score, ok := scoreMap[id]; ok {
+			r.Score = score
+		}
+		results = append(results, r)
+	}
+	return results, nil
+}
 
 func (m *teamMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) error {
 	create := m.client.Memory.Create().
@@ -310,6 +499,11 @@ func (m *teamMemoryStore) Add(ctx context.Context, entry store.MemoryEntry) erro
 		if err != nil {
 			return fmt.Errorf("set embedding: %w", err)
 		}
+	}
+
+	// On SQLite, update in-memory vector index for instant search availability.
+	if entry.Embedding != nil && m.dialect == DialectSQLite && m.vecIndex != nil {
+		m.vecIndex.add(saved.ID.String(), entry.Embedding)
 	}
 
 	return nil
@@ -379,6 +573,11 @@ func (m *teamMemoryStore) Update(ctx context.Context, id string, content string,
 		}
 	}
 
+	// On SQLite, update in-memory vector index.
+	if newEmb != nil && m.dialect == DialectSQLite && m.vecIndex != nil {
+		m.vecIndex.add(uid.String(), newEmb)
+	}
+
 	return nil
 }
 
@@ -386,6 +585,10 @@ func (m *teamMemoryStore) Delete(ctx context.Context, id string) error {
 	uid, err := uuid.Parse(id)
 	if err != nil {
 		return fmt.Errorf("invalid memory ID: %w", err)
+	}
+	// Remove from in-memory vector index on SQLite.
+	if m.dialect == DialectSQLite && m.vecIndex != nil {
+		m.vecIndex.remove(uid.String())
 	}
 	return m.client.Memory.DeleteOneID(uid).Exec(ctx)
 }

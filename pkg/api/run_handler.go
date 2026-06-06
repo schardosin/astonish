@@ -765,14 +765,15 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Initialize MCP - per-session, only servers needed for this flow
-	// In platform mode, query both team and org MCP stores for server configs
-	var teamMCPStore, orgMCPStore store.MCPServerStore
+	// In platform mode, query team, org, and platform MCP stores for server configs
+	var teamMCPStore, orgMCPStore, platformMCPStore store.MCPServerStore
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
 		teamMCPStore = svc.TeamMCPServers
 		orgMCPStore = svc.MCPServers
+		platformMCPStore = svc.PlatformMCPServers
 	}
-	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore)
-	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers, teamMCPStore, orgMCPStore)
+	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore, platformMCPStore)
+	_, mcpToolsets := sm.GetOrCreateMCPManager(ctx, req.SessionID, requiredServers, teamMCPStore, orgMCPStore, platformMCPStore)
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)

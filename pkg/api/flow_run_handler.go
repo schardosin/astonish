@@ -180,17 +180,18 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Initialize MCP servers needed for this flow
-	// In platform mode, query both team and org MCP stores
-	var teamMCPStore, orgMCPStore store.MCPServerStore
+	// In platform mode, query team, org, and platform MCP stores
+	var teamMCPStore, orgMCPStore, platformMCPStore store.MCPServerStore
 	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
 		teamMCPStore = svc.TeamMCPServers
 		orgMCPStore = svc.MCPServers
+		platformMCPStore = svc.PlatformMCPServers
 	}
-	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore)
+	requiredServers := getRequiredMCPServers(cfg, teamMCPStore, orgMCPStore, platformMCPStore)
 
 	var mcpToolsets []tool.Toolset
 	if len(requiredServers) > 0 {
-		_, mcpToolsets = sm.GetOrCreateMCPManager(ctx, sessionID, requiredServers, teamMCPStore, orgMCPStore)
+		_, mcpToolsets = sm.GetOrCreateMCPManager(ctx, sessionID, requiredServers, teamMCPStore, orgMCPStore, platformMCPStore)
 	}
 
 	// 5. Create Agent

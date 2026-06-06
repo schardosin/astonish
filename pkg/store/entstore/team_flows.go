@@ -20,6 +20,7 @@ var _ store.FlowStore = (*teamFlowStore)(nil)
 
 func (s *teamFlowStore) ListAllFlows(ctx context.Context) []store.FlowSummary {
 	flows, err := s.client.Flow.Query().
+		Where(flow.TypeNotIn("drill", "drill_suite", "test", "test_suite")).
 		Order(flow.ByName()).
 		All(ctx)
 	if err != nil {

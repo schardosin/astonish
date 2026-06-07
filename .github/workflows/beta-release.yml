@@ -1,0 +1,306 @@
+name: Beta Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Beta version (e.g. v1.5.0-beta.1). Leave blank for auto: v0.0.0-beta.{sha}'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  # --------------------------------------------------------------------------
+  # Determine version tag
+  # --------------------------------------------------------------------------
+  prepare:
+    name: Determine beta version
+    runs-on: ubuntu-latest
+    outputs:
+      version_tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Determine version
+        id: version
+        run: |
+          INPUT_VERSION="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "tag=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA=$(git rev-parse --short=7 HEAD)
+            echo "tag=v0.0.0-beta.${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print version
+        run: echo "Beta version: ${{ steps.version.outputs.tag }}"
+
+  # --------------------------------------------------------------------------
+  # Build binaries for all platforms
+  # --------------------------------------------------------------------------
+  build:
+    name: Build for ${{ matrix.suffix }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            suffix: linux-amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            suffix: linux-arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+            suffix: darwin-amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+            suffix: darwin-arm64
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            suffix: windows-amd64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        shell: bash
+        run: |
+          cd web
+          rm -rf dist
+          npm ci
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+
+      - name: Build binary
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          touch web/embed.go
+          go clean -cache
+          go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ needs.prepare.outputs.version_tag }}" -o astonish-${{ matrix.suffix }} .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: astonish-${{ matrix.suffix }}
+          path: astonish-${{ matrix.suffix }}
+          retention-days: 7
+
+  # --------------------------------------------------------------------------
+  # Create GitHub prerelease
+  # --------------------------------------------------------------------------
+  release:
+    name: Create Prerelease
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: github.repository == 'schardosin/astonish'
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find ./artifacts -type f -name "astonish-*" -exec mv {} ./release/ \;
+          ls -la ./release/
+          chmod +x ./release/astonish-linux-* ./release/astonish-darwin-* || true
+
+      - name: Create Prerelease
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.version_tag }}
+          name: "${{ needs.prepare.outputs.version_tag }} (Beta)"
+          files: ./release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # --------------------------------------------------------------------------
+  # Build and push Docker images with beta tags
+  # --------------------------------------------------------------------------
+  docker-astonish:
+    name: Docker astonish (beta)
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/astonish/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            schardosin/astonish:beta
+            schardosin/astonish:${{ needs.prepare.outputs.version_tag }}
+          build-args: |
+            VERSION=${{ needs.prepare.outputs.version_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-incus:
+    name: Docker astonish-incus (beta)
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cross-compile Linux binaries
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          touch web/embed.go
+          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+          echo "Building linux/amd64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
+          echo "Building linux/arm64..."
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-arm64 .
+          ls -la astonish-linux-*
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/incus/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            schardosin/astonish-incus:beta
+            schardosin/astonish-incus:${{ needs.prepare.outputs.version_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  docker-sandbox-base:
+    name: Docker sandbox-base (beta)
+    needs: [prepare, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/sandbox-base/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            schardosin/astonish-sandbox-base:beta
+            schardosin/astonish-sandbox-base:${{ needs.prepare.outputs.version_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

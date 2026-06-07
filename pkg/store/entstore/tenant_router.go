@@ -159,6 +159,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 				"org", slug, "error", err)
 		}
 
+		// Migrate legacy pgstore table schemas to match Ent's expectations
+		// (e.g. team_memberships composite PK → UUID id PK). Idempotent.
+		migrateOrgLegacySchema(context.Background(), db)
+
 		// Auto-migrate: create any missing tables (e.g. team_memberships added
 		// after the org was originally provisioned). Skip ModifyTable/ModifyColumn
 		// to tolerate SERIAL-vs-IDENTITY differences on tables created by legacy

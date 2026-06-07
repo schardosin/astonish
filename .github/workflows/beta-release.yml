@@ -122,6 +122,16 @@ jobs:
     if: github.repository == 'schardosin/astonish'
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Delete previous beta release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Delete the existing 'beta' release (if any) and its tag.
+          gh release delete beta --yes --cleanup-tag 2>/dev/null || true
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -137,10 +147,23 @@ jobs:
       - name: Create Prerelease
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ needs.prepare.outputs.version_tag }}
-          name: "${{ needs.prepare.outputs.version_tag }} (Beta)"
+          tag_name: beta
+          name: "Beta (${{ needs.prepare.outputs.version_tag }})"
+          body: |
+            **Beta build from `${{ github.ref_name }}` branch**
+
+            Commit: ${{ github.sha }}
+            Version: ${{ needs.prepare.outputs.version_tag }}
+
+            This is a pre-release for testing. It will not trigger update notifications for regular users.
+
+            **Docker:**
+            ```
+            docker pull schardosin/astonish:beta
+            docker pull schardosin/astonish-incus:beta
+            docker pull schardosin/astonish-sandbox-base:beta
+            ```
           files: ./release/*
-          generate_release_notes: true
           draft: false
           prerelease: true
         env:

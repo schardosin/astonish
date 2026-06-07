@@ -197,11 +197,13 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("open org sqlite db %s: %w", dbPath, err)
 		}
+		// SQLite: single writer, serialize all access to prevent SQLITE_BUSY.
+		db.SetMaxOpenConns(1)
 		// Enable WAL and foreign keys.
 		for _, pragma := range []string{
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA foreign_keys=ON",
-			"PRAGMA busy_timeout=5000",
+			"PRAGMA busy_timeout=10000",
 		} {
 			if _, err := db.Exec(pragma); err != nil {
 				db.Close()
@@ -211,10 +213,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := orgent.NewClient(orgent.Driver(drv))
 
-		// Auto-migrate: create any missing tables. Skip modify operations for safety.
-		if err := client.Schema.Create(context.Background(),
-			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
-		); err != nil {
+		// Auto-migrate: create missing tables and add missing columns to existing
+		// tables. SQLite doesn't have the SERIAL/IDENTITY issue that PostgreSQL has,
+		// so we can let Ent fully manage the schema here.
+		if err := client.Schema.Create(context.Background()); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("auto-migrate org sqlite db %s: %w", dbPath, err)
 		}
@@ -389,7 +391,7 @@ func (o *orgDataStore) getOrCreateCredentialKey() []byte {
 
 		ctx := context.Background()
 
-		// Try to load existing DEK.
+		// Try to load existing DEK via Ent (fast path).
 		ek, err := o.client.OrgEncryptionKey.Query().
 			Where(orgencryptionkey.KeyNameEQ("credential_key")).
 			Only(ctx)
@@ -404,7 +406,25 @@ func (o *orgDataStore) getOrCreateCredentialKey() []byte {
 			return
 		}
 
-		// DEK doesn't exist — generate one and store it.
+		// Ent query failed — could be "not found" or a schema mismatch (e.g.,
+		// legacy table with NULL/invalid id column that Ent can't scan).
+		// Try raw SQL as fallback to check if the key actually exists.
+		var keyData []byte
+		rawErr := o.db.QueryRowContext(ctx,
+			`SELECT key_data FROM org_encryption_keys WHERE key_name = 'credential_key' LIMIT 1`,
+		).Scan(&keyData)
+		if rawErr == nil && len(keyData) > 0 {
+			// Key exists in DB but Ent couldn't read it (schema mismatch).
+			dek, decErr := credentials.Decrypt(keyData, masterKey)
+			if decErr != nil {
+				slog.Error("failed to decrypt org credential key (raw fallback)", "org", o.orgSlug, "error", decErr)
+				return
+			}
+			o.credKey = dek
+			return
+		}
+
+		// DEK truly doesn't exist — generate one and store it.
 		dek, genErr := credentials.GenerateKey()
 		if genErr != nil {
 			slog.Error("failed to generate org credential key", "org", o.orgSlug, "error", genErr)
@@ -423,11 +443,12 @@ func (o *orgDataStore) getOrCreateCredentialKey() []byte {
 			Save(ctx)
 		if storeErr != nil {
 			// Handle race condition: another instance may have inserted concurrently.
-			// Retry loading the key that was just inserted by the other instance.
-			if ek2, err2 := o.client.OrgEncryptionKey.Query().
-				Where(orgencryptionkey.KeyNameEQ("credential_key")).
-				Only(ctx); err2 == nil {
-				if dek2, decErr := credentials.Decrypt(ek2.KeyData, masterKey); decErr == nil {
+			// Retry loading via raw SQL.
+			var keyData2 []byte
+			if rawErr2 := o.db.QueryRowContext(ctx,
+				`SELECT key_data FROM org_encryption_keys WHERE key_name = 'credential_key' LIMIT 1`,
+			).Scan(&keyData2); rawErr2 == nil && len(keyData2) > 0 {
+				if dek2, decErr := credentials.Decrypt(keyData2, masterKey); decErr == nil {
 					o.credKey = dek2
 					return
 				}
@@ -755,10 +776,11 @@ func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
 		if err != nil {
 			return nil, fmt.Errorf("open team sqlite: %w", err)
 		}
+		db.SetMaxOpenConns(1)
 		for _, pragma := range []string{
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA foreign_keys=ON",
-			"PRAGMA busy_timeout=5000",
+			"PRAGMA busy_timeout=10000",
 		} {
 			if _, err := db.Exec(pragma); err != nil {
 				db.Close()
@@ -823,10 +845,11 @@ func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error)
 		if err != nil {
 			return nil, fmt.Errorf("open personal sqlite: %w", err)
 		}
+		db.SetMaxOpenConns(1)
 		for _, pragma := range []string{
 			"PRAGMA journal_mode=WAL",
 			"PRAGMA foreign_keys=ON",
-			"PRAGMA busy_timeout=5000",
+			"PRAGMA busy_timeout=10000",
 		} {
 			if _, err := db.Exec(pragma); err != nil {
 				db.Close()

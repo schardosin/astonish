@@ -143,11 +143,14 @@ func (s *Store) openSQLite(ctx context.Context, dsn string) error {
 		return fmt.Errorf("sql.Open: %w", err)
 	}
 
+	// SQLite: single writer to prevent SQLITE_BUSY under concurrent access.
+	db.SetMaxOpenConns(1)
+
 	// Enable WAL mode and foreign keys for SQLite.
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA foreign_keys=ON",
-		"PRAGMA busy_timeout=5000",
+		"PRAGMA busy_timeout=10000",
 	} {
 		if _, err := db.ExecContext(ctx, pragma); err != nil {
 			db.Close()

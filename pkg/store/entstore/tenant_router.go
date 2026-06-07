@@ -150,6 +150,15 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		}
 		drv := entsql.OpenDB(dialect.Postgres, db)
 		client := orgent.NewClient(orgent.Driver(drv))
+
+		// Auto-migrate: ensure all Ent-managed tables exist (idempotent).
+		// This handles existing org databases that were created before new
+		// schemas (e.g. team_memberships) were added to the codebase.
+		if err := client.Schema.Create(context.Background()); err != nil {
+			db.Close()
+			return nil, nil, fmt.Errorf("auto-migrate org pg db %s: %w", dbName, err)
+		}
+
 		return client, db, nil
 
 	case DialectSQLite:
@@ -174,6 +183,13 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		}
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := orgent.NewClient(orgent.Driver(drv))
+
+		// Auto-migrate: ensure all Ent-managed tables exist (idempotent).
+		if err := client.Schema.Create(context.Background()); err != nil {
+			db.Close()
+			return nil, nil, fmt.Errorf("auto-migrate org sqlite db %s: %w", dbPath, err)
+		}
+
 		return client, db, nil
 
 	default:

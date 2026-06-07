@@ -13,6 +13,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	entschema "entgo.io/ent/dialect/sql/schema"
 
 	orgent "github.com/schardosin/astonish/ent/org"
 	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
@@ -151,10 +152,20 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		drv := entsql.OpenDB(dialect.Postgres, db)
 		client := orgent.NewClient(orgent.Driver(drv))
 
-		// Auto-migrate: ensure all Ent-managed tables exist (idempotent).
-		// This handles existing org databases that were created before new
-		// schemas (e.g. team_memberships) were added to the codebase.
-		if err := client.Schema.Create(context.Background()); err != nil {
+		// Ensure pgvector extension exists before auto-migration (needed for
+		// vector(384) columns). Idempotent — harmless if already present.
+		if _, err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("openOrgDB: could not ensure pgvector extension",
+				"org", slug, "error", err)
+		}
+
+		// Auto-migrate: create any missing tables (e.g. team_memberships added
+		// after the org was originally provisioned). Skip ModifyTable/ModifyColumn
+		// to tolerate SERIAL-vs-IDENTITY differences on tables created by legacy
+		// (pre-Ent) migrations — SERIAL works identically to IDENTITY at runtime.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("auto-migrate org pg db %s: %w", dbName, err)
 		}
@@ -184,8 +195,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := orgent.NewClient(orgent.Driver(drv))
 
-		// Auto-migrate: ensure all Ent-managed tables exist (idempotent).
-		if err := client.Schema.Create(context.Background()); err != nil {
+		// Auto-migrate: create any missing tables. Skip modify operations for safety.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("auto-migrate org sqlite db %s: %w", dbPath, err)
 		}

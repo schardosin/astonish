@@ -134,6 +134,7 @@ func (m *teamMemoryStore) tsvectorSearch(ctx context.Context, query string, maxR
 		r := store.MemorySearchResult{
 			ID:        id.String(),
 			Snippet:   chunkText,
+			Scope:     "team",
 			Score:     score,
 			CreatedAt: createdAt.Format(time.RFC3339),
 		}
@@ -207,6 +208,7 @@ func (m *teamMemoryStore) vectorSearch(ctx context.Context, query string, maxRes
 		r := store.MemorySearchResult{
 			ID:        id.String(),
 			Snippet:   chunkText,
+			Scope:     "team",
 			Score:     score,
 			CreatedAt: createdAt.Format(time.RFC3339),
 		}
@@ -416,6 +418,7 @@ func (m *teamMemoryStore) loadResultsByIDs(ctx context.Context, scored []scoredR
 		r := store.MemorySearchResult{
 			ID:      id,
 			Snippet: chunkText,
+			Scope:   "team",
 		}
 		if cat.Valid {
 			r.Category = cat.String
@@ -657,6 +660,7 @@ func entMemoryToResult(e *teament.Memory) store.MemorySearchResult {
 	r := store.MemorySearchResult{
 		ID:        e.ID.String(),
 		Snippet:   e.ChunkText,
+		Scope:     "team",
 		CreatedAt: e.CreatedAt.Format(time.RFC3339),
 	}
 	if e.Category != nil {

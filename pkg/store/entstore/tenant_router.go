@@ -213,6 +213,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := orgent.NewClient(orgent.Driver(drv))
 
+		// Pre-migrate: fix legacy table schemas (add missing NOT NULL columns,
+		// restructure composite PKs) so that Ent's Schema.Create succeeds.
+		migrateOrgSQLiteLegacy(db)
+
 		// Auto-migrate: create missing tables and add missing columns to existing
 		// tables. SQLite doesn't have the SERIAL/IDENTITY issue that PostgreSQL has,
 		// so we can let Ent fully manage the schema here.

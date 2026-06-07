@@ -21,6 +21,7 @@ import (
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
+	"golang.org/x/sync/singleflight"
 
 	platforment "github.com/schardosin/astonish/ent/platform"
 	"github.com/schardosin/astonish/pkg/store"
@@ -60,6 +61,8 @@ type Store struct {
 
 	// Cached org data stores (map[string]*orgDataStore).
 	orgClients sync.Map
+	// Deduplicates concurrent ForOrg calls for the same slug.
+	orgFlight singleflight.Group
 }
 
 // Config holds configuration for creating a new Store.

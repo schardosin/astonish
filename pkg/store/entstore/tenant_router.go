@@ -28,30 +28,42 @@ import (
 // --- store.TenantRouter implementation ---
 
 func (s *Store) ForOrg(orgSlug string) (store.OrgDataStore, error) {
-	// Check cache first.
+	// Fast path: check cache.
 	if cached, ok := s.orgClients.Load(orgSlug); ok {
 		return cached.(*orgDataStore), nil
 	}
 
-	// Open connection to the org database.
-	orgClient, orgDB, err := s.openOrgDB(orgSlug)
+	// Serialize concurrent opens for the same org slug.
+	result, err, _ := s.orgFlight.Do(orgSlug, func() (interface{}, error) {
+		// Double-check cache (another goroutine may have populated it).
+		if cached, ok := s.orgClients.Load(orgSlug); ok {
+			return cached.(*orgDataStore), nil
+		}
+
+		// Open connection to the org database.
+		orgClient, orgDB, err := s.openOrgDB(orgSlug)
+		if err != nil {
+			return nil, fmt.Errorf("entstore: ForOrg(%s): %w", orgSlug, err)
+		}
+
+		ds := &orgDataStore{
+			orgSlug:     orgSlug,
+			client:      orgClient,
+			db:          orgDB,
+			dialect:     s.dialect,
+			embedFunc:   s.embedFunc,
+			parentStore: s,
+			teams:       make(map[string]*teamDataStore),
+			users:       make(map[string]*personalDataStore),
+		}
+
+		s.orgClients.Store(orgSlug, ds)
+		return ds, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("entstore: ForOrg(%s): %w", orgSlug, err)
+		return nil, err
 	}
-
-	ds := &orgDataStore{
-		orgSlug:     orgSlug,
-		client:      orgClient,
-		db:          orgDB,
-		dialect:     s.dialect,
-		embedFunc:   s.embedFunc,
-		parentStore: s,
-		teams:       make(map[string]*teamDataStore),
-		users:       make(map[string]*personalDataStore),
-	}
-
-	s.orgClients.Store(orgSlug, ds)
-	return ds, nil
+	return result.(*orgDataStore), nil
 }
 
 func (s *Store) ProvisionOrg(ctx context.Context, orgID, slug string) error {
@@ -410,6 +422,16 @@ func (o *orgDataStore) getOrCreateCredentialKey() []byte {
 			SetKeyData(encryptedDEK).
 			Save(ctx)
 		if storeErr != nil {
+			// Handle race condition: another instance may have inserted concurrently.
+			// Retry loading the key that was just inserted by the other instance.
+			if ek2, err2 := o.client.OrgEncryptionKey.Query().
+				Where(orgencryptionkey.KeyNameEQ("credential_key")).
+				Only(ctx); err2 == nil {
+				if dek2, decErr := credentials.Decrypt(ek2.KeyData, masterKey); decErr == nil {
+					o.credKey = dek2
+					return
+				}
+			}
 			slog.Error("failed to store org credential key", "org", o.orgSlug, "error", storeErr)
 			return
 		}
@@ -427,6 +449,14 @@ func (o *orgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
 	}
 	o.mu.RUnlock()
 
+	// Acquire write lock and double-check to prevent duplicate opens.
+	o.mu.Lock()
+	if ts, ok := o.teams[teamSlug]; ok {
+		o.mu.Unlock()
+		return ts
+	}
+	o.mu.Unlock()
+
 	ts, err := o.openTeamDB(teamSlug)
 	if err != nil {
 		slog.Error("open team database", "team", teamSlug, "org", o.orgSlug, "error", err)
@@ -434,6 +464,15 @@ func (o *orgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
 	}
 
 	o.mu.Lock()
+	// Final check: another goroutine may have inserted while we opened.
+	if existing, ok := o.teams[teamSlug]; ok {
+		o.mu.Unlock()
+		// Close the duplicate we just opened.
+		if ts.db != nil {
+			ts.db.Close()
+		}
+		return existing
+	}
 	o.teams[teamSlug] = ts
 	o.mu.Unlock()
 	return ts
@@ -447,6 +486,14 @@ func (o *orgDataStore) ForUser(userID string) store.PersonalDataStore {
 	}
 	o.mu.RUnlock()
 
+	// Acquire write lock and double-check to prevent duplicate opens.
+	o.mu.Lock()
+	if ps, ok := o.users[userID]; ok {
+		o.mu.Unlock()
+		return ps
+	}
+	o.mu.Unlock()
+
 	ps, err := o.openPersonalDB(userID)
 	if err != nil {
 		slog.Error("open personal database", "user", userID, "org", o.orgSlug, "error", err)
@@ -454,6 +501,15 @@ func (o *orgDataStore) ForUser(userID string) store.PersonalDataStore {
 	}
 
 	o.mu.Lock()
+	// Final check: another goroutine may have inserted while we opened.
+	if existing, ok := o.users[userID]; ok {
+		o.mu.Unlock()
+		// Close the duplicate we just opened.
+		if ps.db != nil {
+			ps.db.Close()
+		}
+		return existing
+	}
 	o.users[userID] = ps
 	o.mu.Unlock()
 	return ps

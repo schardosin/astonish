@@ -774,6 +774,13 @@ func Run(cfg RunConfig) error {
 			channelMgr.SetPlatformResolver(resolver)
 		}
 
+		// Initialize link code store if not yet created (happens when channels
+		// were first enabled at runtime, not at daemon startup).
+		if backend != nil && channelMgr != nil && api.GetLinkCodeStore() == nil {
+			linkStore := api.NewDBLinkCodeBackend(backend.NewLinkCodeStore())
+			api.SetLinkCodeStore(linkStore)
+		}
+
 		// Re-attach link handlers after reload
 		if backend != nil && channelMgr != nil {
 			linkStore := api.GetLinkCodeStore()

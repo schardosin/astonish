@@ -793,6 +793,16 @@ func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
 		}
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := teament.NewClient(teament.Driver(drv))
+
+		// Auto-migrate: create missing tables/columns. If this fails, the DB
+		// has an incompatible schema from a previous version and must be removed.
+		if err := client.Schema.Create(context.Background()); err != nil {
+			client.Close()
+			db.Close()
+			return nil, fmt.Errorf("team database %q has an incompatible schema from a previous version — "+
+				"please delete or move the file and restart: %w", dbPath, err)
+		}
+
 		return &teamDataStore{
 			teamSlug:  teamSlug,
 			orgSlug:   o.orgSlug,
@@ -862,6 +872,16 @@ func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error)
 		}
 		drv := entsql.OpenDB(dialect.SQLite, db)
 		client := personalent.NewClient(personalent.Driver(drv))
+
+		// Auto-migrate: create missing tables/columns. If this fails, the DB
+		// has an incompatible schema from a previous version and must be removed.
+		if err := client.Schema.Create(context.Background()); err != nil {
+			client.Close()
+			db.Close()
+			return nil, fmt.Errorf("personal database %q has an incompatible schema from a previous version — "+
+				"please delete or move the file and restart: %w", dbPath, err)
+		}
+
 		return &personalDataStore{
 			userID:    userID,
 			client:    client,

@@ -27,6 +27,37 @@ export interface AuthResponse {
   expires_in: number
 }
 
+// RegisterResponse can be either a full AuthResponse (first user bootstrap)
+// or a partial response indicating verification is needed / no team assigned.
+export interface RegisterResponse {
+  // Present when first user bootstraps (full auth)
+  user?: AuthUser
+  org?: AuthOrg
+  expires_in?: number
+  // Present when email verification is required
+  requires_verification?: boolean
+  // Present when account is created but no team assigned
+  no_team?: boolean
+  email?: string
+  message?: string
+}
+
+// LoginResponse can be a full AuthResponse or indicate pending states.
+export interface LoginResponse {
+  // Full auth (normal login)
+  user?: AuthUser
+  org?: AuthOrg
+  expires_in?: number
+  team?: string
+  available_orgs?: Array<{ id: string; name: string; slug: string; role: string }>
+  available_teams?: Array<{ name: string; slug: string; role: string }>
+  // Error states
+  error?: string // "email_not_verified" | "no_team_membership"
+  message?: string
+  requires_verification?: boolean
+  email?: string
+}
+
 export interface SetupStatus {
   initialized: boolean
   allow_registration: boolean
@@ -51,26 +82,27 @@ export async function register(
   email: string,
   password: string,
   displayName: string
-): Promise<AuthResponse> {
+): Promise<RegisterResponse> {
   const res = await fetch(`${AUTH_BASE}/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, display_name: displayName }),
   })
-  if (!res.ok) {
+  if (!res.ok && res.status !== 201) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Registration failed')
   }
   return res.json()
 }
 
-export async function login(email: string, password: string): Promise<AuthResponse> {
+export async function login(email: string, password: string): Promise<LoginResponse> {
   const res = await fetch(`${AUTH_BASE}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password }),
   })
-  if (!res.ok) {
+  // 403 can be returned for pending_verification — parse it as a response
+  if (!res.ok && res.status !== 403) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Login failed')
   }
@@ -158,4 +190,28 @@ async function _doCheckAuth(): Promise<MeResponse | null> {
       return null
     }
   }
+}
+
+// --- Email verification ---
+
+export async function verifyEmail(email: string, code: string): Promise<{ verified: boolean; message: string }> {
+  const res = await fetch(`${AUTH_BASE}/verify-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, code }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Verification failed')
+  }
+  return res.json()
+}
+
+export async function resendVerification(email: string): Promise<{ message: string }> {
+  const res = await fetch(`${AUTH_BASE}/resend-verification`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  })
+  return res.json()
 }

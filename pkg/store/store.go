@@ -12,6 +12,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -76,6 +77,10 @@ type PlatformBackend interface {
 
 	// CleanupExpired removes expired transient records (device sessions, link codes).
 	CleanupExpired(ctx context.Context) error
+
+	// PlatformDB returns the raw *sql.DB for the platform database.
+	// Used for health checks (ping). May return nil if not applicable.
+	PlatformDB() *sql.DB
 }
 
 // OrgDataStore is the root of all data access within an organization.
@@ -111,6 +116,7 @@ type TeamDataStore interface {
 	Credentials() CredentialStore
 	Apps() AppStore
 	AppState() AppStateStore
+	AppStateSQL() AppStateSQLStore
 	Flows() FlowStore
 	Skills() SkillStore
 	MCPServers() MCPServerStore
@@ -419,6 +425,7 @@ type LinkCode struct {
 // Both pgstore and sqlitestore implement this interface.
 type LinkCodeStore interface {
 	Generate(ctx context.Context, code, userID, email, channel string) error
+	GenerateWithTTL(ctx context.Context, code, userID, email, channel string, ttl time.Duration) error
 	Consume(ctx context.Context, code string) (*LinkCode, error)
 	Cleanup(ctx context.Context) error
 }

@@ -31,7 +31,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // GCReconcilerConfig configures the deferred GC reconciler.
@@ -62,9 +61,6 @@ type GCReconcilerConfig struct {
 	// PlatformPool is the PG connection pool for the platform database
 	// (advisory lock + sandbox_layers queries).
 	PlatformPool *pgxpool.Pool
-
-	// PGStore gives access to team schemas for session lookups.
-	PGStore *pgstore.PGStore
 
 	// Layers is the layer store for ref_count queries and row deletion.
 	Layers store.LayerStore
@@ -203,7 +199,7 @@ func gcReclaimLayers(ctx context.Context, cfg GCReconcilerConfig) int {
 // gcReclaimUppers lists directories on the uppers PVC via an audit pod,
 // diffs against known sessions, and removes orphans older than the grace period.
 func gcReclaimUppers(ctx context.Context, cfg GCReconcilerConfig) int {
-	if cfg.PGStore == nil || cfg.Client == nil {
+	if cfg.SandboxSessionsQuerier == nil || cfg.Client == nil {
 		return 0
 	}
 
@@ -215,24 +211,10 @@ func gcReclaimUppers(ctx context.Context, cfg GCReconcilerConfig) int {
 	}
 
 	// Get all known session IDs.
-	schemas, err := cfg.PGStore.ListTeamSchemas(ctx)
+	knownSessions, err := cfg.SandboxSessionsQuerier(ctx)
 	if err != nil {
-		slog.Warn("gc-reconciler: failed to list team schemas", "error", err)
+		slog.Warn("[gc-reconciler] failed to query sandbox sessions", "err", err)
 		return 0
-	}
-	knownSessions := make(map[string]bool)
-	for _, schema := range schemas {
-		sessStore := cfg.PGStore.SandboxSessionsForSchema(schema)
-		if sessStore == nil {
-			continue
-		}
-		sessions, err := sessStore.List(ctx, store.SandboxSessionFilter{})
-		if err != nil {
-			continue
-		}
-		for _, s := range sessions {
-			knownSessions[s.SessionID] = true
-		}
 	}
 
 	// Find orphans.

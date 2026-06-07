@@ -1307,9 +1307,18 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if sandboxNodePool != nil {
 			pool := sandboxNodePool
 			bmgr := browserMgr // capture for closure
+			sessReg := sandboxSessRegistry
 			subAgentMgr.OnChildSession = func(parentSessionID, childSessionID string) {
 				pool.Alias(childSessionID, parentSessionID)
 				bmgr.AliasSession(childSessionID, parentSessionID)
+				// Register the child session in the sandbox session registry so
+				// Backend.ExecStreaming (used by MCP servers) can resolve it to
+				// the same container as the parent.
+				if sessReg != nil {
+					if entry := sessReg.Get(parentSessionID); entry != nil {
+						_ = sessReg.Put(childSessionID, entry.ContainerName, entry.TemplateName)
+					}
+				}
 			}
 		}
 		tools.SetSubAgentManager(subAgentMgr)

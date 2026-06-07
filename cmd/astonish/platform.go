@@ -16,13 +16,14 @@ import (
 	"github.com/schardosin/astonish/pkg/client"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
 
 // withPlatformStore is a helper that loads the app config, verifies postgres backend,
-// opens a PGStore connection, and passes it to the callback. The PGStore is automatically
-// closed when the callback returns.
-func withPlatformStore(category string, fn func(ctx context.Context, pgCfg config.PostgresConfig, pgStore *pgstore.PGStore) error) error {
+// opens a platform store connection, and passes it to the callback. The store is
+// automatically closed when the callback returns.
+func withPlatformStore(category string, fn func(ctx context.Context, pgCfg config.PostgresConfig, backend store.PlatformBackend) error) error {
 	appCfg, err := config.LoadAppConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -31,12 +32,15 @@ func withPlatformStore(category string, fn func(ctx context.Context, pgCfg confi
 		return fmt.Errorf("platform %s commands require storage.backend: postgres", category)
 	}
 	ctx := context.Background()
-	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            appCfg.Storage.Postgres.PlatformDSN,
+		InstanceSuffix: appCfg.Storage.Postgres.InstanceSuffix,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to platform DB: %w", err)
 	}
-	defer pgStore.Close()
-	return fn(ctx, appCfg.Storage.Postgres, pgStore)
+	defer es.Close()
+	return fn(ctx, appCfg.Storage.Postgres, es)
 }
 
 func handlePlatformCommand(args []string) error {
@@ -164,10 +168,10 @@ func handlePlatformInit(args []string) error {
 
 	// Connect to the admin database to check/generate suffix.
 	fmt.Printf("Connecting to PostgreSQL at %s:%d... ", pgHost, pgPort)
-	tempDSN := pgstore.BuildDSN(pgHost, pgPort, pgUser, pgPassword, "postgres", pgSSLMode)
+	tempDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, "postgres", pgSSLMode)
 
 	// Verify connectivity by checking if admin DB is reachable.
-	_, checkErr := pgstore.PlatformDBExists(ctx, tempDSN, "connectivity_check_probe")
+	_, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, "connectivity_check_probe")
 	if checkErr != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("cannot connect to PostgreSQL: %w", checkErr)
@@ -181,7 +185,7 @@ func handlePlatformInit(args []string) error {
 		// If it exists, we run migrations (upgrade path).
 		// If it doesn't exist, we create it (fresh install with fixed suffix).
 		fmt.Printf("Checking database %s... ", config.PlatformDBName(suffix))
-		exists, err := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, err := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
 		if err != nil {
 			fmt.Println("FAILED")
 			return fmt.Errorf("failed to check database existence: %w", err)
@@ -197,7 +201,7 @@ func handlePlatformInit(args []string) error {
 		fmt.Print("Generating instance suffix... ")
 		suffix = config.GenerateInstanceSuffix()
 		for attempts := 0; attempts < 5; attempts++ {
-			exists, err := pgstore.PlatformDBExists(ctx, tempDSN, suffix)
+			exists, err := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
 			if err != nil {
 				fmt.Println("FAILED")
 				return fmt.Errorf("failed to check database existence: %w", err)
@@ -212,7 +216,7 @@ func handlePlatformInit(args []string) error {
 
 	// Build the platform DSN with the actual platform DB name.
 	platformDBName := config.PlatformDBName(suffix)
-	platformDSN := pgstore.BuildDSN(pgHost, pgPort, pgUser, pgPassword, platformDBName, pgSSLMode)
+	platformDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, platformDBName, pgSSLMode)
 
 	// Bootstrap: create database (if needed), ensure roles, and run migrations.
 	if dbAlreadyExists {
@@ -220,24 +224,26 @@ func handlePlatformInit(args []string) error {
 	} else {
 		fmt.Printf("Creating database %s... ", platformDBName)
 	}
-	if err := pgstore.BootstrapPlatform(ctx, platformDSN, suffix); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
+		DSN:            platformDSN,
+		InstanceSuffix: suffix,
+	}); err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
 	fmt.Println("OK")
 
-	// Verify connectivity via PGStore.
+	// Verify connectivity via entstore.
 	fmt.Print("Verifying platform store... ")
-	pgCfg := config.PostgresConfig{
-		PlatformDSN:    platformDSN,
+	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            platformDSN,
 		InstanceSuffix: suffix,
-	}
-	_, pgStore, err := pgstore.NewPlatformServices(ctx, pgCfg)
+	})
 	if err != nil {
 		fmt.Println("FAILED")
 		return fmt.Errorf("store verification failed: %w", err)
 	}
-	pgStore.Close()
+	es.Close()
 	fmt.Println("OK")
 
 	fmt.Println()
@@ -331,11 +337,14 @@ func handlePlatformStatus(args []string) error {
 
 	ctx := context.Background()
 
-	_, pgStore, err := pgstore.NewPlatformServices(ctx, appCfg.Storage.Postgres)
+	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:            appCfg.Storage.Postgres.PlatformDSN,
+		InstanceSuffix: appCfg.Storage.Postgres.InstanceSuffix,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to platform DB: %w", err)
 	}
-	defer pgStore.Close()
+	defer es.Close()
 
 	fmt.Println("=== Astonish Platform Status ===")
 	fmt.Println()
@@ -343,25 +352,22 @@ func handlePlatformStatus(args []string) error {
 	fmt.Println()
 
 	// Organization count
-	orgCount, err := pgStore.Organizations().Count(ctx)
+	orgCount, err := es.Organizations().Count(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to count orgs: %w", err)
 	}
 	fmt.Printf("  Organizations:  %d\n", orgCount)
 
-	// User count (query directly since there's no Count on UserStore)
-	pool, err := pgStore.PoolManager().PlatformPool(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get platform pool: %w", err)
-	}
+	// User count via raw SQL on the platform DB
+	db := es.PlatformDB()
 	var userCount int
-	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&userCount); err != nil {
 		return fmt.Errorf("failed to count users: %w", err)
 	}
 	fmt.Printf("  Users:          %d\n", userCount)
 
 	// List organizations with their team counts
-	orgs, err := pgStore.Organizations().List(ctx)
+	orgs, err := es.Organizations().List(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to list orgs: %w", err)
 	}
@@ -371,7 +377,7 @@ func handlePlatformStatus(args []string) error {
 		fmt.Println("  Organizations:")
 		for _, org := range orgs {
 			teamCount := 0
-			orgDS, forOrgErr := pgStore.ForOrg(org.Slug)
+			orgDS, forOrgErr := es.ForOrg(org.Slug)
 			if forOrgErr == nil {
 				teams, listErr := orgDS.Teams().ListTeams(ctx)
 				if listErr == nil {
@@ -387,7 +393,7 @@ func handlePlatformStatus(args []string) error {
 	fmt.Println()
 	fmt.Print("  Database:       ")
 	var pgVersion string
-	if err := pool.QueryRow(ctx, `SELECT version()`).Scan(&pgVersion); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT version()`).Scan(&pgVersion); err != nil {
 		fmt.Println("ERROR - " + err.Error())
 	} else {
 		// Truncate to just the main version line
@@ -475,12 +481,12 @@ func handlePlatformOrgCreate(args []string) error {
 		}
 	}
 
-	return withPlatformStore("org", func(ctx context.Context, pgCfg config.PostgresConfig, pgStore *pgstore.PGStore) error {
+	return withPlatformStore("org", func(ctx context.Context, pgCfg config.PostgresConfig, backend store.PlatformBackend) error {
 		fmt.Printf("Creating organization '%s' (slug: %s)...\n", name, slug)
 		fmt.Println()
 
 		// Check if slug is already taken
-		if existing, _ := pgStore.Organizations().GetBySlug(ctx, slug); existing != nil {
+		if existing, _ := backend.Organizations().GetBySlug(ctx, slug); existing != nil {
 			return fmt.Errorf("organization with slug '%s' already exists", slug)
 		}
 
@@ -489,26 +495,26 @@ func handlePlatformOrgCreate(args []string) error {
 			ID:        uuid.New().String(),
 			Name:      name,
 			Slug:      slug,
-			DBName:    pgstore.OrgDBName(pgCfg.InstanceSuffix, slug),
+			DBName:    entstore.OrgDBName(pgCfg.InstanceSuffix, slug),
 			Status:    "active",
 			CreatedAt: time.Now(),
 		}
 
-		if err := pgStore.Organizations().Create(ctx, org); err != nil {
+		if err := backend.Organizations().Create(ctx, org); err != nil {
 			return fmt.Errorf("failed to create org record: %w", err)
 		}
 		fmt.Printf("  Organization record: %s (id: %s)\n", org.Name, org.ID)
 
 		// Provision the org database
 		fmt.Print("  Provisioning org database... ")
-		if err := pgStore.ProvisionOrg(ctx, org.ID, slug); err != nil {
+		if err := backend.ProvisionOrg(ctx, org.ID, slug); err != nil {
 			fmt.Println("FAILED")
 			return fmt.Errorf("failed to provision org DB: %w", err)
 		}
 		fmt.Println("OK")
 
 		// Create the default "general" team
-		orgDS, err := pgStore.ForOrg(slug)
+		orgDS, err := backend.ForOrg(slug)
 		if err != nil {
 			return fmt.Errorf("failed to connect to org database: %w", err)
 		}
@@ -518,7 +524,7 @@ func handlePlatformOrgCreate(args []string) error {
 			ID:         uuid.New().String(),
 			Name:       "General",
 			Slug:       teamSlug,
-			SchemaName: pgstore.TeamSchemaName(teamSlug),
+			SchemaName: entstore.TeamSchemaName(teamSlug),
 			CreatedAt:  time.Now(),
 		}
 
@@ -537,11 +543,11 @@ func handlePlatformOrgCreate(args []string) error {
 
 		// If owner email is specified, add them
 		if ownerEmail != "" {
-			user, userErr := pgStore.Users().GetByEmail(ctx, strings.ToLower(strings.TrimSpace(ownerEmail)))
+			user, userErr := backend.Users().GetByEmail(ctx, strings.ToLower(strings.TrimSpace(ownerEmail)))
 			if userErr != nil {
 				fmt.Printf("  Warning: user '%s' not found, skipping owner assignment\n", ownerEmail)
 			} else {
-				if err := pgStore.Organizations().AddMember(ctx, user.ID, org.ID, "owner"); err != nil {
+				if err := backend.Organizations().AddMember(ctx, user.ID, org.ID, "owner"); err != nil {
 					fmt.Printf("  Warning: failed to add owner: %v\n", err)
 				} else {
 					fmt.Printf("  Owner: %s (%s)\n", user.DisplayName, user.Email)
@@ -585,8 +591,8 @@ func handlePlatformOrgList(args []string) error {
 		return nil
 	}
 
-	return withPlatformStore("org", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		orgs, err := pgStore.Organizations().List(ctx)
+	return withPlatformStore("org", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		orgs, err := backend.Organizations().List(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to list organizations: %w", err)
 		}
@@ -682,15 +688,15 @@ func handlePlatformOrgInvite(args []string) error {
 		teamSlug = "general"
 	}
 
-	return withPlatformStore("org", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
+	return withPlatformStore("org", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
 		// Look up the organization
-		org, err := pgStore.Organizations().GetBySlug(ctx, orgSlug)
+		org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
 		if err != nil {
 			return fmt.Errorf("organization '%s' not found: %w", orgSlug, err)
 		}
 
 		// Check if user exists or create
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+		user, err := backend.Users().GetByEmail(ctx, email)
 		userIsNew := false
 		if err != nil {
 			// User doesn't exist — create
@@ -724,7 +730,7 @@ func handlePlatformOrgInvite(args []string) error {
 				CreatedAt:    time.Now(),
 			}
 
-			if createErr := pgStore.Users().Create(ctx, user); createErr != nil {
+			if createErr := backend.Users().Create(ctx, user); createErr != nil {
 				return fmt.Errorf("failed to create user: %w", createErr)
 			}
 
@@ -738,13 +744,13 @@ func handlePlatformOrgInvite(args []string) error {
 		}
 
 		// Add user to org
-		if err := pgStore.Organizations().AddMember(ctx, user.ID, org.ID, role); err != nil {
+		if err := backend.Organizations().AddMember(ctx, user.ID, org.ID, role); err != nil {
 			return fmt.Errorf("failed to add user to org: %w", err)
 		}
 		fmt.Printf("  Added to org '%s' as %s\n", org.Name, role)
 
 		// Connect to org DB and add to team
-		orgDS, err := pgStore.ForOrg(orgSlug)
+		orgDS, err := backend.ForOrg(orgSlug)
 		if err != nil {
 			return fmt.Errorf("failed to connect to org database: %w", err)
 		}
@@ -840,15 +846,15 @@ func handlePlatformUserList(args []string) error {
 		}
 	}
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
 		if orgSlug != "" {
 			// List users for a specific org.
-			org, orgErr := pgStore.Organizations().GetBySlug(ctx, orgSlug)
+			org, orgErr := backend.Organizations().GetBySlug(ctx, orgSlug)
 			if orgErr != nil {
 				return fmt.Errorf("organization '%s' not found: %w", orgSlug, orgErr)
 			}
 
-			members, listErr := pgStore.Organizations().ListMembers(ctx, org.ID)
+			members, listErr := backend.Organizations().ListMembers(ctx, org.ID)
 			if listErr != nil {
 				return fmt.Errorf("failed to list org members: %w", listErr)
 			}
@@ -870,7 +876,7 @@ func handlePlatformUserList(args []string) error {
 		}
 
 		// List all users.
-		users, err := pgStore.Users().List(ctx)
+		users, err := backend.Users().List(ctx)
 		if err != nil {
 			return fmt.Errorf("failed to list users: %w", err)
 		}
@@ -911,8 +917,8 @@ func handlePlatformUserShow(args []string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
@@ -932,7 +938,7 @@ func handlePlatformUserShow(args []string) error {
 		}
 
 		// Show org memberships.
-		orgs, err := pgStore.Organizations().GetUserOrgs(ctx, user.ID)
+		orgs, err := backend.Organizations().GetUserOrgs(ctx, user.ID)
 		if err != nil {
 			fmt.Printf("\n  (failed to load org memberships: %v)\n", err)
 			return nil
@@ -967,13 +973,13 @@ func handlePlatformUserDelete(args []string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
 
-		if err := pgStore.Users().Delete(ctx, user.ID); err != nil {
+		if err := backend.Users().Delete(ctx, user.ID); err != nil {
 			return fmt.Errorf("failed to delete user: %w", err)
 		}
 
@@ -996,8 +1002,8 @@ func handlePlatformUserSetPassword(args []string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
@@ -1013,7 +1019,7 @@ func handlePlatformUserSetPassword(args []string) error {
 		}
 
 		user.PasswordHash = string(hash)
-		if err := pgStore.Users().Update(ctx, user); err != nil {
+		if err := backend.Users().Update(ctx, user); err != nil {
 			return fmt.Errorf("failed to update password: %w", err)
 		}
 
@@ -1041,14 +1047,14 @@ func handlePlatformUserSetStatus(args []string, status string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
 
 		user.Status = status
-		if err := pgStore.Users().Update(ctx, user); err != nil {
+		if err := backend.Users().Update(ctx, user); err != nil {
 			return fmt.Errorf("failed to %s user: %w", verb, err)
 		}
 
@@ -1072,8 +1078,8 @@ func handlePlatformUserPromote(args []string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
@@ -1083,7 +1089,7 @@ func handlePlatformUserPromote(args []string) error {
 			return nil
 		}
 
-		if err := pgStore.Users().SetPlatformRole(ctx, user.ID, "superadmin"); err != nil {
+		if err := backend.Users().SetPlatformRole(ctx, user.ID, "superadmin"); err != nil {
 			return fmt.Errorf("failed to promote user: %w", err)
 		}
 
@@ -1107,8 +1113,8 @@ func handlePlatformUserDemote(args []string) error {
 
 	email := strings.ToLower(strings.TrimSpace(args[0]))
 
-	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, pgStore *pgstore.PGStore) error {
-		user, err := pgStore.Users().GetByEmail(ctx, email)
+	return withPlatformStore("user", func(ctx context.Context, _ config.PostgresConfig, backend store.PlatformBackend) error {
+		user, err := backend.Users().GetByEmail(ctx, email)
 		if err != nil {
 			return fmt.Errorf("user '%s' not found: %w", email, err)
 		}
@@ -1119,7 +1125,7 @@ func handlePlatformUserDemote(args []string) error {
 		}
 
 		// Safety: prevent demoting the last superadmin
-		count, countErr := pgStore.Users().CountByPlatformRole(ctx, "superadmin")
+		count, countErr := backend.Users().CountByPlatformRole(ctx, "superadmin")
 		if countErr != nil {
 			return fmt.Errorf("failed to count superadmins: %w", countErr)
 		}
@@ -1127,7 +1133,7 @@ func handlePlatformUserDemote(args []string) error {
 			return fmt.Errorf("cannot demote the last platform superadmin — promote another user first")
 		}
 
-		if err := pgStore.Users().SetPlatformRole(ctx, user.ID, ""); err != nil {
+		if err := backend.Users().SetPlatformRole(ctx, user.ID, ""); err != nil {
 			return fmt.Errorf("failed to demote user: %w", err)
 		}
 

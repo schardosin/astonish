@@ -388,6 +388,7 @@ func TestIntegration_X17_MultiTurn(t *testing.T) {
 		"What is the capital of France?",
 		true,
 		"",
+		nil,
 	)
 
 	events2 := collectEvents(t, ch2, 10*time.Second)
@@ -455,6 +456,7 @@ func TestIntegration_X18_ContextCancellation(t *testing.T) {
 			"This will be cancelled",
 			true,
 			"",
+			nil,
 		)
 	}()
 
@@ -641,7 +643,7 @@ func TestIntegration_X23_IsDone(t *testing.T) {
 		}()
 		env.Runner.Run(
 			env.ChatAgent, env.SessionService, blockingLLM,
-			nil, userMsg, "test", true, "",
+			nil, userMsg, "test", true, "", nil,
 		)
 	}()
 

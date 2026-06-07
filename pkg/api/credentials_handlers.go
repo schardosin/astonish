@@ -373,6 +373,7 @@ func DeleteCredentialHandler(w http.ResponseWriter, r *http.Request) {
 // Requires team admin access. Copy semantics: both stores have their own copy afterward.
 func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	if !isPlatformMode(r) {
+		slog.Warn("publish credential: not in platform mode")
 		respondError(w, http.StatusNotFound, "Publish is only available in platform mode")
 		return
 	}
@@ -393,12 +394,14 @@ func PublishCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	personalStore := effectivePersonalCredentialStore(r)
 	teamStore := effectiveTeamCredentialStore(r)
 	if personalStore == nil || teamStore == nil {
+		slog.Warn("publish credential: stores not available", "personal_nil", personalStore == nil, "team_nil", teamStore == nil)
 		respondError(w, http.StatusServiceUnavailable, "Credential stores not available")
 		return
 	}
 
 	cred := personalStore.Get(r.Context(), req.Name)
 	if cred == nil {
+		slog.Warn("publish credential: personal credential not found", "name", req.Name)
 		respondError(w, http.StatusNotFound, "Personal credential not found")
 		return
 	}

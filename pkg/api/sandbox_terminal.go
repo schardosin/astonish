@@ -9,7 +9,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // terminalUpgrader upgrades HTTP connections to WebSocket for the terminal.
@@ -49,7 +49,7 @@ func SandboxTerminalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Derive session ID from team slug
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.TeamSlug == "" {
 		respondError(w, http.StatusBadRequest, "Team context required")
 		return

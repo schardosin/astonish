@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -123,7 +123,7 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 	// Compute DB name: only meaningful for PostgreSQL backend.
 	dbName := ""
 	if suffix := backend.InstanceSuffix(); suffix != "" {
-		dbName = pgstore.OrgDBName(suffix, req.Slug)
+		dbName = entstore.OrgDBName(suffix, req.Slug)
 	}
 
 	// Create org record
@@ -154,7 +154,7 @@ func PlatformAdminCreateOrgHandler(w http.ResponseWriter, r *http.Request) {
 		// Schema name only meaningful for PG
 		schemaName := ""
 		if backend.InstanceSuffix() != "" {
-			schemaName = pgstore.TeamSchemaName("general")
+			schemaName = entstore.TeamSchemaName("general")
 		}
 		defaultTeam := &store.Team{
 			ID:         uuid.New().String(),
@@ -677,29 +677,19 @@ func slugifyOrgName(name string) string {
 
 // --- Platform backend singleton ---
 
-// platformBackendInstance holds the platform store backend (PGStore or SQLiteStore).
-// It's set during daemon initialization via SetPlatformBackend or SetPlatformPGStore.
+// platformBackendInstance holds the platform store backend (entstore.Store).
+// It's set during daemon initialization via SetPlatformBackend.
 var platformBackendInstance store.PlatformBackend
 
-// getPlatformPGStore returns the platform PGStore singleton (legacy accessor).
-// It's set during daemon initialization.
-var platformPGStoreInstance *pgstore.PGStore
-
-func SetPlatformPGStore(pg *pgstore.PGStore) {
-	platformPGStoreInstance = pg
-	platformBackendInstance = pg
-	if pg != nil {
-		platformSecretsInstance = pg.PlatformSecrets()
-	}
-}
-
-func getPlatformPGStore() *pgstore.PGStore {
-	return platformPGStoreInstance
-}
-
-// SetPlatformBackend sets the platform backend (SQLiteStore or PGStore).
+// SetPlatformBackend sets the platform backend.
 func SetPlatformBackend(backend store.PlatformBackend) {
 	platformBackendInstance = backend
+	if backend != nil {
+		// If the backend is an entstore.Store, wire the secrets store.
+		if es, ok := backend.(*entstore.Store); ok {
+			platformSecretsInstance = es.Secrets()
+		}
+	}
 }
 
 // getPlatformBackend returns the platform backend singleton.

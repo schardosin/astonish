@@ -12,7 +12,7 @@ import (
 
 	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 )
 
 // RegisterTeamRoutes registers team management endpoints.
@@ -131,7 +131,7 @@ func (pa *PlatformAuth) handleCreateTeam(w http.ResponseWriter, r *http.Request)
 		ID:         uuid.New().String(),
 		Name:       req.Name,
 		Slug:       req.Slug,
-		SchemaName: pgstore.TeamSchemaName(req.Slug),
+		SchemaName: entstore.TeamSchemaName(req.Slug),
 		CreatedAt:  time.Now(),
 	}
 

@@ -246,6 +246,20 @@ func (c *ChatAgent) DynamicToolInjectionCallback() llmagent.BeforeModelCallback 
 		}
 		c.searchToolsMu.Unlock()
 
+		// Source 3: pinned tool groups from PromptOverrides (wizard sessions).
+		// These ensure critical tools remain available across all turns of a
+		// multi-turn guided conversation regardless of ToolIndex scoring.
+		if po := PromptOverridesFromContext(cbCtx); po != nil && len(po.PinnedToolGroups) > 0 {
+			for _, groupName := range po.PinnedToolGroups {
+				entries := c.ToolIndex.GetToolsByGroup(groupName)
+				for _, entry := range entries {
+					if !entry.IsMainTool {
+						toolsToInject[entry.Name] = true
+					}
+				}
+			}
+		}
+
 		if len(toolsToInject) == 0 {
 			return nil, nil
 		}

@@ -378,6 +378,7 @@ func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult
 			Status:        validationStatus,
 			LastValidated: now,
 		},
+		CreatedBy: store.UserIDFromContext(tc),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}

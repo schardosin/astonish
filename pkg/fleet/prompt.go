@@ -345,6 +345,16 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlu
 		}
 		sb.WriteString("\nCredential secrets are injected into the environment automatically. ")
 		sb.WriteString("Do NOT attempt to read or log credential values.\n")
+		sb.WriteString("\n**Credential Recovery (if authentication fails):**\n")
+		sb.WriteString("If a tool (git, gh, etc.) reports authentication failure or missing credentials, ")
+		sb.WriteString("use the `{{CREDENTIAL:name:field}}` placeholder syntax in `shell_command` to inject secrets at execution time. ")
+		sb.WriteString("The system substitutes real values before the command runs — they never appear in your context.\n\n")
+		sb.WriteString("Example recovery for GitHub:\n")
+		sb.WriteString("```\n")
+		sb.WriteString("shell_command: GH_TOKEN={{CREDENTIAL:github:token}} gh auth setup-git && git push\n")
+		sb.WriteString("```\n\n")
+		sb.WriteString("This pattern works for any credential and any CLI tool that accepts environment variables or stdin.\n")
+		sb.WriteString("Use `list_credentials` to see available credential names, and `resolve_credential(name)` to get the placeholder fields.\n")
 	}
 }
 

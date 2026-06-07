@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -110,7 +109,7 @@ func (m *authzTenantRouter) DecommissionOrg(_ context.Context, _ string) error {
 // Helper: build an HTTP request with full context for authz tests
 // ---------------------------------------------------------------------------
 
-func authzRequest(user *PlatformUser, svc *store.Services, tc *pgstore.TenantContext) *http.Request {
+func authzRequest(user *PlatformUser, svc *store.Services, tc *store.TenantContext) *http.Request {
 	req := httptest.NewRequest("GET", "/api/test", nil)
 	ctx := req.Context()
 	if user != nil {
@@ -120,7 +119,7 @@ func authzRequest(user *PlatformUser, svc *store.Services, tc *pgstore.TenantCon
 		ctx = store.WithServices(ctx, svc)
 	}
 	if tc != nil {
-		ctx = pgstore.WithTenantContext(ctx, tc)
+		ctx = store.WithTenantContext(ctx, tc)
 	}
 	return req.WithContext(ctx)
 }
@@ -356,7 +355,7 @@ func TestRequireTeamAdmin(t *testing.T) {
 	orgDS := &authzOrgDataStore{teams: teamMgmt}
 	router := &authzTenantRouter{orgs: map[string]store.OrgDataStore{"acme": orgDS}}
 	svc := &store.Services{Mode: store.ModePlatform, TenantRouter: router}
-	tc := &pgstore.TenantContext{OrgSlug: "acme", TeamSlug: "engineering"}
+	tc := &store.TenantContext{OrgSlug: "acme", TeamSlug: "engineering"}
 
 	tests := []struct {
 		name       string
@@ -571,13 +570,13 @@ func TestCanManageTeam(t *testing.T) {
 	orgDS := &authzOrgDataStore{teams: teamMgmt}
 	router := &authzTenantRouter{orgs: map[string]store.OrgDataStore{"acme": orgDS}}
 	svc := &store.Services{Mode: store.ModePlatform, TenantRouter: router}
-	tc := &pgstore.TenantContext{OrgSlug: "acme", TeamSlug: "eng"}
+	tc := &store.TenantContext{OrgSlug: "acme", TeamSlug: "eng"}
 
 	tests := []struct {
 		name   string
 		user   *PlatformUser
 		useSvc *store.Services
-		useTc  *pgstore.TenantContext
+		useTc  *store.TenantContext
 		expect bool
 	}{
 		{
@@ -736,7 +735,7 @@ func TestCrossTenantIsolation(t *testing.T) {
 	t.Run("user from org-a cannot resolve org-b stores via canManageCurrentTeam", func(t *testing.T) {
 		// User is authenticated in org-a context but TenantContext points to org-b
 		svc := &store.Services{Mode: store.ModePlatform, TenantRouter: router}
-		tc := &pgstore.TenantContext{OrgSlug: "org-b", TeamSlug: "team-b"}
+		tc := &store.TenantContext{OrgSlug: "org-b", TeamSlug: "team-b"}
 		user := &PlatformUser{ID: "user-a", Role: "member"}
 
 		r := authzRequest(user, svc, tc)
@@ -750,7 +749,7 @@ func TestCrossTenantIsolation(t *testing.T) {
 	t.Run("user from org-a can access their own team", func(t *testing.T) {
 		teamMgmtA.memberRoles["user-a:ta-1"] = "admin"
 		svc := &store.Services{Mode: store.ModePlatform, TenantRouter: router}
-		tc := &pgstore.TenantContext{OrgSlug: "org-a", TeamSlug: "team-a"}
+		tc := &store.TenantContext{OrgSlug: "org-a", TeamSlug: "team-a"}
 		user := &PlatformUser{ID: "user-a", Role: "member"}
 
 		r := authzRequest(user, svc, tc)

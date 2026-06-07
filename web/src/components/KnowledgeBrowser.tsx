@@ -17,11 +17,12 @@ type Tab = 'personal' | 'team' | 'org' | 'add'
 const SCOPE_COLORS: Record<string, string> = { personal: '#3b82f6', team: '#a855f7', org: '#10b981' }
 
 function ScopeBadge({ scope }: { scope: string }) {
-  const color = SCOPE_COLORS[scope] || '#6b7280'
+  const label = scope || 'unknown'
+  const color = SCOPE_COLORS[label] || '#6b7280'
   return (
     <span className="px-2 py-0.5 rounded-full text-xs font-medium"
       style={{ background: `${color}22`, color, border: `1px solid ${color}44` }}>
-      {scope.charAt(0).toUpperCase() + scope.slice(1)}
+      {label.charAt(0).toUpperCase() + label.slice(1)}
     </span>
   )
 }

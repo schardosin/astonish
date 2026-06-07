@@ -447,3 +447,28 @@ func MemorySaveOrMergeFromContext(ctx context.Context) MemorySaveOrMergeFunc {
 	fn, _ := ctx.Value(memorySaveOrMergeKey{}).(MemorySaveOrMergeFunc)
 	return fn
 }
+
+// --- Tenant Context (HTTP middleware identity resolution) ---
+
+// TenantContext holds the resolved tenant identity for a request.
+// This is populated by auth middleware and consumed by TenantMiddleware.
+type TenantContext struct {
+	OrgSlug  string
+	TeamSlug string
+	UserID   string
+}
+
+type tenantCtxKey struct{}
+
+// WithTenantContext stores the tenant identity in the request context.
+// This should be called by the auth middleware after resolving the user's
+// organization and team membership.
+func WithTenantContext(ctx context.Context, tc *TenantContext) context.Context {
+	return context.WithValue(ctx, tenantCtxKey{}, tc)
+}
+
+// TenantContextFrom retrieves the tenant identity from the context.
+func TenantContextFrom(ctx context.Context) *TenantContext {
+	tc, _ := ctx.Value(tenantCtxKey{}).(*TenantContext)
+	return tc
+}

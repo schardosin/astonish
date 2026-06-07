@@ -83,6 +83,12 @@ type PromptOverrides struct {
 	SchedulerHints string // Scheduler-specific output constraints
 	SessionContext string // Per-turn session context (fleet wizard, etc.)
 	SkillIndex     string // Per-request merged skill index (bundled + org + team)
+
+	// PinnedToolGroups lists tool group names that should always be injected
+	// into the LLM request regardless of ToolIndex scoring. Used by wizard
+	// sessions to ensure critical tools (e.g., save_sandbox_template, save_fleet_plan)
+	// remain available across all turns of a multi-turn guided conversation.
+	PinnedToolGroups []string
 }
 
 type promptOverridesKey struct{}

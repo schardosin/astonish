@@ -5,16 +5,22 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store/pgstore"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
-// healthPGStore holds a reference to the PG store for readiness checks.
+// healthBackend holds a reference to the platform backend for readiness checks.
 // Set during route registration when in platform mode.
-var healthPGStore *pgstore.PGStore
+var healthBackend store.PlatformBackend
 
-// SetHealthPGStore sets the PG store reference for health checks.
-func SetHealthPGStore(pg *pgstore.PGStore) {
-	healthPGStore = pg
+// SetHealthBackend sets the backend reference for health checks.
+func SetHealthBackend(b store.PlatformBackend) {
+	healthBackend = b
+}
+
+// SetHealthPGStore is a backward-compatible alias for SetHealthBackend.
+// Deprecated: use SetHealthBackend.
+func SetHealthPGStore(b store.PlatformBackend) {
+	healthBackend = b
 }
 
 // HealthzHandler is the liveness probe endpoint.
@@ -25,30 +31,27 @@ func HealthzHandler(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ReadyzHandler is the readiness probe endpoint.
-// In platform mode, verifies PostgreSQL connectivity.
+// In platform mode, verifies database connectivity via PlatformDB().Ping().
 // In personal mode, always returns 200.
 // GET /api/readyz
 func ReadyzHandler(w http.ResponseWriter, _ *http.Request) {
-	if healthPGStore == nil {
-		// Personal mode or PG not configured — always ready
+	if healthBackend == nil {
+		// Personal mode or backend not configured — always ready
 		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 
-	// Platform mode: check PG connectivity
+	// Platform mode: check DB connectivity via PlatformDB ping
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	pool, err := healthPGStore.PoolManager().PlatformPool(ctx)
-	if err != nil {
-		respondJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"status": "unavailable",
-			"error":  "database pool error",
-		})
+	db := healthBackend.PlatformDB()
+	if db == nil {
+		respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}
 
-	if err := pool.Ping(ctx); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		respondJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"status": "unavailable",
 			"error":  "database unreachable",

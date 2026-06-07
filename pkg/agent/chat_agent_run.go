@@ -588,8 +588,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						if p.Text != "" && !p.Thought && p.FunctionCall == nil && p.FunctionResponse == nil {
 							anyTextYielded = true
 						}
-						// Capture text that comes after tool calls (the final formatted output)
-						if p.Text != "" && lastToolCallSeen {
+						// Capture model output text for the execution trace.
+						// Previously gated by lastToolCallSeen, but the reflector's
+						// triviality gate uses FinalOutput length — so we must always
+						// capture it, otherwise no-tool-call turns are incorrectly
+						// classified as trivial and reflection is skipped.
+						if p.Text != "" {
 							trace.AppendOutput(p.Text)
 						}
 					}

@@ -1,0 +1,345 @@
+package entstore
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	teament "github.com/schardosin/astonish/ent/team"
+	"github.com/schardosin/astonish/ent/team/fleetplan"
+	"github.com/schardosin/astonish/ent/team/fleettemplate"
+	"github.com/schardosin/astonish/pkg/fleet"
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// ===========================================================================
+// teamFleetTemplateStore implements store.FleetTemplateStore
+// ===========================================================================
+
+type teamFleetTemplateStore struct {
+	client *teament.Client
+}
+
+var _ store.FleetTemplateStore = (*teamFleetTemplateStore)(nil)
+
+func (s *teamFleetTemplateStore) GetFleet(ctx context.Context, key string) (any, bool) {
+	// Check DB first (custom templates take priority).
+	ent, err := s.client.FleetTemplate.Query().
+		Where(fleettemplate.KeyEQ(key)).
+		Only(ctx)
+	if err == nil {
+		return ent.Definition, true
+	}
+
+	// Fall back to bundled templates embedded in the binary.
+	if bundled, loadErr := fleet.LoadBundledConfigs(); loadErr == nil {
+		if f, ok := bundled[key]; ok {
+			return f, true
+		}
+	}
+	return nil, false
+}
+
+func (s *teamFleetTemplateStore) ListFleets(ctx context.Context) []store.FleetTemplateSummary {
+	// Start with bundled templates (always available from the binary).
+	var summaries []store.FleetTemplateSummary
+	bundledKeys := make(map[string]int) // key -> index in summaries
+	if bundled, err := fleet.LoadBundledConfigs(); err == nil {
+		for key, cfg := range bundled {
+			summary := store.FleetTemplateSummary{
+				Key:         key,
+				Name:        cfg.Name,
+				Description: cfg.Description,
+				AgentCount:  len(cfg.Agents),
+			}
+			for _, a := range cfg.Agents {
+				summary.AgentNames = append(summary.AgentNames, a.Name)
+			}
+			bundledKeys[key] = len(summaries)
+			summaries = append(summaries, summary)
+		}
+	}
+
+	// Merge DB templates — custom templates with the same key as a bundled
+	// one override it (user forked/customized).
+	templates, err := s.client.FleetTemplate.Query().
+		Order(fleettemplate.ByKey()).
+		All(ctx)
+	if err != nil {
+		return summaries // return bundled only on DB error
+	}
+
+	for _, t := range templates {
+		summary := store.FleetTemplateSummary{
+			Key:  t.Key,
+			Name: t.Name,
+		}
+		if desc, ok := t.Definition["description"].(string); ok {
+			summary.Description = desc
+		}
+		if agents, ok := t.Definition["agents"].([]any); ok {
+			summary.AgentCount = len(agents)
+			for _, a := range agents {
+				if agentMap, ok := a.(map[string]any); ok {
+					if name, ok := agentMap["name"].(string); ok {
+						summary.AgentNames = append(summary.AgentNames, name)
+					}
+				}
+			}
+		}
+
+		if idx, exists := bundledKeys[t.Key]; exists {
+			// Override the bundled entry with DB version.
+			summaries[idx] = summary
+		} else {
+			summaries = append(summaries, summary)
+		}
+	}
+
+	return summaries
+}
+
+func (s *teamFleetTemplateStore) Save(ctx context.Context, key string, fleet any) error {
+	definition, err := toMapAny(fleet)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetTemplateStore.Save: %w", err)
+	}
+
+	name := key
+	if n, ok := definition["name"].(string); ok && n != "" {
+		name = n
+	}
+
+	// Try update first.
+	n, err := s.client.FleetTemplate.Update().
+		Where(fleettemplate.KeyEQ(key)).
+		SetName(name).
+		SetDefinition(definition).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetTemplateStore.Save: update: %w", err)
+	}
+	if n == 0 {
+		_, err = s.client.FleetTemplate.Create().
+			SetKey(key).
+			SetName(name).
+			SetDefinition(definition).
+			Save(ctx)
+		if err != nil {
+			return fmt.Errorf("entstore: FleetTemplateStore.Save: create: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *teamFleetTemplateStore) Delete(ctx context.Context, key string) error {
+	_, err := s.client.FleetTemplate.Delete().
+		Where(fleettemplate.KeyEQ(key)).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetTemplateStore.Delete: %w", err)
+	}
+	return nil
+}
+
+func (s *teamFleetTemplateStore) Count(ctx context.Context) int {
+	count, err := s.client.FleetTemplate.Query().Count(ctx)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func (s *teamFleetTemplateStore) Reload(_ context.Context) error {
+	// No-op for DB-backed store.
+	return nil
+}
+
+// ===========================================================================
+// teamFleetPlanStore implements store.FleetPlanStore
+// ===========================================================================
+
+type teamFleetPlanStore struct {
+	client *teament.Client
+}
+
+var _ store.FleetPlanStore = (*teamFleetPlanStore)(nil)
+
+func (s *teamFleetPlanStore) GetPlan(ctx context.Context, key string) (any, bool) {
+	ent, err := s.client.FleetPlan.Query().
+		Where(fleetplan.KeyEQ(key)).
+		Only(ctx)
+	if err != nil {
+		return nil, false
+	}
+
+	// Deserialize the stored map[string]any back into *fleet.FleetPlan so that
+	// callers (e.g., dbPlanAccessAdapter) can type-assert to the concrete type.
+	data, err := json.Marshal(ent.Definition)
+	if err != nil {
+		return ent.Definition, true
+	}
+	var plan fleet.FleetPlan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return ent.Definition, true
+	}
+	return &plan, true
+}
+
+func (s *teamFleetPlanStore) ListPlans(ctx context.Context) []store.FleetPlanSummary {
+	plans, err := s.client.FleetPlan.Query().
+		Order(fleetplan.ByKey()).
+		All(ctx)
+	if err != nil {
+		return nil
+	}
+
+	summaries := make([]store.FleetPlanSummary, 0, len(plans))
+	for _, p := range plans {
+		summary := store.FleetPlanSummary{
+			Key:  p.Key,
+			Name: p.Name,
+		}
+		if desc, ok := p.Definition["description"].(string); ok {
+			summary.Description = desc
+		}
+		if ct, ok := p.Definition["channel_type"].(string); ok {
+			summary.ChannelType = ct
+		}
+		if cf, ok := p.Definition["created_from"].(string); ok {
+			summary.CreatedFrom = cf
+		}
+		// Count agents from definition.
+		if agents, ok := p.Definition["agents"].([]any); ok {
+			summary.AgentCount = len(agents)
+			for _, a := range agents {
+				if agentMap, ok := a.(map[string]any); ok {
+					if name, ok := agentMap["name"].(string); ok {
+						summary.AgentNames = append(summary.AgentNames, name)
+					}
+				}
+			}
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries
+}
+
+func (s *teamFleetPlanStore) Save(ctx context.Context, plan any) error {
+	definition, err := toMapAny(plan)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetPlanStore.Save: %w", err)
+	}
+
+	key, _ := definition["key"].(string)
+	if key == "" {
+		return fmt.Errorf("entstore: FleetPlanStore.Save: missing 'key' in plan definition")
+	}
+	name := key
+	if n, ok := definition["name"].(string); ok && n != "" {
+		name = n
+	}
+
+	// Try update first.
+	n, updateErr := s.client.FleetPlan.Update().
+		Where(fleetplan.KeyEQ(key)).
+		SetName(name).
+		SetDefinition(definition).
+		Save(ctx)
+	if updateErr != nil {
+		return fmt.Errorf("entstore: FleetPlanStore.Save: update: %w", updateErr)
+	}
+	if n == 0 {
+		create := s.client.FleetPlan.Create().
+			SetKey(key).
+			SetName(name).
+			SetDefinition(definition)
+
+		if createdBy, ok := definition["created_by"].(string); ok {
+			if uid, err := uuid.Parse(createdBy); err == nil {
+				create.SetCreatedBy(uid)
+			}
+		}
+
+		_, err = create.Save(ctx)
+		if err != nil {
+			return fmt.Errorf("entstore: FleetPlanStore.Save: create: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *teamFleetPlanStore) Delete(ctx context.Context, key string) error {
+	_, err := s.client.FleetPlan.Delete().
+		Where(fleetplan.KeyEQ(key)).
+		Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetPlanStore.Delete: %w", err)
+	}
+	return nil
+}
+
+func (s *teamFleetPlanStore) Count(ctx context.Context) int {
+	count, err := s.client.FleetPlan.Query().Count(ctx)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func (s *teamFleetPlanStore) Reload(_ context.Context) error {
+	// No-op for DB-backed store.
+	return nil
+}
+
+func (s *teamFleetPlanStore) GetPlanYAML(ctx context.Context, key string) (string, error) {
+	ent, err := s.client.FleetPlan.Query().
+		Where(fleetplan.KeyEQ(key)).
+		Only(ctx)
+	if err != nil {
+		if teament.IsNotFound(err) {
+			return "", fmt.Errorf("fleet plan %q not found", key)
+		}
+		return "", fmt.Errorf("entstore: FleetPlanStore.GetPlanYAML: %w", err)
+	}
+	if ent.YamlContent != nil {
+		return *ent.YamlContent, nil
+	}
+	return "", nil
+}
+
+func (s *teamFleetPlanStore) SavePlanYAML(ctx context.Context, key string, yamlContent string) error {
+	n, err := s.client.FleetPlan.Update().
+		Where(fleetplan.KeyEQ(key)).
+		SetYamlContent(yamlContent).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("entstore: FleetPlanStore.SavePlanYAML: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("fleet plan %q not found", key)
+	}
+	return nil
+}
+
+// --- Helpers ---
+
+// toMapAny converts a value to map[string]any via JSON round-trip.
+func toMapAny(v any) (map[string]any, error) {
+	switch val := v.(type) {
+	case map[string]any:
+		return val, nil
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, fmt.Errorf("marshal to json: %w", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return nil, fmt.Errorf("unmarshal to map: %w", err)
+		}
+		return m, nil
+	}
+}

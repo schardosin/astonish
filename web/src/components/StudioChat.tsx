@@ -192,6 +192,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [pendingFleetPlanPrompt, setPendingFleetPlanPrompt] = useState<DeferredPrompt | null>(null) // deferred plan creation message
   const [pendingDrillPrompt, setPendingDrillPrompt] = useState<DeferredPrompt | null>(null) // deferred drill creation message
   const [activeWizardContext, setActiveWizardContext] = useState<string | null>(null) // persisted wizard system prompt for multi-turn sessions
+  const [activePinnedToolGroups, setActivePinnedToolGroups] = useState<string[] | null>(null) // persisted pinned tool groups for wizard sessions
 
   // Slash command popup
   const [showSlashPopup, setShowSlashPopup] = useState(false)
@@ -1177,7 +1178,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     loadSessions()
   }, [fleetSessionId, changeSession])
 
-  const sendMessage = useCallback((text: string, options: { systemContext?: string } = {}) => {
+  const sendMessage = useCallback((text: string, options: { systemContext?: string, pinnedToolGroups?: string[] } = {}) => {
     if (!text.trim()) return
     const userMsg = text.trim()
 
@@ -1202,6 +1203,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       sessionId: activeSessionId || '',
       message: userMsg,
       systemContext: options.systemContext || activeWizardContext || undefined,
+      pinnedToolGroups: options.pinnedToolGroups || activePinnedToolGroups || undefined,
       onEvent: (eventType, data) => {
         switch (eventType) {
           case 'session':
@@ -1398,11 +1400,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             {
               const hint = (data.hint as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
+              const pinnedGroups = (data.pinned_tool_groups as string[]) || null
 
               if (wizardSystemPrompt) {
                 // Template has a wizard: persist the system prompt so it's sent on every turn
                 setActiveWizardContext(wizardSystemPrompt)
-                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: wizardSystemPrompt })
+                if (pinnedGroups && pinnedGroups.length > 0) {
+                  setActivePinnedToolGroups(pinnedGroups)
+                }
+                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: wizardSystemPrompt, pinnedToolGroups: pinnedGroups || undefined })
               } else if (hint) {
                 // No wizard in template: use generic prompt as system context, persist it too
                 const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Guide them through:\n1. Plan identity (key, name, description)\n2. Communication channel type and settings\n3. Artifact destinations\n4. Credentials for external services\n5. Any agent behavior customizations\n\nBefore saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes. Include the same credentials in the save call.`
@@ -1751,14 +1757,14 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     })
 
     abortRef.current = controller
-  }, [activeSessionId, activeWizardContext])
+  }, [activeSessionId, activeWizardContext, activePinnedToolGroups])
 
   // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
   useEffect(() => {
     if (pendingFleetPlanPrompt && !isStreaming) {
-      const { message, systemContext } = pendingFleetPlanPrompt
+      const { message, systemContext, pinnedToolGroups } = pendingFleetPlanPrompt
       setPendingFleetPlanPrompt(null)
-      sendMessage(message, { systemContext })
+      sendMessage(message, { systemContext, pinnedToolGroups })
     }
   }, [pendingFleetPlanPrompt, isStreaming, sendMessage])
 

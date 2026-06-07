@@ -41,6 +41,16 @@ var (
 	fleetFileStore *session.FileStore
 )
 
+// excludedFleetTools lists tools that are excluded from fleet sessions because
+// they require pool-based sandbox infrastructure (NodeClientPool) that fleet
+// sessions don't have. Fleet sessions use a single dedicated LazyNodeClient,
+// so pool-switching tools are non-functional and confuse agents into attempting
+// environment switches that don't exist in fleet context.
+var excludedFleetTools = map[string]bool{
+	"use_sandbox_template":   true,
+	"list_sandbox_templates": true,
+}
+
 // SetFleetSessionStore sets the FileStore used for fleet session persistence.
 // Must be called during daemon startup before any fleet sessions are created.
 func SetFleetSessionStore(fs *session.FileStore) {
@@ -740,7 +750,10 @@ func FleetSessionsHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Platform mode: read persisted fleet sessions from the team Sessions store.
 	if svc := store.FromRequest(r); svc != nil && svc.Sessions != nil {
-		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, userID)
+		// Fleet sessions are team-level resources — list ALL sessions regardless
+		// of creator (pass empty userID to skip the user filter). The FleetKey
+		// filter below ensures only fleet sessions are returned.
+		metas, err := svc.Sessions.ListSessionMetas(r.Context(), studioChatAppName, "")
 		if err != nil {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("listing fleet sessions: %v", err))
 			return
@@ -1234,11 +1247,20 @@ func wireFleetSandbox(fleetSession *fleet.FleetSession, plan *fleet.FleetPlan, g
 	// filter from SubAgentManager.resolveTools() — tools in that set (opencode,
 	// delegate_tasks, etc.) come exclusively from FleetTools so they must be
 	// excluded from the base tools to avoid duplicates.
+	//
+	// Additionally, fleet sessions exclude pool-based sandbox tools that require
+	// NodeClientPool (per-session containers). Fleet uses a single LazyNodeClient
+	// so these tools are non-functional and confuse agents into attempting
+	// environment switches that don't exist in fleet context.
 	var baseTools []tool.Tool
 	for _, t := range subAgentMgr.AllTools() {
-		if !agent.IsExcludedChildTool(t.Name()) {
-			baseTools = append(baseTools, t)
+		if agent.IsExcludedChildTool(t.Name()) {
+			continue
 		}
+		if excludedFleetTools[t.Name()] {
+			continue
+		}
+		baseTools = append(baseTools, t)
 	}
 	wrappedTools := sandbox.WrapToolsWithNodeClient(baseTools, lazyNode)
 	if subAgentMgr.FleetTools != nil {

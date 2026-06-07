@@ -37,6 +37,12 @@ type PlanWizardConfig struct {
 	// user as a chat message. The prompt should tell the LLM what to ask about,
 	// what to validate, and how to call save_fleet_plan.
 	SystemPrompt string `yaml:"system_prompt" json:"system_prompt"`
+	// PinnedToolGroups lists tool group names that should always be available
+	// during the wizard conversation, regardless of ToolIndex scoring.
+	// This prevents critical tools (e.g., save_sandbox_template, save_fleet_plan)
+	// from disappearing mid-conversation when user messages don't semantically
+	// match those tools. Example: ["fleet", "sandbox_templates", "drill"]
+	PinnedToolGroups []string `yaml:"pinned_tool_groups,omitempty" json:"pinned_tool_groups,omitempty"`
 }
 
 // CommunicationConfig defines the communication graph for the fleet.

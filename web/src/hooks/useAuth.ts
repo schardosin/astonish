@@ -22,6 +22,10 @@ export interface AuthState {
   org: AuthOrg | null
   orgs: UserOrg[] | null
   team: string | null
+  /** Set when registration or login reveals that email verification is pending */
+  pendingVerificationEmail: string | null
+  /** Set when login reveals the user has no team membership */
+  noTeamMembership: boolean
 }
 
 export function useAuth(isPlatformMode: boolean) {
@@ -32,6 +36,8 @@ export function useAuth(isPlatformMode: boolean) {
     org: null,
     orgs: null,
     team: null,
+    pendingVerificationEmail: null,
+    noTeamMembership: false,
   })
 
   // Check auth on mount (only in platform mode)
@@ -41,7 +47,7 @@ export function useAuth(isPlatformMode: boolean) {
     // Reset stale personal-mode state before checking auth.
     // useState's initializer only runs once, so if isPlatformMode transitions
     // from false→true, we'd have stale isAuthenticated=true with no user data.
-    setState({ isAuthenticated: false, isLoading: true, user: null, org: null, orgs: null, team: null })
+    setState({ isAuthenticated: false, isLoading: true, user: null, org: null, orgs: null, team: null, pendingVerificationEmail: null, noTeamMembership: false })
 
     let cancelled = false
     checkAuth().then(async result => {
@@ -65,9 +71,11 @@ export function useAuth(isPlatformMode: boolean) {
           org: result.org,
           orgs,
           team: result.team,
+          pendingVerificationEmail: null,
+          noTeamMembership: false,
         })
       } else {
-        setState({ isAuthenticated: false, isLoading: false, user: null, org: null, orgs: null, team: null })
+        setState({ isAuthenticated: false, isLoading: false, user: null, org: null, orgs: null, team: null, pendingVerificationEmail: null, noTeamMembership: false })
       }
     })
     return () => { cancelled = true }
@@ -82,7 +90,7 @@ export function useAuth(isPlatformMode: boolean) {
         await refreshToken()
       } catch {
         // Refresh failed — user needs to re-login
-        setState(prev => ({ ...prev, isAuthenticated: false, user: null, org: null, orgs: null, team: null }))
+        setState(prev => ({ ...prev, isAuthenticated: false, user: null, org: null, orgs: null, team: null, pendingVerificationEmail: null, noTeamMembership: false }))
       }
     }, 12 * 60 * 1000) // 12 minutes
 
@@ -91,6 +99,32 @@ export function useAuth(isPlatformMode: boolean) {
 
   const login = useCallback(async (email: string, password: string) => {
     const result = await apiLogin(email, password)
+
+    // Handle pending verification state
+    if (result.error === 'email_not_verified' || result.requires_verification) {
+      setState(prev => ({
+        ...prev,
+        pendingVerificationEmail: result.email || email,
+        noTeamMembership: false,
+      }))
+      return result
+    }
+
+    // Handle no team membership state
+    if (result.error === 'no_team_membership') {
+      setState(prev => ({
+        ...prev,
+        noTeamMembership: true,
+        pendingVerificationEmail: null,
+      }))
+      return result
+    }
+
+    // Normal login with full auth response
+    if (!result.user || !result.org) {
+      throw new Error(result.message || 'Login failed')
+    }
+
     // Fetch orgs after successful login
     let orgs: UserOrg[] | null = null
     try {
@@ -117,6 +151,8 @@ export function useAuth(isPlatformMode: boolean) {
           org: switchResult.org,
           orgs,
           team: null,
+          pendingVerificationEmail: null,
+          noTeamMembership: false,
         })
         return switchResult
       } catch {
@@ -134,12 +170,40 @@ export function useAuth(isPlatformMode: boolean) {
       org: result.org,
       orgs,
       team: null,
+      pendingVerificationEmail: null,
+      noTeamMembership: false,
     })
     return result
   }, [])
 
   const register = useCallback(async (email: string, password: string, displayName: string) => {
     const result = await apiRegister(email, password, displayName)
+
+    // Handle verification required (non-first user with email verification)
+    if (result.requires_verification) {
+      setState(prev => ({
+        ...prev,
+        pendingVerificationEmail: result.email || email,
+        noTeamMembership: false,
+      }))
+      return result
+    }
+
+    // Handle no-team state (verification disabled, but no auto-assign)
+    if (result.no_team) {
+      setState(prev => ({
+        ...prev,
+        noTeamMembership: true,
+        pendingVerificationEmail: null,
+      }))
+      return result
+    }
+
+    // First user bootstrap — full auth response
+    if (!result.user || !result.org) {
+      throw new Error(result.message || 'Registration failed')
+    }
+
     // After registration, user has exactly one org
     let orgs: UserOrg[] | null = null
     try {
@@ -157,6 +221,8 @@ export function useAuth(isPlatformMode: boolean) {
       org: result.org,
       orgs,
       team: null,
+      pendingVerificationEmail: null,
+      noTeamMembership: false,
     })
     return result
   }, [])
@@ -172,6 +238,8 @@ export function useAuth(isPlatformMode: boolean) {
       org: null,
       orgs: null,
       team: null,
+      pendingVerificationEmail: null,
+      noTeamMembership: false,
     })
   }, [])
 
@@ -194,6 +262,8 @@ export function useAuth(isPlatformMode: boolean) {
         org: result.org,
         orgs,
         team: result.team,
+        pendingVerificationEmail: null,
+        noTeamMembership: false,
       })
     } else {
       setState(prev => ({ ...prev, isLoading: false, isAuthenticated: false }))
@@ -218,6 +288,8 @@ export function useAuth(isPlatformMode: boolean) {
       org: result.org,
       orgs,
       team: null, // Team resets on org switch — will be resolved by App
+      pendingVerificationEmail: null,
+      noTeamMembership: false,
     })
     return result
   }, [])

@@ -1,0 +1,892 @@
+package entstore
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"log/slog"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	entschema "entgo.io/ent/dialect/sql/schema"
+
+	orgent "github.com/schardosin/astonish/ent/org"
+	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
+	personalent "github.com/schardosin/astonish/ent/personal"
+	teament "github.com/schardosin/astonish/ent/team"
+	"github.com/schardosin/astonish/ent/platform/organization"
+	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
+	"github.com/schardosin/astonish/pkg/store/pgutil"
+)
+
+// --- store.TenantRouter implementation ---
+
+func (s *Store) ForOrg(orgSlug string) (store.OrgDataStore, error) {
+	// Check cache first.
+	if cached, ok := s.orgClients.Load(orgSlug); ok {
+		return cached.(*orgDataStore), nil
+	}
+
+	// Open connection to the org database.
+	orgClient, orgDB, err := s.openOrgDB(orgSlug)
+	if err != nil {
+		return nil, fmt.Errorf("entstore: ForOrg(%s): %w", orgSlug, err)
+	}
+
+	ds := &orgDataStore{
+		orgSlug:     orgSlug,
+		client:      orgClient,
+		db:          orgDB,
+		dialect:     s.dialect,
+		embedFunc:   s.embedFunc,
+		parentStore: s,
+		teams:       make(map[string]*teamDataStore),
+		users:       make(map[string]*personalDataStore),
+	}
+
+	s.orgClients.Store(orgSlug, ds)
+	return ds, nil
+}
+
+func (s *Store) ProvisionOrg(ctx context.Context, orgID, slug string) error {
+	switch s.dialect {
+	case DialectPostgres:
+		return s.provisionOrgPostgres(ctx, slug)
+	case DialectSQLite:
+		return s.provisionOrgSQLite(ctx, slug)
+	default:
+		return fmt.Errorf("entstore: unsupported dialect: %s", s.dialect)
+	}
+}
+
+func (s *Store) DecommissionOrg(ctx context.Context, orgSlug string) error {
+	// Remove from cache and close.
+	if cached, ok := s.orgClients.LoadAndDelete(orgSlug); ok {
+		if ds, ok := cached.(*orgDataStore); ok {
+			ds.Close()
+		}
+	}
+
+	switch s.dialect {
+	case DialectPostgres:
+		return s.decommissionOrgPostgres(ctx, orgSlug)
+	case DialectSQLite:
+		return s.decommissionOrgSQLite(ctx, orgSlug)
+	default:
+		return fmt.Errorf("entstore: unsupported dialect: %s", s.dialect)
+	}
+}
+
+// --- Postgres helpers ---
+
+// sanitizeSlug replaces hyphens with underscores to match the old pgstore
+// database naming convention (PG identifiers cannot contain hyphens unquoted).
+func sanitizeSlug(slug string) string {
+	return strings.ReplaceAll(slug, "-", "_")
+}
+
+// orgDBName returns the database name for an org in PG mode.
+// Matches old pgstore convention: astonish_{suffix}_{slug_sanitized}
+func (s *Store) orgDBName(slug string) string {
+	safe := sanitizeSlug(slug)
+	if s.instanceSuffix != "" {
+		return fmt.Sprintf("astonish_%s_%s", s.instanceSuffix, safe)
+	}
+	return fmt.Sprintf("astonish_%s", safe)
+}
+
+// teamSchemaName returns the PG schema name for a team within the org database.
+// Matches old pgstore convention: team_{teamSlug}
+func teamSchemaName(teamSlug string) string {
+	return "team_" + teamSlug
+}
+
+// personalSchemaName returns the PG schema name for a user's personal space
+// within the org database. Matches old pgstore convention: personal_{uuid_underscored}
+func personalSchemaName(userID string) string {
+	return "personal_" + strings.ReplaceAll(userID, "-", "_")
+}
+
+// deriveDSN replaces the database name in the platform DSN.
+func (s *Store) deriveDSN(dbName string) (string, error) {
+	u, err := url.Parse(s.platformDSN)
+	if err != nil {
+		return "", fmt.Errorf("parse platform DSN: %w", err)
+	}
+	u.Path = "/" + dbName
+	return u.String(), nil
+}
+
+// deriveSchemaAwareDSN returns a DSN targeting a specific PG schema within a database.
+// It sets search_path=<schema>,public so the connection targets the given schema.
+func (s *Store) deriveSchemaAwareDSN(dbName, schemaName string) (string, error) {
+	u, err := url.Parse(s.platformDSN)
+	if err != nil {
+		return "", fmt.Errorf("parse platform DSN: %w", err)
+	}
+	u.Path = "/" + dbName
+	q := u.Query()
+	q.Set("search_path", schemaName+",public")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
+	switch s.dialect {
+	case DialectPostgres:
+		dbName := s.orgDBName(slug)
+		dsn, err := s.deriveDSN(dbName)
+		if err != nil {
+			return nil, nil, err
+		}
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open org pg db %s: %w", dbName, err)
+		}
+		drv := entsql.OpenDB(dialect.Postgres, db)
+		client := orgent.NewClient(orgent.Driver(drv))
+
+		// Ensure pgvector extension exists before auto-migration (needed for
+		// vector(384) columns). Idempotent — harmless if already present.
+		if _, err := db.Exec("CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("openOrgDB: could not ensure pgvector extension",
+				"org", slug, "error", err)
+		}
+
+		// Migrate legacy pgstore table schemas to match Ent's expectations
+		// (e.g. team_memberships composite PK → UUID id PK). Idempotent.
+		migrateOrgLegacySchema(context.Background(), db)
+
+		// Auto-migrate: create any missing tables (e.g. team_memberships added
+		// after the org was originally provisioned). Skip ModifyTable/ModifyColumn
+		// to tolerate SERIAL-vs-IDENTITY differences on tables created by legacy
+		// (pre-Ent) migrations — SERIAL works identically to IDENTITY at runtime.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
+			db.Close()
+			return nil, nil, fmt.Errorf("auto-migrate org pg db %s: %w", dbName, err)
+		}
+
+		return client, db, nil
+
+	case DialectSQLite:
+		dbPath := filepath.Join(s.dataDir, "orgs", slug, "org.db")
+		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+			return nil, nil, fmt.Errorf("org database not found: %s", dbPath)
+		}
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open org sqlite db %s: %w", dbPath, err)
+		}
+		// Enable WAL and foreign keys.
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA foreign_keys=ON",
+			"PRAGMA busy_timeout=5000",
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				db.Close()
+				return nil, nil, fmt.Errorf("pragma: %w", err)
+			}
+		}
+		drv := entsql.OpenDB(dialect.SQLite, db)
+		client := orgent.NewClient(orgent.Driver(drv))
+
+		// Auto-migrate: create any missing tables. Skip modify operations for safety.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
+			db.Close()
+			return nil, nil, fmt.Errorf("auto-migrate org sqlite db %s: %w", dbPath, err)
+		}
+
+		return client, db, nil
+
+	default:
+		return nil, nil, fmt.Errorf("unsupported dialect: %s", s.dialect)
+	}
+}
+
+func (s *Store) provisionOrgPostgres(ctx context.Context, slug string) error {
+	dbName := s.orgDBName(slug)
+	// Quote the database name for safety.
+	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
+
+	// Create the database on the platform connection.
+	if _, err := s.platformDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil {
+		// Ignore "already exists" errors.
+		if !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("create database %s: %w", dbName, err)
+		}
+	}
+
+	// Open connection to the new database and run Ent auto-migration.
+	client, db, err := s.openOrgDB(slug)
+	if err != nil {
+		return fmt.Errorf("open new org db: %w", err)
+	}
+	defer db.Close()
+	defer client.Close()
+
+	// Pre-create the pgvector extension so Schema.Create can use vector(384) columns.
+	if _, err := db.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+		return fmt.Errorf("create vector extension in org db: %w", err)
+	}
+
+	if err := client.Schema.Create(ctx); err != nil {
+		return fmt.Errorf("migrate org schema: %w", err)
+	}
+
+	// Apply PG-specific extras (extensions, indexes, triggers, RLS).
+	if err := s.applyPGExtras(ctx, ScopeOrg, db); err != nil {
+		return fmt.Errorf("apply org pg extras: %w", err)
+	}
+
+	// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+	if err := s.applySQLiteExtras(ctx, ScopeOrg, db); err != nil {
+		return fmt.Errorf("apply org sqlite extras: %w", err)
+	}
+
+	// Apply grants for app role.
+	if err := pgutil.ApplyGrants(ctx, db, "org"); err != nil {
+		return fmt.Errorf("apply org grants: %w", err)
+	}
+
+	// Update the org's db_name field in the platform database.
+	if _, err := s.platformClient.Organization.Update().
+		Where(organization.SlugEQ(slug)).
+		SetDbName(dbName).
+		Save(ctx); err != nil {
+		slog.Warn("failed to update org db_name", "slug", slug, "error", err)
+	}
+
+	slog.Info("provisioned org database", "slug", slug, "db", dbName)
+	return nil
+}
+
+func (s *Store) provisionOrgSQLite(ctx context.Context, slug string) error {
+	orgDir := filepath.Join(s.dataDir, "orgs", slug)
+	if err := os.MkdirAll(orgDir, 0750); err != nil {
+		return fmt.Errorf("create org directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(orgDir, "teams"), 0750); err != nil {
+		return fmt.Errorf("create teams directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(orgDir, "personal"), 0750); err != nil {
+		return fmt.Errorf("create personal directory: %w", err)
+	}
+
+	dbPath := filepath.Join(orgDir, "org.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return fmt.Errorf("create org database: %w", err)
+	}
+	defer db.Close()
+
+	// Enable WAL and foreign keys.
+	for _, pragma := range []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA busy_timeout=5000",
+	} {
+		if _, err := db.ExecContext(ctx, pragma); err != nil {
+			return fmt.Errorf("pragma: %w", err)
+		}
+	}
+
+	drv := entsql.OpenDB(dialect.SQLite, db)
+	client := orgent.NewClient(orgent.Driver(drv))
+	defer client.Close()
+
+	if err := client.Schema.Create(ctx); err != nil {
+		return fmt.Errorf("migrate org schema: %w", err)
+	}
+
+	slog.Info("provisioned org database (sqlite)", "slug", slug, "path", dbPath)
+	return nil
+}
+
+func (s *Store) decommissionOrgPostgres(ctx context.Context, orgSlug string) error {
+	dbName := s.orgDBName(orgSlug)
+	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
+
+	// Terminate existing connections.
+	_, _ = s.platformDB.ExecContext(ctx,
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, dbName)
+
+	// Drop the database.
+	if _, err := s.platformDB.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoted); err != nil {
+		return fmt.Errorf("drop database %s: %w", dbName, err)
+	}
+
+	slog.Info("decommissioned org database", "slug", orgSlug, "db", dbName)
+	return nil
+}
+
+func (s *Store) decommissionOrgSQLite(_ context.Context, orgSlug string) error {
+	orgDir := filepath.Join(s.dataDir, "orgs", orgSlug)
+	if err := os.RemoveAll(orgDir); err != nil {
+		return fmt.Errorf("remove org directory: %w", err)
+	}
+	slog.Info("decommissioned org (sqlite)", "slug", orgSlug)
+	return nil
+}
+
+// ===========================================================================
+// orgDataStore implements store.OrgDataStore
+// ===========================================================================
+
+type orgDataStore struct {
+	orgSlug   string
+	client    *orgent.Client
+	db        *sql.DB
+	dialect   Dialect
+	embedFunc store.EmbedFunc
+
+	parentStore *Store
+
+	mu    sync.RWMutex
+	teams map[string]*teamDataStore
+	users map[string]*personalDataStore
+
+	credKeyOnce sync.Once
+	credKey     []byte // cached per-org credential DEK
+}
+
+// getOrCreateCredentialKey returns the per-org Data Encryption Key (DEK) used
+// for credential encryption. The DEK is stored encrypted (by the master key)
+// in the org_encryption_keys table. This replicates the old pgstore's envelope
+// encryption scheme: master key encrypts the DEK, DEK encrypts credential data.
+//
+// If no DEK exists yet (new org), one is generated and stored.
+// The result is cached for the lifetime of the orgDataStore.
+// Returns nil if no master key is configured (encryption disabled).
+func (o *orgDataStore) getOrCreateCredentialKey() []byte {
+	o.credKeyOnce.Do(func() {
+		masterKey := loadMasterKey()
+		if masterKey == nil {
+			return // encryption disabled
+		}
+
+		ctx := context.Background()
+
+		// Try to load existing DEK.
+		ek, err := o.client.OrgEncryptionKey.Query().
+			Where(orgencryptionkey.KeyNameEQ("credential_key")).
+			Only(ctx)
+		if err == nil {
+			// Decrypt the DEK with the master key.
+			dek, decErr := credentials.Decrypt(ek.KeyData, masterKey)
+			if decErr != nil {
+				slog.Error("failed to decrypt org credential key", "org", o.orgSlug, "error", decErr)
+				return
+			}
+			o.credKey = dek
+			return
+		}
+
+		// DEK doesn't exist — generate one and store it.
+		dek, genErr := credentials.GenerateKey()
+		if genErr != nil {
+			slog.Error("failed to generate org credential key", "org", o.orgSlug, "error", genErr)
+			return
+		}
+
+		encryptedDEK, encErr := credentials.Encrypt(dek, masterKey)
+		if encErr != nil {
+			slog.Error("failed to encrypt org credential key", "org", o.orgSlug, "error", encErr)
+			return
+		}
+
+		_, storeErr := o.client.OrgEncryptionKey.Create().
+			SetKeyName("credential_key").
+			SetKeyData(encryptedDEK).
+			Save(ctx)
+		if storeErr != nil {
+			slog.Error("failed to store org credential key", "org", o.orgSlug, "error", storeErr)
+			return
+		}
+
+		o.credKey = dek
+	})
+	return o.credKey
+}
+
+func (o *orgDataStore) ForTeam(teamSlug string) store.TeamDataStore {
+	o.mu.RLock()
+	if ts, ok := o.teams[teamSlug]; ok {
+		o.mu.RUnlock()
+		return ts
+	}
+	o.mu.RUnlock()
+
+	ts, err := o.openTeamDB(teamSlug)
+	if err != nil {
+		slog.Error("open team database", "team", teamSlug, "org", o.orgSlug, "error", err)
+		return nil
+	}
+
+	o.mu.Lock()
+	o.teams[teamSlug] = ts
+	o.mu.Unlock()
+	return ts
+}
+
+func (o *orgDataStore) ForUser(userID string) store.PersonalDataStore {
+	o.mu.RLock()
+	if ps, ok := o.users[userID]; ok {
+		o.mu.RUnlock()
+		return ps
+	}
+	o.mu.RUnlock()
+
+	ps, err := o.openPersonalDB(userID)
+	if err != nil {
+		slog.Error("open personal database", "user", userID, "org", o.orgSlug, "error", err)
+		return nil
+	}
+
+	o.mu.Lock()
+	o.users[userID] = ps
+	o.mu.Unlock()
+	return ps
+}
+
+func (o *orgDataStore) OrgMemories() store.MemoryStore {
+	ms := &orgMemoryStore{
+		client:    o.client,
+		db:        o.db,
+		dialect:   o.dialect,
+		embedFunc: o.embedFunc,
+		table:     "org_memories",
+	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "org_memories_fts"
+	}
+	return ms
+}
+
+func (o *orgDataStore) OrgSkills() store.SkillStore {
+	return &orgSkillStore{client: o.client}
+}
+
+func (o *orgDataStore) OrgMCPServers() store.MCPServerStore {
+	return &orgMCPServerStore{client: o.client}
+}
+
+func (o *orgDataStore) OrgApps() store.AppStore {
+	return &orgAppStore{client: o.client}
+}
+
+func (o *orgDataStore) OrgAudit() store.AuditStore {
+	return &orgAuditStore{client: o.client}
+}
+
+func (o *orgDataStore) Teams() store.TeamManagementStore {
+	return &orgTeamStore{client: o.client}
+}
+
+func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
+	switch o.dialect {
+	case DialectPostgres:
+		schemaName := teamSchemaName(slug)
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
+
+		// Create the PG schema within the org database.
+		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil {
+			return fmt.Errorf("create team schema %s: %w", schemaName, err)
+		}
+
+		client, db, err := o.openTeamDBBySchema(schemaName)
+		if err != nil {
+			return fmt.Errorf("open new team schema: %w", err)
+		}
+		defer db.Close()
+		defer client.Close()
+
+		if err := client.Schema.Create(ctx); err != nil {
+			return fmt.Errorf("migrate team schema: %w", err)
+		}
+
+		// Apply PG-specific extras (indexes, triggers).
+		if err := o.parentStore.applyPGExtras(ctx, ScopeTeam, db); err != nil {
+			return fmt.Errorf("apply team pg extras: %w", err)
+		}
+
+		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+		if err := o.parentStore.applySQLiteExtras(ctx, ScopeTeam, db); err != nil {
+			return fmt.Errorf("apply team sqlite extras: %w", err)
+		}
+
+		// Apply grants for app role.
+		if err := pgutil.ApplyGrants(ctx, db, "team"); err != nil {
+			return fmt.Errorf("apply team grants: %w", err)
+		}
+
+		slog.Info("provisioned team schema", "org", o.orgSlug, "team", slug, "schema", schemaName)
+
+	case DialectSQLite:
+		dbPath := filepath.Join(o.parentStore.dataDir, "orgs", o.orgSlug, "teams", slug+".db")
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0750); err != nil {
+			return fmt.Errorf("create team directory: %w", err)
+		}
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			return fmt.Errorf("create team database: %w", err)
+		}
+		defer db.Close()
+
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA foreign_keys=ON",
+			"PRAGMA busy_timeout=5000",
+		} {
+			if _, err := db.ExecContext(ctx, pragma); err != nil {
+				return fmt.Errorf("pragma: %w", err)
+			}
+		}
+
+		drv := entsql.OpenDB(dialect.SQLite, db)
+		client := teament.NewClient(teament.Driver(drv))
+		defer client.Close()
+
+		if err := client.Schema.Create(ctx); err != nil {
+			return fmt.Errorf("migrate team schema: %w", err)
+		}
+		slog.Info("provisioned team database (sqlite)", "org", o.orgSlug, "team", slug)
+	}
+	return nil
+}
+
+func (o *orgDataStore) ProvisionPersonalSchema(ctx context.Context, userID string) error {
+	switch o.dialect {
+	case DialectPostgres:
+		schemaName := personalSchemaName(userID)
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
+
+		// Create the PG schema within the org database.
+		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil {
+			return fmt.Errorf("create personal schema %s: %w", schemaName, err)
+		}
+
+		client, db, err := o.openPersonalDBBySchema(schemaName)
+		if err != nil {
+			return fmt.Errorf("open new personal schema: %w", err)
+		}
+		defer db.Close()
+		defer client.Close()
+
+		if err := client.Schema.Create(ctx); err != nil {
+			return fmt.Errorf("migrate personal schema: %w", err)
+		}
+
+		// Apply PG-specific extras (indexes, triggers).
+		if err := o.parentStore.applyPGExtras(ctx, ScopePersonal, db); err != nil {
+			return fmt.Errorf("apply personal pg extras: %w", err)
+		}
+
+		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
+		if err := o.parentStore.applySQLiteExtras(ctx, ScopePersonal, db); err != nil {
+			return fmt.Errorf("apply personal sqlite extras: %w", err)
+		}
+
+		// Apply grants for app role.
+		if err := pgutil.ApplyGrants(ctx, db, "personal"); err != nil {
+			return fmt.Errorf("apply personal grants: %w", err)
+		}
+
+		slog.Info("provisioned personal schema", "org", o.orgSlug, "user", userID, "schema", schemaName)
+
+	case DialectSQLite:
+		safeID := strings.ReplaceAll(userID, "/", "_")
+		dbPath := filepath.Join(o.parentStore.dataDir, "orgs", o.orgSlug, "personal", safeID+".db")
+		if err := os.MkdirAll(filepath.Dir(dbPath), 0750); err != nil {
+			return fmt.Errorf("create personal directory: %w", err)
+		}
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			return fmt.Errorf("create personal database: %w", err)
+		}
+		defer db.Close()
+
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA foreign_keys=ON",
+			"PRAGMA busy_timeout=5000",
+		} {
+			if _, err := db.ExecContext(ctx, pragma); err != nil {
+				return fmt.Errorf("pragma: %w", err)
+			}
+		}
+
+		drv := entsql.OpenDB(dialect.SQLite, db)
+		client := personalent.NewClient(personalent.Driver(drv))
+		defer client.Close()
+
+		if err := client.Schema.Create(ctx); err != nil {
+			return fmt.Errorf("migrate personal schema: %w", err)
+		}
+		slog.Info("provisioned personal database (sqlite)", "org", o.orgSlug, "user", userID)
+	}
+	return nil
+}
+
+func (o *orgDataStore) Close() error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	// Close all team stores.
+	for _, ts := range o.teams {
+		if ts.db != nil {
+			ts.db.Close()
+		}
+		if ts.client != nil {
+			ts.client.Close()
+		}
+	}
+	o.teams = make(map[string]*teamDataStore)
+
+	// Close all personal stores.
+	for _, ps := range o.users {
+		if ps.db != nil {
+			ps.db.Close()
+		}
+		if ps.client != nil {
+			ps.client.Close()
+		}
+	}
+	o.users = make(map[string]*personalDataStore)
+
+	// Close org client/db.
+	if o.client != nil {
+		o.client.Close()
+	}
+	if o.db != nil {
+		return o.db.Close()
+	}
+	return nil
+}
+
+// --- Team/Personal DB helpers ---
+
+func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
+	switch o.dialect {
+	case DialectPostgres:
+		schemaName := teamSchemaName(teamSlug)
+		client, db, err := o.openTeamDBBySchema(schemaName)
+		if err != nil {
+			return nil, err
+		}
+		return &teamDataStore{
+			teamSlug:  teamSlug,
+			orgSlug:   o.orgSlug,
+			client:    client,
+			db:        db,
+			parentOrg: o,
+		}, nil
+
+	case DialectSQLite:
+		dbPath := filepath.Join(o.parentStore.dataDir, "orgs", o.orgSlug, "teams", teamSlug+".db")
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("open team sqlite: %w", err)
+		}
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA foreign_keys=ON",
+			"PRAGMA busy_timeout=5000",
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("pragma: %w", err)
+			}
+		}
+		drv := entsql.OpenDB(dialect.SQLite, db)
+		client := teament.NewClient(teament.Driver(drv))
+		return &teamDataStore{
+			teamSlug:  teamSlug,
+			orgSlug:   o.orgSlug,
+			client:    client,
+			db:        db,
+			parentOrg: o,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported dialect: %s", o.dialect)
+	}
+}
+
+// openTeamDBBySchema opens a connection to the org database with search_path
+// targeting the given team schema.
+func (o *orgDataStore) openTeamDBBySchema(schemaName string) (*teament.Client, *sql.DB, error) {
+	orgDBName := o.parentStore.orgDBName(o.orgSlug)
+	dsn, err := o.parentStore.deriveSchemaAwareDSN(orgDBName, schemaName)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open team schema %s: %w", schemaName, err)
+	}
+	drv := entsql.OpenDB(dialect.Postgres, db)
+	client := teament.NewClient(teament.Driver(drv))
+	return client, db, nil
+}
+
+func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error) {
+	credKey := o.getOrCreateCredentialKey()
+
+	switch o.dialect {
+	case DialectPostgres:
+		schemaName := personalSchemaName(userID)
+		client, db, err := o.openPersonalDBBySchema(schemaName)
+		if err != nil {
+			return nil, err
+		}
+		return &personalDataStore{
+			userID:    userID,
+			client:    client,
+			db:        db,
+			dialect:   o.dialect,
+			embedFunc: o.embedFunc,
+			credKey:   credKey,
+		}, nil
+
+	case DialectSQLite:
+		safeID := strings.ReplaceAll(userID, "/", "_")
+		dbPath := filepath.Join(o.parentStore.dataDir, "orgs", o.orgSlug, "personal", safeID+".db")
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			return nil, fmt.Errorf("open personal sqlite: %w", err)
+		}
+		for _, pragma := range []string{
+			"PRAGMA journal_mode=WAL",
+			"PRAGMA foreign_keys=ON",
+			"PRAGMA busy_timeout=5000",
+		} {
+			if _, err := db.Exec(pragma); err != nil {
+				db.Close()
+				return nil, fmt.Errorf("pragma: %w", err)
+			}
+		}
+		drv := entsql.OpenDB(dialect.SQLite, db)
+		client := personalent.NewClient(personalent.Driver(drv))
+		return &personalDataStore{
+			userID:    userID,
+			client:    client,
+			db:        db,
+			dialect:   o.dialect,
+			embedFunc: o.embedFunc,
+			credKey:   credKey,
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unsupported dialect: %s", o.dialect)
+	}
+}
+
+// openPersonalDBBySchema opens a connection to the org database with search_path
+// targeting the given personal schema.
+func (o *orgDataStore) openPersonalDBBySchema(schemaName string) (*personalent.Client, *sql.DB, error) {
+	orgDBName := o.parentStore.orgDBName(o.orgSlug)
+	dsn, err := o.parentStore.deriveSchemaAwareDSN(orgDBName, schemaName)
+	if err != nil {
+		return nil, nil, err
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open personal schema %s: %w", schemaName, err)
+	}
+	drv := entsql.OpenDB(dialect.Postgres, db)
+	client := personalent.NewClient(personalent.Driver(drv))
+	return client, db, nil
+}
+
+// ===========================================================================
+// teamDataStore implements store.TeamDataStore
+// ===========================================================================
+
+type teamDataStore struct {
+	teamSlug  string
+	orgSlug   string
+	client    *teament.Client
+	db        *sql.DB
+	parentOrg *orgDataStore
+}
+
+func (t *teamDataStore) Sessions() store.SessionStore {
+	return &teamSessionStore{client: t.client}
+}
+func (t *teamDataStore) Memories() store.MemoryStore {
+	ms := &teamMemoryStore{
+		client:    t.client,
+		db:        t.db,
+		dialect:   t.parentOrg.dialect,
+		embedFunc: t.parentOrg.embedFunc,
+		table:     "memories",
+	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "memories_fts"
+	}
+	return ms
+}
+func (t *teamDataStore) Credentials() store.CredentialStore   { return &teamCredentialStore{client: t.client, credKey: t.parentOrg.getOrCreateCredentialKey()} }
+func (t *teamDataStore) Apps() store.AppStore                 { return &teamAppStore{client: t.client} }
+func (t *teamDataStore) AppState() store.AppStateStore        { return &teamAppStateStore{client: t.client} }
+func (t *teamDataStore) AppStateSQL() store.AppStateSQLStore {
+	if t.parentOrg.dialect == DialectPostgres {
+		return &pgAppStateSQLStore{db: t.db, teamSchema: teamSchemaName(t.teamSlug)}
+	}
+	return newSQLiteAppStateSQLStore(filepath.Join(t.parentOrg.parentStore.dataDir, "orgs", t.parentOrg.orgSlug, "teams", t.teamSlug))
+}
+func (t *teamDataStore) Flows() store.FlowStore               { return &teamFlowStore{client: t.client} }
+func (t *teamDataStore) Skills() store.SkillStore             { return &teamSkillStore{client: t.client} }
+func (t *teamDataStore) MCPServers() store.MCPServerStore     { return &teamMCPServerStore{client: t.client} }
+func (t *teamDataStore) ScheduledJobs() store.SchedulerStore  { return &teamSchedulerStore{client: t.client} }
+func (t *teamDataStore) FleetTemplates() store.FleetTemplateStore { return &teamFleetTemplateStore{client: t.client} }
+func (t *teamDataStore) FleetPlans() store.FleetPlanStore     { return &teamFleetPlanStore{client: t.client} }
+func (t *teamDataStore) DrillReports() store.DrillReportStore { return &teamDrillReportStore{client: t.client} }
+func (t *teamDataStore) Settings() store.SettingsStore        { return &teamSettingsStore{client: t.client} }
+func (t *teamDataStore) Audit() store.AuditStore              { return &teamAuditStore{client: t.client} }
+
+// ===========================================================================
+// personalDataStore implements store.PersonalDataStore
+// ===========================================================================
+
+type personalDataStore struct {
+	userID    string
+	client    *personalent.Client
+	db        *sql.DB
+	dialect   Dialect
+	embedFunc store.EmbedFunc
+	credKey   []byte // per-org credential DEK (nil = encryption disabled)
+}
+
+func (p *personalDataStore) Memories() store.MemoryStore {
+	ms := &personalMemoryStore{
+		client:    p.client,
+		db:        p.db,
+		dialect:   p.dialect,
+		embedFunc: p.embedFunc,
+		table:     "memories",
+	}
+	if ms.dialect == DialectSQLite {
+		ms.vecIndex = newVectorIndex()
+		ms.ftsTable = "memories_fts"
+	}
+	return ms
+}
+func (p *personalDataStore) Apps() store.AppStore               { return &personalAppStore{client: p.client} }
+func (p *personalDataStore) Sessions() store.SessionStore       { return &personalSessionStore{client: p.client} }
+func (p *personalDataStore) AppState() store.AppStateStore      { return &personalAppStateStore{client: p.client} }
+func (p *personalDataStore) Flows() store.FlowStore             { return &personalFlowStore{client: p.client} }
+func (p *personalDataStore) Credentials() store.CredentialStore { return &personalCredentialStore{client: p.client, credKey: p.credKey} }

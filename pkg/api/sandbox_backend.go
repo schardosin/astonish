@@ -17,7 +17,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // sandboxBackendForRequest constructs a sandbox.Backend appropriate for
@@ -75,28 +74,30 @@ func sandboxBackendForTeamTemplate(r *http.Request) (sandbox.Backend, func(), er
 	return b, cleanup, nil
 }
 
-// buildPGSessionRegistry attempts to construct a pgstore-backed
-// SessionRegistry for the current request's team. Returns nil if the platform
-// backend is not PG-backed or tenant context is unavailable.
+// buildPGSessionRegistry attempts to construct a DB-backed SessionRegistry
+// for the current request's team. Returns nil if the platform backend does not
+// support DB-backed sandbox sessions or tenant context is unavailable.
 // For SQLite deployments (single-node), the caller falls back to the local
 // file-based session registry which is adequate.
 func buildPGSessionRegistry(ctx context.Context) *sandbox.SessionRegistry {
-	pg := getPlatformPGStore()
-	if pg == nil {
+	backend := getPlatformBackend()
+	if backend == nil {
 		return nil
 	}
-	tc := pgstore.TenantContextFrom(ctx)
+	tc := store.TenantContextFrom(ctx)
 	if tc == nil || tc.OrgSlug == "" || tc.TeamSlug == "" {
 		return nil
 	}
-	pool, err := pg.PoolManager().OrgPool(ctx, tc.OrgSlug)
-	if err != nil {
-		slog.Warn("buildPGSessionRegistry: failed to get org pool, falling back to local registry",
-			"org", tc.OrgSlug, "error", err)
+
+	// Check if the backend supports DB-backed sandbox sessions.
+	provider, ok := backend.(store.SandboxSessionProvider)
+	if !ok {
 		return nil
 	}
-	schema := pgstore.TeamSchemaName(tc.TeamSlug)
-	sessStore := pgstore.NewPGSandboxSessionStore(pool, schema)
+	sessStore := provider.SandboxSessionsForTeam(ctx, tc.OrgSlug, tc.TeamSlug)
+	if sessStore == nil {
+		return nil
+	}
 	return sandbox.NewSessionRegistryFromStore(sessStore)
 }
 

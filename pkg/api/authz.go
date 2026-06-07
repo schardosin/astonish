@@ -16,7 +16,6 @@ import (
 	"net/http"
 
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 )
 
 // ---------------------------------------------------------------------------
@@ -174,7 +173,7 @@ func IsTeamAdmin(r *http.Request) bool {
 // canManageCurrentTeam checks if the user is a team-level admin for the
 // team indicated by the request's TenantContext.
 func canManageCurrentTeam(r *http.Request, user *PlatformUser) bool {
-	tc := pgstore.TenantContextFrom(r.Context())
+	tc := store.TenantContextFrom(r.Context())
 	if tc == nil || tc.OrgSlug == "" || tc.TeamSlug == "" {
 		return false
 	}

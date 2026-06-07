@@ -235,6 +235,11 @@ func fleetPlanCommand(mgr *ChannelManager) *Command {
 			// Inject the wizard system prompt for the next regular chat turn
 			mgr.SetSessionContext(cc.SessionKey, systemPrompt)
 
+			// Inject pinned tool groups if the template specifies them
+			if len(tmpl.PinnedToolGroups) > 0 {
+				mgr.SetPinnedToolGroups(cc.SessionKey, tmpl.PinnedToolGroups)
+			}
+
 			// Return a message that will trigger the user to send their first
 			// regular message (which will have the wizard context injected).
 			return fmt.Sprintf("Starting fleet plan wizard for %q (%s).\n\nJust say \"go\" or describe what you want to build, and I'll guide you through the configuration.", templateKey, tmpl.Name), nil

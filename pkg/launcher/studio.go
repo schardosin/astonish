@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -16,7 +17,6 @@ import (
 	"github.com/schardosin/astonish/pkg/api"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/pgstore"
 	"github.com/schardosin/astonish/pkg/tools"
 	"github.com/schardosin/astonish/web"
 )
@@ -38,7 +38,6 @@ type StudioServer struct {
 	port          int
 	platformAuth  *api.PlatformAuth   // non-nil in platform mode
 	backend       studioBackend       // non-nil in platform mode
-	pgStore       *pgstore.PGStore    // non-nil only for PG-specific features (SSO, health, tenant MW)
 	tenantMW      func(http.Handler) http.Handler // tenant resolution middleware
 	configDir     string              // config dir for settings
 	services      *store.Services
@@ -57,16 +56,12 @@ func WithServices(svc *store.Services) StudioOption {
 // WithPlatformAuth enables JWT-based authentication for platform (multi-tenant) mode.
 // When set, the platform auth middleware replaces the device auth middleware,
 // and platform-specific routes (register, login, teams) are registered.
-// The pg parameter is optional — when non-nil it enables PG-specific features
-// (SSO device sessions, health checks, tenant middleware). For SQLite mode pass nil
-// and provide a custom tenant MW via WithTenantMiddleware.
-func WithPlatformAuth(pa *api.PlatformAuth, pg *pgstore.PGStore) StudioOption {
+// The backend parameter provides backend access for ToolVectorStore and other methods.
+func WithPlatformAuth(pa *api.PlatformAuth, backend studioBackend) StudioOption {
 	return func(s *StudioServer) {
 		s.platformAuth = pa
-		s.pgStore = pg
-		// If pg is non-nil it also satisfies studioBackend.
-		if pg != nil {
-			s.backend = pg
+		if backend != nil {
+			s.backend = backend
 		}
 	}
 }
@@ -167,13 +162,11 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		api.RegisterUserRoutes(router, s.platformAuth)
 
 		// SSO/OIDC endpoints (device flow for CLI, browser redirect for Studio)
-		// In platform mode, use PG-backed device sessions for stateless horizontal scaling.
+		// When a backend is available, use DB-backed device sessions for horizontal scaling.
 		var ssoHandler *api.SSOHandler
-		if s.pgStore != nil {
-			pool, poolErr := s.pgStore.PoolManager().PlatformPool(context.Background())
-			if poolErr == nil {
-				backend := api.NewPGDeviceSessionBackend(pgstore.NewPGDeviceSessionStore(pool))
-				ssoHandler = api.NewSSOHandlerWithPG(s.platformAuth, backend)
+		if s.backend != nil {
+			if dsb := api.DeviceSessionBackendFromStore(s.backend); dsb != nil {
+				ssoHandler = api.NewSSOHandlerWithPG(s.platformAuth, dsb)
 			}
 		}
 		if ssoHandler == nil {
@@ -183,8 +176,8 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		api.RegisterSSORoutes(router, ssoHandler)
 	}
 
-	// Register API routes (passes pgStore for platform-mode TenantMiddleware)
-	api.RegisterRoutes(router, s.services, s.pgStore, s.tenantMW)
+	// Register API routes (passes tenantMW for platform-mode TenantMiddleware)
+	api.RegisterRoutes(router, s.services, s.backend, s.tenantMW)
 
 	// Try to get web assets (embedded or filesystem)
 	webFS := getWebAssets()
@@ -429,6 +422,13 @@ func spaFileServer(fs http.FileSystem) http.Handler {
 			r.URL.Path = "/"
 		} else {
 			f.Close()
+		}
+
+		// Content-hashed assets (Vite build) are immutable — cache them
+		// aggressively so browsers don't re-fetch on every page navigation.
+		// This also eliminates concurrent connection storms on reverse proxies.
+		if strings.HasPrefix(path, "/assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
 
 		fileServer.ServeHTTP(w, r)

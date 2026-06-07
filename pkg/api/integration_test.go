@@ -93,6 +93,7 @@ func runAndCollect(t *testing.T, env *integrationTestEnv, msg string, timeout ..
 		msg,
 		true, // autoApprove
 		"",   // systemContext
+		nil,  // pinnedToolGroups
 	)
 
 	return collectEvents(t, env.EventCh, to)
@@ -344,6 +345,7 @@ func runAndCollectWithApprove(t *testing.T, env *integrationTestEnv, msg string,
 		msg,
 		autoApprove,
 		systemContext,
+		nil, // pinnedToolGroups
 	)
 
 	return collectEvents(t, env.EventCh, to)

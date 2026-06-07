@@ -283,6 +283,7 @@ export interface FleetStateInfo {
 export interface DeferredPrompt {
   message: string
   systemContext: string
+  pinnedToolGroups?: string[]
 }
 
 // Agent identity colors for the team conversation view

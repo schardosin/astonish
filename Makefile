@@ -87,8 +87,8 @@ build-ui:
 	@touch $(WEB_DIR)/embed.go
 	@echo "React UI built successfully: $(WEB_DIR)/dist"
 
-# Build everything: UI first, then auto-generate migrations, then Go binary
-build-all: setup-hooks build-ui migrate-diff-auto build
+# Build everything: UI first, then Go binary
+build-all: setup-hooks ent-generate build-ui build
 	@echo "Full build complete!"
 
 # Setup git hooks (runs automatically on first build)
@@ -418,7 +418,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev migrate-diff migrate-diff-auto migrate-diff-all migrate-verify migrate-status
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev ent-generate
 
 # Docker Test Environment - isolated environment for running integration/E2E tests
 e2e-env-up:
@@ -582,174 +582,13 @@ push-incus-dev-fast: ensure-builder build-linux
 push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast
 	@echo "All dev images pushed ($(DEV_ARCH) only)!"
 
-# --- Atlas Migration Management ---
-#
-# Workflow:
-#   1. Edit schema/<scope>/schema.{pg,sqlite}.sql (desired state)
-#   2. Run: make build-all (auto-generates migrations if schema changed)
-#   3. Review generated migration in pkg/store/{pgstore,sqlitestore}/migrations/<scope>/
-#   4. Commit everything
-#
-# The pre-commit hook runs `make migrate-verify` to ensure migrations
-# are in sync with schema files.
-
-# Atlas environment names (used by atlas.hcl):
-#   platform_pg, platform_lite, org_pg, org_lite,
-#   team_pg, team_lite, personal_pg, personal_lite
-ATLAS ?= atlas
-
-# Preprocess: resolve {{schema}} → public for Atlas (PG team/personal schemas)
-schema/team/schema.pg.resolved.sql: schema/team/schema.pg.sql
-	@sed 's/{{schema}}/public/g' $< > $@
-
-schema/personal/schema.pg.resolved.sql: schema/personal/schema.pg.sql
-	@sed 's/{{schema}}/public/g' $< > $@
-
-# Auto-detect changed schema files and generate migrations automatically.
-# No arguments needed — generates migrations for PG environments only
-# (SQLite has Atlas limitations with triggers/FTS5; write those manually).
-# Uses ASTONISH_TEST_DSN to derive the Atlas dev database URL.
-# Safe to run when nothing changed (no-op).
-#
-# Note: Atlas community edition cannot handle CREATE EXTENSION, CREATE FUNCTION,
-# or CREATE TRIGGER. These are stripped from the schema before diffing — Atlas
-# only diffs tables and indexes. Extensions/functions/triggers that change must
-# be added to migrations manually.
-migrate-diff-auto: schema/team/schema.pg.resolved.sql schema/personal/schema.pg.resolved.sql
-	@if ! command -v $(ATLAS) > /dev/null 2>&1; then \
-		echo "⚠️  atlas CLI not found — skipping migration auto-generation"; \
-		echo "   Install: curl -sSf https://atlasgo.sh | sh"; \
-		exit 0; \
-	fi; \
-	if [ -z "$$ATLAS_PG_DEV_URL" ] && [ -z "$$ASTONISH_TEST_DSN" ]; then \
-		echo "⚠️  Neither ATLAS_PG_DEV_URL nor ASTONISH_TEST_DSN set — skipping PG migration generation"; \
-		echo "   Add to .env: ASTONISH_TEST_DSN=postgres://user:pass@host:port/dbname?sslmode=disable"; \
-		exit 0; \
-	fi; \
-	if [ -z "$$ATLAS_PG_DEV_URL" ]; then \
-		export ATLAS_PG_DEV_URL=$$(echo "$$ASTONISH_TEST_DSN" | sed -E 's|/([^/?]+)(\?.*)?$$|/atlas_dev\2|'); \
-	fi; \
-	MAINT_URL=$$(echo "$$ASTONISH_TEST_DSN" | sed -E 's|/([^/?]+)(\?.*)?$$|/postgres\2|'); \
-	psql "$$MAINT_URL" -tc "SELECT 1 FROM pg_database WHERE datname = 'atlas_dev'" 2>/dev/null | grep -q 1 || \
-		psql "$$MAINT_URL" -c "CREATE DATABASE atlas_dev" 2>/dev/null || true; \
-	DEV_URL=$$(echo "$$ASTONISH_TEST_DSN" | sed -E 's|/([^/?]+)(\?.*)?$$|/atlas_dev\2|'); \
-	psql "$$DEV_URL" -c "CREATE EXTENSION IF NOT EXISTS vector SCHEMA pg_catalog" 2>/dev/null || true; \
-	for SRC in schema/platform/schema.pg.sql schema/org/schema.pg.sql schema/team/schema.pg.resolved.sql schema/personal/schema.pg.resolved.sql; do \
-		./scripts/strip-atlas-pro.sh < "$$SRC" > "$${SRC%.sql}.atlas.sql"; \
-	done; \
-	for SCOPE in team personal; do \
-		MDIR="pkg/store/pgstore/migrations/$$SCOPE"; \
-		RDIR="$$MDIR/.resolved"; \
-		rm -rf "$$RDIR"; mkdir -p "$$RDIR"; \
-		for f in "$$MDIR"/*.sql; do \
-			[ -f "$$f" ] && sed 's/{{schema}}/public/g' "$$f" > "$$RDIR/$$(basename $$f)"; \
-		done; \
-		$(ATLAS) migrate hash --dir "file://$$RDIR" 2>/dev/null; \
-	done; \
-	GENERATED=""; \
-	for ENV in platform_pg org_pg team_pg personal_pg; do \
-		OUTPUT=$$($(ATLAS) migrate diff auto --env $$ENV 2>&1); \
-		RC=$$?; \
-		if [ $$RC -eq 0 ] && echo "$$OUTPUT" | grep -q "is synced"; then \
-			: ; \
-		elif [ $$RC -eq 0 ]; then \
-			SCOPE=$$(echo "$$ENV" | sed 's/_pg$$//'); \
-			DIR="pkg/store/pgstore/migrations/$$SCOPE"; \
-			if echo "$$ENV" | grep -qE '^(team|personal)_pg$$'; then \
-				RDIR="$$DIR/.resolved"; \
-				LATEST=$$(ls -t "$$RDIR"/*.sql 2>/dev/null | head -1); \
-				if [ -n "$$LATEST" ]; then \
-					FNAME=$$(basename "$$LATEST"); \
-					sed -e 's/"public"\./\"{{schema}}\"./g' -e 's/public\./{{schema}}./g' "$$LATEST" > "$$DIR/$$FNAME"; \
-					$(ATLAS) migrate hash --dir "file://$$DIR" 2>/dev/null; \
-					GENERATED="$$GENERATED $$ENV"; \
-				fi; \
-			else \
-				LATEST=$$(ls -t "$$DIR"/*.sql 2>/dev/null | head -1); \
-				if [ -n "$$LATEST" ]; then \
-					GENERATED="$$GENERATED $$ENV"; \
-				fi; \
-			fi; \
-		elif [ $$RC -ne 0 ]; then \
-			if echo "$$OUTPUT" | grep -q "The migration directory is synced"; then \
-				: ; \
-			else \
-				echo "⚠️  Atlas error for $$ENV: $$OUTPUT"; \
-			fi; \
-		fi; \
-	done; \
-	rm -rf pkg/store/pgstore/migrations/team/.resolved pkg/store/pgstore/migrations/personal/.resolved; \
-	rm -f schema/*/schema.pg.atlas.sql schema/*/schema.pg.resolved.atlas.sql; \
-	if [ -n "$$GENERATED" ]; then \
-		echo "✓ Auto-generated migrations for:$$GENERATED"; \
-	fi
-
-# Generate a new migration for a single environment (manual).
-# Usage: make migrate-diff ENV=platform_pg NAME=add_foo_table
-migrate-diff: schema/team/schema.pg.resolved.sql schema/personal/schema.pg.resolved.sql
-ifndef ENV
-	$(error ENV is required. Example: make migrate-diff ENV=platform_pg NAME=add_foo_table)
-endif
-ifndef NAME
-	$(error NAME is required. Example: make migrate-diff ENV=platform_pg NAME=add_foo_table)
-endif
-	@echo "Generating migration for env=$(ENV) name=$(NAME)..."
-	$(ATLAS) migrate diff $(NAME) --env $(ENV)
-	@# Post-process: restore {{schema}} placeholder in team/personal PG migrations
-	@if echo "$(ENV)" | grep -qE '^(team|personal)_pg$$'; then \
-		SCOPE=$$(echo "$(ENV)" | sed 's/_pg$$//'); \
-		DIR="pkg/store/pgstore/migrations/$$SCOPE"; \
-		LATEST=$$(ls -t "$$DIR"/*.sql 2>/dev/null | head -1); \
-		if [ -n "$$LATEST" ]; then \
-			sed -i 's/public\./{{schema}}./g' "$$LATEST"; \
-			echo "Post-processed: restored {{schema}} in $$LATEST"; \
-		fi; \
-	fi
-	@echo "Done. Review the generated migration before committing."
-
-# Generate migrations for ALL environments (if schema changed).
-# Useful for bulk operations; typically you only change one scope at a time.
-migrate-diff-all:
-ifndef NAME
-	$(error NAME is required. Example: make migrate-diff-all NAME=add_foo)
-endif
-	@for ENV in platform_pg platform_lite org_pg org_lite team_pg team_lite personal_pg personal_lite; do \
-		echo "=== $$ENV ==="; \
-		$(MAKE) migrate-diff ENV=$$ENV NAME=$(NAME) 2>&1 || true; \
-	done
-
-# Verify migration integrity (atlas.sum files are current).
-# Used by pre-commit hook and CI. Exits non-zero if any directory is invalid.
-migrate-verify:
-	@FAIL=0; \
-	for DIR in \
-		pkg/store/pgstore/migrations/platform \
-		pkg/store/pgstore/migrations/org \
-		pkg/store/pgstore/migrations/team \
-		pkg/store/pgstore/migrations/personal \
-		pkg/store/sqlitestore/migrations/platform \
-		pkg/store/sqlitestore/migrations/org \
-		pkg/store/sqlitestore/migrations/team \
-		pkg/store/sqlitestore/migrations/personal; do \
-		if ! $(ATLAS) migrate validate --dir "file://$$DIR" 2>/dev/null; then \
-			echo "INVALID: $$DIR"; \
-			FAIL=1; \
-		fi; \
-	done; \
-	if [ $$FAIL -eq 1 ]; then \
-		echo ""; \
-		echo "Migration integrity check failed."; \
-		echo "Run: atlas migrate hash --dir 'file://<dir>' to fix."; \
-		exit 1; \
-	fi; \
-	echo "All migration directories validated."
-
-# Show migration status for all environments.
-migrate-status:
-	@for ENV in platform_pg platform_lite org_pg org_lite team_pg team_lite personal_pg personal_lite; do \
-		echo "=== $$ENV ==="; \
-		$(ATLAS) migrate status --env $$ENV 2>/dev/null || echo "  (no status available)"; \
-		echo ""; \
-	done
+# Regenerate Ent client code for all scopes.
+ent-generate:
+	@echo "Generating Ent clients..."
+	@cd ent/platform && go run generate.go
+	@cd ent/org && go run generate.go
+	@cd ent/team && go run generate.go
+	@cd ent/personal && go run generate.go
+	@echo "Done."
 
 

@@ -97,8 +97,11 @@ func (r *PlatformReflector) Reflect(ctx context.Context, trace *ExecutionTrace, 
 	}
 
 	// Gate: skip trivial turns (same logic as file-based reflector)
+	// A turn is trivial only if BOTH the user request AND the model output
+	// are short AND no tool calls were made. This prevents skipping reflection
+	// when the user states durable facts but the model just briefly acknowledges.
 	totalToolCalls := countToolCallsRecursive(trace)
-	if totalToolCalls == 0 && len(trace.FinalOutput) < minOutputForReflection {
+	if totalToolCalls == 0 && len(trace.FinalOutput) < minOutputForReflection && len(trace.UserRequest) < minOutputForReflection {
 		slog.Debug("platform reflector skipped: trivial turn",
 			"component", "platform-reflector",
 			"toolCalls", 0,
@@ -141,6 +144,7 @@ func (r *PlatformReflector) runReflection(ctx context.Context, trace *ExecutionT
 	}
 
 	// Build the LLM request with memory_save tool
+	tempZero := float32(0.0)
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
 			{
@@ -149,6 +153,7 @@ func (r *PlatformReflector) runReflection(ctx context.Context, trace *ExecutionT
 			},
 		},
 		Config: &genai.GenerateContentConfig{
+			Temperature: &tempZero,
 			SystemInstruction: &genai.Content{
 				Parts: []*genai.Part{{Text: platformReflectionPrompt}},
 			},

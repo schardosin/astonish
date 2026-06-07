@@ -398,3 +398,16 @@ type SandboxSessionStore interface {
 	// transaction when applicable (pgstore provides that guarantee).
 	SetUpperLayer(ctx context.Context, sessionID, upperLayerID string) error
 }
+
+// SandboxSessionProvider is an optional interface that PlatformBackend
+// implementations can satisfy to provide team-scoped sandbox session stores.
+// Used by the sandbox backend to create DB-backed session registries for
+// cross-replica consistency in multi-node deployments.
+//
+// SQLite deployments return nil (single-node, file-based registry is fine).
+// PostgreSQL deployments return a store backed by the team's schema.
+type SandboxSessionProvider interface {
+	// SandboxSessionsForTeam returns a SandboxSessionStore for the given
+	// org and team, or nil if DB-backed sessions are not supported.
+	SandboxSessionsForTeam(ctx context.Context, orgSlug, teamSlug string) SandboxSessionStore
+}

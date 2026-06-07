@@ -15,7 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/sqlitestore"
+	"github.com/schardosin/astonish/pkg/store/entstore"
 )
 
 // bootstrapSQLite sets up a full platform instance backed by SQLite.
@@ -47,16 +47,19 @@ func bootstrapSQLite(t *testing.T) *Harness {
 
 	// SQLite auto-creates platform.db and runs migrations inside New().
 	t.Logf("[e2eboot] Bootstrapping platform (SQLite, dataDir=%s)...", dataDir)
-	svc, sqlStore, err := sqlitestore.NewPlatformServices(ctx, dataDir)
+	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
+		DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
+		DataDir: dataDir,
+	})
 	if err != nil {
 		t.Fatalf("[e2eboot] NewPlatformServices (SQLite): %v", err)
 	}
-	t.Cleanup(func() { sqlStore.Close() })
+	t.Cleanup(func() { esStore.Close() })
 
 	// Initialize local embedding model for hybrid vector+keyword memory search.
 	// Must be called before XDG_CONFIG_HOME is overridden (resolves models dir
 	// from the real user home) and before the server starts serving requests.
-	initEmbedFunc(t, sqlStore)
+	initEmbedFunc(t, esStore)
 
 	// Write config.yaml with backend: sqlite
 	configDir := t.TempDir()
@@ -73,30 +76,30 @@ func bootstrapSQLite(t *testing.T) *Harness {
 	}
 
 	// Seed provider in platform settings.
-	seedProviderGeneric(t, ctx, sqlStore.PlatformSettings(), apiKey)
+	seedProviderGeneric(t, ctx, esStore.PlatformSettings(), apiKey)
 
 	// Set global platform backend + secrets (used by admin handlers that
 	// call getPlatformBackend()/getPlatformSecrets()). In PG mode this is
-	// done inside RegisterRoutes via SetPlatformPGStore, but when pg==nil
+	// done inside RegisterRoutes via SetPlatformBackend, but when pg==nil
 	// we must do it explicitly.
-	api.SetPlatformBackend(sqlStore)
-	api.SetPlatformSecrets(sqlStore.Secrets())
+	api.SetPlatformBackend(esStore)
+	api.SetPlatformSecrets(esStore.Secrets())
 
-	// Auth (backend-agnostic — sqlStore implements store.PlatformBackend).
+	// Auth (backend-agnostic — esStore implements store.PlatformBackend).
 	authCfg := config.PlatformAuthConfig{JWTSecret: defaultJWTSecret}
 	storageCfg := config.StorageConfig{
 		Backend: "sqlite",
 		SQLite:  config.SQLiteConfig{DataDir: dataDir},
 		Auth:    authCfg,
 	}
-	platformAuth := api.NewPlatformAuth(authCfg, sqlStore, storageCfg)
+	platformAuth := api.NewPlatformAuth(authCfg, esStore, storageCfg)
 
 	// Start server with SQLite options.
 	studio, err := launcher.NewStudioServer(0,
 		launcher.WithServices(svc),
 		launcher.WithPlatformAuth(platformAuth, nil),
-		launcher.WithBackend(sqlStore),
-		launcher.WithTenantMiddleware(sqlitestore.TenantMiddleware(sqlStore)),
+		launcher.WithBackend(esStore),
+		launcher.WithTenantMiddleware(entstore.TenantMiddleware(esStore)),
 	)
 	if err != nil {
 		t.Fatalf("[e2eboot] NewStudioServer (SQLite): %v", err)
@@ -125,10 +128,10 @@ func bootstrapSQLite(t *testing.T) *Harness {
 	t.Logf("[e2eboot] Authenticated (token: %s...)", token[:20])
 
 	return &Harness{
-		BaseURL:     baseURL,
-		Token:       token,
-		SQLiteStore: sqlStore,
-		DataDir:     dataDir,
+		BaseURL: baseURL,
+		Token:   token,
+		Store:   esStore,
+		DataDir: dataDir,
 	}
 }
 

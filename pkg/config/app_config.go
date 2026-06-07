@@ -405,6 +405,12 @@ type PlatformAuthConfig struct {
 	// Default: true. Set to false to require invitations.
 	AllowRegistration *bool `yaml:"allow_registration,omitempty" json:"allow_registration,omitempty"`
 
+	// RequireEmailVerification controls whether self-registered users must verify
+	// their email address via a 6-digit code before their account becomes active.
+	// Only applies to builtin auth sign-up; OIDC users are verified by the IdP.
+	// Default: true.
+	RequireEmailVerification *bool `yaml:"require_email_verification,omitempty" json:"require_email_verification,omitempty"`
+
 	// DefaultOrgName is used when the first user registers and auto-creates an org.
 	// Default: "Default Organization".
 	DefaultOrgName string `yaml:"default_org_name,omitempty" json:"default_org_name,omitempty"`
@@ -489,6 +495,15 @@ func (c *PlatformAuthConfig) IsRegistrationAllowed() bool {
 		return true
 	}
 	return *c.AllowRegistration
+}
+
+// IsEmailVerificationRequired returns true if email verification is needed for sign-up.
+// Default: true (nil means required). Only applies to builtin auth.
+func (c *PlatformAuthConfig) IsEmailVerificationRequired() bool {
+	if c.RequireEmailVerification == nil {
+		return true
+	}
+	return *c.RequireEmailVerification
 }
 
 // GetDefaultOrgName returns the name for the auto-provisioned org.

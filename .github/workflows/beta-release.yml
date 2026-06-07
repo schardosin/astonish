@@ -36,7 +36,8 @@ jobs:
           fi
 
       - name: Print version
-        run: echo "Beta version: ${{ steps.version.outputs.tag }}"
+        run: |
+          echo "Beta version: ${{ steps.version.outputs.tag }}"
 
   # --------------------------------------------------------------------------
   # Build binaries for all platforms

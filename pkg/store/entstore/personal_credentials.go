@@ -116,7 +116,7 @@ func (cs *personalCredentialStore) Count(ctx context.Context) int {
 
 func (cs *personalCredentialStore) Resolve(ctx context.Context, name string) (string, string, error) {
 	cred := cs.Get(ctx, name)
-	return store.ResolveCredentialHeader(name, cred, nil)
+	return store.ResolveCredentialHeader(name, cred, oauthFetcher(name))
 }
 
 // Secret management - stored as credentials with special type prefix.

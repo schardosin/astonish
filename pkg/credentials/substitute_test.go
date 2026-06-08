@@ -337,3 +337,168 @@ func TestSubstituteAndRestore_ParallelCalls(t *testing.T) {
 		}
 	}
 }
+
+func TestSubstituteShellCommand_DollarSign(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	// SAP AI Core style credentials with $ and special characters.
+	store.Set("sap-ai-core", &Credential{
+		Type:         CredOAuthClientCreds,
+		AuthURL:      "https://auth.example.com/oauth/token",
+		ClientID:     "sb-1c8c055a!b589421|aicore!b164",
+		ClientSecret: "46898dfe-secret$4xghIXJReKKDiYvjki0bqtacT0SzRatkuCcyns-qvkA=",
+	})
+
+	command := `curl -s -X POST "https://auth.example.com/oauth/token" -u "{{CREDENTIAL:sap-ai-core:client_id}}:{{CREDENTIAL:sap-ai-core:client_secret}}" -d "grant_type=client_credentials"`
+
+	result := SubstituteShellCommand(command, store)
+
+	// The result should NOT contain the raw credential value in the command portion
+	// (after the exports). The exports use single-quoted values which are shell-safe.
+	// Split on the last semicolon-space before curl to isolate the command part.
+	parts := strings.SplitN(result, "; curl", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected export prefix + curl command, got:\n%s", result)
+	}
+	commandPart := "curl" + parts[1]
+
+	// The command part should use env var references, not inline values.
+	if strings.Contains(commandPart, "$4xghIXJReKKDiYvjki0bqtacT0SzRatkuCcyns") {
+		t.Errorf("command part should not contain raw dollar-sign value, got:\n%s", commandPart)
+	}
+
+	// The result should contain env var exports with single-quoted values.
+	if !strings.Contains(result, "export __ASTONISH_CRED_") {
+		t.Errorf("expected env var exports in command, got:\n%s", result)
+	}
+
+	// The result should reference env vars in the command.
+	if !strings.Contains(commandPart, "${__ASTONISH_CRED_") {
+		t.Errorf("expected env var references in command, got:\n%s", commandPart)
+	}
+
+	// The env var values should be single-quoted for shell safety ($ not expanded).
+	exportPart := parts[0]
+	if !strings.Contains(exportPart, "'46898dfe-secret$4xghIXJReKKDiYvjki0bqtacT0SzRatkuCcyns-qvkA='") {
+		t.Errorf("expected single-quoted secret value in export, got:\n%s", exportPart)
+	}
+}
+
+func TestSubstituteShellCommand_SingleQuoteInValue(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	store.Set("test-cred", &Credential{
+		Type:     CredPassword,
+		Username: "user",
+		Password: "pass'word",
+	})
+
+	command := `echo "{{CREDENTIAL:test-cred:password}}"`
+	result := SubstituteShellCommand(command, store)
+
+	// Single quotes in the value should be escaped with '\'' technique.
+	if !strings.Contains(result, "'pass'\\''word'") {
+		t.Errorf("single quotes should be escaped, got:\n%s", result)
+	}
+}
+
+func TestSubstituteShellCommand_NoPlaceholders(t *testing.T) {
+	command := `echo "hello world"`
+	result := SubstituteShellCommand(command, nil)
+
+	if result != command {
+		t.Errorf("command without placeholders should be unchanged, got %q", result)
+	}
+}
+
+func TestSubstituteShellCommand_UnresolvablePlaceholder(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	command := `echo "{{CREDENTIAL:nonexistent:password}}"`
+	result := SubstituteShellCommand(command, store)
+
+	// Unresolvable placeholders should leave command unchanged.
+	if result != command {
+		t.Errorf("unresolvable placeholder should leave command unchanged, got:\n%s", result)
+	}
+}
+
+func TestSubstituteAndRestore_ShellCommandField(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	store.Set("db", &Credential{
+		Type:     CredPassword,
+		Username: "admin",
+		Password: "p@ss$word",
+	})
+
+	args := map[string]any{
+		"command": `mysql -u "{{CREDENTIAL:db:username}}" -p"{{CREDENTIAL:db:password}}" mydb`,
+		"timeout": 30,
+	}
+
+	// With shellCommandFields=["command"], the command field should use env-var injection.
+	restore := SubstituteAndRestore(args, store, "command")
+
+	cmd := args["command"].(string)
+
+	// Should NOT contain raw $word (which shell would expand).
+	if strings.Contains(cmd, "$word") && !strings.Contains(cmd, "${__ASTONISH_CRED_") {
+		t.Errorf("command field should use env var injection, got:\n%s", cmd)
+	}
+
+	// Should contain env var exports.
+	if !strings.Contains(cmd, "export __ASTONISH_CRED_") {
+		t.Errorf("expected env var exports in command, got:\n%s", cmd)
+	}
+
+	// Non-command fields should not be affected.
+	if args["timeout"] != 30 {
+		t.Errorf("timeout should be unchanged, got %v", args["timeout"])
+	}
+
+	// Restore should put back the original placeholder.
+	restore()
+	if !ContainsPlaceholder(args["command"].(string)) {
+		t.Errorf("after restore, placeholder should be back, got %q", args["command"])
+	}
+}
+
+func TestShellQuoteSingle(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"simple", "'simple'"},
+		{"with space", "'with space'"},
+		{"has$dollar", "'has$dollar'"},
+		{"has`backtick`", "'has`backtick`'"},
+		{"has'quote", "'has'\\''quote'"},
+		{"multi'ple'quotes", "'multi'\\''ple'\\''quotes'"},
+		{"", "''"},
+		{"normal-value-123", "'normal-value-123'"},
+	}
+
+	for _, tt := range tests {
+		got := shellQuoteSingle(tt.input)
+		if got != tt.expected {
+			t.Errorf("shellQuoteSingle(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}

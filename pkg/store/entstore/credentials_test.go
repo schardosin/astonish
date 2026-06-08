@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"entgo.io/ent/dialect"
@@ -604,4 +605,95 @@ func TestCredential_DEK_OldPgstoreData(t *testing.T) {
 	if got.Value != "sk-old-pgstore-key-12345" {
 		t.Errorf("Value = %q, want %q", got.Value, "sk-old-pgstore-key-12345")
 	}
+}
+
+// TestPersonalCredential_Resolve_OAuthFetcherNotNil verifies that Resolve()
+// passes a non-nil OAuthTokenFetcher for OAuth credential types (so they no
+// longer produce "requires a token fetcher" errors).
+func TestPersonalCredential_Resolve_OAuthFetcherNotNil(t *testing.T) {
+	t.Setenv("ASTONISH_MASTER_KEY", testMasterKeyHex)
+
+	cs, _ := setupPersonalStore(t)
+	ctx := context.Background()
+
+	// Store a bearer credential (simpler, doesn't need network access).
+	bearerCred := &store.Credential{
+		Type:  store.CredBearer,
+		Token: "test-token-123",
+	}
+	if err := cs.Set(ctx, "my-bearer", bearerCred); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Resolve should return the correct Authorization header.
+	headerKey, headerValue, err := cs.Resolve(ctx, "my-bearer")
+	if err != nil {
+		t.Fatalf("Resolve bearer: %v", err)
+	}
+	if headerKey != "Authorization" {
+		t.Errorf("headerKey = %q, want %q", headerKey, "Authorization")
+	}
+	if headerValue != "Bearer test-token-123" {
+		t.Errorf("headerValue = %q, want %q", headerValue, "Bearer test-token-123")
+	}
+
+	// Store an OAuth client_credentials credential.
+	// We can't test actual token fetching without a server, but we can verify
+	// that Resolve() returns a proper OAuth error (not "requires a token fetcher").
+	oauthCred := &store.Credential{
+		Type:         store.CredOAuthClientCreds,
+		AuthURL:      "http://127.0.0.1:1/oauth/token", // intentionally unreachable
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+	}
+	if err := cs.Set(ctx, "my-oauth", oauthCred); err != nil {
+		t.Fatalf("Set oauth: %v", err)
+	}
+
+	// Resolve should attempt the OAuth flow (and fail with a network error),
+	// NOT with "requires a token fetcher".
+	_, _, err = cs.Resolve(ctx, "my-oauth")
+	if err == nil {
+		t.Fatal("expected error from unreachable OAuth server")
+	}
+	errMsg := err.Error()
+	if contains(errMsg, "requires a token fetcher") {
+		t.Errorf("Resolve should not return 'requires a token fetcher' error, got: %v", err)
+	}
+	// Should be a network/connection error instead.
+	if !contains(errMsg, "token request") && !contains(errMsg, "OAuth") {
+		t.Errorf("expected network/OAuth error, got: %v", err)
+	}
+}
+
+// TestTeamCredential_Resolve_OAuthFetcherNotNil verifies the same for team store.
+func TestTeamCredential_Resolve_OAuthFetcherNotNil(t *testing.T) {
+	t.Setenv("ASTONISH_MASTER_KEY", testMasterKeyHex)
+
+	cs, _ := setupTeamStore(t)
+	ctx := context.Background()
+
+	// Store an OAuth client_credentials credential.
+	oauthCred := &store.Credential{
+		Type:         store.CredOAuthClientCreds,
+		AuthURL:      "http://127.0.0.1:1/oauth/token",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+	}
+	if err := cs.Set(ctx, "my-oauth", oauthCred); err != nil {
+		t.Fatalf("Set oauth: %v", err)
+	}
+
+	_, _, err := cs.Resolve(ctx, "my-oauth")
+	if err == nil {
+		t.Fatal("expected error from unreachable OAuth server")
+	}
+	errMsg := err.Error()
+	if contains(errMsg, "requires a token fetcher") {
+		t.Errorf("Resolve should not return 'requires a token fetcher' error, got: %v", err)
+	}
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

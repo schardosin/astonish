@@ -3,6 +3,7 @@ package credentials
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // CredentialResolver is the interface used by the substitution engine to
@@ -60,6 +61,86 @@ func SubstitutePlaceholders(text string, resolver CredentialResolver) string {
 	})
 }
 
+// SubstituteShellCommand replaces credential placeholders in a shell command
+// string using environment variable injection. Instead of inlining secret values
+// directly (which is unsafe because characters like $, `, !, etc. are interpreted
+// by the shell), this function:
+//
+//  1. Resolves each unique placeholder to its real value
+//  2. Assigns each to a numbered env var (__ASTONISH_CRED_0, __ASTONISH_CRED_1, ...)
+//  3. Replaces placeholders in the command with env var references
+//  4. Prepends the env var exports so the shell sets them before running the command
+//
+// The result is a shell-safe command string where secret values are never subject
+// to shell expansion. Returns the original string unchanged if no placeholders
+// are found or the resolver is nil.
+func SubstituteShellCommand(command string, resolver CredentialResolver) string {
+	if resolver == nil || !ContainsPlaceholder(command) {
+		return command
+	}
+
+	// Find all unique placeholders and resolve them.
+	type resolvedCred struct {
+		envVar string
+		value  string
+	}
+	seen := make(map[string]*resolvedCred) // placeholder → resolved info
+	var envVars []resolvedCred
+	counter := 0
+
+	for _, match := range credentialPlaceholderRe.FindAllString(command, -1) {
+		if _, exists := seen[match]; exists {
+			continue
+		}
+		parts := credentialPlaceholderRe.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			continue
+		}
+		name, field := parts[1], parts[2]
+		value := resolveField(resolver, name, field, "")
+		if value == "" {
+			// Could not resolve — leave placeholder as-is.
+			continue
+		}
+		envName := fmt.Sprintf("__ASTONISH_CRED_%d", counter)
+		counter++
+		rc := resolvedCred{envVar: envName, value: value}
+		seen[match] = &rc
+		envVars = append(envVars, rc)
+	}
+
+	if len(envVars) == 0 {
+		return command
+	}
+
+	// Replace placeholders in the command with env var references.
+	result := command
+	for placeholder, rc := range seen {
+		result = strings.ReplaceAll(result, placeholder, "${"+rc.envVar+"}")
+	}
+
+	// Prepend export statements with single-quoted values (safe from expansion).
+	var prefix strings.Builder
+	for _, ev := range envVars {
+		prefix.WriteString("export ")
+		prefix.WriteString(ev.envVar)
+		prefix.WriteString("=")
+		prefix.WriteString(shellQuoteSingle(ev.value))
+		prefix.WriteString("; ")
+	}
+
+	return prefix.String() + result
+}
+
+// shellQuoteSingle wraps a value in single quotes, escaping any embedded single
+// quotes with the standard '\'' technique. Single-quoted strings in sh/bash
+// have NO expansion — $, `, \, ! are all literal.
+func shellQuoteSingle(s string) string {
+	// Replace each ' with '\'' (end quote, escaped quote, start quote).
+	escaped := strings.ReplaceAll(s, "'", "'\\''")
+	return "'" + escaped + "'"
+}
+
 // SubstituteMap deep-walks a map and substitutes credential placeholders in
 // all string values. Returns a new map (the original is not modified).
 func SubstituteMap(m map[string]any, resolver CredentialResolver) map[string]any {
@@ -102,7 +183,12 @@ func SubstituteMapInPlace(m map[string]any, resolver CredentialResolver) {
 //     map by reference) never persists real secrets.
 //
 // If there are no placeholders or the resolver is nil, returns a no-op function.
-func SubstituteAndRestore(m map[string]any, resolver CredentialResolver) (restore func()) {
+//
+// If shellCommandField is non-empty and that key exists in the map with a string
+// value containing placeholders, it will be substituted using the shell-safe
+// env-var injection technique (SubstituteShellCommand) instead of inline replacement.
+// Typically pass "command" for shell_command tools, or "" for other tools.
+func SubstituteAndRestore(m map[string]any, resolver CredentialResolver, shellCommandFields ...string) (restore func()) {
 	noop := func() {}
 
 	if resolver == nil || m == nil {
@@ -112,11 +198,25 @@ func SubstituteAndRestore(m map[string]any, resolver CredentialResolver) (restor
 		return noop
 	}
 
+	// Build the set of shell-command fields for O(1) lookup.
+	shellFields := make(map[string]bool, len(shellCommandFields))
+	for _, f := range shellCommandFields {
+		if f != "" {
+			shellFields[f] = true
+		}
+	}
+
 	// Snapshot original values for keys that contain placeholders.
 	originals := snapshotPlaceholderValues(m)
 
 	// Substitute in-place so the tool gets real values.
 	for k, v := range m {
+		if shellFields[k] {
+			if s, ok := v.(string); ok && ContainsPlaceholder(s) {
+				m[k] = SubstituteShellCommand(s, resolver)
+				continue
+			}
+		}
 		m[k] = substituteValue(v, resolver)
 	}
 

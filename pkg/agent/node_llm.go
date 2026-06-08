@@ -726,7 +726,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 					return nil, nil // no credential store available at all
 				}
 
-				credRestore := credentials.SubstituteAndRestore(args, resolver)
+				// Use shell-safe env-var injection for shell_command tools.
+				var shellFields []string
+				if t.Name() == "shell_command" || t.Name() == "process_write" {
+					shellFields = []string{"command"}
+				}
+				credRestore := credentials.SubstituteAndRestore(args, resolver, shellFields...)
 				callID := ctx.FunctionCallID()
 				if prev, loaded := restoreFuncs.Load(callID); loaded {
 					prevFn := prev.(func())

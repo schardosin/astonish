@@ -124,7 +124,7 @@ func (s *teamCredentialStore) Count(ctx context.Context) int {
 
 func (s *teamCredentialStore) Resolve(ctx context.Context, name string) (string, string, error) {
 	cred := s.Get(ctx, name)
-	return store.ResolveCredentialHeader(name, cred, nil)
+	return store.ResolveCredentialHeader(name, cred, oauthFetcher(name))
 }
 
 // --- Secret key-value store (stored as credentials with name prefix "secret:") ---

@@ -703,6 +703,7 @@ Fetches data from a backend source. Returns ` + "`{ data, loading, error, refetc
 
 **options:**
 - ` + "`args`" + ` — Object passed to the backend (MCP tool args, or HTTP body for POST).
+- ` + "`args.headers`" + ` — Object of custom HTTP headers to include in the request. Example: ` + "`{ headers: { \"AI-Resource-Group\": \"default\" } }`" + `. These are applied alongside credential-based auth headers.
 - ` + "`interval`" + ` — Polling interval in milliseconds. If set, the data auto-refreshes. Example: ` + "`30000`" + ` for 30 seconds.
 
 **Example — MCP tool (database query):**
@@ -766,6 +767,29 @@ export default function GitHubRepos() {
       <h2 className="text-lg font-bold text-white">My Repos</h2>
       {data?.map(repo => (
         <div key={repo.id} className="p-2 bg-gray-800 rounded text-gray-300">{repo.full_name}</div>
+      ))}
+    </div>
+  );
+}
+` + "```" + `
+
+**Example — Authenticated API with custom headers:**
+` + "```" + `jsx
+export default function AIDeployments() {
+  const resourceGroup = 'default';
+  const { data, loading, error } = useAppData(
+    'http:GET:https://api.ai.prod.us-east-1.aws.ml.hana.ondemand.com/v2/lm/deployments?$top=50@sap-ai-core',
+    { args: { headers: { "AI-Resource-Group": resourceGroup } } }
+  );
+
+  if (loading) return <div className="p-4 text-gray-400">Loading...</div>;
+  if (error) return <div className="p-4 text-red-400">Error: {error}</div>;
+
+  return (
+    <div className="p-4 space-y-2">
+      <h2 className="text-lg font-bold text-white">Deployments</h2>
+      {data?.resources?.map(d => (
+        <div key={d.id} className="p-2 bg-gray-800 rounded text-gray-300">{d.name} — {d.status}</div>
       ))}
     </div>
   );

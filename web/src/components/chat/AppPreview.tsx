@@ -325,7 +325,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
       <iframe
         ref={iframeRef}
         src={SANDBOX_URL}
-        sandbox="allow-scripts"
+        sandbox="allow-scripts allow-forms"
         style={{
           width: '100%',
           height: `${height}px`,

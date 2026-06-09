@@ -159,14 +159,16 @@ const sandboxHTMLBody = `
 
   // ── useAppData hook ────────────────────────────────────────────────
   // Usage: const { data, loading, error, refetch } = useAppData('mcp:server/tool', { args: { query: 'SELECT ...' }, interval: 30000 })
+  // Pass null/undefined as sourceId to skip fetching (conditional data loading).
   window.useAppData = function useAppData(sourceId, options) {
     options = options || {};
     var generationRef = React.useRef(0);
     var _s1 = React.useState(null);    var data = _s1[0];    var setData = _s1[1];
-    var _s2 = React.useState(true);    var loading = _s2[0]; var setLoading = _s2[1];
+    var _s2 = React.useState(sourceId ? true : false); var loading = _s2[0]; var setLoading = _s2[1];
     var _s3 = React.useState(null);    var error = _s3[0];   var setError = _s3[1];
 
     var fetchData = React.useCallback(function() {
+      if (!sourceId) return;
       var gen = ++generationRef.current;
       setLoading(true);
       setError(null);
@@ -187,6 +189,12 @@ const sandboxHTMLBody = `
     }, [sourceId]);
 
     React.useEffect(function() {
+      if (!sourceId) {
+        setData(null);
+        setLoading(false);
+        setError(null);
+        return;
+      }
       fetchData();
 
       // Subscribe for push updates

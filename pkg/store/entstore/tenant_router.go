@@ -67,6 +67,9 @@ func (s *Store) ForOrg(orgSlug string) (store.OrgDataStore, error) {
 }
 
 func (s *Store) ProvisionOrg(ctx context.Context, orgID, slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return fmt.Errorf("provision org: %w", err)
+	}
 	switch s.dialect {
 	case DialectPostgres:
 		return s.provisionOrgPostgres(ctx, slug)
@@ -78,6 +81,10 @@ func (s *Store) ProvisionOrg(ctx context.Context, orgID, slug string) error {
 }
 
 func (s *Store) DecommissionOrg(ctx context.Context, orgSlug string) error {
+	if err := validateSlug(orgSlug); err != nil {
+		return fmt.Errorf("decommission org: %w", err)
+	}
+
 	// Remove from cache and close.
 	if cached, ok := s.orgClients.LoadAndDelete(orgSlug); ok {
 		if ds, ok := cached.(*orgDataStore); ok {
@@ -150,6 +157,9 @@ func (s *Store) deriveSchemaAwareDSN(dbName, schemaName string) (string, error) 
 }
 
 func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
+	if err := validateSlug(slug); err != nil {
+		return nil, nil, fmt.Errorf("open org db: %w", err)
+	}
 	switch s.dialect {
 	case DialectPostgres:
 		dbName := s.orgDBName(slug)
@@ -238,7 +248,7 @@ func (s *Store) provisionOrgPostgres(ctx context.Context, slug string) error {
 	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
 
 	// Create the database on the platform connection.
-	if _, err := s.platformDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil {
+	if _, err := s.platformDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil { // CodeQL[go/sql-injection]: slug is validated by validateSlug allowlist, dbName is properly quoted
 		// Ignore "already exists" errors.
 		if !strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("create database %s: %w", dbName, err)
@@ -340,7 +350,7 @@ func (s *Store) decommissionOrgPostgres(ctx context.Context, orgSlug string) err
 		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1`, dbName)
 
 	// Drop the database.
-	if _, err := s.platformDB.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoted); err != nil {
+	if _, err := s.platformDB.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoted); err != nil { // CodeQL[go/sql-injection]: slug is validated by validateSlug allowlist, dbName is properly quoted
 		return fmt.Errorf("drop database %s: %w", dbName, err)
 	}
 
@@ -576,13 +586,16 @@ func (o *orgDataStore) Teams() store.TeamManagementStore {
 }
 
 func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return fmt.Errorf("provision team: %w", err)
+	}
 	switch o.dialect {
 	case DialectPostgres:
 		schemaName := teamSchemaName(slug)
 		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
 
 		// Create the PG schema within the org database.
-		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil {
+		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil { // CodeQL[go/sql-injection]: slug is validated by validateSlug allowlist, schemaName is properly quoted
 			return fmt.Errorf("create team schema %s: %w", schemaName, err)
 		}
 
@@ -648,13 +661,16 @@ func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
 }
 
 func (o *orgDataStore) ProvisionPersonalSchema(ctx context.Context, userID string) error {
+	if err := validateUserID(userID); err != nil {
+		return fmt.Errorf("provision personal schema: %w", err)
+	}
 	switch o.dialect {
 	case DialectPostgres:
 		schemaName := personalSchemaName(userID)
 		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
 
 		// Create the PG schema within the org database.
-		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil {
+		if _, err := o.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil { // CodeQL[go/sql-injection]: userID is validated by validateUserID allowlist, schemaName is properly quoted
 			return fmt.Errorf("create personal schema %s: %w", schemaName, err)
 		}
 
@@ -834,6 +850,9 @@ func (o *orgDataStore) openTeamDBBySchema(schemaName string) (*teament.Client, *
 }
 
 func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error) {
+	if err := validateUserID(userID); err != nil {
+		return nil, fmt.Errorf("open personal db: %w", err)
+	}
 	credKey := o.getOrCreateCredentialKey()
 
 	switch o.dialect {

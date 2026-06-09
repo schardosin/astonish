@@ -313,6 +313,12 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 	skillDir := filepath.Join(userDir, name)
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 
+	// Defense-in-depth: ensure resolved paths stay within userDir.
+	if !strings.HasPrefix(filepath.Clean(skillDir), filepath.Clean(userDir)+string(os.PathSeparator)) {
+		respondError(w, http.StatusBadRequest, "Invalid skill name: path traversal detected")
+		return
+	}
+
 	if _, err := os.Stat(skillFile); err == nil {
 		respondError(w, http.StatusConflict, fmt.Sprintf("Skill %q already exists at %s", name, skillFile))
 		return
@@ -1110,6 +1116,12 @@ func InstallSkillHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Read and parse main SKILL.md
 	skillPath := filepath.Join(tmpDir, slug, "SKILL.md")
+	// Defense-in-depth: ensure skillPath is within tmpDir.
+	if !strings.HasPrefix(filepath.Clean(skillPath), filepath.Clean(tmpDir)+string(os.PathSeparator)) {
+		slog.Warn("path traversal attempt in ClawHub slug", "slug", slug)
+		respondError(w, http.StatusBadRequest, "invalid skill slug")
+		return
+	}
 	skillData, err := os.ReadFile(skillPath)
 	if err != nil {
 		slog.Warn("SKILL.md not found in ClawHub package", "slug", slug, "path", skillPath, "error", err)

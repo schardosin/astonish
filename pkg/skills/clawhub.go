@@ -44,6 +44,8 @@ func ParseClawHubInput(input string) (string, error) {
 		return "", fmt.Errorf("empty input")
 	}
 
+	var slug string
+
 	// Full URL: https://clawhub.ai/{owner}/{slug}
 	if strings.HasPrefix(input, "https://clawhub.ai/") || strings.HasPrefix(input, "http://clawhub.ai/") {
 		u, err := url.Parse(input)
@@ -54,39 +56,42 @@ func ParseClawHubInput(input string) (string, error) {
 		if len(parts) < 2 {
 			return "", fmt.Errorf("invalid ClawHub URL: expected https://clawhub.ai/{owner}/{slug}")
 		}
-		slug := parts[len(parts)-1]
+		slug = parts[len(parts)-1]
 		if slug == "" {
 			return "", fmt.Errorf("invalid ClawHub URL: empty slug")
 		}
-		return slug, nil
-	}
-
-	// Shorthand: clawhub:slug
-	if strings.HasPrefix(input, "clawhub:") {
-		slug := strings.TrimPrefix(input, "clawhub:")
+	} else if strings.HasPrefix(input, "clawhub:") {
+		// Shorthand: clawhub:slug
+		slug = strings.TrimPrefix(input, "clawhub:")
 		slug = strings.TrimSpace(slug)
 		if slug == "" {
 			return "", fmt.Errorf("empty slug in shorthand")
 		}
-		return slug, nil
-	}
-
-	// Bare slug — validate it looks reasonable (no spaces, slashes only for owner/slug)
-	if strings.Contains(input, " ") {
-		return "", fmt.Errorf("invalid slug: contains spaces")
-	}
-
-	// If it contains a slash, treat as owner/slug and extract slug part
-	if strings.Contains(input, "/") {
-		parts := strings.Split(input, "/")
-		slug := parts[len(parts)-1]
-		if slug == "" {
-			return "", fmt.Errorf("invalid input: empty slug after slash")
+	} else {
+		// Bare slug — validate it looks reasonable (no spaces, slashes only for owner/slug)
+		if strings.Contains(input, " ") {
+			return "", fmt.Errorf("invalid slug: contains spaces")
 		}
-		return slug, nil
+
+		// If it contains a slash, treat as owner/slug and extract slug part
+		if strings.Contains(input, "/") {
+			parts := strings.Split(input, "/")
+			slug = parts[len(parts)-1]
+			if slug == "" {
+				return "", fmt.Errorf("invalid input: empty slug after slash")
+			}
+		} else {
+			slug = input
+		}
 	}
 
-	return input, nil
+	// Reject path-traversal sequences and path separators in the final slug.
+	if slug == "." || slug == ".." || strings.Contains(slug, "..") ||
+		strings.ContainsAny(slug, `/\`) {
+		return "", fmt.Errorf("invalid slug %q: contains path traversal characters", slug)
+	}
+
+	return slug, nil
 }
 
 // DownloadFromClawHub downloads a skill from ClawHub and extracts it to destDir/{slug}/.
@@ -133,6 +138,10 @@ func DownloadFromClawHub(slug string, destDir string) (*InstallResult, error) {
 
 	// Create destination directory
 	skillDir := filepath.Join(destDir, slug)
+	// Defense-in-depth: ensure the resolved skillDir is within destDir.
+	if !strings.HasPrefix(filepath.Clean(skillDir)+string(os.PathSeparator), filepath.Clean(destDir)+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("invalid slug %q: resolves outside destination directory", slug)
+	}
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return nil, fmt.Errorf("create skill dir: %w", err)
 	}

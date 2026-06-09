@@ -33,13 +33,19 @@ func (s *pgAppStateSQLStore) appSchemaName(appSlug string) string {
 }
 
 func (s *pgAppStateSQLStore) EnsureSchema(ctx context.Context, appSlug string) error {
+	if err := validateSlug(appSlug); err != nil {
+		return fmt.Errorf("ensure schema: %w", err)
+	}
 	schema := s.appSchemaName(appSlug)
 	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schema, `"`, `""`))
-	_, err := s.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted)
+	_, err := s.db.ExecContext(ctx, "CREATE SCHEMA IF NOT EXISTS "+quoted) // CodeQL[go/sql-injection]: schema name is validated by validateSlug allowlist and properly quoted
 	return err
 }
 
 func (s *pgAppStateSQLStore) Query(ctx context.Context, appSlug, sqlStr string, params ...any) ([]map[string]any, error) {
+	if err := validateSlug(appSlug); err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
 	schema := s.appSchemaName(appSlug)
 
 	conn, err := s.db.Conn(ctx)
@@ -50,12 +56,12 @@ func (s *pgAppStateSQLStore) Query(ctx context.Context, appSlug, sqlStr string, 
 
 	// Set search_path to the app schema.
 	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schema, `"`, `""`))
-	if _, err := conn.ExecContext(ctx, "SET search_path TO "+quoted); err != nil {
+	if _, err := conn.ExecContext(ctx, "SET search_path TO "+quoted); err != nil { // CodeQL[go/sql-injection]: schema name is validated by validateSlug allowlist and properly quoted
 		return nil, fmt.Errorf("set search_path: %w", err)
 	}
 	defer conn.ExecContext(ctx, "RESET search_path") //nolint:errcheck
 
-	rows, err := conn.QueryContext(ctx, sqlStr, params...)
+	rows, err := conn.QueryContext(ctx, sqlStr, params...) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +92,9 @@ func (s *pgAppStateSQLStore) Query(ctx context.Context, appSlug, sqlStr string, 
 }
 
 func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr string, params ...any) (int64, int64, error) {
+	if err := validateSlug(appSlug); err != nil {
+		return 0, 0, fmt.Errorf("exec: %w", err)
+	}
 	schema := s.appSchemaName(appSlug)
 
 	// Ensure schema exists for DDL operations.
@@ -100,7 +109,7 @@ func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr string, p
 	defer conn.Close()
 
 	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schema, `"`, `""`))
-	if _, err := conn.ExecContext(ctx, "SET search_path TO "+quoted); err != nil {
+	if _, err := conn.ExecContext(ctx, "SET search_path TO "+quoted); err != nil { // CodeQL[go/sql-injection]: schema name is validated by validateSlug allowlist and properly quoted
 		return 0, 0, fmt.Errorf("set search_path: %w", err)
 	}
 	defer conn.ExecContext(ctx, "RESET search_path") //nolint:errcheck
@@ -110,11 +119,11 @@ func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr string, p
 	if strings.HasPrefix(upperSQL, "INSERT") && !strings.Contains(upperSQL, "RETURNING") {
 		sqlStr = sqlStr + " RETURNING id"
 		var lastID int64
-		err := conn.QueryRowContext(ctx, sqlStr, params...).Scan(&lastID)
+		err := conn.QueryRowContext(ctx, sqlStr, params...).Scan(&lastID) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 		if err != nil {
 			// If RETURNING id fails (no id column), fall back to regular exec.
 			sqlStr = strings.TrimSuffix(sqlStr, " RETURNING id")
-			res, execErr := conn.ExecContext(ctx, sqlStr, params...)
+			res, execErr := conn.ExecContext(ctx, sqlStr, params...) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 			if execErr != nil {
 				return 0, 0, execErr
 			}
@@ -124,7 +133,7 @@ func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr string, p
 		return 1, lastID, nil
 	}
 
-	res, err := conn.ExecContext(ctx, sqlStr, params...)
+	res, err := conn.ExecContext(ctx, sqlStr, params...) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 	if err != nil {
 		return 0, 0, err
 	}
@@ -134,9 +143,12 @@ func (s *pgAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr string, p
 }
 
 func (s *pgAppStateSQLStore) DropSchema(ctx context.Context, appSlug string) error {
+	if err := validateSlug(appSlug); err != nil {
+		return fmt.Errorf("drop schema: %w", err)
+	}
 	schema := s.appSchemaName(appSlug)
 	quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schema, `"`, `""`))
-	_, err := s.db.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+quoted+" CASCADE")
+	_, err := s.db.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+quoted+" CASCADE") // CodeQL[go/sql-injection]: schema name is validated by validateSlug allowlist and properly quoted
 	return err
 }
 
@@ -195,6 +207,10 @@ func newSQLiteAppStateSQLStore(dataDir string) *sqliteAppStateSQLStore {
 }
 
 func (s *sqliteAppStateSQLStore) openDB(appSlug string) (*sql.DB, error) {
+	if err := validateSlug(appSlug); err != nil {
+		return nil, fmt.Errorf("open app db: %w", err)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -226,7 +242,7 @@ func (s *sqliteAppStateSQLStore) Query(ctx context.Context, appSlug, sqlStr stri
 		return nil, err
 	}
 
-	rows, err := db.QueryContext(ctx, sqlStr, params...)
+	rows, err := db.QueryContext(ctx, sqlStr, params...) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 	if err != nil {
 		return nil, err
 	}
@@ -262,7 +278,7 @@ func (s *sqliteAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr strin
 		return 0, 0, err
 	}
 
-	res, err := db.ExecContext(ctx, sqlStr, params...)
+	res, err := db.ExecContext(ctx, sqlStr, params...) // CodeQL[go/sql-injection]: sqlStr is intentionally caller-provided raw SQL for per-app sandbox execution
 	if err != nil {
 		return 0, 0, err
 	}
@@ -272,6 +288,10 @@ func (s *sqliteAppStateSQLStore) Exec(ctx context.Context, appSlug, sqlStr strin
 }
 
 func (s *sqliteAppStateSQLStore) DropSchema(_ context.Context, appSlug string) error {
+	if err := validateSlug(appSlug); err != nil {
+		return fmt.Errorf("drop schema: %w", err)
+	}
+
 	s.mu.Lock()
 	if db, ok := s.dbs[appSlug]; ok {
 		db.Close()

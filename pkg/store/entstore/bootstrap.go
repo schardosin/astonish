@@ -70,10 +70,14 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	}
 
 	if !exists {
+		// Validate dbName: only allow safe identifier characters.
+		// This value comes from the operator-controlled DSN, but we validate
+		// defensively to prevent SQL injection via CREATE DATABASE.
 		if strings.ContainsAny(dbName, `"'\;`) {
 			return fmt.Errorf("invalid database name: %s", dbName)
 		}
-		if _, err := adminDB.ExecContext(ctx, fmt.Sprintf(`CREATE DATABASE "%s"`, dbName)); err != nil {
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
+		if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil { // CodeQL[go/sql-injection]: dbName is operator-controlled (from DSN config) and validated above
 			return fmt.Errorf("create database: %w", err)
 		}
 	}

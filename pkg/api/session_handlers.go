@@ -174,7 +174,16 @@ func StudioSessionHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		messages := eventsToMessages(getResp.Session.Events(), nil)
+		// Defense-in-depth: hydrate a Redactor from the request's credential
+		// stores so that any secrets persisted before the redactor was active
+		// are scrubbed before reaching the frontend.
+		var redactor *credentials.Redactor
+		if svc.PersonalCredentials != nil || svc.Credentials != nil {
+			merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+			redactor = credentials.NewRedactor()
+			redactor.HydrateFromStore(merged)
+		}
+		messages := eventsToMessages(getResp.Session.Events(), redactor)
 		artifacts := collectArtifacts(getResp.Session.Events())
 		// Project persisted astonish-report fences onto matching artifacts so
 		// the frontend can decide which markdown files to embed inline.
@@ -453,6 +462,16 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 		Events []subtaskEventItem `json:"events"`
 	}
 
+	// Hydrate a redactor for subtask event scrubbing (platform mode).
+	var subtaskRedactor *credentials.Redactor
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.PersonalCredentials != nil || svc.Credentials != nil {
+			merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+			subtaskRedactor = credentials.NewRedactor()
+			subtaskRedactor.HydrateFromStore(merged)
+		}
+	}
+
 	// extractChildToolEvents parses ADK session events from a child session
 	// and returns subtask event items (tool calls, results, and text).
 	extractChildToolEvents := func(events []*session.Event) []subtaskEventItem {
@@ -468,10 +487,14 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 					if name == "search_tools" || name == "announce_plan" || name == "update_plan" {
 						continue
 					}
+					args := part.FunctionCall.Args
+					if subtaskRedactor != nil && args != nil {
+						args = subtaskRedactor.RedactMap(args)
+					}
 					items = append(items, subtaskEventItem{
 						Type:     "task_tool_call",
 						ToolName: name,
-						ToolArgs: part.FunctionCall.Args,
+						ToolArgs: args,
 					})
 				}
 				if part.FunctionResponse != nil {
@@ -479,16 +502,24 @@ func StudioSubtaskEventsHandler(w http.ResponseWriter, r *http.Request) {
 					if name == "search_tools" || name == "announce_plan" || name == "update_plan" {
 						continue
 					}
+					resp := part.FunctionResponse.Response
+					if subtaskRedactor != nil && resp != nil {
+						resp = subtaskRedactor.RedactMap(resp)
+					}
 					items = append(items, subtaskEventItem{
 						Type:       "task_tool_result",
 						ToolName:   name,
-						ToolResult: summarizeToolResult(part.FunctionResponse.Response),
+						ToolResult: summarizeToolResult(resp),
 					})
 				}
 				if part.Text != "" && evt.Content.Role == "model" {
+					text := part.Text
+					if subtaskRedactor != nil {
+						text = subtaskRedactor.Redact(text)
+					}
 					items = append(items, subtaskEventItem{
 						Type: "task_text",
-						Text: part.Text,
+						Text: text,
 					})
 				}
 			}

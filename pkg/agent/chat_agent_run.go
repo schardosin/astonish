@@ -345,12 +345,34 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// session transcript. The redactor now knows the new secret values,
 			// so user messages that contained raw secrets (submitted before the
 			// credential was saved) can be scrubbed on disk and in memory.
-			if t.Name() == "save_credential" && err == nil && c.RedactSessionFunc != nil {
-				if redactErr := c.RedactSessionFunc(sessionAppName, sessionUserID, sessionID); redactErr != nil {
-					if c.DebugMode {
-						slog.Debug("retroactive session redaction failed", "component", "chat", "error", redactErr)
+			if t.Name() == "save_credential" && err == nil {
+				redacted := false
+				// File-based mode: use the pre-wired RedactSessionFunc.
+				if c.RedactSessionFunc != nil {
+					if redactErr := c.RedactSessionFunc(sessionAppName, sessionUserID, sessionID); redactErr != nil {
+						if c.DebugMode {
+							slog.Debug("retroactive session redaction failed", "component", "chat", "error", redactErr)
+						}
+					} else {
+						redacted = true
 					}
-				} else if c.DebugMode {
+				}
+				// Platform mode: resolve session store from context and redact.
+				// The per-request session store is injected via InjectSessionService
+				// and carries the correct tenant-scoped Ent store.
+				if !redacted {
+					if ss := store.SessionServiceFromContext(ctx); ss != nil && c.Redactor != nil {
+						ss.SetRedactFunc(c.Redactor.Redact)
+						if redactErr := ss.RedactSession(ctx, sessionAppName, sessionUserID, sessionID); redactErr != nil {
+							if c.DebugMode {
+								slog.Debug("retroactive session redaction (platform) failed", "component", "chat", "error", redactErr)
+							}
+						} else if c.DebugMode {
+							slog.Debug("retroactive session redaction (platform) completed", "component", "chat")
+						}
+					}
+				}
+				if c.DebugMode && redacted {
 					slog.Debug("retroactive session redaction completed", "component", "chat")
 				}
 			}

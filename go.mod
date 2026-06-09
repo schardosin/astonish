@@ -24,7 +24,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/mux v1.8.1
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/jackc/pgx/v5 v5.9.2
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/knights-analytics/hugot v0.7.5
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/lxc/incus/v6 v6.23.0

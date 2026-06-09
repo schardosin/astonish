@@ -121,11 +121,12 @@ const skillStoresKey contextKey = "astonish_skill_stores"
 const schedulerStoreKey contextKey = "astonish_scheduler_store"
 const mcpServerStoresKey contextKey = "astonish_mcp_server_stores"
 
-// SkillStores holds references to both org and team skill stores
+// SkillStores holds references to platform, org, and team skill stores
 // for use in tool context injection.
 type SkillStores struct {
-	Org  SkillStore // org-level skill store (nil if not in platform mode)
-	Team SkillStore // team-level skill store (nil if not in platform mode)
+	Platform SkillStore // platform-wide skill store (nil in personal mode); cascades into all orgs/teams
+	Org      SkillStore // org-level skill store (nil if not in platform mode)
+	Team     SkillStore // team-level skill store (nil if not in platform mode)
 }
 
 // WithSkillStores returns a new context containing the SkillStores.

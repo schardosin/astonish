@@ -1417,7 +1417,14 @@ export default function SettingsPage({
               <PlatformMCPServersTab theme={theme as string} />
             </Suspense>
           )}
-          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && isSuperadmin && (
+          {activeSection === 'platform-skills' && isSuperadmin && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <div className="flex-1 overflow-hidden p-6 flex flex-col h-full">
+                <SkillsSettings config={null} onSaved={() => {}} theme={theme} scope="platform" isPlatform canManage={true} />
+              </div>
+            </Suspense>
+          )}
+          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && activeSection !== 'platform-skills' && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <PlatformAdminPanel theme={theme as 'dark' | 'light'} activeTab={activeSection.replace('platform-', '')} />
             </Suspense>

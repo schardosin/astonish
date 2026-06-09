@@ -125,13 +125,13 @@ func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
 
 // InjectSkillStores adds tenant-scoped skill stores to the runner's context
 // so that the skill_lookup tool can resolve skills dynamically per-request
-// from the org and team stores (in addition to bundled skills).
+// from the platform, org, and team stores.
 // Must be called before Run().
-func (cr *ChatRunner) InjectSkillStores(org, team store.SkillStore) {
-	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Org: org, Team: team})
+func (cr *ChatRunner) InjectSkillStores(platform, org, team store.SkillStore) {
+	cr.ctx = store.WithSkillStores(cr.ctx, &store.SkillStores{Platform: platform, Org: org, Team: team})
 }
 
-// InjectSkillIndex sets a per-request merged skill index (bundled + org + team)
+// InjectSkillIndex sets a per-request merged skill index (platform + org + team)
 // that will be used in the system prompt for this run. This makes custom platform
 // skills visible to the LLM in the "Available Skills" section.
 // Must be called before Run().

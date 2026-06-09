@@ -37,7 +37,10 @@ type FleetStores struct {
 // platformMCP, when non-nil, makes platform-tier MCP servers (e.g. standard
 // servers like Tavily installed at scope=platform) visible to the fleet's chat
 // agents. Pass nil only in personal-mode tests.
-func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore, platformMCP store.MCPServerStore) *FleetStores {
+//
+// platformSkills, when non-nil, makes platform-tier skills visible to the
+// fleet's chat agents.
+func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore, platformMCP store.MCPServerStore, platformSkills store.SkillStore) *FleetStores {
 	if team == nil {
 		return nil
 	}
@@ -50,7 +53,8 @@ func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore, platf
 		FleetTemplates: team.FleetTemplates(),
 		FleetPlans:     team.FleetPlans(),
 		Skills: &store.SkillStores{
-			Team: team.Skills(),
+			Platform: platformSkills,
+			Team:     team.Skills(),
 		},
 		MCPServers: &store.MCPServerStores{
 			Platform: platformMCP,
@@ -85,10 +89,11 @@ func FleetStoresFromServices(svc *store.Services) *FleetStores {
 		FleetPlans:     svc.FleetPlans,
 	}
 
-	if svc.Skills != nil || svc.TeamSkills != nil {
+	if svc.PlatformSkills != nil || svc.Skills != nil || svc.TeamSkills != nil {
 		fs.Skills = &store.SkillStores{
-			Org:  svc.Skills,
-			Team: svc.TeamSkills,
+			Platform: svc.PlatformSkills,
+			Org:      svc.Skills,
+			Team:     svc.TeamSkills,
 		}
 	}
 

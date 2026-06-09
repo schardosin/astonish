@@ -70,7 +70,7 @@ type SkillListItem struct {
 	Name             string   `json:"name"`
 	Description      string   `json:"description"`
 	Source           string   `json:"source"`
-	Scope            string   `json:"scope,omitempty"` // "bundled", "org", or "team"
+	Scope            string   `json:"scope,omitempty"` // "platform", "org", or "team"
 	Eligible         bool     `json:"eligible"`
 	Editable         bool     `json:"editable"`
 	Missing          []string `json:"missing,omitempty"`
@@ -135,12 +135,13 @@ type SkillsListResponse struct {
 // Query params:
 //   - scope=team: return only team skills
 //   - scope=org: return only org skills
-//   - (empty): return merged view (bundled + org + team, team overrides org overrides bundled)
+//   - scope=platform: return only platform skills (superadmin)
+//   - (empty): return merged view (platform + org + team, team overrides org overrides platform)
 func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
 	svc := store.FromRequest(r)
-	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+	if svc != nil && (svc.PlatformSkills != nil || svc.Skills != nil || svc.TeamSkills != nil) {
 		// Platform mode: scope-aware listing (only supported mode)
 		items, err := listSkillsPlatform(r.Context(), svc, scope)
 		if err != nil {
@@ -166,7 +167,8 @@ func ListSkillsHandler(w http.ResponseWriter, r *http.Request) {
 // Query params:
 //   - scope=team: look in team store only
 //   - scope=org: look in org store only
-//   - (empty): try team → org → bundled
+//   - scope=platform: look in platform store only (superadmin)
+//   - (empty): try team → org → platform
 func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	// Auth: Any authenticated team member can read skill content (consistent
 	// with ListSkillFilesHandler/GetSkillFileHandler).
@@ -179,7 +181,7 @@ func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	scope := r.URL.Query().Get("scope")
 
 	svc := store.FromRequest(r)
-	if svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
+	if svc != nil && (svc.PlatformSkills != nil || svc.Skills != nil || svc.TeamSkills != nil) {
 		// Platform mode: scope-aware get
 		getSkillContentPlatform(w, r, svc, name, scope)
 		return
@@ -194,6 +196,7 @@ func GetSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 // Query params:
 //   - scope=team: save to team store (requires team admin)
 //   - scope=org: save to org store (requires org admin)
+//   - scope=platform: save to platform store (requires superadmin)
 func UpdateSkillContentHandler(w http.ResponseWriter, r *http.Request) {
 	name := mux.Vars(r)["name"]
 	scope := r.URL.Query().Get("scope")
@@ -603,6 +606,15 @@ func DeleteSkillFileHandler(w http.ResponseWriter, r *http.Request) {
 // based on the requested scope. Returns nil and writes an error if auth fails.
 func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *store.Services, scope string) store.SkillStore {
 	switch scope {
+	case "platform":
+		if svc.PlatformSkills == nil {
+			respondError(w, http.StatusServiceUnavailable, "Platform skills store not available")
+			return nil
+		}
+		if RequirePlatformAdmin(w, r) == nil {
+			return nil
+		}
+		return svc.PlatformSkills
 	case "team":
 		if svc.TeamSkills == nil {
 			respondError(w, http.StatusServiceUnavailable, "Team skills store not available")
@@ -641,14 +653,16 @@ func resolveSkillStoreForWrite(w http.ResponseWriter, r *http.Request, svc *stor
 	}
 }
 
-// listSkillsPlatform loads skills with three-tier merge: bundled → org → team.
-// Team skills override org skills of the same name; org skills override bundled.
+// listSkillsPlatform loads skills with three-tier merge: platform → org → team.
+// Team skills override org skills of the same name; org skills override platform.
 func listSkillsPlatform(ctx context.Context, svc *store.Services, scope string) ([]SkillListItem, error) {
 	switch scope {
 	case "team":
 		return listSkillsFromStore(ctx, svc.TeamSkills, "team")
 	case "org":
-		return listSkillsOrgWithBundled(ctx, svc.Skills)
+		return listSkillsFromStore(ctx, svc.Skills, "org")
+	case "platform":
+		return listSkillsFromStore(ctx, svc.PlatformSkills, "platform")
 	default:
 		return listSkillsMerged(ctx, svc)
 	}
@@ -674,57 +688,26 @@ func listSkillsFromStore(ctx context.Context, skillStore store.SkillStore, scope
 	return items, nil
 }
 
-// listSkillsOrgWithBundled lists org skills + bundled (org overrides bundled).
-func listSkillsOrgWithBundled(ctx context.Context, orgStore store.SkillStore) ([]SkillListItem, error) {
-	// Load bundled
-	bundled, err := skills.LoadBundledSkills()
-	if err != nil {
-		return nil, fmt.Errorf("load bundled skills: %w", err)
-	}
-
-	byName := make(map[string]SkillListItem, len(bundled))
-	for _, s := range bundled {
-		byName[s.Name] = skillToListItem(s.Name, s.Description, "bundled", "bundled",
-			s.IsEligible(), s.MissingRequirements(), s.RequireBins, s.RequireEnv, s.OS, "", false, false)
-	}
-
-	// Org customs override bundled
-	if orgStore != nil {
-		pgSkills, err := orgStore.List(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("load org skills: %w", err)
-		}
-		for _, s := range pgSkills {
-			item := storeSkillToListItem(&s)
-			item.Scope = "org"
-			item.Editable = true
-			byName[s.Name] = item
-		}
-	}
-
-	items := make([]SkillListItem, 0, len(byName))
-	for _, item := range byName {
-		items = append(items, item)
-	}
-	sortListItems(items)
-	return items, nil
-}
-
-// listSkillsMerged returns all skills merged: bundled → org → team (team wins).
+// listSkillsMerged returns all skills merged: platform → org → team (team wins).
 func listSkillsMerged(ctx context.Context, svc *store.Services) ([]SkillListItem, error) {
-	// Load bundled
-	bundled, err := skills.LoadBundledSkills()
-	if err != nil {
-		return nil, fmt.Errorf("load bundled skills: %w", err)
+	byName := make(map[string]SkillListItem)
+
+	// Platform skills (base layer)
+	if svc.PlatformSkills != nil {
+		platformSkills, err := svc.PlatformSkills.List(ctx)
+		if err != nil {
+			slog.Warn("failed to load platform skills", "error", err)
+		} else {
+			for _, s := range platformSkills {
+				item := storeSkillToListItem(&s)
+				item.Scope = "platform"
+				item.Editable = false // Only editable through platform admin
+				byName[s.Name] = item
+			}
+		}
 	}
 
-	byName := make(map[string]SkillListItem, len(bundled))
-	for _, s := range bundled {
-		byName[s.Name] = skillToListItem(s.Name, s.Description, "bundled", "bundled",
-			s.IsEligible(), s.MissingRequirements(), s.RequireBins, s.RequireEnv, s.OS, "", false, false)
-	}
-
-	// Org customs override bundled
+	// Org customs override platform
 	if svc.Skills != nil {
 		pgSkills, err := svc.Skills.List(ctx)
 		if err != nil {
@@ -739,7 +722,7 @@ func listSkillsMerged(ctx context.Context, svc *store.Services) ([]SkillListItem
 		}
 	}
 
-	// Team customs override org and bundled
+	// Team customs override org and platform
 	if svc.TeamSkills != nil {
 		teamSkills, err := svc.TeamSkills.List(ctx)
 		if err != nil {
@@ -839,8 +822,31 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 			AcknowledgedRisks: persistedAcks(skill),
 		})
 
+	case "platform":
+		if svc.PlatformSkills == nil {
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in platform", name))
+			return
+		}
+		skill, err := svc.PlatformSkills.Get(r.Context(), name)
+		if err != nil || skill == nil {
+			respondError(w, http.StatusNotFound, fmt.Sprintf("Skill %q not found in platform", name))
+			return
+		}
+		respondJSON(w, http.StatusOK, SkillContentResponse{
+			Name:             skill.Name,
+			Description:      skill.Description,
+			Source:           "custom",
+			Scope:            "platform",
+			Content:          extractBody(skill.Content),
+			RawFile:          skill.Content,
+			Editable:         IsPlatformAdmin(GetPlatformUser(r)),
+			ValidationStatus: skill.ValidationStatus,
+			Validation:       persistedValidation(skill),
+			AcknowledgedRisks: persistedAcks(skill),
+		})
+
 	default:
-		// No scope: try team → org → bundled
+		// No scope: try team → org → platform
 		if svc.TeamSkills != nil {
 			if skill, err := svc.TeamSkills.Get(r.Context(), name); err == nil && skill != nil {
 				respondJSON(w, http.StatusOK, SkillContentResponse{
@@ -877,23 +883,20 @@ func getSkillContentPlatform(w http.ResponseWriter, r *http.Request, svc *store.
 			}
 		}
 
-		// Fall back to bundled
-		bundled, loadErr := skills.LoadBundledSkills()
-		if loadErr != nil {
-			respondError(w, http.StatusInternalServerError, "Failed to load bundled skills: "+loadErr.Error())
-			return
-		}
-		for _, s := range bundled {
-			if strings.EqualFold(s.Name, name) {
-				rawFile := reconstructRawFileFromSkillPkg(&s)
+		// Fall back to platform store
+		if svc.PlatformSkills != nil {
+			if skill, err := svc.PlatformSkills.Get(r.Context(), name); err == nil && skill != nil {
 				respondJSON(w, http.StatusOK, SkillContentResponse{
-					Name:        s.Name,
-					Description: s.Description,
-					Source:      "bundled",
-					Scope:       "bundled",
-					Content:     s.Content,
-					RawFile:     rawFile,
-					Editable:    false,
+					Name:             skill.Name,
+					Description:      skill.Description,
+					Source:           "custom",
+					Scope:            "platform",
+					Content:          extractBody(skill.Content),
+					RawFile:          skill.Content,
+					Editable:         false,
+					ValidationStatus: skill.ValidationStatus,
+					Validation:       persistedValidation(skill),
+					AcknowledgedRisks: persistedAcks(skill),
 				})
 				return
 			}
@@ -1299,14 +1302,6 @@ func deleteSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 	// Verify it exists in this store
 	skill, err := targetStore.Get(ctx, name)
 	if err != nil || skill == nil {
-		// Check if it's a bundled skill
-		bundled, _ := skills.LoadBundledSkills()
-		for _, s := range bundled {
-			if strings.EqualFold(s.Name, name) {
-				respondError(w, http.StatusForbidden, "cannot delete bundled skills")
-				return
-			}
-		}
 		respondError(w, http.StatusNotFound, fmt.Sprintf("skill %q not found in %s store", name, scope))
 		return
 	}
@@ -1321,26 +1316,6 @@ func deleteSkillPlatform(w http.ResponseWriter, r *http.Request, targetStore sto
 }
 
 // --- Shared helpers ---
-
-func skillToListItem(name, description, source, scope string, eligible bool, missing, requireBins, requireEnv, osNames []string, filePath string, hasDirectory, editable bool) SkillListItem {
-	item := SkillListItem{
-		Name:         name,
-		Description:  description,
-		Source:       source,
-		Scope:        scope,
-		Eligible:     eligible,
-		Editable:     editable,
-		RequireBins:  requireBins,
-		RequireEnv:   requireEnv,
-		OS:           osNames,
-		FilePath:     filePath,
-		HasDirectory: hasDirectory,
-	}
-	if !eligible {
-		item.Missing = missing
-	}
-	return item
-}
 
 func storeSkillToListItem(s *store.Skill) SkillListItem {
 	// Re-parse the raw content to check eligibility
@@ -1369,26 +1344,6 @@ func storeSkillToListItem(s *store.Skill) SkillListItem {
 	}
 }
 
-func reconstructRawFileFromSkillPkg(s *skills.Skill) string {
-	// Fallback: reconstruct from parsed data
-	var sb strings.Builder
-	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("name: %s\n", s.Name))
-	sb.WriteString(fmt.Sprintf("description: %q\n", s.Description))
-	if len(s.OS) > 0 {
-		sb.WriteString(fmt.Sprintf("os: [%s]\n", strings.Join(quoteStrings(s.OS), ", ")))
-	}
-	if len(s.RequireBins) > 0 {
-		sb.WriteString(fmt.Sprintf("require_bins: [%s]\n", strings.Join(quoteStrings(s.RequireBins), ", ")))
-	}
-	if len(s.RequireEnv) > 0 {
-		sb.WriteString(fmt.Sprintf("require_env: [%s]\n", strings.Join(quoteStrings(s.RequireEnv), ", ")))
-	}
-	sb.WriteString("---\n\n")
-	sb.WriteString(s.Content)
-	return sb.String()
-}
-
 // extractBody returns the markdown body after frontmatter from a raw SKILL.md.
 func extractBody(rawFile string) string {
 	parsed, err := skills.ParseSkillFile("extract", []byte(rawFile))
@@ -1396,14 +1351,6 @@ func extractBody(rawFile string) string {
 		return rawFile
 	}
 	return parsed.Content
-}
-
-func quoteStrings(ss []string) []string {
-	result := make([]string, len(ss))
-	for i, s := range ss {
-		result[i] = fmt.Sprintf("%q", s)
-	}
-	return result
 }
 
 func sortListItems(items []SkillListItem) {

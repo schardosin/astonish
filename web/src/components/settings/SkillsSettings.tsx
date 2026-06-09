@@ -16,7 +16,7 @@ interface Skill {
   name: string
   description: string
   source: string
-  scope?: string // "bundled", "org", "team"
+  scope?: string // "platform", "org", "team"
   eligible: boolean
   editable: boolean
   require_bins?: string[]
@@ -157,7 +157,7 @@ function ScopeBadge({ scope }: { scope: string }) {
   const colors: Record<string, { bg: string, fg: string }> = {
     team: { bg: 'rgba(34, 197, 94, 0.15)', fg: '#22c55e' },
     org: { bg: 'rgba(59, 130, 246, 0.15)', fg: '#3b82f6' },
-    bundled: { bg: 'rgba(168, 85, 247, 0.15)', fg: '#a855f7' },
+    platform: { bg: 'rgba(168, 85, 247, 0.15)', fg: '#a855f7' },
     custom: { bg: 'rgba(34, 197, 94, 0.15)', fg: '#22c55e' },
   }
   const c = colors[scope] || colors.custom
@@ -704,8 +704,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
   // Group skills by scope for platform mode display
   const teamSkills = skillsList.filter(s => s.scope === 'team')
   const orgSkills = skillsList.filter(s => s.scope === 'org')
-  const bundledSkills = skillsList.filter(s => s.source === 'bundled')
-  const customSkills = skillsList.filter(s => s.source !== 'bundled')
+  const platformSkills = skillsList.filter(s => s.scope === 'platform')
+  const customSkills = skillsList.filter(s => s.scope !== 'platform')
 
   // Full-screen editor mode
   if (editorMode) {
@@ -770,8 +770,8 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                 {activeSkill?.scope && <ScopeBadge scope={activeSkill.scope} />}
                 {!activeSkill?.scope && (
                   <span className="text-xs px-2 py-0.5 rounded flex-shrink-0" style={{
-                    background: activeSkill?.source === 'bundled' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(34, 197, 94, 0.15)',
-                    color: activeSkill?.source === 'bundled' ? '#a855f7' : '#22c55e'
+                    background: activeSkill?.source === 'platform' ? 'rgba(168, 85, 247, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                    color: activeSkill?.source === 'platform' ? '#a855f7' : '#22c55e'
                   }}>
                     {activeSkill?.source}
                   </span>
@@ -1193,32 +1193,32 @@ export default function SkillsSettings({ config, onSaved, theme = 'dark', scope,
                   />
                 )}
 
-                {/* Bundled Skills */}
-                {bundledSkills.length > 0 && (
+                {/* Platform Skills */}
+                {platformSkills.length > 0 && (
                   <SkillSection
-                    label="Bundled (read-only)"
-                    skills={bundledSkills}
+                    label="Platform (inherited)"
+                    skills={platformSkills}
                     canManage={false}
-                    onView={(s) => handleOpenSkill(s.name, 'view', undefined)}
+                    onView={(s) => handleOpenSkill(s.name, 'view', 'platform')}
                   />
                 )}
               </>
             )}
 
-            {/* Scoped or personal mode: Bundled / Custom grouping */}
+            {/* Scoped or personal mode: Platform (inherited) / Custom grouping */}
             {(isPlatform ? !!scope : true) && (
               <>
-                {bundledSkills.length > 0 && (
+                {platformSkills.length > 0 && (
                   <div className="mb-4">
                     <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={hintStyle}>
-                      Bundled
+                      Platform (inherited)
                     </div>
                     <div className="space-y-1">
-                      {bundledSkills.map(skill => (
+                      {platformSkills.map(skill => (
                         <SkillRow
                           key={skill.name}
                           skill={skill}
-                          onView={() => handleOpenSkill(skill.name, 'view', isPlatform ? undefined : undefined)}
+                          onView={() => handleOpenSkill(skill.name, 'view', isPlatform ? 'platform' : undefined)}
                         />
                       ))}
                     </div>
@@ -1477,8 +1477,6 @@ interface SkillRowProps {
 function SkillRow({ skill, showScope, onView, onEdit, onDelete }: SkillRowProps) {
   const isBlocked = skill.validation_status === 'blocked' || skill.validation_status === 'unknown'
   const isValidated = skill.validation_status === 'clean' || skill.validation_status === 'warnings' || skill.validation_status === 'acknowledged'
-  // Bundled skills are always trusted
-  const isBundled = skill.source === 'bundled'
 
   return (
     <div
@@ -1508,15 +1506,15 @@ function SkillRow({ skill, showScope, onView, onEdit, onDelete }: SkillRowProps)
                multi-file
              </span>
            )}
-           {/* Validation status badge — only for non-bundled skills */}
-           {!isBundled && isBlocked && (
+           {/* Validation status badge */}
+           {isBlocked && (
              <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-900/40 text-red-300 flex items-center gap-1"
                title={skill.validation_status === 'unknown' ? 'Not validated — must be validated before use' : 'Blocked — critical security issues need review'}>
                <ShieldAlert size={10} />
                {skill.validation_status === 'unknown' ? 'unvalidated' : 'blocked'}
              </span>
            )}
-           {!isBundled && isValidated && (
+           {isValidated && (
              <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-900/40 text-green-300 flex items-center gap-1"
                title={skill.validation_status === 'acknowledged' ? 'Validated — risks acknowledged' : 'Validated'}>
                <ShieldCheck size={10} />

@@ -149,38 +149,6 @@ func TestFilterEligible(t *testing.T) {
 	}
 }
 
-func TestLoadBundledSkills(t *testing.T) {
-	byName := make(map[string]*Skill)
-	if err := loadBundledSkills(byName); err != nil {
-		t.Fatalf("loadBundledSkills failed: %v", err)
-	}
-
-	// We ship 10 bundled skills
-	if len(byName) != 10 {
-		t.Errorf("Expected 10 bundled skills, got %d", len(byName))
-	}
-
-	expected := []string{"github", "docker", "git", "npm", "python", "kubernetes", "terraform", "aws", "gcloud", "web-registration"}
-	for _, name := range expected {
-		if _, ok := byName[name]; !ok {
-			t.Errorf("Missing bundled skill: %s", name)
-		}
-	}
-
-	// Each skill should have content
-	for name, skill := range byName {
-		if skill.Content == "" {
-			t.Errorf("Skill %s has empty content", name)
-		}
-		if skill.Description == "" {
-			t.Errorf("Skill %s has empty description", name)
-		}
-		if skill.Source != "bundled" {
-			t.Errorf("Skill %s has source %q, want %q", name, skill.Source, "bundled")
-		}
-	}
-}
-
 func TestLoadSkillsFromDir(t *testing.T) {
 	tmpDir := t.TempDir()
 

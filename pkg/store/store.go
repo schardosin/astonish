@@ -56,6 +56,7 @@ type PlatformBackend interface {
 	PlatformSettings() PlatformSettingsStore
 	OrgSettings(orgSlug string) OrgSettingsStore
 	PlatformMCPServers() MCPServerStore
+	PlatformSkills() SkillStore
 
 	// --- Embeddings ---
 	SetEmbedFunc(fn EmbedFunc)

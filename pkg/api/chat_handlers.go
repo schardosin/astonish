@@ -741,14 +741,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject tenant-scoped skill stores into the runner context so that
-	// the skill_lookup tool can resolve skills from org and team stores
-	// in addition to bundled skills.
-	if svc := store.FromRequest(r); svc != nil && (svc.Skills != nil || svc.TeamSkills != nil) {
-		runner.InjectSkillStores(svc.Skills, svc.TeamSkills)
+	// the skill_lookup tool can resolve skills from platform, org, and team stores.
+	if svc := store.FromRequest(r); svc != nil && (svc.PlatformSkills != nil || svc.Skills != nil || svc.TeamSkills != nil) {
+		runner.InjectSkillStores(svc.PlatformSkills, svc.Skills, svc.TeamSkills)
 
-		// Build and inject a merged skill index (bundled + org + team) so the LLM
+		// Build and inject a merged skill index (platform + org + team) so the LLM
 		// sees custom platform skills in the "Available Skills" section of the system prompt.
-		if merged := buildMergedSkillIndex(r.Context(), svc.Skills, svc.TeamSkills); merged != "" {
+		if merged := buildMergedSkillIndex(r.Context(), svc.PlatformSkills, svc.Skills, svc.TeamSkills); merged != "" {
 			runner.InjectSkillIndex(merged)
 		}
 	}
@@ -1157,18 +1156,27 @@ func extractAppFromSystemContext(systemContext string) (code, title string) {
 	return code, title
 }
 
-// buildMergedSkillIndex builds a skill index string containing bundled skills
+// buildMergedSkillIndex builds a skill index string containing platform skills
 // plus any org-level and team-level skills from the platform DB.
 // This is used to populate the "Available Skills" section in the system prompt
 // so the LLM knows about custom platform skills and will call skill_lookup for them.
-func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillStore) string {
+func buildMergedSkillIndex(ctx context.Context, platformStore, orgStore, teamStore store.SkillStore) string {
 	var all []skills.Skill
 
-	// 1. Bundled skills (always available)
-	if bundled, err := skills.LoadBundledSkills(); err == nil {
-		all = append(all, bundled...)
-	} else {
-		slog.Warn("failed to load bundled skills for index", "error", err)
+	// 1. Platform skills (base layer, inherited by all orgs/teams)
+	if platformStore != nil {
+		if platformSkills, err := platformStore.LoadAll(ctx); err == nil {
+			for _, s := range platformSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "platform",
+				})
+			}
+		}
 	}
 
 	// 2. Org skills (if store available)
@@ -1187,7 +1195,7 @@ func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillS
 		}
 	}
 
-	// 3. Team skills (highest priority, can override org/bundled names)
+	// 3. Team skills (highest priority, can override org/platform names)
 	if teamStore != nil {
 		if teamSkills, err := teamStore.LoadAll(ctx); err == nil {
 			for _, s := range teamSkills {
@@ -1207,7 +1215,7 @@ func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillS
 		return ""
 	}
 
-	// Deduplicate preferring later entries (team > org > bundled).
+	// Deduplicate preferring later entries (team > org > platform).
 	// Reverse-iterate and collect, then reverse to preserve original order — O(n).
 	seen := make(map[string]bool, len(all))
 	var deduped []skills.Skill
@@ -1218,7 +1226,7 @@ func buildMergedSkillIndex(ctx context.Context, orgStore, teamStore store.SkillS
 			deduped = append(deduped, all[i])
 		}
 	}
-	// Reverse to restore bundled → org → team display order
+	// Reverse to restore platform → org → team display order
 	for i, j := 0, len(deduped)-1; i < j; i, j = i+1, j-1 {
 		deduped[i], deduped[j] = deduped[j], deduped[i]
 	}

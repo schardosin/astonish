@@ -92,6 +92,11 @@ type Services struct {
 	// Only superadmins can manage these. Nil in personal mode.
 	PlatformMCPServers MCPServerStore
 
+	// PlatformSkills provides access to platform-wide skill definitions.
+	// Platform skills are inherited by all organizations and teams.
+	// Only superadmins can manage these. Nil in personal mode.
+	PlatformSkills SkillStore
+
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore
 

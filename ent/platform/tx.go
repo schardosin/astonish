@@ -32,6 +32,10 @@ type Tx struct {
 	PlatformSecret *PlatformSecretClient
 	// PlatformSetting is the client for interacting with the PlatformSetting builders.
 	PlatformSetting *PlatformSettingClient
+	// PlatformSkill is the client for interacting with the PlatformSkill builders.
+	PlatformSkill *PlatformSkillClient
+	// PlatformSkillFile is the client for interacting with the PlatformSkillFile builders.
+	PlatformSkillFile *PlatformSkillFileClient
 	// SandboxLayer is the client for interacting with the SandboxLayer builders.
 	SandboxLayer *SandboxLayerClient
 	// SandboxTemplate is the client for interacting with the SandboxTemplate builders.
@@ -183,6 +187,8 @@ func (tx *Tx) init() {
 	tx.PlatformMCPServer = NewPlatformMCPServerClient(tx.config)
 	tx.PlatformSecret = NewPlatformSecretClient(tx.config)
 	tx.PlatformSetting = NewPlatformSettingClient(tx.config)
+	tx.PlatformSkill = NewPlatformSkillClient(tx.config)
+	tx.PlatformSkillFile = NewPlatformSkillFileClient(tx.config)
 	tx.SandboxLayer = NewSandboxLayerClient(tx.config)
 	tx.SandboxTemplate = NewSandboxTemplateClient(tx.config)
 	tx.ToolIndex = NewToolIndexClient(tx.config)

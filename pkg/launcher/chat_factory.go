@@ -23,7 +23,6 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -41,9 +40,9 @@ type ChatFactoryConfig struct {
 	WorkspaceDir string
 	IsDaemon     bool // When true, always run indexing/watchers (we ARE the daemon).
 
-	// PlatformMode indicates multi-tenant platform mode. When true, skill loading
-	// is restricted to bundled skills only — org/team skills are resolved per-request
-	// from context-injected stores. The filesystem user skill directory is NOT read.
+	// PlatformMode indicates multi-tenant platform mode. When true, skills are
+	// resolved per-request from context-injected stores (platform → org → team).
+	// The filesystem user skill directory is NOT read.
 	PlatformMode bool
 
 	// PlatformToolVectorStore is the vector store for tool discovery.
@@ -341,41 +340,26 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	}
 
 	// --- 2h. Initialize skills system → deferred category ---
-	var loadedSkills []skills.Skill
 	var skillIndex string
 	var skillToolSlice []tool.Tool
 	var skillLookupTool tool.Tool // hoisted for SubAgentManager wiring
 	if cfg.AppConfig != nil && cfg.AppConfig.Skills.IsSkillsEnabled() {
-		var skillErr error
-
-		// Only bundled (embedded) skills in the static index.
-		// Org/team skills are resolved per-request from context-injected stores.
-		loadedSkills, skillErr = skills.LoadBundledSkills()
-
-		if skillErr != nil {
+		// In platform mode, skills are resolved per-request from context-injected stores
+		// (platform → org → team). The static index is empty; the per-request merged index
+		// is injected by InjectSkillIndex in chat_handlers.go.
+		// The skill_lookup tool is still created (with an empty static index) so it can
+		// resolve skills from context stores at runtime.
+		skillTool, stErr := tools.NewSkillLookupTool(nil)
+		if stErr != nil {
 			if cfg.DebugMode {
-				slog.Warn("failed to load skills", "error", skillErr)
+				slog.Warn("failed to create skill_lookup tool", "error", stErr)
 			}
 		} else {
-			if len(loadedSkills) > 0 {
-				// Build lightweight index for system prompt (includes bundled skills only in platform mode)
-				skillIndex = skills.BuildSkillIndex(loadedSkills)
-
-				// Create skill_lookup tool (bundled index; platform mode also checks context stores at runtime)
-				skillTool, stErr := tools.NewSkillLookupTool(loadedSkills)
-				if stErr != nil {
-					if cfg.DebugMode {
-						slog.Warn("failed to create skill_lookup tool", "error", stErr)
-					}
-				} else {
-					skillToolSlice = append(skillToolSlice, skillTool)
-					skillLookupTool = skillTool // keep reference for sub-agent injection
-				}
-			}
-			if cfg.DebugMode {
-				eligible := skills.FilterEligible(loadedSkills)
-				slog.Debug("skills loaded", "component", "chat-factory", "total", len(loadedSkills), "eligible", len(eligible), "platform", cfg.PlatformMode)
-			}
+			skillToolSlice = append(skillToolSlice, skillTool)
+			skillLookupTool = skillTool // keep reference for sub-agent injection
+		}
+		if cfg.DebugMode {
+			slog.Debug("skills system initialized", "component", "chat-factory", "platform", cfg.PlatformMode)
 		}
 	}
 

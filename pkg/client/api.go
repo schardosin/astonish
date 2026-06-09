@@ -329,7 +329,7 @@ type ListSkillsResponse struct {
 }
 
 // ListSkills fetches the merged list of skills visible to the current user
-// (bundled + org + team).
+// (platform + org + team).
 func (c *Client) ListSkills() (*ListSkillsResponse, error) {
 	var resp ListSkillsResponse
 	if err := c.DoJSON("GET", "/api/skills", nil, &resp); err != nil {

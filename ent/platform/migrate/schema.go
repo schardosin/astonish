@@ -271,6 +271,74 @@ var (
 		Columns:    PlatformSettingsColumns,
 		PrimaryKey: []*schema.Column{PlatformSettingsColumns[0]},
 	}
+	// PlatformSkillsColumns holds the columns for the "platform_skills" table.
+	PlatformSkillsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "name", Type: field.TypeString},
+		{Name: "content", Type: field.TypeString},
+		{Name: "frontmatter", Type: field.TypeJSON, Nullable: true},
+		{Name: "validation_status", Type: field.TypeString, Default: "unknown"},
+		{Name: "validation_meta", Type: field.TypeJSON, Nullable: true},
+		{Name: "created_by", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// PlatformSkillsTable holds the schema information for the "platform_skills" table.
+	PlatformSkillsTable = &schema.Table{
+		Name:       "platform_skills",
+		Columns:    PlatformSkillsColumns,
+		PrimaryKey: []*schema.Column{PlatformSkillsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformskill_name",
+				Unique:  true,
+				Columns: []*schema.Column{PlatformSkillsColumns[1]},
+			},
+		},
+	}
+	// PlatformSkillFilesColumns holds the columns for the "platform_skill_files" table.
+	PlatformSkillFilesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "path", Type: field.TypeString, Default: ""},
+		{Name: "filename", Type: field.TypeString},
+		{Name: "content", Type: field.TypeString},
+		{Name: "is_executable", Type: field.TypeBool, Default: false},
+		{Name: "size_bytes", Type: field.TypeInt64},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "skill_id", Type: field.TypeUUID},
+	}
+	// PlatformSkillFilesTable holds the schema information for the "platform_skill_files" table.
+	PlatformSkillFilesTable = &schema.Table{
+		Name:       "platform_skill_files",
+		Columns:    PlatformSkillFilesColumns,
+		PrimaryKey: []*schema.Column{PlatformSkillFilesColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "platform_skill_files_platform_skills_files",
+				Columns:    []*schema.Column{PlatformSkillFilesColumns[8]},
+				RefColumns: []*schema.Column{PlatformSkillsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformskillfile_skill_id_path_filename",
+				Unique:  true,
+				Columns: []*schema.Column{PlatformSkillFilesColumns[8], PlatformSkillFilesColumns[1], PlatformSkillFilesColumns[2]},
+			},
+			{
+				Name:    "platformskillfile_skill_id",
+				Unique:  false,
+				Columns: []*schema.Column{PlatformSkillFilesColumns[8]},
+			},
+			{
+				Name:    "platformskillfile_path",
+				Unique:  false,
+				Columns: []*schema.Column{PlatformSkillFilesColumns[1]},
+			},
+		},
+	}
 	// SandboxLayersColumns holds the columns for the "sandbox_layers" table.
 	SandboxLayersColumns = []*schema.Column{
 		{Name: "layer_id", Type: field.TypeString},
@@ -446,6 +514,8 @@ var (
 		PlatformMcpServersTable,
 		PlatformSecretsTable,
 		PlatformSettingsTable,
+		PlatformSkillsTable,
+		PlatformSkillFilesTable,
 		SandboxLayersTable,
 		SandboxTemplatesTable,
 		ToolIndexTable,
@@ -489,6 +559,13 @@ func init() {
 	}
 	PlatformSettingsTable.Annotation = &entsql.Annotation{
 		Table: "platform_settings",
+	}
+	PlatformSkillsTable.Annotation = &entsql.Annotation{
+		Table: "platform_skills",
+	}
+	PlatformSkillFilesTable.ForeignKeys[0].RefTable = PlatformSkillsTable
+	PlatformSkillFilesTable.Annotation = &entsql.Annotation{
+		Table: "platform_skill_files",
 	}
 	SandboxLayersTable.Annotation = &entsql.Annotation{
 		Table: "sandbox_layers",

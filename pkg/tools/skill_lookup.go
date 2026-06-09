@@ -38,14 +38,14 @@ type SkillLookupResult struct {
 // All installed skills are indexed (eligible and ineligible) so the agent can
 // discover skills that need setup and guide the user through configuration.
 //
-// At runtime, this function also checks the context for tenant-scoped skill
-// stores (org + team) injected via store.WithSkillStores. Skills from these
-// stores override bundled skills of the same name (team > org > bundled).
+// At runtime, this function checks the context for tenant-scoped skill
+// stores (platform + org + team) injected via store.WithSkillStores.
+// Resolution order: team > org > platform (team wins on name collision).
 func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLookupArgs) (SkillLookupResult, error) {
-	// Build index of bundled/filesystem skills by name
-	bundledIndex := make(map[string]*skills.Skill, len(allSkills))
+	// Build index of any statically-provided skills (filesystem-based, personal mode)
+	staticIndex := make(map[string]*skills.Skill, len(allSkills))
 	for i := range allSkills {
-		bundledIndex[allSkills[i].Name] = &allSkills[i]
+		staticIndex[allSkills[i].Name] = &allSkills[i]
 	}
 
 	return func(ctx tool.Context, args SkillLookupArgs) (SkillLookupResult, error) {
@@ -55,7 +55,7 @@ func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLook
 
 		name := strings.ToLower(strings.TrimSpace(args.Name))
 
-		// Check tenant-scoped stores first (team overrides org overrides bundled)
+		// Check tenant-scoped stores (team > org > platform)
 		if ctx != nil {
 			if ss := store.SkillStoresFromContext(ctx); ss != nil {
 				// Team store takes highest priority
@@ -70,14 +70,24 @@ func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLook
 						return handlePlatformSkillLookup(ctx, ss.Org, skill, args), nil
 					}
 				}
+				// Then platform store (lowest DB tier)
+				if ss.Platform != nil {
+					if skill, err := ss.Platform.Get(ctx, name); err == nil && skill != nil {
+						return handlePlatformSkillLookup(ctx, ss.Platform, skill, args), nil
+					}
+				}
 			}
 		}
 
-		// Fall back to bundled/filesystem index
-		skill, ok := bundledIndex[name]
+		// Fall back to static/filesystem index (personal mode only)
+		skill, ok := staticIndex[name]
 		if !ok {
-			// List all available names (bundled + store skills) for LLM self-correction
-			names := collectAllSkillNames(bundledIndex, ctx)
+			names := collectAllSkillNames(staticIndex, ctx)
+			if len(names) == 0 {
+				return SkillLookupResult{
+					Error: fmt.Sprintf("skill %q not found. No skills are configured.", args.Name),
+				}, nil
+			}
 			return SkillLookupResult{
 				Error: fmt.Sprintf("skill %q not found. Available: %s", args.Name, strings.Join(names, ", ")),
 			}, nil
@@ -133,15 +143,22 @@ func storeSkillToResult(s *store.Skill) SkillLookupResult {
 	return result
 }
 
-// collectAllSkillNames gathers skill names from bundled index + context stores.
-func collectAllSkillNames(bundledIndex map[string]*skills.Skill, ctx tool.Context) []string {
-	nameSet := make(map[string]struct{}, len(bundledIndex))
-	for n := range bundledIndex {
+// collectAllSkillNames gathers skill names from static index + context stores.
+func collectAllSkillNames(staticIndex map[string]*skills.Skill, ctx tool.Context) []string {
+	nameSet := make(map[string]struct{}, len(staticIndex))
+	for n := range staticIndex {
 		nameSet[n] = struct{}{}
 	}
 
 	if ctx != nil {
 		if ss := store.SkillStoresFromContext(ctx); ss != nil {
+			if ss.Platform != nil {
+				if platformSkills, err := ss.Platform.List(ctx); err == nil {
+					for _, s := range platformSkills {
+						nameSet[s.Name] = struct{}{}
+					}
+				}
+			}
 			if ss.Org != nil {
 				if orgSkills, err := ss.Org.List(ctx); err == nil {
 					for _, s := range orgSkills {

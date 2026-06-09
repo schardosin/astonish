@@ -22,6 +22,8 @@ import (
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
+	"github.com/schardosin/astonish/ent/platform/platformskill"
+	"github.com/schardosin/astonish/ent/platform/platformskillfile"
 	"github.com/schardosin/astonish/ent/platform/predicate"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
@@ -49,6 +51,8 @@ const (
 	TypePlatformMCPServer = "PlatformMCPServer"
 	TypePlatformSecret    = "PlatformSecret"
 	TypePlatformSetting   = "PlatformSetting"
+	TypePlatformSkill     = "PlatformSkill"
+	TypePlatformSkillFile = "PlatformSkillFile"
 	TypeSandboxLayer      = "SandboxLayer"
 	TypeSandboxTemplate   = "SandboxTemplate"
 	TypeToolIndex         = "ToolIndex"
@@ -6727,6 +6731,1669 @@ func (m *PlatformSettingMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *PlatformSettingMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown PlatformSetting edge %s", name)
+}
+
+// PlatformSkillMutation represents an operation that mutates the PlatformSkill nodes in the graph.
+type PlatformSkillMutation struct {
+	config
+	op                Op
+	typ               string
+	id                *uuid.UUID
+	name              *string
+	content           *string
+	frontmatter       *map[string]interface{}
+	validation_status *string
+	validation_meta   *map[string]interface{}
+	created_by        *string
+	created_at        *time.Time
+	updated_at        *time.Time
+	clearedFields     map[string]struct{}
+	files             map[uuid.UUID]struct{}
+	removedfiles      map[uuid.UUID]struct{}
+	clearedfiles      bool
+	done              bool
+	oldValue          func(context.Context) (*PlatformSkill, error)
+	predicates        []predicate.PlatformSkill
+}
+
+var _ ent.Mutation = (*PlatformSkillMutation)(nil)
+
+// platformskillOption allows management of the mutation configuration using functional options.
+type platformskillOption func(*PlatformSkillMutation)
+
+// newPlatformSkillMutation creates new mutation for the PlatformSkill entity.
+func newPlatformSkillMutation(c config, op Op, opts ...platformskillOption) *PlatformSkillMutation {
+	m := &PlatformSkillMutation{
+		config:        c,
+		op:            op,
+		typ:           TypePlatformSkill,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withPlatformSkillID sets the ID field of the mutation.
+func withPlatformSkillID(id uuid.UUID) platformskillOption {
+	return func(m *PlatformSkillMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *PlatformSkill
+		)
+		m.oldValue = func(ctx context.Context) (*PlatformSkill, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().PlatformSkill.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withPlatformSkill sets the old PlatformSkill of the mutation.
+func withPlatformSkill(node *PlatformSkill) platformskillOption {
+	return func(m *PlatformSkillMutation) {
+		m.oldValue = func(context.Context) (*PlatformSkill, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m PlatformSkillMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m PlatformSkillMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("platform: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of PlatformSkill entities.
+func (m *PlatformSkillMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *PlatformSkillMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *PlatformSkillMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().PlatformSkill.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetName sets the "name" field.
+func (m *PlatformSkillMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *PlatformSkillMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *PlatformSkillMutation) ResetName() {
+	m.name = nil
+}
+
+// SetContent sets the "content" field.
+func (m *PlatformSkillMutation) SetContent(s string) {
+	m.content = &s
+}
+
+// Content returns the value of the "content" field in the mutation.
+func (m *PlatformSkillMutation) Content() (r string, exists bool) {
+	v := m.content
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContent returns the old "content" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldContent(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContent: %w", err)
+	}
+	return oldValue.Content, nil
+}
+
+// ResetContent resets all changes to the "content" field.
+func (m *PlatformSkillMutation) ResetContent() {
+	m.content = nil
+}
+
+// SetFrontmatter sets the "frontmatter" field.
+func (m *PlatformSkillMutation) SetFrontmatter(value map[string]interface{}) {
+	m.frontmatter = &value
+}
+
+// Frontmatter returns the value of the "frontmatter" field in the mutation.
+func (m *PlatformSkillMutation) Frontmatter() (r map[string]interface{}, exists bool) {
+	v := m.frontmatter
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFrontmatter returns the old "frontmatter" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldFrontmatter(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFrontmatter is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFrontmatter requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFrontmatter: %w", err)
+	}
+	return oldValue.Frontmatter, nil
+}
+
+// ClearFrontmatter clears the value of the "frontmatter" field.
+func (m *PlatformSkillMutation) ClearFrontmatter() {
+	m.frontmatter = nil
+	m.clearedFields[platformskill.FieldFrontmatter] = struct{}{}
+}
+
+// FrontmatterCleared returns if the "frontmatter" field was cleared in this mutation.
+func (m *PlatformSkillMutation) FrontmatterCleared() bool {
+	_, ok := m.clearedFields[platformskill.FieldFrontmatter]
+	return ok
+}
+
+// ResetFrontmatter resets all changes to the "frontmatter" field.
+func (m *PlatformSkillMutation) ResetFrontmatter() {
+	m.frontmatter = nil
+	delete(m.clearedFields, platformskill.FieldFrontmatter)
+}
+
+// SetValidationStatus sets the "validation_status" field.
+func (m *PlatformSkillMutation) SetValidationStatus(s string) {
+	m.validation_status = &s
+}
+
+// ValidationStatus returns the value of the "validation_status" field in the mutation.
+func (m *PlatformSkillMutation) ValidationStatus() (r string, exists bool) {
+	v := m.validation_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldValidationStatus returns the old "validation_status" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldValidationStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldValidationStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldValidationStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldValidationStatus: %w", err)
+	}
+	return oldValue.ValidationStatus, nil
+}
+
+// ResetValidationStatus resets all changes to the "validation_status" field.
+func (m *PlatformSkillMutation) ResetValidationStatus() {
+	m.validation_status = nil
+}
+
+// SetValidationMeta sets the "validation_meta" field.
+func (m *PlatformSkillMutation) SetValidationMeta(value map[string]interface{}) {
+	m.validation_meta = &value
+}
+
+// ValidationMeta returns the value of the "validation_meta" field in the mutation.
+func (m *PlatformSkillMutation) ValidationMeta() (r map[string]interface{}, exists bool) {
+	v := m.validation_meta
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldValidationMeta returns the old "validation_meta" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldValidationMeta(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldValidationMeta is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldValidationMeta requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldValidationMeta: %w", err)
+	}
+	return oldValue.ValidationMeta, nil
+}
+
+// ClearValidationMeta clears the value of the "validation_meta" field.
+func (m *PlatformSkillMutation) ClearValidationMeta() {
+	m.validation_meta = nil
+	m.clearedFields[platformskill.FieldValidationMeta] = struct{}{}
+}
+
+// ValidationMetaCleared returns if the "validation_meta" field was cleared in this mutation.
+func (m *PlatformSkillMutation) ValidationMetaCleared() bool {
+	_, ok := m.clearedFields[platformskill.FieldValidationMeta]
+	return ok
+}
+
+// ResetValidationMeta resets all changes to the "validation_meta" field.
+func (m *PlatformSkillMutation) ResetValidationMeta() {
+	m.validation_meta = nil
+	delete(m.clearedFields, platformskill.FieldValidationMeta)
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *PlatformSkillMutation) SetCreatedBy(s string) {
+	m.created_by = &s
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *PlatformSkillMutation) CreatedBy() (r string, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldCreatedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *PlatformSkillMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.clearedFields[platformskill.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *PlatformSkillMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[platformskill.FieldCreatedBy]
+	return ok
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *PlatformSkillMutation) ResetCreatedBy() {
+	m.created_by = nil
+	delete(m.clearedFields, platformskill.FieldCreatedBy)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *PlatformSkillMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *PlatformSkillMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *PlatformSkillMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *PlatformSkillMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *PlatformSkillMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the PlatformSkill entity.
+// If the PlatformSkill object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *PlatformSkillMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// AddFileIDs adds the "files" edge to the PlatformSkillFile entity by ids.
+func (m *PlatformSkillMutation) AddFileIDs(ids ...uuid.UUID) {
+	if m.files == nil {
+		m.files = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		m.files[ids[i]] = struct{}{}
+	}
+}
+
+// ClearFiles clears the "files" edge to the PlatformSkillFile entity.
+func (m *PlatformSkillMutation) ClearFiles() {
+	m.clearedfiles = true
+}
+
+// FilesCleared reports if the "files" edge to the PlatformSkillFile entity was cleared.
+func (m *PlatformSkillMutation) FilesCleared() bool {
+	return m.clearedfiles
+}
+
+// RemoveFileIDs removes the "files" edge to the PlatformSkillFile entity by IDs.
+func (m *PlatformSkillMutation) RemoveFileIDs(ids ...uuid.UUID) {
+	if m.removedfiles == nil {
+		m.removedfiles = make(map[uuid.UUID]struct{})
+	}
+	for i := range ids {
+		delete(m.files, ids[i])
+		m.removedfiles[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedFiles returns the removed IDs of the "files" edge to the PlatformSkillFile entity.
+func (m *PlatformSkillMutation) RemovedFilesIDs() (ids []uuid.UUID) {
+	for id := range m.removedfiles {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// FilesIDs returns the "files" edge IDs in the mutation.
+func (m *PlatformSkillMutation) FilesIDs() (ids []uuid.UUID) {
+	for id := range m.files {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetFiles resets all changes to the "files" edge.
+func (m *PlatformSkillMutation) ResetFiles() {
+	m.files = nil
+	m.clearedfiles = false
+	m.removedfiles = nil
+}
+
+// Where appends a list predicates to the PlatformSkillMutation builder.
+func (m *PlatformSkillMutation) Where(ps ...predicate.PlatformSkill) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the PlatformSkillMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *PlatformSkillMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.PlatformSkill, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *PlatformSkillMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *PlatformSkillMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (PlatformSkill).
+func (m *PlatformSkillMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *PlatformSkillMutation) Fields() []string {
+	fields := make([]string, 0, 8)
+	if m.name != nil {
+		fields = append(fields, platformskill.FieldName)
+	}
+	if m.content != nil {
+		fields = append(fields, platformskill.FieldContent)
+	}
+	if m.frontmatter != nil {
+		fields = append(fields, platformskill.FieldFrontmatter)
+	}
+	if m.validation_status != nil {
+		fields = append(fields, platformskill.FieldValidationStatus)
+	}
+	if m.validation_meta != nil {
+		fields = append(fields, platformskill.FieldValidationMeta)
+	}
+	if m.created_by != nil {
+		fields = append(fields, platformskill.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, platformskill.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, platformskill.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *PlatformSkillMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case platformskill.FieldName:
+		return m.Name()
+	case platformskill.FieldContent:
+		return m.Content()
+	case platformskill.FieldFrontmatter:
+		return m.Frontmatter()
+	case platformskill.FieldValidationStatus:
+		return m.ValidationStatus()
+	case platformskill.FieldValidationMeta:
+		return m.ValidationMeta()
+	case platformskill.FieldCreatedBy:
+		return m.CreatedBy()
+	case platformskill.FieldCreatedAt:
+		return m.CreatedAt()
+	case platformskill.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *PlatformSkillMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case platformskill.FieldName:
+		return m.OldName(ctx)
+	case platformskill.FieldContent:
+		return m.OldContent(ctx)
+	case platformskill.FieldFrontmatter:
+		return m.OldFrontmatter(ctx)
+	case platformskill.FieldValidationStatus:
+		return m.OldValidationStatus(ctx)
+	case platformskill.FieldValidationMeta:
+		return m.OldValidationMeta(ctx)
+	case platformskill.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case platformskill.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case platformskill.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown PlatformSkill field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PlatformSkillMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case platformskill.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case platformskill.FieldContent:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContent(v)
+		return nil
+	case platformskill.FieldFrontmatter:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFrontmatter(v)
+		return nil
+	case platformskill.FieldValidationStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetValidationStatus(v)
+		return nil
+	case platformskill.FieldValidationMeta:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetValidationMeta(v)
+		return nil
+	case platformskill.FieldCreatedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case platformskill.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case platformskill.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkill field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *PlatformSkillMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *PlatformSkillMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PlatformSkillMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown PlatformSkill numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *PlatformSkillMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(platformskill.FieldFrontmatter) {
+		fields = append(fields, platformskill.FieldFrontmatter)
+	}
+	if m.FieldCleared(platformskill.FieldValidationMeta) {
+		fields = append(fields, platformskill.FieldValidationMeta)
+	}
+	if m.FieldCleared(platformskill.FieldCreatedBy) {
+		fields = append(fields, platformskill.FieldCreatedBy)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *PlatformSkillMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *PlatformSkillMutation) ClearField(name string) error {
+	switch name {
+	case platformskill.FieldFrontmatter:
+		m.ClearFrontmatter()
+		return nil
+	case platformskill.FieldValidationMeta:
+		m.ClearValidationMeta()
+		return nil
+	case platformskill.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkill nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *PlatformSkillMutation) ResetField(name string) error {
+	switch name {
+	case platformskill.FieldName:
+		m.ResetName()
+		return nil
+	case platformskill.FieldContent:
+		m.ResetContent()
+		return nil
+	case platformskill.FieldFrontmatter:
+		m.ResetFrontmatter()
+		return nil
+	case platformskill.FieldValidationStatus:
+		m.ResetValidationStatus()
+		return nil
+	case platformskill.FieldValidationMeta:
+		m.ResetValidationMeta()
+		return nil
+	case platformskill.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case platformskill.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case platformskill.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkill field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *PlatformSkillMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.files != nil {
+		edges = append(edges, platformskill.EdgeFiles)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *PlatformSkillMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case platformskill.EdgeFiles:
+		ids := make([]ent.Value, 0, len(m.files))
+		for id := range m.files {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *PlatformSkillMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.removedfiles != nil {
+		edges = append(edges, platformskill.EdgeFiles)
+	}
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *PlatformSkillMutation) RemovedIDs(name string) []ent.Value {
+	switch name {
+	case platformskill.EdgeFiles:
+		ids := make([]ent.Value, 0, len(m.removedfiles))
+		for id := range m.removedfiles {
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *PlatformSkillMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedfiles {
+		edges = append(edges, platformskill.EdgeFiles)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *PlatformSkillMutation) EdgeCleared(name string) bool {
+	switch name {
+	case platformskill.EdgeFiles:
+		return m.clearedfiles
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *PlatformSkillMutation) ClearEdge(name string) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown PlatformSkill unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *PlatformSkillMutation) ResetEdge(name string) error {
+	switch name {
+	case platformskill.EdgeFiles:
+		m.ResetFiles()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkill edge %s", name)
+}
+
+// PlatformSkillFileMutation represents an operation that mutates the PlatformSkillFile nodes in the graph.
+type PlatformSkillFileMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	_path         *string
+	filename      *string
+	content       *string
+	is_executable *bool
+	size_bytes    *int64
+	addsize_bytes *int64
+	created_at    *time.Time
+	updated_at    *time.Time
+	clearedFields map[string]struct{}
+	skill         *uuid.UUID
+	clearedskill  bool
+	done          bool
+	oldValue      func(context.Context) (*PlatformSkillFile, error)
+	predicates    []predicate.PlatformSkillFile
+}
+
+var _ ent.Mutation = (*PlatformSkillFileMutation)(nil)
+
+// platformskillfileOption allows management of the mutation configuration using functional options.
+type platformskillfileOption func(*PlatformSkillFileMutation)
+
+// newPlatformSkillFileMutation creates new mutation for the PlatformSkillFile entity.
+func newPlatformSkillFileMutation(c config, op Op, opts ...platformskillfileOption) *PlatformSkillFileMutation {
+	m := &PlatformSkillFileMutation{
+		config:        c,
+		op:            op,
+		typ:           TypePlatformSkillFile,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withPlatformSkillFileID sets the ID field of the mutation.
+func withPlatformSkillFileID(id uuid.UUID) platformskillfileOption {
+	return func(m *PlatformSkillFileMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *PlatformSkillFile
+		)
+		m.oldValue = func(ctx context.Context) (*PlatformSkillFile, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().PlatformSkillFile.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withPlatformSkillFile sets the old PlatformSkillFile of the mutation.
+func withPlatformSkillFile(node *PlatformSkillFile) platformskillfileOption {
+	return func(m *PlatformSkillFileMutation) {
+		m.oldValue = func(context.Context) (*PlatformSkillFile, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m PlatformSkillFileMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m PlatformSkillFileMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("platform: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of PlatformSkillFile entities.
+func (m *PlatformSkillFileMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *PlatformSkillFileMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *PlatformSkillFileMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().PlatformSkillFile.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSkillID sets the "skill_id" field.
+func (m *PlatformSkillFileMutation) SetSkillID(u uuid.UUID) {
+	m.skill = &u
+}
+
+// SkillID returns the value of the "skill_id" field in the mutation.
+func (m *PlatformSkillFileMutation) SkillID() (r uuid.UUID, exists bool) {
+	v := m.skill
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSkillID returns the old "skill_id" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldSkillID(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSkillID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSkillID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSkillID: %w", err)
+	}
+	return oldValue.SkillID, nil
+}
+
+// ResetSkillID resets all changes to the "skill_id" field.
+func (m *PlatformSkillFileMutation) ResetSkillID() {
+	m.skill = nil
+}
+
+// SetPath sets the "path" field.
+func (m *PlatformSkillFileMutation) SetPath(s string) {
+	m._path = &s
+}
+
+// Path returns the value of the "path" field in the mutation.
+func (m *PlatformSkillFileMutation) Path() (r string, exists bool) {
+	v := m._path
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPath returns the old "path" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldPath(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPath is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPath requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPath: %w", err)
+	}
+	return oldValue.Path, nil
+}
+
+// ResetPath resets all changes to the "path" field.
+func (m *PlatformSkillFileMutation) ResetPath() {
+	m._path = nil
+}
+
+// SetFilename sets the "filename" field.
+func (m *PlatformSkillFileMutation) SetFilename(s string) {
+	m.filename = &s
+}
+
+// Filename returns the value of the "filename" field in the mutation.
+func (m *PlatformSkillFileMutation) Filename() (r string, exists bool) {
+	v := m.filename
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFilename returns the old "filename" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldFilename(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFilename is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFilename requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFilename: %w", err)
+	}
+	return oldValue.Filename, nil
+}
+
+// ResetFilename resets all changes to the "filename" field.
+func (m *PlatformSkillFileMutation) ResetFilename() {
+	m.filename = nil
+}
+
+// SetContent sets the "content" field.
+func (m *PlatformSkillFileMutation) SetContent(s string) {
+	m.content = &s
+}
+
+// Content returns the value of the "content" field in the mutation.
+func (m *PlatformSkillFileMutation) Content() (r string, exists bool) {
+	v := m.content
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldContent returns the old "content" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldContent(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldContent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldContent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldContent: %w", err)
+	}
+	return oldValue.Content, nil
+}
+
+// ResetContent resets all changes to the "content" field.
+func (m *PlatformSkillFileMutation) ResetContent() {
+	m.content = nil
+}
+
+// SetIsExecutable sets the "is_executable" field.
+func (m *PlatformSkillFileMutation) SetIsExecutable(b bool) {
+	m.is_executable = &b
+}
+
+// IsExecutable returns the value of the "is_executable" field in the mutation.
+func (m *PlatformSkillFileMutation) IsExecutable() (r bool, exists bool) {
+	v := m.is_executable
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsExecutable returns the old "is_executable" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldIsExecutable(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsExecutable is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsExecutable requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsExecutable: %w", err)
+	}
+	return oldValue.IsExecutable, nil
+}
+
+// ResetIsExecutable resets all changes to the "is_executable" field.
+func (m *PlatformSkillFileMutation) ResetIsExecutable() {
+	m.is_executable = nil
+}
+
+// SetSizeBytes sets the "size_bytes" field.
+func (m *PlatformSkillFileMutation) SetSizeBytes(i int64) {
+	m.size_bytes = &i
+	m.addsize_bytes = nil
+}
+
+// SizeBytes returns the value of the "size_bytes" field in the mutation.
+func (m *PlatformSkillFileMutation) SizeBytes() (r int64, exists bool) {
+	v := m.size_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSizeBytes returns the old "size_bytes" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldSizeBytes(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSizeBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSizeBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSizeBytes: %w", err)
+	}
+	return oldValue.SizeBytes, nil
+}
+
+// AddSizeBytes adds i to the "size_bytes" field.
+func (m *PlatformSkillFileMutation) AddSizeBytes(i int64) {
+	if m.addsize_bytes != nil {
+		*m.addsize_bytes += i
+	} else {
+		m.addsize_bytes = &i
+	}
+}
+
+// AddedSizeBytes returns the value that was added to the "size_bytes" field in this mutation.
+func (m *PlatformSkillFileMutation) AddedSizeBytes() (r int64, exists bool) {
+	v := m.addsize_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSizeBytes resets all changes to the "size_bytes" field.
+func (m *PlatformSkillFileMutation) ResetSizeBytes() {
+	m.size_bytes = nil
+	m.addsize_bytes = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *PlatformSkillFileMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *PlatformSkillFileMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *PlatformSkillFileMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *PlatformSkillFileMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *PlatformSkillFileMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the PlatformSkillFile entity.
+// If the PlatformSkillFile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *PlatformSkillFileMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *PlatformSkillFileMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// ClearSkill clears the "skill" edge to the PlatformSkill entity.
+func (m *PlatformSkillFileMutation) ClearSkill() {
+	m.clearedskill = true
+	m.clearedFields[platformskillfile.FieldSkillID] = struct{}{}
+}
+
+// SkillCleared reports if the "skill" edge to the PlatformSkill entity was cleared.
+func (m *PlatformSkillFileMutation) SkillCleared() bool {
+	return m.clearedskill
+}
+
+// SkillIDs returns the "skill" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// SkillID instead. It exists only for internal usage by the builders.
+func (m *PlatformSkillFileMutation) SkillIDs() (ids []uuid.UUID) {
+	if id := m.skill; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetSkill resets all changes to the "skill" edge.
+func (m *PlatformSkillFileMutation) ResetSkill() {
+	m.skill = nil
+	m.clearedskill = false
+}
+
+// Where appends a list predicates to the PlatformSkillFileMutation builder.
+func (m *PlatformSkillFileMutation) Where(ps ...predicate.PlatformSkillFile) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the PlatformSkillFileMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *PlatformSkillFileMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.PlatformSkillFile, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *PlatformSkillFileMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *PlatformSkillFileMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (PlatformSkillFile).
+func (m *PlatformSkillFileMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *PlatformSkillFileMutation) Fields() []string {
+	fields := make([]string, 0, 8)
+	if m.skill != nil {
+		fields = append(fields, platformskillfile.FieldSkillID)
+	}
+	if m._path != nil {
+		fields = append(fields, platformskillfile.FieldPath)
+	}
+	if m.filename != nil {
+		fields = append(fields, platformskillfile.FieldFilename)
+	}
+	if m.content != nil {
+		fields = append(fields, platformskillfile.FieldContent)
+	}
+	if m.is_executable != nil {
+		fields = append(fields, platformskillfile.FieldIsExecutable)
+	}
+	if m.size_bytes != nil {
+		fields = append(fields, platformskillfile.FieldSizeBytes)
+	}
+	if m.created_at != nil {
+		fields = append(fields, platformskillfile.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, platformskillfile.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *PlatformSkillFileMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case platformskillfile.FieldSkillID:
+		return m.SkillID()
+	case platformskillfile.FieldPath:
+		return m.Path()
+	case platformskillfile.FieldFilename:
+		return m.Filename()
+	case platformskillfile.FieldContent:
+		return m.Content()
+	case platformskillfile.FieldIsExecutable:
+		return m.IsExecutable()
+	case platformskillfile.FieldSizeBytes:
+		return m.SizeBytes()
+	case platformskillfile.FieldCreatedAt:
+		return m.CreatedAt()
+	case platformskillfile.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *PlatformSkillFileMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case platformskillfile.FieldSkillID:
+		return m.OldSkillID(ctx)
+	case platformskillfile.FieldPath:
+		return m.OldPath(ctx)
+	case platformskillfile.FieldFilename:
+		return m.OldFilename(ctx)
+	case platformskillfile.FieldContent:
+		return m.OldContent(ctx)
+	case platformskillfile.FieldIsExecutable:
+		return m.OldIsExecutable(ctx)
+	case platformskillfile.FieldSizeBytes:
+		return m.OldSizeBytes(ctx)
+	case platformskillfile.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case platformskillfile.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown PlatformSkillFile field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PlatformSkillFileMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case platformskillfile.FieldSkillID:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSkillID(v)
+		return nil
+	case platformskillfile.FieldPath:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPath(v)
+		return nil
+	case platformskillfile.FieldFilename:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFilename(v)
+		return nil
+	case platformskillfile.FieldContent:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetContent(v)
+		return nil
+	case platformskillfile.FieldIsExecutable:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsExecutable(v)
+		return nil
+	case platformskillfile.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSizeBytes(v)
+		return nil
+	case platformskillfile.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case platformskillfile.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkillFile field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *PlatformSkillFileMutation) AddedFields() []string {
+	var fields []string
+	if m.addsize_bytes != nil {
+		fields = append(fields, platformskillfile.FieldSizeBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *PlatformSkillFileMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case platformskillfile.FieldSizeBytes:
+		return m.AddedSizeBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *PlatformSkillFileMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case platformskillfile.FieldSizeBytes:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSizeBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkillFile numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *PlatformSkillFileMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *PlatformSkillFileMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *PlatformSkillFileMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown PlatformSkillFile nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *PlatformSkillFileMutation) ResetField(name string) error {
+	switch name {
+	case platformskillfile.FieldSkillID:
+		m.ResetSkillID()
+		return nil
+	case platformskillfile.FieldPath:
+		m.ResetPath()
+		return nil
+	case platformskillfile.FieldFilename:
+		m.ResetFilename()
+		return nil
+	case platformskillfile.FieldContent:
+		m.ResetContent()
+		return nil
+	case platformskillfile.FieldIsExecutable:
+		m.ResetIsExecutable()
+		return nil
+	case platformskillfile.FieldSizeBytes:
+		m.ResetSizeBytes()
+		return nil
+	case platformskillfile.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case platformskillfile.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkillFile field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *PlatformSkillFileMutation) AddedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.skill != nil {
+		edges = append(edges, platformskillfile.EdgeSkill)
+	}
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *PlatformSkillFileMutation) AddedIDs(name string) []ent.Value {
+	switch name {
+	case platformskillfile.EdgeSkill:
+		if id := m.skill; id != nil {
+			return []ent.Value{*id}
+		}
+	}
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *PlatformSkillFileMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 1)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *PlatformSkillFileMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *PlatformSkillFileMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 1)
+	if m.clearedskill {
+		edges = append(edges, platformskillfile.EdgeSkill)
+	}
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *PlatformSkillFileMutation) EdgeCleared(name string) bool {
+	switch name {
+	case platformskillfile.EdgeSkill:
+		return m.clearedskill
+	}
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *PlatformSkillFileMutation) ClearEdge(name string) error {
+	switch name {
+	case platformskillfile.EdgeSkill:
+		m.ClearSkill()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkillFile unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *PlatformSkillFileMutation) ResetEdge(name string) error {
+	switch name {
+	case platformskillfile.EdgeSkill:
+		m.ResetSkill()
+		return nil
+	}
+	return fmt.Errorf("unknown PlatformSkillFile edge %s", name)
 }
 
 // SandboxLayerMutation represents an operation that mutates the SandboxLayer nodes in the graph.

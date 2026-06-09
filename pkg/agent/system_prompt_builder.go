@@ -82,7 +82,7 @@ type PromptOverrides struct {
 	ChannelHints   string // Channel-specific output constraints
 	SchedulerHints string // Scheduler-specific output constraints
 	SessionContext string // Per-turn session context (fleet wizard, etc.)
-	SkillIndex     string // Per-request merged skill index (bundled + org + team)
+	SkillIndex     string // Per-request merged skill index (platform + org + team)
 
 	// PinnedToolGroups lists tool group names that should always be injected
 	// into the LLM request regardless of ToolIndex scoring. Used by wizard

@@ -36,6 +36,12 @@ type PlatformSecret func(*sql.Selector)
 // PlatformSetting is the predicate function for platformsetting builders.
 type PlatformSetting func(*sql.Selector)
 
+// PlatformSkill is the predicate function for platformskill builders.
+type PlatformSkill func(*sql.Selector)
+
+// PlatformSkillFile is the predicate function for platformskillfile builders.
+type PlatformSkillFile func(*sql.Selector)
+
 // SandboxLayer is the predicate function for sandboxlayer builders.
 type SandboxLayer func(*sql.Selector)
 

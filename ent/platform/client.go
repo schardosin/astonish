@@ -26,6 +26,8 @@ import (
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
+	"github.com/schardosin/astonish/ent/platform/platformskill"
+	"github.com/schardosin/astonish/ent/platform/platformskillfile"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
 	"github.com/schardosin/astonish/ent/platform/toolindex"
@@ -58,6 +60,10 @@ type Client struct {
 	PlatformSecret *PlatformSecretClient
 	// PlatformSetting is the client for interacting with the PlatformSetting builders.
 	PlatformSetting *PlatformSettingClient
+	// PlatformSkill is the client for interacting with the PlatformSkill builders.
+	PlatformSkill *PlatformSkillClient
+	// PlatformSkillFile is the client for interacting with the PlatformSkillFile builders.
+	PlatformSkillFile *PlatformSkillFileClient
 	// SandboxLayer is the client for interacting with the SandboxLayer builders.
 	SandboxLayer *SandboxLayerClient
 	// SandboxTemplate is the client for interacting with the SandboxTemplate builders.
@@ -89,6 +95,8 @@ func (c *Client) init() {
 	c.PlatformMCPServer = NewPlatformMCPServerClient(c.config)
 	c.PlatformSecret = NewPlatformSecretClient(c.config)
 	c.PlatformSetting = NewPlatformSettingClient(c.config)
+	c.PlatformSkill = NewPlatformSkillClient(c.config)
+	c.PlatformSkillFile = NewPlatformSkillFileClient(c.config)
 	c.SandboxLayer = NewSandboxLayerClient(c.config)
 	c.SandboxTemplate = NewSandboxTemplateClient(c.config)
 	c.ToolIndex = NewToolIndexClient(c.config)
@@ -196,6 +204,8 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		PlatformMCPServer: NewPlatformMCPServerClient(cfg),
 		PlatformSecret:    NewPlatformSecretClient(cfg),
 		PlatformSetting:   NewPlatformSettingClient(cfg),
+		PlatformSkill:     NewPlatformSkillClient(cfg),
+		PlatformSkillFile: NewPlatformSkillFileClient(cfg),
 		SandboxLayer:      NewSandboxLayerClient(cfg),
 		SandboxTemplate:   NewSandboxTemplateClient(cfg),
 		ToolIndex:         NewToolIndexClient(cfg),
@@ -230,6 +240,8 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		PlatformMCPServer: NewPlatformMCPServerClient(cfg),
 		PlatformSecret:    NewPlatformSecretClient(cfg),
 		PlatformSetting:   NewPlatformSettingClient(cfg),
+		PlatformSkill:     NewPlatformSkillClient(cfg),
+		PlatformSkillFile: NewPlatformSkillFileClient(cfg),
 		SandboxLayer:      NewSandboxLayerClient(cfg),
 		SandboxTemplate:   NewSandboxTemplateClient(cfg),
 		ToolIndex:         NewToolIndexClient(cfg),
@@ -266,8 +278,8 @@ func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.DeviceSession, c.EmailThreadIndex, c.LoginSession, c.OIDCProvider,
 		c.OrgMembership, c.Organization, c.PendingLinkCode, c.PlatformMCPServer,
-		c.PlatformSecret, c.PlatformSetting, c.SandboxLayer, c.SandboxTemplate,
-		c.ToolIndex, c.User, c.UserChannel,
+		c.PlatformSecret, c.PlatformSetting, c.PlatformSkill, c.PlatformSkillFile,
+		c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User, c.UserChannel,
 	} {
 		n.Use(hooks...)
 	}
@@ -279,8 +291,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.DeviceSession, c.EmailThreadIndex, c.LoginSession, c.OIDCProvider,
 		c.OrgMembership, c.Organization, c.PendingLinkCode, c.PlatformMCPServer,
-		c.PlatformSecret, c.PlatformSetting, c.SandboxLayer, c.SandboxTemplate,
-		c.ToolIndex, c.User, c.UserChannel,
+		c.PlatformSecret, c.PlatformSetting, c.PlatformSkill, c.PlatformSkillFile,
+		c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User, c.UserChannel,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -309,6 +321,10 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.PlatformSecret.mutate(ctx, m)
 	case *PlatformSettingMutation:
 		return c.PlatformSetting.mutate(ctx, m)
+	case *PlatformSkillMutation:
+		return c.PlatformSkill.mutate(ctx, m)
+	case *PlatformSkillFileMutation:
+		return c.PlatformSkillFile.mutate(ctx, m)
 	case *SandboxLayerMutation:
 		return c.SandboxLayer.mutate(ctx, m)
 	case *SandboxTemplateMutation:
@@ -1749,6 +1765,304 @@ func (c *PlatformSettingClient) mutate(ctx context.Context, m *PlatformSettingMu
 	}
 }
 
+// PlatformSkillClient is a client for the PlatformSkill schema.
+type PlatformSkillClient struct {
+	config
+}
+
+// NewPlatformSkillClient returns a client for the PlatformSkill from the given config.
+func NewPlatformSkillClient(c config) *PlatformSkillClient {
+	return &PlatformSkillClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `platformskill.Hooks(f(g(h())))`.
+func (c *PlatformSkillClient) Use(hooks ...Hook) {
+	c.hooks.PlatformSkill = append(c.hooks.PlatformSkill, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `platformskill.Intercept(f(g(h())))`.
+func (c *PlatformSkillClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PlatformSkill = append(c.inters.PlatformSkill, interceptors...)
+}
+
+// Create returns a builder for creating a PlatformSkill entity.
+func (c *PlatformSkillClient) Create() *PlatformSkillCreate {
+	mutation := newPlatformSkillMutation(c.config, OpCreate)
+	return &PlatformSkillCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PlatformSkill entities.
+func (c *PlatformSkillClient) CreateBulk(builders ...*PlatformSkillCreate) *PlatformSkillCreateBulk {
+	return &PlatformSkillCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PlatformSkillClient) MapCreateBulk(slice any, setFunc func(*PlatformSkillCreate, int)) *PlatformSkillCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PlatformSkillCreateBulk{err: fmt.Errorf("calling to PlatformSkillClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PlatformSkillCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PlatformSkillCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PlatformSkill.
+func (c *PlatformSkillClient) Update() *PlatformSkillUpdate {
+	mutation := newPlatformSkillMutation(c.config, OpUpdate)
+	return &PlatformSkillUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PlatformSkillClient) UpdateOne(_m *PlatformSkill) *PlatformSkillUpdateOne {
+	mutation := newPlatformSkillMutation(c.config, OpUpdateOne, withPlatformSkill(_m))
+	return &PlatformSkillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PlatformSkillClient) UpdateOneID(id uuid.UUID) *PlatformSkillUpdateOne {
+	mutation := newPlatformSkillMutation(c.config, OpUpdateOne, withPlatformSkillID(id))
+	return &PlatformSkillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PlatformSkill.
+func (c *PlatformSkillClient) Delete() *PlatformSkillDelete {
+	mutation := newPlatformSkillMutation(c.config, OpDelete)
+	return &PlatformSkillDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PlatformSkillClient) DeleteOne(_m *PlatformSkill) *PlatformSkillDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PlatformSkillClient) DeleteOneID(id uuid.UUID) *PlatformSkillDeleteOne {
+	builder := c.Delete().Where(platformskill.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PlatformSkillDeleteOne{builder}
+}
+
+// Query returns a query builder for PlatformSkill.
+func (c *PlatformSkillClient) Query() *PlatformSkillQuery {
+	return &PlatformSkillQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePlatformSkill},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PlatformSkill entity by its id.
+func (c *PlatformSkillClient) Get(ctx context.Context, id uuid.UUID) (*PlatformSkill, error) {
+	return c.Query().Where(platformskill.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PlatformSkillClient) GetX(ctx context.Context, id uuid.UUID) *PlatformSkill {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryFiles queries the files edge of a PlatformSkill.
+func (c *PlatformSkillClient) QueryFiles(_m *PlatformSkill) *PlatformSkillFileQuery {
+	query := (&PlatformSkillFileClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(platformskill.Table, platformskill.FieldID, id),
+			sqlgraph.To(platformskillfile.Table, platformskillfile.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, platformskill.FilesTable, platformskill.FilesColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *PlatformSkillClient) Hooks() []Hook {
+	return c.hooks.PlatformSkill
+}
+
+// Interceptors returns the client interceptors.
+func (c *PlatformSkillClient) Interceptors() []Interceptor {
+	return c.inters.PlatformSkill
+}
+
+func (c *PlatformSkillClient) mutate(ctx context.Context, m *PlatformSkillMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PlatformSkillCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PlatformSkillUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PlatformSkillUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PlatformSkillDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("platform: unknown PlatformSkill mutation op: %q", m.Op())
+	}
+}
+
+// PlatformSkillFileClient is a client for the PlatformSkillFile schema.
+type PlatformSkillFileClient struct {
+	config
+}
+
+// NewPlatformSkillFileClient returns a client for the PlatformSkillFile from the given config.
+func NewPlatformSkillFileClient(c config) *PlatformSkillFileClient {
+	return &PlatformSkillFileClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `platformskillfile.Hooks(f(g(h())))`.
+func (c *PlatformSkillFileClient) Use(hooks ...Hook) {
+	c.hooks.PlatformSkillFile = append(c.hooks.PlatformSkillFile, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `platformskillfile.Intercept(f(g(h())))`.
+func (c *PlatformSkillFileClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PlatformSkillFile = append(c.inters.PlatformSkillFile, interceptors...)
+}
+
+// Create returns a builder for creating a PlatformSkillFile entity.
+func (c *PlatformSkillFileClient) Create() *PlatformSkillFileCreate {
+	mutation := newPlatformSkillFileMutation(c.config, OpCreate)
+	return &PlatformSkillFileCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PlatformSkillFile entities.
+func (c *PlatformSkillFileClient) CreateBulk(builders ...*PlatformSkillFileCreate) *PlatformSkillFileCreateBulk {
+	return &PlatformSkillFileCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PlatformSkillFileClient) MapCreateBulk(slice any, setFunc func(*PlatformSkillFileCreate, int)) *PlatformSkillFileCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PlatformSkillFileCreateBulk{err: fmt.Errorf("calling to PlatformSkillFileClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PlatformSkillFileCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PlatformSkillFileCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PlatformSkillFile.
+func (c *PlatformSkillFileClient) Update() *PlatformSkillFileUpdate {
+	mutation := newPlatformSkillFileMutation(c.config, OpUpdate)
+	return &PlatformSkillFileUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PlatformSkillFileClient) UpdateOne(_m *PlatformSkillFile) *PlatformSkillFileUpdateOne {
+	mutation := newPlatformSkillFileMutation(c.config, OpUpdateOne, withPlatformSkillFile(_m))
+	return &PlatformSkillFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PlatformSkillFileClient) UpdateOneID(id uuid.UUID) *PlatformSkillFileUpdateOne {
+	mutation := newPlatformSkillFileMutation(c.config, OpUpdateOne, withPlatformSkillFileID(id))
+	return &PlatformSkillFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PlatformSkillFile.
+func (c *PlatformSkillFileClient) Delete() *PlatformSkillFileDelete {
+	mutation := newPlatformSkillFileMutation(c.config, OpDelete)
+	return &PlatformSkillFileDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PlatformSkillFileClient) DeleteOne(_m *PlatformSkillFile) *PlatformSkillFileDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PlatformSkillFileClient) DeleteOneID(id uuid.UUID) *PlatformSkillFileDeleteOne {
+	builder := c.Delete().Where(platformskillfile.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PlatformSkillFileDeleteOne{builder}
+}
+
+// Query returns a query builder for PlatformSkillFile.
+func (c *PlatformSkillFileClient) Query() *PlatformSkillFileQuery {
+	return &PlatformSkillFileQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePlatformSkillFile},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PlatformSkillFile entity by its id.
+func (c *PlatformSkillFileClient) Get(ctx context.Context, id uuid.UUID) (*PlatformSkillFile, error) {
+	return c.Query().Where(platformskillfile.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PlatformSkillFileClient) GetX(ctx context.Context, id uuid.UUID) *PlatformSkillFile {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QuerySkill queries the skill edge of a PlatformSkillFile.
+func (c *PlatformSkillFileClient) QuerySkill(_m *PlatformSkillFile) *PlatformSkillQuery {
+	query := (&PlatformSkillClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(platformskillfile.Table, platformskillfile.FieldID, id),
+			sqlgraph.To(platformskill.Table, platformskill.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, platformskillfile.SkillTable, platformskillfile.SkillColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *PlatformSkillFileClient) Hooks() []Hook {
+	return c.hooks.PlatformSkillFile
+}
+
+// Interceptors returns the client interceptors.
+func (c *PlatformSkillFileClient) Interceptors() []Interceptor {
+	return c.inters.PlatformSkillFile
+}
+
+func (c *PlatformSkillFileClient) mutate(ctx context.Context, m *PlatformSkillFileMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PlatformSkillFileCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PlatformSkillFileUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PlatformSkillFileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PlatformSkillFileDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("platform: unknown PlatformSkillFile mutation op: %q", m.Op())
+	}
+}
+
 // SandboxLayerClient is a client for the SandboxLayer schema.
 type SandboxLayerClient struct {
 	config
@@ -2563,13 +2877,13 @@ type (
 	hooks struct {
 		DeviceSession, EmailThreadIndex, LoginSession, OIDCProvider, OrgMembership,
 		Organization, PendingLinkCode, PlatformMCPServer, PlatformSecret,
-		PlatformSetting, SandboxLayer, SandboxTemplate, ToolIndex, User,
-		UserChannel []ent.Hook
+		PlatformSetting, PlatformSkill, PlatformSkillFile, SandboxLayer,
+		SandboxTemplate, ToolIndex, User, UserChannel []ent.Hook
 	}
 	inters struct {
 		DeviceSession, EmailThreadIndex, LoginSession, OIDCProvider, OrgMembership,
 		Organization, PendingLinkCode, PlatformMCPServer, PlatformSecret,
-		PlatformSetting, SandboxLayer, SandboxTemplate, ToolIndex, User,
-		UserChannel []ent.Interceptor
+		PlatformSetting, PlatformSkill, PlatformSkillFile, SandboxLayer,
+		SandboxTemplate, ToolIndex, User, UserChannel []ent.Interceptor
 	}
 )

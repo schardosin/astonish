@@ -129,6 +129,30 @@ func (f PlatformSettingFunc) Mutate(ctx context.Context, m platform.Mutation) (p
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *platform.PlatformSettingMutation", m)
 }
 
+// The PlatformSkillFunc type is an adapter to allow the use of ordinary
+// function as PlatformSkill mutator.
+type PlatformSkillFunc func(context.Context, *platform.PlatformSkillMutation) (platform.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformSkillFunc) Mutate(ctx context.Context, m platform.Mutation) (platform.Value, error) {
+	if mv, ok := m.(*platform.PlatformSkillMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *platform.PlatformSkillMutation", m)
+}
+
+// The PlatformSkillFileFunc type is an adapter to allow the use of ordinary
+// function as PlatformSkillFile mutator.
+type PlatformSkillFileFunc func(context.Context, *platform.PlatformSkillFileMutation) (platform.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformSkillFileFunc) Mutate(ctx context.Context, m platform.Mutation) (platform.Value, error) {
+	if mv, ok := m.(*platform.PlatformSkillFileMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *platform.PlatformSkillFileMutation", m)
+}
+
 // The SandboxLayerFunc type is an adapter to allow the use of ordinary
 // function as SandboxLayer mutator.
 type SandboxLayerFunc func(context.Context, *platform.SandboxLayerMutation) (platform.Value, error)

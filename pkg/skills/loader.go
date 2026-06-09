@@ -2,10 +2,8 @@ package skills
 
 import (
 	"bufio"
-	"embed"
 	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,9 +12,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
-
-//go:embed bundled/*/SKILL.md
-var bundledSkills embed.FS
 
 // Skill represents a loaded skill with its metadata and content.
 type Skill struct {
@@ -28,8 +23,8 @@ type Skill struct {
 	Metadata    interface{} `yaml:"metadata,omitempty"` // ClawHub nested metadata (parsed but not used directly)
 	Content     string      `yaml:"-"`                  // Full markdown body (after frontmatter)
 	FilePath    string      `yaml:"-"`                  // Source file path
-	Source      string      `yaml:"-"`                  // "bundled", "user", "extra", "project"
-	Directory   string      `yaml:"-"`                  // Absolute path to skill directory (empty for bundled)
+	Source      string      `yaml:"-"`                  // "platform", "org", "team", "user", "extra", "project"
+	Directory   string      `yaml:"-"`                  // Absolute path to skill directory (empty for DB-backed)
 }
 
 // IsEligible checks if a skill can run in the current environment.
@@ -232,60 +227,9 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 	return []byte(strings.Join(frontLines, "\n")), strings.Join(bodyLines, "\n"), nil
 }
 
-// LoadSkills loads skills from all configured sources.
-// Later sources override earlier ones by skill name.
-// The workspaceDir parameter is kept for API compatibility but is no longer used
-// (project-local skills were removed — all skills live in the config directory).
 // LoadSkills was the file-based loader for personal mode.
 // It has been removed in v3 (platform DB is the only source of truth for custom skills).
-// Use LoadBundledSkills() for the static index + platform SkillStore.LoadAll() for org/team skills.
-
-// LoadBundledSkills returns only the skills embedded in the binary.
-// Used by platform mode to overlay bundled skills on top of PG-stored custom skills.
-func LoadBundledSkills() ([]Skill, error) {
-	byName := make(map[string]*Skill)
-	if err := loadBundledSkills(byName); err != nil {
-		return nil, err
-	}
-	var result []Skill
-	for _, s := range byName {
-		result = append(result, *s)
-	}
-	sortSkills(result)
-	return result, nil
-}
-
-// loadBundledSkills loads skills from the embedded filesystem.
-func loadBundledSkills(byName map[string]*Skill) error {
-	return loadBundledSkillsInto(byName)
-}
-
-// loadBundledSkillsInto is the shared implementation for loading bundled skills.
-func loadBundledSkillsInto(byName map[string]*Skill) error {
-	dirs, err := fs.ReadDir(bundledSkills, "bundled")
-	if err != nil {
-		return err
-	}
-
-	for _, dir := range dirs {
-		if !dir.IsDir() {
-			continue
-		}
-		skillPath := filepath.Join("bundled", dir.Name(), "SKILL.md")
-		data, err := bundledSkills.ReadFile(skillPath)
-		if err != nil {
-			continue // Skip dirs without SKILL.md
-		}
-
-		skill, err := ParseSkillFile(skillPath, data)
-		if err != nil {
-			continue // Skip unparseable skills
-		}
-		skill.Source = "bundled"
-		byName[skill.Name] = skill
-	}
-	return nil
-}
+// Use the platform/org/team SkillStore.LoadAll() for skills at each tier.
 
 // loadSkillsFromDir loads skills from a directory on disk.
 // Each immediate subdirectory containing a SKILL.md is loaded.
@@ -330,14 +274,4 @@ func FilterEligible(skills []Skill) []Skill {
 		}
 	}
 	return eligible
-}
-
-func sortSkills(skills []Skill) {
-	for i := 0; i < len(skills); i++ {
-		for j := i + 1; j < len(skills); j++ {
-			if skills[i].Name > skills[j].Name {
-				skills[i], skills[j] = skills[j], skills[i]
-			}
-		}
-	}
 }

@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"entgo.io/ent/dialect/sql/schema"
+
+	platformmigrate "github.com/schardosin/astonish/ent/platform/migrate"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/session"
@@ -72,14 +75,20 @@ func NewPlatformServices(ctx context.Context, cfg Config) (*store.Services, *Sto
 		return nil, nil, err
 	}
 
-	// Auto-migrate for SQLite (schema is always created fresh or upgraded in place).
-	// For PostgreSQL, callers must use BootstrapPlatform explicitly.
+	// Auto-migrate only the platform_skills tables (idempotent — creates if missing).
+	// We scope to these two tables to avoid Ent trying to reconcile pre-existing
+	// column types on other tables (e.g. platform_mcp_servers id → uuid cast issue).
+	skillTables := []*schema.Table{
+		platformmigrate.PlatformSkillsTable,
+		platformmigrate.PlatformSkillFilesTable,
+	}
+	if err := platformmigrate.Create(ctx, s.platformClient.Schema, skillTables); err != nil {
+		s.Close()
+		return nil, nil, fmt.Errorf("auto-migrate platform skill tables: %w", err)
+	}
+
+	// Seed platform defaults for SQLite (e.g. @base sandbox template).
 	if s.dialect == DialectSQLite {
-		if err := s.platformClient.Schema.Create(ctx); err != nil {
-			s.Close()
-			return nil, nil, fmt.Errorf("auto-migrate sqlite platform: %w", err)
-		}
-		// Seed platform defaults (e.g. @base sandbox template).
 		if err := s.applySQLiteExtras(ctx, ScopePlatform, s.platformDB); err != nil {
 			s.Close()
 			return nil, nil, fmt.Errorf("apply sqlite platform extras: %w", err)
@@ -131,6 +140,7 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				Skills:             orgStore.OrgSkills(),
 				MCPServers:         orgStore.OrgMCPServers(),
 				PlatformMCPServers: s.PlatformMCPServers(),
+				PlatformSkills:     s.PlatformSkills(),
 				PlatformSettings:   s.PlatformSettings(),
 				OrgSettings:        s.OrgSettings(tc.OrgSlug),
 			}

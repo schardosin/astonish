@@ -16,6 +16,8 @@ import (
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
+	"github.com/schardosin/astonish/ent/platform/platformskill"
+	"github.com/schardosin/astonish/ent/platform/platformskillfile"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
 	"github.com/schardosin/astonish/ent/platform/schema"
@@ -230,6 +232,66 @@ func init() {
 	platformsettingDescID := platformsettingFields[0].Descriptor()
 	// platformsetting.IDValidator is a validator for the "id" field. It is called by the builders before save.
 	platformsetting.IDValidator = platformsettingDescID.Validators[0].(func(string) error)
+	platformskillFields := schema.PlatformSkill{}.Fields()
+	_ = platformskillFields
+	// platformskillDescName is the schema descriptor for name field.
+	platformskillDescName := platformskillFields[1].Descriptor()
+	// platformskill.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	platformskill.NameValidator = platformskillDescName.Validators[0].(func(string) error)
+	// platformskillDescContent is the schema descriptor for content field.
+	platformskillDescContent := platformskillFields[2].Descriptor()
+	// platformskill.ContentValidator is a validator for the "content" field. It is called by the builders before save.
+	platformskill.ContentValidator = platformskillDescContent.Validators[0].(func(string) error)
+	// platformskillDescValidationStatus is the schema descriptor for validation_status field.
+	platformskillDescValidationStatus := platformskillFields[4].Descriptor()
+	// platformskill.DefaultValidationStatus holds the default value on creation for the validation_status field.
+	platformskill.DefaultValidationStatus = platformskillDescValidationStatus.Default.(string)
+	// platformskillDescCreatedAt is the schema descriptor for created_at field.
+	platformskillDescCreatedAt := platformskillFields[7].Descriptor()
+	// platformskill.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformskill.DefaultCreatedAt = platformskillDescCreatedAt.Default.(func() time.Time)
+	// platformskillDescUpdatedAt is the schema descriptor for updated_at field.
+	platformskillDescUpdatedAt := platformskillFields[8].Descriptor()
+	// platformskill.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	platformskill.DefaultUpdatedAt = platformskillDescUpdatedAt.Default.(func() time.Time)
+	// platformskill.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	platformskill.UpdateDefaultUpdatedAt = platformskillDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// platformskillDescID is the schema descriptor for id field.
+	platformskillDescID := platformskillFields[0].Descriptor()
+	// platformskill.DefaultID holds the default value on creation for the id field.
+	platformskill.DefaultID = platformskillDescID.Default.(func() uuid.UUID)
+	platformskillfileFields := schema.PlatformSkillFile{}.Fields()
+	_ = platformskillfileFields
+	// platformskillfileDescPath is the schema descriptor for path field.
+	platformskillfileDescPath := platformskillfileFields[2].Descriptor()
+	// platformskillfile.DefaultPath holds the default value on creation for the path field.
+	platformskillfile.DefaultPath = platformskillfileDescPath.Default.(string)
+	// platformskillfileDescFilename is the schema descriptor for filename field.
+	platformskillfileDescFilename := platformskillfileFields[3].Descriptor()
+	// platformskillfile.FilenameValidator is a validator for the "filename" field. It is called by the builders before save.
+	platformskillfile.FilenameValidator = platformskillfileDescFilename.Validators[0].(func(string) error)
+	// platformskillfileDescContent is the schema descriptor for content field.
+	platformskillfileDescContent := platformskillfileFields[4].Descriptor()
+	// platformskillfile.ContentValidator is a validator for the "content" field. It is called by the builders before save.
+	platformskillfile.ContentValidator = platformskillfileDescContent.Validators[0].(func(string) error)
+	// platformskillfileDescIsExecutable is the schema descriptor for is_executable field.
+	platformskillfileDescIsExecutable := platformskillfileFields[5].Descriptor()
+	// platformskillfile.DefaultIsExecutable holds the default value on creation for the is_executable field.
+	platformskillfile.DefaultIsExecutable = platformskillfileDescIsExecutable.Default.(bool)
+	// platformskillfileDescCreatedAt is the schema descriptor for created_at field.
+	platformskillfileDescCreatedAt := platformskillfileFields[7].Descriptor()
+	// platformskillfile.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformskillfile.DefaultCreatedAt = platformskillfileDescCreatedAt.Default.(func() time.Time)
+	// platformskillfileDescUpdatedAt is the schema descriptor for updated_at field.
+	platformskillfileDescUpdatedAt := platformskillfileFields[8].Descriptor()
+	// platformskillfile.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	platformskillfile.DefaultUpdatedAt = platformskillfileDescUpdatedAt.Default.(func() time.Time)
+	// platformskillfile.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	platformskillfile.UpdateDefaultUpdatedAt = platformskillfileDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// platformskillfileDescID is the schema descriptor for id field.
+	platformskillfileDescID := platformskillfileFields[0].Descriptor()
+	// platformskillfile.DefaultID holds the default value on creation for the id field.
+	platformskillfile.DefaultID = platformskillfileDescID.Default.(func() uuid.UUID)
 	sandboxlayerFields := schema.SandboxLayer{}.Fields()
 	_ = sandboxlayerFields
 	// sandboxlayerDescCephfsPath is the schema descriptor for cephfs_path field.

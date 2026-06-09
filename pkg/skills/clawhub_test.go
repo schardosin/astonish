@@ -360,16 +360,3 @@ func TestSkillDirectorySetForDiskSkills(t *testing.T) {
 		t.Errorf("Directory should be absolute, got %q", skill.Directory)
 	}
 }
-
-func TestBundledSkillsHaveEmptyDirectory(t *testing.T) {
-	byName := make(map[string]*Skill)
-	if err := loadBundledSkills(byName); err != nil {
-		t.Fatalf("loadBundledSkills failed: %v", err)
-	}
-
-	for name, skill := range byName {
-		if skill.Directory != "" {
-			t.Errorf("Bundled skill %q should have empty Directory, got %q", name, skill.Directory)
-		}
-	}
-}

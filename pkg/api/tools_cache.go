@@ -53,6 +53,9 @@ func asyncDiscoverAndCacheTools(mcpStore store.MCPServerStore, serverName string
 		if json.Unmarshal(discoveredTools, &toolList) == nil {
 			slog.Info("async MCP discovery: tools cached", "server", serverName, "count", len(toolList))
 		}
+
+		// Reset the chat agent so the next session picks up the newly-discovered tools.
+		GetChatManager().Reset()
 	}()
 }
 

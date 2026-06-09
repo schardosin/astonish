@@ -196,31 +196,24 @@ func (s *Store) SecretGetter() func(string) string {
 	return ps.getter()
 }
 
-// getter loads all secrets from the platform_secrets table into a map and
-// returns a closure that does map lookups. Values are decrypted using the
-// master key (ASTONISH_MASTER_KEY env or ~/.config/astonish/.store_key).
+// getter returns a closure that queries the platform_secrets table live on
+// each call. This ensures callers always see the current DB state — critical
+// for IsStandardServerInstalled() which must reflect secrets written by the
+// install handler without requiring a daemon restart.
 func (ps *platformSecretStore) getter() func(string) string {
-	ctx := context.Background()
-	rows, err := ps.client.PlatformSecret.Query().All(ctx)
-	if err != nil {
-		// If we cannot read secrets, return a no-op getter.
-		return func(string) string { return "" }
-	}
-
 	masterKey := loadMasterKey()
 
-	secrets := make(map[string]string, len(rows))
-	for _, row := range rows {
+	return func(key string) string {
+		row, err := ps.client.PlatformSecret.Get(context.Background(), key)
+		if err != nil {
+			return ""
+		}
 		plaintext, err := decryptSecret(row.Value, masterKey)
 		if err != nil {
-			slog.Warn("failed to decrypt platform secret", "key", row.ID, "error", err)
-			continue
+			slog.Warn("failed to decrypt platform secret", "key", key, "error", err)
+			return ""
 		}
-		secrets[row.ID] = string(plaintext)
-	}
-
-	return func(key string) string {
-		return secrets[key]
+		return string(plaintext)
 	}
 }
 

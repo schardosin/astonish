@@ -13,6 +13,39 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 )
 
+// ── SQL Safety Validation ────────────────────────────────────────────
+
+// disallowedSQLTokenRE matches SQL keywords that are not permitted in
+// read-only query execution. This prevents write, DDL, and administrative
+// operations from being smuggled through the query endpoint.
+var disallowedSQLTokenRE = regexp.MustCompile(`(?i)\b(INSERT|UPDATE|DELETE|MERGE|UPSERT|REPLACE|ALTER|DROP|CREATE|TRUNCATE|GRANT|REVOKE|COPY|CALL|DO|EXECUTE|PREPARE|DEALLOCATE|VACUUM|ANALYZE|ATTACH|DETACH)\b`)
+
+// isSafeReadOnlySQL validates that a SQL string is a single, read-only
+// statement without comment injection or disallowed keywords.
+func isSafeReadOnlySQL(sql string) bool {
+	trimmed := strings.TrimSpace(sql)
+	if trimmed == "" {
+		return false
+	}
+
+	// Reject multiple statements.
+	if strings.Contains(trimmed, ";") {
+		return false
+	}
+
+	// Reject SQL comments which could be used to obfuscate intent.
+	if strings.Contains(trimmed, "--") || strings.Contains(trimmed, "/*") || strings.Contains(trimmed, "*/") {
+		return false
+	}
+
+	// Reject any disallowed (non-read-only) keywords.
+	if disallowedSQLTokenRE.MatchString(trimmed) {
+		return false
+	}
+
+	return true
+}
+
 // ── SQLite → PostgreSQL Dialect Translation ──────────────────────────
 
 // sqliteToPostgres translates common SQLite SQL dialect differences to
@@ -147,6 +180,15 @@ func AppStateQueryHandler(w http.ResponseWriter, r *http.Request) {
 		respondJSON(w, http.StatusBadRequest, appStateResponse{
 			RequestID: req.RequestID,
 			Error:     "only SELECT, PRAGMA, and EXPLAIN statements are allowed on the query endpoint",
+		})
+		return
+	}
+
+	// Strict validation: reject unsafe SQL patterns (multi-statement, comments, write keywords).
+	if !isSafeReadOnlySQL(req.SQL) {
+		respondJSON(w, http.StatusBadRequest, appStateResponse{
+			RequestID: req.RequestID,
+			Error:     "unsafe SQL detected; only single-statement read-only queries are allowed",
 		})
 		return
 	}

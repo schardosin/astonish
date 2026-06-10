@@ -558,6 +558,12 @@ func PlatformAdminAddUserToOrgHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID := mux.Vars(r)["id"]
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+	userID = parsedUserID.String()
 	var req struct {
 		OrgSlug  string `json:"org_slug"`
 		Role     string `json:"role"`

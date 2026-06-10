@@ -302,6 +302,14 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if req.UserID != "" {
+		parsedUserID, err := uuid.Parse(req.UserID)
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid user_id")
+			return
+		}
+		req.UserID = parsedUserID.String()
+	}
 
 	ctx := r.Context()
 	orgDataStore, err := pa.pgStore.ForOrg(user.OrgSlug)

@@ -524,7 +524,11 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 	// expects the model to process tool results and continue, but these
 	// providers require a user message after tool responses. We append
 	// a minimal user prompt to trigger the model to process the results.
-	messages = ensureNotEndingWithTool(messages)
+	// NOTE: Only apply for kimi models. Mistral (and most other providers)
+	// reject a user message between tool results and the next assistant turn.
+	if strings.Contains(p.model, "kimi") {
+		messages = ensureNotEndingWithTool(messages)
+	}
 
 	return messages
 }

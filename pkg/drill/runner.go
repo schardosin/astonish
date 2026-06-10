@@ -367,18 +367,7 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 func (sr *SuiteRunner) runParameterizedTest(ctx context.Context, test *LoadedTest, suite *LoadedSuite, paramSet map[string]string, paramIdx int) TestReport {
 	// Save current vars and merge parameter values
 	savedVars := sr.vars
-
-	// Cap allocation size to prevent overflow and excessive memory use.
-	const maxVars = 10_000
-	varsLen := len(sr.vars)
-	paramLen := len(paramSet)
-	if varsLen > maxVars {
-		varsLen = maxVars
-	}
-	if paramLen > maxVars {
-		paramLen = maxVars
-	}
-	mergedVars := make(map[string]string, varsLen+paramLen)
+	mergedVars := make(map[string]string)
 	for k, v := range sr.vars {
 		mergedVars[k] = v
 	}

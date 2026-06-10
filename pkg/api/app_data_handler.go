@@ -116,6 +116,14 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
+// httpTransportFactory creates the HTTP transport for resolveHTTPSource requests.
+// Overridable in tests to bypass SSRF checks for localhost test servers.
+var httpTransportFactory = func() http.RoundTripper { return ssrfSafeTransport() }
+
+// httpURLValidator validates a URL before making a request.
+// Overridable in tests to allow localhost test servers.
+var httpURLValidator = validateHTTPURL
+
 // ssrfSafeTransport returns an *http.Transport that validates resolved IPs
 // before connecting, blocking requests to private/internal networks.
 // Checking at the dial level prevents DNS-rebinding attacks where a public
@@ -803,6 +811,8 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 // spec format: "<METHOD>:<url>" or "<METHOD>:<url>@<credential-name>"
 // When a @credential-name suffix is present, the named credential is resolved
 // from the credential store and its auth header is injected into the request.
+// If the remote API responds with 401 Unauthorized, the cached OAuth token is
+// invalidated and the request is retried once with a fresh token.
 func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, error) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -818,76 +828,103 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 		url = url[:m[0]]
 	}
 
-	// Build the request body and extract custom headers.
-	bodyData, customHeaders := extractHTTPBodyAndHeaders(method, args)
-
-	var body io.Reader
-	if bodyData != nil {
-		jsonBytes, err := json.Marshal(bodyData)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal request body: %w", err)
-		}
-		body = strings.NewReader(string(jsonBytes))
+	// Validate the URL scheme and host before making the request.
+	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
+	if err := httpURLValidator(url); err != nil {
+		return nil, err
 	}
 
-	httpReq, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	if body != nil {
-		httpReq.Header.Set("Content-Type", "application/json")
-	}
-	httpReq.Header.Set("Accept", "application/json")
-
-	// Apply any custom headers from args
-	for k, v := range customHeaders {
-		httpReq.Header.Set(k, v)
-	}
-
-	// Resolve and inject credential (after custom headers — credential takes precedence for auth)
+	// Resolve the credential store once (used for both initial attempt and retry).
+	var credStore store.CredentialStore
 	if credentialName != "" {
-		var credStore store.CredentialStore
 		if r != nil {
 			credStore = effectiveCredentialStore(r)
 		}
 		if credStore == nil {
 			return nil, fmt.Errorf("credential store is not available — cannot resolve credential %q", credentialName)
 		}
-		headerKey, headerValue, err := credStore.Resolve(r.Context(), credentialName)
-		if err != nil {
-			return nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
-		}
-		httpReq.Header.Set(headerKey, headerValue)
 	}
 
-	// Validate the URL scheme and host before making the request.
-	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
-	if err := validateHTTPURL(url); err != nil {
+	// doRequest builds and executes the HTTP request with the current credential.
+	doRequest := func() (*http.Response, []byte, error) {
+		// Build the request body and extract custom headers.
+		bodyData, customHeaders := extractHTTPBodyAndHeaders(method, args)
+
+		var body io.Reader
+		if bodyData != nil {
+			jsonBytes, err := json.Marshal(bodyData)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to marshal request body: %w", err)
+			}
+			body = strings.NewReader(string(jsonBytes))
+		}
+
+		httpReq, err := http.NewRequest(method, url, body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to create HTTP request: %w", err)
+		}
+
+		if body != nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+		}
+		httpReq.Header.Set("Accept", "application/json")
+
+		// Apply any custom headers from args
+		for k, v := range customHeaders {
+			httpReq.Header.Set(k, v)
+		}
+
+		// Resolve and inject credential (after custom headers — credential takes precedence for auth)
+		if credentialName != "" {
+			headerKey, headerValue, err := credStore.Resolve(r.Context(), credentialName)
+			if err != nil {
+				return nil, nil, fmt.Errorf("failed to resolve credential %q: %w", credentialName, err)
+			}
+			httpReq.Header.Set(headerKey, headerValue)
+		}
+
+		client := &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: httpTransportFactory(),
+			// Do not follow redirects to private IPs — each hop is checked
+			// by the Transport's DialContext, but we also cap redirects.
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if len(via) >= 5 {
+					return fmt.Errorf("too many redirects")
+				}
+				return nil
+			},
+		}
+		resp, err := client.Do(httpReq)
+		if err != nil {
+			return nil, nil, fmt.Errorf("HTTP request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to read response: %w", err)
+		}
+
+		return resp, respBody, nil
+	}
+
+	// First attempt.
+	resp, respBody, err := doRequest()
+	if err != nil {
 		return nil, err
 	}
 
-	client := &http.Client{
-		Timeout:   30 * time.Second,
-		Transport: ssrfSafeTransport(),
-		// Do not follow redirects to private IPs — each hop is checked
-		// by the Transport's DialContext, but we also cap redirects.
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
-	}
-	resp, err := client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("HTTP request failed: %w", err)
-	}
-	defer resp.Body.Close()
+	// If we got a 401 and we're using an OAuth credential, invalidate the cached
+	// token and retry once. The token may have been revoked server-side or expired
+	// due to clock skew before our cached expiry time was reached.
+	if resp.StatusCode == http.StatusUnauthorized && credentialName != "" {
+		credStore.InvalidateToken(r.Context(), credentialName)
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodySize))
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		resp, respBody, err = doRequest()
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if resp.StatusCode >= 400 {

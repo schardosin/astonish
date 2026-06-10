@@ -345,6 +345,14 @@ func (s *Store) Resolve(name string) (headerKey, headerValue string, err error) 
 	}
 }
 
+// InvalidateToken evicts the cached OAuth token for the named credential,
+// forcing the next Resolve call to fetch a fresh token from the OAuth provider.
+// This is called when a downstream API returns 401, indicating the token is no
+// longer valid despite not having reached its expected expiry time.
+func (s *Store) InvalidateToken(name string) {
+	s.tokens.Invalidate(name)
+}
+
 // Redactor returns the redaction engine for wiring into tool outputs,
 // channel delivery, and session storage.
 func (s *Store) Redactor() *Redactor {

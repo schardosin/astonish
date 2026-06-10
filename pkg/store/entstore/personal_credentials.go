@@ -119,6 +119,10 @@ func (cs *personalCredentialStore) Resolve(ctx context.Context, name string) (st
 	return store.ResolveCredentialHeader(name, cred, oauthFetcher(name))
 }
 
+func (cs *personalCredentialStore) InvalidateToken(_ context.Context, name string) {
+	globalOAuthCache.invalidate(name)
+}
+
 // Secret management - stored as credentials with special type prefix.
 
 const secretCredType = "_secret"

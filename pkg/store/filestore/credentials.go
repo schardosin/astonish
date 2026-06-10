@@ -57,6 +57,10 @@ func (w *CredentialStoreWrapper) Resolve(_ context.Context, name string) (header
 	return w.inner.Resolve(name)
 }
 
+func (w *CredentialStoreWrapper) InvalidateToken(_ context.Context, name string) {
+	w.inner.InvalidateToken(name)
+}
+
 func (w *CredentialStoreWrapper) SetSecret(_ context.Context, key, value string) error {
 	return w.inner.SetSecret(key, value)
 }

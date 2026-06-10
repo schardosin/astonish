@@ -41,6 +41,15 @@ func newTokenCache() *tokenCache {
 	}
 }
 
+// Invalidate removes the cached token for the given name, forcing the next
+// call to GetOrRefresh to acquire a fresh token. This is used when a downstream
+// service rejects a token (e.g., 401 Unauthorized) before the cached expiry time.
+func (tc *tokenCache) Invalidate(name string) {
+	tc.mu.Lock()
+	delete(tc.tokens, name)
+	tc.mu.Unlock()
+}
+
 // GetOrRefresh returns a valid access token for the named OAuth credential.
 // If the cached token is still valid, it is returned immediately.
 // Otherwise, a new token is acquired via the client_credentials flow.

@@ -292,6 +292,7 @@ func (m *mockCredentialStore) Count(_ context.Context) int                      
 func (m *mockCredentialStore) Resolve(_ context.Context, _ string) (string, string, error) {
 	return "", "", nil
 }
+func (m *mockCredentialStore) InvalidateToken(_ context.Context, _ string) {}
 func (m *mockCredentialStore) SetSecret(_ context.Context, _, _ string) error          { return nil }
 func (m *mockCredentialStore) SetSecretBatch(_ context.Context, _ map[string]string) error { return nil }
 func (m *mockCredentialStore) GetSecret(_ context.Context, _ string) string            { return "" }

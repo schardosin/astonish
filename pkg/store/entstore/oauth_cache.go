@@ -32,6 +32,14 @@ var globalOAuthCache = &oauthTokenCache{
 	tokens: make(map[string]*oauthCachedToken),
 }
 
+// invalidate removes the cached token for the given credential name, forcing
+// the next getOrFetch call to acquire a fresh token from the OAuth provider.
+func (tc *oauthTokenCache) invalidate(name string) {
+	tc.mu.Lock()
+	delete(tc.tokens, name)
+	tc.mu.Unlock()
+}
+
 // getOrFetch returns a cached token if still valid, otherwise fetches a new one
 // via the OAuth2 client_credentials flow.
 func (tc *oauthTokenCache) getOrFetch(name string, cred *store.Credential) (string, error) {

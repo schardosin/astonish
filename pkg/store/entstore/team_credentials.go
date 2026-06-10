@@ -127,6 +127,10 @@ func (s *teamCredentialStore) Resolve(ctx context.Context, name string) (string,
 	return store.ResolveCredentialHeader(name, cred, oauthFetcher(name))
 }
 
+func (s *teamCredentialStore) InvalidateToken(_ context.Context, name string) {
+	globalOAuthCache.invalidate(name)
+}
+
 // --- Secret key-value store (stored as credentials with name prefix "secret:") ---
 
 func (s *teamCredentialStore) SetSecret(ctx context.Context, key, value string) error {

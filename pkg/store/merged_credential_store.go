@@ -102,6 +102,18 @@ func (m *MergedCredentialStore) Resolve(ctx context.Context, name string) (heade
 	return "", "", nil
 }
 
+func (m *MergedCredentialStore) InvalidateToken(ctx context.Context, name string) {
+	// Invalidate in both stores — the token cache is shared (globalOAuthCache)
+	// but for file-backed mode they may differ, so invalidate in whichever
+	// store owns the credential.
+	if m.Personal != nil {
+		m.Personal.InvalidateToken(ctx, name)
+	}
+	if m.Team != nil {
+		m.Team.InvalidateToken(ctx, name)
+	}
+}
+
 func (m *MergedCredentialStore) SetSecret(ctx context.Context, key, value string) error {
 	if m.Personal != nil {
 		return m.Personal.SetSecret(ctx, key, value)

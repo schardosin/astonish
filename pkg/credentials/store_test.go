@@ -908,6 +908,82 @@ func TestOAuthTokenCache(t *testing.T) {
 	}
 }
 
+func TestOAuthTokenCacheInvalidate(t *testing.T) {
+	tc := newTokenCache()
+
+	// Manually cache a token
+	tc.mu.Lock()
+	tc.tokens["my-cred"] = &cachedToken{
+		accessToken: "stale-token",
+		expiresAt:   time.Now().Add(300 * time.Second),
+	}
+	tc.mu.Unlock()
+
+	// Verify it's cached
+	tc.mu.RLock()
+	_, exists := tc.tokens["my-cred"]
+	tc.mu.RUnlock()
+	if !exists {
+		t.Fatal("expected token to be cached")
+	}
+
+	// Invalidate
+	tc.Invalidate("my-cred")
+
+	// Verify it's gone
+	tc.mu.RLock()
+	_, exists = tc.tokens["my-cred"]
+	tc.mu.RUnlock()
+	if exists {
+		t.Fatal("expected token to be evicted after Invalidate")
+	}
+}
+
+func TestOAuthTokenCacheInvalidateNonExistent(t *testing.T) {
+	tc := newTokenCache()
+
+	// Should not panic on non-existent key
+	tc.Invalidate("does-not-exist")
+}
+
+func TestOAuthTokenCacheInvalidateAndRefresh(t *testing.T) {
+	tc := newTokenCache()
+	r := NewRedactor()
+
+	// Cache a valid token
+	tc.mu.Lock()
+	tc.tokens["refresh-test"] = &cachedToken{
+		accessToken: "old-token",
+		expiresAt:   time.Now().Add(300 * time.Second),
+	}
+	tc.mu.Unlock()
+
+	// GetOrRefresh should return the cached token
+	cred := &Credential{
+		Type:         CredOAuthClientCreds,
+		AuthURL:      "https://auth.example.com/token",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+	}
+	token, err := tc.GetOrRefresh("refresh-test", cred, r)
+	if err != nil {
+		t.Fatalf("GetOrRefresh (before invalidate): %v", err)
+	}
+	if token != "old-token" {
+		t.Errorf("expected old-token, got %q", token)
+	}
+
+	// Invalidate it
+	tc.Invalidate("refresh-test")
+
+	// Next GetOrRefresh should try to fetch (will fail since no real server)
+	// but proves the cache was cleared.
+	_, err = tc.GetOrRefresh("refresh-test", cred, r)
+	if err == nil {
+		t.Fatal("expected error from GetOrRefresh after invalidation (no real OAuth server)")
+	}
+}
+
 // contains is a test helper for string containment.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)

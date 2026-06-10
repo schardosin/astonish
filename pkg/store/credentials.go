@@ -113,6 +113,11 @@ type CredentialStore interface {
 	// Credential resolution for HTTP requests.
 	Resolve(ctx context.Context, name string) (headerKey, headerValue string, err error)
 
+	// InvalidateToken evicts a cached OAuth token for the named credential,
+	// forcing the next Resolve call to fetch a fresh token. This is used when
+	// a downstream API returns 401, indicating the token is stale.
+	InvalidateToken(ctx context.Context, name string)
+
 	// Secret key-value store (for API keys, tokens, etc.).
 	SetSecret(ctx context.Context, key, value string) error
 	SetSecretBatch(ctx context.Context, secrets map[string]string) error

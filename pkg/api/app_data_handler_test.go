@@ -1,10 +1,16 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 func TestCredentialSuffixParsing(t *testing.T) {
@@ -350,5 +356,248 @@ func TestExtractHTTPBodyAndHeaders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ── Retry-on-401 with token invalidation tests ──────────────────────
+
+// disableSSRF overrides the SSRF checks for testing with localhost test servers.
+// Returns a cleanup function that restores the original values.
+func disableSSRF() func() {
+	origTransport := httpTransportFactory
+	origValidator := httpURLValidator
+	httpTransportFactory = func() http.RoundTripper { return http.DefaultTransport }
+	httpURLValidator = func(_ string) error { return nil }
+	return func() {
+		httpTransportFactory = origTransport
+		httpURLValidator = origValidator
+	}
+}
+
+// oauthRetryCredentialStore is a test credential store that simulates an OAuth
+// credential returning a stale token on first call and a fresh token after
+// InvalidateToken is called.
+type oauthRetryCredentialStore struct {
+	resolveCount     atomic.Int32
+	invalidateCount  atomic.Int32
+	staleToken       string
+	freshToken       string
+}
+
+func (s *oauthRetryCredentialStore) Get(_ context.Context, _ string) *store.Credential { return nil }
+func (s *oauthRetryCredentialStore) Set(_ context.Context, _ string, _ *store.Credential) error {
+	return nil
+}
+func (s *oauthRetryCredentialStore) Remove(_ context.Context, _ string) error { return nil }
+func (s *oauthRetryCredentialStore) List(_ context.Context) map[string]store.CredentialType {
+	return nil
+}
+func (s *oauthRetryCredentialStore) Count(_ context.Context) int { return 0 }
+func (s *oauthRetryCredentialStore) Resolve(_ context.Context, _ string) (string, string, error) {
+	n := s.resolveCount.Add(1)
+	if n == 1 {
+		return "Authorization", "Bearer " + s.staleToken, nil
+	}
+	return "Authorization", "Bearer " + s.freshToken, nil
+}
+func (s *oauthRetryCredentialStore) InvalidateToken(_ context.Context, _ string) {
+	s.invalidateCount.Add(1)
+}
+func (s *oauthRetryCredentialStore) SetSecret(_ context.Context, _, _ string) error { return nil }
+func (s *oauthRetryCredentialStore) SetSecretBatch(_ context.Context, _ map[string]string) error {
+	return nil
+}
+func (s *oauthRetryCredentialStore) GetSecret(_ context.Context, _ string) string  { return "" }
+func (s *oauthRetryCredentialStore) RemoveSecret(_ context.Context, _ string) error { return nil }
+func (s *oauthRetryCredentialStore) HasSecrets(_ context.Context) bool              { return false }
+func (s *oauthRetryCredentialStore) SecretCount(_ context.Context) int              { return 0 }
+func (s *oauthRetryCredentialStore) ListSecrets(_ context.Context) []string         { return nil }
+func (s *oauthRetryCredentialStore) Reload(_ context.Context) error                 { return nil }
+
+func TestResolveHTTPSource_RetryOn401(t *testing.T) {
+	cleanup := disableSSRF()
+	defer cleanup()
+
+	// Set up a test server that returns 401 on the first request (stale token)
+	// and 200 on the second request (fresh token).
+	var requestCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := requestCount.Add(1)
+		auth := r.Header.Get("Authorization")
+
+		if n == 1 {
+			// First request comes with stale token — reject it
+			if auth != "Bearer stale-token" {
+				t.Errorf("first request: expected stale token, got %q", auth)
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"token expired"}`))
+			return
+		}
+
+		// Second request should have fresh token
+		if auth != "Bearer fresh-token" {
+			t.Errorf("second request: expected fresh token, got %q", auth)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok","data":"hello"}`))
+	}))
+	defer ts.Close()
+
+	// Create a mock credential store that returns stale then fresh tokens
+	credStore := &oauthRetryCredentialStore{
+		staleToken: "stale-token",
+		freshToken: "fresh-token",
+	}
+
+	// We need to build a fake http.Request with the credential store accessible.
+	// The resolveHTTPSource function calls effectiveCredentialStore(r), so we need
+	// to set up the context properly. Instead, we'll test by directly overriding
+	// the credential resolution. Since resolveHTTPSource uses effectiveCredentialStore,
+	// we need a slightly different approach.
+	//
+	// For this test, we'll set the personal-mode credential store via the API singleton.
+	// But since resolveHTTPSource directly calls effectiveCredentialStore(r) which for
+	// platform mode reads from the request context, let's use a request with Services.
+	r := httptest.NewRequest("GET", "/", nil)
+	ctx := store.WithServices(r.Context(), &store.Services{
+		Mode:        store.ModePlatform,
+		Credentials: credStore,
+	})
+	r = r.WithContext(ctx)
+
+	spec := "GET:" + ts.URL + "/data@my-oauth-cred"
+	result, err := resolveHTTPSource(r, spec, nil)
+	if err != nil {
+		t.Fatalf("resolveHTTPSource failed: %v", err)
+	}
+
+	// Verify the result is from the successful retry
+	m, ok := result.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map result, got %T: %v", result, result)
+	}
+	if m["status"] != "ok" {
+		t.Errorf("unexpected result: %v", m)
+	}
+
+	// Verify the credential store interactions
+	if got := credStore.resolveCount.Load(); got != 2 {
+		t.Errorf("expected 2 Resolve calls, got %d", got)
+	}
+	if got := credStore.invalidateCount.Load(); got != 1 {
+		t.Errorf("expected 1 InvalidateToken call, got %d", got)
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Errorf("expected 2 HTTP requests to backend, got %d", got)
+	}
+}
+
+func TestResolveHTTPSource_NoRetryOnNonCredential401(t *testing.T) {
+	cleanup := disableSSRF()
+	defer cleanup()
+
+	// When no credential is used, a 401 should NOT trigger a retry.
+	var requestCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"unauthorized"}`))
+	}))
+	defer ts.Close()
+
+	spec := "GET:" + ts.URL + "/data"
+	_, err := resolveHTTPSource(nil, spec, nil)
+	if err == nil {
+		t.Fatal("expected error from 401 response")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 in error, got: %v", err)
+	}
+	if got := requestCount.Load(); got != 1 {
+		t.Errorf("expected exactly 1 HTTP request (no retry), got %d", got)
+	}
+}
+
+func TestResolveHTTPSource_RetryStill401(t *testing.T) {
+	cleanup := disableSSRF()
+	defer cleanup()
+
+	// If the retry also returns 401, we should get an error (no infinite retry).
+	var requestCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"still unauthorized"}`))
+	}))
+	defer ts.Close()
+
+	credStore := &oauthRetryCredentialStore{
+		staleToken: "bad-token",
+		freshToken: "also-bad-token",
+	}
+
+	r := httptest.NewRequest("GET", "/", nil)
+	ctx := store.WithServices(r.Context(), &store.Services{
+		Mode:        store.ModePlatform,
+		Credentials: credStore,
+	})
+	r = r.WithContext(ctx)
+
+	spec := "GET:" + ts.URL + "/data@my-oauth-cred"
+	_, err := resolveHTTPSource(r, spec, nil)
+	if err == nil {
+		t.Fatal("expected error from persistent 401")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("expected 401 in error, got: %v", err)
+	}
+	// Should have tried exactly twice (initial + one retry)
+	if got := requestCount.Load(); got != 2 {
+		t.Errorf("expected 2 HTTP requests (initial + retry), got %d", got)
+	}
+}
+
+func TestResolveHTTPSource_NoRetryOn403(t *testing.T) {
+	cleanup := disableSSRF()
+	defer cleanup()
+
+	// 403 Forbidden should NOT trigger a token retry (only 401 does).
+	var requestCount atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+		w.Write([]byte(`{"error":"forbidden"}`))
+	}))
+	defer ts.Close()
+
+	credStore := &oauthRetryCredentialStore{
+		staleToken: "valid-token",
+		freshToken: "valid-token",
+	}
+
+	r := httptest.NewRequest("GET", "/", nil)
+	ctx := store.WithServices(r.Context(), &store.Services{
+		Mode:        store.ModePlatform,
+		Credentials: credStore,
+	})
+	r = r.WithContext(ctx)
+
+	spec := "GET:" + ts.URL + "/data@my-oauth-cred"
+	_, err := resolveHTTPSource(r, spec, nil)
+	if err == nil {
+		t.Fatal("expected error from 403 response")
+	}
+	if !strings.Contains(err.Error(), "403") {
+		t.Errorf("expected 403 in error, got: %v", err)
+	}
+	// Only one request — no retry on 403
+	if got := requestCount.Load(); got != 1 {
+		t.Errorf("expected 1 HTTP request (no retry on 403), got %d", got)
+	}
+	// InvalidateToken should NOT have been called
+	if got := credStore.invalidateCount.Load(); got != 0 {
+		t.Errorf("expected 0 InvalidateToken calls on 403, got %d", got)
 	}
 }

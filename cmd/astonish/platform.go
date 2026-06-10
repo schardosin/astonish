@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -19,6 +20,20 @@ import (
 	"github.com/schardosin/astonish/pkg/store/entstore"
 	"github.com/schardosin/astonish/pkg/store/pgutil"
 )
+
+// redactDSN replaces the password in a PostgreSQL DSN with "***" for safe logging.
+func redactDSN(dsn string) string {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "***"
+	}
+	if u.User != nil {
+		if _, hasPassword := u.User.Password(); hasPassword {
+			u.User = url.UserPassword(u.User.Username(), "***")
+		}
+	}
+	return u.String()
+}
 
 // withPlatformStore is a helper that loads the app config, verifies postgres backend,
 // opens a platform store connection, and passes it to the callback. The store is
@@ -260,7 +275,7 @@ func handlePlatformInit(args []string) error {
 	fmt.Println("Add to your Helm values file:")
 	fmt.Println()
 	fmt.Println("  secrets:")
-	fmt.Printf("    platformDSN: %q\n", platformDSN)
+	fmt.Printf("    platformDSN: %q\n", redactDSN(platformDSN))
 	fmt.Println("  config:")
 	fmt.Println("    storage:")
 	fmt.Println("      postgres:")
@@ -271,7 +286,7 @@ func handlePlatformInit(args []string) error {
 	fmt.Println("  storage:")
 	fmt.Println("    backend: postgres")
 	fmt.Println("    postgres:")
-	fmt.Printf("      platform_dsn: %q\n", platformDSN)
+	fmt.Printf("      platform_dsn: %q\n", redactDSN(platformDSN))
 	fmt.Printf("      instance_suffix: %q\n", suffix)
 	fmt.Println()
 	if !dbAlreadyExists {

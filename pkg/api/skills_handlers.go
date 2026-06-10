@@ -310,7 +310,7 @@ func CreateSkillHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	skillDir := filepath.Join(userDir, name)
+	skillDir := filepath.Join(userDir, filepath.Base(name))
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 
 	// Defense-in-depth: ensure resolved paths stay within userDir.

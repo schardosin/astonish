@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const OUTPUT = resolve(import.meta.dirname, '.last-run.json')
@@ -28,9 +28,9 @@ if (!inputFile) {
 
 let grepOutput = ''
 try {
-  grepOutput = execSync(
-    `grep -rn "COVERS:" --include="*.go" ${ROOT}/tests 2>/dev/null || true`,
-    { encoding: 'utf8' }
+  grepOutput = execFileSync(
+    'grep', ['-rn', 'COVERS:', '--include=*.go', `${ROOT}/tests`],
+    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
   )
 } catch { /* ignore */ }
 

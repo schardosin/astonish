@@ -367,7 +367,11 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 func (sr *SuiteRunner) runParameterizedTest(ctx context.Context, test *LoadedTest, suite *LoadedSuite, paramSet map[string]string, paramIdx int) TestReport {
 	// Save current vars and merge parameter values
 	savedVars := sr.vars
-	mergedVars := make(map[string]string, len(sr.vars)+len(paramSet))
+	capacity := len(sr.vars) + len(paramSet)
+	if capacity < len(sr.vars) { // overflow guard
+		capacity = 0
+	}
+	mergedVars := make(map[string]string, capacity)
 	for k, v := range sr.vars {
 		mergedVars[k] = v
 	}

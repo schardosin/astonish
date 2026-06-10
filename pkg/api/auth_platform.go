@@ -406,7 +406,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrTokenExpired) {
 			// Clear the expired cookie
-			clearAuthCookies(w)
+			clearAuthCookies(w, r)
 			respondError(w, http.StatusUnauthorized, "refresh token expired; please login again")
 			return
 		}
@@ -436,7 +436,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Verify user still exists and is active
 	user, err := pa.pgStore.Users().GetByID(ctx, claims.UserID)
 	if err != nil || user == nil || user.Status != "active" {
-		clearAuthCookies(w)
+		clearAuthCookies(w, r)
 		respondError(w, http.StatusUnauthorized, "account not found or suspended")
 		return
 	}
@@ -444,7 +444,7 @@ func (pa *PlatformAuth) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// Get current org membership (may have changed since token was issued)
 	orgs, err := pa.pgStore.Organizations().GetUserOrgs(ctx, user.ID)
 	if err != nil || len(orgs) == 0 {
-		clearAuthCookies(w)
+		clearAuthCookies(w, r)
 		respondError(w, http.StatusUnauthorized, "no organization membership")
 		return
 	}
@@ -581,7 +581,7 @@ func (pa *PlatformAuth) handleLogout(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	clearAuthCookies(w)
+	clearAuthCookies(w, r)
 	respondJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }
 
@@ -986,13 +986,14 @@ func isSecureRequest(r *http.Request) bool {
 	return r.Header.Get("X-Forwarded-Proto") == "https"
 }
 
-func clearAuthCookies(w http.ResponseWriter) {
+func clearAuthCookies(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     accessCookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 	http.SetCookie(w, &http.Cookie{
@@ -1001,6 +1002,7 @@ func clearAuthCookies(w http.ResponseWriter) {
 		Path:     "/api/auth/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteStrictMode,
 	})
 }

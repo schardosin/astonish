@@ -13,7 +13,7 @@
 
 import { readFileSync, readdirSync, existsSync } from 'fs'
 import { join, resolve } from 'path'
-import { execSync } from 'child_process'
+import { execFileSync } from 'child_process'
 
 const ROOT = resolve(import.meta.dirname, '../..')
 const SCENARIOS_DIR = resolve(import.meta.dirname)
@@ -89,9 +89,9 @@ for (const file of catalogFiles) {
 
 let coversOutput = ''
 try {
-  coversOutput = execSync(
-    `grep -rn "COVERS:" --include="*.go" ${ROOT}/tests 2>/dev/null || true`,
-    { encoding: 'utf8' }
+  coversOutput = execFileSync(
+    'grep', ['-rn', 'COVERS:', '--include=*.go', `${ROOT}/tests`],
+    { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
   )
 } catch { /* ignore */ }
 

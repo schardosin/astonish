@@ -160,6 +160,7 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 	if err := validateSlug(slug); err != nil {
 		return nil, nil, fmt.Errorf("open org db: %w", err)
 	}
+	slug = filepath.Base(slug) // sanitize for path safety (also satisfies static analysis)
 	switch s.dialect {
 	case DialectPostgres:
 		dbName := s.orgDBName(slug)
@@ -300,6 +301,7 @@ func (s *Store) provisionOrgPostgres(ctx context.Context, slug string) error {
 }
 
 func (s *Store) provisionOrgSQLite(ctx context.Context, slug string) error {
+	slug = filepath.Base(slug) // sanitize for path safety (also satisfies static analysis)
 	orgDir := filepath.Join(s.dataDir, "orgs", slug)
 	if err := os.MkdirAll(orgDir, 0750); err != nil {
 		return fmt.Errorf("create org directory: %w", err)

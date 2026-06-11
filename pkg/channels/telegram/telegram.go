@@ -42,6 +42,11 @@ type Config struct {
 	BotToken  string                    // Telegram bot token from BotFather
 	AllowFrom []string                  // Allowed sender IDs (empty = allow all)
 	Commands  *channels.CommandRegistry // Slash commands to register with Telegram's menu
+
+	// APIEndpoint overrides the Telegram Bot API endpoint URL (for testing).
+	// Format: "https://api.telegram.org/bot%s/%s"
+	// If empty, the default Telegram API endpoint is used.
+	APIEndpoint string
 }
 
 // TelegramChannel implements the channels.Channel interface for Telegram.
@@ -174,7 +179,11 @@ func (t *TelegramChannel) connectAndPoll(ctx context.Context) error {
 	// The default http.Client{} has no timeout, which means a stale TCP
 	// connection (e.g., after NAT table expiry) can block forever.
 	httpClient := &http.Client{Timeout: httpClientTimeout}
-	bot, err := tgbotapi.NewBotAPIWithClient(t.config.BotToken, tgbotapi.APIEndpoint, httpClient)
+	apiEndpoint := tgbotapi.APIEndpoint
+	if t.config.APIEndpoint != "" {
+		apiEndpoint = t.config.APIEndpoint
+	}
+	bot, err := tgbotapi.NewBotAPIWithClient(t.config.BotToken, apiEndpoint, httpClient)
 	if err != nil {
 		return fmt.Errorf("failed to create bot API: %w", err)
 	}

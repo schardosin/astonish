@@ -71,10 +71,12 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Merge: update providers, preserving existing secrets for masked values
+	// and preserving channel configuration (Telegram, Email, Slack enabled state).
 	settings := &store.PlatformSettings{
 		DefaultProvider: req.DefaultProvider,
 		DefaultModel:    req.DefaultModel,
 		Providers:       mergeProviders(existing.Providers, req.Providers),
+		Channels:        existing.Channels,
 	}
 
 	if err := svc.PlatformSettings.Save(r.Context(), settings); err != nil {

@@ -105,7 +105,9 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	enrichedCtx = store.WithCredentialStore(enrichedCtx, teamStore.Credentials())
 	enrichedCtx = store.WithFlowStore(enrichedCtx, teamStore.Flows())
 	enrichedCtx = store.WithSkillStores(enrichedCtx, &store.SkillStores{
-		Team: teamStore.Skills(),
+		Platform: r.backend.PlatformSkills(),
+		Org:      orgStore.OrgSkills(),
+		Team:     teamStore.Skills(),
 	})
 	enrichedCtx = store.WithMCPServerStores(enrichedCtx, &store.MCPServerStores{
 		Platform: r.backend.PlatformMCPServers(),

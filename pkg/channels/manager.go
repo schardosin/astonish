@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -628,6 +629,13 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	if pinnedGroups := m.consumePinnedToolGroups(route.SessionKey); len(pinnedGroups) > 0 {
 		overrides.PinnedToolGroups = pinnedGroups
 	}
+	// Build merged skill index (platform + org + team) so the LLM knows about
+	// all available skills — matching parity with the Studio Chat path.
+	if ss := store.SkillStoresFromContext(ctx); ss != nil {
+		if idx := buildChannelSkillIndex(ctx, ss); idx != "" {
+			overrides.SkillIndex = idx
+		}
+	}
 	ctx = agent.WithPromptOverrides(ctx, overrides)
 
 	// Create ADK agent wrapper for this turn
@@ -1182,4 +1190,80 @@ func (m *ChannelManager) sendTypingLoop(ctx context.Context, ch Channel, target 
 			}
 		}
 	}
+}
+
+// buildChannelSkillIndex constructs a merged skill index from all available
+// skill stores (platform + org + team) for injection into the system prompt.
+// This gives channel agents the same skill awareness as Studio Chat.
+func buildChannelSkillIndex(ctx context.Context, ss *store.SkillStores) string {
+	var all []skills.Skill
+
+	// Platform skills (base layer, inherited by all orgs/teams)
+	if ss.Platform != nil {
+		if platformSkills, err := ss.Platform.LoadAll(ctx); err == nil {
+			for _, s := range platformSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "platform",
+				})
+			}
+		}
+	}
+
+	// Org skills
+	if ss.Org != nil {
+		if orgSkills, err := ss.Org.LoadAll(ctx); err == nil {
+			for _, s := range orgSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "org",
+				})
+			}
+		}
+	}
+
+	// Team skills (highest priority, can override org/platform names)
+	if ss.Team != nil {
+		if teamSkills, err := ss.Team.LoadAll(ctx); err == nil {
+			for _, s := range teamSkills {
+				all = append(all, skills.Skill{
+					Name:        s.Name,
+					Description: s.Description,
+					OS:          s.OS,
+					RequireBins: s.RequireBins,
+					RequireEnv:  s.RequireEnv,
+					Source:      "team",
+				})
+			}
+		}
+	}
+
+	if len(all) == 0 {
+		return ""
+	}
+
+	// Deduplicate preferring later entries (team > org > platform).
+	seen := make(map[string]bool, len(all))
+	var deduped []skills.Skill
+	for i := len(all) - 1; i >= 0; i-- {
+		name := strings.ToLower(all[i].Name)
+		if !seen[name] {
+			seen[name] = true
+			deduped = append(deduped, all[i])
+		}
+	}
+	// Reverse to restore platform → org → team display order
+	for i, j := 0, len(deduped)-1; i < j; i, j = i+1, j-1 {
+		deduped[i], deduped[j] = deduped[j], deduped[i]
+	}
+
+	return skills.BuildSkillIndex(deduped)
 }

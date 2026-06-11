@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,6 +19,16 @@ import (
 	"github.com/schardosin/astonish/pkg/channels"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+)
+
+// Reconnection constants for exponential backoff.
+const (
+	initialReconnectDelay = 3 * time.Second
+	maxReconnectDelay     = 5 * time.Minute
+	// httpClientTimeout covers the 30s long-poll timeout plus a buffer for
+	// network overhead. Without this, a hung TCP connection can block the
+	// polling goroutine indefinitely.
+	httpClientTimeout = 60 * time.Second
 )
 
 // maxMessageLength is the Telegram API limit for a single message.
@@ -104,16 +115,72 @@ func (t *TelegramChannel) SetLinkHandler(fn func(ctx context.Context, senderID, 
 // Start connects to Telegram via long polling and begins processing updates.
 // It calls handler for each normalized inbound message. Blocks until ctx
 // is cancelled or Stop is called.
+//
+// If the polling loop exits abnormally (network error, Telegram API issue),
+// Start will automatically reconnect with exponential backoff (3s → 5min cap).
+// This ensures the channel survives transient outages without manual intervention.
 func (t *TelegramChannel) Start(ctx context.Context, handler channels.MessageHandler) error {
-	bot, err := tgbotapi.NewBotAPI(t.config.BotToken)
+	t.mu.Lock()
+	t.handler = handler
+	t.mu.Unlock()
+
+	// Create cancellable context for the entire Start lifecycle
+	pollCtx, cancel := context.WithCancel(ctx)
+	t.cancel = cancel
+
+	t.wg.Add(1)
+	defer t.wg.Done()
+
+	delay := initialReconnectDelay
+
+	for {
+		// Check if we should stop before attempting connection
+		select {
+		case <-pollCtx.Done():
+			t.logger.Printf("[telegram] Polling stopped")
+			return nil
+		default:
+		}
+
+		err := t.connectAndPoll(pollCtx)
+		if err == nil {
+			// Clean exit (context cancelled)
+			return nil
+		}
+
+		// Abnormal exit — attempt reconnect with backoff
+		t.logger.Printf("[telegram] Connection lost: %v — reconnecting in %v", err, delay)
+		t.setError(fmt.Sprintf("reconnecting: %v", err))
+
+		select {
+		case <-pollCtx.Done():
+			return nil
+		case <-time.After(delay):
+		}
+
+		// Exponential backoff
+		delay = delay * 2
+		if delay > maxReconnectDelay {
+			delay = maxReconnectDelay
+		}
+	}
+}
+
+// connectAndPoll creates a bot API connection and polls for updates until the
+// context is cancelled or an unrecoverable error occurs. Returns nil on clean
+// shutdown (context done), or an error on abnormal exit.
+func (t *TelegramChannel) connectAndPoll(ctx context.Context) error {
+	// Use a custom HTTP client with a timeout to prevent hung connections.
+	// The default http.Client{} has no timeout, which means a stale TCP
+	// connection (e.g., after NAT table expiry) can block forever.
+	httpClient := &http.Client{Timeout: httpClientTimeout}
+	bot, err := tgbotapi.NewBotAPIWithClient(t.config.BotToken, tgbotapi.APIEndpoint, httpClient)
 	if err != nil {
-		t.setError(fmt.Sprintf("failed to connect: %v", err))
-		return fmt.Errorf("telegram: failed to create bot API: %w", err)
+		return fmt.Errorf("failed to create bot API: %w", err)
 	}
 
 	t.mu.Lock()
 	t.botAPI = bot
-	t.handler = handler
 	t.status = channels.ChannelStatus{
 		Connected:   true,
 		AccountID:   bot.Self.UserName,
@@ -128,28 +195,21 @@ func (t *TelegramChannel) Start(ctx context.Context, handler channels.MessageHan
 	// servers — survives restarts. Idempotent on subsequent starts.
 	t.registerBotCommands(bot)
 
-	// Create cancellable context for polling
-	pollCtx, cancel := context.WithCancel(ctx)
-	t.cancel = cancel
-
 	// Configure long polling
 	updateConfig := tgbotapi.NewUpdate(0)
 	updateConfig.Timeout = 30
 
 	updates := bot.GetUpdatesChan(updateConfig)
 
-	// Process updates until context is cancelled
-	t.wg.Add(1)
-	defer t.wg.Done()
-
 	for {
 		select {
-		case <-pollCtx.Done():
-			t.logger.Printf("[telegram] Polling stopped")
+		case <-ctx.Done():
+			bot.StopReceivingUpdates()
 			return nil
 		case update, ok := <-updates:
 			if !ok {
-				return nil
+				// Channel closed unexpectedly (library shutdown or error)
+				return fmt.Errorf("updates channel closed unexpectedly")
 			}
 			if update.Message == nil {
 				continue
@@ -180,9 +240,6 @@ func (t *TelegramChannel) Stop(ctx context.Context) error {
 	}
 
 	t.mu.Lock()
-	if t.botAPI != nil {
-		t.botAPI.StopReceivingUpdates()
-	}
 	t.status.Connected = false
 	t.mu.Unlock()
 

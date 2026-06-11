@@ -1192,6 +1192,20 @@ func (cr *ChatRunner) Stop() {
 	cr.cancel()
 }
 
+// EmitPanicError is called when the runner goroutine panics. It emits an error
+// event and a done event to the frontend, then closes subscribers so the SSE
+// stream terminates gracefully instead of hanging forever.
+func (cr *ChatRunner) EmitPanicError(msg string) {
+	cr.emitEvent("error", map[string]any{"error": msg})
+	cr.emitEvent("done", map[string]any{"done": true})
+
+	cr.doneMu.Lock()
+	cr.done = true
+	cr.doneMu.Unlock()
+
+	cr.closeSubscribers()
+}
+
 // closeSubscribers closes all subscriber channels. Called when the runner is done.
 func (cr *ChatRunner) closeSubscribers() {
 	cr.subMu.Lock()

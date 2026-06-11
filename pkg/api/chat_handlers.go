@@ -853,6 +853,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		defer registry.Unregister(sessionID)
 		defer cm.unregisterStream(sessionID)
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("chat runner panic recovered",
+					"session", sessionID,
+					"panic", fmt.Sprintf("%v", r))
+				runner.EmitPanicError(fmt.Sprintf("Internal error: %v", r))
+			}
+		}()
 		runner.Run(chatAgent, sessionService, comp.LLM, titleSetter, userMsg, msg, req.AutoApprove, req.SystemContext, req.PinnedToolGroups)
 	}()
 

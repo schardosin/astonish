@@ -3,6 +3,7 @@ package credentials
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"sync"
 )
 
@@ -102,17 +103,27 @@ func (v *PendingVault) extractExplicitTags(text string) string {
 
 // extractDetectedSecrets runs the SecretScanner on text and replaces any
 // detected secrets with <<<SECRET_N>>> tokens. Processes detections in
-// reverse order to preserve byte offsets.
+// reverse positional order to preserve byte offsets.
 func (v *PendingVault) extractDetectedSecrets(text string) string {
 	detections := v.Scanner.Scan(text)
 	if len(detections) == 0 {
 		return text
 	}
 
+	// Sort by Start position ascending so that reverse iteration below
+	// processes from end-of-text to start. Scanner.Scan() returns detections
+	// ordered by layer (keyword first, then entropy/structural), NOT by
+	// position. Without sorting, reverse-index iteration can process a
+	// low-offset detection before a high-offset one, shortening the text
+	// and causing the high-offset slice to panic with "bounds out of range".
+	sort.Slice(detections, func(i, j int) bool {
+		return detections[i].Start < detections[j].Start
+	})
+
 	v.mu.Lock()
 	defer v.mu.Unlock()
 
-	// Process in reverse order so byte offsets remain valid
+	// Process in reverse positional order so byte offsets remain valid
 	for i := len(detections) - 1; i >= 0; i-- {
 		d := detections[i]
 		rawValue := d.Original

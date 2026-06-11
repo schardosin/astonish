@@ -205,3 +205,59 @@ func TestPendingVault_Extract_AcrossMultipleCalls(t *testing.T) {
 		t.Errorf("Resolve: SECRET_1=%q, SECRET_2=%q", v1, v2)
 	}
 }
+
+// TestPendingVault_Extract_UnsortedDetectionsNoPanic verifies that
+// extractDetectedSecrets does not panic when the scanner returns detections
+// in non-positional order (keyword layer first, entropy/structural later
+// but at lower byte offsets). This was a crash bug: reverse-index iteration
+// assumed positional order, causing slice-bounds-out-of-range panics when
+// an earlier replacement shortened the text.
+func TestPendingVault_Extract_UnsortedDetectionsNoPanic(t *testing.T) {
+	scanner := NewSecretScanner()
+
+	// This input triggers keyword detection late in the text (Token: ...)
+	// and entropy/structural detections earlier (high-entropy config string).
+	// Without the sort fix, this panics with "slice bounds out of range".
+	text := "config_data=" + "aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!aB3$xY9!" +
+		"\nresult output Token: MySecretValue123 end"
+
+	v := NewPendingVault(nil)
+	v.Scanner = scanner
+
+	// Must not panic
+	result := v.Extract(text)
+	if result == "" {
+		t.Fatal("Extract returned empty string")
+	}
+	if len(result) >= len(text) {
+		t.Error("Expected result to be shorter after secret replacement")
+	}
+}
+
+// TestPendingVault_Extract_OpenStackToolOutput reproduces the exact crash
+// scenario: pasting OpenStack tool output containing credential patterns
+// and a Token value. The scanner produces detections in non-positional order
+// (keyword detections at high offsets, entropy detections at lower offsets)
+// which previously caused a panic.
+func TestPendingVault_Extract_OpenStackToolOutput(t *testing.T) {
+	scanner := NewSecretScanner()
+
+	// Realistic content matching the user's report
+	text := `{
+  "command": "\nAPP_CRED_SECRET=\"{{CREDENTIAL:openstack:password}}\"\n\ncurl -s -X POST \"https://identity-3.qa-de-1.cloud.sap/v3/auth/tokens\" \\\n  -H \"Content-Type: application/json\"\n"
+}
+
+{
+  "exit_code": 5,
+  "stdout": "Token: gAAAAABqKeG2FIl21uYD...\r\nNova: https://compute-3.qa-de-1.cloud.sap:443/v2.1/\r\njq: error (at <stdin>:0): Cannot index string with string \"id\"\r\n"
+}`
+
+	v := NewPendingVault(nil)
+	v.Scanner = scanner
+
+	// Must not panic — this was the exact crash scenario
+	result := v.Extract(text)
+	if result == "" {
+		t.Fatal("Extract returned empty string")
+	}
+}

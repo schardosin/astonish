@@ -246,6 +246,13 @@ func (cm *ChatManager) ShutdownContainers() {
 	}
 }
 
+// PreWarm initializes the chat agent in the background so the first request is fast.
+// In platform mode, the provided context must carry store.Services for config resolution.
+// Safe to call concurrently with incoming requests — ensureReady is mutex-protected.
+func (cm *ChatManager) PreWarm(ctx context.Context) error {
+	return cm.ensureReady(ctx)
+}
+
 // ensureReady lazily initializes the ChatAgent on first use.
 func (cm *ChatManager) ensureReady(ctx context.Context) error {
 	cm.mu.Lock()

@@ -1175,6 +1175,16 @@ func Run(cfg RunConfig) error {
 		return fmt.Errorf("failed to start HTTP server: %w", err)
 	}
 
+	// Pre-warm the Studio chat agent in the background so the first web request is fast.
+	go func() {
+		warmCtx := store.WithServices(ctx, svc)
+		if err := api.GetChatManager().PreWarm(warmCtx); err != nil {
+			logger.Printf("Studio chat pre-warm failed (will retry on first request): %v", err)
+		} else {
+			logger.Printf("Studio chat agent pre-warmed successfully")
+		}
+	}()
+
 	// Signal handling
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)

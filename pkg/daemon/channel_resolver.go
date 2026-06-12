@@ -124,6 +124,15 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 		enrichedCtx = store.WithMemorySaveOrMerge(enrichedCtx, r.memorySaveOrMerge)
 	}
 
+	// Inject provider settings stores for per-message provider resolution.
+	// This enables the channel manager to resolve the effective LLM provider
+	// using the same 3-tier cascade (Platform → Org → Team) as the Studio chat.
+	enrichedCtx = store.WithProviderStores(enrichedCtx, &store.ProviderStores{
+		Platform: r.backend.PlatformSettings(),
+		Org:      r.backend.OrgSettings(orgSlug),
+		Team:     teamStore.Settings(),
+	})
+
 	return enrichedCtx, link.UserID, user.DisplayName, nil
 }
 

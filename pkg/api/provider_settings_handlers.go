@@ -87,6 +87,11 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset chat agent so next request picks up fresh config
 	GetChatManager().Reset()
 
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
+
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -155,6 +160,11 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Reset chat agent so next request picks up fresh config
 	GetChatManager().Reset()
+
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -381,6 +391,12 @@ func DeleteProviderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	GetChatManager().Reset()
+
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
+
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

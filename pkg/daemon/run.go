@@ -30,6 +30,7 @@ import (
 	"github.com/schardosin/astonish/pkg/launcher"
 	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/memory"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
@@ -295,6 +296,7 @@ func Run(cfg RunConfig) error {
 	// The ChatAgent is expensive to create, so we only init it when channels are enabled.
 	var channelMgr *channels.ChannelManager
 	var factoryResult *launcher.ChatFactoryResult
+	llmPool := provider.NewPool() // Shared LLM cache for per-message provider resolution
 	defer func() {
 		if factoryResult != nil {
 			// Preserve sandbox containers for reconnection after restart,
@@ -359,6 +361,11 @@ func Run(cfg RunConfig) error {
 		if factoryResult.CredentialStore != nil {
 			mgr.SetRedactor(factoryResult.CredentialStore.Redactor())
 		}
+
+		// Wire LLM provider pool for per-message provider resolution.
+		// This ensures channel messages use the 3-tier DB cascade (Platform → Org → Team)
+		// to resolve providers, matching the Studio chat behavior.
+		mgr.SetLLMPool(llmPool)
 
 		// Wire sandbox-aware file reader so channel document attachments can
 		// read files from inside sandbox containers. Without this, os.ReadFile
@@ -670,11 +677,15 @@ func Run(cfg RunConfig) error {
 
 		logger.Printf("Reloading channel configuration...")
 
-		// Re-read config and credential store from disk
+		// Re-read non-provider config from disk (sandbox settings, etc.)
 		freshCfg, err := config.LoadAppConfig()
 		if err != nil {
 			return fmt.Errorf("failed to reload config: %w", err)
 		}
+		// Re-apply the DB provider cascade so the factory uses current DB
+		// settings (not stale config.yaml providers).
+		cascadePlatformProviders(context.Background(), backend, freshCfg, logger)
+
 		if factoryResult != nil && factoryResult.CredentialStore != nil {
 			if err := factoryResult.CredentialStore.Reload(); err != nil {
 				logger.Printf("Warning: failed to reload credential store: %v", err)
@@ -1665,6 +1676,9 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 // cascadePlatformProviders merges platform-level and default-org provider
 // settings from the platform store into appCfg. This gives the daemon-level
 // channel/fleet agent access to providers configured via the admin UI.
+//
+// Note: This only applies Platform + Org layers. Team-level provider overrides
+// are resolved per-message via the provider.Pool in the channel manager.
 func cascadePlatformProviders(ctx context.Context, backend store.PlatformBackend, appCfg *config.AppConfig, logger *Logger) {
 	// Platform mode: providers come exclusively from the database.
 	// Clear any config.yaml residue so the DB is the sole source of truth.
@@ -1672,43 +1686,22 @@ func cascadePlatformProviders(ctx context.Context, backend store.PlatformBackend
 	appCfg.General.DefaultProvider = ""
 	appCfg.General.DefaultModel = ""
 
-	// Layer 1: Platform settings
-	psStore := backend.PlatformSettings()
-	if psStore != nil {
-		if ps, err := psStore.Get(ctx); err == nil && ps != nil {
-			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
-			logger.Printf("Platform providers cascaded (%d providers)", len(ps.Providers))
-		}
-	}
-
-	// Layer 2: Default org settings
+	// Determine org settings store for the default org (if configured).
+	var orgSettings store.OrgSettingsStore
 	orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
 	if orgSlug != "" {
-		osStore := backend.OrgSettings(orgSlug)
-		if osStore != nil {
-			if os, err := osStore.Get(ctx); err == nil && os != nil {
-				applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
-				logger.Printf("Org '%s' providers cascaded (%d providers)", orgSlug, len(os.Providers))
-			}
-		}
+		orgSettings = backend.OrgSettings(orgSlug)
 	}
-}
 
-// applyProviderLayer merges a provider configuration layer into the app config.
-// Providers are additive by name; defaults override only if non-empty.
-func applyProviderLayer(appCfg *config.AppConfig, providers map[string]store.ProviderConfig, defaultProvider, defaultModel string) {
-	if defaultProvider != "" {
-		appCfg.General.DefaultProvider = defaultProvider
-	}
-	if defaultModel != "" {
-		appCfg.General.DefaultModel = defaultModel
-	}
-	if len(providers) > 0 {
-		if appCfg.Providers == nil {
-			appCfg.Providers = make(map[string]config.ProviderConfig)
-		}
-		for name, provCfg := range providers {
-			appCfg.Providers[name] = config.ProviderConfig(provCfg)
-		}
+	// Delegate to the shared provider resolution function (Platform + Org only;
+	// team is nil since this is the daemon-wide fallback, not per-user).
+	resolved := provider.ResolveEffectiveConfig(ctx, backend.PlatformSettings(), orgSettings, nil)
+	appCfg.Providers = resolved.Providers
+	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
+	appCfg.General.DefaultModel = resolved.General.DefaultModel
+
+	if resolved.General.DefaultProvider != "" {
+		logger.Printf("Platform providers cascaded: default=%s model=%s (%d providers)",
+			resolved.General.DefaultProvider, resolved.General.DefaultModel, len(resolved.Providers))
 	}
 }

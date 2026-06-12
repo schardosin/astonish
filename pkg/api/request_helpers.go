@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/filestore"
 )
@@ -241,29 +242,17 @@ func EffectiveAppConfigFromContext(ctx context.Context, isPlatformMode bool) *co
 	}
 
 	// Platform mode: providers come exclusively from the database.
-	appCfg.Providers = nil
-	appCfg.General.DefaultProvider = ""
-	appCfg.General.DefaultModel = ""
+	// Delegate to the shared provider resolution function.
+	resolved := provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+	appCfg.Providers = resolved.Providers
+	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
+	appCfg.General.DefaultModel = resolved.General.DefaultModel
 
-	// Layer 1: Platform settings (all orgs and teams see these)
-	if svc.PlatformSettings != nil {
-		if ps, psErr := svc.PlatformSettings.Get(ctx); psErr == nil && ps != nil {
-			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
-		}
-	}
-
-	// Layer 2: Org settings (all teams in this org see these)
-	if svc.OrgSettings != nil {
-		if os, osErr := svc.OrgSettings.Get(ctx); osErr == nil && os != nil {
-			applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
-		}
-	}
-
-	// Layer 3: Team settings (only this team sees these)
+	// Apply additional non-provider team settings (web tools, context length, etc.)
 	if svc.Settings != nil {
 		teamSettings, tsErr := svc.Settings.Get(ctx)
 		if tsErr == nil && teamSettings != nil {
-			applyTeamSettings(appCfg, teamSettings)
+			applyTeamNonProviderSettings(appCfg, teamSettings)
 		}
 	}
 
@@ -289,64 +278,30 @@ func effectiveAppConfig(r *http.Request) *config.AppConfig {
 		return appCfg
 	}
 
-	// Platform mode: providers come exclusively from the database.
-	// Clear any config.yaml providers so they don't leak into the cascade.
-	appCfg.Providers = nil
-	appCfg.General.DefaultProvider = ""
-	appCfg.General.DefaultModel = ""
-
 	ctx := r.Context()
 
-	// Layer 1: Platform settings (all orgs and teams see these)
-	if svc.PlatformSettings != nil {
-		if ps, psErr := svc.PlatformSettings.Get(ctx); psErr == nil && ps != nil {
-			applyProviderLayer(appCfg, ps.Providers, ps.DefaultProvider, ps.DefaultModel)
-		}
-	}
+	// Platform mode: providers come exclusively from the database.
+	// Delegate to the shared provider resolution function.
+	resolved := provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+	appCfg.Providers = resolved.Providers
+	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
+	appCfg.General.DefaultModel = resolved.General.DefaultModel
 
-	// Layer 2: Org settings (all teams in this org see these)
-	if svc.OrgSettings != nil {
-		if os, osErr := svc.OrgSettings.Get(ctx); osErr == nil && os != nil {
-			applyProviderLayer(appCfg, os.Providers, os.DefaultProvider, os.DefaultModel)
-		}
-	}
-
-	// Layer 3: Team settings (only this team sees these)
+	// Apply additional non-provider team settings (web tools, context length, etc.)
 	if svc.Settings != nil {
 		teamSettings, tsErr := svc.Settings.Get(ctx)
 		if tsErr == nil && teamSettings != nil {
-			applyTeamSettings(appCfg, teamSettings)
+			applyTeamNonProviderSettings(appCfg, teamSettings)
 		}
 	}
 
 	return appCfg
 }
 
-// applyProviderLayer merges a provider configuration layer into the app config.
-// Providers are additive by name; defaults override only if non-empty.
-func applyProviderLayer(appCfg *config.AppConfig, providers map[string]store.ProviderConfig, defaultProvider, defaultModel string) {
-	if defaultProvider != "" {
-		appCfg.General.DefaultProvider = defaultProvider
-	}
-	if defaultModel != "" {
-		appCfg.General.DefaultModel = defaultModel
-	}
-	if len(providers) > 0 {
-		if appCfg.Providers == nil {
-			appCfg.Providers = make(map[string]config.ProviderConfig)
-		}
-		for name, provCfg := range providers {
-			appCfg.Providers[name] = config.ProviderConfig(provCfg)
-		}
-	}
-}
-
-// applyTeamSettings overlays team-level settings from the DB onto the host AppConfig.
+// applyTeamNonProviderSettings overlays team-level non-provider settings from the DB
+// onto the host AppConfig. Provider settings are handled by provider.ResolveEffectiveConfig.
 // Only non-zero/non-empty team values override the host defaults.
-func applyTeamSettings(appCfg *config.AppConfig, ts *store.TeamSettings) {
-	// Apply providers and defaults via the shared layer function.
-	applyProviderLayer(appCfg, ts.Providers, ts.DefaultProvider, ts.DefaultModel)
-
+func applyTeamNonProviderSettings(appCfg *config.AppConfig, ts *store.TeamSettings) {
 	// Team-specific non-provider settings.
 	if ts.WebSearchTool != "" {
 		appCfg.General.WebSearchTool = ts.WebSearchTool

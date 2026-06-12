@@ -337,6 +337,11 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Reset the Studio chat agent so the next request picks up fresh config.
 	GetChatManager().Reset()
 
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
+
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -413,6 +418,11 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 
 	// Reset the Studio chat agent so the next request picks up fresh config.
 	GetChatManager().Reset()
+
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
@@ -541,6 +551,11 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 	// Reset the Studio chat agent so the next request picks up fresh MCP config.
 	GetChatManager().Reset()
 
+	// Invalidate channel LLM pool so channels pick up the new provider config
+	if cm := GetChannelManager(); cm != nil {
+		cm.InvalidateLLMPool()
+	}
+
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -606,6 +621,11 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		asyncDiscoverAndCacheTools(mcpStore, req.ServerName, req.Config)
 
 		GetChatManager().Reset()
+
+		// Invalidate channel LLM pool so channels pick up the new config
+		if cm := GetChannelManager(); cm != nil {
+			cm.InvalidateLLMPool()
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{

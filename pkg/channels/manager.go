@@ -15,6 +15,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/pdfgen"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
@@ -39,6 +40,12 @@ type ChannelManager struct {
 	providerName string
 	modelName    string
 	toolCount    int
+
+	// LLM provider pool for per-message provider resolution.
+	// When set, each inbound message resolves the effective provider from
+	// the 3-tier DB cascade (Platform → Org → Team) and caches LLM instances.
+	// When nil, falls back to the ChatAgent's default LLM (startup-time provider).
+	llmPool *provider.Pool
 
 	// Credential redaction for outbound messages
 	redactor *credentials.Redactor
@@ -235,6 +242,24 @@ func NewChannelManager(chatAgent *agent.ChatAgent, sessSvc session.Service, logg
 // SetRedactor sets the credential redactor for outbound message sanitization.
 func (m *ChannelManager) SetRedactor(r *credentials.Redactor) {
 	m.redactor = r
+}
+
+// SetLLMPool sets the LLM provider pool for per-message provider resolution.
+// When set, each inbound message resolves the effective provider from the
+// 3-tier DB cascade (Platform → Org → Team) instead of using the ChatAgent's
+// startup-time provider. This ensures channels use the same provider resolution
+// logic as the Studio chat.
+func (m *ChannelManager) SetLLMPool(pool *provider.Pool) {
+	m.llmPool = pool
+}
+
+// InvalidateLLMPool drops all cached LLM instances in the pool, forcing fresh
+// provider creation on the next message. Call this when provider settings
+// change (API keys, base URLs, default provider/model, etc.).
+func (m *ChannelManager) InvalidateLLMPool() {
+	if m.llmPool != nil {
+		m.llmPool.Invalidate()
+	}
 }
 
 // SetReadFileFunc sets a sandbox-aware file reader for document attachments.
@@ -611,6 +636,24 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	// Inject Redactor into context so memory_save can Placeholderize()
 	if m.redactor != nil {
 		ctx = credentials.WithRedactor(ctx, m.redactor)
+	}
+
+	// Per-message provider resolution: resolve the effective LLM from the
+	// 3-tier DB cascade (Platform → Org → Team). This ensures channels use
+	// the same provider as the Studio chat for the resolved team.
+	if m.llmPool != nil {
+		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
+			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+			if appCfg.General.DefaultProvider != "" {
+				llm, llmErr := m.llmPool.Get(ctx, appCfg.General.DefaultProvider, appCfg.General.DefaultModel, appCfg)
+				if llmErr != nil {
+					m.logger.Printf("[channels] Failed to resolve provider %q for message: %v", appCfg.General.DefaultProvider, llmErr)
+					// Fall through — ChatAgent.Run will use its default c.LLM
+				} else {
+					ctx = agent.WithLLM(ctx, llm)
+				}
+			}
+		}
 	}
 
 	sess, err := m.getOrCreateSession(ctx, appName, userID, route.SessionKey)

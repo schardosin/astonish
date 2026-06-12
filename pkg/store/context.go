@@ -473,3 +473,31 @@ func TenantContextFrom(ctx context.Context) *TenantContext {
 	tc, _ := ctx.Value(tenantCtxKey{}).(*TenantContext)
 	return tc
 }
+
+// --- Provider settings stores (for per-message provider resolution) ---
+
+const providerStoresKey contextKey = "astonish_provider_stores"
+
+// ProviderStores holds references to the 3-tier settings stores needed for
+// provider resolution. Used by the channel manager to resolve the effective
+// LLM provider per-message without coupling to the HTTP API layer.
+type ProviderStores struct {
+	Platform PlatformSettingsStore // platform-wide settings (nil in personal mode)
+	Org      OrgSettingsStore      // org-level settings (nil if not resolved)
+	Team     SettingsStore         // team-level settings (nil if not resolved)
+}
+
+// WithProviderStores returns a new context containing the ProviderStores.
+func WithProviderStores(ctx context.Context, ps *ProviderStores) context.Context {
+	return context.WithValue(ctx, providerStoresKey, ps)
+}
+
+// ProviderStoresFromContext retrieves the ProviderStores from a context.
+// Returns nil if no ProviderStores is present (personal mode or tests).
+func ProviderStoresFromContext(ctx context.Context) *ProviderStores {
+	if ctx == nil {
+		return nil
+	}
+	ps, _ := ctx.Value(providerStoresKey).(*ProviderStores)
+	return ps
+}

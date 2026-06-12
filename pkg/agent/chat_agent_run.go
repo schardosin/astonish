@@ -506,10 +506,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			beforeModelCallbacks = append(beforeModelCallbacks, c.Compactor.BeforeModelCallback())
 		}
 
+		// Resolve LLM: prefer per-request override from context (set by channel
+		// manager or other per-message provider resolution), fall back to the
+		// agent's default LLM set at construction time.
+		effectiveLLM := LLMFromContext(ctx)
+		if effectiveLLM == nil {
+			effectiveLLM = c.LLM
+		}
+
 		// Create llmagent with static tools
 		llmAgent, err := llmagent.New(llmagent.Config{
 			Name:                 "chat",
-			Model:                c.LLM,
+			Model:                effectiveLLM,
 			Instruction:          instruction,
 			Tools:                c.Tools,
 			Toolsets:             c.Toolsets,

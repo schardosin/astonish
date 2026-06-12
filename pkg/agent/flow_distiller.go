@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/common"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
@@ -22,6 +23,14 @@ type DistillerToolInfo struct {
 	Name        string
 	Description string
 	Source      string
+	Schema      json.RawMessage // JSON schema of tool parameters (nil if unavailable)
+}
+
+// FlowDryRunResult mirrors api.FlowDryRunResult to avoid import cycles.
+type FlowDryRunResult struct {
+	Valid    bool
+	Warnings []string
+	Errors   []string
 }
 
 // FlowDistiller converts execution traces into YAML flow definitions.
@@ -32,6 +41,7 @@ type FlowDistiller struct {
 	MaxRetries   int            // Default: 3
 	GetSchema    func() string  // Returns the flow schema string
 	ValidateYAML func(yamlStr string, tools []DistillerToolInfo) FlowValidationResult
+	DryRunYAML   func(yamlStr string, toolSchemas map[string]json.RawMessage) FlowDryRunResult
 }
 
 // internalOnlyTools lists tools that exist only for the chat agent's
@@ -50,6 +60,7 @@ func NewFlowDistiller(
 	toolsets []tool.Toolset,
 	getSchema func() string,
 	validateYAML func(yamlStr string, tools []DistillerToolInfo) FlowValidationResult,
+	dryRunYAML func(yamlStr string, toolSchemas map[string]json.RawMessage) FlowDryRunResult,
 ) *FlowDistiller {
 	return &FlowDistiller{
 		LLM: func(ctx context.Context, prompt string) (string, error) {
@@ -84,6 +95,7 @@ func NewFlowDistiller(
 		MaxRetries:   3,
 		GetSchema:    getSchema,
 		ValidateYAML: validateYAML,
+		DryRunYAML:   dryRunYAML,
 	}
 }
 
@@ -120,6 +132,9 @@ func (d *FlowDistiller) Distill(ctx context.Context, req DistillRequest) (*Disti
 	// Build available tools list for validation
 	availableTools := d.buildToolInfoList()
 
+	// Build tool schema map for dry-run validation
+	toolSchemas := d.buildToolSchemaMap(availableTools)
+
 	var lastYAML string
 	var lastErrors []string
 
@@ -141,12 +156,30 @@ func (d *FlowDistiller) Distill(ctx context.Context, req DistillRequest) (*Disti
 			continue
 		}
 
-		// Validate if validator is available
+		// Schema validation
 		if d.ValidateYAML != nil {
 			validation := d.ValidateYAML(yamlStr, availableTools)
 			if !validation.Valid {
 				lastYAML = yamlStr
 				lastErrors = validation.Errors
+				continue
+			}
+		}
+
+		// Semantic dry-run validation
+		if d.DryRunYAML != nil {
+			dryRun := d.DryRunYAML(yamlStr, toolSchemas)
+			if !dryRun.Valid {
+				lastYAML = yamlStr
+				// Combine errors with context about what dry-run checks
+				var dryRunErrors []string
+				for _, e := range dryRun.Errors {
+					dryRunErrors = append(dryRunErrors, "[dry-run] "+e)
+				}
+				for _, w := range dryRun.Warnings {
+					dryRunErrors = append(dryRunErrors, "[dry-run warning] "+w)
+				}
+				lastErrors = dryRunErrors
 				continue
 			}
 		}
@@ -174,6 +207,18 @@ func (d *FlowDistiller) Distill(ctx context.Context, req DistillRequest) (*Disti
 	return nil, fmt.Errorf("failed to generate valid YAML flow after %d attempts", maxRetries)
 }
 
+// buildToolSchemaMap creates a map of tool name -> JSON parameter schema
+// for use in dry-run validation.
+func (d *FlowDistiller) buildToolSchemaMap(tools []DistillerToolInfo) map[string]json.RawMessage {
+	schemas := make(map[string]json.RawMessage)
+	for _, t := range tools {
+		if t.Schema != nil {
+			schemas[t.Name] = t.Schema
+		}
+	}
+	return schemas
+}
+
 // buildDistillationPrompt constructs the prompt for the LLM.
 func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML string, validationErrors []string) string {
 	var sb strings.Builder
@@ -187,7 +232,15 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 		sb.WriteString(d.GetSchema())
 	}
 
-	// Available tools (excluding internal-only tools)
+	// Collect tool names used in the trace
+	tracedTools := make(map[string]bool)
+	for _, step := range req.Trace.SuccessfulSteps() {
+		if !internalOnlyTools[step.ToolName] {
+			tracedTools[step.ToolName] = true
+		}
+	}
+
+	// Available tools — full list for reference, schemas for traced tools only
 	toolInfos := d.buildToolInfoList()
 	if len(toolInfos) > 0 {
 		sb.WriteString("\n\n# Available Tools\n\nONLY use tools from this list:\n")
@@ -196,6 +249,26 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 				continue
 			}
 			sb.WriteString(fmt.Sprintf("- %s: %s (source: %s)\n", t.Name, t.Description, t.Source))
+		}
+
+		// Include parameter schemas for tools that were actually used in the trace
+		sb.WriteString("\n## Parameter Schemas (for tools used in this execution)\n\n")
+		sb.WriteString("When generating `tool` type nodes, the `args` keys MUST exactly match the parameter names below.\n")
+		sb.WriteString("When generating `llm` type nodes with `tools: true`, the LLM will receive these schemas at runtime.\n\n")
+		for _, t := range toolInfos {
+			if !tracedTools[t.Name] {
+				continue
+			}
+			if t.Schema != nil {
+				// Pretty-print the schema
+				var prettySchema json.RawMessage
+				if err := json.Unmarshal(t.Schema, &prettySchema); err == nil {
+					formatted, _ := json.MarshalIndent(prettySchema, "", "  ")
+					sb.WriteString(fmt.Sprintf("### %s\n```json\n%s\n```\n\n", t.Name, string(formatted)))
+				}
+			} else {
+				sb.WriteString(fmt.Sprintf("### %s\n(no schema available — use the arg names from the trace below)\n\n", t.Name))
+			}
 		}
 	}
 
@@ -218,11 +291,47 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 		if step.DurationMs > 0 {
 			sb.WriteString(fmt.Sprintf("  Duration: %dms\n", step.DurationMs))
 		}
+		// Include truncated result to show the approach worked
+		if step.ToolResult != nil {
+			resultJSON, err := json.Marshal(step.ToolResult)
+			if err == nil {
+				resultStr := string(resultJSON)
+				if len(resultStr) > 500 {
+					resultStr = resultStr[:500] + "... (truncated)"
+				}
+				sb.WriteString(fmt.Sprintf("  Result (truncated): %s\n", resultStr))
+			}
+		}
 		sb.WriteString("\n")
 	}
 
-	// Instructions
-	sb.WriteString("# Instructions\n\n")
+	// Faithful Replication Instructions (most important section)
+	sb.WriteString("# CRITICAL: Faithful Replication Rules\n\n")
+	sb.WriteString("The distilled flow MUST faithfully replicate the exact sequence of tool calls from the execution trace above.\n\n")
+	sb.WriteString("**DO:**\n")
+	sb.WriteString("- Replicate the EXACT same tool calls that succeeded, in the SAME order\n")
+	sb.WriteString("- Parameterize only literal values that would change between runs (e.g., server names, URLs, regions)\n")
+	sb.WriteString("- Use the same tool for each step as was used in the original execution\n")
+	sb.WriteString("- Preserve the approach that worked — if the original used `{{CREDENTIAL:name:field}}` placeholders directly in commands, keep that pattern (the system substitutes real values automatically at execution time)\n\n")
+	sb.WriteString("**DO NOT:**\n")
+	sb.WriteString("- Add steps that weren't in the original execution (no extra helper/preparatory/validation steps)\n")
+	sb.WriteString("- Remove or skip steps that were in the original execution\n")
+	sb.WriteString("- Reorder the steps\n")
+	sb.WriteString("- Replace a single tool call with multiple calls\n")
+	sb.WriteString("- Add error-handling or retry logic that wasn't in the original\n")
+	sb.WriteString("- \"Improve\" upon the original approach — it worked as-is, replicate it\n\n")
+
+	// Shell command guidance
+	sb.WriteString("# Shell Command Handling\n\n")
+	sb.WriteString("For steps that call `shell_command` (especially with complex scripts, awk, jq, variable expansion like `${VAR}`):\n")
+	sb.WriteString("- ALWAYS use an `llm` node with `tools: true` and `tools_selection: [shell_command]`\n")
+	sb.WriteString("- NEVER use a `tool` node with hardcoded command args for complex scripts\n")
+	sb.WriteString("- Reason: `tool` node args go through state variable interpolation which corrupts shell syntax like `${VAR}`, `{print $2}`, and jq `{...}` patterns\n")
+	sb.WriteString("- The LLM node generates the command at runtime (matching what happened in the original chat) and avoids this corruption\n")
+	sb.WriteString("- In the LLM node's `prompt`, describe WHAT to do (with `{parameter}` references for inputs), and let the LLM build the exact shell command\n\n")
+
+	// Additional instructions
+	sb.WriteString("# Additional Instructions\n\n")
 	sb.WriteString("1. Create a valid YAML flow with input -> processing -> output nodes\n")
 	sb.WriteString("2. Replace literal values (IPs, paths, credentials, region names, IDs, URLs) with {parameter} variables\n")
 	sb.WriteString("3. Create ONE input node PER parameter. Each input node collects exactly ONE value and has exactly ONE field in output_model. Do NOT combine multiple parameters into a single input node.\n")
@@ -231,12 +340,12 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 	sb.WriteString("6. After tool execution, add an LLM processing node that formats the output\n")
 	sb.WriteString("7. Add an output node to display the formatted result\n")
 	sb.WriteString("8. Include proper flow edges connecting START -> nodes -> END\n")
-	sb.WriteString("9. NEVER include memory_save or other internal-only tools in the flow. Memory is a chat-mode concern, not a flow step.\n")
-	sb.WriteString("10. CREDENTIAL HANDLING: Flows must NEVER ask for raw secrets (passwords, tokens, API keys, secrets) and must NEVER call save_credential.\n")
+	sb.WriteString("9. NEVER include memory_save, delegate_tasks, or skill_lookup in the flow — these are internal chat-mode tools\n")
+	sb.WriteString("10. CREDENTIAL HANDLING: If the original execution used `{{CREDENTIAL:name:field}}` placeholders directly in commands, preserve that exact pattern.\n")
 	sb.WriteString("    - Add an input node asking for the CREDENTIAL NAME (a reference to an already-saved credential in the encrypted store)\n")
-	sb.WriteString("    - Use resolve_credential with that credential name to obtain secure placeholders\n")
 	sb.WriteString("    - In shell commands, use the {{CREDENTIAL:{credential_var}:password}} pattern — the inner {credential_var} is resolved from state at prompt time, then the outer {{CREDENTIAL:...}} placeholder is substituted with the real secret at tool execution time\n")
-	sb.WriteString("    - NEVER hardcode credential names in the YAML — always use a {variable} from an input node\n\n")
+	sb.WriteString("    - NEVER hardcode credential names in the YAML — always use a {variable} from an input node\n")
+	sb.WriteString("    - NEVER add resolve_credential tool calls unless the original execution explicitly used resolve_credential\n\n")
 
 	// Include actual output if captured, so the distiller can replicate the format
 	if req.Trace.FinalOutput != "" {
@@ -294,6 +403,7 @@ func (d *FlowDistiller) buildToolInfoList() []DistillerToolInfo {
 			Name:        t.Name(),
 			Description: t.Description(),
 			Source:      "internal",
+			Schema:      common.ExtractToolInputSchema(t),
 		})
 	}
 
@@ -309,6 +419,7 @@ func (d *FlowDistiller) buildToolInfoList() []DistillerToolInfo {
 					Name:        t.Name(),
 					Description: t.Description(),
 					Source:      ts.Name(),
+					Schema:      common.ExtractToolInputSchema(t),
 				})
 			}
 		}
@@ -397,6 +508,7 @@ func (d *FlowDistiller) ModifyFlow(ctx context.Context, req DistillModifyRequest
 	}
 
 	availableTools := d.buildToolInfoList()
+	toolSchemas := d.buildToolSchemaMap(availableTools)
 	var lastYAML string
 	var lastErrors []string
 
@@ -420,6 +532,23 @@ func (d *FlowDistiller) ModifyFlow(ctx context.Context, req DistillModifyRequest
 			if !validation.Valid {
 				lastYAML = yamlStr
 				lastErrors = validation.Errors
+				continue
+			}
+		}
+
+		// Semantic dry-run validation
+		if d.DryRunYAML != nil {
+			dryRun := d.DryRunYAML(yamlStr, toolSchemas)
+			if !dryRun.Valid {
+				lastYAML = yamlStr
+				var dryRunErrors []string
+				for _, e := range dryRun.Errors {
+					dryRunErrors = append(dryRunErrors, "[dry-run] "+e)
+				}
+				for _, w := range dryRun.Warnings {
+					dryRunErrors = append(dryRunErrors, "[dry-run warning] "+w)
+				}
+				lastErrors = dryRunErrors
 				continue
 			}
 		}

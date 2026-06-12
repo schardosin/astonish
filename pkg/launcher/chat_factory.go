@@ -1412,9 +1412,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		return agent.FlowValidationResult{Valid: result.Valid, Errors: result.Errors}
 	}
 
+	dryRunYAML := func(yamlStr string, toolSchemas map[string]json.RawMessage) agent.FlowDryRunResult {
+		result := api.DryRunFlowYAML(yamlStr, toolSchemas)
+		return agent.FlowDryRunResult{Valid: result.Valid, Warnings: result.Warnings, Errors: result.Errors}
+	}
+
 	chatAgent.FlowDistiller = agent.NewFlowDistiller(
 		llm, allToolsForPrompt, allToolsetsForPrompt,
-		api.GetFlowSchema, validateYAML,
+		api.GetFlowSchema, validateYAML, dryRunYAML,
 	)
 
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.FlowSaveDir != "" {

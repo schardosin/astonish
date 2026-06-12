@@ -218,8 +218,8 @@ function App() {
   const [aiChatContext, setAIChatContext] = useState('create_flow')
   const [aiFocusedNode, setAIFocusedNode] = useState<FocusedNodeData | null>(null)  // Node being edited when AI chat opens
   const [aiSelectedNodeIds, setAISelectedNodeIds] = useState<string[]>([])  // Multi-selected nodes for AI
-  const [defaultProvider, setDefaultProvider] = useState('')
-  const [defaultModel, setDefaultModel] = useState('')
+  const [defaultProvider, setDefaultProvider] = useState(() => localStorage.getItem('astonish_provider') || '')
+  const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('astonish_model') || '')
   const [runningNodeId, setRunningNodeId] = useState<string | null>(null)
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [isWaitingForInput, setIsWaitingForInput] = useState(false)
@@ -390,14 +390,22 @@ function App() {
     }
   }
 
+  // In platform mode, wait until the team context is resolved before making
+  // API calls. Without this gate, the effect fires as soon as isCheckingSetup
+  // becomes false — which can happen before activeTeam is set (the team is
+  // resolved asynchronously via fetchTeams). Firing too early sends requests
+  // without the X-Astonish-Team header, which may return empty/wrong data
+  // and overwrite the correct results that arrive later.
+  const teamReady = !isPlatformMode || !!activeTeam
+
   // Load agents, tools, and settings from API on mount and when team changes
   useEffect(() => {
-    if (!showSetupWizard && !isCheckingSetup) {
+    if (!showSetupWizard && !isCheckingSetup && teamReady) {
       loadAgents()
       loadTools()
       loadSettings()
     }
-  }, [showSetupWizard, isCheckingSetup, activeTeam])
+  }, [showSetupWizard, isCheckingSetup, teamReady, activeTeam])
 
   // Check for updates on mount
   useEffect(() => {
@@ -446,8 +454,15 @@ function App() {
       if (res.ok) {
         const data = await res.json()
         // Use display name from API for proper formatting
-        setDefaultProvider(data.general?.default_provider_display_name || data.general?.default_provider || '')
-        setDefaultModel(data.general?.default_model || '')
+        const provider = data.general?.default_provider_display_name || data.general?.default_provider || ''
+        const model = data.general?.default_model || ''
+        setDefaultProvider(provider)
+        setDefaultModel(model)
+        // Persist for instant display on next page load
+        try {
+          localStorage.setItem('astonish_provider', provider)
+          localStorage.setItem('astonish_model', model)
+        } catch { /* ignore localStorage errors */ }
       }
     } catch (err: any) {
       console.error('Failed to load settings:', err)

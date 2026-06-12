@@ -116,10 +116,12 @@ type DistillResult struct {
 
 // DistillModifyRequest holds the inputs for modifying a distilled flow.
 type DistillModifyRequest struct {
-	CurrentYAML   string // The current YAML to modify
-	ChangeRequest string // What the user wants changed
-	OriginalTrace *ExecutionTrace
-	History       []string // Previous modification requests for context
+	CurrentYAML    string // The current YAML to modify
+	ChangeRequest  string // What the user wants changed
+	OriginalTrace  *ExecutionTrace
+	History        []string // Previous modification requests for context
+	DryRunOutput   string   // Output from last test run (for context)
+	DryRunError    string   // Error from last test run (for diagnosis)
 }
 
 // Distill converts an execution trace into a YAML flow definition.
@@ -323,23 +325,57 @@ func (d *FlowDistiller) buildDistillationPrompt(req DistillRequest, previousYAML
 
 	// Shell command guidance
 	sb.WriteString("# Shell Command Handling\n\n")
-	sb.WriteString("For steps that call `shell_command` (especially with complex scripts, awk, jq, variable expansion like `${VAR}`):\n")
+	sb.WriteString("For steps that call `shell_command`:\n")
 	sb.WriteString("- ALWAYS use an `llm` node with `tools: true` and `tools_selection: [shell_command]`\n")
-	sb.WriteString("- NEVER use a `tool` node with hardcoded command args for complex scripts\n")
-	sb.WriteString("- Reason: `tool` node args go through state variable interpolation which corrupts shell syntax like `${VAR}`, `{print $2}`, and jq `{...}` patterns\n")
-	sb.WriteString("- The LLM node generates the command at runtime (matching what happened in the original chat) and avoids this corruption\n")
-	sb.WriteString("- In the LLM node's `prompt`, describe WHAT to do (with `{parameter}` references for inputs), and let the LLM build the exact shell command\n\n")
+	sb.WriteString("- NEVER use a `tool` node with hardcoded command args for shell scripts\n")
+	sb.WriteString("- For SIMPLE commands (single-line: `ls`, `cat`, `grep`, `find`, `mkdir`, `cp`):\n")
+	sb.WriteString("  - Do NOT use `raw_context` — just describe the task in `prompt`\n")
+	sb.WriteString("  - The LLM can easily generate simple one-line commands without a reference script\n")
+	sb.WriteString("- For COMPLEX scripts (multi-line, pipes, awk, jq, variable expansion `${VAR}`, curl with JSON bodies, loops):\n")
+	sb.WriteString("  - Include the EXACT working script from the trace in the `raw_context` field\n")
+	sb.WriteString("  - `raw_context` is appended to the system instruction WITHOUT state variable interpolation\n")
+	sb.WriteString("  - This preserves shell syntax like `${VAR}`, `{print $2}`, jq `{...}` intact\n")
+	sb.WriteString("  - In `raw_context`, preface the script with: \"Execute EXACTLY this proven script.\"\n")
+	sb.WriteString("- In the `prompt` field, always describe the task with `{parameter}` references for state variables\n\n")
+	sb.WriteString("Example (complex script needing raw_context):\n")
+	sb.WriteString("```yaml\n")
+	sb.WriteString("- name: fetch_data\n")
+	sb.WriteString("  type: llm\n")
+	sb.WriteString("  system: \"You are an infrastructure automation assistant.\"\n")
+	sb.WriteString("  prompt: \"Authenticate with credential {credential_name} in region {region} and list all resources\"\n")
+	sb.WriteString("  raw_context: |\n")
+	sb.WriteString("    Execute EXACTLY this proven script. Do NOT modify the approach or use alternatives.\n")
+	sb.WriteString("    APP_CRED_ID=\"{{CREDENTIAL:<credential_name>:username}}\"\n")
+	sb.WriteString("    APP_CRED_SECRET=\"{{CREDENTIAL:<credential_name>:password}}\"\n")
+	sb.WriteString("    TOKEN=$(curl -s -X POST \"$AUTH_URL/auth/tokens\" -d @payload.json | jq -r '.token')\n")
+	sb.WriteString("    curl -s -H \"X-Auth-Token: $TOKEN\" \"${ENDPOINT}/v2/resources\" | jq '.resources[]'\n")
+	sb.WriteString("  tools: true\n")
+	sb.WriteString("  tools_selection:\n")
+	sb.WriteString("    - shell_command\n")
+	sb.WriteString("```\n\n")
 
 	// Additional instructions
+	sb.WriteString("# CRITICAL: Flow Structure Requirements\n\n")
+	sb.WriteString("Every generated flow MUST contain BOTH a `nodes:` section AND a `flow:` section.\n")
+	sb.WriteString("The `flow:` section defines edges connecting nodes. Without it, the flow is INVALID.\n\n")
+	sb.WriteString("```yaml\n")
+	sb.WriteString("flow:\n")
+	sb.WriteString("  - from: START\n")
+	sb.WriteString("    to: first_node\n")
+	sb.WriteString("  - from: first_node\n")
+	sb.WriteString("    to: second_node\n")
+	sb.WriteString("  - from: last_node\n")
+	sb.WriteString("    to: END\n")
+	sb.WriteString("```\n\n")
 	sb.WriteString("# Additional Instructions\n\n")
-	sb.WriteString("1. Create a valid YAML flow with input -> processing -> output nodes\n")
+	sb.WriteString("1. Create a valid YAML flow with `nodes:` AND `flow:` sections\n")
 	sb.WriteString("2. Replace literal values (IPs, paths, credentials, region names, IDs, URLs) with {parameter} variables\n")
 	sb.WriteString("3. Create ONE input node PER parameter. Each input node collects exactly ONE value and has exactly ONE field in output_model. Do NOT combine multiple parameters into a single input node.\n")
 	sb.WriteString("4. Each tool-calling step should be an LLM node with tools: true\n")
 	sb.WriteString("5. Use tools_selection to restrict to only the tools that were actually used\n")
 	sb.WriteString("6. After tool execution, add an LLM processing node that formats the output\n")
 	sb.WriteString("7. Add an output node to display the formatted result\n")
-	sb.WriteString("8. Include proper flow edges connecting START -> nodes -> END\n")
+	sb.WriteString("8. The `flow:` section MUST connect START -> all nodes in order -> END\n")
 	sb.WriteString("9. NEVER include memory_save, delegate_tasks, or skill_lookup in the flow — these are internal chat-mode tools\n")
 	sb.WriteString("10. CREDENTIAL HANDLING: If the original execution used `{{CREDENTIAL:name:field}}` placeholders directly in commands, preserve that exact pattern.\n")
 	sb.WriteString("    - Add an input node asking for the CREDENTIAL NAME (a reference to an already-saved credential in the encrypted store)\n")
@@ -610,6 +646,27 @@ func (d *FlowDistiller) buildModificationPrompt(req DistillModifyRequest, previo
 			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, h))
 		}
 		sb.WriteString("\n")
+	}
+
+	// Last dry-run results for context (helps the LLM diagnose issues)
+	if req.DryRunError != "" || req.DryRunOutput != "" {
+		sb.WriteString("# Last Test Run Result\n\n")
+		if req.DryRunError != "" {
+			sb.WriteString("**Status: FAILED**\n")
+			sb.WriteString(fmt.Sprintf("Error: %s\n\n", req.DryRunError))
+		} else {
+			sb.WriteString("**Status: SUCCESS**\n\n")
+		}
+		if req.DryRunOutput != "" {
+			output := req.DryRunOutput
+			if len(output) > 2000 {
+				output = output[:2000] + "\n... (truncated)"
+			}
+			sb.WriteString("Output:\n```\n")
+			sb.WriteString(output)
+			sb.WriteString("\n```\n\n")
+		}
+		sb.WriteString("Use this information to understand what works and what fails in the current flow.\n\n")
 	}
 
 	// User's change request

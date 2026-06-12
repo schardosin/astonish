@@ -292,14 +292,107 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 					break
 				}
 				startSpinner("Distilling flow...")
-				distillErr := chatAgent.ConfirmAndDistill(ctx, ds, func(s string) {
+				review, distillErr := chatAgent.DistillToReview(ctx, ds, func(s string) {
 					stopSpinner()
 					fmt.Printf("%sAgent:%s %s", ColorGreen, ColorReset, s)
 				})
 				stopSpinner()
 				if distillErr != nil {
 					fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, distillErr)
+					fmt.Println()
+					break
 				}
+
+				// Show the distilled flow preview
+				fmt.Printf("\n%s─── Distilled Flow ───%s\n", ColorCyan, ColorReset)
+				fmt.Printf("%sName:%s %s\n", ColorCyan, ColorReset, review.FlowName)
+				fmt.Printf("%sDescription:%s %s\n", ColorCyan, ColorReset, review.Description)
+				fmt.Printf("\n%s\n\n", review.YAML)
+
+				// Interactive review loop
+				for {
+					fmt.Printf("Options: [s]ave, [t]est run, [m]odify, [c]ancel: ")
+					action, _ := reader.ReadString('\n')
+					action = strings.TrimSpace(strings.ToLower(action))
+
+					switch action {
+					case "s", "save":
+						filePath, runCmd, saveErr := chatAgent.SaveDistillReview(ctx, sess.ID())
+						if saveErr != nil {
+							fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, saveErr)
+						} else {
+							fmt.Printf("%sSaved:%s %s\n", ColorGreen, ColorReset, filePath)
+							fmt.Printf("%sRun with:%s %s\n", ColorGreen, ColorReset, runCmd)
+						}
+						goto distillDone
+
+					case "t", "test", "test run":
+						if chatAgent.FlowRunner == nil {
+							fmt.Printf("%sError:%s dry-run execution is not available\n", "\033[31m", ColorReset)
+							continue
+						}
+						startSpinner("Executing test run...")
+						dryResult, dryErr := chatAgent.DryRunDistilledFlow(ctx, sess.ID())
+						stopSpinner()
+						if dryErr != nil {
+							fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, dryErr)
+							continue
+						}
+						if dryResult.Success {
+							fmt.Printf("\n%s✓ Test run succeeded%s\n", ColorGreen, ColorReset)
+							if dryResult.Output != "" {
+								// Show truncated output
+								output := dryResult.Output
+								if len(output) > 2000 {
+									output = output[:2000] + "\n... (truncated)"
+								}
+								fmt.Printf("%s\n", output)
+							}
+						} else {
+							fmt.Printf("\n%s✗ Test run failed%s\n", "\033[31m", ColorReset)
+							if dryResult.Error != "" {
+								fmt.Printf("Error: %s\n", dryResult.Error)
+							}
+							if dryResult.Output != "" {
+								output := dryResult.Output
+								if len(output) > 1000 {
+									output = output[:1000] + "\n... (truncated)"
+								}
+								fmt.Printf("Output so far:\n%s\n", output)
+							}
+						}
+						fmt.Println()
+						continue
+
+					case "m", "modify":
+						fmt.Printf("Describe the change: ")
+						change, _ := reader.ReadString('\n')
+						change = strings.TrimSpace(change)
+						if change == "" {
+							continue
+						}
+						startSpinner("Modifying flow...")
+						modified, modErr := chatAgent.ModifyDistillReview(ctx, sess.ID(), change)
+						stopSpinner()
+						if modErr != nil {
+							fmt.Printf("%sError:%s %v\n", "\033[31m", ColorReset, modErr)
+							continue
+						}
+						fmt.Printf("\n%s─── Modified Flow ───%s\n", ColorCyan, ColorReset)
+						fmt.Printf("%sName:%s %s\n", ColorCyan, ColorReset, modified.FlowName)
+						fmt.Printf("\n%s\n\n", modified.YAML)
+						continue
+
+					case "c", "cancel":
+						fmt.Println("Cancelled.")
+						goto distillDone
+
+					default:
+						fmt.Println("Invalid option. Use s/t/m/c.")
+						continue
+					}
+				}
+			distillDone:
 				fmt.Println()
 			case input == "/status":
 				fmt.Printf("\n%sStatus%s\n", ColorCyan, ColorReset)

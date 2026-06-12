@@ -53,6 +53,12 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	agentName := parts[2] // agents/{name}/run
 
+	// "team:" prefix signals the user explicitly selected the team version.
+	forceTeam := strings.HasPrefix(agentName, "team:")
+	if forceTeam {
+		agentName = strings.TrimPrefix(agentName, "team:")
+	}
+
 	// Parse request body
 	var req FlowRunRequest
 	if r.Body != nil {
@@ -84,10 +90,11 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		// Platform mode: load from flow store (personal-first, team fallback).
+		// When forceTeam is set, skip personal and resolve from team only.
 		var yamlContent string
 		var found bool
-		if svc.PersonalFlows != nil {
-			if y, err := svc.PersonalFlows.GetFlow(r.Context(), agentName); err == nil {
+		if !forceTeam && svc.PersonalFlows != nil {
+			if y, err := svc.PersonalFlows.GetFlow(r.Context(), agentName); err == nil && y != "" {
 				yamlContent = y
 				found = true
 			}

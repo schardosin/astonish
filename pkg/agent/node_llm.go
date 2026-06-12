@@ -367,6 +367,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	userPrompt := a.renderString(node.Prompt, state)
 	systemInstruction := a.renderString(node.System, state)
 
+	// Append raw_context verbatim (no renderString) — used for reference scripts
+	// that contain shell syntax ({}, ${}, awk, jq) which would be corrupted by
+	// state variable interpolation.
+	if node.RawContext != "" {
+		if systemInstruction != "" {
+			systemInstruction += "\n\n"
+		}
+		systemInstruction += node.RawContext
+	}
+
 	// Use system instruction as the main instruction for the agent
 	// This ensures it goes to the System Prompt in the LLM request
 	instruction := systemInstruction

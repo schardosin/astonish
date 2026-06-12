@@ -803,7 +803,7 @@ layout:
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
         body: JSON.stringify({
-          agentId: selectedAgent!.name,
+          agentId: selectedAgent!.id,
           message: message,
           sessionId: currentSessionId,
           provider: defaultProvider,

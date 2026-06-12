@@ -58,6 +58,7 @@ type ChatAgent struct {
 	FlowSaveDir   string         // Directory for saved flows (default: agents dir)
 	FlowRegistry  *FlowRegistry  // Registry for saved flows
 	FlowDistiller *FlowDistiller // Distiller for trace-to-YAML conversion
+	FlowRunner    FlowRunnerFunc // Executes a flow YAML for dry-run testing (nil = disabled)
 
 	// Memory and knowledge
 	PlatformReflector         *PlatformReflector            // Post-task memory reflection for platform mode (nil = disabled)
@@ -153,6 +154,18 @@ type FileArtifact struct {
 	ToolName string // "write_file" or "edit_file"
 }
 
+// DryRunExecResult holds the output from executing a distilled flow as a test run.
+type DryRunExecResult struct {
+	Success bool   // Whether the flow completed without errors
+	Output  string // Combined output from all nodes
+	Error   string // Error message if the flow failed
+}
+
+// FlowRunnerFunc is a function that executes a flow YAML with the given inputs
+// and returns the execution result. Used for dry-run testing of distilled flows.
+// The params map provides input variable values extracted from the original trace.
+type FlowRunnerFunc func(ctx context.Context, yamlContent string, params map[string]string) (*DryRunExecResult, error)
+
 // distillPreview holds the result of PreviewDistill for use by ConfirmAndDistill.
 type distillPreview struct {
 	Description string            // LLM-generated task description
@@ -162,13 +175,15 @@ type distillPreview struct {
 // DistillReview holds the state of an interactive distill review session.
 // The user can request modifications until they're satisfied, then save.
 type DistillReview struct {
-	YAML          string            // Current YAML draft
-	FlowName      string            // Suggested flow name
-	Description   string            // Flow description
-	Tags          []string          // Flow tags
-	Explanation   string            // Human-readable explanation
-	Traces        []*ExecutionTrace // Original traces (for context in modifications)
-	Modifications []string          // History of user change requests
+	YAML            string            // Current YAML draft
+	FlowName        string            // Suggested flow name
+	Description     string            // Flow description
+	Tags            []string          // Flow tags
+	Explanation     string            // Human-readable explanation
+	Traces          []*ExecutionTrace // Original traces (for context in modifications)
+	Modifications   []string          // History of user change requests
+	LastDryRunOutput string           // Output from last test run (for modification context)
+	LastDryRunError  string           // Error from last test run
 }
 
 // DistillSession identifies a session for distillation, providing the

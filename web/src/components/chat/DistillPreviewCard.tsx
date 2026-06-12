@@ -312,7 +312,7 @@ export default function DistillPreviewCard({ data, isActive = false, onSave, onR
           {/* Help text */}
           <div className="px-4 pb-3">
             <p className="text-[10px]" style={{ color: 'var(--text-muted)' }}>
-              Type your changes in the chat, or click &quot;Save Flow&quot; when you&apos;re satisfied.
+              Type your changes in the chat, say &quot;test it&quot; to run a verification test, or click &quot;Save Flow&quot; when you&apos;re satisfied.
             </p>
           </div>
         </>

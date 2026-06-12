@@ -32,6 +32,7 @@ flow:
 AI processing with optional tool use.
 - output_model: saves result to state for later nodes
 - user_message: DISPLAY result to user (use this when user needs to see the response!)
+- raw_context: verbatim text appended to system instruction WITHOUT state variable interpolation
 ` + "```yaml" + `
 # LLM that shows answer to user (most common pattern)
 - name: answer_question
@@ -55,6 +56,26 @@ AI processing with optional tool use.
     search_result: str
   user_message:
     - search_result  # Show the result to user
+
+# LLM with tools and raw_context (ONLY for complex multi-line shell scripts)
+# raw_context is appended to system instruction WITHOUT state interpolation.
+# Use ONLY when the script contains ${VAR}, awk {print}, jq {...}, pipes, loops.
+# Do NOT use raw_context for simple one-line commands like ls, cat, grep.
+- name: run_infrastructure_command
+  type: llm
+  system: "You are an infrastructure automation assistant."
+  prompt: "Execute the command for server {server_name} in region {region}"
+  raw_context: |
+    Execute EXACTLY this proven script. Do NOT modify the approach.
+    TOKEN=$(curl -s ... | jq -r '.token')
+    curl -s -H "X-Auth-Token: $TOKEN" "${ENDPOINT}/servers/detail" | jq '.servers[]'
+  tools: true
+  tools_selection:
+    - shell_command
+  output_model:
+    result: str
+  user_message:
+    - result
 ` + "```" + `
 
 #### Advanced: Raw Tool Output (CONTEXT OPTIMIZATION)

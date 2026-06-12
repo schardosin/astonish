@@ -778,6 +778,8 @@ func (c *ChatAgent) ModifyDistillReview(ctx context.Context, sessionID string, c
 		CurrentYAML:   review.YAML,
 		ChangeRequest: changeRequest,
 		History:       review.Modifications,
+		DryRunOutput:  review.LastDryRunOutput,
+		DryRunError:   review.LastDryRunError,
 	}
 
 	// Include the original trace if available
@@ -901,6 +903,8 @@ const (
 	DistillIntentCancel
 	// DistillIntentModify means the user wants to change the flow.
 	DistillIntentModify
+	// DistillIntentTestRun means the user wants to test-run the flow.
+	DistillIntentTestRun
 )
 
 // ClassifyDistillReviewIntent determines the user's intent from their message
@@ -915,6 +919,9 @@ func (c *ChatAgent) ClassifyDistillReviewIntent(ctx context.Context, msg string)
 	}
 	if trimmed == "__distill_cancel__" {
 		return DistillIntentCancel
+	}
+	if trimmed == "__distill_test_run__" {
+		return DistillIntentTestRun
 	}
 
 	// Use LLM to classify intent
@@ -934,15 +941,16 @@ func (c *ChatAgent) ClassifyDistillReviewIntent(ctx context.Context, msg string)
 func (c *ChatAgent) classifyViaLLM(ctx context.Context, msg string) DistillReviewIntent {
 	prompt := fmt.Sprintf(`You are classifying a user's message during a flow review process.
 The user has just been shown a generated flow (YAML workflow) and is being asked to review it.
-They can do one of three things:
+They can do one of four things:
 
 1. SAVE — They want to accept and save the flow as-is. This includes any affirmative response like "yes", "save it", "looks good", "ship it", "go ahead", "you can save it now", etc.
 2. CANCEL — They want to discard the flow entirely. This includes "no", "cancel", "nevermind", "don't save", "scrap it", etc.
-3. MODIFY — They want to make specific changes to the flow. This includes requests like "add an error handler", "rename the first node", "change the model to gpt-4", etc.
+3. TEST — They want to test-run the flow to verify it works. This includes "test it", "run it", "try it", "execute it", "dry run", "verify it", "let's test", "yes test", "go ahead and test", etc.
+4. MODIFY — They want to make specific changes to the flow. This includes requests like "add an error handler", "rename the first node", "change the model to gpt-4", etc.
 
 User message: %q
 
-Respond with exactly one word: SAVE, CANCEL, or MODIFY`, msg)
+Respond with exactly one word: SAVE, CANCEL, TEST, or MODIFY`, msg)
 
 	response, err := c.FlowDistiller.LLM(ctx, prompt)
 	if err != nil {
@@ -963,6 +971,8 @@ Respond with exactly one word: SAVE, CANCEL, or MODIFY`, msg)
 		return DistillIntentSave
 	case "CANCEL":
 		return DistillIntentCancel
+	case "TEST":
+		return DistillIntentTestRun
 	case "MODIFY":
 		return DistillIntentModify
 	default:
@@ -971,4 +981,62 @@ Respond with exactly one word: SAVE, CANCEL, or MODIFY`, msg)
 		}
 		return -1
 	}
+}
+
+// DryRunDistilledFlow executes the currently-reviewed flow YAML using the
+// FlowRunner closure (which delegates to InteractiveFlowRunner.RunFlowFromYAML).
+// It extracts input parameters from the original trace and passes them to the runner.
+// Returns the execution result and stores it on the DistillReview for self-improvement.
+func (c *ChatAgent) DryRunDistilledFlow(ctx context.Context, sessionID string) (*DryRunExecResult, error) {
+	if c.FlowRunner == nil {
+		return nil, fmt.Errorf("flow runner is not configured — dry-run execution is unavailable")
+	}
+
+	c.traceMu.Lock()
+	review := c.pendingDistillReview[sessionID]
+	c.traceMu.Unlock()
+
+	if review == nil {
+		return nil, fmt.Errorf("no pending distill review for session %q", sessionID)
+	}
+
+	if review.YAML == "" {
+		return nil, fmt.Errorf("no flow YAML to execute")
+	}
+
+	// Extract input parameters from the original trace
+	params := make(map[string]string)
+	if len(review.Traces) > 0 {
+		paramLines := c.extractInputParams(ctx, review.YAML, review.Traces[0])
+		for _, line := range paramLines {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && parts[1] != "<value>" {
+				params[parts[0]] = parts[1]
+			}
+		}
+	}
+
+	if c.DebugMode {
+		slog.Debug("dry-run executing distilled flow",
+			"component", "chat",
+			"session_id", sessionID,
+			"params", params,
+		)
+	}
+
+	// Execute the flow
+	result, err := c.FlowRunner(ctx, review.YAML, params)
+	if err != nil {
+		return nil, fmt.Errorf("flow execution error: %w", err)
+	}
+
+	// Store result on the review for self-improvement context
+	c.traceMu.Lock()
+	if r := c.pendingDistillReview[sessionID]; r != nil {
+		r.LastDryRunOutput = result.Output
+		r.LastDryRunError = result.Error
+	}
+	c.traceMu.Unlock()
+
+	return result, nil
 }

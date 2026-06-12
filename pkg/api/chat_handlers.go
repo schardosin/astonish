@@ -472,12 +472,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 
-			// Enrich context with FlowStore so SaveDistillReview can persist
-			// to PG in platform mode (no disk write).
-			saveCtx := r.Context()
-			if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-				saveCtx = store.WithFlowStore(saveCtx, svc.Flows)
-			}
+		// Enrich context with composite FlowStore (personal-first) so
+		// SaveDistillReview persists to the user's personal store.
+		saveCtx := r.Context()
+		if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+			saveCtx = store.WithFlowStore(saveCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+		}
 
 			filePath, runCmd, err := chatAgent.SaveDistillReview(saveCtx, req.SessionID)
 			if err != nil {
@@ -500,6 +500,48 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			responseText := "Distill review cancelled."
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", responseText)
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+
+		case agent.DistillIntentTestRun:
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", msg)
+
+			if chatAgent.FlowRunner == nil {
+				errText := "Test run is not available — the flow runner is not configured in this environment."
+				SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
+				persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", errText)
+				SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+				return
+			}
+
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Running test execution with the original parameters...\n\n"})
+
+			dryResult, dryErr := chatAgent.DryRunDistilledFlow(r.Context(), req.SessionID)
+
+			var analysisText string
+			if dryErr != nil {
+				analysisText = fmt.Sprintf("**Test run failed to start:** %v\n\nThe flow could not be executed. This may indicate a configuration issue. You can say \"fix it\" and I'll attempt to correct the flow, or describe specific changes you'd like.", dryErr)
+			} else if dryResult.Success {
+				output := dryResult.Output
+				if len(output) > 3000 {
+					output = output[:3000] + "\n... (truncated)"
+				}
+				analysisText = fmt.Sprintf("**Test run succeeded!** The flow executed correctly with the original parameters.\n\n**Output:**\n```\n%s\n```\n\nThe flow is working as expected. You can say \"save\" to save it, or request changes if you'd like to modify anything.", output)
+			} else {
+				output := dryResult.Output
+				if len(output) > 2000 {
+					output = output[:2000] + "\n... (truncated)"
+				}
+				errorDetail := dryResult.Error
+				analysisText = fmt.Sprintf("**Test run failed.**\n\n**Error:** %s", errorDetail)
+				if output != "" {
+					analysisText += fmt.Sprintf("\n\n**Partial output:**\n```\n%s\n```", output)
+				}
+				analysisText += "\n\nI can attempt to fix this — just say \"fix it\" or describe the issue. You can also save as-is if this is expected behavior."
+			}
+
+			SendSSE(w, flusher, "text", map[string]interface{}{"text": analysisText})
+			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "model", analysisText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 
@@ -734,11 +776,11 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Inject tenant-scoped flow store into the runner context so that
-	// drill tools (save_drill, list_drills, read_drill, edit_drill, delete_drill)
-	// and run_drill can read/write flows from the database in platform mode.
-	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
-		runner.InjectFlowStore(svc.Flows)
+	// Inject composite flow store (personal-first, team-fallback) into the runner
+	// context so that drill tools, run_flow, search_flows, etc. resolve personal
+	// flows first and save to personal. Users promote to team explicitly.
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+		runner.InjectFlowStore(store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
 	}
 
 	// Inject tenant-scoped drill report store into the runner context so that
@@ -1070,9 +1112,9 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 				if svc.PersonalSessions != nil {
 					distillCtx = store.WithSessionService(distillCtx, svc.PersonalSessions)
 				}
-				if svc.Flows != nil {
-					distillCtx = store.WithFlowStore(distillCtx, svc.Flows)
-				}
+			if svc.PersonalFlows != nil || svc.Flows != nil {
+				distillCtx = store.WithFlowStore(distillCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+			}
 			}
 
 			ds := agent.DistillSession{
@@ -1104,6 +1146,13 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 						"explanation": review.Explanation,
 					})
 					persistDistillPreview(ctx, sessionService, userID, sessionID, review)
+
+					// Offer to test-run the flow (conversational — like the scheduler workflow)
+					if chatAgent.FlowRunner != nil {
+						offerText := "\nWould you like me to run a test with the original parameters to verify it works? You can also request changes, or say \"save\" when you're ready."
+						SendSSE(w, flusher, "text", map[string]interface{}{"text": offerText})
+						persistSessionMessage(ctx, sessionService, userID, sessionID, "model", offerText)
+					}
 				}
 			}
 		}

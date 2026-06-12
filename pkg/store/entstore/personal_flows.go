@@ -2,6 +2,7 @@ package entstore
 
 import (
 	"context"
+	"fmt"
 
 	"gopkg.in/yaml.v3"
 
@@ -58,7 +59,7 @@ func (fs *personalFlowStore) GetFlow(ctx context.Context, name string) (string, 
 		Only(ctx)
 	if err != nil {
 		if personalent.IsNotFound(err) {
-			return "", nil
+			return "", fmt.Errorf("flow %q not found", name)
 		}
 		return "", err
 	}

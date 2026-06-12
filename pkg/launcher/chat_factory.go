@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/api"
@@ -1421,6 +1422,49 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		llm, allToolsForPrompt, allToolsetsForPrompt,
 		api.GetFlowSchema, validateYAML, dryRunYAML,
 	)
+
+	// Wire the FlowRunner closure for dry-run execution of distilled flows.
+	// This uses the same InteractiveFlowRunner that powers the run_flow tool.
+	chatAgent.FlowRunner = func(ctx context.Context, yamlContent string, params map[string]string) (*agent.DryRunExecResult, error) {
+		sessionKey := fmt.Sprintf("__distill_dryrun__%d", time.Now().UnixNano())
+		defer flowRunner.CleanupSession(sessionKey)
+
+		result, err := flowRunner.RunFlowFromYAML(ctx, yamlContent, "distill-dry-run", params, "", sessionKey)
+		if err != nil {
+			return &agent.DryRunExecResult{
+				Success: false,
+				Error:   err.Error(),
+			}, nil
+		}
+
+		switch result.Status {
+		case "completed":
+			return &agent.DryRunExecResult{
+				Success: true,
+				Output:  result.Output,
+			}, nil
+		case "waiting_for_input":
+			// Flow paused on input node — for dry-run this means we couldn't
+			// supply a required parameter. Report which one.
+			return &agent.DryRunExecResult{
+				Success: false,
+				Output:  result.Output,
+				Error:   fmt.Sprintf("flow paused on input node %q (prompt: %s) — parameter value not available", result.InputNode, result.InputPrompt),
+			}, nil
+		case "error":
+			return &agent.DryRunExecResult{
+				Success: false,
+				Output:  result.Output,
+				Error:   result.Message,
+			}, nil
+		default:
+			return &agent.DryRunExecResult{
+				Success: false,
+				Output:  result.Output,
+				Error:   fmt.Sprintf("unexpected flow status: %s — %s", result.Status, result.Message),
+			}, nil
+		}
+	}
 
 	if cfg.AppConfig != nil && cfg.AppConfig.Chat.FlowSaveDir != "" {
 		chatAgent.FlowSaveDir = cfg.AppConfig.Chat.FlowSaveDir

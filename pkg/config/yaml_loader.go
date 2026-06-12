@@ -152,6 +152,7 @@ type Node struct {
 	Type              string                 `yaml:"type" json:"type"` // "input", "llm", "tool"
 	Prompt            string                 `yaml:"prompt,omitempty" json:"prompt,omitempty"`
 	System            string                 `yaml:"system,omitempty" json:"system,omitempty"`
+	RawContext        string                 `yaml:"raw_context,omitempty" json:"raw_context,omitempty"` // Verbatim context appended to system instruction (no state interpolation)
 	OutputModel       map[string]string      `yaml:"output_model,omitempty" json:"output_model,omitempty"`
 	Tools             bool                   `yaml:"tools,omitempty" json:"tools,omitempty"`
 	ToolsSelection    []string               `yaml:"tools_selection,omitempty" json:"tools_selection,omitempty"`

@@ -639,8 +639,10 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	sm.TouchSession(req.SessionID)
 
 	// 1. Load Agent Config
-	// Strip "team:" prefix used by frontend for React key uniqueness.
-	if strings.HasPrefix(req.AgentID, "team:") {
+	// "team:" prefix signals the user explicitly selected the team version.
+	// When present, skip personal resolution and go directly to team store.
+	forceTeam := strings.HasPrefix(req.AgentID, "team:")
+	if forceTeam {
 		req.AgentID = strings.TrimPrefix(req.AgentID, "team:")
 	}
 
@@ -648,11 +650,12 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	var cfgErr error
 
 	// Platform mode: load from flow store (personal-first, team fallback).
+	// When forceTeam is set, skip personal and resolve from team only.
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		var yamlContent string
 		var found bool
-		if svc.PersonalFlows != nil {
-			if y, err := svc.PersonalFlows.GetFlow(r.Context(), req.AgentID); err == nil {
+		if !forceTeam && svc.PersonalFlows != nil {
+			if y, err := svc.PersonalFlows.GetFlow(r.Context(), req.AgentID); err == nil && y != "" {
 				yamlContent = y
 				found = true
 			}

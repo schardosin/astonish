@@ -512,6 +512,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		effectiveLLM := LLMFromContext(ctx)
 		if effectiveLLM == nil {
 			effectiveLLM = c.LLM
+			slog.Debug("[agent] No LLM override in context; using default c.LLM")
+		} else {
+			slog.Debug("[agent] Using context-injected LLM override")
 		}
 
 		// Create llmagent with static tools

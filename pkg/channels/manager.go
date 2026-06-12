@@ -645,15 +645,28 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
 			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
 			if appCfg.General.DefaultProvider != "" {
+				m.logger.Printf("[channels] Dynamic provider resolution: provider=%q model=%q (channel=%s sender=%s)",
+					appCfg.General.DefaultProvider, appCfg.General.DefaultModel, msg.ChannelID, msg.SenderID)
 				llm, llmErr := m.llmPool.Get(ctx, appCfg.General.DefaultProvider, appCfg.General.DefaultModel, appCfg)
 				if llmErr != nil {
 					m.logger.Printf("[channels] Failed to resolve provider %q for message: %v", appCfg.General.DefaultProvider, llmErr)
 					// Fall through — ChatAgent.Run will use its default c.LLM
 				} else {
 					ctx = agent.WithLLM(ctx, llm)
+					m.logger.Printf("[channels] LLM override injected into context for provider=%q model=%q",
+						appCfg.General.DefaultProvider, appCfg.General.DefaultModel)
 				}
+			} else {
+				m.logger.Printf("[channels] Dynamic resolution returned empty DefaultProvider; falling back to startup LLM (channel=%s sender=%s)",
+					msg.ChannelID, msg.SenderID)
 			}
+		} else {
+			m.logger.Printf("[channels] No ProviderStores in context; falling back to startup LLM (channel=%s sender=%s)",
+				msg.ChannelID, msg.SenderID)
 		}
+	} else {
+		m.logger.Printf("[channels] No LLM pool configured; using startup LLM (channel=%s sender=%s)",
+			msg.ChannelID, msg.SenderID)
 	}
 
 	sess, err := m.getOrCreateSession(ctx, appName, userID, route.SessionKey)
@@ -947,6 +960,23 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		}
 	}
 
+	// Resolve effective provider/model dynamically from the 3-tier DB cascade
+	// so that /status and other commands reflect the current configuration,
+	// not the stale startup-time values.
+	effectiveProvider := m.providerName
+	effectiveModel := m.modelName
+	if m.llmPool != nil {
+		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
+			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+			if appCfg.General.DefaultProvider != "" {
+				effectiveProvider = appCfg.General.DefaultProvider
+			}
+			if appCfg.General.DefaultModel != "" {
+				effectiveModel = appCfg.General.DefaultModel
+			}
+		}
+	}
+
 	cc := CommandContext{
 		ChannelID:      msg.ChannelID,
 		ChatID:         msg.ChatID,
@@ -956,8 +986,8 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		UserID:         userID,
 		AppName:        appName,
 		SessionService: sessSvc,
-		ProviderName:   m.providerName,
-		ModelName:      m.modelName,
+		ProviderName:   effectiveProvider,
+		ModelName:      effectiveModel,
 		ToolCount:      m.toolCount,
 		Distiller:      m.agent,
 		AuthorizeFunc:  m.authorizeFunc,

@@ -40,6 +40,7 @@ type ChatRequest struct {
 	Model       string `json:"model,omitempty"`
 	AutoApprove bool   `json:"autoApprove,omitempty"` // Global auto-approve flag
 	CLIMode     bool   `json:"cliMode,omitempty"`     // When true, renders ANSI output (tool boxes etc.)
+	Debug       bool   `json:"debug,omitempty"`       // When true, stream debug events (tool args/responses)
 }
 
 // SessionManager manages active sessions
@@ -780,7 +781,7 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	// 5. Create Astonish Agent & ADK Agent
 	astonishAgent := agent.NewAstonishAgentWithToolsets(cfg, llm, internalTools, mcpToolsets)
-	astonishAgent.DebugMode = false     // Disable verbose debug output
+	astonishAgent.DebugMode = req.Debug // Enable verbose debug output when requested
 	astonishAgent.IsWebMode = !req.CLIMode // CLI mode renders ANSI tool boxes; web mode uses markdown
 	astonishAgent.SessionService = sm.service
 	astonishAgent.AutoApprove = req.AutoApprove
@@ -857,6 +858,16 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 
 	SendSSE(w, flusher, "status", map[string]string{"status": "running"})
 
+	// Emit debug initialization info
+	if req.Debug {
+		SendSSE(w, flusher, "debug", map[string]any{
+			"type":     "init",
+			"provider": req.Provider,
+			"model":    req.Model,
+			"agent":    req.AgentID,
+			"tools":    len(internalTools),
+		})
+	}
 	var lastNodeName string
 	var currentNodeType string // Track node type for conditional streaming
 	var hasOutputModel bool    // Track if current node has output_model
@@ -915,6 +926,23 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			for _, part := range event.LLMResponse.Content.Parts {
 				if part.FunctionCall != nil {
 					toolCallCount++
+					// Emit debug event for tool call args
+					if req.Debug {
+						argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+						SendSSE(w, flusher, "debug", map[string]any{
+							"type": "tool_call",
+							"tool": part.FunctionCall.Name,
+							"args": string(argsJSON),
+						})
+					}
+				}
+				if part.FunctionResponse != nil && req.Debug {
+					respJSON, _ := json.Marshal(part.FunctionResponse.Response)
+					SendSSE(w, flusher, "debug", map[string]any{
+						"type":   "tool_response",
+						"tool":   part.FunctionResponse.Name,
+						"result": string(respJSON),
+					})
 				}
 			}
 		}

@@ -86,6 +86,7 @@ func handleChatCommand(args []string) error {
 func handleChatRemote(args []string) error {
 	chatCmd := flag.NewFlagSet("chat", flag.ExitOnError)
 	autoApprove := chatCmd.Bool("auto-approve", false, "Auto-approve all tool executions")
+	debugMode := chatCmd.Bool("debug", false, "Enable debug mode")
 	resumeSession := chatCmd.String("resume", "", "Resume an existing session by ID")
 	chatCmd.StringVar(resumeSession, "r", "", "Resume session (short)")
 
@@ -96,6 +97,7 @@ func handleChatRemote(args []string) error {
 	cfg := &launcher.RemoteChatConfig{
 		AutoApprove: *autoApprove,
 		SessionID:   *resumeSession,
+		DebugMode:   *debugMode,
 	}
 
 	return launcher.RunRemoteChatConsole(context.Background(), cfg)

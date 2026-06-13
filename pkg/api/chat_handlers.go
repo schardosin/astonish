@@ -32,6 +32,7 @@ type StudioChatRequest struct {
 	SessionID        string   `json:"sessionId,omitempty"`
 	Message          string   `json:"message"`
 	AutoApprove      bool     `json:"autoApprove,omitempty"`
+	Debug            bool     `json:"debug,omitempty"`            // reserved for future debug streaming
 	SystemContext    string   `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
 	PinnedToolGroups []string `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
 }

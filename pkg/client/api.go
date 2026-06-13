@@ -129,6 +129,7 @@ type FlowChatRequest struct {
 	Model       string `json:"model,omitempty"`
 	AutoApprove bool   `json:"autoApprove,omitempty"`
 	CLIMode     bool   `json:"cliMode,omitempty"`
+	Debug       bool   `json:"debug,omitempty"`
 }
 
 // SendFlowMessage sends a message to a flow execution session and returns an SSE stream.
@@ -144,6 +145,7 @@ type ChatRequest struct {
 	SessionID   string `json:"sessionId,omitempty"`
 	Message     string `json:"message"`
 	AutoApprove bool   `json:"autoApprove,omitempty"`
+	Debug       bool   `json:"debug,omitempty"`
 }
 
 // SendChatMessage sends a chat message and returns an SSE stream of events.

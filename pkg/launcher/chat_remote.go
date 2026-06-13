@@ -17,6 +17,7 @@ import (
 type RemoteChatConfig struct {
 	AutoApprove bool
 	SessionID   string // Resume existing session (empty = new)
+	DebugMode   bool   // Enable debug output (stream tool args/responses)
 }
 
 // RunRemoteChatConsole runs an interactive chat session against a remote
@@ -124,7 +125,7 @@ func RunRemoteChatConsole(ctx context.Context, cfg *RemoteChatConfig) error {
 		}
 
 		// Send message to server
-		if err := runRemoteTurn(ctx, c, &sessionID, input, cfg.AutoApprove, startSpinner, stopSpinner, &lineHasContent, reader); err != nil {
+		if err := runRemoteTurn(ctx, c, &sessionID, input, cfg.AutoApprove, cfg.DebugMode, startSpinner, stopSpinner, &lineHasContent, reader); err != nil {
 			fmt.Printf("\n%sError:%s %v\n\n", "\033[31m", ColorReset, err)
 		}
 	}
@@ -142,6 +143,7 @@ func runRemoteTurn(
 	sessionID *string,
 	message string,
 	autoApprove bool,
+	debugMode bool,
 	startSpinner func(string),
 	stopSpinner func(),
 	lineHasContent *bool,
@@ -151,6 +153,7 @@ func runRemoteTurn(
 		SessionID:   *sessionID,
 		Message:     message,
 		AutoApprove: autoApprove,
+		Debug:       debugMode,
 	}
 
 	startSpinner("Thinking...")
@@ -323,6 +326,40 @@ func runRemoteTurn(
 		case "usage":
 			// Silently consume usage events (could optionally display)
 
+		case "debug":
+			if debugMode {
+				var payload struct {
+					Type   string `json:"type"`
+					Tool   string `json:"tool"`
+					Args   string `json:"args"`
+					Result string `json:"result"`
+					// init fields
+					Provider string `json:"provider"`
+					Model    string `json:"model"`
+					Agent    string `json:"agent"`
+					Tools    int    `json:"tools"`
+				}
+				if jsonErr := json.Unmarshal([]byte(event.Data), &payload); jsonErr == nil {
+					stopSpinner()
+					spinnerStopped = true
+					switch payload.Type {
+					case "init":
+						fmt.Fprintf(os.Stderr, "%s[debug] init: provider=%s model=%s agent=%s tools=%d%s\n",
+							ColorGray, payload.Provider, payload.Model, payload.Agent, payload.Tools, ColorReset)
+					case "tool_call":
+						fmt.Fprintf(os.Stderr, "%s[debug] tool_call: %s %s%s\n",
+							ColorGray, payload.Tool, payload.Args, ColorReset)
+					case "tool_response":
+						fmt.Fprintf(os.Stderr, "%s[debug] tool_response: %s %s%s\n",
+							ColorGray, payload.Tool, payload.Result, ColorReset)
+					default:
+						fmt.Fprintf(os.Stderr, "%s[debug] %s%s\n",
+							ColorGray, event.Data, ColorReset)
+					}
+					*lineHasContent = false
+				}
+			}
+
 		case "done":
 			// Turn complete
 		}
@@ -353,7 +390,7 @@ func runRemoteTurn(
 			fmt.Println(ui.RenderStatusBadge("Command rejected", false))
 		}
 		// Send approval response back as a new turn
-		return runRemoteTurn(ctx, c, sessionID, selection, autoApprove, startSpinner, stopSpinner, lineHasContent, reader)
+		return runRemoteTurn(ctx, c, sessionID, selection, autoApprove, debugMode, startSpinner, stopSpinner, lineHasContent, reader)
 	}
 
 	return nil

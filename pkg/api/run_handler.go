@@ -789,8 +789,25 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 	// Wire credential redactor so secrets are masked in SSE output
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
+		astonishAgent.CredentialStore = cs
+		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
 		// Inject Redactor into context so memory_save can Placeholderize()
 		ctx = credentials.WithRedactor(ctx, cs.Redactor())
+	}
+	// Platform mode: inject PG-backed credential store into runner context
+	// so BeforeToolCallback can resolve {{CREDENTIAL:...}} placeholders.
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalCredentials != nil || svc.Credentials != nil) {
+		merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+		ctx = store.WithCredentialStore(ctx, merged)
+		// Wire agent-level resolver as fallback (in case context propagation fails)
+		astonishAgent.CredentialStore = credentials.NewStoreAdapter(merged)
+		if astonishAgent.PendingSecrets == nil {
+			astonishAgent.PendingSecrets = credentials.NewPendingVault(nil)
+		}
+		// Hydrate redactor from PG store so credential values are masked in SSE
+		if astonishAgent.Redactor != nil {
+			astonishAgent.Redactor.HydrateFromStore(merged)
+		}
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

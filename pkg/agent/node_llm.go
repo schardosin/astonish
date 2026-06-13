@@ -392,6 +392,20 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		instruction = "You are a helpful AI assistant."
 	}
 
+	// If the instruction contains {{CREDENTIAL:...}} placeholders, append a
+	// directive telling the LLM to preserve them verbatim in tool arguments.
+	// The placeholders are resolved at the tool execution boundary (BeforeToolCallback)
+	// AFTER the LLM emits the tool call — the LLM must NOT interpret or strip them.
+	if credentials.ContainsPlaceholder(instruction) {
+		instruction += "\n\n" +
+			"IMPORTANT: The text above contains {{CREDENTIAL:...}} placeholder tokens (e.g. " +
+			"{{CREDENTIAL:openstack:username}}). These are NOT literal values — they are " +
+			"secure credential references that will be resolved automatically at execution time. " +
+			"When you use these values in tool calls (e.g. shell_command), you MUST copy them " +
+			"EXACTLY as-is, including the double curly braces. Do NOT replace them with the " +
+			"credential name, do NOT strip the braces, and do NOT attempt to resolve them yourself."
+	}
+
 	if a.DebugMode {
 		slog.Debug("final user prompt", "prompt", userPrompt)
 		slog.Debug("final system instruction", "instruction", instruction)

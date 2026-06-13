@@ -1440,28 +1440,32 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		switch result.Status {
 		case "completed":
 			return &agent.DryRunExecResult{
-				Success: true,
-				Output:  result.Output,
+				Success:      true,
+				Output:       result.Output,
+				NodesVisited: result.NodesVisited,
 			}, nil
 		case "waiting_for_input":
 			// Flow paused on input node — for dry-run this means we couldn't
 			// supply a required parameter. Report which one.
 			return &agent.DryRunExecResult{
-				Success: false,
-				Output:  result.Output,
-				Error:   fmt.Sprintf("flow paused on input node %q (prompt: %s) — parameter value not available", result.InputNode, result.InputPrompt),
+				Success:      false,
+				Output:       result.Output,
+				Error:        fmt.Sprintf("flow paused on input node %q (prompt: %s) — parameter value not available", result.InputNode, result.InputPrompt),
+				NodesVisited: result.NodesVisited,
 			}, nil
 		case "error":
 			return &agent.DryRunExecResult{
-				Success: false,
-				Output:  result.Output,
-				Error:   result.Message,
+				Success:      false,
+				Output:       result.Output,
+				Error:        result.Message,
+				NodesVisited: result.NodesVisited,
 			}, nil
 		default:
 			return &agent.DryRunExecResult{
-				Success: false,
-				Output:  result.Output,
-				Error:   fmt.Sprintf("unexpected flow status: %s — %s", result.Status, result.Message),
+				Success:      false,
+				Output:       result.Output,
+				Error:        fmt.Sprintf("unexpected flow status: %s — %s", result.Status, result.Message),
+				NodesVisited: result.NodesVisited,
 			}, nil
 		}
 	}

@@ -58,6 +58,9 @@ type FlowRunResult struct {
 	InputNode    string   `json:"input_node,omitempty"`    // Name of the input node
 	InputPrompt  string   `json:"input_prompt,omitempty"`  // Prompt text for the user
 	InputOptions []string `json:"input_options,omitempty"` // Selection options (empty = free text)
+
+	// Execution trace:
+	NodesVisited []string `json:"nodes_visited,omitempty"` // Ordered list of nodes executed
 }
 
 // FlowParameter describes a required input parameter for a flow.

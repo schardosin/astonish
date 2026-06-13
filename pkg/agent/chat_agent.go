@@ -156,9 +156,10 @@ type FileArtifact struct {
 
 // DryRunExecResult holds the output from executing a distilled flow as a test run.
 type DryRunExecResult struct {
-	Success bool   // Whether the flow completed without errors
-	Output  string // Combined output from all nodes
-	Error   string // Error message if the flow failed
+	Success      bool     // Whether the flow completed without errors
+	Output       string   // Combined output from all nodes
+	Error        string   // Error message if the flow failed
+	NodesVisited []string // Ordered list of nodes executed during the run
 }
 
 // FlowRunnerFunc is a function that executes a flow YAML with the given inputs

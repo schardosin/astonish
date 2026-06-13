@@ -47,6 +47,7 @@ type flowSession struct {
 	agentConfig     *config.AgentConfig
 	output          strings.Builder // accumulated output
 	currentNode     string
+	nodesVisited    []string // ordered list of nodes executed
 	resolvedOptions []string // runtime-resolved options from the flow engine
 	resolvedPrompt  string   // runtime-resolved prompt from the flow engine
 	cleanupFuncs    []func() // deferred cleanup (MCP, browser, sandbox)
@@ -423,6 +424,7 @@ func (ifr *InteractiveFlowRunner) executeFlowTurn(
 						}
 
 						sess.currentNode = node
+						sess.nodesVisited = append(sess.nodesVisited, node)
 						sess.resolvedOptions = nil
 						sess.resolvedPrompt = ""
 						suppressStreaming = false
@@ -520,8 +522,9 @@ func (ifr *InteractiveFlowRunner) executeFlowTurn(
 		// Flow completed
 		if sess.currentNode == "END" {
 			return &tools.FlowRunResult{
-				Status: "completed",
-				Output: strings.TrimSpace(sess.output.String()),
+				Status:       "completed",
+				Output:       strings.TrimSpace(sess.output.String()),
+				NodesVisited: sess.nodesVisited,
 			}, nil
 		}
 
@@ -558,6 +561,7 @@ func (ifr *InteractiveFlowRunner) executeFlowTurn(
 				InputNode:    sess.currentNode,
 				InputPrompt:  prompt,
 				InputOptions: options,
+				NodesVisited: sess.nodesVisited,
 			}, nil
 		}
 
@@ -569,8 +573,9 @@ func (ifr *InteractiveFlowRunner) executeFlowTurn(
 
 		// Agent completed a turn without needing input — done
 		return &tools.FlowRunResult{
-			Status: "completed",
-			Output: strings.TrimSpace(sess.output.String()),
+			Status:       "completed",
+			Output:       strings.TrimSpace(sess.output.String()),
+			NodesVisited: sess.nodesVisited,
 		}, nil
 	}
 }

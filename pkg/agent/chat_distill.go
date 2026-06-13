@@ -940,19 +940,21 @@ func (c *ChatAgent) ClassifyDistillReviewIntent(ctx context.Context, msg string)
 // Returns -1 if classification fails.
 func (c *ChatAgent) classifyViaLLM(ctx context.Context, msg string) DistillReviewIntent {
 	prompt := fmt.Sprintf(`You are classifying a user's message during a flow review process.
-The user has just been shown a generated flow (YAML workflow) and asked what to do next.
-They were given these options: "test it" to run a verification, "save" to save it, or describe changes.
+The user was just shown a generated flow and asked: "Should we run a test before saving?"
 
 Classify their response into exactly one of:
 
-1. SAVE — They want to accept and save the flow. Examples: "save", "save it", "looks good save it", "ship it", "lgtm".
-2. CANCEL — They want to discard the flow. Examples: "cancel", "nevermind", "don't save", "scrap it", "discard".
-3. TEST — They want to test/run the flow to verify it works. Examples: "test it", "run it", "try it", "execute it", "dry run", "verify", "yes test it", "yes run a test", "go ahead and test". NOTE: If the user says "yes" without further context, classify as TEST (they are confirming the test offer).
-4. MODIFY — They want to change the flow. Examples: "change the model", "add error handling", "rename the node", "make it faster".
+1. TEST — They want to test/run the flow. This is the DEFAULT for affirmative responses. Examples: "yes", "sure", "go ahead", "ok", "yeah", "yep", "test it", "run it", "try it", "let's test", "do it".
+2. SAVE — They want to skip testing and save immediately. Examples: "no just save", "save it", "no save", "skip test and save", "looks good save it", "ship it".
+3. CANCEL — They want to discard entirely. Examples: "cancel", "discard", "nevermind", "don't save", "scrap it", "abort".
+4. MODIFY — They want to change the flow. Examples: "change the model", "add error handling", "rename the node", "make it faster", or any specific modification request.
+
+IMPORTANT: A bare "yes" or simple affirmative ALWAYS means TEST (they are answering "yes" to the test question).
+A bare "no" means SAVE (they are declining the test, implying they want to save directly).
 
 User message: %q
 
-Respond with exactly one word: SAVE, CANCEL, TEST, or MODIFY`, msg)
+Respond with exactly one word: TEST, SAVE, CANCEL, or MODIFY`, msg)
 
 	response, err := c.FlowDistiller.LLM(ctx, prompt)
 	if err != nil {
@@ -1041,4 +1043,84 @@ func (c *ChatAgent) DryRunDistilledFlow(ctx context.Context, sessionID string) (
 	c.traceMu.Unlock()
 
 	return result, nil
+}
+
+// EvaluateDryRunResult uses the LLM to intelligently assess the dry-run result
+// based on the flow structure, nodes visited, output, and errors.
+func (c *ChatAgent) EvaluateDryRunResult(ctx context.Context, sessionID string, result *DryRunExecResult) string {
+	if c.FlowDistiller == nil || c.FlowDistiller.LLM == nil {
+		return c.staticDryRunSummary(result)
+	}
+
+	c.traceMu.Lock()
+	review := c.pendingDistillReview[sessionID]
+	c.traceMu.Unlock()
+
+	if review == nil {
+		return c.staticDryRunSummary(result)
+	}
+
+	// Build context for the LLM evaluation
+	var evalCtx strings.Builder
+	evalCtx.WriteString("You are evaluating the results of a test execution of a flow.\n\n")
+	evalCtx.WriteString("## Flow Description\n")
+	evalCtx.WriteString(review.Description)
+	evalCtx.WriteString("\n\n## Flow YAML\n```yaml\n")
+	// Include only the node names and types to keep it concise
+	evalCtx.WriteString(review.YAML)
+	evalCtx.WriteString("\n```\n\n")
+	evalCtx.WriteString("## Execution Results\n")
+	evalCtx.WriteString(fmt.Sprintf("- Status: %s\n", map[bool]string{true: "completed successfully", false: "failed"}[result.Success]))
+	if len(result.NodesVisited) > 0 {
+		evalCtx.WriteString(fmt.Sprintf("- Nodes visited: %s\n", strings.Join(result.NodesVisited, " → ")))
+	} else {
+		evalCtx.WriteString("- Nodes visited: none (flow exited immediately)\n")
+	}
+	if result.Output != "" {
+		output := result.Output
+		if len(output) > 2000 {
+			output = output[:2000] + "\n...(truncated)"
+		}
+		evalCtx.WriteString(fmt.Sprintf("- Output:\n```\n%s\n```\n", output))
+	} else {
+		evalCtx.WriteString("- Output: (empty — no text output captured)\n")
+	}
+	if result.Error != "" {
+		evalCtx.WriteString(fmt.Sprintf("- Error: %s\n", result.Error))
+	}
+
+	evalCtx.WriteString("\n## Your Task\n")
+	evalCtx.WriteString("Provide a brief (2-4 sentences) assessment:\n")
+	evalCtx.WriteString("1. Did the flow execute as expected based on its structure?\n")
+	evalCtx.WriteString("2. If output is empty, explain WHY based on the flow's node types (e.g., nodes with output_model suppress text output, tool nodes may not produce visible text).\n")
+	evalCtx.WriteString("3. If there's an error, explain what went wrong and suggest a fix.\n")
+	evalCtx.WriteString("4. End with a clear recommendation: save as-is, or what to fix.\n\n")
+	evalCtx.WriteString("Be concise and direct. Do NOT use markdown headers.")
+
+	assessment, err := c.FlowDistiller.LLM(ctx, evalCtx.String())
+	if err != nil {
+		if c.DebugMode {
+			slog.Debug("dry-run evaluation LLM failed, using static summary", "error", err)
+		}
+		return c.staticDryRunSummary(result)
+	}
+
+	return strings.TrimSpace(assessment)
+}
+
+// staticDryRunSummary provides a fallback assessment without LLM.
+func (c *ChatAgent) staticDryRunSummary(result *DryRunExecResult) string {
+	if result.Success && result.Output != "" {
+		return "Flow executed successfully and produced output."
+	}
+	if result.Success && result.Output == "" {
+		if len(result.NodesVisited) > 0 {
+			return fmt.Sprintf("Flow completed (nodes: %s) but produced no visible text output. This may be expected if nodes use structured output_model instead of free text.", strings.Join(result.NodesVisited, " → "))
+		}
+		return "Flow reported success but no nodes were visited and no output was produced. The flow may have immediately transitioned to END."
+	}
+	if !result.Success {
+		return fmt.Sprintf("Flow failed: %s", result.Error)
+	}
+	return "Flow execution completed."
 }

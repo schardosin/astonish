@@ -521,27 +521,30 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			var analysisText string
 			if dryErr != nil {
 				analysisText = fmt.Sprintf("**Test run failed to start:** %v\n\nThe flow could not be executed. This may indicate a configuration issue. You can say \"fix it\" and I'll attempt to correct the flow, or describe specific changes you'd like.", dryErr)
-			} else if dryResult.Success {
-				output := strings.TrimSpace(dryResult.Output)
-				if output == "" {
-					analysisText = "**Test run completed** but produced no visible output. This may be normal for flows that perform actions without text output, or it could indicate the flow exited before reaching an output node.\n\nYou can say \"save\" to save it as-is, or request changes."
-				} else {
-					if len(output) > 3000 {
+			} else {
+				// Use LLM to intelligently evaluate the result
+				assessment := chatAgent.EvaluateDryRunResult(r.Context(), req.SessionID, dryResult)
+
+				if dryResult.Success {
+					output := strings.TrimSpace(dryResult.Output)
+					if output != "" && len(output) > 3000 {
 						output = output[:3000] + "\n... (truncated)"
 					}
-					analysisText = fmt.Sprintf("**Test run succeeded!** The flow executed correctly with the original parameters.\n\n**Output:**\n```\n%s\n```\n\nThe flow is working as expected. You can say \"save\" to save it, or request changes if you'd like to modify anything.", output)
+					if output != "" {
+						analysisText = fmt.Sprintf("**Test run completed.**\n\n**Output:**\n```\n%s\n```\n\n%s", output, assessment)
+					} else {
+						analysisText = fmt.Sprintf("**Test run completed.**\n\n%s", assessment)
+					}
+				} else {
+					output := strings.TrimSpace(dryResult.Output)
+					if len(output) > 2000 {
+						output = output[:2000] + "\n... (truncated)"
+					}
+					analysisText = fmt.Sprintf("**Test run failed.**\n\n%s", assessment)
+					if output != "" {
+						analysisText += fmt.Sprintf("\n\n**Partial output:**\n```\n%s\n```", output)
+					}
 				}
-			} else {
-				output := dryResult.Output
-				if len(output) > 2000 {
-					output = output[:2000] + "\n... (truncated)"
-				}
-				errorDetail := dryResult.Error
-				analysisText = fmt.Sprintf("**Test run failed.**\n\n**Error:** %s", errorDetail)
-				if output != "" {
-					analysisText += fmt.Sprintf("\n\n**Partial output:**\n```\n%s\n```", output)
-				}
-				analysisText += "\n\nI can attempt to fix this — just say \"fix it\" or describe the issue. You can also save as-is if this is expected behavior."
 			}
 
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": analysisText})
@@ -1153,7 +1156,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 
 					// Offer to test-run the flow (conversational — like the scheduler workflow)
 					if chatAgent.FlowRunner != nil {
-						offerText := "\n**Next steps:** Reply with one of:\n• **\"test it\"** — run a verification test with the original parameters\n• **\"save\"** — save this flow to your personal workspace\n• Or describe any changes you'd like me to make"
+						offerText := "\n**Should we run a test before saving?**"
 						SendSSE(w, flusher, "text", map[string]interface{}{"text": offerText})
 						persistSessionMessage(ctx, sessionService, userID, sessionID, "model", offerText)
 					}

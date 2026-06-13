@@ -940,13 +940,15 @@ func (c *ChatAgent) ClassifyDistillReviewIntent(ctx context.Context, msg string)
 // Returns -1 if classification fails.
 func (c *ChatAgent) classifyViaLLM(ctx context.Context, msg string) DistillReviewIntent {
 	prompt := fmt.Sprintf(`You are classifying a user's message during a flow review process.
-The user has just been shown a generated flow (YAML workflow) and is being asked to review it.
-They can do one of four things:
+The user has just been shown a generated flow (YAML workflow) and asked what to do next.
+They were given these options: "test it" to run a verification, "save" to save it, or describe changes.
 
-1. SAVE — They want to accept and save the flow as-is. This includes any affirmative response like "yes", "save it", "looks good", "ship it", "go ahead", "you can save it now", etc.
-2. CANCEL — They want to discard the flow entirely. This includes "no", "cancel", "nevermind", "don't save", "scrap it", etc.
-3. TEST — They want to test-run the flow to verify it works. This includes "test it", "run it", "try it", "execute it", "dry run", "verify it", "let's test", "yes test", "go ahead and test", etc.
-4. MODIFY — They want to make specific changes to the flow. This includes requests like "add an error handler", "rename the first node", "change the model to gpt-4", etc.
+Classify their response into exactly one of:
+
+1. SAVE — They want to accept and save the flow. Examples: "save", "save it", "looks good save it", "ship it", "lgtm".
+2. CANCEL — They want to discard the flow. Examples: "cancel", "nevermind", "don't save", "scrap it", "discard".
+3. TEST — They want to test/run the flow to verify it works. Examples: "test it", "run it", "try it", "execute it", "dry run", "verify", "yes test it", "yes run a test", "go ahead and test". NOTE: If the user says "yes" without further context, classify as TEST (they are confirming the test offer).
+4. MODIFY — They want to change the flow. Examples: "change the model", "add error handling", "rename the node", "make it faster".
 
 User message: %q
 

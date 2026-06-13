@@ -782,9 +782,16 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		}
 
 		llmAgent, err = llmagent.New(llmagent.Config{
-			Name:                nodeName,
-			Model:               a.LLM,
-			Instruction:         instruction,
+			Name:  nodeName,
+			Model: a.LLM,
+			// Use InstructionProvider instead of Instruction to bypass ADK's
+			// InjectSessionState template processing. We already resolved all
+			// {var} placeholders via renderString; ADK's stricter processor
+			// would error on state keys that exist but are empty, or on literal
+			// braces in shell scripts / JSON content.
+			InstructionProvider: func(_ agent.ReadonlyContext) (string, error) {
+				return instruction, nil
+			},
 			Tools:               internalTools,
 			Toolsets:            mcpToolsets,
 			OutputSchema:        outputSchema,
@@ -795,9 +802,11 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 	} else {
 		// No tools enabled
 		llmAgent, err = llmagent.New(llmagent.Config{
-			Name:         nodeName,
-			Model:        a.LLM,
-			Instruction:  instruction,
+			Name:  nodeName,
+			Model: a.LLM,
+			InstructionProvider: func(_ agent.ReadonlyContext) (string, error) {
+				return instruction, nil
+			},
 			Tools:        nodeTools,
 			OutputSchema: outputSchema,
 			OutputKey:    outputKey,

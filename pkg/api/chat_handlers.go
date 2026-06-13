@@ -522,11 +522,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if dryErr != nil {
 				analysisText = fmt.Sprintf("**Test run failed to start:** %v\n\nThe flow could not be executed. This may indicate a configuration issue. You can say \"fix it\" and I'll attempt to correct the flow, or describe specific changes you'd like.", dryErr)
 			} else if dryResult.Success {
-				output := dryResult.Output
-				if len(output) > 3000 {
-					output = output[:3000] + "\n... (truncated)"
+				output := strings.TrimSpace(dryResult.Output)
+				if output == "" {
+					analysisText = "**Test run completed** but produced no visible output. This may be normal for flows that perform actions without text output, or it could indicate the flow exited before reaching an output node.\n\nYou can say \"save\" to save it as-is, or request changes."
+				} else {
+					if len(output) > 3000 {
+						output = output[:3000] + "\n... (truncated)"
+					}
+					analysisText = fmt.Sprintf("**Test run succeeded!** The flow executed correctly with the original parameters.\n\n**Output:**\n```\n%s\n```\n\nThe flow is working as expected. You can say \"save\" to save it, or request changes if you'd like to modify anything.", output)
 				}
-				analysisText = fmt.Sprintf("**Test run succeeded!** The flow executed correctly with the original parameters.\n\n**Output:**\n```\n%s\n```\n\nThe flow is working as expected. You can say \"save\" to save it, or request changes if you'd like to modify anything.", output)
 			} else {
 				output := dryResult.Output
 				if len(output) > 2000 {
@@ -1149,7 +1153,7 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 
 					// Offer to test-run the flow (conversational — like the scheduler workflow)
 					if chatAgent.FlowRunner != nil {
-						offerText := "\nWould you like me to run a test with the original parameters to verify it works? You can also request changes, or say \"save\" when you're ready."
+						offerText := "\n**Next steps:** Reply with one of:\n• **\"test it\"** — run a verification test with the original parameters\n• **\"save\"** — save this flow to your personal workspace\n• Or describe any changes you'd like me to make"
 						SendSSE(w, flusher, "text", map[string]interface{}{"text": offerText})
 						persistSessionMessage(ctx, sessionService, userID, sessionID, "model", offerText)
 					}

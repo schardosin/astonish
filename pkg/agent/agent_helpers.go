@@ -134,6 +134,40 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 	return result
 }
 
+// resolveCredentialVarsInRawContext resolves state variable references that are
+// nested inside {{CREDENTIAL:...}} placeholders within raw_context text.
+// For example: {{CREDENTIAL:{credential_name}:password}} with state
+// credential_name="openstack" becomes {{CREDENTIAL:openstack:password}}.
+//
+// Only state variables INSIDE credential placeholders are resolved — the rest
+// of raw_context remains untouched to preserve shell syntax (${}, awk {}, etc.).
+func (a *AstonishAgent) resolveCredentialVarsInRawContext(raw string, state session.State) string {
+	// Match {{CREDENTIAL:{var}:field}} — nested state var inside credential placeholder.
+	// The outer pattern is {{CREDENTIAL: ... : ... }} where the first segment
+	// contains {state_var} that needs resolution.
+	nestedRe := regexp.MustCompile(`\{\{CREDENTIAL:\{([^{}]+)\}:([^}]+)\}\}`)
+
+	stateMap := a.stateToMap(state)
+
+	return nestedRe.ReplaceAllStringFunc(raw, func(match string) string {
+		parts := nestedRe.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		varName, field := parts[1], parts[2]
+
+		// Resolve the state variable
+		val, err := EvaluateExpression(varName, stateMap)
+		if err != nil || val == nil {
+			// Can't resolve — leave as-is so the error is visible
+			return match
+		}
+
+		resolved := fmt.Sprintf("%v", val)
+		return fmt.Sprintf("{{CREDENTIAL:%s:%s}}", resolved, field)
+	})
+}
+
 func (a *AstonishAgent) cleanAndFixJson(input string) string {
 	trimmed := strings.TrimSpace(input)
 

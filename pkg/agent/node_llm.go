@@ -374,7 +374,12 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 		if systemInstruction != "" {
 			systemInstruction += "\n\n"
 		}
-		systemInstruction += node.RawContext
+		// Resolve state variables nested INSIDE credential placeholders only.
+		// Pattern: {{CREDENTIAL:{state_var}:field}} → {{CREDENTIAL:resolved:field}}
+		// This allows flows to use dynamic credential names (e.g. from input nodes)
+		// while keeping the rest of raw_context untouched (shell ${}, awk {}, etc.).
+		rawCtx := a.resolveCredentialVarsInRawContext(node.RawContext, state)
+		systemInstruction += rawCtx
 	}
 
 	// Use system instruction as the main instruction for the agent

@@ -208,10 +208,18 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	astonishAgent.AutoApprove = true
 	astonishAgent.SessionService = session.InMemoryService()
 
+	// Wire credential store for {{CREDENTIAL:...}} placeholder resolution.
+	// File-based store (personal mode) + context-injected PG store (platform mode).
 	if cs := tools.GetCredentialStore(); cs != nil {
 		astonishAgent.Redactor = cs.Redactor()
-		// Inject Redactor into context so memory_save can Placeholderize()
+		astonishAgent.CredentialStore = cs
+		astonishAgent.PendingSecrets = credentials.NewPendingVault(cs.Redactor())
 		ctx = credentials.WithRedactor(ctx, cs.Redactor())
+	}
+	// Platform mode: inject PG-backed credential store into context so
+	// BeforeToolCallback can resolve credentials from the database.
+	if svc := store.FromRequest(r); svc != nil && (svc.PersonalCredentials != nil || svc.Credentials != nil) {
+		ctx = store.WithCredentialStore(ctx, store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials))
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

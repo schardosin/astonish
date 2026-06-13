@@ -516,7 +516,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": "Running test execution with the original parameters...\n\n"})
 
-			dryResult, dryErr := chatAgent.DryRunDistilledFlow(r.Context(), req.SessionID)
+			// Inject PG credential store into dry-run context so that
+			// BeforeToolCallback in the flow agent can resolve {{CREDENTIAL:...}}
+			// placeholders in tool arguments (e.g., shell_command).
+			dryCtx := r.Context()
+			if svc := store.FromRequest(r); svc != nil && (svc.PersonalCredentials != nil || svc.Credentials != nil) {
+				dryCtx = store.WithCredentialStore(dryCtx, store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials))
+			}
+			dryResult, dryErr := chatAgent.DryRunDistilledFlow(dryCtx, req.SessionID)
 
 			var analysisText string
 			if dryErr != nil {

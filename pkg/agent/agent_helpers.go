@@ -80,12 +80,23 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 	// This allows for expressions like {comment["patch"]}
 	re := regexp.MustCompile(`\{([^{}]+)\}`)
 
+	// Protect {{CREDENTIAL:...}} and <<<SECRET_N>>> patterns from being
+	// garbled by state variable interpolation. These placeholders are resolved
+	// later at the tool execution boundary (BeforeToolCallback / node_tool).
+	var credHoles []string
+	credRe := regexp.MustCompile(`\{\{CREDENTIAL:[^}]+\}\}`)
+	tmpl = credRe.ReplaceAllStringFunc(tmpl, func(m string) string {
+		idx := len(credHoles)
+		credHoles = append(credHoles, m)
+		return fmt.Sprintf("\x00CRED_%d\x00", idx)
+	})
+
 	// Convert state to map once for efficiency if needed, but renderString might be called often
 	// For now, convert inside the loop or pass it?
 	// stateToMap is relatively cheap if state is small.
 	stateMap := a.stateToMap(state)
 
-	return re.ReplaceAllStringFunc(tmpl, func(match string) string {
+	result := re.ReplaceAllStringFunc(tmpl, func(match string) string {
 		expr := match[1 : len(match)-1]
 
 		// Try to evaluate the expression using Starlark
@@ -114,6 +125,13 @@ func (a *AstonishAgent) renderString(tmpl string, state session.State) string {
 		}
 		return formatted
 	})
+
+	// Restore protected credential placeholders
+	for i, orig := range credHoles {
+		result = strings.Replace(result, fmt.Sprintf("\x00CRED_%d\x00", i), orig, 1)
+	}
+
+	return result
 }
 
 func (a *AstonishAgent) cleanAndFixJson(input string) string {

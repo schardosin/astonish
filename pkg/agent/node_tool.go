@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -262,6 +264,30 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 	if !ok {
 		yield(nil, fmt.Errorf("tool '%s' does not implement Run method", toolName))
 		return false
+	}
+
+	// Resolve {{CREDENTIAL:name:field}} placeholders in tool args.
+	// Tool-type nodes bypass ADK's tool lifecycle (no BeforeToolCallback),
+	// so we must substitute credentials here before execution.
+	var resolver credentials.CredentialResolver
+	if cs := store.CredentialStoreFromContext(ctx); cs != nil {
+		resolver = credentials.NewStoreAdapter(cs)
+	} else if a.CredentialStore != nil {
+		resolver = a.CredentialStore
+	}
+	if resolver != nil {
+		var shellFields []string
+		if toolName == "shell_command" || toolName == "process_write" {
+			shellFields = []string{"command"}
+		}
+		credentials.SubstituteAndRestore(resolvedArgs, resolver, shellFields...)
+		// Note: we don't restore — tool nodes don't need to redact args
+		// back into session history (they emit structured results, not raw args).
+	}
+
+	// Resolve <<<SECRET_N>>> tokens (pending secrets from interactive capture).
+	if a.PendingSecrets != nil {
+		a.PendingSecrets.SubstituteAndRestore(resolvedArgs)
 	}
 
 	toolResult, err := runnable.Run(toolCtx, resolvedArgs)

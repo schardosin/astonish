@@ -40,9 +40,13 @@ type HeadlessConfig struct {
 //
 // This is used by the scheduler for "routine" mode jobs.
 func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
-	// Suppress default logger to avoid ADK warnings in headless mode
+	// Suppress default logger to avoid ADK warnings in headless mode.
+	// IMPORTANT: Restore the original output on return so the daemon's
+	// scheduler logs (and any other goroutines) are not permanently silenced.
 	if !cfg.DebugMode {
+		originalLogOutput := log.Writer()
 		log.SetOutput(io.Discard)
+		defer log.SetOutput(originalLogOutput)
 	}
 
 	// Ensure provider secrets are available. When called from the daemon,
@@ -233,6 +237,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 
 		for event, err := range r.Run(ctx, userID, sess.ID(), userMsg, adkagent.RunConfig{}) {
 			if err != nil {
+				slog.Error("[headless] agent returned error", "node", currentNodeName, "error", err)
 				return output.String(), fmt.Errorf("agent error: %w", err)
 			}
 
@@ -279,6 +284,14 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 								break
 							}
 						}
+
+						slog.Info("[headless] node transition",
+							"node", currentNodeName,
+							"suppressStreaming", suppressStreaming,
+							"userMessageFields", userMessageFields,
+							"isInput", isInputNode,
+							"isOutput", isOutputNode,
+						)
 					}
 				}
 
@@ -301,14 +314,24 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 					for _, field := range userMessageFields {
 						if val, ok := event.Actions.StateDelta[field]; ok {
 							if s, ok := val.(string); ok {
+								slog.Info("[headless] captured user_message field", "field", field, "len", len(s))
 								output.WriteString(s)
 								output.WriteString("\n")
 							} else {
+								slog.Info("[headless] captured user_message field (non-string)", "field", field, "value", fmt.Sprintf("%v", val))
 								output.WriteString(fmt.Sprintf("%v", val))
 								output.WriteString("\n")
 							}
 						}
 					}
+				}
+
+				// Track internal flow errors for diagnostics
+				if hasErrVal, ok := event.Actions.StateDelta["_has_error"]; ok {
+					slog.Info("[headless] _has_error state change", "value", hasErrVal, "node", currentNodeName)
+				}
+				if lastErrVal, ok := event.Actions.StateDelta["_last_error"]; ok {
+					slog.Warn("[headless] _last_error set", "error", lastErrVal, "node", currentNodeName)
 				}
 			}
 
@@ -356,5 +379,33 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 		break
 	}
 
-	return strings.TrimSpace(output.String()), nil
+	result := strings.TrimSpace(output.String())
+
+	// Check if the flow failed internally (all retries exhausted).
+	// The flow transitions to END with _has_error=true but RunHeadless
+	// previously returned ("", nil), masking the failure from the scheduler.
+	getResp, getErr := sessionService.Get(ctx, &session.GetRequest{
+		AppName:   appName,
+		UserID:    userID,
+		SessionID: sess.ID(),
+	})
+	if getErr == nil && getResp != nil && getResp.Session != nil {
+		state := getResp.Session.State()
+		if hasErr, _ := state.Get("_has_error"); hasErr != nil {
+			if b, ok := hasErr.(bool); ok && b {
+				lastErr, _ := state.Get("_last_error")
+				errNode, _ := state.Get("_error_node")
+				errMsg := fmt.Sprintf("flow node %v failed: %v", errNode, lastErr)
+				slog.Warn("[headless] flow completed with internal error", "node", errNode, "error", lastErr)
+				if result == "" {
+					return "", fmt.Errorf("%s", errMsg)
+				}
+				// If we have partial output (from prior nodes), return it with the error
+				return result, fmt.Errorf("%s", errMsg)
+			}
+		}
+	}
+
+	slog.Info("[headless] flow completed", "output_len", len(result), "final_node", currentNodeName)
+	return result, nil
 }

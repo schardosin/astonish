@@ -3,8 +3,6 @@ package launcher
 import (
 	"context"
 	"fmt"
-	"io"
-	"log"
 	"log/slog"
 	"strings"
 
@@ -40,14 +38,11 @@ type HeadlessConfig struct {
 //
 // This is used by the scheduler for "routine" mode jobs.
 func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
-	// Suppress default logger to avoid ADK warnings in headless mode.
-	// IMPORTANT: Restore the original output on return so the daemon's
-	// scheduler logs (and any other goroutines) are not permanently silenced.
-	if !cfg.DebugMode {
-		originalLogOutput := log.Writer()
-		log.SetOutput(io.Discard)
-		defer log.SetOutput(originalLogOutput)
-	}
+	// NOTE: We intentionally do NOT suppress log output here.
+	// Previously log.SetOutput(io.Discard) was used to hide ADK warnings,
+	// but it also silenced all slog diagnostics (slog delegates through the
+	// standard log package). Visibility into headless runs is more important
+	// than suppressing noisy ADK log lines.
 
 	// Ensure provider secrets are available. When called from the daemon,
 	// secrets are typically already injected into AppConfig. But for safety

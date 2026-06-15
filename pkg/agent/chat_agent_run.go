@@ -406,7 +406,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 
 				if resolver == nil {
-					return nil, nil // no credential store available at all
+					// No credential store available — check if args have placeholders
+					if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
+						return nil, fmt.Errorf("credential %q not found — no credential store available", unresolved[0])
+					}
+					return nil, nil
 				}
 
 				// Use shell-safe env-var injection for shell_command tools to
@@ -416,6 +420,13 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					shellFields = []string{"command"}
 				}
 				credRestore := credentials.SubstituteAndRestore(args, resolver, shellFields...)
+
+				// After substitution, check if any placeholders remain unresolved.
+				if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
+					credRestore()
+					return nil, fmt.Errorf("credential %q not found — ensure the credential exists (for scheduled jobs, it must be at team scope)", unresolved[0])
+				}
+
 				callID := ctx.FunctionCallID()
 				// Chain with any existing restore (e.g. pending secrets added later).
 				if prev, loaded := restoreFuncs.Load(callID); loaded {

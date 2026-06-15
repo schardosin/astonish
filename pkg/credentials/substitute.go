@@ -38,6 +38,44 @@ func ContainsPlaceholder(text string) bool {
 	return credentialPlaceholderRe.MatchString(text)
 }
 
+// UnresolvedCredentialNames extracts unique credential names from any
+// {{CREDENTIAL:name:field}} placeholders remaining in the map values.
+// Returns nil if no unresolved placeholders remain.
+func UnresolvedCredentialNames(m map[string]any) []string {
+	seen := make(map[string]bool)
+	for _, v := range m {
+		collectUnresolvedNames(v, seen)
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	return names
+}
+
+func collectUnresolvedNames(v any, seen map[string]bool) {
+	switch val := v.(type) {
+	case string:
+		matches := credentialPlaceholderRe.FindAllStringSubmatch(val, -1)
+		for _, m := range matches {
+			if len(m) >= 2 {
+				seen[m[1]] = true
+			}
+		}
+	case map[string]any:
+		for _, inner := range val {
+			collectUnresolvedNames(inner, seen)
+		}
+	case []any:
+		for _, item := range val {
+			collectUnresolvedNames(item, seen)
+		}
+	}
+}
+
 // SubstitutePlaceholders replaces all {{CREDENTIAL:name:field}} tokens in text
 // with the actual secret values from the credential store. Unresolvable
 // placeholders are left as-is (the tool will fail naturally, giving the LLM

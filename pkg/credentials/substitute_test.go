@@ -502,3 +502,73 @@ func TestShellQuoteSingle(t *testing.T) {
 		}
 	}
 }
+
+func TestUnresolvedCredentialNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    map[string]any
+		expected []string
+	}{
+		{
+			name:     "no placeholders",
+			input:    map[string]any{"command": "echo hello"},
+			expected: nil,
+		},
+		{
+			name:     "single credential placeholder",
+			input:    map[string]any{"command": "curl -u {{CREDENTIAL:openstack:username}}:{{CREDENTIAL:openstack:password}} http://api"},
+			expected: []string{"openstack"},
+		},
+		{
+			name:     "multiple credential names",
+			input:    map[string]any{"command": "curl -u {{CREDENTIAL:aws:key}} -H {{CREDENTIAL:github:token}}"},
+			expected: []string{"aws", "github"},
+		},
+		{
+			name:     "nil map",
+			input:    nil,
+			expected: nil,
+		},
+		{
+			name:     "empty map",
+			input:    map[string]any{},
+			expected: nil,
+		},
+		{
+			name:     "nested map with placeholder",
+			input:    map[string]any{"config": map[string]any{"token": "{{CREDENTIAL:vault:api_key}}"}},
+			expected: []string{"vault"},
+		},
+		{
+			name:     "array with placeholder",
+			input:    map[string]any{"args": []any{"--token", "{{CREDENTIAL:myservice:token}}"}},
+			expected: []string{"myservice"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := UnresolvedCredentialNames(tt.input)
+			if tt.expected == nil {
+				if got != nil {
+					t.Errorf("expected nil, got %v", got)
+				}
+				return
+			}
+			if len(got) != len(tt.expected) {
+				t.Errorf("expected %d names %v, got %d names %v", len(tt.expected), tt.expected, len(got), got)
+				return
+			}
+			// Check all expected names are present (order may vary)
+			gotSet := make(map[string]bool)
+			for _, name := range got {
+				gotSet[name] = true
+			}
+			for _, expected := range tt.expected {
+				if !gotSet[expected] {
+					t.Errorf("expected name %q not found in result %v", expected, got)
+				}
+			}
+		})
+	}
+}

@@ -321,12 +321,10 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 					}
 				}
 
-				// Track internal flow errors for diagnostics
-				if hasErrVal, ok := event.Actions.StateDelta["_has_error"]; ok {
-					slog.Info("[headless] _has_error state change", "value", hasErrVal, "node", currentNodeName)
-				}
-				if lastErrVal, ok := event.Actions.StateDelta["_last_error"]; ok {
-					slog.Warn("[headless] _last_error set", "error", lastErrVal, "node", currentNodeName)
+				// Track internal flow errors for diagnostics.
+				// _failure_info is emitted via StateDelta when retries exhaust.
+				if failInfo, ok := event.Actions.StateDelta["_failure_info"]; ok {
+					slog.Warn("[headless] node failure detected", "node", currentNodeName, "info", failInfo)
 				}
 			}
 

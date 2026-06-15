@@ -103,6 +103,13 @@ func (s *SecretScanner) Scan(text string) []Detection {
 				quoteStrip = 1
 			}
 			evalStart = tok.start + eqPos + 1 + quoteStrip
+
+			// Re-check coverage after adjusting to the value portion.
+			// The token start (KEY part) may not be covered, but the
+			// value portion may already be detected by the keyword layer.
+			if covered[evalStart] {
+				continue
+			}
 		}
 
 		// Layer 2: Entropy

@@ -126,6 +126,14 @@ func (v *PendingVault) extractDetectedSecrets(text string) string {
 	// Process in reverse positional order so byte offsets remain valid
 	for i := len(detections) - 1; i >= 0; i-- {
 		d := detections[i]
+
+		// Bounds guard: skip detections whose offsets exceed the current
+		// text length. This defends against overlapping or duplicate
+		// detections that become invalid after earlier replacements.
+		if d.Start > len(text) || d.End > len(text) || d.Start > d.End {
+			continue
+		}
+
 		rawValue := d.Original
 
 		// Check if this exact value was already extracted (dedup)

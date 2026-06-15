@@ -261,3 +261,46 @@ func TestPendingVault_Extract_OpenStackToolOutput(t *testing.T) {
 		t.Fatal("Extract returned empty string")
 	}
 }
+
+// TestPendingVault_Extract_EnvVarKeywordOverlap verifies that the scanner
+// does not produce duplicate detections when the keyword layer matches a
+// KEY=VALUE secret and the entropy layer later evaluates the same VALUE
+// portion. Previously, the covered map only checked tok.start (the KEY
+// position), so the entropy layer re-detected the already-covered VALUE —
+// producing two identical [Start:End] detections that caused a panic in
+// reverse-iteration replacement.
+func TestPendingVault_Extract_EnvVarKeywordOverlap(t *testing.T) {
+	scanner := NewSecretScanner()
+
+	// This is the exact input that triggered the crash. The keyword regex
+	// matches APP_CRED_SECRET="..." and the entropy layer would also flag
+	// the high-entropy value if the coverage check doesn't account for
+	// the evalStart adjustment after extractEnvValue.
+	text := `APP_CRED_ID="i851355"
+APP_CRED_SECRET="rYts_wLXMEM5RZJyn_eqAW4J6FD2QoAYJfkjSfp9KzZj6PdbEKrM5aXW7A-VNXdUq6eq8bKLJeUJkgIdN2lX9A"`
+
+	v := NewPendingVault(nil)
+	v.Scanner = scanner
+
+	// Must not panic with "slice bounds out of range [125:54]"
+	result := v.Extract(text)
+	if result == "" {
+		t.Fatal("Extract returned empty string")
+	}
+
+	// The secret value should be replaced with exactly one token
+	if !ContainsPendingSecret(result) {
+		t.Error("Expected result to contain a <<<SECRET_N>>> token")
+	}
+
+	// Should only have one secret stored (dedup)
+	token := "<<<SECRET_1>>>"
+	val, ok := v.Resolve(token)
+	if !ok {
+		t.Fatal("Expected SECRET_1 to be resolvable")
+	}
+	expected := "rYts_wLXMEM5RZJyn_eqAW4J6FD2QoAYJfkjSfp9KzZj6PdbEKrM5aXW7A-VNXdUq6eq8bKLJeUJkgIdN2lX9A"
+	if val != expected {
+		t.Errorf("SECRET_1 = %q; want %q", val, expected)
+	}
+}

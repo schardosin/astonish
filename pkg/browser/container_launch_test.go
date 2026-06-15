@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/go-rod/rod"
+	"github.com/go-rod/rod/lib/cdp"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
@@ -279,5 +282,145 @@ func TestConnectContainerCDP_NoDialFunc_FallsToRemote(t *testing.T) {
 	// The error should be from connectRemote, not from tunnel dialer
 	if strings.Contains(err.Error(), "tunnel") {
 		t.Errorf("should not attempt tunnel when ContainerDialFunc is nil, got: %v", err)
+	}
+}
+
+// deadCDPClient is a mock CDPClient that returns "closed pipe" errors on Call().
+// This simulates a dead CDP connection (Chrome crashed, container destroyed, etc.).
+type deadCDPClient struct {
+	events chan *cdp.Event
+}
+
+func newDeadCDPClient() *deadCDPClient {
+	return &deadCDPClient{events: make(chan *cdp.Event)}
+}
+
+func (c *deadCDPClient) Event() <-chan *cdp.Event { return c.events }
+func (c *deadCDPClient) Call(_ context.Context, _, _ string, _ interface{}) ([]byte, error) {
+	return nil, fmt.Errorf("io: read/write on closed pipe")
+}
+
+// TestGetOrLaunch_ReconnectsOnDeadConnection verifies that GetOrLaunch detects
+// a dead CDP connection (e.g., "io: read/write on closed pipe") and attempts
+// to reconnect instead of returning the dead browser.
+func TestGetOrLaunch_ReconnectsOnDeadConnection(t *testing.T) {
+	m := NewManager(BrowserConfig{})
+	m.SandboxEnabled = true
+	m.sessionID = "test-session"
+
+	// Set up a dead browser (Version() will return "closed pipe" error)
+	deadBrowser := rod.New().Client(newDeadCDPClient()).NoDefaultDevice()
+	m.browser = deadBrowser
+	m.containerName = "old-container"
+	m.containerIP = "10.0.0.99"
+	m.config.RemoteCDPURL = "ws://10.0.0.99:9222/devtools/browser/dead-guid"
+
+	// Wire up ContainerResolveFunc so the re-launch path is exercised
+	var resolveCalled atomic.Int32
+	m.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+		resolveCalled.Add(1)
+		return "new-container", "10.0.0.2", nil
+	}
+	m.ContainerStartBrowserFunc = func(_ string) error {
+		return nil
+	}
+	// ContainerDialFunc fails — we just want to verify the reconnection
+	// path is triggered, not that the full launch succeeds.
+	m.ContainerDialFunc = func(_ string, _ int) (net.Conn, error) {
+		return nil, fmt.Errorf("intentional test failure in dial")
+	}
+
+	_, err := m.GetOrLaunch()
+	// The call will fail because we can't actually connect to a real browser,
+	// but what matters is:
+	// 1. The dead browser was detected and cleared
+	// 2. The re-launch path was triggered (resolve was called)
+	if err == nil {
+		t.Fatal("expected error (no real Chrome to reconnect to)")
+	}
+
+	// Verify that reconnection was attempted
+	if resolveCalled.Load() == 0 {
+		t.Error("ContainerResolveFunc should have been called (reconnection path)")
+	}
+
+	// Verify stale state was cleared
+	m.mu.Lock()
+	if m.browser != nil {
+		t.Error("dead browser should have been cleared")
+	}
+	m.mu.Unlock()
+}
+
+// TestGetOrLaunch_HealthyBrowserNotReconnected verifies that a healthy browser
+// (one that responds to Version()) is returned without triggering reconnection.
+func TestGetOrLaunch_HealthyBrowserNotReconnected(t *testing.T) {
+	// We can't easily create a "healthy" rod.Browser without a real Chrome,
+	// so we test the inverse: verify isBrowserDead recognizes non-dead errors.
+	m := NewManager(BrowserConfig{})
+
+	// Non-pipe errors should NOT trigger reconnection
+	nonDeadErrors := []error{
+		fmt.Errorf("context deadline exceeded"),
+		fmt.Errorf("some other random error"),
+		fmt.Errorf("permission denied"),
+	}
+
+	for _, err := range nonDeadErrors {
+		if m.isBrowserDead(err) {
+			t.Errorf("isBrowserDead should return false for %q", err)
+		}
+	}
+
+	// Pipe-related errors SHOULD trigger reconnection
+	deadErrors := []error{
+		fmt.Errorf("io: read/write on closed pipe"),
+		fmt.Errorf("write tcp: broken pipe"),
+		fmt.Errorf("read: connection reset by peer"),
+		fmt.Errorf("use of closed network connection"),
+		fmt.Errorf("unexpected EOF"),
+	}
+
+	for _, err := range deadErrors {
+		if !m.isBrowserDead(err) {
+			t.Errorf("isBrowserDead should return true for %q", err)
+		}
+	}
+}
+
+// TestResetBrowserLocked_ClearsAllState verifies that resetBrowserLocked
+// clears all relevant state fields.
+func TestResetBrowserLocked_ClearsAllState(t *testing.T) {
+	m := NewManager(BrowserConfig{
+		RemoteCDPURL: "ws://old:9222/devtools/browser/guid",
+	})
+	m.SandboxEnabled = true
+	// Use a dead CDP client so Close() doesn't panic on nil context
+	m.browser = rod.New().Client(newDeadCDPClient()).NoDefaultDevice()
+	m.containerName = "old-container"
+	m.containerIP = "10.0.0.1"
+	m.cdpURL = "ws://10.0.0.1:9222/devtools/browser/guid"
+
+	m.mu.Lock()
+	m.resetBrowserLocked()
+	m.mu.Unlock()
+
+	if m.browser != nil {
+		t.Error("browser should be nil after reset")
+	}
+	if m.activePg != nil {
+		t.Error("activePg should be nil after reset")
+	}
+	if m.cdpURL != "" {
+		t.Errorf("cdpURL should be empty after reset, got %q", m.cdpURL)
+	}
+	if m.containerName != "" {
+		t.Errorf("containerName should be empty after reset, got %q", m.containerName)
+	}
+	if m.containerIP != "" {
+		t.Errorf("containerIP should be empty after reset, got %q", m.containerIP)
+	}
+	if m.config.RemoteCDPURL != "" {
+		t.Errorf("RemoteCDPURL should be empty after reset, got %q", m.config.RemoteCDPURL)
 	}
 }

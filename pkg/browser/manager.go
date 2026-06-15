@@ -379,6 +379,46 @@ func (m *Manager) IsContainerMode() bool {
 	return m.SandboxEnabled
 }
 
+// isBrowserDead returns true if the error indicates the CDP connection to the
+// browser is no longer functional (pipe closed, connection reset, EOF, etc.).
+// This mirrors the isContainerGone() pattern in pkg/sandbox/node.go.
+func (m *Manager) isBrowserDead(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "closed pipe") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "EOF")
+}
+
+// resetBrowserLocked tears down the dead browser state so the next launch
+// attempt performs a fresh connection. This handles the case where Chrome
+// crashed, the container was destroyed, or the CDP tunnel pipe broke.
+// Must be called with m.mu held.
+func (m *Manager) resetBrowserLocked() {
+	if m.browser != nil {
+		_ = m.browser.Close() // best-effort; likely already dead
+		m.browser = nil
+	}
+	m.activePg = nil
+	m.cdpURL = ""
+
+	// For container mode: clear container state to force full re-resolve
+	// on the next GetOrLaunch() call (resolve → start → connect sequence).
+	if m.SandboxEnabled {
+		m.containerName = ""
+		m.containerIP = ""
+		m.config.RemoteCDPURL = ""
+	}
+
+	m.pagesMu.Lock()
+	m.pages = make(map[proto.TargetTargetID]*PageState)
+	m.pagesMu.Unlock()
+}
+
 // GetOrLaunch returns the current browser, launching it if necessary.
 // On first launch, the browser is configured with anti-detection measures:
 //   - Headed mode by default (with Xvfb on Linux) for realistic fingerprint
@@ -390,12 +430,32 @@ func (m *Manager) IsContainerMode() bool {
 //
 // When SandboxEnabled is true, the browser is launched inside the session
 // container and connected via a remote CDP URL.
+//
+// Health check: if a browser is already connected, a lightweight Version() call
+// verifies the CDP connection is still alive. If the connection is dead (pipe
+// closed, container destroyed, Chrome crashed), the stale state is cleared and
+// a fresh launch is attempted. This prevents the "closed pipe" errors that
+// previously required a daemon restart to recover from.
 func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.browser != nil {
-		return m.browser, nil
+		// Health check: verify the CDP connection is still alive.
+		// Browser.Version() is a lightweight CDP call (Browser.getVersion)
+		// that exercises the full pipe/WebSocket without side effects.
+		if _, err := m.browser.Version(); err != nil {
+			if m.isBrowserDead(err) {
+				m.logger.Printf("Browser CDP connection is dead (%v), reconnecting...", err)
+				m.resetBrowserLocked()
+				// Fall through to launch a new browser below.
+			} else {
+				// Non-pipe error (unlikely) — still return the browser.
+				return m.browser, nil
+			}
+		} else {
+			return m.browser, nil
+		}
 	}
 
 	// Container mode: launch browser in an LXC container.

@@ -218,6 +218,7 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 	var userMsg *genai.Content
 	var currentNodeName string
 	var output strings.Builder
+	var flowError string // captured from _failure_info StateDelta events
 
 	for {
 		isInputNode := false
@@ -321,10 +322,22 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 					}
 				}
 
-				// Track internal flow errors for diagnostics.
+				// Track internal flow errors.
 				// _failure_info is emitted via StateDelta when retries exhaust.
+				// Capture it so we can return a proper error from RunHeadless.
 				if failInfo, ok := event.Actions.StateDelta["_failure_info"]; ok {
 					slog.Warn("[headless] node failure detected", "node", currentNodeName, "info", failInfo)
+					if infoMap, ok := failInfo.(map[string]any); ok {
+						if reason, ok := infoMap["original_error"].(string); ok {
+							flowError = fmt.Sprintf("node %q failed: %s", currentNodeName, reason)
+						} else if reason, ok := infoMap["reason"].(string); ok {
+							flowError = fmt.Sprintf("node %q failed: %s", currentNodeName, reason)
+						} else {
+							flowError = fmt.Sprintf("node %q failed", currentNodeName)
+						}
+					} else {
+						flowError = fmt.Sprintf("node %q failed: %v", currentNodeName, failInfo)
+					}
 				}
 			}
 
@@ -374,29 +387,15 @@ func RunHeadless(ctx context.Context, cfg *HeadlessConfig) (string, error) {
 
 	result := strings.TrimSpace(output.String())
 
-	// Check if the flow failed internally (all retries exhausted).
-	// The flow transitions to END with _has_error=true but RunHeadless
-	// previously returned ("", nil), masking the failure from the scheduler.
-	getResp, getErr := sessionService.Get(ctx, &session.GetRequest{
-		AppName:   appName,
-		UserID:    userID,
-		SessionID: sess.ID(),
-	})
-	if getErr == nil && getResp != nil && getResp.Session != nil {
-		state := getResp.Session.State()
-		if hasErr, _ := state.Get("_has_error"); hasErr != nil {
-			if b, ok := hasErr.(bool); ok && b {
-				lastErr, _ := state.Get("_last_error")
-				errNode, _ := state.Get("_error_node")
-				errMsg := fmt.Sprintf("flow node %v failed: %v", errNode, lastErr)
-				slog.Warn("[headless] flow completed with internal error", "node", errNode, "error", lastErr)
-				if result == "" {
-					return "", fmt.Errorf("%s", errMsg)
-				}
-				// If we have partial output (from prior nodes), return it with the error
-				return result, fmt.Errorf("%s", errMsg)
-			}
+	// Check if the flow failed internally. We detect this from _failure_info
+	// StateDelta events captured during the run (the only reliable signal —
+	// state.Set("_has_error") mutations are NOT persisted to the session service).
+	if flowError != "" {
+		slog.Warn("[headless] flow completed with error", "error", flowError, "output_len", len(result))
+		if result == "" {
+			return "", fmt.Errorf("%s", flowError)
 		}
+		return result, fmt.Errorf("%s", flowError)
 	}
 
 	slog.Info("[headless] flow completed", "output_len", len(result), "final_node", currentNodeName)

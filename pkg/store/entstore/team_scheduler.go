@@ -187,7 +187,10 @@ func jobToPayloadMap(job *store.ScheduledJob) map[string]any {
 	}
 
 	// Delivery fields.
-	if job.Delivery.Channel != "" {
+	hasDeliveryData := job.Delivery.Channel != "" || job.Delivery.Mode != "" ||
+		job.Delivery.Target != "" || len(job.Delivery.MemberIDs) > 0 ||
+		len(job.Delivery.ChannelFilter) > 0 || len(job.Delivery.MemberChannels) > 0
+	if hasDeliveryData {
 		delivery := map[string]any{
 			"channel": job.Delivery.Channel,
 			"target":  job.Delivery.Target,

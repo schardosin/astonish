@@ -418,7 +418,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev ent-generate
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 build-boot build-boot-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev ent-generate
 
 # Docker Test Environment - isolated environment for running integration/E2E tests
 e2e-env-up:
@@ -494,6 +494,17 @@ build-linux-arm64:
 	@echo "Cross-compiling Linux arm64 binary..."
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o astonish-linux-arm64 .
 	@echo "Linux binary built: astonish-linux-arm64"
+
+# Build astonish-boot binary (OpenShell sandbox ENTRYPOINT)
+build-boot:
+	@echo "Building astonish-boot (linux/amd64)..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o astonish-boot-linux-amd64 ./cmd/astonish-boot
+	@echo "Built: astonish-boot-linux-amd64"
+
+build-boot-arm64:
+	@echo "Building astonish-boot (linux/arm64)..."
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o astonish-boot-linux-arm64 ./cmd/astonish-boot
+	@echo "Built: astonish-boot-linux-arm64"
 
 # Build the Incus Docker image (for CI release pipeline)
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)

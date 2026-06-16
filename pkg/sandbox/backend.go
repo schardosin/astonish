@@ -235,9 +235,10 @@ type Backend interface {
 type BackendKind string
 
 const (
-	BackendKindIncus BackendKind = "incus"
-	BackendKindK8s   BackendKind = "k8s"
-	BackendKindMock  BackendKind = "mock"
+	BackendKindIncus     BackendKind = "incus"
+	BackendKindK8s       BackendKind = "k8s"
+	BackendKindOpenShell BackendKind = "openshell"
+	BackendKindMock      BackendKind = "mock"
 )
 
 // BaseTemplateID is the canonical template identifier for the default base

@@ -112,6 +112,19 @@ func BackendFromAppConfigWithSessions(appCfg *config.AppConfig, sessRegistry *Se
 		}
 		return b, nil, nil
 
+	case BackendKindOpenShell:
+		b, err := NewBackend(BackendFactoryConfig{
+			Kind:       BackendKindOpenShell,
+			Sessions:   sessRegistry,
+			Templates:  tplRegistry,
+			DefaultLim: &limits,
+			K8s:        appCfg.Sandbox.Kubernetes,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return b, nil, nil
+
 	default:
 		return nil, nil, fmt.Errorf("sandbox: unsupported backend kind %q", kind)
 	}

@@ -1,0 +1,43 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.webhook.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-volumes
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-webhook
+  {{- if .Values.sandbox.webhook.certManager.enabled }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ include "astonish.namespace.controlPlane" . }}/{{ include "astonish.fullname" . }}-sandbox-webhook
+  {{- end }}
+webhooks:
+  - name: sandbox-volumes.astonish.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    reinvocationPolicy: Never
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: {{ include "astonish.fullname" . }}-sandbox-webhook
+        namespace: {{ include "astonish.namespace.controlPlane" . }}
+        path: /mutate
+        port: 443
+      {{- if not .Values.sandbox.webhook.certManager.enabled }}
+      caBundle: {{ .Values.sandbox.webhook.caBundle | default "" | quote }}
+      {{- end }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        operations: ["CREATE"]
+        scope: Namespaced
+    namespaceSelector:
+      matchLabels:
+        astonish.io/sandbox-namespace: "true"
+    objectSelector:
+      matchExpressions:
+        - key: astonish.io/type
+          operator: Exists
+{{- end }}

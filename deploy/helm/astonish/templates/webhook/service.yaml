@@ -1,0 +1,20 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.webhook.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-webhook
+  namespace: {{ include "astonish.namespace.controlPlane" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-webhook
+spec:
+  selector:
+    {{- include "astonish.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-webhook
+  ports:
+    - port: 443
+      targetPort: https
+      protocol: TCP
+      name: https
+{{- end }}

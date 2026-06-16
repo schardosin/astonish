@@ -1,0 +1,73 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.webhook.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-webhook
+  namespace: {{ include "astonish.namespace.controlPlane" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sandbox-webhook
+spec:
+  replicas: {{ .Values.sandbox.webhook.replicas }}
+  selector:
+    matchLabels:
+      {{- include "astonish.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sandbox-webhook
+  template:
+    metadata:
+      labels:
+        {{- include "astonish.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sandbox-webhook
+    spec:
+      serviceAccountName: {{ include "astonish.serviceAccountName" . }}
+      containers:
+        - name: webhook
+          image: "{{ .Values.sandbox.webhook.image.repository }}:{{ .Values.sandbox.webhook.image.tag }}"
+          imagePullPolicy: {{ .Values.sandbox.webhook.image.pullPolicy | default "IfNotPresent" }}
+          ports:
+            - containerPort: 8443
+              name: https
+              protocol: TCP
+          env:
+            - name: WEBHOOK_ADDR
+              value: ":8443"
+            - name: WEBHOOK_CERT_FILE
+              value: "/etc/webhook/certs/tls.crt"
+            - name: WEBHOOK_KEY_FILE
+              value: "/etc/webhook/certs/tls.key"
+            - name: WEBHOOK_LAYERS_PVC
+              value: {{ .Values.sandbox.storage.layers.pvcName | quote }}
+            - name: WEBHOOK_UPPERS_PVC
+              value: {{ .Values.sandbox.storage.uppers.pvcName | quote }}
+            {{- if .Values.sandbox.overlay.fuseDeviceResource }}
+            - name: WEBHOOK_FUSE_DEVICE_RESOURCE
+              value: {{ .Values.sandbox.overlay.fuseDeviceResource | quote }}
+            {{- end }}
+            - name: WEBHOOK_INJECT_SYS_ADMIN
+              value: "true"
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/webhook/certs
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: https
+              scheme: HTTPS
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.sandbox.webhook.resources | nindent 12 }}
+      volumes:
+        - name: certs
+          secret:
+            secretName: {{ include "astonish.fullname" . }}-sandbox-webhook-tls
+{{- end }}

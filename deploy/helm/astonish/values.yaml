@@ -199,6 +199,35 @@ sandbox:
         cpu: "1"
         memory: 1Gi
 
+  # MutatingAdmissionWebhook for OpenShell sandbox pods.
+  # Injects PVC volumes, FUSE device resources, and CAP_SYS_ADMIN into
+  # pods created by the OpenShell K8s driver. Only needed when
+  # sandbox.backend = "openshell".
+  webhook:
+    enabled: false
+    replicas: 2
+    image:
+      repository: schardosin/astonish-sandbox-webhook
+      tag: dev
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 10m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 64Mi
+    # cert-manager integration for automatic TLS certificate management.
+    certManager:
+      enabled: true
+      issuerRef:
+        name: letsencrypt-prod
+        kind: ClusterIssuer
+      duration: "8760h"       # 1 year
+      renewBefore: "720h"     # 30 days
+    # Manual CA bundle (base64-encoded) — only used when certManager.enabled=false.
+    caBundle: ""
+
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
   # equivalent to the Incus cgroup cap. A session can burst up to this

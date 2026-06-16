@@ -9,6 +9,7 @@ metadata:
     {{- include "astonish.labels" . | nindent 4 }}
     app.kubernetes.io/component: sandbox-namespace
     astonish.io/ns-class: sandboxes
+    astonish.io/sandbox-namespace: "true"
     pod-security.kubernetes.io/enforce: {{ .Values.sandbox.podSecurity }}
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: {{ .Values.sandbox.podSecurity }}

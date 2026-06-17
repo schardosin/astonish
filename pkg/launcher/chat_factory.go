@@ -435,7 +435,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		kind := sandbox.BackendKind(cfg.AppConfig.Sandbox.BackendKind())
 
 		switch kind {
-		case sandbox.BackendKindK8s, sandbox.BackendKindMock:
+		case sandbox.BackendKindK8s, sandbox.BackendKindMock, sandbox.BackendKindOpenShell:
 			// --- Backend-agnostic chat path (Phase F) ---
 			// Minimal feature set:
 			//   - tool wrapping via BackendPool + WrapToolsWithPool

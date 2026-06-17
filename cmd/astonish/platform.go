@@ -713,7 +713,7 @@ func handlePlatformOrgInvite(args []string) error {
 		// Check if user exists or create
 		user, err := backend.Users().GetByEmail(ctx, email)
 		userIsNew := false
-		if err != nil {
+		if err != nil || user == nil {
 			// User doesn't exist — create
 			userIsNew = true
 

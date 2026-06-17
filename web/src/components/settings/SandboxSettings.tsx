@@ -420,8 +420,9 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
 
     const runtimeAvailable = details.runtimeAvailable ?? details.incusAvailable ?? false
     const isK8s = details.backend === 'k8s'
+    const isOpenShell = details.backend === 'openshell'
 
-    if (details.platform === 'unsupported' && !isK8s) {
+    if (details.platform === 'unsupported' && !isK8s && !isOpenShell) {
       return (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
@@ -436,13 +437,15 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
     if (!runtimeAvailable) {
       const hint = isK8s
         ? `Kubernetes sandbox not reachable${details.reason ? ` \u2014 ${details.reason}` : ''}`
-        : 'Incus not available \u2014 install with sudo apt install incus'
+        : isOpenShell
+          ? `OpenShell gateway not reachable${details.reason ? ` \u2014 ${details.reason}` : ''}`
+          : 'Incus not available \u2014 install with sudo apt install incus'
       return (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs"
           style={{ background: 'rgba(234, 179, 8, 0.1)', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
           <Shield size={14} style={{ color: '#eab308' }} />
           <span style={{ color: '#eab308' }}>
-            {isK8s ? hint : <>Incus not available &mdash; install with <code className="font-mono">sudo apt install incus</code></>}
+            {(isK8s || isOpenShell) ? hint : <>Incus not available &mdash; install with <code className="font-mono">sudo apt install incus</code></>}
           </span>
         </div>
       )
@@ -477,12 +480,14 @@ export default function SandboxSettings({ config, onSaved }: SandboxSettingsProp
           {isK8s && details.server_version && <span>K8s {details.server_version}</span>}
           {isK8s && details.namespace && <span>Namespace: {details.namespace}</span>}
           {isK8s && details.overlay_mode && <span>Overlay: {details.overlay_mode}</span>}
-          {!isK8s && details.incus_version && <span>Incus {details.incus_version}</span>}
+          {isOpenShell && details.namespace && <span>Gateway: {details.namespace}</span>}
+          {isOpenShell && <span>Backend: OpenShell</span>}
+          {!isK8s && !isOpenShell && details.incus_version && <span>Incus {details.incus_version}</span>}
           {details.storage_backend && <span>Storage: {details.storage_backend}</span>}
-          {!isK8s && <span>Overlay: {details.overlay_ready ? 'ready' : 'not configured'}</span>}
-          <span>{details.template_count} template{details.template_count !== 1 ? 's' : ''}</span>
-          <span>{details.container_count} container{details.container_count !== 1 ? 's' : ''}</span>
-          {(details.orphan_count ?? 0) > 0 && (
+          {!isK8s && !isOpenShell && <span>Overlay: {details.overlay_ready ? 'ready' : 'not configured'}</span>}
+          {!isOpenShell && <span>{details.template_count} template{details.template_count !== 1 ? 's' : ''}</span>}
+          {!isOpenShell && <span>{details.container_count} container{details.container_count !== 1 ? 's' : ''}</span>}
+          {!isOpenShell && (details.orphan_count ?? 0) > 0 && (
             <span style={{ color: '#f59e0b' }}>{details.orphan_count} orphan{details.orphan_count !== 1 ? 's' : ''}</span>
           )}
         </div>

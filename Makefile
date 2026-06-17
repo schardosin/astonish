@@ -61,17 +61,24 @@ help:
 	@echo "  make build-linux-arm64 - Cross-compile Linux arm64 binary"
 	@echo "  make docker-incus      - Build the Incus Docker image (for CI release)"
 	@echo ""
+	@echo "OpenShell Sandbox:"
+	@echo "  make docker-sandbox-openshell - Build the OpenShell sandbox image"
+	@echo "  make proto-gen                - Regenerate gRPC stubs from vendored protos"
+	@echo "  make helm-deps                - Update Helm subchart dependencies"
+	@echo ""
 	@echo "Registry Push (multi-arch, requires docker login + buildx):"
-	@echo "  make push-dev              - Build+push astonish:dev (multi-arch)"
-	@echo "  make push-incus-dev        - Build+push astonish-incus:dev (multi-arch)"
-	@echo "  make push-sandbox-base-dev - Build+push astonish-sandbox-base:dev (multi-arch)"
-	@echo "  make push-all-dev          - Push all dev images"
+	@echo "  make push-dev                      - Build+push astonish:dev (multi-arch)"
+	@echo "  make push-incus-dev                - Build+push astonish-incus:dev (multi-arch)"
+	@echo "  make push-sandbox-base-dev         - Build+push astonish-sandbox-base:dev (multi-arch)"
+	@echo "  make push-sandbox-openshell-dev    - Build+push astonish-sandbox-openshell:dev (multi-arch)"
+	@echo "  make push-all-dev                  - Push all dev images"
 	@echo ""
 	@echo "Registry Push (fast single-arch, dev iteration):"
-	@echo "  make push-dev-fast              - Build+push astonish:dev (native arch only)"
-	@echo "  make push-sandbox-base-dev-fast - Build+push sandbox-base:dev (native arch only)"
-	@echo "  make push-incus-dev-fast        - Build+push incus:dev (native arch only)"
-	@echo "  make push-all-dev-fast          - Push all dev images (native arch only)"
+	@echo "  make push-dev-fast                      - Build+push astonish:dev (native arch only)"
+	@echo "  make push-sandbox-base-dev-fast         - Build+push sandbox-base:dev (native arch only)"
+	@echo "  make push-incus-dev-fast               - Build+push incus:dev (native arch only)"
+	@echo "  make push-sandbox-openshell-dev-fast    - Build+push sandbox-openshell:dev (native arch only)"
+	@echo "  make push-all-dev-fast                  - Push all dev images (native arch only)"
 
 # Build the Go binary only
 build:
@@ -418,7 +425,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 build-boot build-boot-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev ent-generate
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus docker-sandbox-openshell ensure-builder push-dev push-incus-dev push-sandbox-base-dev push-sandbox-openshell-dev push-all-dev push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast push-sandbox-openshell-dev-fast push-all-dev-fast ent-generate proto-gen
 
 # Docker Test Environment - isolated environment for running integration/E2E tests
 e2e-env-up:
@@ -495,16 +502,16 @@ build-linux-arm64:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o astonish-linux-arm64 .
 	@echo "Linux binary built: astonish-linux-arm64"
 
-# Build astonish-boot binary (OpenShell sandbox ENTRYPOINT)
-build-boot:
-	@echo "Building astonish-boot (linux/amd64)..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o astonish-boot-linux-amd64 ./cmd/astonish-boot
-	@echo "Built: astonish-boot-linux-amd64"
+# Generate Go gRPC stubs from vendored NVIDIA OpenShell proto files
+proto-gen:
+	@echo "Generating Go gRPC stubs from proto/openshell/v1/..."
+	buf generate
+	@echo "Generated: pkg/sandbox/openshell/gen/openshellv1/"
 
-build-boot-arm64:
-	@echo "Building astonish-boot (linux/arm64)..."
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o astonish-boot-linux-arm64 ./cmd/astonish-boot
-	@echo "Built: astonish-boot-linux-arm64"
+# Update Helm chart dependencies (pull OpenShell subchart archive)
+helm-deps:
+	helm dependency update deploy/helm/astonish
+	@echo "Helm dependencies updated (Chart.lock + charts/ archive)"
 
 # Build the Incus Docker image (for CI release pipeline)
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)
@@ -512,6 +519,12 @@ docker-incus: build-linux
 	@echo "Building Incus Docker image..."
 	docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:$(VERSION) .
 	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
+
+# Build the OpenShell sandbox image (NVIDIA sandbox base + Astonish agent tools)
+docker-sandbox-openshell:
+	@echo "Building OpenShell sandbox image..."
+	docker build -f docker/sandbox-openshell/Dockerfile -t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION) .
+	@echo "Image built: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION)"
 
 # --- Registry Push (multi-arch via buildx) ---
 
@@ -551,8 +564,17 @@ push-sandbox-base-dev: ensure-builder
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG)"
 
+# Build and push the OpenShell sandbox image (multi-arch)
+push-sandbox-openshell-dev: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/amd64,linux/arm64)..."
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f docker/sandbox-openshell/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG)"
+
 # Push all dev images
-push-all-dev: push-dev push-incus-dev push-sandbox-base-dev
+push-all-dev: push-dev push-incus-dev push-sandbox-base-dev push-sandbox-openshell-dev
 	@echo "All dev images pushed successfully!"
 
 # --- Fast single-arch dev builds (native architecture only) ---
@@ -589,8 +611,17 @@ push-incus-dev-fast: ensure-builder build-linux
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
 
+# Fast: build and push OpenShell sandbox image (single arch)
+push-sandbox-openshell-dev-fast: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
+	docker buildx build --platform linux/$(DEV_ARCH) \
+		-f docker/sandbox-openshell/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG)"
+
 # Fast: push all dev images (single arch)
-push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast
+push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast push-sandbox-openshell-dev-fast
 	@echo "All dev images pushed ($(DEV_ARCH) only)!"
 
 # Regenerate Ent client code for all scopes.

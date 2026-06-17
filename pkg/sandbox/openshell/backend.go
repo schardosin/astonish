@@ -1,14 +1,14 @@
 // Package openshell provides the OpenShell-backed implementation of the
 // sandbox.Backend interface.
 //
-// The OpenShell backend creates sandbox pods that run NVIDIA OpenShell's
-// supervisor as PID 1 (after astonish-boot composes the overlay and
-// pivot_roots). All exec operations flow through the OpenShell Gateway
-// relay, which enforces Landlock, seccomp, network namespace, and OCSF
-// audit policies per-process.
+// The OpenShell backend creates sandboxes via the NVIDIA OpenShell Gateway,
+// which manages pod lifecycle through the kubernetes-sigs/agent-sandbox CRD.
+// The OpenShell supervisor (sideloaded by the gateway into each sandbox pod)
+// enforces Landlock, seccomp, network namespace, and OCSF audit policies.
 //
-// This file owns the OpenShellBackend type, Config, factory registration,
-// Kind, Capabilities, Health, and stubs for operations pending implementation.
+// Astonish is a *client* of the OpenShell gateway — it does NOT manage the
+// gateway, supervisor, or Agent Sandbox controller. Those are deployed
+// independently using NVIDIA's official Helm chart.
 //
 // Reference: docs/architecture/openshell-sandbox-backend.md
 
@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -36,28 +34,37 @@ type Config struct {
 	// Sessions is the session registry. Required.
 	Sessions *sandbox.SessionRegistry
 
+	// Gateway is the OpenShell Gateway client. When nil, session
+	// lifecycle and exec methods return ErrNotImplementedYet (useful
+	// for skeleton/test construction where no gateway is available).
+	Gateway GatewayClient
+
 	// GatewayAddr is the gRPC address of the OpenShell Gateway.
-	// Default: "openshell-gateway.openshell-system.svc.cluster.local:443"
+	// Default: "openshell.openshell.svc.cluster.local:8080"
 	GatewayAddr string
 
-	// Namespace is the Kubernetes namespace for sandbox pods.
-	// Default: "astonish-sandboxes"
-	Namespace string
+	// GatewayTLS enables TLS for the gRPC connection to the gateway.
+	GatewayTLS bool
+
+	// ClientCertPath / ClientKeyPath / CACertPath configure mTLS.
+	ClientCertPath string
+	ClientKeyPath  string
+	CACertPath     string
+
+	// AuthToken is a static bearer token for development setups.
+	AuthToken string
 
 	// SandboxImage is the container image for OpenShell sandbox pods.
 	// Default: "schardosin/astonish-sandbox-openshell:latest"
 	SandboxImage string
 
-	// K8s carries the shared Kubernetes configuration from app config.
-	K8s config.SandboxKubernetesConfig
+	// AppConfig stores the full OpenShell config from app_config.yaml.
+	AppConfig config.SandboxOpenShellConfig
 }
 
 func (c *Config) applyDefaults() {
 	if c.GatewayAddr == "" {
-		c.GatewayAddr = "openshell-gateway.openshell-system.svc.cluster.local:443"
-	}
-	if c.Namespace == "" {
-		c.Namespace = "astonish-sandboxes"
+		c.GatewayAddr = "openshell.openshell.svc.cluster.local:8080"
 	}
 	if c.SandboxImage == "" {
 		c.SandboxImage = "schardosin/astonish-sandbox-openshell:latest"
@@ -69,6 +76,7 @@ func (c *Config) applyDefaults() {
 type OpenShellBackend struct {
 	cfg       Config
 	sessions  *sandbox.SessionRegistry
+	gateway   GatewayClient
 	startedAt time.Time
 }
 
@@ -82,6 +90,7 @@ func New(cfg Config) (*OpenShellBackend, error) {
 	return &OpenShellBackend{
 		cfg:       cfg,
 		sessions:  cfg.Sessions,
+		gateway:   cfg.Gateway,
 		startedAt: time.Now().UTC(),
 	}, nil
 }
@@ -92,12 +101,35 @@ func init() {
 		if fc.Sessions == nil {
 			return nil, errors.New("sandbox/openshell: BackendFactoryConfig.Sessions is required")
 		}
+		osCfg := fc.OpenShell
 		cfg := Config{
-			Sessions:     fc.Sessions,
-			Namespace:    fc.K8s.Namespace,
-			SandboxImage: fc.K8s.SandboxImage,
-			K8s:          fc.K8s,
+			Sessions:       fc.Sessions,
+			GatewayAddr:    osCfg.GatewayAddr,
+			GatewayTLS:     osCfg.OpenShellGatewayTLS(),
+			ClientCertPath: osCfg.ClientCertPath,
+			ClientKeyPath:  osCfg.ClientKeyPath,
+			CACertPath:     osCfg.CACertPath,
+			AuthToken:      osCfg.AuthToken,
+			SandboxImage:   osCfg.SandboxImage,
+			AppConfig:      osCfg,
 		}
+		// Apply defaults before creating the gRPC client.
+		cfg.applyDefaults()
+
+		// Create the real gRPC gateway client.
+		gatewayClient, err := NewGRPCGatewayClient(GRPCClientConfig{
+			Addr:           cfg.GatewayAddr,
+			TLS:            cfg.GatewayTLS,
+			ClientCertPath: cfg.ClientCertPath,
+			ClientKeyPath:  cfg.ClientKeyPath,
+			CACertPath:     cfg.CACertPath,
+			AuthToken:      cfg.AuthToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("sandbox/openshell: create gateway client: %w", err)
+		}
+		cfg.Gateway = gatewayClient
+
 		return New(cfg)
 	})
 }
@@ -134,10 +166,10 @@ func (b *OpenShellBackend) Health(ctx context.Context) (*sandbox.BackendHealth, 
 		return nil, err
 	}
 	details := map[string]string{
-		"namespace":    b.cfg.Namespace,
-		"gateway_addr": b.cfg.GatewayAddr,
+		"gateway_addr":  b.cfg.GatewayAddr,
+		"gateway_tls":   fmt.Sprintf("%t", b.cfg.GatewayTLS),
 		"sandbox_image": b.cfg.SandboxImage,
-		"started_at":  b.startedAt.Format(time.RFC3339),
+		"started_at":    b.startedAt.Format(time.RFC3339),
 	}
 	return &sandbox.BackendHealth{
 		Healthy:   true,
@@ -148,174 +180,24 @@ func (b *OpenShellBackend) Health(ctx context.Context) (*sandbox.BackendHealth, 
 }
 
 // ---------------------------------------------------------------------------
-// Session lifecycle
+// Session lifecycle — implemented in session.go
 // ---------------------------------------------------------------------------
 
-func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec) (*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) StopSession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) DestroySession(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) SessionState(ctx context.Context, sessionID string) (sandbox.SessionState, error) {
-	if err := ctx.Err(); err != nil {
-		return "", err
-	}
-	return "", ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) WaitForSessionReady(ctx context.Context, sessionID string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) ListSessions(ctx context.Context, filter sandbox.SessionFilter) ([]*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
 // ---------------------------------------------------------------------------
-// Exec and file I/O
+// Exec and file I/O — implemented in exec.go
 // ---------------------------------------------------------------------------
 
-func (b *OpenShellBackend) Exec(ctx context.Context, sessionID string, opts sandbox.ExecSpec) (*sandbox.ExecResult, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) ExecInteractive(ctx context.Context, sessionID string, opts sandbox.PTYSpec) (sandbox.ExecStream, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, opts sandbox.ExecStreamSpec) (sandbox.ExecStream, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) PushFile(ctx context.Context, sessionID, path string, content io.Reader, mode os.FileMode) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) PullFile(ctx context.Context, sessionID, path string) (io.ReadCloser, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
 // ---------------------------------------------------------------------------
-// Templates
+// Templates — implemented in template.go
 // ---------------------------------------------------------------------------
 
-func (b *OpenShellBackend) BuildTemplate(ctx context.Context, spec sandbox.TemplateBuildSpec) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) SaveSessionAsTemplate(ctx context.Context, sessionID string) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) RefreshTemplate(ctx context.Context, templateID string) (*sandbox.TemplateArtifact, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) DeleteTemplate(ctx context.Context, templateID string, force bool) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
 // ---------------------------------------------------------------------------
-// Networking
+// Networking — implemented in network.go
 // ---------------------------------------------------------------------------
 
-func (b *OpenShellBackend) EnsureOrgNetwork(ctx context.Context, orgSlug string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) DeleteOrgNetwork(ctx context.Context, orgSlug string) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) ExposePort(ctx context.Context, sessionID string, port int, proto string) (*sandbox.ExposedAddr, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
-
-func (b *OpenShellBackend) UnexposePort(ctx context.Context, sessionID string, port int) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return ErrNotImplementedYet
-}
-
 // ---------------------------------------------------------------------------
-// Fleet
+// Fleet — implemented in fleet.go
 // ---------------------------------------------------------------------------
-
-func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbox.FleetSpec) (*sandbox.Session, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	return nil, ErrNotImplementedYet
-}
 
 // Ensure compile-time interface compliance.
 var _ sandbox.Backend = (*OpenShellBackend)(nil)
-
-// Suppress unused import warnings for packages used in stubs.
-var _ = fmt.Sprintf

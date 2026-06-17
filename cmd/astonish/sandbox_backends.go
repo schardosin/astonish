@@ -26,4 +26,9 @@ import (
 	// Register the mock backend so tests and demos that request
 	// backend=mock succeed without a separate build tag.
 	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
+
+	// Register the openshell backend so configurations setting
+	// backend=openshell succeed. Links the NVIDIA OpenShell gRPC
+	// client, gateway connection, and init-container support.
+	_ "github.com/schardosin/astonish/pkg/sandbox/openshell"
 )

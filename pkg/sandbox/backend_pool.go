@@ -151,6 +151,18 @@ func (c *backendNodeClient) provision(sessionID string) {
 		c.mu.Unlock()
 		return
 	}
+	// Wait for the sandbox to reach Running state before allowing Exec.
+	// Required by the Backend contract (see Backend.WaitForSessionReady doc):
+	// "Callers that need to exec into a session immediately after
+	// CreateSession MUST call this first."
+	// On Incus this returns in <1s; on K8s/OpenShell it polls until the
+	// pod reaches Running phase (image pull + scheduling may take seconds).
+	if err := c.backend.WaitForSessionReady(ctx, sessionID); err != nil {
+		c.mu.Lock()
+		c.bindErr = fmt.Errorf("backend wait for session ready: %w", err)
+		c.mu.Unlock()
+		return
+	}
 }
 
 // Call executes toolName inside the bound sandbox and returns the raw JSON

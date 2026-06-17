@@ -158,6 +158,15 @@ func SandboxStatusHandler(w http.ResponseWriter, r *http.Request) {
 			resp.Reason = health.Reason
 		}
 
+	case "openshell":
+		resp.Platform = "openshell_gateway"
+		health := sandboxOpenShellHealth(appCfg)
+		resp.RuntimeAvailable = health.Healthy
+		resp.BaseTemplateExists = true // OpenShell has no template system
+		if !health.Healthy {
+			resp.Reason = health.Reason
+		}
+
 	default: // "incus"
 		platform, reason := incus.DetectPlatformReason()
 		resp.Platform = platformString(platform)
@@ -338,6 +347,19 @@ func SandboxDetailsHandler(w http.ResponseWriter, r *http.Request) {
 			resp.StorageBackend = "pvc"
 		}
 		resp.OverlayReady = health.Healthy
+
+	case "openshell":
+		resp.Platform = "openshell_gateway"
+		health := sandboxOpenShellHealth(appCfg)
+		resp.RuntimeAvailable = health.Healthy
+		resp.BaseTemplateExists = true // OpenShell has no template system
+		if !health.Healthy {
+			resp.Reason = health.Reason
+		}
+		if health.Details != nil {
+			resp.Namespace = health.Details["gateway_addr"]
+			resp.StorageBackend = "openshell"
+		}
 
 	default: // "incus"
 		platform, reason := incus.DetectPlatformReason()
@@ -1150,6 +1172,35 @@ func sandboxK8sHealth(appCfg *config.AppConfig) *sandbox.BackendHealth {
 		return &sandbox.BackendHealth{
 			Healthy:   false,
 			Reason:    fmt.Sprintf("k8s health check error: %v", err),
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+	return health
+}
+
+// sandboxOpenShellHealth returns a BackendHealth for the OpenShell sandbox backend.
+// Same pattern as sandboxK8sHealth: constructs the backend via factory, calls Health.
+func sandboxOpenShellHealth(appCfg *config.AppConfig) *sandbox.BackendHealth {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	b, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if err != nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    fmt.Sprintf("openshell backend construction failed: %v", err),
+			CheckedAt: time.Now().UTC(),
+		}
+	}
+
+	health, err := b.Health(ctx)
+	if err != nil {
+		return &sandbox.BackendHealth{
+			Healthy:   false,
+			Reason:    fmt.Sprintf("openshell health check error: %v", err),
 			CheckedAt: time.Now().UTC(),
 		}
 	}

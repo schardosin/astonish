@@ -3,6 +3,7 @@ package openshell
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -44,8 +45,11 @@ func TestOpenShellBackendHealth(t *testing.T) {
 	if !h.Healthy {
 		t.Errorf("Health.Healthy = false, want true")
 	}
-	if h.Details["namespace"] != "astonish-sandboxes" {
-		t.Errorf("Health.Details[namespace] = %q, want %q", h.Details["namespace"], "astonish-sandboxes")
+	if h.Details["gateway_addr"] == "" {
+		t.Error("Health.Details[gateway_addr] should not be empty")
+	}
+	if h.Details["sandbox_image"] == "" {
+		t.Error("Health.Details[sandbox_image] should not be empty")
 	}
 }
 
@@ -72,17 +76,40 @@ func TestOpenShellBackendStubsReturnNotImplemented(t *testing.T) {
 		t.Errorf("StartSession: got %v, want ErrNotImplementedYet", err)
 	}
 
-	if err := b.StopSession(ctx, "test"); !errors.Is(err, ErrNotImplementedYet) {
-		t.Errorf("StopSession: got %v, want ErrNotImplementedYet", err)
+	// StopSession and DestroySession are idempotent no-ops for nonexistent sessions
+	// even with nil gateway.
+	if err := b.StopSession(ctx, "test"); err != nil {
+		t.Errorf("StopSession on nonexistent: got %v, want nil", err)
 	}
 
-	if err := b.DestroySession(ctx, "test"); !errors.Is(err, ErrNotImplementedYet) {
-		t.Errorf("DestroySession: got %v, want ErrNotImplementedYet", err)
+	if err := b.DestroySession(ctx, "test"); err != nil {
+		t.Errorf("DestroySession on nonexistent: got %v, want nil", err)
 	}
 
-	_, err = b.Exec(ctx, "test", sandbox.ExecSpec{})
+	// Exec methods require a non-empty Command to pass validation before
+	// hitting the gateway-nil check.
+	_, err = b.Exec(ctx, "test", sandbox.ExecSpec{Command: []string{"echo", "hi"}})
 	if !errors.Is(err, ErrNotImplementedYet) {
 		t.Errorf("Exec: got %v, want ErrNotImplementedYet", err)
+	}
+
+	_, err = b.ExecInteractive(ctx, "test", sandbox.PTYSpec{Command: []string{"bash"}})
+	if !errors.Is(err, ErrNotImplementedYet) {
+		t.Errorf("ExecInteractive: got %v, want ErrNotImplementedYet", err)
+	}
+
+	_, err = b.ExecStreaming(ctx, "test", sandbox.ExecStreamSpec{Command: []string{"cat"}})
+	if !errors.Is(err, ErrNotImplementedYet) {
+		t.Errorf("ExecStreaming: got %v, want ErrNotImplementedYet", err)
+	}
+
+	if err := b.PushFile(ctx, "test", "/tmp/foo", strings.NewReader("x"), 0644); !errors.Is(err, ErrNotImplementedYet) {
+		t.Errorf("PushFile: got %v, want ErrNotImplementedYet", err)
+	}
+
+	_, err = b.PullFile(ctx, "test", "/tmp/foo")
+	if !errors.Is(err, ErrNotImplementedYet) {
+		t.Errorf("PullFile: got %v, want ErrNotImplementedYet", err)
 	}
 }
 

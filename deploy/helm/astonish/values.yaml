@@ -199,34 +199,35 @@ sandbox:
         cpu: "1"
         memory: 1Gi
 
-  # MutatingAdmissionWebhook for OpenShell sandbox pods.
-  # Injects PVC volumes, FUSE device resources, and CAP_SYS_ADMIN into
-  # pods created by the OpenShell K8s driver. Only needed when
-  # sandbox.backend = "openshell".
-  webhook:
+  # ==========================================================================
+  # OpenShell backend configuration (sandbox.backend = "openshell")
+  # ==========================================================================
+  # When enabled, deploys the NVIDIA OpenShell gateway as a Helm subchart in
+  # the same namespace and configures Istio service mesh policies.
+  #
+  # Prerequisites (cluster-scoped, NOT managed by this chart):
+  #   1. Istio installed; control-plane namespace labeled istio-injection=enabled
+  #   2. Agent Sandbox CRD + controller:
+  #      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+  openshell:
+    # Enables the OpenShell subchart deployment + Istio policies.
+    # Also gates the Chart.yaml dependency condition.
     enabled: false
-    replicas: 2
+
+    # Override gRPC address. Empty = auto-derived from release name:
+    #   "{release}-openshell.{namespace}.svc.cluster.local:8080"
+    gateway:
+      addr: ""
+
+    # Sandbox container image (Astonish agent tooling + OpenShell supervisor).
     image:
-      repository: schardosin/astonish-sandbox-webhook
+      repository: schardosin/astonish-sandbox-openshell
       tag: dev
-      pullPolicy: IfNotPresent
-    resources:
-      requests:
-        cpu: 10m
-        memory: 32Mi
-      limits:
-        cpu: 100m
-        memory: 64Mi
-    # cert-manager integration for automatic TLS certificate management.
-    certManager:
+
+    # Istio policy generation (PeerAuthentication + AuthorizationPolicy).
+    # Disable if managing Istio policies externally.
+    istio:
       enabled: true
-      issuerRef:
-        name: letsencrypt-prod
-        kind: ClusterIssuer
-      duration: "8760h"       # 1 year
-      renewBefore: "720h"     # 30 days
-    # Manual CA bundle (base64-encoded) — only used when certManager.enabled=false.
-    caBundle: ""
 
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
@@ -281,3 +282,44 @@ fuseDevicePlugin:
     limits:
       cpu: 100m
       memory: 50Mi
+
+# =============================================================================
+# OpenShell subchart values (forwarded to the NVIDIA OpenShell Helm chart)
+# =============================================================================
+# These are passed verbatim to the subchart via its alias "openshell".
+# Only rendered when sandbox.openshell.enabled=true (Chart.yaml condition).
+#
+# Architecture: Pure Istio (Architecture 1)
+#   - Gateway listens plaintext (disableTls: true) — Istio encrypts mesh traffic
+#   - No mTLS client verification — Istio PeerAuthentication handles identity
+#   - No PKI init job — no certificates needed
+#   - Sandbox namespace set to match the sandbox namespace this chart creates
+openshell:
+  nameOverride: openshell
+
+  server:
+    # Gateway serves plaintext; Istio sidecar provides mTLS for mesh callers.
+    disableTls: true
+    # Sandbox pods are created in the sandbox namespace managed by this chart.
+    # Must match the computed value of include "astonish.namespace.sandbox".
+    sandboxNamespace: "astonish-sandbox"
+    # Default sandbox image — Astonish agent tooling.
+    # Must match sandbox.openshell.image.repository:tag above.
+    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    auth:
+      # Istio AuthorizationPolicy handles identity; gateway skips auth.
+      allowUnauthenticatedUsers: true
+    tls:
+      # Disable mTLS client certificate verification (Istio handles this).
+      clientCaSecretName: ""
+
+  # The pkiInitJob MUST remain enabled: it generates the JWT signing keypair
+  # (astonish-openshell-jwt-keys) that the gateway always mounts for sandbox
+  # token issuance. As a side effect it also creates TLS secrets that are
+  # unused when disableTls=true — these are inert and harmless.
+  pkiInitJob:
+    enabled: true
+
+  # We manage our own NetworkPolicies (templates/openshell/networkpolicy.yaml).
+  networkPolicy:
+    enabled: false

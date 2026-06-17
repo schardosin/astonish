@@ -75,40 +75,22 @@ Alternatives considered and rejected:
 
 ## 2. Architecture Overview
 
-A single `SandboxBackend` interface abstracts all sandbox operations. Two production implementations and one test implementation exist:
+A single `SandboxBackend` interface abstracts all sandbox operations. Three production implementations and one test implementation exist:
 
-```
-                 ┌──────────────────────────────────────┐
-                 │  Astonish callers:                    │
-                 │   - pkg/api/sandbox_handlers.go       │
-                 │   - pkg/api/team_template_handlers.go │
-                 │   - pkg/agent (flow/tool exec)        │
-                 │   - pkg/chat (chat runner)            │
-                 │   - pkg/fleet (monitors)              │
-                 └────────────────┬─────────────────────┘
-                                  │
-                                  ▼
-                      ┌───────────────────────┐
-                      │  SandboxBackend       │
-                      │  (interface)          │
-                      └───────────────────────┘
-                          ▲        ▲        ▲
-                          │        │        │
-         ┌────────────────┘        │        └────────────────┐
-         │                         │                         │
-┌────────────────┐       ┌──────────────────┐       ┌────────────────┐
-│ IncusBackend   │       │ K8sBackend       │       │ MockBackend    │
-│                │       │                  │       │                │
-│ pkg/sandbox/   │       │ pkg/sandbox/k8s/ │       │ pkg/sandbox/   │
-│ incus/         │       │                  │       │ mock/          │
-└────────────────┘       └──────────────────┘       └────────────────┘
-        │                         │
-        ▼                         ▼
- Local Incus daemon       Kubernetes API
- Unix socket or TCP       + sandbox pods (one of 4
-                            privilege paths; see §10)
-                          + RWX PVCs (CephFS / NFS /
-                            EFS / Manila / Azure Files)
+```mermaid
+graph TB
+    Callers["Astonish Callers<br/>pkg/api/sandbox_handlers.go<br/>pkg/api/team_template_handlers.go<br/>pkg/agent (flow/tool exec)<br/>pkg/chat (chat runner)<br/>pkg/fleet (monitors)"]
+
+    Callers --> Interface["SandboxBackend<br/>(interface)"]
+
+    Interface --> Incus["IncusBackend<br/>pkg/sandbox/incus/"]
+    Interface --> K8s["K8sBackend<br/>pkg/sandbox/k8s/"]
+    Interface --> OpenShell["OpenShellBackend<br/>pkg/sandbox/openshell/"]
+    Interface --> Mock["MockBackend<br/>pkg/sandbox/mock/"]
+
+    Incus --> IncusTarget["Local Incus Daemon<br/>Unix socket or TCP"]
+    K8s --> K8sTarget["Kubernetes API<br/>+ sandbox pods (4 privilege paths, §10)<br/>+ RWX PVCs (CephFS/NFS/EFS)"]
+    OpenShell --> OSTarget["OpenShell Gateway<br/>gRPC (Helm subchart)<br/>+ Istio mTLS<br/>+ Landlock/seccomp<br/>+ L7 egress policy"]
 ```
 
 **Backend selection:**
@@ -118,9 +100,10 @@ A single `SandboxBackend` interface abstracts all sandbox operations. Two produc
 | Personal (`astonish studio`) | Always `IncusBackend`; config ignored |
 | Platform (`astonish daemon run`), `sandbox.backend: incus` | `IncusBackend` |
 | Platform (`astonish daemon run`), `sandbox.backend: k8s` | `K8sBackend` |
+| Platform (`astonish daemon run`), `sandbox.backend: openshell` | `OpenShellBackend` |
 | Unit tests | `MockBackend` (in-memory) |
 
-The abstraction lives in `pkg/sandbox/backend.go`. Existing Incus code is reorganized under `pkg/sandbox/incus/` and wrapped to implement the interface. K8s code is new under `pkg/sandbox/k8s/`. Callers see only the interface.
+The abstraction lives in `pkg/sandbox/backend.go`. Existing Incus code is reorganized under `pkg/sandbox/incus/` and wrapped to implement the interface. K8s code is new under `pkg/sandbox/k8s/`. The OpenShell backend (`pkg/sandbox/openshell/`) delegates sandbox lifecycle to an NVIDIA OpenShell gateway deployed as a Helm subchart, gaining per-process Landlock/seccomp isolation and L7 egress policy enforcement on top of standard Kubernetes pod boundaries. See [`openshell-sandbox-backend.md`](openshell-sandbox-backend.md) for full details. Callers see only the interface.
 
 ## 3. `SandboxBackend` Interface Specification
 
@@ -286,55 +269,50 @@ Platform mode deployments that already use Incus continue to work by setting `sa
 
 ### 5.1 Deployment shape
 
+```mermaid
+graph TB
+    subgraph Cluster["Kubernetes Cluster"]
+        subgraph NS1["Namespace: astonish (Helm release namespace)"]
+            API1["API pod 1<br/>unprivileged<br/>default runtime"]
+            API2["API pod 2<br/>unprivileged<br/>default runtime"]
+            Worker["Worker pod<br/>unprivileged<br/>default runtime"]
+        end
+
+        subgraph NS2["Namespace: astonish-sandbox"]
+            Sess1["astn-sess-...<br/>Privilege path from §10<br/>Labels: org=my-org, team=general"]
+            Sess2["astn-sess-...<br/>Privilege path from §10<br/>Labels: org=other, team=ops"]
+            Fleet1["astn-fleet-...<br/>Privilege path from §10<br/>Labels: type=fleet"]
+        end
+
+        subgraph Storage["Storage"]
+            Layers["RWX PVC: astonish-layers<br/>/mnt/astonish-layers<br/>(RW in template-builder, RO in chat)"]
+            Uppers["RWX PVC: astonish-uppers<br/>/mnt/astonish-uppers<br/>(RW; persisted uppers for resume)"]
+        end
+
+        subgraph DB["PostgreSQL"]
+            PG["platform.sandbox_layers<br/>platform.sandbox_templates<br/>team_slug.sandbox_sessions<br/>team_slug.chat_session_events"]
+        end
+
+        SeedJob["Helm hook: release-sandbox-seed<br/>(idempotent @base seeder, §5.6)"]
+    end
+
+    API1 -->|K8s API| Sess1
+    API2 -->|K8s API| Sess2
+    Worker -->|K8s API| Fleet1
+
+    Sess1 --- Layers
+    Sess1 --- Uppers
+    Sess2 --- Layers
+    Sess2 --- Uppers
+    Fleet1 --- Layers
+    Fleet1 --- Uppers
+
+    SeedJob --> Layers
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Kubernetes cluster                                               │
-│                                                                   │
-│  Namespace: astonish (Helm release namespace; configurable)       │
-│  ┌────────────┐  ┌────────────┐  ┌────────────┐                 │
-│  │ API pod 1  │  │ API pod 2  │  │ Worker pod │                 │
-│  │ unprivl.   │  │ unprivl.   │  │ unprivl.   │                 │
-│  │ default    │  │ default    │  │ default    │                 │
-│  │ runtime    │  │ runtime    │  │ runtime    │                 │
-│  └────────────┘  └────────────┘  └────────────┘                 │
-│         │               │               │                        │
-│         └───────────────┴───────────────┘                        │
-│                         │                                         │
-│                         │  K8s API                                │
-│                         ▼                                         │
-│  Namespace: astonish-sandbox  (sandbox namespace; configurable)   │
-│  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐    │
-│  │ astn-sess-...  │  │ astn-sess-...  │  │ astn-fleet-... │    │
-│  │                │  │                │  │                │    │
-│  │ Privilege path │  │ Privilege path │  │ Privilege path │    │
-│  │ from §10:      │  │ from §10:      │  │ from §10:      │    │
-│  │ FUSE plugin /  │  │ FUSE plugin /  │  │ FUSE plugin /  │    │
-│  │ userns /       │  │ userns /       │  │ userns /       │    │
-│  │ privileged /   │  │ privileged /   │  │ privileged /   │    │
-│  │ sysbox-runc    │  │ sysbox-runc    │  │ sysbox-runc    │    │
-│  │                │  │                │  │                │    │
-│  │ Labels:        │  │ Labels:        │  │ Labels:        │    │
-│  │  org=my-org    │  │  org=other     │  │  type=fleet    │    │
-│  │  team=general  │  │  team=ops      │  │                │    │
-│  └────────────────┘  └────────────────┘  └────────────────┘    │
-│                                                                   │
-│  Per-node:                                                        │
-│    /var/astonish/overlay   (emptyDir; upper + work on same FS)    │
-│                                                                   │
-│  RWX-PVC-mounted (CephFS / NFS / EFS / Manila / Azure Files):     │
-│    /mnt/astonish-layers    (RW in template-builder/editor pods;   │
-│                             RO in chat-session pods)              │
-│    /mnt/astonish-uppers    (RW; persisted uppers for resume)      │
-│                                                                   │
-│  Helm post-install/post-upgrade hook:                             │
-│    {release}-sandbox-seed   (idempotent @base seeder; §5.6)       │
-│                                                                   │
-│  PostgreSQL:                                                      │
-│    platform.sandbox_layers, platform.sandbox_templates            │
-│    team_<slug>.sandbox_sessions   ←  cross-replica registry §5.16 │
-│    team_<slug>.chat_session_events                                │
-└─────────────────────────────────────────────────────────────────┘
-```
+
+Each sandbox pod also uses an `emptyDir` volume at `/var/astonish/overlay`
+for the overlay upper + work directories (must be on the same filesystem
+for `fuse-overlayfs` `renameat` to work).
 
 **Pod-name conventions** (deterministic, exposed in `kubectl get pods`):
 

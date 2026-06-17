@@ -1,0 +1,109 @@
+{{- if and .Values.sandbox.openshell.enabled .Values.sandbox.openshell.istio.enabled }}
+---
+# PeerAuthentication: PERMISSIVE on the OpenShell gateway pod.
+#
+# The gateway is the bridge between the Istio mesh (Astonish control plane)
+# and non-mesh workloads (sandbox pods in astonish-sandbox namespace).
+#
+# PERMISSIVE allows the gateway's Envoy sidecar to accept:
+#   - Istio mTLS (from Astonish API/Worker pods with SPIFFE identity)
+#   - Plaintext (from sandbox pods without Istio sidecars)
+#
+# The rest of the namespace inherits the mesh-wide PeerAuthentication
+# (typically STRICT), so only the gateway is exposed to plaintext traffic.
+apiVersion: security.istio.io/v1
+kind: PeerAuthentication
+metadata:
+  name: {{ .Release.Name }}-openshell-permissive
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-istio
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  mtls:
+    mode: PERMISSIVE
+---
+# AuthorizationPolicy: Allow mesh peers (any SPIFFE identity) full gRPC access.
+#
+# Mesh pods (Astonish API/Worker) have Istio sidecars and present a SPIFFE
+# identity via mTLS. This policy grants them unrestricted access to all
+# OpenShell gRPC methods (CreateSandbox, DeleteSandbox, ExecSandbox, etc.).
+#
+# principals: ["*"] matches any non-empty SPIFFE identity — i.e., any pod
+# with a valid Istio-issued certificate.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .Release.Name }}-openshell-mesh-allow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-istio
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  action: ALLOW
+  rules:
+    - from:
+        - source:
+            principals: ["*"]
+---
+# AuthorizationPolicy: Allow non-mesh traffic (sandbox pods) to specific
+# supervisor/sandbox callback gRPC methods only.
+#
+# Sandbox pods run in a namespace without Istio injection (no sidecar, no
+# SPIFFE identity). They connect to the gateway via plaintext through the
+# gateway's Envoy sidecar in PERMISSIVE mode.
+#
+# By omitting the `from` section, this rule matches ALL traffic (both
+# authenticated and unauthenticated). Since mesh pods already match the
+# broader "mesh-allow" policy above (which has no path restriction), they
+# get full access regardless. Non-mesh pods ONLY match this policy, so
+# they are restricted to the listed gRPC paths.
+#
+# Istio uses a union model for ALLOW rules: a request is permitted if ANY
+# ALLOW policy matches. Mesh pods match both → full access. Non-mesh pods
+# match only this one → limited to supervisor methods.
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: {{ .Release.Name }}-openshell-sandbox-allow
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-istio
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: openshell
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  action: ALLOW
+  rules:
+    - to:
+        - operation:
+            paths:
+              # --- Supervisor lifecycle ---
+              - "/openshell.v1.OpenShell/ConnectSupervisor"
+              - "/openshell.v1.OpenShell/RelayStream"
+              - "/openshell.v1.OpenShell/GetSandboxConfig"
+              - "/openshell.v1.OpenShell/GetGatewayConfig"
+              - "/openshell.v1.OpenShell/ReportPolicyStatus"
+              - "/openshell.v1.OpenShell/GetSandboxProviderEnvironment"
+              - "/openshell.v1.OpenShell/PushSandboxLogs"
+              - "/openshell.v1.OpenShell/SubmitPolicyAnalysis"
+              # --- Token exchange ---
+              - "/openshell.v1.OpenShell/IssueSandboxToken"
+              - "/openshell.v1.OpenShell/RefreshSandboxToken"
+              - "/openshell.v1.OpenShell/RotateCredential"
+              # --- Lease management ---
+              - "/openshell.v1.OpenShell/AcquireLease"
+              - "/openshell.v1.OpenShell/RenewLease"
+              # --- Health (probes from non-mesh sources) ---
+              - "/openshell.v1.OpenShell/Health"
+{{- end }}

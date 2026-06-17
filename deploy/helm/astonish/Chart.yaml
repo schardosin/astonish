@@ -1,6 +1,6 @@
 apiVersion: v2
 name: astonish
-description: Astonish AI Operations Platform - multi-tenant deployment with API, Worker, and Kubernetes sandbox backend (Phase F)
+description: Astonish AI Operations Platform - multi-tenant deployment with API, Worker, and Kubernetes sandbox backend
 type: application
 version: 0.2.0
 appVersion: "dev"
@@ -12,3 +12,15 @@ keywords:
   - sandbox
 maintainers:
   - name: schardosin
+
+# Prerequisites (cluster-scoped, NOT managed by this chart):
+#   1. Istio installed; control-plane namespace labeled istio-injection=enabled
+#   2. Agent Sandbox CRD + controller:
+#      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+
+dependencies:
+  - name: helm-chart
+    alias: openshell
+    version: "0.0.63"
+    repository: "oci://ghcr.io/nvidia/openshell"
+    condition: sandbox.openshell.enabled

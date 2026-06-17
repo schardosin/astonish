@@ -82,3 +82,6 @@ pkg/store/sqlitestore/migrations/*/.resolved/
 # Dev migration files (overwritten on each build, never commit)
 pkg/store/pgstore/migrations/*/999_dev.sql
 pkg/store/sqlitestore/migrations/*/999_dev.sql
+deploy/helm/astonish/values-myenv.yaml
+astonish-boot
+webhook

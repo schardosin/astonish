@@ -1,5 +1,10 @@
 # Sandbox & Containerization
 
+> **Scope:** This document covers the **Incus/LXC backend** used in personal
+> mode and single-host deployments. For the Kubernetes cloud deployment with
+> NVIDIA OpenShell (per-process Landlock/seccomp isolation, L7 network policy,
+> Istio mesh), see [openshell-sandbox-backend.md](openshell-sandbox-backend.md).
+
 ## Overview
 
 Astonish executes all agent tool calls -- file edits, shell commands, code execution, MCP servers -- inside isolated Linux containers rather than on the host machine. This provides security isolation, reproducible environments, and the ability to give each chat session its own full Linux workspace without risk to the host.

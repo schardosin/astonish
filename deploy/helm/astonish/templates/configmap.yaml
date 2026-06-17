@@ -54,6 +54,7 @@ data:
           {{- end }}
         {{- end }}
       {{- end }}
+      {{- if eq .Values.sandbox.backend "k8s" }}
       kubernetes:
         in_cluster: true
         namespace: {{ include "astonish.namespace.sandbox" . | quote }}
@@ -72,4 +73,11 @@ data:
         sandbox_image: {{ include "astonish.sandbox.image" . | quote }}
         layers_pvc_name: {{ .Values.sandbox.storage.layers.pvcName | quote }}
         uppers_pvc_name: {{ .Values.sandbox.storage.uppers.pvcName | quote }}
+      {{- end }}
+      {{- if eq .Values.sandbox.backend "openshell" }}
+      openshell:
+        gateway_addr: {{ include "astonish.openshell.gatewayAddr" . | quote }}
+        gateway_tls: false
+        sandbox_image: {{ printf "%s:%s" .Values.sandbox.openshell.image.repository .Values.sandbox.openshell.image.tag | quote }}
+      {{- end }}
     {{- end }}

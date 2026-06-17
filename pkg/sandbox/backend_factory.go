@@ -82,6 +82,11 @@ type BackendFactoryConfig struct {
 	// (lives in pkg/config) and is translated to a k8s.Config by the
 	// registered factory in pkg/sandbox/k8s.
 	K8s config.SandboxKubernetesConfig
+
+	// OpenShell carries OpenShell-specific configuration. Consulted only
+	// when Kind == "openshell"; ignored otherwise. Contains gateway
+	// connection details and sandbox image configuration.
+	OpenShell config.SandboxOpenShellConfig
 }
 
 // NewBackend constructs a Backend implementation from configuration. The

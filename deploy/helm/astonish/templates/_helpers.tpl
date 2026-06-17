@@ -120,3 +120,17 @@ the chart-managed secret ("{fullname}-secrets").
 {{- printf "%s-secrets" (include "astonish.fullname" .) -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+OpenShell gateway gRPC address. Uses explicit override if set, otherwise
+auto-derives from the subchart Service name within the release namespace.
+The subchart uses nameOverride "openshell", so the Service is named
+"{release}-openshell" and listens on port 8080.
+*/}}
+{{- define "astonish.openshell.gatewayAddr" -}}
+{{- if .Values.sandbox.openshell.gateway.addr -}}
+{{- .Values.sandbox.openshell.gateway.addr -}}
+{{- else -}}
+{{- printf "%s-openshell.%s.svc.cluster.local:8080" .Release.Name .Release.Namespace -}}
+{{- end -}}
+{{- end }}

@@ -118,7 +118,7 @@ func BackendFromAppConfigWithSessions(appCfg *config.AppConfig, sessRegistry *Se
 			Sessions:   sessRegistry,
 			Templates:  tplRegistry,
 			DefaultLim: &limits,
-			K8s:        appCfg.Sandbox.Kubernetes,
+			OpenShell:  appCfg.Sandbox.OpenShell,
 		})
 		if err != nil {
 			return nil, nil, err

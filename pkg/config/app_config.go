@@ -62,6 +62,48 @@ type SandboxConfig struct {
 	// Fields have sensible defaults; operators typically only set
 	// KubeconfigPath (or InCluster) and SandboxImage.
 	Kubernetes SandboxKubernetesConfig `yaml:"kubernetes,omitempty" json:"kubernetes,omitempty"`
+
+	// OpenShell holds backend-specific settings used when Backend == "openshell".
+	// The OpenShell backend delegates sandbox lifecycle to NVIDIA's OpenShell
+	// gateway (ghcr.io/nvidia/openshell/gateway) via its gRPC API.
+	OpenShell SandboxOpenShellConfig `yaml:"openshell,omitempty" json:"openshell,omitempty"`
+}
+
+// SandboxOpenShellConfig captures operator-tunable knobs for the OpenShell
+// backend. The gateway is deployed separately (NVIDIA's Helm chart) and this
+// config tells Astonish how to connect to it.
+type SandboxOpenShellConfig struct {
+	// GatewayAddr is the gRPC endpoint of the OpenShell gateway.
+	// Example: "openshell.openshell.svc.cluster.local:8080"
+	GatewayAddr string `yaml:"gateway_addr,omitempty" json:"gateway_addr,omitempty"`
+
+	// GatewayTLS enables TLS for the gRPC connection to the gateway.
+	// When true, the connection uses TLS with optional mTLS (see
+	// ClientCertPath/ClientKeyPath). Default: true.
+	GatewayTLS *bool `yaml:"gateway_tls,omitempty" json:"gateway_tls,omitempty"`
+
+	// ClientCertPath is the path to the mTLS client certificate for
+	// authenticating to the gateway. Mounted from the openshell-client-tls
+	// secret. Empty disables mTLS (uses insecure or token auth).
+	ClientCertPath string `yaml:"client_cert_path,omitempty" json:"client_cert_path,omitempty"`
+
+	// ClientKeyPath is the path to the mTLS client private key.
+	ClientKeyPath string `yaml:"client_key_path,omitempty" json:"client_key_path,omitempty"`
+
+	// CACertPath is the CA certificate for verifying the gateway's server
+	// cert. Empty uses the system CA pool.
+	CACertPath string `yaml:"ca_cert_path,omitempty" json:"ca_cert_path,omitempty"`
+
+	// AuthToken is a static bearer token for gateway authentication.
+	// Used when mTLS is not configured (e.g., development with
+	// server.auth.allowUnauthenticatedUsers). Empty disables token auth.
+	AuthToken string `yaml:"auth_token,omitempty" json:"auth_token,omitempty"`
+
+	// SandboxImage is the container image for sandbox pods. This image
+	// should contain Astonish agent tooling. The OpenShell supervisor is
+	// sideloaded by the gateway automatically.
+	// Default: "schardosin/astonish-sandbox-openshell:latest".
+	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the
@@ -165,6 +207,20 @@ func (c *SandboxConfig) BackendKind() string {
 // IsK8sBackend is a readability helper for the common case.
 func (c *SandboxConfig) IsK8sBackend() bool {
 	return c.BackendKind() == "k8s"
+}
+
+// IsOpenShellBackend is a readability helper for the OpenShell case.
+func (c *SandboxConfig) IsOpenShellBackend() bool {
+	return c.BackendKind() == "openshell"
+}
+
+// OpenShellGatewayTLS returns whether TLS is enabled for the OpenShell
+// gateway connection. Default is true when GatewayTLS is nil.
+func (c *SandboxOpenShellConfig) OpenShellGatewayTLS() bool {
+	if c.GatewayTLS == nil {
+		return true
+	}
+	return *c.GatewayTLS
 }
 
 // SecurityConfig controls security features like proactive secret detection.

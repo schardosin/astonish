@@ -66,7 +66,7 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 		labels["astonish.io/team"] = spec.TeamSlug
 	}
 	if spec.TemplateID != "" {
-		labels["astonish.io/template"] = spec.TemplateID
+		labels["astonish.io/template"] = sanitizeLabelValue(spec.TemplateID)
 	}
 	for k, v := range spec.Labels {
 		labels[k] = v

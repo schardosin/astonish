@@ -53,15 +53,25 @@ export interface ConfigureBuildResult {
   size_bytes: number
 }
 
+export interface UnsupportedBackendInfo {
+  unsupported_backend: true
+  backend: string
+  message: string
+}
+
 // --- API functions ---
 
-export async function getBaseConfig(): Promise<BaseConfigSummary> {
+export async function getBaseConfig(): Promise<BaseConfigSummary | UnsupportedBackendInfo> {
   const res = await adminFetch(BASE)
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as Record<string, unknown>
     throw new Error((body.error as string) || `Failed to fetch base config: ${res.statusText}`)
   }
-  return res.json()
+  const data = await res.json()
+  if (data.unsupported_backend) {
+    return data as UnsupportedBackendInfo
+  }
+  return data as BaseConfigSummary
 }
 
 export async function getBaseStatus(): Promise<BaseConfigStatus> {

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info } from 'lucide-react'
 import { InlineError, InlineSuccess, inputStyle } from './shared'
 import * as api from '../../api/platformSandbox'
-import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult } from '../../api/platformSandbox'
+import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult, UnsupportedBackendInfo } from '../../api/platformSandbox'
 
 // ---------------------------------------------------------------------------
 // SandboxBaseTab — Platform Admin: Configure Base Sandbox
@@ -11,6 +11,7 @@ import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult 
 export default function SandboxBaseTab() {
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<BaseConfigSummary | null>(null)
+  const [unsupported, setUnsupported] = useState<UnsupportedBackendInfo | null>(null)
   const [tools, setTools] = useState<OptionalTool[]>([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -30,15 +31,23 @@ export default function SandboxBaseTab() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+    setUnsupported(null)
     try {
-      const [summaryData, toolsData] = await Promise.all([
-        api.getBaseConfig().catch(() => null),
-        api.listOptionalTools().catch(() => []),
-      ])
-      setSummary(summaryData)
+      const baseData = await api.getBaseConfig().catch(() => null)
+
+      // Check if backend doesn't support base configuration
+      if (baseData && 'unsupported_backend' in baseData && baseData.unsupported_backend) {
+        setUnsupported(baseData as UnsupportedBackendInfo)
+        setLoading(false)
+        return
+      }
+
+      const toolsData = await api.listOptionalTools().catch(() => [])
+      setSummary(baseData as BaseConfigSummary | null)
       setTools(toolsData)
 
       // Populate form from existing config if available
+      const summaryData = baseData as BaseConfigSummary | null
       if (summaryData?.config) {
         const cfg = summaryData.config
         setCore(cfg.core)
@@ -112,6 +121,27 @@ export default function SandboxBaseTab() {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+      </div>
+    )
+  }
+
+  if (unsupported) {
+    return (
+      <div className="p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Base Sandbox Configuration</h3>
+        </div>
+        <div className="flex items-start gap-3 p-4 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+          <Info size={18} className="mt-0.5 shrink-0" style={{ color: 'var(--accent)' }} />
+          <div className="space-y-2">
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Not available with the {unsupported.backend} backend
+            </p>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {unsupported.message}
+            </p>
+          </div>
+        </div>
       </div>
     )
   }

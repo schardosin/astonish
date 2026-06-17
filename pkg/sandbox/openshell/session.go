@@ -3,6 +3,7 @@ package openshell
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
@@ -10,6 +11,18 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// invalidLabelChars matches any character not valid in a Kubernetes label value.
+// Label values must be alphanumeric, '-', '_', or '.'.
+var invalidLabelChars = regexp.MustCompile(`[^a-zA-Z0-9._-]`)
+
+// sanitizeLabelValue strips characters that are invalid in Kubernetes label
+// values. Labels allow only alphanumeric characters, '-', '_', and '.'.
+// This is needed because Astonish uses '@' as a prefix for built-in template
+// IDs (e.g., "@base") which is not a valid K8s label character.
+func sanitizeLabelValue(v string) string {
+	return invalidLabelChars.ReplaceAllString(v, "")
+}
 
 // isAlreadyExists returns true if the error (possibly wrapped) contains a
 // gRPC AlreadyExists status code.
@@ -64,7 +77,7 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		labels["astonish.io/team"] = spec.TeamSlug
 	}
 	if spec.TemplateID != "" {
-		labels["astonish.io/template"] = spec.TemplateID
+		labels["astonish.io/template"] = sanitizeLabelValue(spec.TemplateID)
 	}
 
 	// Create the sandbox via the gateway.

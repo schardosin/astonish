@@ -16,6 +16,17 @@ import (
 // PlatformBaseConfigGetHandler returns the current @base template configuration.
 // GET /api/platform/admin/sandbox/base
 func PlatformBaseConfigGetHandler(w http.ResponseWriter, r *http.Request) {
+	// OpenShell backend does not support base template customization.
+	appCfg := effectiveAppConfig(r)
+	if appCfg != nil && appCfg.Sandbox.Backend == "openshell" {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"unsupported_backend": true,
+			"backend":             "openshell",
+			"message":             "Base sandbox customization is not available with the OpenShell backend. Customize the sandbox by modifying docker/sandbox-openshell/Dockerfile and rebuilding the image.",
+		})
+		return
+	}
+
 	backend := getPlatformBackend()
 	if backend == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform database not available")
@@ -186,6 +197,17 @@ func PlatformBaseConfigBuildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		SendSSE(w, flusher, "error", map[string]string{"error": fmt.Sprintf("sandbox backend unavailable: %v", err)})
+		return
+	}
+
+	// OpenShell backend does not support BuildTemplate — base sandbox
+	// customization is done via the container image (Dockerfile).
+	appCfgCheck := effectiveAppConfig(r)
+	if appCfgCheck != nil && appCfgCheck.Sandbox.Backend == "openshell" {
+		SendSSE(w, flusher, "error", map[string]string{
+			"error": "Base sandbox customization is not available with the OpenShell backend. " +
+				"Customize the sandbox by modifying docker/sandbox-openshell/Dockerfile and rebuilding the image.",
+		})
 		return
 	}
 

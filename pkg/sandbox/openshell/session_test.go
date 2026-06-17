@@ -538,3 +538,26 @@ func TestSandboxName(t *testing.T) {
 
 // Suppress unused import for io (used by ExecStreamConn interface in mock).
 var _ io.Reader
+
+func TestSanitizeLabelValue(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"@base", "base"},
+		{"my-template", "my-template"},
+		{"my_template.v2", "my_template.v2"},
+		{"@base-config-123", "base-config-123"},
+		{"hello world!", "helloworld"},
+		{"valid-123_name.ok", "valid-123_name.ok"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := sanitizeLabelValue(tt.input)
+			if got != tt.want {
+				t.Errorf("sanitizeLabelValue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

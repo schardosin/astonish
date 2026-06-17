@@ -289,12 +289,39 @@ ensuring the agent always has write access to its workspace.
 
 ---
 
-## 6. Istio Integration
+## 6. Service Mesh Integration
 
-### Architecture 1: Pure Istio (No Custom Cert Management)
+### Overview
 
-The gateway listens on plaintext HTTP (`disableTls: true` in the
-subchart config). Istio provides all encryption:
+The OpenShell gateway is the bridge between the service mesh (Astonish
+control plane) and non-mesh workloads (sandbox pods). It must accept
+connections from both:
+
+- **Mesh pods** (Astonish API/Worker) — arrive with mesh-provided mTLS
+- **Non-mesh pods** (sandbox supervisors) — arrive as plaintext
+
+The chart supports pluggable mesh configuration via `mesh.provider`:
+
+```yaml
+# values.yaml
+mesh:
+  provider: ""       # "" | "istio" (more meshes can be added)
+```
+
+| `mesh.provider` | What the chart renders |
+|-----------------|----------------------|
+| `""` (default) | No mesh resources. Operator manages mesh config manually or operates without a mesh. |
+| `"istio"` | PeerAuthentication (PERMISSIVE on gateway) + AuthorizationPolicies + namespace labels (`istio-injection: disabled` on sandbox ns) |
+
+For meshes not directly supported (e.g., Linkerd, Cilium), set
+`mesh.provider: ""` and configure mesh resources manually. The key
+requirement: **the gateway pod must accept both mTLS and plaintext on
+port 8080**.
+
+### Istio Configuration (mesh.provider: "istio")
+
+When `mesh.provider: "istio"`, the gateway listens plaintext
+(`openshell.server.disableTls: true`) and Istio provides all encryption:
 
 ```mermaid
 graph LR
@@ -308,9 +335,9 @@ graph LR
     end
 ```
 
-### Istio Resources
+**Rendered resources** (`templates/openshell/mesh-istio.yaml`):
 
-**PeerAuthentication** (`templates/openshell/istio.yaml`):
+**PeerAuthentication:**
 - Mode: `PERMISSIVE` on the gateway pod only
 - Allows the gateway's Envoy sidecar to accept both:
   - Istio mTLS from mesh pods (Astonish API/Worker)
@@ -337,24 +364,41 @@ policies → full access. Non-mesh pods match only the sandbox policy →
 restricted to supervisor methods. A sandbox pod cannot call
 `CreateSandbox` or `DeleteSandbox` on the gateway.
 
-### NetworkPolicy
+### Without a Mesh (mesh.provider: "")
 
-The NetworkPolicy (`templates/openshell/networkpolicy.yaml`) restricts
-all egress from the sandbox namespace to:
+When no mesh is configured:
+- No mesh CRDs are rendered (no Istio/Linkerd dependency)
+- Set `openshell.server.disableTls: false` to enable the gateway's
+  built-in mTLS (the pkiInitJob generates certificates automatically)
+- Configure Astonish's Go client with `GatewayTLS: true` and cert paths
+- Or set `openshell.server.disableTls: true` for plaintext (dev only —
+  no encryption, no authentication between Astonish and gateway)
+
+### NetworkPolicy (mesh-agnostic)
+
+The NetworkPolicy (`templates/openshell/networkpolicy.yaml`) is **always
+rendered** when `sandbox.openshell.enabled=true`, regardless of mesh
+provider. It restricts all egress from the sandbox namespace to:
 
 1. OpenShell gateway in the control-plane namespace (port 8080/TCP)
 2. Cluster DNS in kube-system (port 53/UDP+TCP)
 
-All other egress is denied. Even if a sandbox pod is compromised, it
-cannot reach any cluster service other than the gateway.
+All other egress is denied. This is a standard Kubernetes NetworkPolicy —
+it requires only a CNI that supports NetworkPolicy enforcement (Calico,
+Cilium, K3s kube-router, etc.), not a service mesh.
 
 ---
 
 ## 7. Configuration
 
-### Helm Values (values-myenv.yaml)
+### Helm Values
 
 ```yaml
+# Service mesh (controls mesh-specific resources)
+mesh:
+  provider: istio  # "" | "istio"
+
+# Sandbox backend
 sandbox:
   enabled: true
   backend: openshell
@@ -369,9 +413,9 @@ sandbox:
 # OpenShell subchart pass-through
 openshell:
   server:
+    disableTls: true  # Mesh handles encryption
     sandboxNamespace: "astonishdev-sandbox"
     sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
-    disableTls: true  # Istio handles encryption
 ```
 
 ### Go Config Struct
@@ -388,9 +432,10 @@ type SandboxOpenShellConfig struct {
 }
 ```
 
-The TLS fields are optional — in the Istio deployment, `GatewayTLS` is
-`false` and the cert paths are empty. They exist for non-Istio
-environments where the client connects directly with mTLS.
+The TLS fields are optional — when using a service mesh with
+`disableTls: true`, `GatewayTLS` is `false` and the cert paths are
+empty. They exist for non-mesh environments where the client connects
+directly with gateway-native mTLS.
 
 ---
 
@@ -523,7 +568,7 @@ to the gateway.
 | `pkg/sandbox/openshell/gen/openshellv1/` | Generated gRPC stubs from vendored protos |
 | `proto/openshell/v1/` | Vendored NVIDIA proto definitions |
 | `docker/sandbox-openshell/Dockerfile` | Custom sandbox image (base + astonish binary) |
-| `deploy/helm/astonish/templates/openshell/istio.yaml` | PeerAuth + AuthorizationPolicies |
+| `deploy/helm/astonish/templates/openshell/mesh-istio.yaml` | Istio PeerAuth + AuthorizationPolicies (rendered when `mesh.provider: istio`) |
 | `deploy/helm/astonish/templates/openshell/networkpolicy.yaml` | Sandbox egress NetworkPolicy |
 | `deploy/helm/astonish/templates/sandbox/namespace.yaml` | Namespace with PSA + istio-injection labels |
 | `deploy/helm/astonish/values-myenv.yaml` | Dev environment Helm values |

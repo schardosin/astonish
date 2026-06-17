@@ -21,9 +21,13 @@ metadata:
     pod-security.kubernetes.io/enforce-version: latest
     pod-security.kubernetes.io/audit: {{ $psa }}
     pod-security.kubernetes.io/warn: {{ $psa }}
-    # Explicitly prevent Istio sidecar injection in the sandbox namespace.
-    # Sandbox pods must NOT have sidecars — they connect to the gateway
-    # via plaintext (protected by NetworkPolicy), and the gateway's
-    # PERMISSIVE PeerAuthentication accepts their non-mTLS traffic.
+    {{- /* Mesh-specific namespace labels: prevent sidecar injection in the
+           sandbox namespace. Sandbox pods connect to the gateway via plaintext
+           (protected by NetworkPolicy), and the gateway accepts their
+           non-mTLS traffic via PERMISSIVE mode. */ -}}
+    {{- if eq .Values.mesh.provider "istio" }}
     istio-injection: disabled
+    {{- else if eq .Values.mesh.provider "linkerd" }}
+    linkerd.io/inject: disabled
+    {{- end }}
 {{- end }}

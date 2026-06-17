@@ -1,4 +1,4 @@
-{{- if and .Values.sandbox.openshell.enabled .Values.sandbox.openshell.istio.enabled }}
+{{- if and .Values.sandbox.openshell.enabled (eq .Values.mesh.provider "istio") }}
 ---
 # PeerAuthentication: PERMISSIVE on the OpenShell gateway pod.
 #

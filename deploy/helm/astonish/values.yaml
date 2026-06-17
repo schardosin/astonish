@@ -128,6 +128,26 @@ tolerations: []
 affinity: {}
 
 # =============================================================================
+# Service Mesh Integration
+# =============================================================================
+# Controls which mesh-specific resources (PeerAuthentication, AuthorizationPolicy,
+# namespace annotations, pod annotations) the chart renders.
+#
+# mesh.provider selects the mesh. Supported values:
+#   ""       — No mesh resources rendered. Use for clusters without a mesh,
+#              or when managing mesh policies externally.
+#   "istio"  — Renders Istio PeerAuthentication (PERMISSIVE on gateway) and
+#              AuthorizationPolicies (mesh full access, sandbox restricted).
+#              Adds istio-injection labels to namespaces.
+#
+# The relationship between mesh.provider and openshell.server.disableTls:
+#   mesh.provider: "istio" + disableTls: true   → mesh encrypts (recommended)
+#   mesh.provider: ""      + disableTls: false   → gateway's own mTLS (no mesh)
+#   mesh.provider: ""      + disableTls: true    → plaintext (dev/testing only)
+mesh:
+  provider: ""
+
+# =============================================================================
 # Sandbox subsystem (Phase F)
 # =============================================================================
 # Creates the sandbox namespace, RBAC, PVCs, and base-layer seed Job. When
@@ -203,14 +223,16 @@ sandbox:
   # OpenShell backend configuration (sandbox.backend = "openshell")
   # ==========================================================================
   # When enabled, deploys the NVIDIA OpenShell gateway as a Helm subchart in
-  # the same namespace and configures Istio service mesh policies.
+  # the same namespace.
   #
   # Prerequisites (cluster-scoped, NOT managed by this chart):
-  #   1. Istio installed; control-plane namespace labeled istio-injection=enabled
-  #   2. Agent Sandbox CRD + controller:
+  #   1. Agent Sandbox CRD + controller:
   #      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+  #   2. (Optional) Service mesh — set mesh.provider above to render mesh
+  #      resources automatically. Without a mesh, set openshell.server.disableTls
+  #      to false for gateway-native mTLS.
   openshell:
-    # Enables the OpenShell subchart deployment + Istio policies.
+    # Enables the OpenShell subchart deployment.
     # Also gates the Chart.yaml dependency condition.
     enabled: false
 
@@ -223,11 +245,6 @@ sandbox:
     image:
       repository: schardosin/astonish-sandbox-openshell
       tag: dev
-
-    # Istio policy generation (PeerAuthentication + AuthorizationPolicy).
-    # Disable if managing Istio policies externally.
-    istio:
-      enabled: true
 
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
@@ -289,16 +306,16 @@ fuseDevicePlugin:
 # These are passed verbatim to the subchart via its alias "openshell".
 # Only rendered when sandbox.openshell.enabled=true (Chart.yaml condition).
 #
-# Architecture: Pure Istio (Architecture 1)
-#   - Gateway listens plaintext (disableTls: true) — Istio encrypts mesh traffic
-#   - No mTLS client verification — Istio PeerAuthentication handles identity
-#   - No PKI init job — no certificates needed
-#   - Sandbox namespace set to match the sandbox namespace this chart creates
+# When mesh.provider is set, Istio/Linkerd handles encryption and the gateway
+# can listen plaintext (disableTls: true). Without a mesh, set disableTls: false
+# to use the gateway's built-in mTLS with auto-generated certificates.
 openshell:
   nameOverride: openshell
 
   server:
-    # Gateway serves plaintext; Istio sidecar provides mTLS for mesh callers.
+    # Gateway TLS mode.
+    # true  = plaintext; rely on service mesh for encryption (recommended with mesh.provider)
+    # false = gateway terminates mTLS itself (recommended without mesh.provider)
     disableTls: true
     # Sandbox pods are created in the sandbox namespace managed by this chart.
     # Must match the computed value of include "astonish.namespace.sandbox".
@@ -307,10 +324,13 @@ openshell:
     # Must match sandbox.openshell.image.repository:tag above.
     sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
     auth:
-      # Istio AuthorizationPolicy handles identity; gateway skips auth.
+      # When mesh.provider is set, the mesh AuthorizationPolicy handles identity.
+      # Without a mesh, consider setting this to false and configuring gateway auth.
       allowUnauthenticatedUsers: true
     tls:
-      # Disable mTLS client certificate verification (Istio handles this).
+      # Disable mTLS client certificate verification when using a service mesh
+      # or when disableTls=true. Set to a Secret name containing the client CA
+      # when using gateway-native mTLS without a mesh.
       clientCaSecretName: ""
 
   # The pkiInitJob MUST remain enabled: it generates the JWT signing keypair

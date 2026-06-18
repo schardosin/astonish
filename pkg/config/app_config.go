@@ -110,6 +110,10 @@ type SandboxOpenShellConfig struct {
 
 	// Builder configures the Kaniko-based image builder.
 	Builder BuilderConfig `yaml:"builder,omitempty" json:"builder,omitempty"`
+
+	// NetworkPolicy configures sandbox egress enforcement via the OpenShell
+	// supervisor's network namespace proxy.
+	NetworkPolicy NetworkPolicyConfig `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
 }
 
 // RegistryConfig holds OCI registry connection details for pushing
@@ -133,6 +137,26 @@ type BuilderConfig struct {
 
 	// Namespace where build Jobs run. Defaults to the control-plane namespace.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+}
+
+// NetworkPolicyConfig controls sandbox network egress enforcement via the
+// OpenShell supervisor's network namespace proxy.
+type NetworkPolicyConfig struct {
+	// Mode is "open" (default) or "allowlist".
+	//   - "open": unrestricted internet access.
+	//   - "allowlist": only hosts in the Allowlist are reachable.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+
+	// Allowlist of host patterns. Only effective when Mode is "allowlist".
+	// Supports glob patterns matching the OpenShell NetworkEndpoint.host field.
+	// Examples: "github.com", "*.github.com", "registry.npmjs.org"
+	Allowlist []string `yaml:"allowlist,omitempty" json:"allowlist,omitempty"`
+}
+
+// IsAllowlistMode returns true when the network policy is configured to
+// restrict egress to an explicit allowlist.
+func (c *NetworkPolicyConfig) IsAllowlistMode() bool {
+	return c.Mode == "allowlist" && len(c.Allowlist) > 0
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the

@@ -1,14 +1,14 @@
 {{- if .Values.sandbox.openshell.enabled }}
 ---
-# NetworkPolicy: Restrict sandbox namespace egress.
+# NetworkPolicy: Sandbox namespace egress policy.
 #
-# Sandbox pods (in the non-mesh namespace) are only permitted to reach:
-#   1. The OpenShell gateway in the control-plane namespace (port 8080/TCP)
-#   2. Cluster DNS (kube-system, port 53/UDP+TCP)
+# This is a coarse Layer 3/4 gate. Fine-grained L7 enforcement is handled
+# by the OpenShell supervisor's network namespace proxy, which supports
+# per-sandbox host glob allowlists.
 #
-# All other egress is denied. This provides Layer 3/4 isolation as a
-# complement to the Istio Layer 7 AuthorizationPolicy. Even if a sandbox
-# pod is compromised, it cannot reach any service other than the gateway.
+# By default, egress is fully open (agents need unrestricted internet for
+# research, git, npm, pip, browsing, etc.). The supervisor's network policy
+# is the real enforcement layer.
 #
 # Note: This NetworkPolicy requires a CNI that supports NetworkPolicy
 # enforcement (Calico, Cilium, etc.). K3s ships with kube-router or
@@ -27,26 +27,7 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # Rule 1: Allow traffic to the OpenShell gateway.
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Release.Namespace }}
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/name: openshell
-              app.kubernetes.io/instance: {{ .Release.Name }}
-      ports:
-        - port: 8080
-          protocol: TCP
-    # Rule 2: Allow DNS resolution (required for gateway service discovery).
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: kube-system
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
+    # Allow all egress. The OpenShell supervisor's network namespace proxy
+    # handles fine-grained L7 enforcement (host globs, per-process rules).
+    - {}
 {{- end }}

@@ -91,5 +91,15 @@ data:
           image: {{ .Values.sandbox.openshell.builder.image | quote }}
           namespace: {{ default (include "astonish.namespace.controlPlane" .) .Values.sandbox.openshell.builder.namespace | quote }}
         {{- end }}
+        {{- if .Values.sandbox.openshell.networkPolicy.mode }}
+        network_policy:
+          mode: {{ .Values.sandbox.openshell.networkPolicy.mode | quote }}
+          {{- if .Values.sandbox.openshell.networkPolicy.allowlist }}
+          allowlist:
+            {{- range .Values.sandbox.openshell.networkPolicy.allowlist }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
       {{- end }}
     {{- end }}

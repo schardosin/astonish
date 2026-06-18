@@ -84,7 +84,7 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 		Image:  image,
 		Env:    env,
 		Labels: labels,
-		Policy: defaultSandboxPolicy(),
+		Policy: defaultSandboxPolicy(b.cfg.AppConfig.NetworkPolicy),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/openshell: EnsureFleetContainer(%s): create: %w", spec.FleetKey, err)

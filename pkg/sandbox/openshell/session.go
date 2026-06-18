@@ -93,7 +93,7 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		Image:  image,
 		Env:    env,
 		Labels: labels,
-		Policy: defaultSandboxPolicy(),
+		Policy: defaultSandboxPolicy(b.cfg.AppConfig.NetworkPolicy),
 	})
 	if err != nil {
 		if !isAlreadyExists(err) {
@@ -179,7 +179,7 @@ func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) e
 		Image:  image,
 		Env:    env,
 		Labels: labels,
-		Policy: defaultSandboxPolicy(),
+		Policy: defaultSandboxPolicy(b.cfg.AppConfig.NetworkPolicy),
 	})
 	if err != nil {
 		if !isAlreadyExists(err) {

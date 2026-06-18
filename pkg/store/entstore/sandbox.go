@@ -225,6 +225,19 @@ func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTe
 		create.SetSandboxImage(*tpl.SandboxImage)
 	}
 
+	if len(tpl.Packages) > 0 {
+		create.SetPackages(tpl.Packages)
+	}
+	if tpl.BuildStatus != "" {
+		create.SetBuildStatus(tpl.BuildStatus)
+	}
+	if tpl.BuildJobName != "" {
+		create.SetBuildJobName(tpl.BuildJobName)
+	}
+	if tpl.LastBuiltImage != "" {
+		create.SetLastBuiltImage(tpl.LastBuiltImage)
+	}
+
 	if tpl.CreatedBy != "" {
 		createdBy, err := uuid.Parse(tpl.CreatedBy)
 		if err != nil {
@@ -332,6 +345,20 @@ func (ts *sandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTe
 		update.SetSandboxImage(*tpl.SandboxImage)
 	} else {
 		update.ClearSandboxImage()
+	}
+
+	// Build-related fields.
+	if tpl.Packages != nil {
+		update.SetPackages(tpl.Packages)
+	}
+	update.SetBuildStatus(tpl.BuildStatus)
+	update.SetBuildJobName(tpl.BuildJobName)
+	update.SetBuildError(tpl.BuildError)
+	update.SetLastBuiltImage(tpl.LastBuiltImage)
+	if tpl.BuildStartedAt != nil {
+		update.SetBuildStartedAt(*tpl.BuildStartedAt)
+	} else {
+		update.ClearBuildStartedAt()
 	}
 
 	return update.Exec(ctx)
@@ -609,20 +636,112 @@ func (ts *sandboxTemplateStore) IsBuildInProgress(ctx context.Context) (bool, er
 	return lockTime.After(staleThreshold), nil
 }
 
+func (ts *sandboxTemplateStore) AcquireTemplateBuildLock(ctx context.Context, templateID string) (bool, func(), error) {
+	ts.buildMu.Lock()
+	defer ts.buildMu.Unlock()
+
+	lockKey := "build_lock:" + templateID
+	setting, err := ts.client.PlatformSetting.Get(ctx, lockKey)
+	if err != nil && !platforment.IsNotFound(err) {
+		return false, nil, fmt.Errorf("check template build lock: %w", err)
+	}
+
+	now := time.Now()
+	staleThreshold := now.Add(-10 * time.Minute) // image builds can take longer
+
+	if setting != nil {
+		if tsVal, ok := setting.Value["timestamp"].(string); ok {
+			lockTime, parseErr := time.Parse(time.RFC3339, tsVal)
+			if parseErr == nil && lockTime.After(staleThreshold) {
+				return false, nil, nil
+			}
+		}
+	}
+
+	lockValue := map[string]interface{}{
+		"holder":    fmt.Sprintf("pod-%d", now.UnixNano()),
+		"timestamp": now.Format(time.RFC3339),
+	}
+
+	if setting == nil {
+		_, err = ts.client.PlatformSetting.Create().
+			SetID(lockKey).
+			SetValue(lockValue).
+			SetUpdatedAt(now).
+			Save(ctx)
+	} else {
+		err = ts.client.PlatformSetting.UpdateOneID(lockKey).
+			SetValue(lockValue).
+			SetUpdatedAt(now).
+			Exec(ctx)
+	}
+	if err != nil {
+		return false, nil, fmt.Errorf("acquire template build lock: %w", err)
+	}
+
+	release := func() {
+		ts.buildMu.Lock()
+		defer ts.buildMu.Unlock()
+
+		clearValue := map[string]interface{}{
+			"holder":    "",
+			"timestamp": "",
+		}
+		_ = ts.client.PlatformSetting.UpdateOneID(lockKey).
+			SetValue(clearValue).
+			SetUpdatedAt(time.Now()).
+			Exec(ctx)
+	}
+
+	return true, release, nil
+}
+
+func (ts *sandboxTemplateStore) IsTemplateBuildInProgress(ctx context.Context, templateID string) (bool, error) {
+	lockKey := "build_lock:" + templateID
+	setting, err := ts.client.PlatformSetting.Get(ctx, lockKey)
+	if err != nil {
+		if platforment.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	now := time.Now()
+	staleThreshold := now.Add(-10 * time.Minute)
+
+	tsStr, ok := setting.Value["timestamp"].(string)
+	if !ok || tsStr == "" {
+		return false, nil
+	}
+
+	lockTime, err := time.Parse(time.RFC3339, tsStr)
+	if err != nil {
+		return false, nil
+	}
+
+	return lockTime.After(staleThreshold), nil
+}
+
 func entTemplateToStore(e *platforment.SandboxTemplate) *store.SandboxTemplate {
 	tpl := &store.SandboxTemplate{
-		ID:           e.ID.String(),
-		Slug:         e.Slug,
-		Scope:        store.SandboxTemplateScope(e.Scope),
-		OwnerID:      e.OwnerID,
-		Purpose:      store.SandboxTemplatePurpose(e.Purpose),
-		Name:         e.Name,
-		Description:  e.Description,
-		TopLayerID:   e.TopLayerID,
-		SandboxImage: e.SandboxImage,
-		Version:      e.Version,
-		CreatedAt:    e.CreatedAt,
-		UpdatedAt:    e.UpdatedAt,
+		ID:             e.ID.String(),
+		Slug:           e.Slug,
+		Scope:          store.SandboxTemplateScope(e.Scope),
+		OwnerID:        e.OwnerID,
+		Purpose:        store.SandboxTemplatePurpose(e.Purpose),
+		Name:           e.Name,
+		Description:    e.Description,
+		TopLayerID:     e.TopLayerID,
+		SandboxImage:   e.SandboxImage,
+		Packages:       e.Packages,
+		BuildStatus:    e.BuildStatus,
+		BuildJobName:   e.BuildJobName,
+		BuildError:     e.BuildError,
+		LastBuiltImage: e.LastBuiltImage,
+		BuildStartedAt: e.BuildStartedAt,
+		Version:        e.Version,
+		CreatedAt:      e.CreatedAt,
+		UpdatedAt:      e.UpdatedAt,
 	}
 
 	if e.ParentTemplateID != nil {

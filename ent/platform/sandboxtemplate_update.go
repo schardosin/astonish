@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/ent/platform/predicate"
@@ -171,6 +172,100 @@ func (_u *SandboxTemplateUpdate) SetNillableSandboxImage(v *string) *SandboxTemp
 // ClearSandboxImage clears the value of the "sandbox_image" field.
 func (_u *SandboxTemplateUpdate) ClearSandboxImage() *SandboxTemplateUpdate {
 	_u.mutation.ClearSandboxImage()
+	return _u
+}
+
+// SetPackages sets the "packages" field.
+func (_u *SandboxTemplateUpdate) SetPackages(v []string) *SandboxTemplateUpdate {
+	_u.mutation.SetPackages(v)
+	return _u
+}
+
+// AppendPackages appends value to the "packages" field.
+func (_u *SandboxTemplateUpdate) AppendPackages(v []string) *SandboxTemplateUpdate {
+	_u.mutation.AppendPackages(v)
+	return _u
+}
+
+// ClearPackages clears the value of the "packages" field.
+func (_u *SandboxTemplateUpdate) ClearPackages() *SandboxTemplateUpdate {
+	_u.mutation.ClearPackages()
+	return _u
+}
+
+// SetBuildStatus sets the "build_status" field.
+func (_u *SandboxTemplateUpdate) SetBuildStatus(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetBuildStatus(v)
+	return _u
+}
+
+// SetNillableBuildStatus sets the "build_status" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableBuildStatus(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetBuildStatus(*v)
+	}
+	return _u
+}
+
+// SetBuildJobName sets the "build_job_name" field.
+func (_u *SandboxTemplateUpdate) SetBuildJobName(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetBuildJobName(v)
+	return _u
+}
+
+// SetNillableBuildJobName sets the "build_job_name" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableBuildJobName(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetBuildJobName(*v)
+	}
+	return _u
+}
+
+// SetBuildError sets the "build_error" field.
+func (_u *SandboxTemplateUpdate) SetBuildError(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetBuildError(v)
+	return _u
+}
+
+// SetNillableBuildError sets the "build_error" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableBuildError(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetBuildError(*v)
+	}
+	return _u
+}
+
+// SetLastBuiltImage sets the "last_built_image" field.
+func (_u *SandboxTemplateUpdate) SetLastBuiltImage(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetLastBuiltImage(v)
+	return _u
+}
+
+// SetNillableLastBuiltImage sets the "last_built_image" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableLastBuiltImage(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetLastBuiltImage(*v)
+	}
+	return _u
+}
+
+// SetBuildStartedAt sets the "build_started_at" field.
+func (_u *SandboxTemplateUpdate) SetBuildStartedAt(v time.Time) *SandboxTemplateUpdate {
+	_u.mutation.SetBuildStartedAt(v)
+	return _u
+}
+
+// SetNillableBuildStartedAt sets the "build_started_at" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableBuildStartedAt(v *time.Time) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetBuildStartedAt(*v)
+	}
+	return _u
+}
+
+// ClearBuildStartedAt clears the value of the "build_started_at" field.
+func (_u *SandboxTemplateUpdate) ClearBuildStartedAt() *SandboxTemplateUpdate {
+	_u.mutation.ClearBuildStartedAt()
 	return _u
 }
 
@@ -455,6 +550,35 @@ func (_u *SandboxTemplateUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if _u.mutation.SandboxImageCleared() {
 		_spec.ClearField(sandboxtemplate.FieldSandboxImage, field.TypeString)
+	}
+	if value, ok := _u.mutation.Packages(); ok {
+		_spec.SetField(sandboxtemplate.FieldPackages, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedPackages(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, sandboxtemplate.FieldPackages, value)
+		})
+	}
+	if _u.mutation.PackagesCleared() {
+		_spec.ClearField(sandboxtemplate.FieldPackages, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BuildStatus(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildJobName(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildJobName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildError(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.LastBuiltImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldLastBuiltImage, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildStartedAt(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BuildStartedAtCleared() {
+		_spec.ClearField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)
@@ -753,6 +877,100 @@ func (_u *SandboxTemplateUpdateOne) SetNillableSandboxImage(v *string) *SandboxT
 // ClearSandboxImage clears the value of the "sandbox_image" field.
 func (_u *SandboxTemplateUpdateOne) ClearSandboxImage() *SandboxTemplateUpdateOne {
 	_u.mutation.ClearSandboxImage()
+	return _u
+}
+
+// SetPackages sets the "packages" field.
+func (_u *SandboxTemplateUpdateOne) SetPackages(v []string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetPackages(v)
+	return _u
+}
+
+// AppendPackages appends value to the "packages" field.
+func (_u *SandboxTemplateUpdateOne) AppendPackages(v []string) *SandboxTemplateUpdateOne {
+	_u.mutation.AppendPackages(v)
+	return _u
+}
+
+// ClearPackages clears the value of the "packages" field.
+func (_u *SandboxTemplateUpdateOne) ClearPackages() *SandboxTemplateUpdateOne {
+	_u.mutation.ClearPackages()
+	return _u
+}
+
+// SetBuildStatus sets the "build_status" field.
+func (_u *SandboxTemplateUpdateOne) SetBuildStatus(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetBuildStatus(v)
+	return _u
+}
+
+// SetNillableBuildStatus sets the "build_status" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableBuildStatus(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetBuildStatus(*v)
+	}
+	return _u
+}
+
+// SetBuildJobName sets the "build_job_name" field.
+func (_u *SandboxTemplateUpdateOne) SetBuildJobName(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetBuildJobName(v)
+	return _u
+}
+
+// SetNillableBuildJobName sets the "build_job_name" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableBuildJobName(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetBuildJobName(*v)
+	}
+	return _u
+}
+
+// SetBuildError sets the "build_error" field.
+func (_u *SandboxTemplateUpdateOne) SetBuildError(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetBuildError(v)
+	return _u
+}
+
+// SetNillableBuildError sets the "build_error" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableBuildError(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetBuildError(*v)
+	}
+	return _u
+}
+
+// SetLastBuiltImage sets the "last_built_image" field.
+func (_u *SandboxTemplateUpdateOne) SetLastBuiltImage(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetLastBuiltImage(v)
+	return _u
+}
+
+// SetNillableLastBuiltImage sets the "last_built_image" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableLastBuiltImage(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetLastBuiltImage(*v)
+	}
+	return _u
+}
+
+// SetBuildStartedAt sets the "build_started_at" field.
+func (_u *SandboxTemplateUpdateOne) SetBuildStartedAt(v time.Time) *SandboxTemplateUpdateOne {
+	_u.mutation.SetBuildStartedAt(v)
+	return _u
+}
+
+// SetNillableBuildStartedAt sets the "build_started_at" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableBuildStartedAt(v *time.Time) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetBuildStartedAt(*v)
+	}
+	return _u
+}
+
+// ClearBuildStartedAt clears the value of the "build_started_at" field.
+func (_u *SandboxTemplateUpdateOne) ClearBuildStartedAt() *SandboxTemplateUpdateOne {
+	_u.mutation.ClearBuildStartedAt()
 	return _u
 }
 
@@ -1067,6 +1285,35 @@ func (_u *SandboxTemplateUpdateOne) sqlSave(ctx context.Context) (_node *Sandbox
 	}
 	if _u.mutation.SandboxImageCleared() {
 		_spec.ClearField(sandboxtemplate.FieldSandboxImage, field.TypeString)
+	}
+	if value, ok := _u.mutation.Packages(); ok {
+		_spec.SetField(sandboxtemplate.FieldPackages, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedPackages(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, sandboxtemplate.FieldPackages, value)
+		})
+	}
+	if _u.mutation.PackagesCleared() {
+		_spec.ClearField(sandboxtemplate.FieldPackages, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.BuildStatus(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildJobName(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildJobName, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildError(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.LastBuiltImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldLastBuiltImage, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.BuildStartedAt(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime, value)
+	}
+	if _u.mutation.BuildStartedAtCleared() {
+		_spec.ClearField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

@@ -246,6 +246,32 @@ sandbox:
       repository: schardosin/astonish-sandbox-openshell
       tag: dev
 
+    # Container image registry for custom-built sandbox images.
+    # Required for the automated image build pipeline (P1).
+    registry:
+      # OCI registry URL prefix. Images are pushed as:
+      #   <url>/astonish-sandbox-<scope>:<content-hash>
+      # Examples: "docker.io/schardosin", "ghcr.io/schardosin", "harbor.internal:5000/astonish"
+      url: ""
+      # Name of a K8s Secret (type kubernetes.io/dockerconfigjson) containing
+      # registry credentials. Must exist in the control-plane namespace.
+      secretName: ""
+
+    # Kaniko-based image builder configuration.
+    builder:
+      # Pinned Kaniko executor image. Update to upgrade build tooling.
+      image: "gcr.io/kaniko-project/executor:v1.23.2"
+      # Namespace where build Jobs run. Empty = control-plane namespace.
+      namespace: ""
+      # Resource requests/limits for the Kaniko build pod.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
   # equivalent to the Incus cgroup cap. A session can burst up to this

@@ -3,7 +3,7 @@ import { Box, Play, Save, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2,
 import {
   fetchTeamTemplateStatus, createTeamTemplate, saveTeamTemplate,
   restoreTeamTemplate, deleteTeamTemplate, startTeamTemplate,
-  setTeamTemplateImage,
+  setTeamTemplateImage, buildTeamImage,
   type TeamTemplateStatus,
 } from '../api/sandbox'
 
@@ -33,6 +33,10 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
   // OpenShell image state
   const [imageInput, setImageInput] = useState('')
   const [savingImage, setSavingImage] = useState(false)
+  const [packagesInput, setPackagesInput] = useState('')
+  const [buildingImage, setBuildingImage] = useState(false)
+  const [buildLog, setBuildLog] = useState<string[]>([])
+  const buildAbortRef = useRef<(() => void) | null>(null)
 
   const loadStatus = useCallback(async () => {
     try {
@@ -290,19 +294,93 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
           </div>
         )}
 
-        {/* Info box */}
-        <div className="flex items-start gap-3 p-4 rounded-lg" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
-          <Info size={16} className="mt-0.5 shrink-0" style={{ color: '#3b82f6' }} />
-          <div className="space-y-1">
-            <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-              Interactive editing not available
-            </p>
+        {/* Package-based image build */}
+        {canManage && (
+          <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Build from Package List</h4>
             <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              OpenShell sandboxes are immutable at runtime. To customize packages, build a Docker image
-              with your packages pre-installed and set it here. Automated image building from a package list is coming soon.
+              Specify apt packages to install. A new image will be built and set as this team's sandbox image.
             </p>
+
+            <div className="space-y-2">
+              <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+                Packages (one per line)
+              </label>
+              <textarea
+                value={packagesInput}
+                onChange={e => setPackagesInput(e.target.value)}
+                placeholder={"curl\ngit\njq\npython3"}
+                rows={4}
+                disabled={buildingImage}
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono resize-y"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+            </div>
+
+            {/* Build log */}
+            {buildLog.length > 0 && (
+              <div className="font-mono text-[11px] space-y-0.5 max-h-48 overflow-y-auto p-3 rounded-lg"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+                {buildLog.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+                {buildingImage && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <Loader2 size={10} className="animate-spin" /> Building...
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              {buildingImage && (
+                <button
+                  onClick={() => { buildAbortRef.current?.(); setBuildingImage(false); setBuildLog(prev => [...prev, '--- Cancelled ---']) }}
+                  className={btnBase}
+                  style={{ color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+                >
+                  Cancel
+                </button>
+              )}
+              <button
+                onClick={() => {
+                  const packages = packagesInput.trim().split('\n').map(l => l.trim()).filter(Boolean)
+                  if (packages.length === 0) return
+                  setError('')
+                  setSuccess('')
+                  setBuildLog([])
+                  setBuildingImage(true)
+                  const { abort } = buildTeamImage({
+                    packages,
+                    teamSlug,
+                    onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
+                    onDone: (result) => {
+                      setBuildingImage(false)
+                      setSuccess(`Build complete! Image: ${result.image}`)
+                      setImageInput(result.image)
+                      loadStatus()
+                    },
+                    onError: (err) => {
+                      setBuildingImage(false)
+                      setError(err)
+                    },
+                  })
+                  buildAbortRef.current = abort
+                }}
+                disabled={buildingImage || !packagesInput.trim()}
+                className={btnBase}
+                style={{ background: 'var(--accent)', color: '#fff', opacity: (buildingImage || !packagesInput.trim()) ? 0.5 : 1 }}
+              >
+                {buildingImage ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                {buildingImage ? 'Building...' : 'Build Image'}
+              </button>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     )
   }

@@ -167,6 +167,14 @@ func (s *sandboxTemplateStore) IsBuildInProgress(context.Context) (bool, error) 
 	return false, store.ErrUnsupported
 }
 
+func (s *sandboxTemplateStore) AcquireTemplateBuildLock(context.Context, string) (bool, func(), error) {
+	return false, nil, store.ErrUnsupported
+}
+
+func (s *sandboxTemplateStore) IsTemplateBuildInProgress(context.Context, string) (bool, error) {
+	return false, store.ErrUnsupported
+}
+
 func metaToTemplate(m *tmplmeta.TemplateMeta) *store.SandboxTemplate {
 	return &store.SandboxTemplate{
 		ID:          m.Name,

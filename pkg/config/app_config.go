@@ -104,6 +104,35 @@ type SandboxOpenShellConfig struct {
 	// sideloaded by the gateway automatically.
 	// Default: "schardosin/astonish-sandbox-openshell:latest".
 	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
+
+	// Registry configures the OCI registry for custom-built sandbox images.
+	Registry RegistryConfig `yaml:"registry,omitempty" json:"registry,omitempty"`
+
+	// Builder configures the Kaniko-based image builder.
+	Builder BuilderConfig `yaml:"builder,omitempty" json:"builder,omitempty"`
+}
+
+// RegistryConfig holds OCI registry connection details for pushing
+// custom-built sandbox images.
+type RegistryConfig struct {
+	// URL is the registry URL prefix. Images are pushed as:
+	//   <URL>/astonish-sandbox-<scope>:<content-hash>
+	// Examples: "docker.io/schardosin", "ghcr.io/org", "harbor.local:5000/proj"
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+
+	// SecretName is the name of a K8s Secret (type kubernetes.io/dockerconfigjson)
+	// containing registry credentials. Must exist in the builder namespace.
+	SecretName string `yaml:"secret_name,omitempty" json:"secret_name,omitempty"`
+}
+
+// BuilderConfig holds configuration for the Kaniko-based image builder.
+type BuilderConfig struct {
+	// Image is the pinned Kaniko executor image reference.
+	// Default: "gcr.io/kaniko-project/executor:v1.23.2"
+	Image string `yaml:"image,omitempty" json:"image,omitempty"`
+
+	// Namespace where build Jobs run. Defaults to the control-plane namespace.
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the

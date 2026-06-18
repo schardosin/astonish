@@ -79,5 +79,17 @@ data:
         gateway_addr: {{ include "astonish.openshell.gatewayAddr" . | quote }}
         gateway_tls: false
         sandbox_image: {{ printf "%s:%s" .Values.sandbox.openshell.image.repository .Values.sandbox.openshell.image.tag | quote }}
+        {{- if .Values.sandbox.openshell.registry.url }}
+        registry:
+          url: {{ .Values.sandbox.openshell.registry.url | quote }}
+          {{- if .Values.sandbox.openshell.registry.secretName }}
+          secret_name: {{ .Values.sandbox.openshell.registry.secretName | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.sandbox.openshell.builder.image }}
+        builder:
+          image: {{ .Values.sandbox.openshell.builder.image | quote }}
+          namespace: {{ default (include "astonish.namespace.controlPlane" .) .Values.sandbox.openshell.builder.namespace | quote }}
+        {{- end }}
       {{- end }}
     {{- end }}

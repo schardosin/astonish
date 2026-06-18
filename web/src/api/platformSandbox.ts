@@ -184,3 +184,94 @@ export function configureBase({ config, onProgress, onDone, onError }: Configure
 
   return { abort: () => controller.abort() }
 }
+
+// --- Image Build API (OpenShell / Kaniko) ---
+
+export interface ImageBuildCallbacks {
+  packages: string[]
+  onProgress: (msg: string) => void
+  onDone: (result: { image: string }) => void
+  onError: (err: string) => void
+}
+
+export function buildBaseImage({ packages, onProgress, onDone, onError }: ImageBuildCallbacks): { abort: () => void } {
+  const controller = new AbortController()
+
+  adminFetch(`${BASE}/build`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packages }),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text()
+        try {
+          const body = JSON.parse(text)
+          onError(body.error || text || res.statusText)
+        } catch {
+          onError(text || res.statusText)
+        }
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()!
+
+        let currentEvent = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6)
+            try {
+              const data = JSON.parse(dataStr)
+              if (currentEvent === 'progress') {
+                onProgress(data.message || '')
+              } else if (currentEvent === 'done') {
+                onDone({ image: data.image })
+              } else if (currentEvent === 'error') {
+                onError(data.error || 'Unknown error')
+              }
+            } catch {
+              // ignore parse errors for incomplete data
+            }
+            currentEvent = ''
+          }
+        }
+      }
+    })
+    .catch((err: Error) => {
+      if (err.name !== 'AbortError') {
+        onError(err.message || 'Connection failed')
+      }
+    })
+
+  return { abort: () => controller.abort() }
+}
+
+export interface ImageBuildStatus {
+  in_progress: boolean
+  status: string
+  image: string
+  error: string
+  job_name: string
+  started_at: string
+}
+
+export async function getBaseImageBuildStatus(): Promise<ImageBuildStatus> {
+  const res = await adminFetch(`${BASE}/build/status`)
+  if (!res.ok) {
+    throw new Error(`Failed to fetch build status: ${res.statusText}`)
+  }
+  return res.json()
+}

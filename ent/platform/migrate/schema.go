@@ -373,6 +373,12 @@ var (
 		{Name: "name", Type: field.TypeString},
 		{Name: "description", Type: field.TypeString, Default: ""},
 		{Name: "sandbox_image", Type: field.TypeString, Nullable: true},
+		{Name: "packages", Type: field.TypeJSON, Nullable: true},
+		{Name: "build_status", Type: field.TypeString, Default: ""},
+		{Name: "build_job_name", Type: field.TypeString, Default: ""},
+		{Name: "build_error", Type: field.TypeString, Default: ""},
+		{Name: "last_built_image", Type: field.TypeString, Default: ""},
+		{Name: "build_started_at", Type: field.TypeTime, Nullable: true},
 		{Name: "base_config", Type: field.TypeJSON, Nullable: true},
 		{Name: "configured_by", Type: field.TypeUUID, Nullable: true},
 		{Name: "configured_at", Type: field.TypeTime, Nullable: true},
@@ -391,13 +397,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sandbox_templates_sandbox_layers_templates",
-				Columns:    []*schema.Column{SandboxTemplatesColumns[15]},
+				Columns:    []*schema.Column{SandboxTemplatesColumns[21]},
 				RefColumns: []*schema.Column{SandboxLayersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "sandbox_templates_sandbox_templates_children",
-				Columns:    []*schema.Column{SandboxTemplatesColumns[16]},
+				Columns:    []*schema.Column{SandboxTemplatesColumns[22]},
 				RefColumns: []*schema.Column{SandboxTemplatesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -416,7 +422,7 @@ var (
 			{
 				Name:    "sandboxtemplate_parent_template_id",
 				Unique:  false,
-				Columns: []*schema.Column{SandboxTemplatesColumns[16]},
+				Columns: []*schema.Column{SandboxTemplatesColumns[22]},
 			},
 		},
 	}

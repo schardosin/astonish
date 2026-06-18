@@ -89,6 +89,12 @@ func (f *fakeTemplateStore) AcquireBuildLock(context.Context) (bool, func(), err
 func (f *fakeTemplateStore) IsBuildInProgress(context.Context) (bool, error) {
 	return false, errors.New("not implemented")
 }
+func (f *fakeTemplateStore) AcquireTemplateBuildLock(context.Context, string) (bool, func(), error) {
+	return false, nil, errors.New("not implemented")
+}
+func (f *fakeTemplateStore) IsTemplateBuildInProgress(context.Context, string) (bool, error) {
+	return false, errors.New("not implemented")
+}
 
 func tpl(id, slug string, scope store.SandboxTemplateScope, owner string) *store.SandboxTemplate {
 	return &store.SandboxTemplate{

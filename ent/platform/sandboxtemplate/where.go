@@ -96,6 +96,31 @@ func SandboxImage(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldSandboxImage, v))
 }
 
+// BuildStatus applies equality check predicate on the "build_status" field. It's identical to BuildStatusEQ.
+func BuildStatus(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildStatus, v))
+}
+
+// BuildJobName applies equality check predicate on the "build_job_name" field. It's identical to BuildJobNameEQ.
+func BuildJobName(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildJobName, v))
+}
+
+// BuildError applies equality check predicate on the "build_error" field. It's identical to BuildErrorEQ.
+func BuildError(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildError, v))
+}
+
+// LastBuiltImage applies equality check predicate on the "last_built_image" field. It's identical to LastBuiltImageEQ.
+func LastBuiltImage(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldLastBuiltImage, v))
+}
+
+// BuildStartedAt applies equality check predicate on the "build_started_at" field. It's identical to BuildStartedAtEQ.
+func BuildStartedAt(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildStartedAt, v))
+}
+
 // ConfiguredBy applies equality check predicate on the "configured_by" field. It's identical to ConfiguredByEQ.
 func ConfiguredBy(v uuid.UUID) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldConfiguredBy, v))
@@ -649,6 +674,326 @@ func SandboxImageEqualFold(v string) predicate.SandboxTemplate {
 // SandboxImageContainsFold applies the ContainsFold predicate on the "sandbox_image" field.
 func SandboxImageContainsFold(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldSandboxImage, v))
+}
+
+// PackagesIsNil applies the IsNil predicate on the "packages" field.
+func PackagesIsNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIsNull(FieldPackages))
+}
+
+// PackagesNotNil applies the NotNil predicate on the "packages" field.
+func PackagesNotNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotNull(FieldPackages))
+}
+
+// BuildStatusEQ applies the EQ predicate on the "build_status" field.
+func BuildStatusEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildStatus, v))
+}
+
+// BuildStatusNEQ applies the NEQ predicate on the "build_status" field.
+func BuildStatusNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldBuildStatus, v))
+}
+
+// BuildStatusIn applies the In predicate on the "build_status" field.
+func BuildStatusIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldBuildStatus, vs...))
+}
+
+// BuildStatusNotIn applies the NotIn predicate on the "build_status" field.
+func BuildStatusNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldBuildStatus, vs...))
+}
+
+// BuildStatusGT applies the GT predicate on the "build_status" field.
+func BuildStatusGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldBuildStatus, v))
+}
+
+// BuildStatusGTE applies the GTE predicate on the "build_status" field.
+func BuildStatusGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldBuildStatus, v))
+}
+
+// BuildStatusLT applies the LT predicate on the "build_status" field.
+func BuildStatusLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldBuildStatus, v))
+}
+
+// BuildStatusLTE applies the LTE predicate on the "build_status" field.
+func BuildStatusLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldBuildStatus, v))
+}
+
+// BuildStatusContains applies the Contains predicate on the "build_status" field.
+func BuildStatusContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldBuildStatus, v))
+}
+
+// BuildStatusHasPrefix applies the HasPrefix predicate on the "build_status" field.
+func BuildStatusHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldBuildStatus, v))
+}
+
+// BuildStatusHasSuffix applies the HasSuffix predicate on the "build_status" field.
+func BuildStatusHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldBuildStatus, v))
+}
+
+// BuildStatusEqualFold applies the EqualFold predicate on the "build_status" field.
+func BuildStatusEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldBuildStatus, v))
+}
+
+// BuildStatusContainsFold applies the ContainsFold predicate on the "build_status" field.
+func BuildStatusContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldBuildStatus, v))
+}
+
+// BuildJobNameEQ applies the EQ predicate on the "build_job_name" field.
+func BuildJobNameEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildJobName, v))
+}
+
+// BuildJobNameNEQ applies the NEQ predicate on the "build_job_name" field.
+func BuildJobNameNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldBuildJobName, v))
+}
+
+// BuildJobNameIn applies the In predicate on the "build_job_name" field.
+func BuildJobNameIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldBuildJobName, vs...))
+}
+
+// BuildJobNameNotIn applies the NotIn predicate on the "build_job_name" field.
+func BuildJobNameNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldBuildJobName, vs...))
+}
+
+// BuildJobNameGT applies the GT predicate on the "build_job_name" field.
+func BuildJobNameGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldBuildJobName, v))
+}
+
+// BuildJobNameGTE applies the GTE predicate on the "build_job_name" field.
+func BuildJobNameGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldBuildJobName, v))
+}
+
+// BuildJobNameLT applies the LT predicate on the "build_job_name" field.
+func BuildJobNameLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldBuildJobName, v))
+}
+
+// BuildJobNameLTE applies the LTE predicate on the "build_job_name" field.
+func BuildJobNameLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldBuildJobName, v))
+}
+
+// BuildJobNameContains applies the Contains predicate on the "build_job_name" field.
+func BuildJobNameContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldBuildJobName, v))
+}
+
+// BuildJobNameHasPrefix applies the HasPrefix predicate on the "build_job_name" field.
+func BuildJobNameHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldBuildJobName, v))
+}
+
+// BuildJobNameHasSuffix applies the HasSuffix predicate on the "build_job_name" field.
+func BuildJobNameHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldBuildJobName, v))
+}
+
+// BuildJobNameEqualFold applies the EqualFold predicate on the "build_job_name" field.
+func BuildJobNameEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldBuildJobName, v))
+}
+
+// BuildJobNameContainsFold applies the ContainsFold predicate on the "build_job_name" field.
+func BuildJobNameContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldBuildJobName, v))
+}
+
+// BuildErrorEQ applies the EQ predicate on the "build_error" field.
+func BuildErrorEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildError, v))
+}
+
+// BuildErrorNEQ applies the NEQ predicate on the "build_error" field.
+func BuildErrorNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldBuildError, v))
+}
+
+// BuildErrorIn applies the In predicate on the "build_error" field.
+func BuildErrorIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldBuildError, vs...))
+}
+
+// BuildErrorNotIn applies the NotIn predicate on the "build_error" field.
+func BuildErrorNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldBuildError, vs...))
+}
+
+// BuildErrorGT applies the GT predicate on the "build_error" field.
+func BuildErrorGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldBuildError, v))
+}
+
+// BuildErrorGTE applies the GTE predicate on the "build_error" field.
+func BuildErrorGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldBuildError, v))
+}
+
+// BuildErrorLT applies the LT predicate on the "build_error" field.
+func BuildErrorLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldBuildError, v))
+}
+
+// BuildErrorLTE applies the LTE predicate on the "build_error" field.
+func BuildErrorLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldBuildError, v))
+}
+
+// BuildErrorContains applies the Contains predicate on the "build_error" field.
+func BuildErrorContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldBuildError, v))
+}
+
+// BuildErrorHasPrefix applies the HasPrefix predicate on the "build_error" field.
+func BuildErrorHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldBuildError, v))
+}
+
+// BuildErrorHasSuffix applies the HasSuffix predicate on the "build_error" field.
+func BuildErrorHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldBuildError, v))
+}
+
+// BuildErrorEqualFold applies the EqualFold predicate on the "build_error" field.
+func BuildErrorEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldBuildError, v))
+}
+
+// BuildErrorContainsFold applies the ContainsFold predicate on the "build_error" field.
+func BuildErrorContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldBuildError, v))
+}
+
+// LastBuiltImageEQ applies the EQ predicate on the "last_built_image" field.
+func LastBuiltImageEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageNEQ applies the NEQ predicate on the "last_built_image" field.
+func LastBuiltImageNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageIn applies the In predicate on the "last_built_image" field.
+func LastBuiltImageIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldLastBuiltImage, vs...))
+}
+
+// LastBuiltImageNotIn applies the NotIn predicate on the "last_built_image" field.
+func LastBuiltImageNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldLastBuiltImage, vs...))
+}
+
+// LastBuiltImageGT applies the GT predicate on the "last_built_image" field.
+func LastBuiltImageGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageGTE applies the GTE predicate on the "last_built_image" field.
+func LastBuiltImageGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageLT applies the LT predicate on the "last_built_image" field.
+func LastBuiltImageLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageLTE applies the LTE predicate on the "last_built_image" field.
+func LastBuiltImageLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageContains applies the Contains predicate on the "last_built_image" field.
+func LastBuiltImageContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageHasPrefix applies the HasPrefix predicate on the "last_built_image" field.
+func LastBuiltImageHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageHasSuffix applies the HasSuffix predicate on the "last_built_image" field.
+func LastBuiltImageHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageEqualFold applies the EqualFold predicate on the "last_built_image" field.
+func LastBuiltImageEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldLastBuiltImage, v))
+}
+
+// LastBuiltImageContainsFold applies the ContainsFold predicate on the "last_built_image" field.
+func LastBuiltImageContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldLastBuiltImage, v))
+}
+
+// BuildStartedAtEQ applies the EQ predicate on the "build_started_at" field.
+func BuildStartedAtEQ(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtNEQ applies the NEQ predicate on the "build_started_at" field.
+func BuildStartedAtNEQ(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtIn applies the In predicate on the "build_started_at" field.
+func BuildStartedAtIn(vs ...time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldBuildStartedAt, vs...))
+}
+
+// BuildStartedAtNotIn applies the NotIn predicate on the "build_started_at" field.
+func BuildStartedAtNotIn(vs ...time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldBuildStartedAt, vs...))
+}
+
+// BuildStartedAtGT applies the GT predicate on the "build_started_at" field.
+func BuildStartedAtGT(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtGTE applies the GTE predicate on the "build_started_at" field.
+func BuildStartedAtGTE(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtLT applies the LT predicate on the "build_started_at" field.
+func BuildStartedAtLT(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtLTE applies the LTE predicate on the "build_started_at" field.
+func BuildStartedAtLTE(v time.Time) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldBuildStartedAt, v))
+}
+
+// BuildStartedAtIsNil applies the IsNil predicate on the "build_started_at" field.
+func BuildStartedAtIsNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIsNull(FieldBuildStartedAt))
+}
+
+// BuildStartedAtNotNil applies the NotNil predicate on the "build_started_at" field.
+func BuildStartedAtNotNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotNull(FieldBuildStartedAt))
 }
 
 // BaseConfigIsNil applies the IsNil predicate on the "base_config" field.

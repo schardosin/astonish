@@ -110,6 +110,14 @@ func (m *mockTemplateStore) IsBuildInProgress(_ context.Context) (bool, error) {
 	return false, nil
 }
 
+func (m *mockTemplateStore) AcquireTemplateBuildLock(_ context.Context, _ string) (bool, func(), error) {
+	return true, func() {}, nil
+}
+
+func (m *mockTemplateStore) IsTemplateBuildInProgress(_ context.Context, _ string) (bool, error) {
+	return false, nil
+}
+
 func (m *mockTemplateStore) has(id string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()

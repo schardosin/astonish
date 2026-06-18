@@ -144,7 +144,7 @@ func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, 
 		return nil, fmt.Errorf("sandbox/openshell: ExecStreaming: session %q has no sandbox", sessionID)
 	}
 
-	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
+	command := wrapCommandRaw(opts.Command, opts.WorkDir, opts.Env)
 
 	conn, err := b.gateway.ExecStream(ctx, rec.PodName, ExecRequest{
 		Command:        command,
@@ -393,6 +393,57 @@ func wrapCommand(command []string, workDir string, env map[string]string) []stri
 		buf.WriteString(" && ")
 	}
 	buf.WriteString("exec")
+	for _, a := range command {
+		buf.WriteByte(' ')
+		buf.WriteString(shellQuote(a))
+	}
+	return []string{"/bin/sh", "-c", buf.String()}
+}
+
+// wrapCommandRaw is like wrapCommand but prepends "stty raw -echo 2>/dev/null;"
+// to disable PTY echo. Used by ExecStreaming for machine-to-machine protocols
+// (MCP JSON-RPC) where the OpenShell gateway unconditionally allocates a PTY
+// on ExecSandboxInteractive regardless of the tty=false flag.
+//
+// Also injects TERM=dumb (suppresses spinner/ANSI output from npx and friends)
+// and NODE_OPTIONS=--no-warnings (suppresses ExperimentalWarning on stdout)
+// unless the caller has already set them.
+func wrapCommandRaw(command []string, workDir string, env map[string]string) []string {
+	// Merge in PTY-safe defaults for non-interactive use.
+	mergedEnv := make(map[string]string, len(env)+2)
+	for k, v := range env {
+		mergedEnv[k] = v
+	}
+	if _, ok := mergedEnv["TERM"]; !ok {
+		mergedEnv["TERM"] = "dumb"
+	}
+	if _, ok := mergedEnv["NODE_OPTIONS"]; !ok {
+		mergedEnv["NODE_OPTIONS"] = "--no-warnings"
+	}
+
+	var buf bytes.Buffer
+	// Disable PTY echo and \n→\r\n translation. The gateway's
+	// ExecSandboxInteractive always allocates a PTY; without this,
+	// stdin bytes are echoed back on stdout, corrupting JSON-RPC.
+	buf.WriteString("stty raw -echo 2>/dev/null; ")
+	if workDir != "" {
+		buf.WriteString("cd ")
+		buf.WriteString(shellQuote(workDir))
+		buf.WriteString(" && ")
+	}
+	buf.WriteString("export")
+	keys := make([]string, 0, len(mergedEnv))
+	for k := range mergedEnv {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	for _, k := range keys {
+		buf.WriteByte(' ')
+		buf.WriteString(k)
+		buf.WriteByte('=')
+		buf.WriteString(shellQuote(mergedEnv[k]))
+	}
+	buf.WriteString(" && exec")
 	for _, a := range command {
 		buf.WriteByte(' ')
 		buf.WriteString(shellQuote(a))

@@ -96,10 +96,14 @@ func (t *BackendMCPTransport) Connect(ctx context.Context) (mcp.Connection, erro
 
 	// Wrap the stream's Reader/Writer in an IOTransport.
 	// ExecStream implements io.Reader (stdout) and io.Writer (stdin).
+	// The jsonPrefixFilterReader discards non-JSON preamble lines
+	// (e.g. "Tavily MCP server running on stdio") that some servers
+	// print to stdout before the JSON-RPC stream starts.
 	rwc := &backendStreamRWC{stream: stream}
+	filteredReader := newJSONPrefixFilterReader(rwc)
 
 	inner := &mcp.IOTransport{
-		Reader: rwc,
+		Reader: filteredReader,
 		Writer: rwc,
 	}
 	return inner.Connect(ctx)
@@ -142,4 +146,76 @@ func (s *backendStreamRWC) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// jsonPrefixFilterReader wraps an io.Reader and discards any non-JSON lines
+// before the first line that starts with '{'. Some MCP servers (e.g. tavily-mcp)
+// print human-readable startup messages to stdout before the JSON-RPC stream
+// begins. When connected via a PTY (OpenShell always allocates one), these
+// messages cannot be separated via stderr and would break json.Decoder.
+//
+// After the first '{' byte is encountered, this reader becomes transparent
+// and passes all subsequent bytes through without inspection.
+type jsonPrefixFilterReader struct {
+	inner      io.ReadCloser
+	foundJSON  bool
+	buf        []byte // leftover from partial read that found JSON
+	bufOffset  int
+}
+
+func newJSONPrefixFilterReader(r io.ReadCloser) *jsonPrefixFilterReader {
+	return &jsonPrefixFilterReader{inner: r}
+}
+
+func (f *jsonPrefixFilterReader) Read(p []byte) (int, error) {
+	// Fast path: after finding JSON, pass through directly.
+	if f.foundJSON {
+		// Drain any buffered leftover first.
+		if f.bufOffset < len(f.buf) {
+			n := copy(p, f.buf[f.bufOffset:])
+			f.bufOffset += n
+			if f.bufOffset >= len(f.buf) {
+				f.buf = nil
+				f.bufOffset = 0
+			}
+			return n, nil
+		}
+		return f.inner.Read(p)
+	}
+
+	// Slow path: read and discard non-JSON lines until we find one starting with '{'.
+	tmp := make([]byte, len(p))
+	for {
+		n, err := f.inner.Read(tmp[:])
+		if n == 0 {
+			return 0, err
+		}
+
+		data := tmp[:n]
+		// Look for the first '{' in the data — that marks the start of JSON-RPC.
+		idx := bytes.IndexByte(data, '{')
+		if idx >= 0 {
+			f.foundJSON = true
+			// Everything from '{' onward is valid; discard anything before it.
+			remaining := data[idx:]
+			copied := copy(p, remaining)
+			if copied < len(remaining) {
+				// Buffer the excess.
+				f.buf = append([]byte(nil), remaining[copied:]...)
+				f.bufOffset = 0
+			}
+			return copied, nil
+		}
+
+		// No '{' found — entire chunk is non-JSON preamble, discard it.
+		// If the underlying reader errored (including EOF), propagate.
+		if err != nil {
+			return 0, err
+		}
+		// Continue reading.
+	}
+}
+
+func (f *jsonPrefixFilterReader) Close() error {
+	return f.inner.Close()
 }

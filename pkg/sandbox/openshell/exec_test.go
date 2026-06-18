@@ -387,6 +387,58 @@ func TestWrapCommand_WithEnv(t *testing.T) {
 	}
 }
 
+func TestWrapCommandRaw_NoWorkDirNoEnv(t *testing.T) {
+	cmd := wrapCommandRaw([]string{"npx", "tavily-mcp"}, "", nil)
+	if len(cmd) != 3 || cmd[0] != "/bin/sh" || cmd[1] != "-c" {
+		t.Fatalf("expected shell wrap, got %v", cmd)
+	}
+	if !strings.HasPrefix(cmd[2], "stty raw -echo 2>/dev/null; ") {
+		t.Errorf("should start with stty, got: %s", cmd[2])
+	}
+	if !strings.Contains(cmd[2], "exec 'npx' 'tavily-mcp'") {
+		t.Errorf("should contain exec, got: %s", cmd[2])
+	}
+	// Should inject TERM=dumb and NODE_OPTIONS by default.
+	if !strings.Contains(cmd[2], "NODE_OPTIONS='--no-warnings'") {
+		t.Errorf("should inject NODE_OPTIONS, got: %s", cmd[2])
+	}
+	if !strings.Contains(cmd[2], "TERM='dumb'") {
+		t.Errorf("should inject TERM=dumb, got: %s", cmd[2])
+	}
+}
+
+func TestWrapCommandRaw_WithWorkDirAndEnv(t *testing.T) {
+	cmd := wrapCommandRaw([]string{"node", "server.js"}, "/app", map[string]string{"PORT": "3000"})
+	if len(cmd) != 3 || cmd[0] != "/bin/sh" {
+		t.Fatalf("expected shell wrap, got %v", cmd)
+	}
+	script := cmd[2]
+	if !strings.HasPrefix(script, "stty raw -echo 2>/dev/null; ") {
+		t.Errorf("should start with stty, got: %s", script)
+	}
+	if !strings.Contains(script, "cd '/app'") {
+		t.Errorf("should contain cd, got: %s", script)
+	}
+	if !strings.Contains(script, "PORT='3000'") {
+		t.Errorf("should contain env, got: %s", script)
+	}
+	if !strings.Contains(script, "exec 'node' 'server.js'") {
+		t.Errorf("should contain exec, got: %s", script)
+	}
+}
+
+func TestWrapCommandRaw_DoesNotOverrideUserEnv(t *testing.T) {
+	cmd := wrapCommandRaw([]string{"cmd"}, "", map[string]string{"TERM": "xterm", "NODE_OPTIONS": "--max-old-space-size=4096"})
+	script := cmd[2]
+	// User-provided values should be preserved, not overridden by defaults.
+	if !strings.Contains(script, "TERM='xterm'") {
+		t.Errorf("should preserve user TERM, got: %s", script)
+	}
+	if !strings.Contains(script, "NODE_OPTIONS='--max-old-space-size=4096'") {
+		t.Errorf("should preserve user NODE_OPTIONS, got: %s", script)
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	tests := []struct {
 		input string

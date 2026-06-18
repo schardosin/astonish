@@ -221,6 +221,10 @@ func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTe
 		create.SetTopLayerID(*tpl.TopLayerID)
 	}
 
+	if tpl.SandboxImage != nil {
+		create.SetSandboxImage(*tpl.SandboxImage)
+	}
+
 	if tpl.CreatedBy != "" {
 		createdBy, err := uuid.Parse(tpl.CreatedBy)
 		if err != nil {
@@ -322,6 +326,12 @@ func (ts *sandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTe
 		update.SetTopLayerID(*tpl.TopLayerID)
 	} else {
 		update.ClearTopLayerID()
+	}
+
+	if tpl.SandboxImage != nil {
+		update.SetSandboxImage(*tpl.SandboxImage)
+	} else {
+		update.ClearSandboxImage()
 	}
 
 	return update.Exec(ctx)
@@ -601,17 +611,18 @@ func (ts *sandboxTemplateStore) IsBuildInProgress(ctx context.Context) (bool, er
 
 func entTemplateToStore(e *platforment.SandboxTemplate) *store.SandboxTemplate {
 	tpl := &store.SandboxTemplate{
-		ID:          e.ID.String(),
-		Slug:        e.Slug,
-		Scope:       store.SandboxTemplateScope(e.Scope),
-		OwnerID:     e.OwnerID,
-		Purpose:     store.SandboxTemplatePurpose(e.Purpose),
-		Name:        e.Name,
-		Description: e.Description,
-		TopLayerID:  e.TopLayerID,
-		Version:     e.Version,
-		CreatedAt:   e.CreatedAt,
-		UpdatedAt:   e.UpdatedAt,
+		ID:           e.ID.String(),
+		Slug:         e.Slug,
+		Scope:        store.SandboxTemplateScope(e.Scope),
+		OwnerID:      e.OwnerID,
+		Purpose:      store.SandboxTemplatePurpose(e.Purpose),
+		Name:         e.Name,
+		Description:  e.Description,
+		TopLayerID:   e.TopLayerID,
+		SandboxImage: e.SandboxImage,
+		Version:      e.Version,
+		CreatedAt:    e.CreatedAt,
+		UpdatedAt:    e.UpdatedAt,
 	}
 
 	if e.ParentTemplateID != nil {

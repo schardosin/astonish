@@ -154,6 +154,26 @@ func (_u *SandboxTemplateUpdate) ClearTopLayerID() *SandboxTemplateUpdate {
 	return _u
 }
 
+// SetSandboxImage sets the "sandbox_image" field.
+func (_u *SandboxTemplateUpdate) SetSandboxImage(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetSandboxImage(v)
+	return _u
+}
+
+// SetNillableSandboxImage sets the "sandbox_image" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableSandboxImage(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetSandboxImage(*v)
+	}
+	return _u
+}
+
+// ClearSandboxImage clears the value of the "sandbox_image" field.
+func (_u *SandboxTemplateUpdate) ClearSandboxImage() *SandboxTemplateUpdate {
+	_u.mutation.ClearSandboxImage()
+	return _u
+}
+
 // SetBaseConfig sets the "base_config" field.
 func (_u *SandboxTemplateUpdate) SetBaseConfig(v map[string]interface{}) *SandboxTemplateUpdate {
 	_u.mutation.SetBaseConfig(v)
@@ -429,6 +449,12 @@ func (_u *SandboxTemplateUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if value, ok := _u.mutation.Description(); ok {
 		_spec.SetField(sandboxtemplate.FieldDescription, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SandboxImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldSandboxImage, field.TypeString, value)
+	}
+	if _u.mutation.SandboxImageCleared() {
+		_spec.ClearField(sandboxtemplate.FieldSandboxImage, field.TypeString)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)
@@ -707,6 +733,26 @@ func (_u *SandboxTemplateUpdateOne) SetNillableTopLayerID(v *string) *SandboxTem
 // ClearTopLayerID clears the value of the "top_layer_id" field.
 func (_u *SandboxTemplateUpdateOne) ClearTopLayerID() *SandboxTemplateUpdateOne {
 	_u.mutation.ClearTopLayerID()
+	return _u
+}
+
+// SetSandboxImage sets the "sandbox_image" field.
+func (_u *SandboxTemplateUpdateOne) SetSandboxImage(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetSandboxImage(v)
+	return _u
+}
+
+// SetNillableSandboxImage sets the "sandbox_image" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableSandboxImage(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetSandboxImage(*v)
+	}
+	return _u
+}
+
+// ClearSandboxImage clears the value of the "sandbox_image" field.
+func (_u *SandboxTemplateUpdateOne) ClearSandboxImage() *SandboxTemplateUpdateOne {
+	_u.mutation.ClearSandboxImage()
 	return _u
 }
 
@@ -1015,6 +1061,12 @@ func (_u *SandboxTemplateUpdateOne) sqlSave(ctx context.Context) (_node *Sandbox
 	}
 	if value, ok := _u.mutation.Description(); ok {
 		_spec.SetField(sandboxtemplate.FieldDescription, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SandboxImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldSandboxImage, field.TypeString, value)
+	}
+	if _u.mutation.SandboxImageCleared() {
+		_spec.ClearField(sandboxtemplate.FieldSandboxImage, field.TypeString)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

@@ -29,7 +29,9 @@ type TeamTemplateStatusResponse struct {
 	Exists       bool   `json:"exists"`
 	Running      bool   `json:"running"`
 	TemplateName string `json:"templateName"`
-	Saved        bool   `json:"saved"` // true if TeamSettings.TemplateName is set
+	Saved        bool   `json:"saved"`         // true if TeamSettings.TemplateName is set
+	SandboxImage string `json:"sandboxImage,omitempty"` // per-template container image (OpenShell)
+	Backend      string `json:"backend,omitempty"`      // "incus", "k8s", or "openshell"
 }
 
 // TeamTemplateStatusHandler handles GET /api/team/template/status.
@@ -88,6 +90,16 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil && settings != nil {
 			resp.Saved = settings.TemplateName == templateName
 		}
+	}
+
+	// Resolve per-template image (OpenShell).
+	if img := resolveTemplateImage(r.Context(), templateName); img != "" {
+		resp.SandboxImage = img
+	}
+
+	// Include backend type so frontend can conditionally render UI.
+	if appCfg := effectiveAppConfig(r); appCfg != nil {
+		resp.Backend = appCfg.Sandbox.Backend
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -704,4 +716,125 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// TeamTemplateImageHandler handles POST /api/team/template/image.
+// Sets or clears the per-team sandbox image override. When set, sandboxes
+// created for this team use the specified container image (OpenShell backend)
+// instead of the global default. This bypasses the interactive editor/snapshot
+// flow — teams build their own image with packages pre-installed.
+//
+// Request body: {"image": "ghcr.io/schardosin/custom-sandbox:v2"} or {"image": ""} to clear.
+// Response: {"status": "ok", "image": "<image>"}
+func TeamTemplateImageHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
+	tc := store.TenantContextFrom(r.Context())
+	if tc == nil {
+		respondError(w, http.StatusUnauthorized, "team context not available")
+		return
+	}
+	teamSlug := tc.TeamSlug
+
+	// Parse request body.
+	var req struct {
+		Image string `json:"image"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	// Get the platform backend for template store access.
+	backend := getPlatformBackend()
+	if backend == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	templates := backend.SandboxTemplates()
+	if templates == nil {
+		respondError(w, http.StatusServiceUnavailable, "template store not available")
+		return
+	}
+
+	// Look up or create the team's template.
+	templateSlug := "team-" + teamSlug
+	tpl, err := templates.GetBySlug(r.Context(), store.SandboxTemplateScopeTeam, teamSlug, templateSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to look up template: "+err.Error())
+		return
+	}
+
+	if tpl == nil {
+		// No template exists yet — create one with just the image.
+		baseID, bErr := getBaseTemplateID(r.Context(), templates)
+		if bErr != nil {
+			respondError(w, http.StatusInternalServerError, "failed to resolve @base template: "+bErr.Error())
+			return
+		}
+
+		imgPtr := &req.Image
+		if req.Image == "" {
+			imgPtr = nil
+		}
+
+		tpl = &store.SandboxTemplate{
+			ID:               uuid.New().String(),
+			Slug:             templateSlug,
+			Scope:            store.SandboxTemplateScopeTeam,
+			OwnerID:          teamSlug,
+			Name:             "Team " + teamSlug + " template",
+			ParentTemplateID: &baseID,
+			SandboxImage:     imgPtr,
+			Version:          1,
+		}
+		if err := templates.Create(r.Context(), tpl); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to create template: "+err.Error())
+			return
+		}
+	} else {
+		// Update the existing template's image.
+		if req.Image != "" {
+			tpl.SandboxImage = &req.Image
+		} else {
+			tpl.SandboxImage = nil
+		}
+		if err := templates.Update(r.Context(), tpl); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to update template: "+err.Error())
+			return
+		}
+	}
+
+	// Update team settings so sessions know the template name.
+	if svc := store.FromRequest(r); svc != nil && svc.Settings != nil {
+		if settings, sErr := svc.Settings.Get(r.Context()); sErr == nil {
+			if settings.TemplateName != templateSlug {
+				settings.TemplateName = templateSlug
+				_ = svc.Settings.Save(r.Context(), settings)
+			}
+		}
+	}
+
+	slog.Info("team template image set",
+		"team", teamSlug,
+		"image", req.Image)
+
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"image":  req.Image,
+	})
+}
+
+// getBaseTemplateID returns the UUID string of the @base template.
+func getBaseTemplateID(ctx context.Context, templates store.SandboxTemplateStore) (string, error) {
+	base, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil {
+		return "", err
+	}
+	if base == nil {
+		return "", fmt.Errorf("@base template not found")
+	}
+	return base.ID, nil
 }

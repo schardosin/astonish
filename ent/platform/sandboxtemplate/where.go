@@ -91,6 +91,11 @@ func TopLayerID(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldTopLayerID, v))
 }
 
+// SandboxImage applies equality check predicate on the "sandbox_image" field. It's identical to SandboxImageEQ.
+func SandboxImage(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldSandboxImage, v))
+}
+
 // ConfiguredBy applies equality check predicate on the "configured_by" field. It's identical to ConfiguredByEQ.
 func ConfiguredBy(v uuid.UUID) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldConfiguredBy, v))
@@ -569,6 +574,81 @@ func TopLayerIDEqualFold(v string) predicate.SandboxTemplate {
 // TopLayerIDContainsFold applies the ContainsFold predicate on the "top_layer_id" field.
 func TopLayerIDContainsFold(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldTopLayerID, v))
+}
+
+// SandboxImageEQ applies the EQ predicate on the "sandbox_image" field.
+func SandboxImageEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldSandboxImage, v))
+}
+
+// SandboxImageNEQ applies the NEQ predicate on the "sandbox_image" field.
+func SandboxImageNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldSandboxImage, v))
+}
+
+// SandboxImageIn applies the In predicate on the "sandbox_image" field.
+func SandboxImageIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldSandboxImage, vs...))
+}
+
+// SandboxImageNotIn applies the NotIn predicate on the "sandbox_image" field.
+func SandboxImageNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldSandboxImage, vs...))
+}
+
+// SandboxImageGT applies the GT predicate on the "sandbox_image" field.
+func SandboxImageGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldSandboxImage, v))
+}
+
+// SandboxImageGTE applies the GTE predicate on the "sandbox_image" field.
+func SandboxImageGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldSandboxImage, v))
+}
+
+// SandboxImageLT applies the LT predicate on the "sandbox_image" field.
+func SandboxImageLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldSandboxImage, v))
+}
+
+// SandboxImageLTE applies the LTE predicate on the "sandbox_image" field.
+func SandboxImageLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldSandboxImage, v))
+}
+
+// SandboxImageContains applies the Contains predicate on the "sandbox_image" field.
+func SandboxImageContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldSandboxImage, v))
+}
+
+// SandboxImageHasPrefix applies the HasPrefix predicate on the "sandbox_image" field.
+func SandboxImageHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldSandboxImage, v))
+}
+
+// SandboxImageHasSuffix applies the HasSuffix predicate on the "sandbox_image" field.
+func SandboxImageHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldSandboxImage, v))
+}
+
+// SandboxImageIsNil applies the IsNil predicate on the "sandbox_image" field.
+func SandboxImageIsNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIsNull(FieldSandboxImage))
+}
+
+// SandboxImageNotNil applies the NotNil predicate on the "sandbox_image" field.
+func SandboxImageNotNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotNull(FieldSandboxImage))
+}
+
+// SandboxImageEqualFold applies the EqualFold predicate on the "sandbox_image" field.
+func SandboxImageEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldSandboxImage, v))
+}
+
+// SandboxImageContainsFold applies the ContainsFold predicate on the "sandbox_image" field.
+func SandboxImageContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldSandboxImage, v))
 }
 
 // BaseConfigIsNil applies the IsNil predicate on the "base_config" field.

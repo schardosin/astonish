@@ -14,6 +14,7 @@ type spyPool struct {
 	session  string
 	template string
 	chain    []string
+	image    string
 }
 
 func (s *spyPool) GetOrCreate(sessionID string) ToolNodeClient {
@@ -34,6 +35,15 @@ func (s *spyPool) GetOrCreateWithChain(sessionID, template string, chain []strin
 	s.session = sessionID
 	s.template = template
 	s.chain = chain
+	return &stubClient{}
+}
+
+func (s *spyPool) GetOrCreateWithImage(sessionID, template string, chain []string, image string) ToolNodeClient {
+	s.method = "GetOrCreateWithImage"
+	s.session = sessionID
+	s.template = template
+	s.chain = chain
+	s.image = image
 	return &stubClient{}
 }
 
@@ -64,14 +74,17 @@ func TestGetClientFromContext_ChainWithoutTemplate(t *testing.T) {
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
-	if spy.method != "GetOrCreateWithChain" {
-		t.Fatalf("expected GetOrCreateWithChain, got %s", spy.method)
+	if spy.method != "GetOrCreateWithImage" {
+		t.Fatalf("expected GetOrCreateWithImage, got %s", spy.method)
 	}
 	if spy.template != "" {
 		t.Fatalf("expected empty template, got %q", spy.template)
 	}
 	if len(spy.chain) != 2 || spy.chain[0] != "@base" || spy.chain[1] != "sha256:abc123" {
 		t.Fatalf("unexpected chain: %v", spy.chain)
+	}
+	if spy.image != "" {
+		t.Fatalf("expected empty image, got %q", spy.image)
 	}
 }
 
@@ -89,8 +102,8 @@ func TestGetClientFromContext_ChainWithTemplate(t *testing.T) {
 	if client == nil {
 		t.Fatal("expected non-nil client")
 	}
-	if spy.method != "GetOrCreateWithChain" {
-		t.Fatalf("expected GetOrCreateWithChain, got %s", spy.method)
+	if spy.method != "GetOrCreateWithImage" {
+		t.Fatalf("expected GetOrCreateWithImage, got %s", spy.method)
 	}
 	if spy.template != "my-team-tpl" {
 		t.Fatalf("expected template 'my-team-tpl', got %q", spy.template)
@@ -135,6 +148,30 @@ func TestGetClientFromContext_NoTemplateNoChain(t *testing.T) {
 	}
 	if spy.method != "GetOrCreate" {
 		t.Fatalf("expected GetOrCreate, got %s", spy.method)
+	}
+}
+
+func TestGetClientFromContext_ImageOnly(t *testing.T) {
+	// When image is set but no chain (OpenShell with custom image, no layer chain),
+	// getClientFromContext uses GetOrCreateWithImage.
+	spy := &spyPool{}
+	nt := &NodeTool{pool: spy}
+
+	ctx := context.Background()
+	ctx = store.WithSandboxImage(ctx, "ghcr.io/schardosin/custom-sandbox:v2")
+
+	client := nt.getClientFromContext(ctx, "session-img")
+	if client == nil {
+		t.Fatal("expected non-nil client")
+	}
+	if spy.method != "GetOrCreateWithImage" {
+		t.Fatalf("expected GetOrCreateWithImage, got %s", spy.method)
+	}
+	if spy.image != "ghcr.io/schardosin/custom-sandbox:v2" {
+		t.Fatalf("expected custom image, got %q", spy.image)
+	}
+	if len(spy.chain) != 0 {
+		t.Fatalf("expected no chain, got %v", spy.chain)
 	}
 }
 

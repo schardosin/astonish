@@ -119,6 +119,20 @@ func (_c *SandboxTemplateCreate) SetNillableTopLayerID(v *string) *SandboxTempla
 	return _c
 }
 
+// SetSandboxImage sets the "sandbox_image" field.
+func (_c *SandboxTemplateCreate) SetSandboxImage(v string) *SandboxTemplateCreate {
+	_c.mutation.SetSandboxImage(v)
+	return _c
+}
+
+// SetNillableSandboxImage sets the "sandbox_image" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableSandboxImage(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetSandboxImage(*v)
+	}
+	return _c
+}
+
 // SetBaseConfig sets the "base_config" field.
 func (_c *SandboxTemplateCreate) SetBaseConfig(v map[string]interface{}) *SandboxTemplateCreate {
 	_c.mutation.SetBaseConfig(v)
@@ -453,6 +467,10 @@ func (_c *SandboxTemplateCreate) createSpec() (*SandboxTemplate, *sqlgraph.Creat
 	if value, ok := _c.mutation.Description(); ok {
 		_spec.SetField(sandboxtemplate.FieldDescription, field.TypeString, value)
 		_node.Description = value
+	}
+	if value, ok := _c.mutation.SandboxImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldSandboxImage, field.TypeString, value)
+		_node.SandboxImage = &value
 	}
 	if value, ok := _c.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

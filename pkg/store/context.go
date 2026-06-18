@@ -234,6 +234,7 @@ func FleetPlanStoreFromContext(ctx context.Context) FleetPlanStore {
 
 const sandboxTemplateKey contextKey = "astonish_sandbox_template"
 const sandboxLayerChainKey contextKey = "astonish_sandbox_layer_chain"
+const sandboxImageKey contextKey = "astonish_sandbox_image"
 const sessionServiceKey contextKey = "astonish_session_service"
 const userIDKey contextKey = "astonish_user_id"
 
@@ -276,6 +277,24 @@ func SandboxLayerChainFromContext(ctx context.Context) []string {
 	}
 	chain, _ := ctx.Value(sandboxLayerChainKey).([]string)
 	return chain
+}
+
+// WithSandboxImage returns a new context containing the per-template container
+// image reference. When present, the OpenShell backend uses this image to create
+// sandbox containers instead of the global config default.
+func WithSandboxImage(ctx context.Context, image string) context.Context {
+	return context.WithValue(ctx, sandboxImageKey, image)
+}
+
+// SandboxImageFromContext retrieves the per-template container image from
+// context. Returns "" if no image override is present (backends use their
+// global config default).
+func SandboxImageFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	img, _ := ctx.Value(sandboxImageKey).(string)
+	return img
 }
 
 // WithSessionService returns a new context containing a tenant-scoped SessionStore.

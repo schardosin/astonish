@@ -72,9 +72,16 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 		labels[k] = v
 	}
 
+	// Resolve the container image: prefer per-fleet-spec override (from template),
+	// fall back to the global config default.
+	image := b.cfg.SandboxImage
+	if spec.Image != "" {
+		image = spec.Image
+	}
+
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
 		Name:   name,
-		Image:  b.cfg.SandboxImage,
+		Image:  image,
 		Env:    env,
 		Labels: labels,
 		Policy: defaultSandboxPolicy(),
@@ -96,6 +103,7 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 		ContainerName: resp.SandboxID,
 		PodName:       resp.GatewayID,
 		TemplateID:    templateID,
+		Image:         image,
 		State:         store.SandboxSessionStateCreating,
 		CreatedAt:     time.Now().UTC(),
 	}

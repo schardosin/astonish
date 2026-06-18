@@ -41,6 +41,14 @@ func (SandboxTemplate) Fields() []ent.Field {
 		field.String("top_layer_id").
 			Optional().
 			Nillable(),
+		// sandbox_image holds a fully-qualified OCI image reference for
+		// backends that use per-template container images (e.g., OpenShell).
+		// When non-empty, sandbox sessions created from this template use
+		// this image instead of the global default. Nullable — existing
+		// templates (incus/k8s) leave this unset and use LayerChain instead.
+		field.String("sandbox_image").
+			Optional().
+			Nillable(),
 		field.JSON("base_config", map[string]any{}).
 			Optional(),
 		field.UUID("configured_by", uuid.UUID{}).

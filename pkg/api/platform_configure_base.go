@@ -16,13 +16,22 @@ import (
 // PlatformBaseConfigGetHandler returns the current @base template configuration.
 // GET /api/platform/admin/sandbox/base
 func PlatformBaseConfigGetHandler(w http.ResponseWriter, r *http.Request) {
-	// OpenShell backend does not support base template customization.
+	// OpenShell backend: the interactive package build is not available.
+	// Instead, return the current custom image info + the backend kind so
+	// the frontend can show the image-setting UI.
 	appCfg := effectiveAppConfig(r)
 	if appCfg != nil && appCfg.Sandbox.Backend == "openshell" {
+		currentImage := resolveBaseImage(r.Context())
+		defaultImage := ""
+		if appCfg.Sandbox.OpenShell.SandboxImage != "" {
+			defaultImage = appCfg.Sandbox.OpenShell.SandboxImage
+		}
 		respondJSON(w, http.StatusOK, map[string]any{
-			"unsupported_backend": true,
-			"backend":             "openshell",
-			"message":             "Base sandbox customization is not available with the OpenShell backend. Customize the sandbox by modifying docker/sandbox-openshell/Dockerfile and rebuilding the image.",
+			"backend":          "openshell",
+			"build_supported":  false,
+			"sandbox_image":    currentImage,
+			"default_image":    defaultImage,
+			"message":          "Package installation via the interactive editor is not available with the OpenShell backend. Set a custom container image with your packages pre-installed.",
 		})
 		return
 	}
@@ -332,4 +341,54 @@ func PlatformBaseConfigOptionalToolsHandler(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tools)
+}
+
+// PlatformBaseImageHandler handles POST /api/platform/admin/sandbox/base/image.
+// Sets or clears the custom sandbox image on the @base template. This is the
+// platform-wide image override used by the OpenShell backend.
+//
+// Request body: {"image": "ghcr.io/schardosin/custom-sandbox:v2"} or {"image": ""} to clear.
+func PlatformBaseImageHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Image string `json:"image"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	db := getPlatformBackend()
+	if db == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	templates := db.SandboxTemplates()
+	if templates == nil {
+		respondError(w, http.StatusServiceUnavailable, "template store not available")
+		return
+	}
+
+	// Look up @base.
+	base, err := templates.GetBySlug(r.Context(), store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || base == nil {
+		respondError(w, http.StatusInternalServerError, "failed to look up @base template")
+		return
+	}
+
+	// Update.
+	if req.Image != "" {
+		base.SandboxImage = &req.Image
+	} else {
+		base.SandboxImage = nil
+	}
+	if err := templates.Update(r.Context(), base); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to update @base: "+err.Error())
+		return
+	}
+
+	slog.Info("platform base sandbox image set", "image", req.Image)
+	respondJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+		"image":  req.Image,
+	})
 }

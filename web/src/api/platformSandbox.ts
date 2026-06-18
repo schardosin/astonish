@@ -59,9 +59,17 @@ export interface UnsupportedBackendInfo {
   message: string
 }
 
+export interface OpenShellBackendInfo {
+  backend: 'openshell'
+  build_supported: false
+  sandbox_image: string
+  default_image: string
+  message: string
+}
+
 // --- API functions ---
 
-export async function getBaseConfig(): Promise<BaseConfigSummary | UnsupportedBackendInfo> {
+export async function getBaseConfig(): Promise<BaseConfigSummary | OpenShellBackendInfo | UnsupportedBackendInfo> {
   const res = await adminFetch(BASE)
   if (!res.ok) {
     const body = await res.json().catch(() => ({})) as Record<string, unknown>
@@ -71,7 +79,22 @@ export async function getBaseConfig(): Promise<BaseConfigSummary | UnsupportedBa
   if (data.unsupported_backend) {
     return data as UnsupportedBackendInfo
   }
+  if (data.backend === 'openshell') {
+    return data as OpenShellBackendInfo
+  }
   return data as BaseConfigSummary
+}
+
+export async function setBaseImage(image: string): Promise<void> {
+  const res = await adminFetch(`${BASE}/image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as Record<string, unknown>
+    throw new Error((body.error as string) || `Failed to set image: ${res.statusText}`)
+  }
 }
 
 export async function getBaseStatus(): Promise<BaseConfigStatus> {

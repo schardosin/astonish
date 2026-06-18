@@ -32,6 +32,8 @@ const (
 	FieldParentTemplateID = "parent_template_id"
 	// FieldTopLayerID holds the string denoting the top_layer_id field in the database.
 	FieldTopLayerID = "top_layer_id"
+	// FieldSandboxImage holds the string denoting the sandbox_image field in the database.
+	FieldSandboxImage = "sandbox_image"
 	// FieldBaseConfig holds the string denoting the base_config field in the database.
 	FieldBaseConfig = "base_config"
 	// FieldConfiguredBy holds the string denoting the configured_by field in the database.
@@ -84,6 +86,7 @@ var Columns = []string{
 	FieldDescription,
 	FieldParentTemplateID,
 	FieldTopLayerID,
+	FieldSandboxImage,
 	FieldBaseConfig,
 	FieldConfiguredBy,
 	FieldConfiguredAt,
@@ -200,6 +203,11 @@ func ByParentTemplateID(opts ...sql.OrderTermOption) OrderOption {
 // ByTopLayerID orders the results by the top_layer_id field.
 func ByTopLayerID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTopLayerID, opts...).ToFunc()
+}
+
+// BySandboxImage orders the results by the sandbox_image field.
+func BySandboxImage(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSandboxImage, opts...).ToFunc()
 }
 
 // ByConfiguredBy orders the results by the configured_by field.

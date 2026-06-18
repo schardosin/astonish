@@ -9267,6 +9267,7 @@ type SandboxTemplateMutation struct {
 	purpose         *string
 	name            *string
 	description     *string
+	sandbox_image   *string
 	base_config     *map[string]interface{}
 	configured_by   *uuid.UUID
 	configured_at   *time.Time
@@ -9704,6 +9705,55 @@ func (m *SandboxTemplateMutation) TopLayerIDCleared() bool {
 func (m *SandboxTemplateMutation) ResetTopLayerID() {
 	m.layer = nil
 	delete(m.clearedFields, sandboxtemplate.FieldTopLayerID)
+}
+
+// SetSandboxImage sets the "sandbox_image" field.
+func (m *SandboxTemplateMutation) SetSandboxImage(s string) {
+	m.sandbox_image = &s
+}
+
+// SandboxImage returns the value of the "sandbox_image" field in the mutation.
+func (m *SandboxTemplateMutation) SandboxImage() (r string, exists bool) {
+	v := m.sandbox_image
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSandboxImage returns the old "sandbox_image" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldSandboxImage(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSandboxImage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSandboxImage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSandboxImage: %w", err)
+	}
+	return oldValue.SandboxImage, nil
+}
+
+// ClearSandboxImage clears the value of the "sandbox_image" field.
+func (m *SandboxTemplateMutation) ClearSandboxImage() {
+	m.sandbox_image = nil
+	m.clearedFields[sandboxtemplate.FieldSandboxImage] = struct{}{}
+}
+
+// SandboxImageCleared returns if the "sandbox_image" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) SandboxImageCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldSandboxImage]
+	return ok
+}
+
+// ResetSandboxImage resets all changes to the "sandbox_image" field.
+func (m *SandboxTemplateMutation) ResetSandboxImage() {
+	m.sandbox_image = nil
+	delete(m.clearedFields, sandboxtemplate.FieldSandboxImage)
 }
 
 // SetBaseConfig sets the "base_config" field.
@@ -10198,7 +10248,7 @@ func (m *SandboxTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SandboxTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 16)
 	if m.slug != nil {
 		fields = append(fields, sandboxtemplate.FieldSlug)
 	}
@@ -10222,6 +10272,9 @@ func (m *SandboxTemplateMutation) Fields() []string {
 	}
 	if m.layer != nil {
 		fields = append(fields, sandboxtemplate.FieldTopLayerID)
+	}
+	if m.sandbox_image != nil {
+		fields = append(fields, sandboxtemplate.FieldSandboxImage)
 	}
 	if m.base_config != nil {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
@@ -10268,6 +10321,8 @@ func (m *SandboxTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.ParentTemplateID()
 	case sandboxtemplate.FieldTopLayerID:
 		return m.TopLayerID()
+	case sandboxtemplate.FieldSandboxImage:
+		return m.SandboxImage()
 	case sandboxtemplate.FieldBaseConfig:
 		return m.BaseConfig()
 	case sandboxtemplate.FieldConfiguredBy:
@@ -10307,6 +10362,8 @@ func (m *SandboxTemplateMutation) OldField(ctx context.Context, name string) (en
 		return m.OldParentTemplateID(ctx)
 	case sandboxtemplate.FieldTopLayerID:
 		return m.OldTopLayerID(ctx)
+	case sandboxtemplate.FieldSandboxImage:
+		return m.OldSandboxImage(ctx)
 	case sandboxtemplate.FieldBaseConfig:
 		return m.OldBaseConfig(ctx)
 	case sandboxtemplate.FieldConfiguredBy:
@@ -10385,6 +10442,13 @@ func (m *SandboxTemplateMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTopLayerID(v)
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSandboxImage(v)
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		v, ok := value.(map[string]interface{})
@@ -10486,6 +10550,9 @@ func (m *SandboxTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(sandboxtemplate.FieldTopLayerID) {
 		fields = append(fields, sandboxtemplate.FieldTopLayerID)
 	}
+	if m.FieldCleared(sandboxtemplate.FieldSandboxImage) {
+		fields = append(fields, sandboxtemplate.FieldSandboxImage)
+	}
 	if m.FieldCleared(sandboxtemplate.FieldBaseConfig) {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
 	}
@@ -10517,6 +10584,9 @@ func (m *SandboxTemplateMutation) ClearField(name string) error {
 		return nil
 	case sandboxtemplate.FieldTopLayerID:
 		m.ClearTopLayerID()
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		m.ClearSandboxImage()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ClearBaseConfig()
@@ -10561,6 +10631,9 @@ func (m *SandboxTemplateMutation) ResetField(name string) error {
 		return nil
 	case sandboxtemplate.FieldTopLayerID:
 		m.ResetTopLayerID()
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		m.ResetSandboxImage()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ResetBaseConfig()

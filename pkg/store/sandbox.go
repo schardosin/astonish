@@ -65,6 +65,11 @@ type SandboxTemplate struct {
 	Description     string                 `json:"description,omitempty"`
 	ParentTemplateID *string               `json:"parent_template_id,omitempty"`
 	TopLayerID      *string                `json:"top_layer_id,omitempty"`
+	// SandboxImage holds a fully-qualified OCI image reference for backends
+	// that use per-template container images (e.g., OpenShell). When non-nil
+	// and non-empty, sandbox sessions use this image instead of the global
+	// default. Nil for templates that use the layer chain (incus/k8s).
+	SandboxImage    *string                `json:"sandbox_image,omitempty"`
 	Version         int                    `json:"version"`
 	CreatedBy       string                 `json:"created_by,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`
@@ -328,6 +333,9 @@ type SandboxSession struct {
 	ContainerName  string              `json:"container_name,omitempty"`
 	TemplateID     string              `json:"template_id"`
 	UpperLayerID   string              `json:"upper_layer_id,omitempty"`
+	// Image is the container image used to create this session (OpenShell).
+	// Stored so that StartSession can recreate with the correct image.
+	Image          string              `json:"image,omitempty"`
 	State          SandboxSessionState `json:"state"`
 	PodName        string              `json:"pod_name,omitempty"`
 	NodeName       string              `json:"node_name,omitempty"`

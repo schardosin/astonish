@@ -299,6 +299,10 @@ type SessionSpec struct {
 	UserID       string            `json:"user_id,omitempty"`
 	LayerChain   []string          `json:"layer_chain"` // resolved via store.SandboxTemplateStore.Resolve()
 	UpperLayerID string            `json:"upper_layer_id,omitempty"` // resume: previously-evicted upper
+	// Image is the container image to use for this session. When non-empty,
+	// the OpenShell backend uses it instead of the global SandboxImage config.
+	// K8s and Incus backends ignore this field (they use LayerChain).
+	Image        string            `json:"image,omitempty"`
 	Limits       ResourceLimits    `json:"limits"`
 	Labels       map[string]string `json:"labels,omitempty"`
 }
@@ -421,6 +425,10 @@ type FleetSpec struct {
 	TemplateID string            `json:"template_id"`
 	OrgSlug    string            `json:"org_slug"`
 	TeamSlug   string            `json:"team_slug"`
+	// Image is the container image to use for this fleet container.
+	// When non-empty, the OpenShell backend uses it instead of the global
+	// SandboxImage config. K8s and Incus backends ignore this field.
+	Image      string            `json:"image,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
 	Limits     ResourceLimits    `json:"limits"`
 }

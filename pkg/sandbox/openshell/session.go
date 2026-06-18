@@ -80,10 +80,17 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		labels["astonish.io/template"] = sanitizeLabelValue(spec.TemplateID)
 	}
 
+	// Resolve the container image: prefer per-session override (from template),
+	// fall back to the global config default.
+	image := b.cfg.SandboxImage
+	if spec.Image != "" {
+		image = spec.Image
+	}
+
 	// Create the sandbox via the gateway.
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
 		Name:   name,
-		Image:  b.cfg.SandboxImage,
+		Image:  image,
 		Env:    env,
 		Labels: labels,
 		Policy: defaultSandboxPolicy(),
@@ -115,6 +122,7 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		ContainerName: resp.SandboxID,
 		PodName:       resp.GatewayID,
 		TemplateID:    spec.TemplateID,
+		Image:         image,
 		State:         store.SandboxSessionStateCreating,
 		CreatedAt:     time.Now().UTC(),
 	}
@@ -159,9 +167,16 @@ func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) e
 		"astonish.io/session-id": sessionID,
 	}
 
+	// Resolve the container image: prefer the image stored in the session
+	// record (set at CreateSession time), fall back to the global config.
+	image := b.cfg.SandboxImage
+	if rec.Image != "" {
+		image = rec.Image
+	}
+
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
 		Name:   sandboxName(sessionID),
-		Image:  b.cfg.SandboxImage,
+		Image:  image,
 		Env:    env,
 		Labels: labels,
 		Policy: defaultSandboxPolicy(),

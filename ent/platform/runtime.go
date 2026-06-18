@@ -341,15 +341,15 @@ func init() {
 	// sandboxtemplate.DefaultDescription holds the default value on creation for the description field.
 	sandboxtemplate.DefaultDescription = sandboxtemplateDescDescription.Default.(string)
 	// sandboxtemplateDescVersion is the schema descriptor for version field.
-	sandboxtemplateDescVersion := sandboxtemplateFields[12].Descriptor()
+	sandboxtemplateDescVersion := sandboxtemplateFields[13].Descriptor()
 	// sandboxtemplate.DefaultVersion holds the default value on creation for the version field.
 	sandboxtemplate.DefaultVersion = sandboxtemplateDescVersion.Default.(int)
 	// sandboxtemplateDescCreatedAt is the schema descriptor for created_at field.
-	sandboxtemplateDescCreatedAt := sandboxtemplateFields[14].Descriptor()
+	sandboxtemplateDescCreatedAt := sandboxtemplateFields[15].Descriptor()
 	// sandboxtemplate.DefaultCreatedAt holds the default value on creation for the created_at field.
 	sandboxtemplate.DefaultCreatedAt = sandboxtemplateDescCreatedAt.Default.(func() time.Time)
 	// sandboxtemplateDescUpdatedAt is the schema descriptor for updated_at field.
-	sandboxtemplateDescUpdatedAt := sandboxtemplateFields[15].Descriptor()
+	sandboxtemplateDescUpdatedAt := sandboxtemplateFields[16].Descriptor()
 	// sandboxtemplate.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	sandboxtemplate.DefaultUpdatedAt = sandboxtemplateDescUpdatedAt.Default.(func() time.Time)
 	// sandboxtemplate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

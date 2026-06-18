@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info } from 'lucide-react'
+import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Save } from 'lucide-react'
 import { InlineError, InlineSuccess, inputStyle } from './shared'
 import * as api from '../../api/platformSandbox'
-import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult, UnsupportedBackendInfo } from '../../api/platformSandbox'
+import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult, UnsupportedBackendInfo, OpenShellBackendInfo } from '../../api/platformSandbox'
 
 // ---------------------------------------------------------------------------
 // SandboxBaseTab — Platform Admin: Configure Base Sandbox
@@ -12,6 +12,7 @@ export default function SandboxBaseTab() {
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<BaseConfigSummary | null>(null)
   const [unsupported, setUnsupported] = useState<UnsupportedBackendInfo | null>(null)
+  const [openshell, setOpenshell] = useState<OpenShellBackendInfo | null>(null)
   const [tools, setTools] = useState<OptionalTool[]>([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -23,6 +24,10 @@ export default function SandboxBaseTab() {
   const [extraSteps, setExtraSteps] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
+  // OpenShell image state
+  const [imageInput, setImageInput] = useState('')
+  const [savingImage, setSavingImage] = useState(false)
+
   // Build state
   const [building, setBuilding] = useState(false)
   const [buildLog, setBuildLog] = useState<string[]>([])
@@ -32,12 +37,22 @@ export default function SandboxBaseTab() {
     setLoading(true)
     setError('')
     setUnsupported(null)
+    setOpenshell(null)
     try {
       const baseData = await api.getBaseConfig().catch(() => null)
 
       // Check if backend doesn't support base configuration
       if (baseData && 'unsupported_backend' in baseData && baseData.unsupported_backend) {
         setUnsupported(baseData as UnsupportedBackendInfo)
+        setLoading(false)
+        return
+      }
+
+      // Check if backend is openshell (image-only mode)
+      if (baseData && 'backend' in baseData && baseData.backend === 'openshell') {
+        const info = baseData as OpenShellBackendInfo
+        setOpenshell(info)
+        setImageInput(info.sandbox_image || '')
         setLoading(false)
         return
       }
@@ -117,6 +132,21 @@ export default function SandboxBaseTab() {
     )
   }
 
+  const handleSaveImage = async () => {
+    setError('')
+    setSuccess('')
+    setSavingImage(true)
+    try {
+      await api.setBaseImage(imageInput.trim())
+      setSuccess(imageInput.trim() ? `Image set to: ${imageInput.trim()}` : 'Custom image cleared. Using default image.')
+      load()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSavingImage(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -139,6 +169,105 @@ export default function SandboxBaseTab() {
             </p>
             <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
               {unsupported.message}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (openshell) {
+    return (
+      <div className="p-6 space-y-6 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 120px)' }}>
+        {/* Header */}
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Base Sandbox Image</h3>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Configure the container image for the OpenShell sandbox backend. All sandboxes use this image unless overridden by a team template.
+          </p>
+        </div>
+
+        <InlineError msg={error} />
+        <InlineSuccess msg={success} />
+
+        {/* Current status */}
+        <div className="rounded-xl p-4 space-y-3" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Current Image</span>
+            {openshell.sandbox_image ? (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>
+                Custom
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(107, 114, 128, 0.1)', color: 'var(--text-muted)' }}>
+                Default
+              </span>
+            )}
+          </div>
+          <p className="text-xs font-mono break-all" style={{ color: 'var(--text-primary)' }}>
+            {openshell.sandbox_image || openshell.default_image || 'Not configured'}
+          </p>
+          {openshell.default_image && openshell.sandbox_image && (
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Default: <span className="font-mono">{openshell.default_image}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Image input form */}
+        <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Custom Image</h4>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Container Image Reference
+            </label>
+            <input
+              type="text"
+              value={imageInput}
+              onChange={e => setImageInput(e.target.value)}
+              placeholder={openshell.default_image || 'ghcr.io/org/custom-sandbox:latest'}
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
+              style={inputStyle}
+            />
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Leave empty to use the default image. The image must have the OpenShell supervisor installed and be compatible with the Landlock security policy.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+            {imageInput !== (openshell.sandbox_image || '') && (
+              <button
+                onClick={() => setImageInput(openshell.sandbox_image || '')}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}
+              >
+                Reset
+              </button>
+            )}
+            <button
+              onClick={handleSaveImage}
+              disabled={savingImage || imageInput === (openshell.sandbox_image || '')}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white transition-opacity"
+              style={{ background: 'var(--accent)', opacity: (savingImage || imageInput === (openshell.sandbox_image || '')) ? 0.5 : 1 }}
+            >
+              {savingImage ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {savingImage ? 'Saving...' : 'Save Image'}
+            </button>
+          </div>
+        </div>
+
+        {/* Info note about package installation */}
+        <div className="flex items-start gap-3 p-4 rounded-lg" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+          <Info size={16} className="mt-0.5 shrink-0" style={{ color: '#3b82f6' }} />
+          <div className="space-y-1">
+            <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+              Package Installation
+            </p>
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              OpenShell sandboxes are immutable at runtime — packages cannot be installed interactively.
+              To add packages, build a custom Docker image with your packages pre-installed and set it here.
+              Automated image building from a package list is coming soon.
             </p>
           </div>
         </div>

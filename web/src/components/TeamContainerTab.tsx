@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
-import { Box, Play, Save, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Box, Play, Save, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react'
 import {
   fetchTeamTemplateStatus, createTeamTemplate, saveTeamTemplate,
   restoreTeamTemplate, deleteTeamTemplate, startTeamTemplate,
+  setTeamTemplateImage,
   type TeamTemplateStatus,
 } from '../api/sandbox'
 
@@ -29,11 +30,19 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
   const [success, setSuccess] = useState('')
   const [showTerminal, setShowTerminal] = useState(false)
 
+  // OpenShell image state
+  const [imageInput, setImageInput] = useState('')
+  const [savingImage, setSavingImage] = useState(false)
+
   const loadStatus = useCallback(async () => {
     try {
       setError('')
       const s = await fetchTeamTemplateStatus(teamSlug)
       setStatus(s)
+      // Populate image input for OpenShell backend
+      if (s.backend === 'openshell') {
+        setImageInput(s.sandboxImage || '')
+      }
       // Auto-show terminal if container is running
       if (s.exists && s.running) {
         setShowTerminal(true)
@@ -162,6 +171,138 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
       <div className="flex items-center justify-center py-12">
         <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
         <span className="ml-2 text-sm" style={{ color: 'var(--text-muted)' }}>Loading container status...</span>
+      </div>
+    )
+  }
+
+  // OpenShell backend: show image-setting UI instead of interactive terminal
+  if (status?.backend === 'openshell') {
+    const handleSaveImage = async () => {
+      setError('')
+      setSuccess('')
+      setSavingImage(true)
+      try {
+        await setTeamTemplateImage(imageInput.trim(), teamSlug)
+        setSuccess(imageInput.trim() ? `Custom image set: ${imageInput.trim()}` : 'Custom image cleared. Using platform default.')
+        await loadStatus()
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to set image')
+      } finally {
+        setSavingImage(false)
+      }
+    }
+
+    return (
+      <div className="flex flex-col h-full gap-4">
+        {/* Header */}
+        <div>
+          <h3 className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
+            <Box size={16} style={{ color: 'var(--accent)' }} />
+            Team Sandbox Image
+          </h3>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Set a custom container image for this team. New sandboxes will use this image instead of the platform default.
+          </p>
+        </div>
+
+        {/* Messages */}
+        {error && (
+          <div className="flex items-center gap-2 p-3 rounded-lg text-xs" style={{
+            background: 'rgba(239, 68, 68, 0.1)',
+            color: 'var(--danger)',
+            border: '1px solid rgba(239, 68, 68, 0.2)',
+          }}>
+            <AlertCircle size={14} />
+            <span>{error}</span>
+          </div>
+        )}
+        {success && (
+          <div className="flex items-center gap-2 p-3 rounded-lg text-xs" style={{
+            background: 'rgba(34, 197, 94, 0.1)',
+            color: '#22c55e',
+            border: '1px solid rgba(34, 197, 94, 0.2)',
+          }}>
+            <CheckCircle2 size={14} />
+            <span>{success}</span>
+          </div>
+        )}
+
+        {/* Current image display */}
+        <div className="rounded-xl p-4 space-y-3" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Current Image</span>
+            {status.sandboxImage ? (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(168, 85, 247, 0.1)', color: '#a855f7' }}>
+                Custom
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(107, 114, 128, 0.1)', color: 'var(--text-muted)' }}>
+                Platform Default
+              </span>
+            )}
+          </div>
+          <p className="text-xs font-mono break-all" style={{ color: 'var(--text-primary)' }}>
+            {status.sandboxImage || 'Using platform default image'}
+          </p>
+        </div>
+
+        {/* Image input form */}
+        {canManage && (
+          <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Set Custom Image</h4>
+            <div className="space-y-2">
+              <input
+                type="text"
+                value={imageInput}
+                onChange={e => setImageInput(e.target.value)}
+                placeholder="ghcr.io/org/custom-sandbox:latest"
+                className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
+                style={{
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border-color)',
+                  color: 'var(--text-primary)',
+                }}
+              />
+              <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Leave empty to use the platform default. The image must have the OpenShell supervisor installed.
+              </p>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              {imageInput !== (status.sandboxImage || '') && (
+                <button
+                  onClick={() => setImageInput(status.sandboxImage || '')}
+                  className={btnBase}
+                  style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}
+                >
+                  Reset
+                </button>
+              )}
+              <button
+                onClick={handleSaveImage}
+                disabled={savingImage || imageInput === (status.sandboxImage || '')}
+                className={btnBase}
+                style={{ background: 'var(--accent)', color: '#fff', opacity: (savingImage || imageInput === (status.sandboxImage || '')) ? 0.5 : 1 }}
+              >
+                {savingImage ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save Image
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Info box */}
+        <div className="flex items-start gap-3 p-4 rounded-lg" style={{ backgroundColor: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+          <Info size={16} className="mt-0.5 shrink-0" style={{ color: '#3b82f6' }} />
+          <div className="space-y-1">
+            <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
+              Interactive editing not available
+            </p>
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              OpenShell sandboxes are immutable at runtime. To customize packages, build a Docker image
+              with your packages pre-installed and set it here. Automated image building from a package list is coming soon.
+            </p>
+          </div>
+        </div>
       </div>
     )
   }

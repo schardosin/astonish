@@ -246,3 +246,70 @@ func resolveBaseLayerChainWith(ctx context.Context, tplStore baseTopLayerResolve
 	// Chain: seed-Job @base at the bottom, configured delta on top.
 	return []string{sandbox.BaseTemplateID, topLayerID}
 }
+
+// resolveTemplateImage returns the per-template container image reference for
+// backends that use per-template OCI images (e.g., OpenShell) instead of
+// overlay layer chains.
+//
+// Returns "" if:
+//   - The platform backend is not available (personal mode).
+//   - The template doesn't exist in the DB.
+//   - The template has no SandboxImage set (uses the layer chain approach).
+//
+// This function is separate from resolveTemplateLayerChain by design:
+// both are called; the one that returns a non-empty value gets used,
+// depending on the backend type.
+func resolveTemplateImage(ctx context.Context, templateSlug string) string {
+	backend := getPlatformBackend()
+	if backend == nil {
+		return ""
+	}
+	templates := backend.SandboxTemplates()
+	if templates == nil {
+		return ""
+	}
+	return resolveTemplateImageWith(ctx, templates, templateSlug)
+}
+
+// resolveTemplateImageWith is the testable core of resolveTemplateImage.
+func resolveTemplateImageWith(ctx context.Context, templates store.SandboxTemplateStore, templateSlug string) string {
+	// Derive the lookup parameters from the slug convention.
+	teamSlug := strings.TrimPrefix(templateSlug, "team-")
+	if teamSlug == templateSlug {
+		return ""
+	}
+
+	tpl, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeTeam, teamSlug, templateSlug)
+	if err != nil || tpl == nil {
+		return ""
+	}
+
+	if tpl.SandboxImage != nil && *tpl.SandboxImage != "" {
+		return *tpl.SandboxImage
+	}
+	return ""
+}
+
+// resolveBaseImage returns the SandboxImage set on the @base template (if any).
+// This is used when no team-specific template overrides the image. The admin
+// can set a custom image on @base via the Platform Admin UI.
+func resolveBaseImage(ctx context.Context) string {
+	backend := getPlatformBackend()
+	if backend == nil {
+		return ""
+	}
+	templates := backend.SandboxTemplates()
+	if templates == nil {
+		return ""
+	}
+
+	// Look up the @base template (scope=global, slug="base", owner_id="").
+	tpl, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || tpl == nil {
+		return ""
+	}
+	if tpl.SandboxImage != nil && *tpl.SandboxImage != "" {
+		return *tpl.SandboxImage
+	}
+	return ""
+}

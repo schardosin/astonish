@@ -86,6 +86,12 @@ type ToolNodePool interface {
 	// On Incus (where templates are named containers), chain is ignored.
 	GetOrCreateWithChain(sessionID, template string, chain []string) ToolNodeClient
 
+	// GetOrCreateWithImage is like GetOrCreateWithChain but also supplies a
+	// per-template container image. On OpenShell, this image is passed to
+	// SessionSpec.Image, overriding the global config default. On backends
+	// that don't use per-template images (K8s, Incus), image is ignored.
+	GetOrCreateWithImage(sessionID, template string, chain []string, image string) ToolNodeClient
+
 	// Cleanup destroys every client the pool has vended. After Cleanup
 	// the pool is unusable; further GetOrCreate calls return nil.
 	Cleanup()
@@ -145,6 +151,11 @@ func (a *nodePoolAdapter) GetOrCreateWithTemplate(sessionID, template string) To
 
 func (a *nodePoolAdapter) GetOrCreateWithChain(sessionID, template string, _ []string) ToolNodeClient {
 	// Incus pool ignores the chain; templates are named containers on disk.
+	return a.GetOrCreateWithTemplate(sessionID, template)
+}
+
+func (a *nodePoolAdapter) GetOrCreateWithImage(sessionID, template string, _ []string, _ string) ToolNodeClient {
+	// Incus pool ignores chain and image; templates are named containers.
 	return a.GetOrCreateWithTemplate(sessionID, template)
 }
 

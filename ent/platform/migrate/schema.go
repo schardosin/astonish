@@ -372,6 +372,7 @@ var (
 		{Name: "purpose", Type: field.TypeString, Default: ""},
 		{Name: "name", Type: field.TypeString},
 		{Name: "description", Type: field.TypeString, Default: ""},
+		{Name: "sandbox_image", Type: field.TypeString, Nullable: true},
 		{Name: "base_config", Type: field.TypeJSON, Nullable: true},
 		{Name: "configured_by", Type: field.TypeUUID, Nullable: true},
 		{Name: "configured_at", Type: field.TypeTime, Nullable: true},
@@ -390,13 +391,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sandbox_templates_sandbox_layers_templates",
-				Columns:    []*schema.Column{SandboxTemplatesColumns[14]},
+				Columns:    []*schema.Column{SandboxTemplatesColumns[15]},
 				RefColumns: []*schema.Column{SandboxLayersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "sandbox_templates_sandbox_templates_children",
-				Columns:    []*schema.Column{SandboxTemplatesColumns[15]},
+				Columns:    []*schema.Column{SandboxTemplatesColumns[16]},
 				RefColumns: []*schema.Column{SandboxTemplatesColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -415,7 +416,7 @@ var (
 			{
 				Name:    "sandboxtemplate_parent_template_id",
 				Unique:  false,
-				Columns: []*schema.Column{SandboxTemplatesColumns[15]},
+				Columns: []*schema.Column{SandboxTemplatesColumns[16]},
 			},
 		},
 	}

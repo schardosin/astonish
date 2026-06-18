@@ -283,6 +283,8 @@ export interface TeamTemplateStatus {
   running: boolean
   templateName: string
   saved: boolean
+  sandboxImage?: string
+  backend?: string
 }
 
 export async function fetchTeamTemplateStatus(teamSlug?: string): Promise<TeamTemplateStatus> {
@@ -337,6 +339,18 @@ export async function startTeamTemplate(teamSlug?: string): Promise<{ status: st
     throw new Error(text || res.statusText)
   }
   return res.json()
+}
+
+export async function setTeamTemplateImage(image: string, teamSlug?: string): Promise<void> {
+  const res = await teamFetch('/api/team/template/image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image }),
+  }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
 }
 
 /**

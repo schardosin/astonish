@@ -105,8 +105,17 @@ type ProcessSpec struct {
 type NetworkPolicySpec struct {
 	// Name is a human-readable identifier.
 	Name string
-	// AllowedEndpoints are host:port pairs the sandbox may connect to.
-	AllowedEndpoints []string
+	// Endpoints are structured host:port entries the sandbox may connect to.
+	Endpoints []EndpointSpec
+	// Binaries are path globs for binaries allowed to use these endpoints.
+	// "/**" allows any binary.
+	Binaries []string
+}
+
+// EndpointSpec is a single allowed network endpoint with host and port.
+type EndpointSpec struct {
+	Host string
+	Port uint32 // 0 = defaults to 443 at proto mapping time
 }
 
 // Toleration mirrors corev1.Toleration for decoupling from k8s types.

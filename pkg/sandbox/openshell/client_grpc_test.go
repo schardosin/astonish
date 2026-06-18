@@ -253,6 +253,97 @@ func TestGRPCClient_CreateSandbox_NilPolicy(t *testing.T) {
 	}
 }
 
+func TestGRPCClient_CreateSandbox_WithNetworkPolicy(t *testing.T) {
+	var capturedReq *pb.CreateSandboxRequest
+	srv := &fakeOpenShellServer{
+		createSandboxFn: func(req *pb.CreateSandboxRequest) (*pb.SandboxResponse, error) {
+			capturedReq = req
+			return &pb.SandboxResponse{
+				Sandbox: &pb.Sandbox{
+					Metadata: &pb.ObjectMeta{Id: "sb-net", Name: req.GetName()},
+					Status:   &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, AgentPod: "pod-net"},
+				},
+			}, nil
+		},
+	}
+	client, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	_, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Name:  "netpol-sandbox",
+		Image: "ubuntu:24.04",
+		Policy: &SandboxPolicySpec{
+			Version: 1,
+			Landlock: &LandlockSpec{
+				Compatibility: "best_effort",
+			},
+			Filesystem: &FilesystemSpec{
+				IncludeWorkdir: true,
+				ReadWrite:      []string{"/sandbox"},
+			},
+			NetworkPolicies: map[string]*NetworkPolicySpec{
+				"egress": {
+					Name: "astonish-egress",
+					Endpoints: []EndpointSpec{
+						{Host: "github.com", Port: 443},
+						{Host: "*.github.com", Port: 443},
+						{Host: "ssh.github.com", Port: 22},
+						{Host: "api.tavily.com"}, // Port 0 = defaults to 443
+					},
+					Binaries: []string{"/**"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox error: %v", err)
+	}
+
+	policy := capturedReq.GetSpec().GetPolicy()
+	if policy == nil {
+		t.Fatal("expected policy in request, got nil")
+	}
+
+	netPolicies := policy.GetNetworkPolicies()
+	if netPolicies == nil {
+		t.Fatal("expected network_policies in policy, got nil")
+	}
+
+	egressRule, ok := netPolicies["egress"]
+	if !ok {
+		t.Fatal("expected 'egress' rule in network_policies")
+	}
+	if egressRule.GetName() != "astonish-egress" {
+		t.Errorf("egress rule name = %q, want %q", egressRule.GetName(), "astonish-egress")
+	}
+
+	endpoints := egressRule.GetEndpoints()
+	if len(endpoints) != 4 {
+		t.Fatalf("expected 4 endpoints, got %d", len(endpoints))
+	}
+
+	// Verify host and port mapping.
+	if endpoints[0].GetHost() != "github.com" || endpoints[0].GetPort() != 443 {
+		t.Errorf("endpoint[0] = %s:%d, want github.com:443", endpoints[0].GetHost(), endpoints[0].GetPort())
+	}
+	if endpoints[2].GetHost() != "ssh.github.com" || endpoints[2].GetPort() != 22 {
+		t.Errorf("endpoint[2] = %s:%d, want ssh.github.com:22", endpoints[2].GetHost(), endpoints[2].GetPort())
+	}
+	// Port 0 should default to 443.
+	if endpoints[3].GetHost() != "api.tavily.com" || endpoints[3].GetPort() != 443 {
+		t.Errorf("endpoint[3] = %s:%d, want api.tavily.com:443 (port 0 default)", endpoints[3].GetHost(), endpoints[3].GetPort())
+	}
+
+	// Verify binaries.
+	binaries := egressRule.GetBinaries()
+	if len(binaries) != 1 {
+		t.Fatalf("expected 1 binary, got %d", len(binaries))
+	}
+	if binaries[0].GetPath() != "/**" {
+		t.Errorf("binary path = %q, want %q", binaries[0].GetPath(), "/**")
+	}
+}
+
 func TestGRPCClient_GetSandboxStatus(t *testing.T) {
 	srv := &fakeOpenShellServer{}
 	client, cleanup := startFakeServer(t, srv)

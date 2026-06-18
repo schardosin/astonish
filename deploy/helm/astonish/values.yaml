@@ -276,30 +276,29 @@ sandbox:
     # The K8s NetworkPolicy allows all egress at L3/L4. Fine-grained
     # enforcement is handled by the OpenShell supervisor's network namespace
     # proxy, controlled by this config.
+    #
+    # IMPORTANT: The supervisor denies ALL traffic when no network policies
+    # are configured. Presets resolve to a concrete allowlist that is always
+    # sent to the supervisor so sandboxes have usable internet access.
     networkPolicy:
-      # Mode: "open" (default) or "allowlist".
-      #   - "open": unrestricted internet access (agents can browse, git clone,
-      #     pip install, research, etc.)
-      #   - "allowlist": only hosts matching the allowlist are reachable.
-      #     The supervisor denies all other outbound connections at L7.
-      mode: "open"
-      # Allowlist of host patterns (only effective when mode=allowlist).
-      # Supports glob patterns matching OpenShell's NetworkEndpoint.host field.
-      # Examples: "github.com", "*.github.com", "registry.npmjs.org"
-      allowlist: []
-      # Example restrictive config:
-      # mode: "allowlist"
-      # allowlist:
-      #   - "github.com"
-      #   - "*.github.com"
-      #   - "api.github.com"
-      #   - "registry.npmjs.org"
-      #   - "pypi.org"
-      #   - "files.pythonhosted.org"
-      #   - "api.openai.com"
-      #   - "api.anthropic.com"
-      #   - "opencode.ai"
-      #   - "archive.ubuntu.com"
+      # Presets to enable. Each preset is a named group of allowed endpoints.
+      # Available: "default" (all below), "code_hosting", "package_registries",
+      #   "llm_apis", "tools", "system", "search", "cdn"
+      # When empty or contains "default", all presets are active.
+      # Port 0 = defaults to 443 in the proto mapping layer.
+      presets:
+        - "default"
+      # Additional endpoints beyond presets (operator-specific).
+      # Useful for internal services, private repos, custom APIs.
+      extraEndpoints: []
+      # Example:
+      # extraEndpoints:
+      #   - host: "internal-api.mycompany.com"
+      #     port: 443
+      #   - host: "*.mycompany.com"
+      #     port: 443
+      #   - host: "apt.internal.mycompany.com"
+      #     port: 80
 
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —

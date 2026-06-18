@@ -141,22 +141,28 @@ type BuilderConfig struct {
 
 // NetworkPolicyConfig controls sandbox network egress enforcement via the
 // OpenShell supervisor's network namespace proxy.
+//
+// The supervisor's proxy denies all traffic when no NetworkPolicies are
+// provided. This config resolves named presets (groups of allowed hosts)
+// plus operator-supplied extra endpoints into a concrete allowlist that
+// is always sent to the supervisor.
 type NetworkPolicyConfig struct {
-	// Mode is "open" (default) or "allowlist".
-	//   - "open": unrestricted internet access.
-	//   - "allowlist": only hosts in the Allowlist are reachable.
-	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// Presets enables named groups of allowed endpoints.
+	// Available presets: "default" (all below), "code_hosting",
+	// "package_registries", "llm_apis", "tools", "system", "search", "cdn".
+	// When empty or contains "default", all presets are enabled.
+	Presets []string `yaml:"presets,omitempty" json:"presets,omitempty"`
 
-	// Allowlist of host patterns. Only effective when Mode is "allowlist".
-	// Supports glob patterns matching the OpenShell NetworkEndpoint.host field.
-	// Examples: "github.com", "*.github.com", "registry.npmjs.org"
-	Allowlist []string `yaml:"allowlist,omitempty" json:"allowlist,omitempty"`
+	// ExtraEndpoints are additional host:port patterns added on top of
+	// presets. Useful for internal services, private repos, etc.
+	ExtraEndpoints []NetworkEndpointConfig `yaml:"extra_endpoints,omitempty" json:"extra_endpoints,omitempty"`
 }
 
-// IsAllowlistMode returns true when the network policy is configured to
-// restrict egress to an explicit allowlist.
-func (c *NetworkPolicyConfig) IsAllowlistMode() bool {
-	return c.Mode == "allowlist" && len(c.Allowlist) > 0
+// NetworkEndpointConfig is a single allowed endpoint (host + optional port).
+// Port 0 defaults to 443 in the proto mapping layer.
+type NetworkEndpointConfig struct {
+	Host string `yaml:"host" json:"host"`
+	Port uint32 `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the

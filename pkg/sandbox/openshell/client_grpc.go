@@ -468,11 +468,19 @@ func mapPolicyToProto(spec *SandboxPolicySpec) *pb.SandboxPolicy {
 			rule := &pb.NetworkPolicyRule{
 				Name: v.Name,
 			}
-			// Map allowed endpoints (simplified: just host:port strings
-			// mapped to NetworkEndpoint proto).
-			for _, ep := range v.AllowedEndpoints {
+			for _, ep := range v.Endpoints {
+				port := ep.Port
+				if port == 0 {
+					port = 443
+				}
 				rule.Endpoints = append(rule.Endpoints, &pb.NetworkEndpoint{
-					Host: ep,
+					Host: ep.Host,
+					Port: port,
+				})
+			}
+			for _, bin := range v.Binaries {
+				rule.Binaries = append(rule.Binaries, &pb.NetworkBinary{
+					Path: bin,
 				})
 			}
 			p.NetworkPolicies[k] = rule

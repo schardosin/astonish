@@ -6,9 +6,10 @@
 # by the OpenShell supervisor's network namespace proxy, which supports
 # per-sandbox host glob allowlists.
 #
-# By default, egress is fully open (agents need unrestricted internet for
-# research, git, npm, pip, browsing, etc.). The supervisor's network policy
-# is the real enforcement layer.
+# By default, egress is fully open at L3/L4 (agents need to reach the
+# supervisor's proxy which runs at the sandbox's loopback). The supervisor's
+# preset-based network policy is the real enforcement layer — it allowlists
+# specific hosts (code hosting, package registries, LLM APIs, etc.).
 #
 # Note: This NetworkPolicy requires a CNI that supports NetworkPolicy
 # enforcement (Calico, Cilium, etc.). K3s ships with kube-router or

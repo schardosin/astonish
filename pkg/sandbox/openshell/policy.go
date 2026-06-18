@@ -12,9 +12,9 @@ import "github.com/schardosin/astonish/pkg/config"
 //   - Workspace, temp, and runtime paths are read-write.
 //   - /root is NOT included — the sandboxed process runs as user "sandbox"
 //     with home directory at /sandbox.
-//   - Network: by default (mode="open"), no NetworkPolicies are set and the
-//     supervisor allows unrestricted egress. When mode="allowlist", the
-//     supervisor's network namespace proxy enforces the configured host globs.
+//   - Network: the supervisor's proxy denies all egress when no
+//     NetworkPolicies are set. We ALWAYS populate the policy with resolved
+//     presets so that sandboxes have usable internet access.
 func defaultSandboxPolicy(netCfg config.NetworkPolicyConfig) *SandboxPolicySpec {
 	policy := &SandboxPolicySpec{
 		Version: 1,
@@ -42,13 +42,16 @@ func defaultSandboxPolicy(netCfg config.NetworkPolicyConfig) *SandboxPolicySpec 
 		},
 	}
 
-	// When mode=allowlist, populate NetworkPolicies so the supervisor's
-	// network namespace proxy enforces the configured host globs.
-	if netCfg.IsAllowlistMode() {
+	// Always populate NetworkPolicies — empty = deny-all in OpenShell.
+	// ResolvePresets expands the configured presets + extra endpoints into
+	// a concrete list of allowed host:port entries.
+	endpoints := ResolvePresets(netCfg)
+	if len(endpoints) > 0 {
 		policy.NetworkPolicies = map[string]*NetworkPolicySpec{
 			"egress": {
-				Name:             "egress-allowlist",
-				AllowedEndpoints: netCfg.Allowlist,
+				Name:      "astonish-egress",
+				Endpoints: endpoints,
+				Binaries:  []string{"/**"},
 			},
 		}
 	}

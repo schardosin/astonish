@@ -177,6 +177,11 @@ type ExecRequest struct {
 	// Cols and Rows set the initial terminal size when TTY is true.
 	Cols int
 	Rows int
+
+	// SeparateStderr, when non-nil, receives stderr output instead of
+	// mixing it into the stdout stream. Critical for machine protocols
+	// (MCP JSON-RPC) where stderr contamination breaks parsing.
+	SeparateStderr io.Writer
 }
 
 // ExecResponse is the result of a synchronous exec.

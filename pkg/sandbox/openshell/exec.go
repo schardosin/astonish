@@ -147,8 +147,9 @@ func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, 
 	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
 
 	conn, err := b.gateway.ExecStream(ctx, rec.PodName, ExecRequest{
-		Command: command,
-		TTY:     false,
+		Command:        command,
+		TTY:            false,
+		SeparateStderr: opts.SeparateStderr,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/openshell: ExecStreaming(%s): %w", sessionID, err)

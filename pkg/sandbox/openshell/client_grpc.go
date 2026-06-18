@@ -295,8 +295,9 @@ func (c *grpcGatewayClient) ExecStream(ctx context.Context, sandboxID string, re
 	}
 
 	conn := &grpcExecStreamConn{
-		stream:   stream,
-		exitCode: -1,
+		stream:         stream,
+		separateStderr: req.SeparateStderr,
+		exitCode:       -1,
 	}
 	conn.cond = sync.NewCond(&conn.mu)
 	// Start background reader.
@@ -310,13 +311,14 @@ func (c *grpcGatewayClient) ExecStream(ctx context.Context, sandboxID string, re
 // ---------------------------------------------------------------------------
 
 type grpcExecStreamConn struct {
-	stream   pb.OpenShell_ExecSandboxInteractiveClient
-	buf      bytes.Buffer
-	mu       sync.Mutex
-	cond     *sync.Cond
-	exitCode int
-	closed   bool
-	readErr  error
+	stream         pb.OpenShell_ExecSandboxInteractiveClient
+	separateStderr io.Writer // non-nil → stderr routed here, not mixed into buf
+	buf            bytes.Buffer
+	mu             sync.Mutex
+	cond           *sync.Cond
+	exitCode       int
+	closed         bool
+	readErr        error
 }
 
 func (c *grpcExecStreamConn) readLoop() {
@@ -338,7 +340,14 @@ func (c *grpcExecStreamConn) readLoop() {
 		case *pb.ExecSandboxEvent_Stdout:
 			c.buf.Write(payload.Stdout.GetData())
 		case *pb.ExecSandboxEvent_Stderr:
-			c.buf.Write(payload.Stderr.GetData())
+			if c.separateStderr != nil {
+				// Route stderr to the dedicated writer (not mixed into stdout).
+				// This is critical for machine protocols like MCP JSON-RPC
+				// where stderr contamination breaks JSON parsing.
+				c.separateStderr.Write(payload.Stderr.GetData())
+			} else {
+				c.buf.Write(payload.Stderr.GetData())
+			}
 		case *pb.ExecSandboxEvent_Exit:
 			c.exitCode = int(payload.Exit.GetExitCode())
 			c.closed = true

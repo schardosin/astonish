@@ -1,15 +1,18 @@
 # Dockerfile — astonish-sandbox-openshell image.
 #
-# Custom sandbox image for Astonish sessions running on the OpenShell backend.
-# Based on NVIDIA's official base sandbox image, with Astonish agent tooling
-# added on top.
+# Fully-featured sandbox image for Astonish sessions running on the OpenShell
+# backend. Includes all standard tools baked in:
+#   - Core dev tools (build-essential, docker.io, uv, jq, socat, etc.)
+#   - CloakBrowser (anti-detection stealth Chromium) + KasmVNC (VNC/web access)
+#   - OpenCode (AI coding agent)
 #
 # The OpenShell gateway handles:
 #   - Supervisor sideloading (via init-container or ImageVolume)
 #   - Workspace PVC provisioning (via Agent Sandbox CRD)
 #   - mTLS and policy enforcement
+#   - Landlock/seccomp enforcement; agent process demoted to user "sandbox"
 #
-# This image just needs the tools the agent process uses inside the sandbox.
+# Architecture: amd64 only.
 #
 # Build (from repo root):
 #   docker build -f docker/sandbox-openshell/Dockerfile \
@@ -43,12 +46,143 @@ RUN CGO_ENABLED=0 go build \
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 LABEL org.opencontainers.image.title="astonish-sandbox-openshell" \
-      org.opencontainers.image.description="Astonish agent sandbox image for NVIDIA OpenShell" \
+      org.opencontainers.image.description="Astonish agent sandbox image for NVIDIA OpenShell (full toolset)" \
       org.opencontainers.image.source="https://github.com/schardosin/astonish" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 # --- Astonish agent binary ---
 COPY --from=builder /tmp/astonish /usr/local/bin/astonish
+
+# All install steps run as root. The OpenShell supervisor demotes the agent
+# process to user "sandbox" at runtime via Landlock/seccomp.
+USER root
+
+# ===========================================================================
+# Core Tools
+# ===========================================================================
+# The OpenShell base already provides: Python 3.12, Node.js 22, git, gh, vim, nano.
+# We add the remaining core tools for full parity with Incus/K8s defaults.
+
+# Enable universe repo (Ubuntu). Safe no-op on non-Ubuntu images.
+RUN grep -q 'Components:.*universe' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null \
+    || sed -i '/^Components:/ s/$/ universe/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null \
+    || true
+
+# Ensure apt lists directory exists (some base images clean it aggressively)
+RUN mkdir -p /var/lib/apt/lists/partial
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl wget jq unzip build-essential \
+      python3-pip python3-venv \
+      ca-certificates gnupg \
+      socat \
+      docker.io \
+      passwd \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (Python package manager / uvx runner)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# ===========================================================================
+# CloakBrowser + KasmVNC
+# ===========================================================================
+# CloakBrowser is a patched Chromium with anti-detection (fingerprint spoofing).
+# KasmVNC provides VNC/websocket access for visual browser handoff.
+# Architecture: amd64 only.
+
+# --- CloakBrowser shared library dependencies ---
+# CloakBrowser is a standalone binary (not apt-installed), so all shared
+# libraries it links against must be explicitly installed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      xvfb \
+      fonts-liberation fonts-noto-color-emoji \
+      xdg-utils libnss3 libatk-bridge2.0-0 \
+      libx11-xcb1 libxcomposite1 libxrandr2 \
+      libgbm1 libasound2t64 \
+      libcups2 libpango-1.0-0 libcairo2 \
+      libdbus-1-3 libdrm2 libexpat1 \
+      libxdamage1 libxext6 libxfixes3 \
+      libxkbcommon0 libatspi2.0-0 libvulkan1 \
+      libxcb-dri3-0 libatk1.0-0 libgtk-3-0 \
+      libgdk-pixbuf-2.0-0 libnspr4 \
+      libjpeg-turbo8 libwebp-dev libssl3 \
+      xfonts-base xfonts-75dpi xfonts-100dpi \
+      x11-xserver-utils openssl \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Browser user (KasmVNC cannot run as root) ---
+RUN /usr/sbin/useradd -m -s /bin/bash browser
+
+# --- KasmVNC v1.4.0 (amd64) ---
+RUN wget -q -O /tmp/kasmvnc.deb \
+      "https://github.com/kasmtech/KasmVNC/releases/download/v1.4.0/kasmvncserver_noble_1.4.0_amd64.deb" \
+    && apt-get update \
+    && apt-get install -y /tmp/kasmvnc.deb \
+    && rm -f /tmp/kasmvnc.deb \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- KasmVNC configuration ---
+# Self-signed cert (required by KasmVNC even with SSL disabled)
+RUN install -d -o browser -g browser -m 755 /home/browser/.vnc \
+    && openssl req -x509 -newkey rsa:2048 \
+         -keyout /home/browser/.vnc/snakeoil.key \
+         -out /home/browser/.vnc/snakeoil.pem \
+         -days 3650 -nodes -subj '/CN=localhost' 2>/dev/null \
+    && chown browser:browser /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem \
+    && chmod 600 /home/browser/.vnc/snakeoil.key
+
+# KasmVNC config: SSL disabled (TLS terminated by exec tunnel), no prompts
+RUN printf '%s\n' \
+      'network:' \
+      '  protocol: http' \
+      '  interface: 0.0.0.0' \
+      '  use_ipv4: true' \
+      '  use_ipv6: false' \
+      '  ssl:' \
+      '    require_ssl: false' \
+      '    pem_certificate: /home/browser/.vnc/snakeoil.pem' \
+      '    pem_key: /home/browser/.vnc/snakeoil.key' \
+      'user_session:' \
+      '  concurrent_connections_prompt: false' \
+      'logging:' \
+      '  log_writer_name: all' \
+      '  log_dest: logfile' \
+      '  level: 30' \
+      'command_line:' \
+      '  prompt: false' \
+      > /home/browser/.vnc/kasmvnc.yaml \
+    && chown browser:browser /home/browser/.vnc/kasmvnc.yaml
+
+# Minimal xstartup — keeps X session alive for visual handoff
+RUN printf '#!/bin/bash\nexec sleep infinity\n' > /home/browser/.vnc/xstartup \
+    && chmod +x /home/browser/.vnc/xstartup \
+    && chown browser:browser /home/browser/.vnc/xstartup
+
+# Mark desktop env as selected (skips KasmVNC interactive prompt)
+RUN touch /home/browser/.vnc/.de-was-selected \
+    && chown browser:browser /home/browser/.vnc/.de-was-selected
+
+# Pre-create KasmVNC user account (password overridden at handoff time)
+RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browser/.kasmpasswd \
+    && cp /home/browser/.kasmpasswd /root/.kasmpasswd
+
+# --- CloakBrowser binary ---
+RUN pip3 install --break-system-packages cloakbrowser \
+    && HOME=/home/browser python3 -c "import cloakbrowser; print(cloakbrowser.ensure_binary())"
+
+# Fix ownership of browser home directory
+RUN chown -R browser:browser /home/browser
+
+# ===========================================================================
+# OpenCode
+# ===========================================================================
+# AI coding agent — used as a delegate tool by fleet sub-agents.
+RUN curl -fsSL https://opencode.ai/install | bash
+
+# ===========================================================================
+# Cleanup
+# ===========================================================================
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # The workspace directory. OpenShell mounts a PVC here via the Agent Sandbox
 # CRD's volumeClaimTemplates.

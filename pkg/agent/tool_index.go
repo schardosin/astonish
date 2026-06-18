@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -29,6 +30,10 @@ type ToolIndex struct {
 	// toolRegistry maps tool_name → ToolEntry for resolving search results
 	// back to group names and concrete tool implementations.
 	toolRegistry map[string]ToolEntry
+
+	// knownIDs tracks doc IDs from the last SyncTools call.
+	// Used to detect and prune stale entries on the next sync.
+	knownIDs map[string]bool
 
 	// BM25 inverted index for keyword-based search.
 	// Built during SyncTools() alongside the vector index.
@@ -207,13 +212,35 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 	// On a typical restart where tools haven't changed, this skips all
 	// embedding calls — the only cost is GetByID lookups against the store.
 	var toEmbed []ToolVectorDoc
+	currentIDs := make(map[string]bool, len(docs))
 	for _, doc := range docs {
+		currentIDs[doc.ID] = true
 		existing, _ := idx.vectorStore.GetByID(ctx, doc.ID)
 		if existing != nil && existing.Content == doc.Content {
 			continue // already embedded with same content
 		}
 		toEmbed = append(toEmbed, doc)
 	}
+
+	// Prune stale entries: remove docs that were in the previous sync but
+	// are no longer in the current tool set (e.g., MCP server was removed
+	// or its tools changed between sessions).
+	if idx.knownIDs != nil {
+		var staleIDs []string
+		for id := range idx.knownIDs {
+			if !currentIDs[id] {
+				staleIDs = append(staleIDs, id)
+			}
+		}
+		if len(staleIDs) > 0 {
+			if err := idx.vectorStore.DeleteByIDs(ctx, staleIDs); err != nil {
+				slog.Warn("failed to prune stale tool index entries", "count", len(staleIDs), "error", err)
+			} else if len(staleIDs) > 0 {
+				slog.Debug("pruned stale tool index entries", "count", len(staleIDs))
+			}
+		}
+	}
+	idx.knownIDs = currentIDs
 
 	if len(docs) == 0 {
 		idx.toolRegistry = registry

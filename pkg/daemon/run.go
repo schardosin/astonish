@@ -1177,7 +1177,31 @@ func Run(cfg RunConfig) error {
 
 	// Pre-warm the Studio chat agent in the background so the first web request is fast.
 	go func() {
-		warmCtx := store.WithServices(ctx, svc)
+		// Build an enriched Services clone for pre-warm that includes the
+		// default org/team stores. Without these, the chat factory cannot
+		// resolve MCP server configs (e.g., Tavily) or team settings
+		// (WebSearchTool) from the database — causing standard servers to be
+		// missing from the tool groups until a Reset() is triggered.
+		warmSvc := &store.Services{
+			Mode:             svc.Mode,
+			Platform:         svc.Platform,
+			TenantRouter:     svc.TenantRouter,
+			PlatformSettings: svc.PlatformSettings,
+		}
+		if backend != nil {
+			warmSvc.PlatformMCPServers = backend.PlatformMCPServers()
+			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+			if orgSlug != "" {
+				warmSvc.OrgSettings = backend.OrgSettings(orgSlug)
+				if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+					warmSvc.MCPServers = orgStore.OrgMCPServers()
+					teamStore := orgStore.ForTeam("general")
+					warmSvc.TeamMCPServers = teamStore.MCPServers()
+					warmSvc.Settings = teamStore.Settings()
+				}
+			}
+		}
+		warmCtx := store.WithServices(ctx, warmSvc)
 		if err := api.GetChatManager().PreWarm(warmCtx); err != nil {
 			logger.Printf("Studio chat pre-warm failed (will retry on first request): %v", err)
 		} else {

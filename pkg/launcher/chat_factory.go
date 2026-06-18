@@ -380,6 +380,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// Platform mode: tools are stored in the DB (cached_tools column)
 			cachedTools := getPlatformCachedTools(ctx, name)
 
+			// Fallback: if the platform DB has no cached tools yet (e.g., async
+			// discovery is still running after a fresh install), try the
+			// file-based cache. This avoids the race condition where PreWarm
+			// or the first chat request arrives before async discovery completes.
+			if len(cachedTools) == 0 {
+				if fileTools := cache.GetToolsForServer(name); len(fileTools) > 0 {
+					cachedTools = fileTools
+					slog.Debug("MCP server: using file cache fallback", "server", name, "tools", len(cachedTools))
+				}
+			}
+
 			// Filter out excluded tools for standard servers (e.g., tavily_research
 			// is expensive and redundant with Astonish's delegation-based approach).
 			if excluded := config.GetExcludedTools(name); excluded != nil {
@@ -1238,6 +1249,76 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// propagate file artifacts to the parent ChatAgent for channel delivery
 		// (e.g., as Telegram document attachments).
 		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
+
+		// Wire MCP group fallback resolver to handle the race condition where
+		// async MCP discovery completes after the chat agent was initialized.
+		// When a sub-agent requests "mcp:<server>" but it wasn't in ToolGroups
+		// at init time, this resolver attempts to create the group on-the-fly
+		// from newly-cached tools in the DB.
+		if mcpCfg != nil {
+			capturedMCPCfg := mcpCfg
+			capturedDebugMode := cfg.DebugMode
+			subAgentMgr.MCPGroupResolver = func(ctx context.Context, serverName string) *agent.ToolGroup {
+				serverCfg, exists := capturedMCPCfg.MCPServers[serverName]
+				if !exists || !serverCfg.IsEnabled() {
+					return nil
+				}
+				// Check access control
+				if !config.IsStandardServerInstalled(serverName) {
+					// For non-standard servers, check platform stores
+					mcpStores := store.MCPServerStoresFromContext(ctx)
+					if mcpStores != nil {
+						accessible := false
+						if mcpStores.Platform != nil {
+							if s, _ := mcpStores.Platform.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible && mcpStores.Org != nil {
+							if s, _ := mcpStores.Org.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible && mcpStores.Team != nil {
+							if s, _ := mcpStores.Team.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible {
+							return nil
+						}
+					}
+				}
+				// Try to get cached tools from the DB (they may have been
+				// populated by async discovery since our init time).
+				cachedTools := getPlatformCachedTools(ctx, serverName)
+				if len(cachedTools) == 0 {
+					return nil
+				}
+				// Filter out excluded tools
+				if excluded := config.GetExcludedTools(serverName); excluded != nil {
+					filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+					for _, t := range cachedTools {
+						if !excluded[t.Name] {
+							filtered = append(filtered, t)
+						}
+					}
+					cachedTools = filtered
+				}
+				if len(cachedTools) == 0 {
+					return nil
+				}
+				// Build the ToolGroup on-the-fly
+				lt := agent.NewLazyMCPToolset(serverName, cachedTools, serverCfg, capturedDebugMode)
+				sanitized := agent.NewSanitizedToolset(lt, capturedDebugMode)
+				groupName := "mcp:" + serverName
+				return &agent.ToolGroup{
+					Name:        groupName,
+					Description: fmt.Sprintf("MCP server: %s (%d tools)", serverName, lt.ToolCount()),
+					Toolsets:    []tool.Toolset{sanitized},
+				}
+			}
+		}
 
 		subAgentMgr.AppName = "astonish"
 		// Use SystemUserID as the fallback for child sessions.

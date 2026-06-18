@@ -2,9 +2,9 @@
 #
 # Fully-featured sandbox image for Astonish sessions running on the OpenShell
 # backend. Includes all standard tools baked in:
-#   - Core dev tools (build-essential, docker.io, uv, jq, socat, etc.)
+#   - Core dev tools (docker.io, jq, unzip, socat, etc.)
 #   - CloakBrowser (anti-detection stealth Chromium) + KasmVNC (VNC/web access)
-#   - OpenCode (AI coding agent)
+#   - OpenCode (AI coding agent) — pre-installed in the NVIDIA base
 #
 # The OpenShell gateway handles:
 #   - Supervisor sideloading (via init-container or ImageVolume)
@@ -58,44 +58,34 @@ COPY --from=builder /tmp/astonish /usr/local/bin/astonish
 USER root
 
 # ===========================================================================
-# Core Tools
+# System Packages (single layer)
 # ===========================================================================
-# The OpenShell base already provides: Python 3.12, Node.js 22, git, gh, vim, nano.
-# We add the remaining core tools for full parity with Incus/K8s defaults.
+# The NVIDIA OpenShell base already provides:
+#   Python 3.12 (system) + 3.14 (uv venv at /sandbox/.venv), Node.js 22,
+#   git, gh, vim, nano, build-essential, curl, ca-certificates, gnupg,
+#   openssl, uv, opencode, passwd
+#
+# We install only what's missing for full Astonish parity + CloakBrowser/KasmVNC.
+
+# Ensure apt lists directory exists (NVIDIA base cleans it aggressively)
+RUN mkdir -p /var/lib/apt/lists/partial
 
 # Enable universe repo (Ubuntu). Safe no-op on non-Ubuntu images.
 RUN grep -q 'Components:.*universe' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null \
     || sed -i '/^Components:/ s/$/ universe/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null \
     || true
 
-# Ensure apt lists directory exists (some base images clean it aggressively)
-RUN mkdir -p /var/lib/apt/lists/partial
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl wget jq unzip build-essential \
-      python3-pip python3-venv \
-      ca-certificates gnupg \
-      socat \
+      # --- Core tools not in base ---
+      wget jq unzip socat \
       docker.io \
-      passwd \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install uv (Python package manager / uvx runner)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# ===========================================================================
-# CloakBrowser + KasmVNC
-# ===========================================================================
-# CloakBrowser is a patched Chromium with anti-detection (fingerprint spoofing).
-# KasmVNC provides VNC/websocket access for visual browser handoff.
-# Architecture: amd64 only.
-
-# --- CloakBrowser shared library dependencies ---
-# CloakBrowser is a standalone binary (not apt-installed), so all shared
-# libraries it links against must be explicitly installed.
-RUN apt-get update && apt-get install -y --no-install-recommends \
+      python3-pip python3-venv \
+      # --- CloakBrowser shared library dependencies ---
+      # CloakBrowser is a standalone binary (not apt-installed), so all shared
+      # libraries it links against must be explicitly listed.
       xvfb \
       fonts-liberation fonts-noto-color-emoji \
+      fonts-freefont-ttf fonts-wqy-zenhei fonts-ipafont-gothic \
       xdg-utils libnss3 libatk-bridge2.0-0 \
       libx11-xcb1 libxcomposite1 libxrandr2 \
       libgbm1 libasound2t64 \
@@ -107,8 +97,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgdk-pixbuf-2.0-0 libnspr4 \
       libjpeg-turbo8 libwebp-dev libssl3 \
       xfonts-base xfonts-75dpi xfonts-100dpi \
-      x11-xserver-utils openssl \
+      x11-xserver-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# ===========================================================================
+# CloakBrowser + KasmVNC
+# ===========================================================================
+# CloakBrowser is a patched Chromium with anti-detection (fingerprint spoofing).
+# KasmVNC provides VNC/websocket access for visual browser handoff.
+# Architecture: amd64 only.
 
 # --- Browser user (KasmVNC cannot run as root) ---
 RUN /usr/sbin/useradd -m -s /bin/bash browser
@@ -166,18 +163,15 @@ RUN touch /home/browser/.vnc/.de-was-selected \
 RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browser/.kasmpasswd \
     && cp /home/browser/.kasmpasswd /root/.kasmpasswd
 
-# --- CloakBrowser binary ---
-RUN pip3 install --break-system-packages cloakbrowser \
-    && HOME=/home/browser python3 -c "import cloakbrowser; print(cloakbrowser.ensure_binary())"
+# --- CloakBrowser ---
+# Install into system Python (3.12) so it's importable at runtime via:
+#   python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())"
+# Then download the stealth Chromium binary into /home/browser/.cloakbrowser/
+RUN /usr/local/bin/uv pip install --system --break-system-packages --python /usr/bin/python3 cloakbrowser \
+    && HOME=/home/browser /usr/bin/python3 -m cloakbrowser install
 
 # Fix ownership of browser home directory
 RUN chown -R browser:browser /home/browser
-
-# ===========================================================================
-# OpenCode
-# ===========================================================================
-# AI coding agent — used as a delegate tool by fleet sub-agents.
-RUN curl -fsSL https://opencode.ai/install | bash
 
 # ===========================================================================
 # Cleanup

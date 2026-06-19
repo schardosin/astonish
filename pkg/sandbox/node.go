@@ -802,10 +802,10 @@ func (lnc *LazyNodeClient) GetContainerIP(sessionID string) (string, error) {
 	return lnc.incusClient.GetContainerIPv4(containerName)
 }
 
-// EnsureReady blocks until the container AND node are ready and returns the
+// EnsureNodeReady blocks until the container AND node are ready and returns the
 // container name. If either failed to start, returns an error.
 // Used by built-in tool calls that need both the container and the NDJSON node.
-func (lnc *LazyNodeClient) EnsureReady(sessionID string) (string, error) {
+func (lnc *LazyNodeClient) EnsureNodeReady(sessionID string) (string, error) {
 	lnc.BindSession(sessionID)
 
 	lnc.mu.Lock()
@@ -869,6 +869,14 @@ func (lnc *LazyNodeClient) EnsureContainerReady(sessionID string) (string, error
 		return "", lnc.containerErr
 	}
 	return lnc.containerName, nil
+}
+
+// EnsureReady satisfies ToolNodeClient. It triggers provisioning and blocks
+// until the container is running. Equivalent to EnsureContainerReady but
+// discards the container name (callers using the interface don't need it).
+func (lnc *LazyNodeClient) EnsureReady(sessionID string) error {
+	_, err := lnc.EnsureContainerReady(sessionID)
+	return err
 }
 
 // StopNode stops the node process without destroying the container.

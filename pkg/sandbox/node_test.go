@@ -43,7 +43,7 @@ func TestLazyNodeClientCloseBeforeEnsureReady(t *testing.T) {
 	var readyErr error
 	go func() {
 		defer close(done)
-		_, readyErr = lnc.EnsureReady("some-session")
+		readyErr = lnc.EnsureReady("some-session")
 	}()
 
 	select {

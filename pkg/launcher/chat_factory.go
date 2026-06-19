@@ -461,7 +461,30 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			//   - save/use/list_sandbox_template tools (Incus image-clone)
 			//   - sub-agent alias for delegated tasks
 			//   - MCP stdio servers inside sandbox (host fallback OK)
-			b, backendCleanup, berr := sandbox.BackendFromAppConfig(cfg.AppConfig)
+
+			// In platform mode, use PG-backed session registry for cross-replica
+			// consistency. Prefer TenantContext from ctx; fall back to default
+			// org slug from AppConfig + "general" team.
+			var sessRegistry *sandbox.SessionRegistry
+			if cfg.PlatformMode {
+				if svc := store.FromContext(ctx); svc != nil && svc.Platform != nil {
+					orgSlug := store.OrgSlugFromContext(ctx)
+					teamSlug := store.TeamSlugFromContext(ctx)
+					if orgSlug == "" {
+						orgSlug = cfg.AppConfig.Storage.Auth.GetDefaultOrgSlug()
+					}
+					if teamSlug == "" {
+						teamSlug = "general"
+					}
+					if provider, ok := svc.Platform.(store.SandboxSessionProvider); ok {
+						if sessStore := provider.SandboxSessionsForTeam(ctx, orgSlug, teamSlug); sessStore != nil {
+							sessRegistry = sandbox.NewSessionRegistryFromStore(sessStore)
+						}
+					}
+				}
+			}
+
+			b, backendCleanup, berr := sandbox.BackendFromAppConfigWithSessions(cfg.AppConfig, sessRegistry)
 			if berr != nil {
 				return nil, fmt.Errorf("sandbox is enabled but the %s backend is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", kind, berr)
 			}
@@ -489,14 +512,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			// Note: browserToolsSlice intentionally NOT wrapped — browser runs on host
 
-			// Lazy MCP toolsets: pass nil pool so stdio MCP servers run on the
-			// API host (same as pre-sandbox behaviour). SSE transports unaffected.
+			// Lazy MCP toolsets: wire the pool so stdio MCP servers start
+			// inside the session's sandbox (same as Incus path). SSE
+			// transports are unaffected (isSSETransport check inside).
 			for _, lt := range lazyToolsets {
-				lt.SetSandboxPool(nil)
+				lt.SetSandboxPool(pool)
 			}
 			if len(lazyToolsets) > 0 {
-				slog.Info("sandbox MCP routing not yet supported on backend; stdio MCP servers will run on the API host",
-					"component", "chat-factory", "backend", string(kind))
+				slog.Info("sandbox MCP routing enabled for backend",
+					"component", "chat-factory", "backend", string(kind), "toolsets", len(lazyToolsets))
 			}
 
 			// sandboxNodePool, sandboxIncusClient, sandboxTplRegistry,
@@ -629,7 +653,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// start inside the session's container instead of on the host.
 			// SSE transport servers are unaffected (isSSETransport check inside).
 			for _, lt := range lazyToolsets {
-				lt.SetSandboxPool(nodePool)
+				lt.SetSandboxPool(sandbox.AsNodePool(nodePool))
 			}
 
 			// Async refresh: check all templates for stale binaries in the background.

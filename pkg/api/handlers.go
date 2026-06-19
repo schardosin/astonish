@@ -1342,5 +1342,9 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 		router.HandleFunc("/api/platform/admin/sandbox/base/build", PlatformImageBuildHandler).Methods("POST")
 		router.HandleFunc("/api/platform/admin/sandbox/base/build/status", PlatformImageBuildStatusHandler).Methods("GET")
 		router.HandleFunc("/api/platform/admin/sandbox/base/tools", PlatformBaseConfigOptionalToolsHandler).Methods("GET")
+
+		// OpenShell orphan sandbox management
+		router.HandleFunc("/api/platform/admin/sandbox/orphans", PlatformAdminDeleteOrphanSandboxesHandler).Methods("DELETE")
+		router.HandleFunc("/api/platform/admin/sandbox/orphans", PlatformAdminListOrphanSandboxesHandler).Methods("GET")
 	}
 }

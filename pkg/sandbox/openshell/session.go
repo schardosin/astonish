@@ -42,6 +42,24 @@ func isAlreadyExists(err error) bool {
 	return false
 }
 
+// isNotFound returns true if the error (possibly wrapped) contains a
+// gRPC NotFound status code. Used by DestroySession to distinguish
+// "sandbox already gone" (safe to remove record) from transient failures
+// (record should be kept for retry by the reconciler).
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok {
+		return st.Code() == codes.NotFound
+	}
+	type unwrapper interface{ Unwrap() error }
+	if u, ok := err.(unwrapper); ok {
+		return isNotFound(u.Unwrap())
+	}
+	return false
+}
+
 // CreateSession creates a new sandbox via the OpenShell Gateway and
 // registers it in the session registry.
 func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.SessionSpec) (*sandbox.Session, error) {
@@ -50,6 +68,12 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 	}
 	if b.gateway == nil {
 		return nil, ErrNotImplementedYet
+	}
+
+	// Default TemplateID to BaseTemplateID when not set. This is required
+	// for the PG-backed session registry (template_id is NOT NULL).
+	if spec.TemplateID == "" {
+		spec.TemplateID = sandbox.BaseTemplateID
 	}
 
 	// Check idempotency: if session already exists, return it.
@@ -251,9 +275,16 @@ func (b *OpenShellBackend) DestroySession(ctx context.Context, sessionID string)
 		return ErrNotImplementedYet
 	}
 
-	// If the sandbox is still running, delete it.
+	// If the sandbox is still running, delete it via the gateway.
 	if rec.ContainerName != "" {
-		_ = b.gateway.DeleteSandbox(ctx, rec.ContainerName)
+		if err := b.gateway.DeleteSandbox(ctx, rec.ContainerName); err != nil {
+			// If the gateway says "not found", the sandbox is already gone —
+			// proceed to remove the DB record. Any other error is transient;
+			// keep the record alive so the periodic reconciler can retry.
+			if !isNotFound(err) {
+				return fmt.Errorf("openshell: delete sandbox %s: %w", rec.ContainerName, err)
+			}
+		}
 	}
 
 	return b.sessions.Remove(sessionID)

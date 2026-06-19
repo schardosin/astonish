@@ -49,11 +49,13 @@ func (s *spyPool) GetOrCreateWithImage(sessionID, template string, chain []strin
 
 func (s *spyPool) Cleanup() {}
 
+func (s *spyPool) GetBackend() Backend { return nil }
+
 // stubClient satisfies ToolNodeClient for test purposes.
 type stubClient struct{}
 
-func (c *stubClient) BindSession(string)        {}
-func (c *stubClient) EnsureReady(string) (string, error) { return "", nil }
+func (c *stubClient) BindSession(string)           {}
+func (c *stubClient) EnsureReady(string) error     { return nil }
 func (c *stubClient) Call(string, string, map[string]interface{}) (json.RawMessage, error) {
 	return nil, nil
 }

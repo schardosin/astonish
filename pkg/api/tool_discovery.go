@@ -981,7 +981,7 @@ func InternetMCPInstallHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Discover tools asynchronously with timeout
-		asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig)
+		asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig, buildPGSessionRegistry(r.Context()))
 
 		GetChatManager().Reset()
 

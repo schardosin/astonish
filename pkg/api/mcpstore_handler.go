@@ -269,7 +269,7 @@ func installMCPStoreServerPlatform(w http.ResponseWriter, r *http.Request, mcpSt
 	}
 
 	// Discover tools asynchronously — sandbox discovery can take 30-120s.
-	asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig)
+	asyncDiscoverAndCacheTools(mcpStore, serverName, newConfig, buildPGSessionRegistry(r.Context()))
 
 	// Reset the Studio chat agent so the next request picks up the new MCP server.
 	GetChatManager().Reset()

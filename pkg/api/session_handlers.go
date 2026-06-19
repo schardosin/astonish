@@ -674,7 +674,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to delete session: %v", err))
 			return
 		}
-		sandbox.TryDestroySession(appCfg, sessionID)
+		sandbox.TryDestroySession(appCfg, sessionID, buildPGSessionRegistry(r.Context()))
 		// Clean up session-scoped app databases
 		if svc.AppStateSQL != nil {
 			prefix := "session_" + apps.Slugify(sessionID) + "_"
@@ -714,7 +714,7 @@ func StudioDeleteSessionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Best-effort: destroy sandbox container if one exists for this session
-	sandbox.TryDestroySession(appCfg, sessionID)
+	sandbox.TryDestroySession(appCfg, sessionID, buildPGSessionRegistry(r.Context()))
 
 	// Best-effort: clean up session-scoped app state databases
 	if svc := store.FromRequest(r); svc != nil && svc.AppStateSQL != nil {

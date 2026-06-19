@@ -193,4 +193,57 @@ func (s *Store) sandboxSessionsForSchema(orgDBName, schemaName string) store.San
 	return &teamSandboxSessionStore{client: client}
 }
 
+// PruneStaleSandboxSessions removes sandbox_sessions records whose
+// chat_session_id does not correspond to an existing chat session in the same
+// team schema. These stale records accumulate when session deletion previously
+// failed to clean up the sandbox registry (before the PG-backed
+// TryDestroySession fix).
+//
+// Returns the total number of records deleted across all team schemas.
+func (s *Store) PruneStaleSandboxSessions(ctx context.Context) (int, error) {
+	teamSchemas, err := s.ListTeamSchemas(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("PruneStaleSandboxSessions: list team schemas: %w", err)
+	}
+
+	total := 0
+	for _, ts := range teamSchemas {
+		dsn, err := s.deriveSchemaAwareDSN(ts.orgDBName, ts.schemaName)
+		if err != nil {
+			slog.Debug("PruneStaleSandboxSessions: derive DSN failed", "db", ts.orgDBName, "schema", ts.schemaName, "error", err)
+			continue
+		}
+
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			slog.Debug("PruneStaleSandboxSessions: open failed", "db", ts.orgDBName, "schema", ts.schemaName, "error", err)
+			continue
+		}
+
+		// Delete sandbox_sessions whose chat_session_id has no matching row in sessions.
+		// The special 'team-template-*' rows (used for template builds) have
+		// chat_session_id = id, and there's never a matching chat session for them.
+		// They are intentionally pruned here — they represent build artifacts, not
+		// live sessions.
+		res, err := db.ExecContext(ctx, `
+			DELETE FROM sandbox_sessions ss
+			WHERE NOT EXISTS (
+				SELECT 1 FROM sessions s WHERE s.id = ss.chat_session_id
+			)
+		`)
+		db.Close()
+		if err != nil {
+			slog.Warn("PruneStaleSandboxSessions: delete failed", "db", ts.orgDBName, "schema", ts.schemaName, "error", err)
+			continue
+		}
+		n, _ := res.RowsAffected()
+		if n > 0 {
+			slog.Info("PruneStaleSandboxSessions: pruned stale records",
+				"db", ts.orgDBName, "schema", ts.schemaName, "pruned", n)
+		}
+		total += int(n)
+	}
+	return total, nil
+}
+
 

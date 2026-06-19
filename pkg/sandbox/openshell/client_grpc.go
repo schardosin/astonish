@@ -18,11 +18,13 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	pb "github.com/schardosin/astonish/pkg/sandbox/openshell/gen/openshellv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -123,6 +125,16 @@ func buildDialOptions(cfg GRPCClientConfig) ([]grpc.DialOption, error) {
 		opts = append(opts, grpc.WithUnaryInterceptor(bearerTokenUnaryInterceptor(cfg.AuthToken)))
 		opts = append(opts, grpc.WithStreamInterceptor(bearerTokenStreamInterceptor(cfg.AuthToken)))
 	}
+
+	// Enable gRPC keepalive to prevent the h2 connection from being killed
+	// by the OpenShell supervisor's idle timeout (~145s observed). Pings
+	// every 30s keep the connection alive during long-running streaming
+	// operations (MCP server exec, interactive terminals).
+	opts = append(opts, grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                30 * time.Second, // Send ping every 30s if no activity
+		Timeout:             10 * time.Second, // Wait 10s for ping ACK
+		PermitWithoutStream: true,             // Ping even when no active RPCs
+	}))
 
 	return opts, nil
 }
@@ -406,6 +418,38 @@ func (c *grpcExecStreamConn) ExitCode() int {
 
 func (c *grpcExecStreamConn) Close() error {
 	return c.stream.CloseSend()
+}
+
+// ---------------------------------------------------------------------------
+// ListSandboxes
+// ---------------------------------------------------------------------------
+
+func (c *grpcGatewayClient) ListSandboxes(ctx context.Context, labelSelector string) ([]SandboxSummary, error) {
+	resp, err := c.client.ListSandboxes(ctx, &pb.ListSandboxesRequest{
+		LabelSelector: labelSelector,
+		Limit:         500,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway ListSandboxes: %w", err)
+	}
+
+	sandboxes := resp.GetSandboxes()
+	summaries := make([]SandboxSummary, 0, len(sandboxes))
+	for _, s := range sandboxes {
+		meta := s.GetMetadata()
+		status := s.GetStatus()
+		summary := SandboxSummary{
+			ID:     meta.GetId(),
+			Name:   meta.GetName(),
+			Labels: meta.GetLabels(),
+			Phase:  status.GetPhase().String(),
+		}
+		if ms := meta.GetCreatedAtMs(); ms > 0 {
+			summary.CreatedAt = time.UnixMilli(ms)
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries, nil
 }
 
 // ---------------------------------------------------------------------------

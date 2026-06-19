@@ -35,7 +35,12 @@ func sandboxBackendForRequest(r *http.Request) (sandbox.Backend, func(), error) 
 	if !sandbox.IsSandboxEnabled(&appCfg.Sandbox) {
 		return nil, nil, fmt.Errorf("sandbox is not enabled in configuration")
 	}
-	b, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+
+	// In platform mode, use the PG-backed session registry for cross-replica
+	// consistency. Returns nil in personal mode (single-node), causing
+	// BackendFromAppConfigWithSessions to fall back to local file registry.
+	sessRegistry := buildPGSessionRegistry(r.Context())
+	b, cleanup, err := sandbox.BackendFromAppConfigWithSessions(appCfg, sessRegistry)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sandbox unavailable: %w", err)
 	}

@@ -121,6 +121,30 @@ func (c *backendNodeClient) BindSession(sessionID string) {
 	go c.provision(sessionID)
 }
 
+// EnsureReady satisfies ToolNodeClient. It triggers provisioning (via
+// BindSession) and blocks until the sandbox session is fully running.
+// Returns nil on success or the provisioning error.
+func (c *backendNodeClient) EnsureReady(sessionID string) error {
+	c.BindSession(sessionID)
+
+	c.mu.Lock()
+	done := c.bindDone
+	closed := c.closed
+	c.mu.Unlock()
+
+	if done == nil {
+		return fmt.Errorf("backend node client: no session bound (empty session ID)")
+	}
+	if closed {
+		return fmt.Errorf("backend node client: closed")
+	}
+	<-done
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bindErr
+}
+
 // provision does the CreateSession + StartSession round trip. Any error is
 // captured on c.bindErr; bindDone is always closed exactly once.
 func (c *backendNodeClient) provision(sessionID string) {
@@ -392,6 +416,13 @@ func (p *backendPool) GetOrCreateWithChain(sessionID, template string, chain []s
 
 func (p *backendPool) GetOrCreateWithImage(sessionID, template string, chain []string, image string) ToolNodeClient {
 	return p.getOrCreate(sessionID, template, chain, image)
+}
+
+// GetBackend returns the underlying Backend used by this pool. MCP lazy
+// toolsets use this to create BackendMCPTransport instances for interactive
+// exec streams into sandbox sessions.
+func (p *backendPool) GetBackend() Backend {
+	return p.backend
 }
 
 func (p *backendPool) getOrCreate(sessionID, template string, chain []string, image string) ToolNodeClient {

@@ -3,6 +3,7 @@ package openshell
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // GatewayClient is the interface the backend uses to communicate with the
@@ -31,6 +32,14 @@ type GatewayClient interface {
 	// ExecStream starts a bidirectional streaming exec session.
 	// Returns a stream that the caller reads/writes. Caller MUST close the stream.
 	ExecStream(ctx context.Context, sandboxID string, req ExecRequest) (ExecStreamConn, error)
+
+	// ListSandboxes returns all sandboxes known to the gateway, optionally
+	// filtered by a Kubernetes-style label selector (e.g., "purpose=chat").
+	// An empty selector returns all sandboxes.
+	ListSandboxes(ctx context.Context, labelSelector string) ([]SandboxSummary, error)
+
+	// Close releases any resources held by the client (e.g., gRPC connection).
+	Close() error
 }
 
 // CreateSandboxRequest contains the parameters for creating a new sandbox.
@@ -209,4 +218,23 @@ type ExecStreamConn interface {
 
 	// Close terminates the exec session and releases resources.
 	Close() error
+}
+
+// SandboxSummary is a lightweight view of a sandbox returned by ListSandboxes.
+// Used for GC reconciliation (comparing gateway state against DB session records).
+type SandboxSummary struct {
+	// ID is the gateway-assigned UUID.
+	ID string
+
+	// Name is the sandbox name (Kubernetes pod name, e.g., "astn-sess-abc12345").
+	Name string
+
+	// Labels are the Kubernetes labels on the sandbox pod.
+	Labels map[string]string
+
+	// CreatedAt is when the sandbox was created.
+	CreatedAt time.Time
+
+	// Phase is the sandbox lifecycle phase (e.g., "RUNNING", "CREATING", "FAILED").
+	Phase string
 }

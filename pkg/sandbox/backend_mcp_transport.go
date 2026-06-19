@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/schardosin/astonish/pkg/config"
@@ -67,6 +69,12 @@ func (t *BackendMCPTransport) Connect(ctx context.Context) (mcp.Connection, erro
 		env["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin"
 	}
 
+	// Resolve npx/uvx commands to direct binary paths when the binary is
+	// already installed in the sandbox. This avoids network round-trips to
+	// package registries (npm, PyPI) that may be blocked or slow through
+	// the supervisor's transparent proxy.
+	resolved := resolvePackageManagerCommand(ctx, t.backend, t.sessionID, t.command)
+
 	// Determine the exec command based on backend kind:
 	//
 	// K8s: kubectl exec lands in the pod's base namespace (bare Debian),
@@ -79,9 +87,9 @@ func (t *BackendMCPTransport) Connect(ctx context.Context) (mcp.Connection, erro
 	//   Using astonish-shell here would be WRONG because the fallback
 	//   path (when /sandbox/rootfs doesn't exist) discards all arguments
 	//   and just launches /bin/bash -l.
-	execCmd := t.command
+	execCmd := resolved
 	if t.backend.Kind() == BackendKindK8s {
-		execCmd = append([]string{"/usr/local/bin/astonish-shell"}, t.command...)
+		execCmd = append([]string{"/usr/local/bin/astonish-shell"}, resolved...)
 	}
 
 	stream, err := t.backend.ExecStreaming(ctx, t.sessionID, ExecStreamSpec{
@@ -146,6 +154,203 @@ func (s *backendStreamRWC) Close() error {
 		}
 	})
 	return s.closeErr
+}
+
+// ---------------------------------------------------------------------------
+// Package manager binary resolution
+// ---------------------------------------------------------------------------
+
+// resolvePackageManagerCommand checks if an npx/uvx command can be replaced
+// with a direct binary path already installed in the sandbox. This avoids
+// network round-trips to package registries that may be blocked or slow
+// through the supervisor's transparent proxy.
+//
+// Patterns handled:
+//
+//	npx -y <package>@<version> [extra-args...]  → [/path/to/binary, extra-args...]
+//	npx -y <package> [extra-args...]            → [/path/to/binary, extra-args...]
+//	npx -y @scope/name@version [extra-args...]  → [/path/to/name, extra-args...]
+//	uvx <package>@<version> [extra-args...]     → [/path/to/binary, extra-args...]
+//	uvx <package> [extra-args...]               → [/path/to/binary, extra-args...]
+//
+// If the binary is not found in the sandbox, the original command is returned
+// unchanged so that npx/uvx can attempt a network install as a fallback.
+func resolvePackageManagerCommand(ctx context.Context, backend Backend, sessionID string, command []string) []string {
+	if len(command) == 0 {
+		return command
+	}
+
+	binName, extraArgs, ok := parsePackageManagerCommand(command)
+	if !ok {
+		return command
+	}
+
+	// Run "which <binary>" inside the sandbox to check if it's installed.
+	whichCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	result, err := backend.Exec(whichCtx, sessionID, ExecSpec{
+		Command: []string{"which", binName},
+	})
+	if err != nil || result.ExitCode != 0 {
+		slog.Debug("MCP binary not found in sandbox, using original command",
+			"binary", binName, "command", command[0])
+		return command
+	}
+
+	resolvedPath := strings.TrimSpace(string(result.Stdout))
+	if resolvedPath == "" {
+		return command
+	}
+
+	resolved := append([]string{resolvedPath}, extraArgs...)
+	slog.Info("MCP command resolved to installed binary",
+		"original", strings.Join(command, " "),
+		"resolved", strings.Join(resolved, " "))
+	return resolved
+}
+
+// parsePackageManagerCommand detects npx/uvx invocation patterns and extracts
+// the binary name and any extra arguments that follow the package specifier.
+//
+// Returns (binaryName, extraArgs, true) if the command matches a known pattern,
+// or ("", nil, false) if it does not.
+func parsePackageManagerCommand(command []string) (string, []string, bool) {
+	if len(command) == 0 {
+		return "", nil, false
+	}
+
+	switch command[0] {
+	case "npx":
+		return parseNpxCommand(command[1:])
+	case "uvx":
+		return parseUvxCommand(command[1:])
+	default:
+		return "", nil, false
+	}
+}
+
+// parseNpxCommand parses npx arguments to extract the package/binary name.
+// Expected patterns:
+//
+//	npx -y <package>[@version] [extra-args...]
+//	npx --yes <package>[@version] [extra-args...]
+//
+// The -y/--yes flag means "auto-confirm install". The package argument is
+// the first positional arg after flags.
+func parseNpxCommand(args []string) (string, []string, bool) {
+	hasYes := false
+	var packageArg string
+	packageIdx := -1
+
+	for i, arg := range args {
+		if arg == "-y" || arg == "--yes" {
+			hasYes = true
+			continue
+		}
+		// Skip other flags (e.g., --package, -p)
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		// First positional argument is the package specifier
+		packageArg = arg
+		packageIdx = i
+		break
+	}
+
+	if !hasYes || packageArg == "" {
+		return "", nil, false
+	}
+
+	binName := extractBinaryName(packageArg)
+	if binName == "" {
+		return "", nil, false
+	}
+
+	// Collect extra args (everything after the package argument)
+	var extraArgs []string
+	if packageIdx+1 < len(args) {
+		extraArgs = args[packageIdx+1:]
+	}
+
+	return binName, extraArgs, true
+}
+
+// parseUvxCommand parses uvx arguments to extract the package/binary name.
+// Expected patterns:
+//
+//	uvx <package>[@version] [extra-args...]
+//
+// uvx runs Python packages directly — the first positional arg is the package.
+func parseUvxCommand(args []string) (string, []string, bool) {
+	var packageArg string
+	packageIdx := -1
+
+	for i, arg := range args {
+		// Skip flags
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		packageArg = arg
+		packageIdx = i
+		break
+	}
+
+	if packageArg == "" {
+		return "", nil, false
+	}
+
+	binName := extractBinaryName(packageArg)
+	if binName == "" {
+		return "", nil, false
+	}
+
+	// Collect extra args (everything after the package argument)
+	var extraArgs []string
+	if packageIdx+1 < len(args) {
+		extraArgs = args[packageIdx+1:]
+	}
+
+	return binName, extraArgs, true
+}
+
+// extractBinaryName extracts the likely binary name from an npm/PyPI package
+// specifier. The binary name is typically the package name without scope or
+// version suffix.
+//
+// Examples:
+//
+//	"tavily-mcp@latest"              → "tavily-mcp"
+//	"tavily-mcp@0.2.20"             → "tavily-mcp"
+//	"tavily-mcp"                     → "tavily-mcp"
+//	"@anthropic/mcp-server@latest"   → "mcp-server"
+//	"@brave/brave-search-mcp-server" → "brave-search-mcp-server"
+//	"firecrawl-mcp"                  → "firecrawl-mcp"
+func extractBinaryName(packageSpec string) string {
+	if packageSpec == "" {
+		return ""
+	}
+
+	name := packageSpec
+
+	// Handle scoped packages: @scope/name[@version]
+	if strings.HasPrefix(name, "@") {
+		slashIdx := strings.Index(name, "/")
+		if slashIdx < 0 {
+			// Malformed scoped package (no slash)
+			return ""
+		}
+		// Take the part after the scope
+		name = name[slashIdx+1:]
+	}
+
+	// Strip version suffix: name@version → name
+	// Be careful: only strip if there's an @ that isn't at the start
+	if atIdx := strings.LastIndex(name, "@"); atIdx > 0 {
+		name = name[:atIdx]
+	}
+
+	return name
 }
 
 // jsonLineFilterReader wraps an io.Reader and only passes through lines that

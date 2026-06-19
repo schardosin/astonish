@@ -10,6 +10,8 @@ import (
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // mockGateway implements GatewayClient for testing session lifecycle.
@@ -54,6 +56,14 @@ func (m *mockGateway) ExecStream(ctx context.Context, sandboxID string, req Exec
 		return m.streamFn(ctx, sandboxID, req)
 	}
 	return nil, errors.New("not implemented in mock")
+}
+
+func (m *mockGateway) ListSandboxes(ctx context.Context, labelSelector string) ([]SandboxSummary, error) {
+	return nil, nil
+}
+
+func (m *mockGateway) Close() error {
+	return nil
 }
 
 // newTestBackendWithGateway creates an OpenShellBackend with a mock gateway.
@@ -328,6 +338,65 @@ func TestDestroySession_IdempotentForMissing(t *testing.T) {
 
 	if err := b.DestroySession(context.Background(), "never-existed"); err != nil {
 		t.Fatalf("DestroySession on missing: %v", err)
+	}
+}
+
+func TestDestroySession_GatewayNotFound_RemovesRecord(t *testing.T) {
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			return status.Error(codes.NotFound, "sandbox not found")
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	rec := &store.SandboxSession{
+		SessionID:     "sess-gone",
+		ChatSessionID: "sess-gone",
+		Backend:       "openshell",
+		ContainerName: "sb-gone",
+		State:         store.SandboxSessionStateRunning,
+	}
+	if err := b.sessions.PutSession(rec); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	// NotFound means sandbox is already gone — record should be removed.
+	if err := b.DestroySession(context.Background(), "sess-gone"); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+	got, _ := b.sessions.GetSession("sess-gone")
+	if got != nil {
+		t.Error("session should be removed when gateway returns NotFound")
+	}
+}
+
+func TestDestroySession_GatewayTransientError_KeepsRecord(t *testing.T) {
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			return status.Error(codes.Unavailable, "connection refused")
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	rec := &store.SandboxSession{
+		SessionID:     "sess-retry",
+		ChatSessionID: "sess-retry",
+		Backend:       "openshell",
+		ContainerName: "sb-retry",
+		State:         store.SandboxSessionStateRunning,
+	}
+	if err := b.sessions.PutSession(rec); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	// Transient error — record should be kept for reconciler retry.
+	err := b.DestroySession(context.Background(), "sess-retry")
+	if err == nil {
+		t.Fatal("expected error for transient gateway failure")
+	}
+	got, _ := b.sessions.GetSession("sess-retry")
+	if got == nil {
+		t.Error("session record should be preserved on transient error")
 	}
 }
 

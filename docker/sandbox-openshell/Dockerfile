@@ -101,12 +101,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ===========================================================================
-# Global npm packages (MCP servers pre-installed for sandbox user)
+# Global npm packages (MCP servers pre-installed for faster startup)
 # ===========================================================================
 # The OpenShell gateway runs processes as the "sandbox" user who has HOME=/sandbox.
-# npx would try to download packages at runtime, but the sandbox network policy
-# blocks access to registry.npmjs.org. Pre-installing globally makes the binaries
-# available to all users without network access at runtime.
+# npx can download packages at runtime (network presets allow registry.npmjs.org),
+# but pre-installing common MCP servers globally avoids download latency on first use.
 RUN npm install -g tavily-mcp@latest
 
 # ===========================================================================

@@ -269,6 +269,7 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	studio, err := launcher.NewStudioServer(opts.Port,
 		launcher.WithServices(svc),
 		launcher.WithPlatformAuth(platformAuth, esStore),
+		launcher.WithTenantMiddleware(entstore.TenantMiddleware(esStore)),
 	)
 	if err != nil {
 		esStore.Close()

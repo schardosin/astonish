@@ -55,6 +55,15 @@ type ToolNodeClient interface {
 	// session ID are no-ops.
 	BindSession(sessionID string)
 
+	// EnsureReady triggers provisioning (if not already done) and blocks
+	// until the sandbox is fully ready for exec. Returns nil on success
+	// or the provisioning error. Safe to call multiple times.
+	//
+	// This is used by MCP lazy toolsets that need to guarantee the
+	// container/pod is running before starting an interactive exec
+	// stream for the MCP server process.
+	EnsureReady(sessionID string) error
+
 	// Call executes toolName with args inside the sandbox bound to
 	// sessionID and returns the raw JSON result. The caller is
 	// responsible for JSON-decoding into a concrete result shape.
@@ -91,6 +100,12 @@ type ToolNodePool interface {
 	// SessionSpec.Image, overriding the global config default. On backends
 	// that don't use per-template images (K8s, Incus), image is ignored.
 	GetOrCreateWithImage(sessionID, template string, chain []string, image string) ToolNodeClient
+
+	// GetBackend returns the underlying Backend implementation used by
+	// this pool. Used by MCP lazy toolsets to create BackendMCPTransport
+	// instances for interactive exec into the sandbox. Returns nil if the
+	// pool does not expose a backend (e.g. nil pool).
+	GetBackend() Backend
 
 	// Cleanup destroys every client the pool has vended. After Cleanup
 	// the pool is unusable; further GetOrCreate calls return nil.
@@ -160,3 +175,5 @@ func (a *nodePoolAdapter) GetOrCreateWithImage(sessionID, template string, _ []s
 }
 
 func (a *nodePoolAdapter) Cleanup() { a.p.Cleanup() }
+
+func (a *nodePoolAdapter) GetBackend() Backend { return a.p.GetBackend() }

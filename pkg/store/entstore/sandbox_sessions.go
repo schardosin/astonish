@@ -57,9 +57,8 @@ func (s *teamSandboxSessionStore) Put(ctx context.Context, sess *store.SandboxSe
 	if sess.ContainerName != "" {
 		create.SetContainerName(sess.ContainerName)
 	}
-	if sess.TemplateID != "" {
-		create.SetTemplateID(parseUUIDOrZero(sess.TemplateID))
-	}
+	// template_id is required (NOT NULL) — always set it, using zero UUID as default.
+	create.SetTemplateID(parseUUIDOrZero(sess.TemplateID))
 	if sess.UpperLayerID != "" {
 		create.SetUpperLayerID(sess.UpperLayerID)
 	}

@@ -161,7 +161,10 @@ func Run(cfg RunConfig) error {
 
 	// Both "postgres" and "sqlite" now use the unified entstore.
 	entCfg := entstore.Config{
-		InstanceSuffix: appCfg.Storage.Postgres.InstanceSuffix,
+		InstanceSuffix:  appCfg.Storage.Postgres.InstanceSuffix,
+		MaxOpenConns:    appCfg.Storage.Postgres.GetMaxOpenConns(),
+		MaxIdleConns:    appCfg.Storage.Postgres.GetMaxIdleConns(),
+		ConnMaxLifetime: appCfg.Storage.Postgres.GetConnMaxLifetime(),
 	}
 
 	switch appCfg.Storage.Backend {

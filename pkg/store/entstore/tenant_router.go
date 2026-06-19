@@ -172,6 +172,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("open org pg db %s: %w", dbName, err)
 		}
+		// Apply pool limits to prevent connection exhaustion.
+		db.SetMaxOpenConns(s.maxOpenConns)
+		db.SetMaxIdleConns(s.maxIdleConns)
+		db.SetConnMaxLifetime(s.connMaxLifetime)
 		drv := entsql.OpenDB(dialect.Postgres, db)
 		client := orgent.NewClient(orgent.Driver(drv))
 
@@ -846,6 +850,10 @@ func (o *orgDataStore) openTeamDBBySchema(schemaName string) (*teament.Client, *
 	if err != nil {
 		return nil, nil, fmt.Errorf("open team schema %s: %w", schemaName, err)
 	}
+	// Apply pool limits to prevent connection exhaustion.
+	db.SetMaxOpenConns(o.parentStore.maxOpenConns)
+	db.SetMaxIdleConns(o.parentStore.maxIdleConns)
+	db.SetConnMaxLifetime(o.parentStore.connMaxLifetime)
 	drv := entsql.OpenDB(dialect.Postgres, db)
 	client := teament.NewClient(teament.Driver(drv))
 	return client, db, nil
@@ -929,6 +937,10 @@ func (o *orgDataStore) openPersonalDBBySchema(schemaName string) (*personalent.C
 	if err != nil {
 		return nil, nil, fmt.Errorf("open personal schema %s: %w", schemaName, err)
 	}
+	// Apply pool limits to prevent connection exhaustion.
+	db.SetMaxOpenConns(o.parentStore.maxOpenConns)
+	db.SetMaxIdleConns(o.parentStore.maxIdleConns)
+	db.SetConnMaxLifetime(o.parentStore.connMaxLifetime)
 	drv := entsql.OpenDB(dialect.Postgres, db)
 	client := personalent.NewClient(personalent.Driver(drv))
 	return client, db, nil

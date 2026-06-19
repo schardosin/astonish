@@ -805,9 +805,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			astonishAgent.PendingSecrets = credentials.NewPendingVault(nil)
 		}
 		// Hydrate redactor from PG store so credential values are masked in SSE
-		if astonishAgent.Redactor != nil {
-			astonishAgent.Redactor.HydrateFromStore(merged)
+		if astonishAgent.Redactor == nil {
+			astonishAgent.Redactor = credentials.NewRedactor()
+			ctx = credentials.WithRedactor(ctx, astonishAgent.Redactor)
 		}
+		astonishAgent.Redactor.HydrateFromStore(merged)
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

@@ -233,6 +233,8 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: opts.Suffix,
+		MaxOpenConns:   3,
+		MaxIdleConns:   2,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("NewPlatformServices: %w", err)

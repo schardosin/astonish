@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
@@ -53,6 +54,11 @@ type Store struct {
 	// SQLite data directory (for SQLite mode).
 	dataDir string
 
+	// PG pool settings (applied to all sql.DB pools).
+	maxOpenConns    int
+	maxIdleConns    int
+	connMaxLifetime time.Duration
+
 	// Embedding function for vector search (optional).
 	embedFunc store.EmbedFunc
 
@@ -79,6 +85,18 @@ type Config struct {
 	// DataDir is the base directory for SQLite databases.
 	// Only relevant for SQLite mode.
 	DataDir string
+
+	// MaxOpenConns is the maximum number of open connections per PG pool.
+	// Default: 25. Only relevant for PostgreSQL mode.
+	MaxOpenConns int
+
+	// MaxIdleConns is the maximum number of idle connections per PG pool.
+	// Default: 5. Only relevant for PostgreSQL mode.
+	MaxIdleConns int
+
+	// ConnMaxLifetime is the maximum lifetime of a PG connection.
+	// Default: 30 minutes. Only relevant for PostgreSQL mode.
+	ConnMaxLifetime time.Duration
 }
 
 // New creates a new unified Store from the given configuration.
@@ -86,11 +104,28 @@ type Config struct {
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	d := detectDialect(cfg.DSN)
 
+	// Apply pool defaults.
+	maxOpen := cfg.MaxOpenConns
+	if maxOpen <= 0 {
+		maxOpen = 25
+	}
+	maxIdle := cfg.MaxIdleConns
+	if maxIdle <= 0 {
+		maxIdle = 5
+	}
+	lifetime := cfg.ConnMaxLifetime
+	if lifetime <= 0 {
+		lifetime = 30 * time.Minute
+	}
+
 	s := &Store{
-		dialect:        d,
-		platformDSN:    cfg.DSN,
-		instanceSuffix: cfg.InstanceSuffix,
-		dataDir:        cfg.DataDir,
+		dialect:         d,
+		platformDSN:     cfg.DSN,
+		instanceSuffix:  cfg.InstanceSuffix,
+		dataDir:         cfg.DataDir,
+		maxOpenConns:    maxOpen,
+		maxIdleConns:    maxIdle,
+		connMaxLifetime: lifetime,
 	}
 
 	// Open the platform database connection.
@@ -119,6 +154,11 @@ func (s *Store) openPostgres(ctx context.Context, dsn string) error {
 	if err != nil {
 		return fmt.Errorf("sql.Open: %w", err)
 	}
+
+	// Apply pool limits to prevent connection exhaustion.
+	db.SetMaxOpenConns(s.maxOpenConns)
+	db.SetMaxIdleConns(s.maxIdleConns)
+	db.SetConnMaxLifetime(s.connMaxLifetime)
 
 	// Verify connectivity.
 	if err := db.PingContext(ctx); err != nil {

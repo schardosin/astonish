@@ -297,14 +297,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 
 		// Capture file artifacts from write_file and edit_file tool calls.
 		// The file path is extracted from input args and stashed for UI delivery.
-		switch t.Name() {
-		case "write_file":
-			if path, ok := input["file_path"].(string); ok && path != "" {
-				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
-			}
-		case "edit_file":
-			if path, ok := input["path"].(string); ok && path != "" {
-				c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+		// Only capture on success — failed writes must not emit artifact events,
+		// otherwise the live SSE pipeline and session-detail reconstruction diverge.
+		if err == nil {
+			switch t.Name() {
+			case "write_file":
+				if path, ok := input["file_path"].(string); ok && path != "" {
+					c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+				}
+			case "edit_file":
+				if path, ok := input["path"].(string); ok && path != "" {
+					c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+				}
 			}
 		}
 

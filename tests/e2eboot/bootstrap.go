@@ -153,6 +153,8 @@ func Bootstrap(t *testing.T) *Harness {
 	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: suffix,
+		MaxOpenConns:   10,
+		MaxIdleConns:   5,
 	})
 	if err != nil {
 		t.Fatalf("[e2eboot] NewPlatformServices: %v", err)

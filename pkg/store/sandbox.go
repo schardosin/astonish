@@ -65,6 +65,24 @@ type SandboxTemplate struct {
 	Description     string                 `json:"description,omitempty"`
 	ParentTemplateID *string               `json:"parent_template_id,omitempty"`
 	TopLayerID      *string                `json:"top_layer_id,omitempty"`
+	// SandboxImage holds a fully-qualified OCI image reference for backends
+	// that use per-template container images (e.g., OpenShell). When non-nil
+	// and non-empty, sandbox sessions use this image instead of the global
+	// default. Nil for templates that use the layer chain (incus/k8s).
+	SandboxImage    *string                `json:"sandbox_image,omitempty"`
+	// Packages is the list of apt packages to install when building a custom
+	// sandbox image. Stored as JSON in the database.
+	Packages        []string               `json:"packages,omitempty"`
+	// BuildStatus tracks the image build state: "", "building", "succeeded", "failed".
+	BuildStatus     string                 `json:"build_status,omitempty"`
+	// BuildJobName is the K8s Job name of the current/last build.
+	BuildJobName    string                 `json:"build_job_name,omitempty"`
+	// BuildError stores the error message from the last failed build.
+	BuildError      string                 `json:"build_error,omitempty"`
+	// LastBuiltImage is the full image ref produced by the last successful build.
+	LastBuiltImage  string                 `json:"last_built_image,omitempty"`
+	// BuildStartedAt records when the last build was triggered.
+	BuildStartedAt  *time.Time             `json:"build_started_at,omitempty"`
 	Version         int                    `json:"version"`
 	CreatedBy       string                 `json:"created_by,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`
@@ -148,6 +166,20 @@ type SandboxTemplateStore interface {
 
 	// IsBuildInProgress returns true if a build is currently in progress.
 	IsBuildInProgress(ctx context.Context) (bool, error)
+
+	// --- Per-template image build helpers ---
+
+	// AcquireTemplateBuildLock attempts to acquire a per-template build lock.
+	// This is independent of the global AcquireBuildLock (which guards the
+	// K8s/Incus base layer build). Multiple templates can build concurrently,
+	// but each template can only have one build at a time.
+	// Returns (true, releaseFunc, nil) if acquired, (false, nil, nil) if
+	// a build is already in progress for this template.
+	AcquireTemplateBuildLock(ctx context.Context, templateID string) (acquired bool, release func(), err error)
+
+	// IsTemplateBuildInProgress returns true if a build is currently in
+	// progress for the given template.
+	IsTemplateBuildInProgress(ctx context.Context, templateID string) (bool, error)
 }
 
 // BaseConfigInfo holds the @base template's configuration and metadata.
@@ -328,6 +360,9 @@ type SandboxSession struct {
 	ContainerName  string              `json:"container_name,omitempty"`
 	TemplateID     string              `json:"template_id"`
 	UpperLayerID   string              `json:"upper_layer_id,omitempty"`
+	// Image is the container image used to create this session (OpenShell).
+	// Stored so that StartSession can recreate with the correct image.
+	Image          string              `json:"image,omitempty"`
 	State          SandboxSessionState `json:"state"`
 	PodName        string              `json:"pod_name,omitempty"`
 	NodeName       string              `json:"node_name,omitempty"`

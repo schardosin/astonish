@@ -62,6 +62,107 @@ type SandboxConfig struct {
 	// Fields have sensible defaults; operators typically only set
 	// KubeconfigPath (or InCluster) and SandboxImage.
 	Kubernetes SandboxKubernetesConfig `yaml:"kubernetes,omitempty" json:"kubernetes,omitempty"`
+
+	// OpenShell holds backend-specific settings used when Backend == "openshell".
+	// The OpenShell backend delegates sandbox lifecycle to NVIDIA's OpenShell
+	// gateway (ghcr.io/nvidia/openshell/gateway) via its gRPC API.
+	OpenShell SandboxOpenShellConfig `yaml:"openshell,omitempty" json:"openshell,omitempty"`
+}
+
+// SandboxOpenShellConfig captures operator-tunable knobs for the OpenShell
+// backend. The gateway is deployed separately (NVIDIA's Helm chart) and this
+// config tells Astonish how to connect to it.
+type SandboxOpenShellConfig struct {
+	// GatewayAddr is the gRPC endpoint of the OpenShell gateway.
+	// Example: "openshell.openshell.svc.cluster.local:8080"
+	GatewayAddr string `yaml:"gateway_addr,omitempty" json:"gateway_addr,omitempty"`
+
+	// GatewayTLS enables TLS for the gRPC connection to the gateway.
+	// When true, the connection uses TLS with optional mTLS (see
+	// ClientCertPath/ClientKeyPath). Default: true.
+	GatewayTLS *bool `yaml:"gateway_tls,omitempty" json:"gateway_tls,omitempty"`
+
+	// ClientCertPath is the path to the mTLS client certificate for
+	// authenticating to the gateway. Mounted from the openshell-client-tls
+	// secret. Empty disables mTLS (uses insecure or token auth).
+	ClientCertPath string `yaml:"client_cert_path,omitempty" json:"client_cert_path,omitempty"`
+
+	// ClientKeyPath is the path to the mTLS client private key.
+	ClientKeyPath string `yaml:"client_key_path,omitempty" json:"client_key_path,omitempty"`
+
+	// CACertPath is the CA certificate for verifying the gateway's server
+	// cert. Empty uses the system CA pool.
+	CACertPath string `yaml:"ca_cert_path,omitempty" json:"ca_cert_path,omitempty"`
+
+	// AuthToken is a static bearer token for gateway authentication.
+	// Used when mTLS is not configured (e.g., development with
+	// server.auth.allowUnauthenticatedUsers). Empty disables token auth.
+	AuthToken string `yaml:"auth_token,omitempty" json:"auth_token,omitempty"`
+
+	// SandboxImage is the container image for sandbox pods. This image
+	// should contain Astonish agent tooling. The OpenShell supervisor is
+	// sideloaded by the gateway automatically.
+	// Default: "schardosin/astonish-sandbox-openshell:latest".
+	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
+
+	// Registry configures the OCI registry for custom-built sandbox images.
+	Registry RegistryConfig `yaml:"registry,omitempty" json:"registry,omitempty"`
+
+	// Builder configures the Kaniko-based image builder.
+	Builder BuilderConfig `yaml:"builder,omitempty" json:"builder,omitempty"`
+
+	// NetworkPolicy configures sandbox egress enforcement via the OpenShell
+	// supervisor's network namespace proxy.
+	NetworkPolicy NetworkPolicyConfig `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
+}
+
+// RegistryConfig holds OCI registry connection details for pushing
+// custom-built sandbox images.
+type RegistryConfig struct {
+	// URL is the registry URL prefix. Images are pushed as:
+	//   <URL>/astonish-sandbox-<scope>:<content-hash>
+	// Examples: "docker.io/schardosin", "ghcr.io/org", "harbor.local:5000/proj"
+	URL string `yaml:"url,omitempty" json:"url,omitempty"`
+
+	// SecretName is the name of a K8s Secret (type kubernetes.io/dockerconfigjson)
+	// containing registry credentials. Must exist in the builder namespace.
+	SecretName string `yaml:"secret_name,omitempty" json:"secret_name,omitempty"`
+}
+
+// BuilderConfig holds configuration for the Kaniko-based image builder.
+type BuilderConfig struct {
+	// Image is the pinned Kaniko executor image reference.
+	// Default: "gcr.io/kaniko-project/executor:v1.23.2"
+	Image string `yaml:"image,omitempty" json:"image,omitempty"`
+
+	// Namespace where build Jobs run. Defaults to the control-plane namespace.
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+}
+
+// NetworkPolicyConfig controls sandbox network egress enforcement via the
+// OpenShell supervisor's network namespace proxy.
+//
+// The supervisor's proxy denies all traffic when no NetworkPolicies are
+// provided. This config resolves named presets (groups of allowed hosts)
+// plus operator-supplied extra endpoints into a concrete allowlist that
+// is always sent to the supervisor.
+type NetworkPolicyConfig struct {
+	// Presets enables named groups of allowed endpoints.
+	// Available presets: "default" (all below), "code_hosting",
+	// "package_registries", "llm_apis", "tools", "system", "search", "cdn".
+	// When empty or contains "default", all presets are enabled.
+	Presets []string `yaml:"presets,omitempty" json:"presets,omitempty"`
+
+	// ExtraEndpoints are additional host:port patterns added on top of
+	// presets. Useful for internal services, private repos, etc.
+	ExtraEndpoints []NetworkEndpointConfig `yaml:"extra_endpoints,omitempty" json:"extra_endpoints,omitempty"`
+}
+
+// NetworkEndpointConfig is a single allowed endpoint (host + optional port).
+// Port 0 defaults to 443 in the proto mapping layer.
+type NetworkEndpointConfig struct {
+	Host string `yaml:"host" json:"host"`
+	Port uint32 `yaml:"port,omitempty" json:"port,omitempty"`
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the
@@ -165,6 +266,20 @@ func (c *SandboxConfig) BackendKind() string {
 // IsK8sBackend is a readability helper for the common case.
 func (c *SandboxConfig) IsK8sBackend() bool {
 	return c.BackendKind() == "k8s"
+}
+
+// IsOpenShellBackend is a readability helper for the OpenShell case.
+func (c *SandboxConfig) IsOpenShellBackend() bool {
+	return c.BackendKind() == "openshell"
+}
+
+// OpenShellGatewayTLS returns whether TLS is enabled for the OpenShell
+// gateway connection. Default is true when GatewayTLS is nil.
+func (c *SandboxOpenShellConfig) OpenShellGatewayTLS() bool {
+	if c.GatewayTLS == nil {
+		return true
+	}
+	return *c.GatewayTLS
 }
 
 // SecurityConfig controls security features like proactive secret detection.

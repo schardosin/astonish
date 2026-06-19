@@ -36,6 +36,20 @@ type SandboxTemplate struct {
 	ParentTemplateID *uuid.UUID `json:"parent_template_id,omitempty"`
 	// TopLayerID holds the value of the "top_layer_id" field.
 	TopLayerID *string `json:"top_layer_id,omitempty"`
+	// SandboxImage holds the value of the "sandbox_image" field.
+	SandboxImage *string `json:"sandbox_image,omitempty"`
+	// Packages holds the value of the "packages" field.
+	Packages []string `json:"packages,omitempty"`
+	// BuildStatus holds the value of the "build_status" field.
+	BuildStatus string `json:"build_status,omitempty"`
+	// BuildJobName holds the value of the "build_job_name" field.
+	BuildJobName string `json:"build_job_name,omitempty"`
+	// BuildError holds the value of the "build_error" field.
+	BuildError string `json:"build_error,omitempty"`
+	// LastBuiltImage holds the value of the "last_built_image" field.
+	LastBuiltImage string `json:"last_built_image,omitempty"`
+	// BuildStartedAt holds the value of the "build_started_at" field.
+	BuildStartedAt *time.Time `json:"build_started_at,omitempty"`
 	// BaseConfig holds the value of the "base_config" field.
 	BaseConfig map[string]interface{} `json:"base_config,omitempty"`
 	// ConfiguredBy holds the value of the "configured_by" field.
@@ -107,13 +121,13 @@ func (*SandboxTemplate) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case sandboxtemplate.FieldParentTemplateID, sandboxtemplate.FieldConfiguredBy, sandboxtemplate.FieldCreatedBy:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case sandboxtemplate.FieldBaseConfig:
+		case sandboxtemplate.FieldPackages, sandboxtemplate.FieldBaseConfig:
 			values[i] = new([]byte)
 		case sandboxtemplate.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case sandboxtemplate.FieldSlug, sandboxtemplate.FieldScope, sandboxtemplate.FieldOwnerID, sandboxtemplate.FieldPurpose, sandboxtemplate.FieldName, sandboxtemplate.FieldDescription, sandboxtemplate.FieldTopLayerID:
+		case sandboxtemplate.FieldSlug, sandboxtemplate.FieldScope, sandboxtemplate.FieldOwnerID, sandboxtemplate.FieldPurpose, sandboxtemplate.FieldName, sandboxtemplate.FieldDescription, sandboxtemplate.FieldTopLayerID, sandboxtemplate.FieldSandboxImage, sandboxtemplate.FieldBuildStatus, sandboxtemplate.FieldBuildJobName, sandboxtemplate.FieldBuildError, sandboxtemplate.FieldLastBuiltImage:
 			values[i] = new(sql.NullString)
-		case sandboxtemplate.FieldConfiguredAt, sandboxtemplate.FieldCreatedAt, sandboxtemplate.FieldUpdatedAt:
+		case sandboxtemplate.FieldBuildStartedAt, sandboxtemplate.FieldConfiguredAt, sandboxtemplate.FieldCreatedAt, sandboxtemplate.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
 		case sandboxtemplate.FieldID:
 			values[i] = new(uuid.UUID)
@@ -187,6 +201,52 @@ func (_m *SandboxTemplate) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.TopLayerID = new(string)
 				*_m.TopLayerID = value.String
+			}
+		case sandboxtemplate.FieldSandboxImage:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field sandbox_image", values[i])
+			} else if value.Valid {
+				_m.SandboxImage = new(string)
+				*_m.SandboxImage = value.String
+			}
+		case sandboxtemplate.FieldPackages:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field packages", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Packages); err != nil {
+					return fmt.Errorf("unmarshal field packages: %w", err)
+				}
+			}
+		case sandboxtemplate.FieldBuildStatus:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field build_status", values[i])
+			} else if value.Valid {
+				_m.BuildStatus = value.String
+			}
+		case sandboxtemplate.FieldBuildJobName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field build_job_name", values[i])
+			} else if value.Valid {
+				_m.BuildJobName = value.String
+			}
+		case sandboxtemplate.FieldBuildError:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field build_error", values[i])
+			} else if value.Valid {
+				_m.BuildError = value.String
+			}
+		case sandboxtemplate.FieldLastBuiltImage:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field last_built_image", values[i])
+			} else if value.Valid {
+				_m.LastBuiltImage = value.String
+			}
+		case sandboxtemplate.FieldBuildStartedAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field build_started_at", values[i])
+			} else if value.Valid {
+				_m.BuildStartedAt = new(time.Time)
+				*_m.BuildStartedAt = value.Time
 			}
 		case sandboxtemplate.FieldBaseConfig:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -312,6 +372,31 @@ func (_m *SandboxTemplate) String() string {
 	if v := _m.TopLayerID; v != nil {
 		builder.WriteString("top_layer_id=")
 		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.SandboxImage; v != nil {
+		builder.WriteString("sandbox_image=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	builder.WriteString("packages=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Packages))
+	builder.WriteString(", ")
+	builder.WriteString("build_status=")
+	builder.WriteString(_m.BuildStatus)
+	builder.WriteString(", ")
+	builder.WriteString("build_job_name=")
+	builder.WriteString(_m.BuildJobName)
+	builder.WriteString(", ")
+	builder.WriteString("build_error=")
+	builder.WriteString(_m.BuildError)
+	builder.WriteString(", ")
+	builder.WriteString("last_built_image=")
+	builder.WriteString(_m.LastBuiltImage)
+	builder.WriteString(", ")
+	if v := _m.BuildStartedAt; v != nil {
+		builder.WriteString("build_started_at=")
+		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
 	builder.WriteString("base_config=")

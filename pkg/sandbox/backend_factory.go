@@ -82,6 +82,11 @@ type BackendFactoryConfig struct {
 	// (lives in pkg/config) and is translated to a k8s.Config by the
 	// registered factory in pkg/sandbox/k8s.
 	K8s config.SandboxKubernetesConfig
+
+	// OpenShell carries OpenShell-specific configuration. Consulted only
+	// when Kind == "openshell"; ignored otherwise. Contains gateway
+	// connection details and sandbox image configuration.
+	OpenShell config.SandboxOpenShellConfig
 }
 
 // NewBackend constructs a Backend implementation from configuration. The
@@ -116,7 +121,7 @@ func NewBackend(cfg BackendFactoryConfig) (Backend, error) {
 			Templates:  cfg.Templates,
 			DefaultLim: cfg.DefaultLim,
 		})
-	case BackendKindK8s, BackendKindMock:
+	case BackendKindK8s, BackendKindOpenShell, BackendKindMock:
 		// Fall through to registry lookup.
 	default:
 		// Still try the registry so tests can register exotic kinds.
@@ -133,6 +138,8 @@ func NewBackend(cfg BackendFactoryConfig) (Backend, error) {
 	switch kind {
 	case BackendKindK8s:
 		return nil, fmt.Errorf("%w: k8s backend requires importing pkg/sandbox/k8s", ErrBackendKindUnavailable)
+	case BackendKindOpenShell:
+		return nil, fmt.Errorf("%w: openshell backend requires importing pkg/sandbox/openshell", ErrBackendKindUnavailable)
 	case BackendKindMock:
 		return nil, fmt.Errorf("%w: mock backend requires importing pkg/sandbox/mock", ErrBackendKindUnavailable)
 	default:

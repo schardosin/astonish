@@ -805,9 +805,11 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			astonishAgent.PendingSecrets = credentials.NewPendingVault(nil)
 		}
 		// Hydrate redactor from PG store so credential values are masked in SSE
-		if astonishAgent.Redactor != nil {
-			astonishAgent.Redactor.HydrateFromStore(merged)
+		if astonishAgent.Redactor == nil {
+			astonishAgent.Redactor = credentials.NewRedactor()
+			ctx = credentials.WithRedactor(ctx, astonishAgent.Redactor)
 		}
+		astonishAgent.Redactor.HydrateFromStore(merged)
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -859,11 +861,21 @@ func HandleChat(w http.ResponseWriter, r *http.Request) {
 			if chain := resolveTemplateLayerChain(r.Context(), settings.TemplateName); len(chain) > 0 {
 				ctx = store.WithSandboxLayerChain(ctx, chain)
 			}
+			// On OpenShell, resolve per-template container image.
+			if img := resolveTemplateImage(r.Context(), settings.TemplateName); img != "" {
+				ctx = store.WithSandboxImage(ctx, img)
+			}
 		}
 	}
 	if store.SandboxLayerChainFromContext(ctx) == nil {
 		if chain := resolveBaseLayerChain(r.Context()); len(chain) > 0 {
 			ctx = store.WithSandboxLayerChain(ctx, chain)
+		}
+	}
+	// On OpenShell, resolve @base's custom image if no team-specific image set.
+	if store.SandboxImageFromContext(ctx) == "" {
+		if img := resolveBaseImage(r.Context()); img != "" {
+			ctx = store.WithSandboxImage(ctx, img)
 		}
 	}
 

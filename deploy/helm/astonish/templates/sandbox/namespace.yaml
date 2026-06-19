@@ -1,6 +1,13 @@
 {{- if .Values.sandbox.enabled }}
 {{- /* Trigger validation once, at the top of the first rendered resource. */ -}}
 {{- include "astonish.validate" . -}}
+{{- $psa := .Values.sandbox.podSecurity -}}
+{{- /* OpenShell sandbox pods require privileged PSA (SYS_ADMIN, NET_ADMIN,
+       SYS_PTRACE, AppArmor Unconfined). Override baseline→privileged when
+       the OpenShell backend is active unless the user explicitly set a value. */ -}}
+{{- if and (eq .Values.sandbox.backend "openshell") (eq $psa "baseline") -}}
+  {{- $psa = "privileged" -}}
+{{- end -}}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -9,8 +16,18 @@ metadata:
     {{- include "astonish.labels" . | nindent 4 }}
     app.kubernetes.io/component: sandbox-namespace
     astonish.io/ns-class: sandboxes
-    pod-security.kubernetes.io/enforce: {{ .Values.sandbox.podSecurity }}
+    astonish.io/sandbox-namespace: "true"
+    pod-security.kubernetes.io/enforce: {{ $psa }}
     pod-security.kubernetes.io/enforce-version: latest
-    pod-security.kubernetes.io/audit: {{ .Values.sandbox.podSecurity }}
-    pod-security.kubernetes.io/warn: {{ .Values.sandbox.podSecurity }}
+    pod-security.kubernetes.io/audit: {{ $psa }}
+    pod-security.kubernetes.io/warn: {{ $psa }}
+    {{- /* Mesh-specific namespace labels: prevent sidecar injection in the
+           sandbox namespace. Sandbox pods connect to the gateway via plaintext
+           (protected by NetworkPolicy), and the gateway accepts their
+           non-mTLS traffic via PERMISSIVE mode. */ -}}
+    {{- if eq .Values.mesh.provider "istio" }}
+    istio-injection: disabled
+    {{- else if eq .Values.mesh.provider "linkerd" }}
+    linkerd.io/inject: disabled
+    {{- end }}
 {{- end }}

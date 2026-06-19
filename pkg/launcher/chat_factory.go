@@ -380,6 +380,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// Platform mode: tools are stored in the DB (cached_tools column)
 			cachedTools := getPlatformCachedTools(ctx, name)
 
+			// Fallback: if the platform DB has no cached tools yet (e.g., async
+			// discovery is still running after a fresh install), try the
+			// file-based cache. This avoids the race condition where PreWarm
+			// or the first chat request arrives before async discovery completes.
+			if len(cachedTools) == 0 {
+				if fileTools := cache.GetToolsForServer(name); len(fileTools) > 0 {
+					cachedTools = fileTools
+					slog.Debug("MCP server: using file cache fallback", "server", name, "tools", len(cachedTools))
+				}
+			}
+
 			// Filter out excluded tools for standard servers (e.g., tavily_research
 			// is expensive and redundant with Astonish's delegation-based approach).
 			if excluded := config.GetExcludedTools(name); excluded != nil {
@@ -435,7 +446,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		kind := sandbox.BackendKind(cfg.AppConfig.Sandbox.BackendKind())
 
 		switch kind {
-		case sandbox.BackendKindK8s, sandbox.BackendKindMock:
+		case sandbox.BackendKindK8s, sandbox.BackendKindMock, sandbox.BackendKindOpenShell:
 			// --- Backend-agnostic chat path (Phase F) ---
 			// Minimal feature set:
 			//   - tool wrapping via BackendPool + WrapToolsWithPool
@@ -450,7 +461,30 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			//   - save/use/list_sandbox_template tools (Incus image-clone)
 			//   - sub-agent alias for delegated tasks
 			//   - MCP stdio servers inside sandbox (host fallback OK)
-			b, backendCleanup, berr := sandbox.BackendFromAppConfig(cfg.AppConfig)
+
+			// In platform mode, use PG-backed session registry for cross-replica
+			// consistency. Prefer TenantContext from ctx; fall back to default
+			// org slug from AppConfig + "general" team.
+			var sessRegistry *sandbox.SessionRegistry
+			if cfg.PlatformMode {
+				if svc := store.FromContext(ctx); svc != nil && svc.Platform != nil {
+					orgSlug := store.OrgSlugFromContext(ctx)
+					teamSlug := store.TeamSlugFromContext(ctx)
+					if orgSlug == "" {
+						orgSlug = cfg.AppConfig.Storage.Auth.GetDefaultOrgSlug()
+					}
+					if teamSlug == "" {
+						teamSlug = "general"
+					}
+					if provider, ok := svc.Platform.(store.SandboxSessionProvider); ok {
+						if sessStore := provider.SandboxSessionsForTeam(ctx, orgSlug, teamSlug); sessStore != nil {
+							sessRegistry = sandbox.NewSessionRegistryFromStore(sessStore)
+						}
+					}
+				}
+			}
+
+			b, backendCleanup, berr := sandbox.BackendFromAppConfigWithSessions(cfg.AppConfig, sessRegistry)
 			if berr != nil {
 				return nil, fmt.Errorf("sandbox is enabled but the %s backend is not available: %w\n\nTo disable sandbox, set 'sandbox.enabled: false' in ~/.config/astonish/config.yaml", kind, berr)
 			}
@@ -478,14 +512,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			}
 			// Note: browserToolsSlice intentionally NOT wrapped — browser runs on host
 
-			// Lazy MCP toolsets: pass nil pool so stdio MCP servers run on the
-			// API host (same as pre-sandbox behaviour). SSE transports unaffected.
+			// Lazy MCP toolsets: wire the pool so stdio MCP servers start
+			// inside the session's sandbox (same as Incus path). SSE
+			// transports are unaffected (isSSETransport check inside).
 			for _, lt := range lazyToolsets {
-				lt.SetSandboxPool(nil)
+				lt.SetSandboxPool(pool)
 			}
 			if len(lazyToolsets) > 0 {
-				slog.Info("sandbox MCP routing not yet supported on backend; stdio MCP servers will run on the API host",
-					"component", "chat-factory", "backend", string(kind))
+				slog.Info("sandbox MCP routing enabled for backend",
+					"component", "chat-factory", "backend", string(kind), "toolsets", len(lazyToolsets))
 			}
 
 			// sandboxNodePool, sandboxIncusClient, sandboxTplRegistry,
@@ -618,7 +653,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// start inside the session's container instead of on the host.
 			// SSE transport servers are unaffected (isSSETransport check inside).
 			for _, lt := range lazyToolsets {
-				lt.SetSandboxPool(nodePool)
+				lt.SetSandboxPool(sandbox.AsNodePool(nodePool))
 			}
 
 			// Async refresh: check all templates for stale binaries in the background.
@@ -1238,6 +1273,76 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		// propagate file artifacts to the parent ChatAgent for channel delivery
 		// (e.g., as Telegram document attachments).
 		subAgentMgr.FileArtifactCapture = chatAgent.CaptureFileArtifact
+
+		// Wire MCP group fallback resolver to handle the race condition where
+		// async MCP discovery completes after the chat agent was initialized.
+		// When a sub-agent requests "mcp:<server>" but it wasn't in ToolGroups
+		// at init time, this resolver attempts to create the group on-the-fly
+		// from newly-cached tools in the DB.
+		if mcpCfg != nil {
+			capturedMCPCfg := mcpCfg
+			capturedDebugMode := cfg.DebugMode
+			subAgentMgr.MCPGroupResolver = func(ctx context.Context, serverName string) *agent.ToolGroup {
+				serverCfg, exists := capturedMCPCfg.MCPServers[serverName]
+				if !exists || !serverCfg.IsEnabled() {
+					return nil
+				}
+				// Check access control
+				if !config.IsStandardServerInstalled(serverName) {
+					// For non-standard servers, check platform stores
+					mcpStores := store.MCPServerStoresFromContext(ctx)
+					if mcpStores != nil {
+						accessible := false
+						if mcpStores.Platform != nil {
+							if s, _ := mcpStores.Platform.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible && mcpStores.Org != nil {
+							if s, _ := mcpStores.Org.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible && mcpStores.Team != nil {
+							if s, _ := mcpStores.Team.Get(ctx, serverName); s != nil && s.IsEnabled() {
+								accessible = true
+							}
+						}
+						if !accessible {
+							return nil
+						}
+					}
+				}
+				// Try to get cached tools from the DB (they may have been
+				// populated by async discovery since our init time).
+				cachedTools := getPlatformCachedTools(ctx, serverName)
+				if len(cachedTools) == 0 {
+					return nil
+				}
+				// Filter out excluded tools
+				if excluded := config.GetExcludedTools(serverName); excluded != nil {
+					filtered := make([]cache.ToolEntry, 0, len(cachedTools))
+					for _, t := range cachedTools {
+						if !excluded[t.Name] {
+							filtered = append(filtered, t)
+						}
+					}
+					cachedTools = filtered
+				}
+				if len(cachedTools) == 0 {
+					return nil
+				}
+				// Build the ToolGroup on-the-fly
+				lt := agent.NewLazyMCPToolset(serverName, cachedTools, serverCfg, capturedDebugMode)
+				sanitized := agent.NewSanitizedToolset(lt, capturedDebugMode)
+				groupName := "mcp:" + serverName
+				return &agent.ToolGroup{
+					Name:        groupName,
+					Description: fmt.Sprintf("MCP server: %s (%d tools)", serverName, lt.ToolCount()),
+					Toolsets:    []tool.Toolset{sanitized},
+				}
+			}
+		}
 
 		subAgentMgr.AppName = "astonish"
 		// Use SystemUserID as the fallback for child sessions.

@@ -200,6 +200,9 @@ func (r *Redactor) addSecretFieldsLocked(name string, cred *Credential) {
 		}
 	case CredPassword:
 		r.addVariantsLocked(name, "password", cred.Password)
+		// Username in password-type credentials is often an app credential ID
+		// or service account — treat it as sensitive.
+		r.addVariantsLocked(name, "username", cred.Username)
 	case CredOAuthClientCreds:
 		r.addVariantsLocked(name, "client_secret", cred.ClientSecret)
 		// Client ID is often semi-public but let's protect it too

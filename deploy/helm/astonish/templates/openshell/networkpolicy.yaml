@@ -1,0 +1,34 @@
+{{- if .Values.sandbox.openshell.enabled }}
+---
+# NetworkPolicy: Sandbox namespace egress policy.
+#
+# This is a coarse Layer 3/4 gate. Fine-grained L7 enforcement is handled
+# by the OpenShell supervisor's network namespace proxy, which supports
+# per-sandbox host glob allowlists.
+#
+# By default, egress is fully open at L3/L4 (agents need to reach the
+# supervisor's proxy which runs at the sandbox's loopback). The supervisor's
+# preset-based network policy is the real enforcement layer — it allowlists
+# specific hosts (code hosting, package registries, LLM APIs, etc.).
+#
+# Note: This NetworkPolicy requires a CNI that supports NetworkPolicy
+# enforcement (Calico, Cilium, etc.). K3s ships with kube-router or
+# Flannel + network-policy controller by default.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-sandbox-egress
+  namespace: {{ include "astonish.namespace.sandbox" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-network
+spec:
+  # Applies to ALL pods in the sandbox namespace.
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    # Allow all egress. The OpenShell supervisor's network namespace proxy
+    # handles fine-grained L7 enforcement (host globs, per-process rules).
+    - {}
+{{- end }}

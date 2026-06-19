@@ -22,13 +22,13 @@ func TestDestroySessionEverywhere_MockBackend(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.Backend = "mock"
 
-	err := sandbox.DestroySessionEverywhere(context.Background(), appCfg, "session-xyz")
+	err := sandbox.DestroySessionEverywhere(context.Background(), appCfg, "session-xyz", nil)
 	if err != nil {
 		t.Fatalf("DestroySessionEverywhere(mock): %v", err)
 	}
 
 	// Call again — idempotent.
-	err = sandbox.DestroySessionEverywhere(context.Background(), appCfg, "session-xyz")
+	err = sandbox.DestroySessionEverywhere(context.Background(), appCfg, "session-xyz", nil)
 	if err != nil {
 		t.Fatalf("DestroySessionEverywhere(mock) idempotent: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestDestroySessionEverywhere_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled
 
-	err := sandbox.DestroySessionEverywhere(ctx, appCfg, "session-xyz")
+	err := sandbox.DestroySessionEverywhere(ctx, appCfg, "session-xyz", nil)
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
@@ -81,5 +81,5 @@ func TestDestroySessionEverywhere_MockRecordsCall(t *testing.T) {
 func TestTryDestroySession_Mock(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.Backend = "mock"
-	sandbox.TryDestroySession(appCfg, "session-abc")
+	sandbox.TryDestroySession(appCfg, "session-abc", nil)
 }

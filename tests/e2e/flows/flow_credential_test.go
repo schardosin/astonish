@@ -640,11 +640,30 @@ func TestE2E_FlowRun_CredentialResolution_ChatEndpoint(t *testing.T) {
 	}
 
 	// 4e: Check that the placeholder {{CREDENTIAL:...}} doesn't appear in tool output
-	// (it should have been resolved before execution)
-	if strings.Contains(sseOutput, "CRED_USER={{CREDENTIAL:") {
-		t.Errorf("BUG: unresolved {{CREDENTIAL:...}} placeholder appeared in shell output.\n"+
-			"This means SubstituteShellCommand was called but resolver returned nil/empty.\n"+
-			"The credential store was likely not injected into the runner context.")
+	// (it should have been resolved before execution).
+	// NOTE: The approval text legitimately contains placeholders (showing the user
+	// what will be run), so we only check post-execution text events — i.e. text
+	// events that do NOT start with the approval prefix.
+	for _, ev := range events {
+		if ev.Type != "text" {
+			continue
+		}
+		var textData struct {
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal([]byte(ev.Data), &textData); err != nil {
+			continue
+		}
+		// Skip approval text events — these correctly show placeholders
+		if strings.HasPrefix(textData.Text, "**Requesting approval") {
+			continue
+		}
+		if strings.Contains(textData.Text, "CRED_USER={{CREDENTIAL:") ||
+			strings.Contains(textData.Text, "CRED_PASS={{CREDENTIAL:") {
+			t.Errorf("BUG: unresolved {{CREDENTIAL:...}} placeholder appeared in post-execution output.\n"+
+				"This means SubstituteShellCommand was called but resolver returned nil/empty.\n"+
+				"The credential store was likely not injected into the runner context.\nText: %s", textData.Text)
+		}
 	}
 
 	// 4f: Security — real credential values must NOT appear in SSE stream

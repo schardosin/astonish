@@ -13,4 +13,5 @@ package e2eboot
 import (
 	_ "github.com/schardosin/astonish/pkg/sandbox/k8s"
 	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
+	_ "github.com/schardosin/astonish/pkg/sandbox/openshell"
 )

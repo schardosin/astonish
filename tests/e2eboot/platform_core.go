@@ -233,6 +233,8 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	svc, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: opts.Suffix,
+		MaxOpenConns:   3,
+		MaxIdleConns:   2,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("NewPlatformServices: %w", err)
@@ -269,6 +271,7 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	studio, err := launcher.NewStudioServer(opts.Port,
 		launcher.WithServices(svc),
 		launcher.WithPlatformAuth(platformAuth, esStore),
+		launcher.WithTenantMiddleware(entstore.TenantMiddleware(esStore)),
 	)
 	if err != nil {
 		esStore.Close()
@@ -350,23 +353,65 @@ func writeConfigFile(dir, platformDSN, suffix, bifrostURL, jwtSecret string) err
 			bifrostURL = "https://bifrost.local.muxpie.com"
 		}
 	}
-	sandboxNS := os.Getenv("ASTONISH_E2E_SANDBOX_NAMESPACE")
-	if sandboxNS == "" {
-		sandboxNS = "astonish-sandbox"
-	}
-	controlPlaneNS := os.Getenv("ASTONISH_E2E_CONTROL_PLANE_NAMESPACE")
-	if controlPlaneNS == "" {
-		controlPlaneNS = "astonish"
-	}
-	kubeconfigPath := os.Getenv("KUBECONFIG")
-	if kubeconfigPath == "" {
-		home := os.Getenv("HOME")
-		kubeconfigPath = filepath.Join(home, ".kube", "config")
-		if _, err := os.Stat(kubeconfigPath); err != nil {
-			kubeconfigPath = "/root/.kube/config"
-		}
-	}
 	escapedDSN := strings.ReplaceAll(platformDSN, `"`, `\"`)
+
+	var sandboxBlock string
+	switch SandboxBackendName() {
+	case "openshell":
+		gatewayAddr := os.Getenv("ASTONISH_E2E_OPENSHELL_GATEWAY")
+		if gatewayAddr == "" {
+			gatewayAddr = "localhost:18080"
+		}
+		sandboxBlock = fmt.Sprintf(`sandbox:
+  enabled: true
+  backend: openshell
+  limits:
+    memory: 2GB
+    cpu: 2
+    processes: 500
+  openshell:
+    gateway_addr: %s
+    gateway_tls: false
+    sandbox_image: schardosin/astonish-sandbox-openshell:dev
+    network_policy:
+      presets:
+        - default
+`, gatewayAddr)
+	default:
+		sandboxNS := os.Getenv("ASTONISH_E2E_SANDBOX_NAMESPACE")
+		if sandboxNS == "" {
+			sandboxNS = "astonish-sandbox"
+		}
+		controlPlaneNS := os.Getenv("ASTONISH_E2E_CONTROL_PLANE_NAMESPACE")
+		if controlPlaneNS == "" {
+			controlPlaneNS = "astonish"
+		}
+		kubeconfigPath := os.Getenv("KUBECONFIG")
+		if kubeconfigPath == "" {
+			home := os.Getenv("HOME")
+			kubeconfigPath = filepath.Join(home, ".kube", "config")
+			if _, err := os.Stat(kubeconfigPath); err != nil {
+				kubeconfigPath = "/root/.kube/config"
+			}
+		}
+		sandboxBlock = fmt.Sprintf(`sandbox:
+  enabled: true
+  backend: k8s
+  limits:
+    memory: 2GB
+    cpu: 2
+    processes: 500
+  kubernetes:
+    kubeconfig_path: %s
+    namespace: %s
+    control_plane_namespace: %s
+    overlay_mode: fuse
+    privileged_pods: true
+    sandbox_image: schardosin/astonish-sandbox-base:dev
+    layers_pvc_name: astonish-layers
+    uppers_pvc_name: astonish-uppers
+`, kubeconfigPath, sandboxNS, controlPlaneNS)
+	}
 
 	configYAML := fmt.Sprintf(`general:
   default_provider: Bifrost
@@ -383,23 +428,7 @@ storage:
   auth:
     mode: builtin
     jwt_secret: %s
-sandbox:
-  enabled: true
-  backend: k8s
-  limits:
-    memory: 2GB
-    cpu: 2
-    processes: 500
-  kubernetes:
-    kubeconfig_path: %s
-    namespace: %s
-    control_plane_namespace: %s
-    overlay_mode: fuse
-    privileged_pods: true
-    sandbox_image: schardosin/astonish-sandbox-base:dev
-    layers_pvc_name: astonish-layers
-    uppers_pvc_name: astonish-uppers
-`, bifrostURL, escapedDSN, suffix, jwtSecret, kubeconfigPath, sandboxNS, controlPlaneNS)
+%s`, bifrostURL, escapedDSN, suffix, jwtSecret, sandboxBlock)
 
 	path := filepath.Join(dir, "config.yaml")
 	return os.WriteFile(path, []byte(configYAML), 0644)

@@ -395,6 +395,14 @@ func hasToolInToolsList(t *testing.T, h *e2eboot.Harness, toolName string) bool 
 func ensureBaseConfigured(t *testing.T, h *e2eboot.Harness) {
 	t.Helper()
 
+	// OpenShell sandboxes have all tools (Node.js, npx, etc.) baked into the
+	// container image at build time. There is no "Configure Base" PVC overlay
+	// concept — skip entirely.
+	if e2eboot.SandboxBackendName() == "openshell" {
+		t.Log("OpenShell backend — base image has tools pre-baked, skipping Configure Base")
+		return
+	}
+
 	// Check current base template status via the admin API.
 	resp := h.Get(t, "/api/platform/admin/sandbox/base")
 	body := e2eboot.ReadBody(t, resp)

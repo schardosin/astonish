@@ -61,17 +61,24 @@ help:
 	@echo "  make build-linux-arm64 - Cross-compile Linux arm64 binary"
 	@echo "  make docker-incus      - Build the Incus Docker image (for CI release)"
 	@echo ""
+	@echo "OpenShell Sandbox:"
+	@echo "  make docker-sandbox-openshell - Build the OpenShell sandbox image"
+	@echo "  make proto-gen                - Regenerate gRPC stubs from vendored protos"
+	@echo "  make helm-deps                - Update Helm subchart dependencies"
+	@echo ""
 	@echo "Registry Push (multi-arch, requires docker login + buildx):"
-	@echo "  make push-dev              - Build+push astonish:dev (multi-arch)"
-	@echo "  make push-incus-dev        - Build+push astonish-incus:dev (multi-arch)"
-	@echo "  make push-sandbox-base-dev - Build+push astonish-sandbox-base:dev (multi-arch)"
-	@echo "  make push-all-dev          - Push all dev images"
+	@echo "  make push-dev                      - Build+push astonish:dev (multi-arch)"
+	@echo "  make push-incus-dev                - Build+push astonish-incus:dev (multi-arch)"
+	@echo "  make push-sandbox-base-dev         - Build+push astonish-sandbox-base:dev (multi-arch)"
+	@echo "  make push-sandbox-openshell-dev    - Build+push astonish-sandbox-openshell:dev (multi-arch)"
+	@echo "  make push-all-dev                  - Push all dev images"
 	@echo ""
 	@echo "Registry Push (fast single-arch, dev iteration):"
-	@echo "  make push-dev-fast              - Build+push astonish:dev (native arch only)"
-	@echo "  make push-sandbox-base-dev-fast - Build+push sandbox-base:dev (native arch only)"
-	@echo "  make push-incus-dev-fast        - Build+push incus:dev (native arch only)"
-	@echo "  make push-all-dev-fast          - Push all dev images (native arch only)"
+	@echo "  make push-dev-fast                      - Build+push astonish:dev (native arch only)"
+	@echo "  make push-sandbox-base-dev-fast         - Build+push sandbox-base:dev (native arch only)"
+	@echo "  make push-incus-dev-fast               - Build+push incus:dev (native arch only)"
+	@echo "  make push-sandbox-openshell-dev-fast    - Build+push sandbox-openshell:dev (native arch only)"
+	@echo "  make push-all-dev-fast                  - Push all dev images (native arch only)"
 
 # Build the Go binary only
 build:
@@ -257,6 +264,106 @@ e2e-k8s-down:
 	done
 	@echo "E2E k8s infra removed."
 
+# ===========================================================================
+# E2E OpenShell sandbox infrastructure — provision/destroy the OpenShell
+# gateway and sandbox namespace for E2E tests against the OpenShell backend.
+#
+# Namespace layout (DEDICATED to e2e — never reuse a live install):
+#   control plane: astonishe2eos        (OpenShell gateway pod lives here)
+#   sandbox:       astonishe2eos-sandbox (sandbox pods spawned by gateway)
+#
+# The chart's api/worker pods are scaled to 0 — tests run in-process on the
+# host (same pattern as K8s e2e). Only the OpenShell gateway is deployed.
+# ===========================================================================
+E2E_OS_RELEASE := astonishe2eos
+E2E_OS_NS := astonishe2eos
+E2E_OS_SANDBOX_NS := astonishe2eos-sandbox
+
+e2e-openshell-up:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Pulling OpenShell subchart dependency..."
+	helm dependency update deploy/helm/astonish
+	@echo "Deploying OpenShell e2e infra ($(E2E_OS_NS) + $(E2E_OS_SANDBOX_NS))..."
+	helm upgrade --install $(E2E_OS_RELEASE) deploy/helm/astonish \
+		-n $(E2E_OS_NS) --create-namespace \
+		-f deploy/helm/astonish/values-e2e-openshell.yaml \
+		--history-max=3 \
+		--wait --timeout=10m
+	@echo "Verifying OpenShell gateway is Running..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		PHASE=$$(kubectl get pod -n $(E2E_OS_NS) -l app.kubernetes.io/name=openshell \
+			-o jsonpath='{.items[0].status.phase}' 2>/dev/null); \
+		if [ "$$PHASE" = "Running" ]; then break; fi; \
+		if [ $$i -eq 15 ]; then \
+			echo "ERROR: OpenShell gateway not Running after 45s."; \
+			kubectl get pods -n $(E2E_OS_NS); \
+			exit 1; \
+		fi; \
+		sleep 3; \
+	done
+	@echo "OpenShell e2e infra ready."
+	@echo "  Gateway: $(E2E_OS_RELEASE)-openshell.$(E2E_OS_NS).svc.cluster.local:8080"
+
+e2e-openshell-down:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Tearing down OpenShell e2e infra..."
+	-helm uninstall $(E2E_OS_RELEASE) -n $(E2E_OS_NS) 2>/dev/null
+	-kubectl delete pods --all -n $(E2E_OS_SANDBOX_NS) --force --grace-period=0 --ignore-not-found 2>/dev/null
+	-kubectl delete ns $(E2E_OS_NS) --ignore-not-found
+	-kubectl delete ns $(E2E_OS_SANDBOX_NS) --ignore-not-found
+	@echo "OpenShell e2e infra removed."
+
+# Run E2E tests against the OpenShell backend.
+# Requires: ASTONISH_TEST_DSN, provider API key, OpenShell gateway Running.
+#
+# The tests run on the host, so we port-forward the in-cluster gateway to
+# localhost:18080 for the duration of the run. This avoids requiring the host
+# to resolve cluster-internal DNS names.
+E2E_OS_LOCAL_PORT := 18080
+
+test-e2e-openshell:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then echo "ERROR: ASTONISH_TEST_DSN required"; exit 1; fi
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Preflight: verifying OpenShell gateway is Running..."
+	@PHASE=$$(kubectl get pod -n $(E2E_OS_NS) -l app.kubernetes.io/name=openshell \
+		-o jsonpath='{.items[0].status.phase}' 2>/dev/null); \
+	if [ "$$PHASE" != "Running" ]; then \
+		echo ""; \
+		echo "ERROR: OpenShell gateway not Running (phase=$$PHASE)."; \
+		echo "  Provision it with:    make e2e-openshell-up"; \
+		echo "  Tear it down with:    make e2e-openshell-down"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "Preflight OK — OpenShell gateway Running."
+	@echo ""
+	@echo "Starting port-forward to OpenShell gateway (localhost:$(E2E_OS_LOCAL_PORT) → gateway:8080)..."
+	@kubectl port-forward -n $(E2E_OS_NS) \
+		svc/$(E2E_OS_RELEASE)-openshell $(E2E_OS_LOCAL_PORT):8080 \
+		>/dev/null 2>&1 & PF_PID=$$!; \
+	sleep 2; \
+	if ! kill -0 $$PF_PID 2>/dev/null; then \
+		echo "ERROR: port-forward failed to start."; \
+		exit 1; \
+	fi; \
+	echo "Port-forward running (PID $$PF_PID)."; \
+	echo ""; \
+	echo "Running E2E tests against OpenShell backend (~44 tests, typically 10-20 min)..."; \
+	set -o pipefail; \
+	ASTONISH_E2E_SANDBOX_BACKEND=openshell \
+	ASTONISH_E2E_SANDBOX_NAMESPACE=$(E2E_OS_SANDBOX_NS) \
+	ASTONISH_E2E_CONTROL_PLANE_NAMESPACE=$(E2E_OS_NS) \
+	ASTONISH_E2E_OPENSHELL_GATEWAY=localhost:$(E2E_OS_LOCAL_PORT) \
+	go test -tags=e2e -count=1 -p 1 -timeout=20m \
+		$(if $(RUN),-run $(RUN)) $(if $(VERBOSE),-v) -json ./tests/e2e/... \
+		| node tests/scenarios/stream.mjs /tmp/e2e-openshell-results.json; \
+	RESULT=$$?; \
+	kill $$PF_PID 2>/dev/null || true; \
+	node tests/scenarios/parse-run.mjs /tmp/e2e-openshell-results.json; \
+	exit $$RESULT
+
 # E2E inspector mode — long-lived single-instance for post-run UI inspection.
 #
 # Boots a long-lived in-process StudioServer (port 9394) and runs the entire
@@ -418,7 +525,7 @@ update-mcp-stars:
 	GITHUB_TOKEN=$$(gh auth token) python3 scripts/update-mcp-stars.py
 	@echo "Star counts updated!"
 
-.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus ensure-builder push-dev push-incus-dev push-all-dev ent-generate
+.PHONY: all help build build-ui build-all run studio studio-dev test test-unit test-integration test-e2e test-e2e-sqlite test-e2e-inspect test-e2e-inspect-stop e2e-k8s-up e2e-k8s-down install clean update-mcp-stars setup-hooks platform-init create-secrets e2e-env-up e2e-env-down e2e-env-rebuild docker-up docker-down docker-rebuild build-linux build-linux-arm64 docker-incus docker-sandbox-openshell ensure-builder push-dev push-incus-dev push-sandbox-base-dev push-sandbox-openshell-dev push-all-dev push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast push-sandbox-openshell-dev-fast push-all-dev-fast ent-generate proto-gen
 
 # Docker Test Environment - isolated environment for running integration/E2E tests
 e2e-env-up:
@@ -495,12 +602,29 @@ build-linux-arm64:
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o astonish-linux-arm64 .
 	@echo "Linux binary built: astonish-linux-arm64"
 
+# Generate Go gRPC stubs from vendored NVIDIA OpenShell proto files
+proto-gen:
+	@echo "Generating Go gRPC stubs from proto/openshell/v1/..."
+	buf generate
+	@echo "Generated: pkg/sandbox/openshell/gen/openshellv1/"
+
+# Update Helm chart dependencies (pull OpenShell subchart archive)
+helm-deps:
+	helm dependency update deploy/helm/astonish
+	@echo "Helm dependencies updated (Chart.lock + charts/ archive)"
+
 # Build the Incus Docker image (for CI release pipeline)
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)
 docker-incus: build-linux
 	@echo "Building Incus Docker image..."
 	docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:$(VERSION) .
 	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
+
+# Build the OpenShell sandbox image (NVIDIA sandbox base + Astonish agent tools)
+docker-sandbox-openshell:
+	@echo "Building OpenShell sandbox image..."
+	docker build -f docker/sandbox-openshell/Dockerfile -t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION) .
+	@echo "Image built: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION)"
 
 # --- Registry Push (multi-arch via buildx) ---
 
@@ -540,8 +664,17 @@ push-sandbox-base-dev: ensure-builder
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG)"
 
+# Build and push the OpenShell sandbox image (multi-arch)
+push-sandbox-openshell-dev: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/amd64,linux/arm64)..."
+	docker buildx build --platform linux/amd64,linux/arm64 \
+		-f docker/sandbox-openshell/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG)"
+
 # Push all dev images
-push-all-dev: push-dev push-incus-dev push-sandbox-base-dev
+push-all-dev: push-dev push-incus-dev push-sandbox-base-dev push-sandbox-openshell-dev
 	@echo "All dev images pushed successfully!"
 
 # --- Fast single-arch dev builds (native architecture only) ---
@@ -578,8 +711,17 @@ push-incus-dev-fast: ensure-builder build-linux
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
 
+# Fast: build and push OpenShell sandbox image (single arch)
+push-sandbox-openshell-dev-fast: ensure-builder
+	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
+	docker buildx build --platform linux/$(DEV_ARCH) \
+		-f docker/sandbox-openshell/Dockerfile \
+		-t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) \
+		--push .
+	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG)"
+
 # Fast: push all dev images (single arch)
-push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast
+push-all-dev-fast: push-dev-fast push-sandbox-base-dev-fast push-incus-dev-fast push-sandbox-openshell-dev-fast
 	@echo "All dev images pushed ($(DEV_ARCH) only)!"
 
 # Regenerate Ent client code for all scopes.

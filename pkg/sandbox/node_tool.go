@@ -221,13 +221,10 @@ func (nt *NodeTool) getClientFromContext(ctx context.Context, sessionID string) 
 	if nt.pool != nil {
 		tpl := store.SandboxTemplateFromContext(ctx)
 		chain := store.SandboxLayerChainFromContext(ctx)
-		if len(chain) > 0 {
-			// Honor an explicit layer chain regardless of whether a
-			// team-template name is set. This covers both:
-			//  1. Team-template sessions (tpl + chain resolved together).
-			//  2. @base-configured sessions (chain set by resolveBaseLayerChain,
-			//     tpl empty because team has no custom template).
-			return nt.pool.GetOrCreateWithChain(sessionID, tpl, chain)
+		image := store.SandboxImageFromContext(ctx)
+		if len(chain) > 0 || image != "" {
+			// Use the full-context method when we have a chain and/or image.
+			return nt.pool.GetOrCreateWithImage(sessionID, tpl, chain, image)
 		}
 		if tpl != "" {
 			return nt.pool.GetOrCreateWithTemplate(sessionID, tpl)

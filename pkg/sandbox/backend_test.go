@@ -17,6 +17,7 @@ func TestBackendKindConstants(t *testing.T) {
 	}{
 		{BackendKindIncus, "incus"},
 		{BackendKindK8s, "k8s"},
+		{BackendKindOpenShell, "openshell"},
 		{BackendKindMock, "mock"},
 	}
 	for _, c := range cases {

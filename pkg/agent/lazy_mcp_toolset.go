@@ -56,7 +56,7 @@ type LazyMCPToolset struct {
 
 	// sandboxPool, when non-nil, is used to ensure the container is ready
 	// before starting the MCP server (pool manages per-session containers).
-	sandboxPool *sandbox.NodeClientPool
+	sandboxPool sandbox.ToolNodePool
 
 	// sandboxClient, when non-nil, is used for fleet sessions where each
 	// fleet session has its own dedicated container.
@@ -92,8 +92,12 @@ func NewLazyMCPToolset(serverName string, entries []cache.ToolEntry,
 // instead of on the host. SSE transport servers are unaffected (they connect
 // to remote URLs and don't need containerization).
 //
+// Accepts any ToolNodePool implementation (Incus via AsNodePool, or the
+// backend-agnostic backendPool from NewBackendPool). The Backend is extracted
+// via pool.GetBackend() for creating BackendMCPTransport instances.
+//
 // This is called after the sandbox pool is created in chat_factory.go.
-func (l *LazyMCPToolset) SetSandboxPool(pool *sandbox.NodeClientPool) {
+func (l *LazyMCPToolset) SetSandboxPool(pool sandbox.ToolNodePool) {
 	l.sandboxPool = pool
 	if pool != nil {
 		l.sandboxBackend = pool.GetBackend()
@@ -246,15 +250,14 @@ func (l *LazyMCPToolset) startOnHost(ctx context.Context) error {
 // using the abstract Backend. Uses the pool to ensure the container/pod is ready
 // first. Caller must hold l.mu.
 func (l *LazyMCPToolset) startInContainer(ctx context.Context, sessionID string) error {
-	// Get or create the LazyNodeClient for this session, then wait for the
+	// Get or create the ToolNodeClient for this session, then wait for the
 	// container to be ready. Only waits for container creation, NOT node startup.
-	lazyClient := l.sandboxPool.GetOrCreate(sessionID)
-	if lazyClient == nil {
+	client := l.sandboxPool.GetOrCreate(sessionID)
+	if client == nil {
 		return l.setSessionError(sessionID, fmt.Errorf("sandbox pool returned nil client for session %s", sessionID))
 	}
 
-	_, err := lazyClient.EnsureContainerReady(sessionID)
-	if err != nil {
+	if err := client.EnsureReady(sessionID); err != nil {
 		return l.setSessionError(sessionID, fmt.Errorf("failed to get container for MCP server '%s': %w", l.serverName, err))
 	}
 

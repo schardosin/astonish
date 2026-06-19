@@ -54,6 +54,7 @@ data:
           {{- end }}
         {{- end }}
       {{- end }}
+      {{- if eq .Values.sandbox.backend "k8s" }}
       kubernetes:
         in_cluster: true
         namespace: {{ include "astonish.namespace.sandbox" . | quote }}
@@ -72,4 +73,41 @@ data:
         sandbox_image: {{ include "astonish.sandbox.image" . | quote }}
         layers_pvc_name: {{ .Values.sandbox.storage.layers.pvcName | quote }}
         uppers_pvc_name: {{ .Values.sandbox.storage.uppers.pvcName | quote }}
+      {{- end }}
+      {{- if eq .Values.sandbox.backend "openshell" }}
+      openshell:
+        gateway_addr: {{ include "astonish.openshell.gatewayAddr" . | quote }}
+        gateway_tls: false
+        sandbox_image: {{ printf "%s:%s" .Values.sandbox.openshell.image.repository .Values.sandbox.openshell.image.tag | quote }}
+        {{- if .Values.sandbox.openshell.registry.url }}
+        registry:
+          url: {{ .Values.sandbox.openshell.registry.url | quote }}
+          {{- if .Values.sandbox.openshell.registry.secretName }}
+          secret_name: {{ .Values.sandbox.openshell.registry.secretName | quote }}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.sandbox.openshell.builder.image }}
+        builder:
+          image: {{ .Values.sandbox.openshell.builder.image | quote }}
+          namespace: {{ default (include "astonish.namespace.controlPlane" .) .Values.sandbox.openshell.builder.namespace | quote }}
+        {{- end }}
+        {{- if .Values.sandbox.openshell.networkPolicy }}
+        network_policy:
+          {{- with .Values.sandbox.openshell.networkPolicy.presets }}
+          presets:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.sandbox.openshell.networkPolicy.extraEndpoints }}
+          extra_endpoints:
+            {{- range . }}
+            - host: {{ .host | quote }}
+              {{- if .port }}
+              port: {{ .port }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
+      {{- end }}
     {{- end }}

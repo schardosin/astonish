@@ -34,6 +34,7 @@ import (
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
+	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
@@ -160,7 +161,10 @@ func Run(cfg RunConfig) error {
 
 	// Both "postgres" and "sqlite" now use the unified entstore.
 	entCfg := entstore.Config{
-		InstanceSuffix: appCfg.Storage.Postgres.InstanceSuffix,
+		InstanceSuffix:  appCfg.Storage.Postgres.InstanceSuffix,
+		MaxOpenConns:    appCfg.Storage.Postgres.GetMaxOpenConns(),
+		MaxIdleConns:    appCfg.Storage.Postgres.GetMaxIdleConns(),
+		ConnMaxLifetime: appCfg.Storage.Postgres.GetConnMaxLifetime(),
 	}
 
 	switch appCfg.Storage.Backend {
@@ -1156,6 +1160,82 @@ func Run(cfg RunConfig) error {
 		}
 	}
 
+	// --- OpenShell orphan reconciliation (periodic) ---
+	// When the sandbox backend is OpenShell and we have a PG store, run
+	// periodic orphan cleanup. First pass 30s after startup, then every 5min.
+	// This handles pods orphaned from unclean shutdowns, failed DeleteSandbox
+	// calls, or stale sandbox_sessions records from before the PG registry fix.
+	if appCfg.Storage.Backend == "postgres" && sandbox.BackendKind(appCfg.Sandbox.BackendKind()) == sandbox.BackendKindOpenShell {
+		go func() {
+			// Initial delay: wait for pods to stabilize after a rolling restart.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(30 * time.Second):
+			}
+
+			// Run the first pass immediately, then every 5 minutes.
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+
+			runOpenShellReconcile := func() {
+				// Prune stale sandbox_sessions records whose chat session
+				// has been deleted. Without this, AllSandboxSessionIDs returns
+				// stale IDs and the reconciler thinks orphan pods are still active.
+				pruned, pruneErr := entStore.PruneStaleSandboxSessions(ctx)
+				if pruneErr != nil {
+					slog.Warn("openshell orphan reconciler: failed to prune stale sandbox sessions", "error", pruneErr)
+				} else if pruned > 0 {
+					slog.Info("openshell orphan reconciler: pruned stale sandbox_sessions records", "count", pruned)
+				}
+
+				osCfg := appCfg.Sandbox.OpenShell
+				gateway, gwErr := openshell.NewGatewayClientFromConfig(openshell.GRPCClientConfig{
+					Addr:           osCfg.GatewayAddr,
+					TLS:            osCfg.OpenShellGatewayTLS(),
+					ClientCertPath: osCfg.ClientCertPath,
+					ClientKeyPath:  osCfg.ClientKeyPath,
+					CACertPath:     osCfg.CACertPath,
+					AuthToken:      osCfg.AuthToken,
+				})
+				if gwErr != nil {
+					slog.Warn("openshell orphan reconciler: failed to connect to gateway", "error", gwErr)
+					return
+				}
+				defer gateway.Close()
+
+				knownIDs, idsErr := entStore.AllSandboxSessionIDs(ctx)
+				if idsErr != nil {
+					slog.Warn("openshell orphan reconciler: failed to query session IDs", "error", idsErr)
+					return
+				}
+
+				deleted, err := openshell.ReconcileOrphans(ctx, gateway, knownIDs, 10*time.Minute)
+				if err != nil {
+					slog.Warn("openshell orphan reconciler: reconciliation failed", "error", err)
+					return
+				}
+				if len(deleted) > 0 {
+					slog.Info("openshell orphan reconciler: cleanup complete",
+						"deleted_count", len(deleted), "deleted_names", deleted)
+				}
+			}
+
+			// First pass.
+			runOpenShellReconcile()
+
+			// Subsequent passes every 5 minutes.
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					runOpenShellReconcile()
+				}
+			}
+		}()
+	}
+
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	studioOpts = append(studioOpts, launcher.WithServices(svc))
@@ -1177,7 +1257,31 @@ func Run(cfg RunConfig) error {
 
 	// Pre-warm the Studio chat agent in the background so the first web request is fast.
 	go func() {
-		warmCtx := store.WithServices(ctx, svc)
+		// Build an enriched Services clone for pre-warm that includes the
+		// default org/team stores. Without these, the chat factory cannot
+		// resolve MCP server configs (e.g., Tavily) or team settings
+		// (WebSearchTool) from the database — causing standard servers to be
+		// missing from the tool groups until a Reset() is triggered.
+		warmSvc := &store.Services{
+			Mode:             svc.Mode,
+			Platform:         svc.Platform,
+			TenantRouter:     svc.TenantRouter,
+			PlatformSettings: svc.PlatformSettings,
+		}
+		if backend != nil {
+			warmSvc.PlatformMCPServers = backend.PlatformMCPServers()
+			orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+			if orgSlug != "" {
+				warmSvc.OrgSettings = backend.OrgSettings(orgSlug)
+				if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+					warmSvc.MCPServers = orgStore.OrgMCPServers()
+					teamStore := orgStore.ForTeam("general")
+					warmSvc.TeamMCPServers = teamStore.MCPServers()
+					warmSvc.Settings = teamStore.Settings()
+				}
+			}
+		}
+		warmCtx := store.WithServices(ctx, warmSvc)
 		if err := api.GetChatManager().PreWarm(warmCtx); err != nil {
 			logger.Printf("Studio chat pre-warm failed (will retry on first request): %v", err)
 		} else {
@@ -1633,7 +1737,7 @@ func runCleanupCycle(appCfg *config.AppConfig, sessionStore *persistentsession.F
 			deletedIDs := sessionStore.CleanupExpiredSessions(maxAge)
 			// Destroy sandbox containers for deleted sessions
 			for _, id := range deletedIDs {
-				sandbox.TryDestroySession(appCfg, id)
+				sandbox.TryDestroySession(appCfg, id, nil)
 			}
 		}
 	}

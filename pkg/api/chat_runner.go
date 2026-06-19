@@ -220,6 +220,22 @@ func (cr *ChatRunner) InjectSandboxLayerChainIfEmpty(chain []string) {
 	cr.ctx = store.WithSandboxLayerChain(cr.ctx, chain)
 }
 
+// InjectSandboxImage adds the per-template container image reference to the
+// runner's context. When present, the OpenShell backend uses this image instead
+// of the global SandboxImage config. Must be called before Run().
+func (cr *ChatRunner) InjectSandboxImage(image string) {
+	cr.ctx = store.WithSandboxImage(cr.ctx, image)
+}
+
+// InjectSandboxImageIfEmpty sets the sandbox image only if no image has been
+// injected yet. Used to apply the @base image without overriding team templates.
+func (cr *ChatRunner) InjectSandboxImageIfEmpty(image string) {
+	if existing := store.SandboxImageFromContext(cr.ctx); existing != "" {
+		return
+	}
+	cr.ctx = store.WithSandboxImage(cr.ctx, image)
+}
+
 // InjectSessionService adds a tenant-scoped session store to the runner's context
 // so that sub-agents (delegate_tasks) create child sessions in the correct store
 // (e.g., pgstore PersonalSessions) rather than the factory-time default (FileStore).

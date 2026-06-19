@@ -544,7 +544,7 @@ func updateMCPSettingsPlatform(w http.ResponseWriter, r *http.Request, mcpStore 
 		// (skip if the server already has cached_tools and config hasn't changed)
 		existing := existingMap[name]
 		if existing == nil || !mcpServerConfigUnchanged(existing, s) {
-			refreshMCPPlatformServer(mcpStore, s)
+			refreshMCPPlatformServer(mcpStore, s, buildPGSessionRegistry(r.Context()))
 		}
 	}
 
@@ -618,7 +618,7 @@ func InstallInlineMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Discover tools asynchronously with timeout
-		asyncDiscoverAndCacheTools(mcpStore, req.ServerName, req.Config)
+		asyncDiscoverAndCacheTools(mcpStore, req.ServerName, req.Config, buildPGSessionRegistry(r.Context()))
 
 		GetChatManager().Reset()
 

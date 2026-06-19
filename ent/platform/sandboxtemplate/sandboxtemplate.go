@@ -32,6 +32,20 @@ const (
 	FieldParentTemplateID = "parent_template_id"
 	// FieldTopLayerID holds the string denoting the top_layer_id field in the database.
 	FieldTopLayerID = "top_layer_id"
+	// FieldSandboxImage holds the string denoting the sandbox_image field in the database.
+	FieldSandboxImage = "sandbox_image"
+	// FieldPackages holds the string denoting the packages field in the database.
+	FieldPackages = "packages"
+	// FieldBuildStatus holds the string denoting the build_status field in the database.
+	FieldBuildStatus = "build_status"
+	// FieldBuildJobName holds the string denoting the build_job_name field in the database.
+	FieldBuildJobName = "build_job_name"
+	// FieldBuildError holds the string denoting the build_error field in the database.
+	FieldBuildError = "build_error"
+	// FieldLastBuiltImage holds the string denoting the last_built_image field in the database.
+	FieldLastBuiltImage = "last_built_image"
+	// FieldBuildStartedAt holds the string denoting the build_started_at field in the database.
+	FieldBuildStartedAt = "build_started_at"
 	// FieldBaseConfig holds the string denoting the base_config field in the database.
 	FieldBaseConfig = "base_config"
 	// FieldConfiguredBy holds the string denoting the configured_by field in the database.
@@ -84,6 +98,13 @@ var Columns = []string{
 	FieldDescription,
 	FieldParentTemplateID,
 	FieldTopLayerID,
+	FieldSandboxImage,
+	FieldPackages,
+	FieldBuildStatus,
+	FieldBuildJobName,
+	FieldBuildError,
+	FieldLastBuiltImage,
+	FieldBuildStartedAt,
 	FieldBaseConfig,
 	FieldConfiguredBy,
 	FieldConfiguredAt,
@@ -114,6 +135,14 @@ var (
 	NameValidator func(string) error
 	// DefaultDescription holds the default value on creation for the "description" field.
 	DefaultDescription string
+	// DefaultBuildStatus holds the default value on creation for the "build_status" field.
+	DefaultBuildStatus string
+	// DefaultBuildJobName holds the default value on creation for the "build_job_name" field.
+	DefaultBuildJobName string
+	// DefaultBuildError holds the default value on creation for the "build_error" field.
+	DefaultBuildError string
+	// DefaultLastBuiltImage holds the default value on creation for the "last_built_image" field.
+	DefaultLastBuiltImage string
 	// DefaultVersion holds the default value on creation for the "version" field.
 	DefaultVersion int
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -200,6 +229,36 @@ func ByParentTemplateID(opts ...sql.OrderTermOption) OrderOption {
 // ByTopLayerID orders the results by the top_layer_id field.
 func ByTopLayerID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTopLayerID, opts...).ToFunc()
+}
+
+// BySandboxImage orders the results by the sandbox_image field.
+func BySandboxImage(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSandboxImage, opts...).ToFunc()
+}
+
+// ByBuildStatus orders the results by the build_status field.
+func ByBuildStatus(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuildStatus, opts...).ToFunc()
+}
+
+// ByBuildJobName orders the results by the build_job_name field.
+func ByBuildJobName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuildJobName, opts...).ToFunc()
+}
+
+// ByBuildError orders the results by the build_error field.
+func ByBuildError(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuildError, opts...).ToFunc()
+}
+
+// ByLastBuiltImage orders the results by the last_built_image field.
+func ByLastBuiltImage(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLastBuiltImage, opts...).ToFunc()
+}
+
+// ByBuildStartedAt orders the results by the build_started_at field.
+func ByBuildStartedAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBuildStartedAt, opts...).ToFunc()
 }
 
 // ByConfiguredBy orders the results by the configured_by field.

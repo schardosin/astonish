@@ -119,6 +119,96 @@ func (_c *SandboxTemplateCreate) SetNillableTopLayerID(v *string) *SandboxTempla
 	return _c
 }
 
+// SetSandboxImage sets the "sandbox_image" field.
+func (_c *SandboxTemplateCreate) SetSandboxImage(v string) *SandboxTemplateCreate {
+	_c.mutation.SetSandboxImage(v)
+	return _c
+}
+
+// SetNillableSandboxImage sets the "sandbox_image" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableSandboxImage(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetSandboxImage(*v)
+	}
+	return _c
+}
+
+// SetPackages sets the "packages" field.
+func (_c *SandboxTemplateCreate) SetPackages(v []string) *SandboxTemplateCreate {
+	_c.mutation.SetPackages(v)
+	return _c
+}
+
+// SetBuildStatus sets the "build_status" field.
+func (_c *SandboxTemplateCreate) SetBuildStatus(v string) *SandboxTemplateCreate {
+	_c.mutation.SetBuildStatus(v)
+	return _c
+}
+
+// SetNillableBuildStatus sets the "build_status" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableBuildStatus(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetBuildStatus(*v)
+	}
+	return _c
+}
+
+// SetBuildJobName sets the "build_job_name" field.
+func (_c *SandboxTemplateCreate) SetBuildJobName(v string) *SandboxTemplateCreate {
+	_c.mutation.SetBuildJobName(v)
+	return _c
+}
+
+// SetNillableBuildJobName sets the "build_job_name" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableBuildJobName(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetBuildJobName(*v)
+	}
+	return _c
+}
+
+// SetBuildError sets the "build_error" field.
+func (_c *SandboxTemplateCreate) SetBuildError(v string) *SandboxTemplateCreate {
+	_c.mutation.SetBuildError(v)
+	return _c
+}
+
+// SetNillableBuildError sets the "build_error" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableBuildError(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetBuildError(*v)
+	}
+	return _c
+}
+
+// SetLastBuiltImage sets the "last_built_image" field.
+func (_c *SandboxTemplateCreate) SetLastBuiltImage(v string) *SandboxTemplateCreate {
+	_c.mutation.SetLastBuiltImage(v)
+	return _c
+}
+
+// SetNillableLastBuiltImage sets the "last_built_image" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableLastBuiltImage(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetLastBuiltImage(*v)
+	}
+	return _c
+}
+
+// SetBuildStartedAt sets the "build_started_at" field.
+func (_c *SandboxTemplateCreate) SetBuildStartedAt(v time.Time) *SandboxTemplateCreate {
+	_c.mutation.SetBuildStartedAt(v)
+	return _c
+}
+
+// SetNillableBuildStartedAt sets the "build_started_at" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableBuildStartedAt(v *time.Time) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetBuildStartedAt(*v)
+	}
+	return _c
+}
+
 // SetBaseConfig sets the "base_config" field.
 func (_c *SandboxTemplateCreate) SetBaseConfig(v map[string]interface{}) *SandboxTemplateCreate {
 	_c.mutation.SetBaseConfig(v)
@@ -327,6 +417,22 @@ func (_c *SandboxTemplateCreate) defaults() {
 		v := sandboxtemplate.DefaultDescription
 		_c.mutation.SetDescription(v)
 	}
+	if _, ok := _c.mutation.BuildStatus(); !ok {
+		v := sandboxtemplate.DefaultBuildStatus
+		_c.mutation.SetBuildStatus(v)
+	}
+	if _, ok := _c.mutation.BuildJobName(); !ok {
+		v := sandboxtemplate.DefaultBuildJobName
+		_c.mutation.SetBuildJobName(v)
+	}
+	if _, ok := _c.mutation.BuildError(); !ok {
+		v := sandboxtemplate.DefaultBuildError
+		_c.mutation.SetBuildError(v)
+	}
+	if _, ok := _c.mutation.LastBuiltImage(); !ok {
+		v := sandboxtemplate.DefaultLastBuiltImage
+		_c.mutation.SetLastBuiltImage(v)
+	}
 	if _, ok := _c.mutation.Version(); !ok {
 		v := sandboxtemplate.DefaultVersion
 		_c.mutation.SetVersion(v)
@@ -379,6 +485,18 @@ func (_c *SandboxTemplateCreate) check() error {
 	}
 	if _, ok := _c.mutation.Description(); !ok {
 		return &ValidationError{Name: "description", err: errors.New(`platform: missing required field "SandboxTemplate.description"`)}
+	}
+	if _, ok := _c.mutation.BuildStatus(); !ok {
+		return &ValidationError{Name: "build_status", err: errors.New(`platform: missing required field "SandboxTemplate.build_status"`)}
+	}
+	if _, ok := _c.mutation.BuildJobName(); !ok {
+		return &ValidationError{Name: "build_job_name", err: errors.New(`platform: missing required field "SandboxTemplate.build_job_name"`)}
+	}
+	if _, ok := _c.mutation.BuildError(); !ok {
+		return &ValidationError{Name: "build_error", err: errors.New(`platform: missing required field "SandboxTemplate.build_error"`)}
+	}
+	if _, ok := _c.mutation.LastBuiltImage(); !ok {
+		return &ValidationError{Name: "last_built_image", err: errors.New(`platform: missing required field "SandboxTemplate.last_built_image"`)}
 	}
 	if _, ok := _c.mutation.Version(); !ok {
 		return &ValidationError{Name: "version", err: errors.New(`platform: missing required field "SandboxTemplate.version"`)}
@@ -453,6 +571,34 @@ func (_c *SandboxTemplateCreate) createSpec() (*SandboxTemplate, *sqlgraph.Creat
 	if value, ok := _c.mutation.Description(); ok {
 		_spec.SetField(sandboxtemplate.FieldDescription, field.TypeString, value)
 		_node.Description = value
+	}
+	if value, ok := _c.mutation.SandboxImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldSandboxImage, field.TypeString, value)
+		_node.SandboxImage = &value
+	}
+	if value, ok := _c.mutation.Packages(); ok {
+		_spec.SetField(sandboxtemplate.FieldPackages, field.TypeJSON, value)
+		_node.Packages = value
+	}
+	if value, ok := _c.mutation.BuildStatus(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)
+		_node.BuildStatus = value
+	}
+	if value, ok := _c.mutation.BuildJobName(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildJobName, field.TypeString, value)
+		_node.BuildJobName = value
+	}
+	if value, ok := _c.mutation.BuildError(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildError, field.TypeString, value)
+		_node.BuildError = value
+	}
+	if value, ok := _c.mutation.LastBuiltImage(); ok {
+		_spec.SetField(sandboxtemplate.FieldLastBuiltImage, field.TypeString, value)
+		_node.LastBuiltImage = value
+	}
+	if value, ok := _c.mutation.BuildStartedAt(); ok {
+		_spec.SetField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime, value)
+		_node.BuildStartedAt = &value
 	}
 	if value, ok := _c.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

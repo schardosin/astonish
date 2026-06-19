@@ -74,6 +74,7 @@ type backendNodeClient struct {
 	sessionID  string // set by BindSession; stable after first call
 	templateID string // may be empty → backend default
 	layerChain []string // pre-resolved chain (K8s); nil → derive from templateID
+	image      string // per-template container image (OpenShell); empty → backend default
 	limits     ResourceLimits
 
 	mu         sync.Mutex
@@ -86,11 +87,12 @@ type backendNodeClient struct {
 // newBackendNodeClient constructs a client. The session is NOT created until
 // BindSession is called; the client is inert until then so the caller may
 // defer provisioning until it knows the LLM actually needs a tool.
-func newBackendNodeClient(b Backend, templateID string, layerChain []string, limits ResourceLimits) *backendNodeClient {
+func newBackendNodeClient(b Backend, templateID string, layerChain []string, image string, limits ResourceLimits) *backendNodeClient {
 	return &backendNodeClient{
 		backend:    b,
 		templateID: templateID,
 		layerChain: layerChain,
+		image:      image,
 		limits:     limits,
 	}
 }
@@ -119,6 +121,30 @@ func (c *backendNodeClient) BindSession(sessionID string) {
 	go c.provision(sessionID)
 }
 
+// EnsureReady satisfies ToolNodeClient. It triggers provisioning (via
+// BindSession) and blocks until the sandbox session is fully running.
+// Returns nil on success or the provisioning error.
+func (c *backendNodeClient) EnsureReady(sessionID string) error {
+	c.BindSession(sessionID)
+
+	c.mu.Lock()
+	done := c.bindDone
+	closed := c.closed
+	c.mu.Unlock()
+
+	if done == nil {
+		return fmt.Errorf("backend node client: no session bound (empty session ID)")
+	}
+	if closed {
+		return fmt.Errorf("backend node client: closed")
+	}
+	<-done
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bindErr
+}
+
 // provision does the CreateSession + StartSession round trip. Any error is
 // captured on c.bindErr; bindDone is always closed exactly once.
 func (c *backendNodeClient) provision(sessionID string) {
@@ -134,6 +160,7 @@ func (c *backendNodeClient) provision(sessionID string) {
 		Type:       SessionTypeChat,
 		TemplateID: c.templateID,
 		LayerChain: c.layerChain,
+		Image:      c.image,
 		Limits:     c.limits,
 	}
 	if _, err := c.backend.CreateSession(ctx, spec); err != nil {
@@ -148,6 +175,18 @@ func (c *backendNodeClient) provision(sessionID string) {
 	if err := c.backend.StartSession(ctx, sessionID); err != nil {
 		c.mu.Lock()
 		c.bindErr = fmt.Errorf("backend start session: %w", err)
+		c.mu.Unlock()
+		return
+	}
+	// Wait for the sandbox to reach Running state before allowing Exec.
+	// Required by the Backend contract (see Backend.WaitForSessionReady doc):
+	// "Callers that need to exec into a session immediately after
+	// CreateSession MUST call this first."
+	// On Incus this returns in <1s; on K8s/OpenShell it polls until the
+	// pod reaches Running phase (image pull + scheduling may take seconds).
+	if err := c.backend.WaitForSessionReady(ctx, sessionID); err != nil {
+		c.mu.Lock()
+		c.bindErr = fmt.Errorf("backend wait for session ready: %w", err)
 		c.mu.Unlock()
 		return
 	}
@@ -364,18 +403,29 @@ func NewBackendPool(b Backend, limits ResourceLimits) ToolNodePool {
 }
 
 func (p *backendPool) GetOrCreate(sessionID string) ToolNodeClient {
-	return p.getOrCreate(sessionID, "", nil)
+	return p.getOrCreate(sessionID, "", nil, "")
 }
 
 func (p *backendPool) GetOrCreateWithTemplate(sessionID, template string) ToolNodeClient {
-	return p.getOrCreate(sessionID, template, nil)
+	return p.getOrCreate(sessionID, template, nil, "")
 }
 
 func (p *backendPool) GetOrCreateWithChain(sessionID, template string, chain []string) ToolNodeClient {
-	return p.getOrCreate(sessionID, template, chain)
+	return p.getOrCreate(sessionID, template, chain, "")
 }
 
-func (p *backendPool) getOrCreate(sessionID, template string, chain []string) ToolNodeClient {
+func (p *backendPool) GetOrCreateWithImage(sessionID, template string, chain []string, image string) ToolNodeClient {
+	return p.getOrCreate(sessionID, template, chain, image)
+}
+
+// GetBackend returns the underlying Backend used by this pool. MCP lazy
+// toolsets use this to create BackendMCPTransport instances for interactive
+// exec streams into sandbox sessions.
+func (p *backendPool) GetBackend() Backend {
+	return p.backend
+}
+
+func (p *backendPool) getOrCreate(sessionID, template string, chain []string, image string) ToolNodeClient {
 	if sessionID == "" {
 		return nil
 	}
@@ -396,7 +446,7 @@ func (p *backendPool) getOrCreate(sessionID, template string, chain []string) To
 		}
 		return c
 	}
-	c := newBackendNodeClient(p.backend, template, chain, p.limits)
+	c := newBackendNodeClient(p.backend, template, chain, image, p.limits)
 	p.clients[sessionID] = c
 	return c
 }

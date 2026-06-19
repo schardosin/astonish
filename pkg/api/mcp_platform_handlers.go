@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -156,7 +157,7 @@ func CreateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async tool discovery to populate cached_tools
-	refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server, buildPGSessionRegistry(r.Context()))
 
 	respondJSON(w, http.StatusCreated, map[string]string{"status": "ok", "name": req.Name})
 }
@@ -215,7 +216,7 @@ func UpdateMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async tool discovery to refresh cached_tools when config changes
-	refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server, buildPGSessionRegistry(r.Context()))
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "ok", "name": serverName})
 }
@@ -311,7 +312,7 @@ func RefreshMCPPlatformServerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger async background refresh
-	refreshMCPPlatformServer(targetStore, server)
+	refreshMCPPlatformServer(targetStore, server, buildPGSessionRegistry(r.Context()))
 
 	respondJSON(w, http.StatusAccepted, map[string]string{"status": "refresh_started", "name": name})
 }
@@ -506,9 +507,9 @@ func sortMCPServerItems(items []MCPServerListItem) {
 // refreshMCPPlatformServer performs async tool discovery for a platform MCP server.
 // It routes through asyncDiscoverAndCacheTools which runs in a goroutine with
 // a dedicated timeout, using sandbox for stdio servers and direct network for SSE.
-func refreshMCPPlatformServer(mcpStore store.MCPServerStore, server *store.MCPServer) {
+func refreshMCPPlatformServer(mcpStore store.MCPServerStore, server *store.MCPServer, sessRegistry *sandbox.SessionRegistry) {
 	cfg := mcpServerToConfig(server)
-	asyncDiscoverAndCacheTools(mcpStore, server.Name, cfg)
+	asyncDiscoverAndCacheTools(mcpStore, server.Name, cfg, sessRegistry)
 }
 
 // MCPDiscoveredTool represents a tool discovered from an MCP server.

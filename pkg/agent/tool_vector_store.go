@@ -34,6 +34,10 @@ type ToolVectorStore interface {
 	// Returns nil, nil if the document does not exist.
 	GetByID(ctx context.Context, id string) (*ToolVectorDoc, error)
 
+	// DeleteByIDs removes documents with the given IDs from the store.
+	// IDs that don't exist are silently ignored.
+	DeleteByIDs(ctx context.Context, ids []string) error
+
 	// Count returns the number of documents in the store.
 	Count() int
 }

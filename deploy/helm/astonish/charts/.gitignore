@@ -1,0 +1,4 @@
+# Subchart archives are downloaded by `helm dependency update`.
+# Commit Chart.lock (in parent dir) for reproducibility; the tgz is
+# fetched on demand by `make helm-deps` or `helm dependency build`.
+*.tgz

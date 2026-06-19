@@ -65,6 +65,8 @@ func bootstrapShared(t *testing.T, baseDSN string) *Harness {
 	_, esStore, err := entstore.NewPlatformServices(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: state.Suffix,
+		MaxOpenConns:   3,
+		MaxIdleConns:   2,
 	})
 	if err != nil {
 		t.Fatalf("[e2eboot] NewPlatformServices (shared): %v", err)

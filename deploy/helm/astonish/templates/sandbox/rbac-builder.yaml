@@ -1,0 +1,45 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.rbac.create (eq .Values.sandbox.backend "openshell") }}
+{{- if .Values.sandbox.openshell.registry.url }}
+# Role for Kaniko-based image builder in the control-plane namespace.
+# Grants permissions to create/manage build Jobs and their supporting
+# ConfigMaps. Separate from the sandbox Role (which lives in the sandbox ns).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "astonish.fullname" . }}-image-builder
+  namespace: {{ include "astonish.namespace.controlPlane" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: image-builder
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "astonish.fullname" . }}-image-builder
+  namespace: {{ include "astonish.namespace.controlPlane" . }}
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: image-builder
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "astonish.serviceAccountName" . }}
+    namespace: {{ include "astonish.namespace.controlPlane" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "astonish.fullname" . }}-image-builder
+{{- end }}
+{{- end }}

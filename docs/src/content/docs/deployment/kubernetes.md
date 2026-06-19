@@ -5,6 +5,12 @@ description: Deploy Astonish on Kubernetes with the official Helm chart
 
 This guide walks through deploying Astonish on Kubernetes using the Helm chart at `deploy/helm/astonish/`. By the end you will have a running control plane (API + worker), a sandbox subsystem capable of launching isolated AI agent sessions, and the tooling to verify it all works.
 
+The chart supports two sandbox backends:
+- **`k8s`** — Direct pod creation via the Kubernetes API (simpler, production-proven).
+- **`openshell`** — NVIDIA OpenShell-managed sandboxes with full 4-layer in-pod security (Landlock, seccomp, network namespace, OCSF audit).
+
+Both backends share the same session lifecycle API. The K8s backend uses an overlay layer system for workspace composition; the OpenShell backend uses custom container images directly. This guide covers both; sections specific to one backend are clearly marked.
+
 ## What gets deployed
 
 The Helm chart creates the following resources in a single `helm install`:
@@ -21,12 +27,26 @@ The Helm chart creates the following resources in a single `helm install`:
 | **Role + RoleBinding** | `astonish-sandbox` | Grants the control-plane SA permission to manage pods, PVCs, and exec in the sandbox namespace. Cross-namespace binding (SA in `astonish`, permissions in `astonish-sandbox`). |
 | **PVC** `astonish-layers` | `astonish-sandbox` | RWX volume storing content-addressed layers (`@base/rootfs` + template layers). Mounted read-only into every sandbox pod. |
 | **PVC** `astonish-uppers` | `astonish-sandbox` | RWX volume storing per-session upper layers. Written during sessions, read back on resume. |
-| **Job** `astonish-sandbox-seed` | `astonish-sandbox` | Helm hook (`post-install`, `post-upgrade`). Seeds `@base/rootfs` on the layers PVC by tar-copying the sandbox base image's rootfs. Idempotent — short-circuits if content exists. |
+| **Job** `astonish-sandbox-seed` | `astonish-sandbox` | Helm hook (`post-install`, `post-upgrade`). Seeds `@base/rootfs` on the layers PVC by tar-copying the sandbox base image's filesystem onto the shared PVC. Idempotent — short-circuits if content exists. |
 | **DaemonSet** (optional) | `kube-system` | FUSE device plugin. Only deployed when `fuseDevicePlugin.enabled=true`. Advertises `/dev/fuse` as a schedulable resource so sandbox pods can use fuse-overlayfs without privileged mode. |
 | **Service** `astonish-api` | `astonish` | ClusterIP exposing the API on port 9393. |
 | **Ingress** (optional) | `astonish` | External access to Studio/API. Nginx sticky-session annotations for SSE affinity. |
 
+### Additional resources for OpenShell backend
+
+When `sandbox.backend=openshell` and `sandbox.openshell.enabled=true`, the chart deploys the NVIDIA OpenShell gateway **as a Helm subchart** in the same namespace, plus Istio service mesh policies:
+
+| Resource | Namespace | Why it exists |
+|----------|-----------|---------------|
+| **StatefulSet** `{release}-openshell` | control-plane | NVIDIA OpenShell gateway (gRPC). Manages sandbox lifecycle, exec relay, and policy enforcement. Deployed as a subchart — no separate install needed. |
+| **PeerAuthentication** | control-plane | Sets PERMISSIVE mTLS on the gateway pod so it can accept both mesh (Astonish) and non-mesh (sandbox) traffic. |
+| **AuthorizationPolicy** (×2) | control-plane | Grants mesh peers full gRPC access; restricts non-mesh callers to supervisor callback methods only. |
+| **NetworkPolicy** | sandbox namespace | Locks sandbox pod egress to gateway port 8080 + DNS only. |
+| **Agent Sandbox CRD** (`agents.x-k8s.io/v1alpha1`) | cluster-scoped | Kubernetes API extension for sandbox lifecycle. Installed separately (see prerequisites). |
+
 ## Prerequisites
+
+### All backends
 
 - **Kubernetes cluster** (1.28+). Supported: self-managed (Gardener, Rancher, kubeadm, K3s, k0s), EKS, AKS, GKE with a controllable node pool.
   - **Not supported:** GKE Autopilot, EKS Fargate, AKS virtual nodes — these forbid DaemonSets and hostPath access needed by several overlay paths.
@@ -35,10 +55,55 @@ The Helm chart creates the following resources in a single `helm install`:
 - **`kubectl`** 1.30+ and **`helm`** 3.8+ with cluster-admin access (the chart creates namespaces and cross-namespace RBAC).
 - **Container images** accessible from the cluster:
   - `schardosin/astonish:<tag>` — control plane.
-  - `schardosin/astonish-sandbox-base:<tag>` — sandbox pod base image.
+  - `schardosin/astonish-sandbox-base:<tag>` — sandbox pod base image (k8s backend).
+  - `schardosin/astonish-sandbox-openshell:<tag>` — sandbox pod image (openshell backend).
 - **PostgreSQL** — the platform database. Can be in-cluster or external. You need a connection DSN.
 
-## Step 1: choose an overlay strategy
+### Additional prerequisites for OpenShell backend
+
+- **Istio** — Installed on the cluster (minimal profile is sufficient). The control-plane namespace must be labeled `istio-injection=enabled`:
+  ```bash
+  istioctl install --set profile=minimal -y
+  kubectl label namespace <your-namespace> istio-injection=enabled
+  ```
+- **Agent Sandbox CRD + Controller** — The `agents.x-k8s.io/v1alpha1` Sandbox custom resource and its controller. Install before deploying:
+  ```bash
+  kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+  ```
+- **CNI with NetworkPolicy support** — Required for sandbox egress restriction (Calico, Cilium, or K3s default network-policy controller).
+- **Custom sandbox image** — `schardosin/astonish-sandbox-openshell:<tag>` must be pullable from the cluster.
+- **Helm dependency update** — The OpenShell subchart must be fetched before install:
+  ```bash
+  helm dependency update deploy/helm/astonish
+  ```
+
+## Step 1: choose a sandbox backend
+
+Before selecting an overlay strategy, decide which sandbox backend to use:
+
+| | Standard K8s (`k8s`) | OpenShell (`openshell`) |
+|-|---------------------|------------------------|
+| **How it works** | Astonish control plane creates pods directly via the K8s API. The pod entrypoint composes the overlay and chroots into it. | NVIDIA OpenShell gateway (deployed as subchart) manages pods via the Agent Sandbox CRD. The supervisor runs as PID 1 with Landlock/seccomp/network enforcement. Astonish communicates with the gateway via gRPC through the Istio mesh. |
+| **Security model** | Container boundary (Linux namespaces, cgroups). Network isolation via K8s NetworkPolicy. | Container boundary **plus** per-process Landlock filesystem policies, seccomp syscall filtering, L7 network proxy, and OCSF audit logging inside the container. Istio mTLS between services; NetworkPolicy for sandbox isolation. |
+| **Best for** | Teams that want simple, battle-tested Kubernetes pod isolation. | Regulated environments, untrusted agent workloads, or when you need per-process audit trails and defense-in-depth. |
+| **Extra infrastructure** | None beyond K8s itself. | Istio service mesh, Agent Sandbox CRD + controller. Gateway deployed automatically as subchart. |
+| **Workspace** | Overlay layer chain (PVCs + fuse-overlayfs/kernel mount) | Custom sandbox container images (no overlay layers) |
+
+**Recommendation:** Start with `k8s` for simplicity. Migrate to `openshell` when you need the additional security layers — the migration is non-disruptive (same PVCs, same layer format, same session API).
+
+Set your choice in the values file:
+
+```yaml
+# Standard K8s backend (default):
+sandbox:
+  backend: k8s
+
+# OpenShell backend:
+sandbox:
+  backend: openshell
+```
+
+## Step 2: choose an overlay strategy
 
 The sandbox backend composes an overlay filesystem inside each sandbox pod. Four strategies are available depending on your cluster's capabilities:
 
@@ -53,13 +118,15 @@ The sandbox backend composes an overlay filesystem inside each sandbox pod. Four
 
 ### How the overlay works
 
-Every sandbox pod mounts two shared PVCs:
+Every sandbox pod (K8s backend only) mounts two shared PVCs:
 - **layers** (`astonish-layers`) — read-only, content-addressed layer store. Contains `@base/rootfs` (seeded by the Helm hook Job) and template-specific layers added later.
 - **uppers** (`astonish-uppers`) — read-write, per-session scratch space.
 
-The pod's entrypoint script composes these into a union filesystem using either `fuse-overlayfs` (Paths 1 and 3) or kernel `mount -t overlay` (Paths 2 and 4), then `chroot`s into the result. The AI agent's tool calls execute inside that chroot.
+**K8s backend:** The pod's entrypoint script composes these into a union filesystem using either `fuse-overlayfs` (Paths 1 and 3) or kernel `mount -t overlay` (Paths 2 and 4), then `chroot`s into the result. The AI agent's tool calls execute inside that chroot.
 
-## Step 2: build a values file
+**OpenShell backend:** Does NOT use the overlay system. The OpenShell gateway provisions workspace PVCs via the Agent Sandbox CRD's `volumeClaimTemplates`. The workspace is seeded from the sandbox container image. Customization is done by building different sandbox images (not overlay layers).
+
+## Step 3: build a values file
 
 Start from the dev example and adjust for your environment:
 
@@ -109,6 +176,52 @@ sandbox:
   storage:
     storageClassName: <your-rwx-class>
 ```
+
+### OpenShell backend settings
+
+These settings apply when `sandbox.backend: openshell`. The OpenShell backend does NOT use the overlay layer system — the gateway manages workspace provisioning natively via the Agent Sandbox CRD. The gateway is deployed as a Helm subchart in the same namespace, with Istio handling all inter-service encryption.
+
+```yaml
+# OpenShell with bundled gateway (Architecture 1: Pure Istio)
+sandbox:
+  backend: openshell
+  openshell:
+    enabled: true             # Deploy gateway subchart + Istio policies
+    # gateway.addr: ""        # Auto-derived: "{release}-openshell.{ns}.svc.cluster.local:8080"
+    image:
+      repository: schardosin/astonish-sandbox-openshell
+      tag: dev
+    istio:
+      enabled: true           # Render PeerAuthentication + AuthorizationPolicies
+
+# Subchart pass-through values (top-level key matches the Chart.yaml alias)
+openshell:
+  server:
+    disableTls: true                          # Istio handles encryption
+    sandboxNamespace: "astonish-sandbox"      # Must match your sandbox namespace
+    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    auth:
+      allowUnauthenticatedUsers: true         # Istio handles identity
+    tls:
+      clientCaSecretName: ""                  # No mTLS client verification
+  pkiInitJob:
+    enabled: true                             # Required: generates JWT signing keys
+  networkPolicy:
+    enabled: false                            # Chart manages its own NetworkPolicies
+```
+
+:::tip[Migrating from k8s to openshell]
+To migrate from the K8s backend to OpenShell:
+1. Install prerequisites: Istio + Agent Sandbox CRD (see above).
+2. Label your control-plane namespace: `kubectl label ns <ns> istio-injection=enabled`.
+3. Run `helm dependency update deploy/helm/astonish` to fetch the subchart.
+4. Change `sandbox.backend` from `k8s` to `openshell` in your values.
+5. Add the `sandbox.openshell.*` section and the top-level `openshell:` subchart pass-through.
+6. Run `helm upgrade`. Existing sessions will be terminated; new sessions use OpenShell.
+7. Existing pods will restart with Istio sidecars (2/2 Ready).
+
+Note: The overlay layer system (PVCs, seed Job, templates) is specific to the K8s backend. The OpenShell backend uses custom sandbox images for workspace customization instead.
+:::
 
 ### Required secrets
 
@@ -191,7 +304,7 @@ Treat `masterKey` as permanent infrastructure — back it up securely and never 
 
 The example `values-dev-proxmox.yaml` ships with placeholder secrets. **Never deploy those to a real environment.** Generate fresh keys with `openssl rand -hex 32` (or `astonish platform gen-secret`) for each installation.
 
-## Step 3: initialize the platform database
+## Step 4: initialize the platform database
 
 Before installing the Helm chart, the platform database must be initialized. The `astonish platform init` command connects to your PostgreSQL server, generates a unique instance suffix, creates the database (`astonish_<suffix>_platform`), sets up required PostgreSQL roles (`astonish_platform_admin`, `astonish_app`), and runs all platform-level schema migrations.
 
@@ -265,7 +378,7 @@ Add to your Helm values file:
         instanceSuffix: "a1b2c3"
 ```
 
-Copy the `secrets.platformDSN` and `config.storage.postgres.instanceSuffix` values directly into your `values-myenv.yaml`, then proceed to Step 4.
+Copy the `secrets.platformDSN` and `config.storage.postgres.instanceSuffix` values directly into your `values-myenv.yaml`, then proceed to Step 5.
 
 ### Privilege downgrade (optional, recommended for production)
 
@@ -278,11 +391,11 @@ After `platform init` succeeds, the running api/worker pods do not need `CREATED
 
 This is optional — many teams keep a single set of credentials for simplicity. The trade-off is that compromised pods could theoretically create databases (but not drop them without explicit `DROP` grants).
 
-## Step 4: install
+## Step 5: install
 
 This section explains every command and why it's needed.
 
-### 4.1 Preview the rendered manifests
+### 5.1 Preview the rendered manifests
 
 ```bash
 helm template astonish deploy/helm/astonish \
@@ -294,7 +407,7 @@ helm template astonish deploy/helm/astonish \
 
 **What to check:** Scan the output for your expected namespace names, image tags, PVC sizes, and PSA labels. Pipe to `less` or redirect to a file for inspection.
 
-### 4.2 Install the chart
+### 5.2 Install the chart
 
 ```bash
 helm install astonish deploy/helm/astonish \
@@ -317,7 +430,7 @@ helm install astonish deploy/helm/astonish \
 2. All non-hook resources are applied: namespaces, RBAC, PVCs, configmap, secrets, deployments, service.
 3. The `post-install` hook fires: the seed Job is created in `astonish-sandbox`.
 
-### 4.3 Wait for the seed Job
+### 5.3 Wait for the seed Job
 
 ```bash
 kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
@@ -347,7 +460,7 @@ astonish-seed: done
 
 **If it fails:** Common causes are `ImagePullBackOff` (image not published or tag mismatch), PVC not Bound (StorageClass misconfigured), or NFS export not reachable. Check `kubectl -n astonish-sandbox describe job/astonish-sandbox-seed` and pod events.
 
-### 4.4 Verify control-plane pods
+### 5.4 Verify control-plane pods
 
 ```bash
 kubectl -n astonish rollout status deploy/astonish-api deploy/astonish-worker
@@ -362,9 +475,9 @@ kubectl -n astonish logs deploy/astonish-api --tail=30
 kubectl -n astonish logs deploy/astonish-worker --tail=30
 ```
 
-The logs will show the exact error (connection refused, invalid DSN format, missing key, etc.). If you see "relation does not exist" or "database does not exist", you likely skipped Step 3 (`astonish platform init`).
+The logs will show the exact error (connection refused, invalid DSN format, missing key, etc.). If you see "relation does not exist" or "database does not exist", you likely skipped Step 4 (`astonish platform init`).
 
-### 4.5 Inventory the sandbox namespace
+### 5.5 Inventory the sandbox namespace
 
 ```bash
 kubectl get all,pvc,sa,role,rolebinding -n astonish-sandbox
@@ -381,7 +494,7 @@ kubectl get all,pvc,sa,role,rolebinding -n astonish-sandbox
 
 The seed Job itself will be gone (deleted by `hook-succeeded` policy after completion).
 
-### 4.6 (Path 1 only) Verify the FUSE device plugin
+### 5.6 (Path 1 only) Verify the FUSE device plugin
 
 ```bash
 # Label the nodes that should host sandbox pods:
@@ -396,7 +509,46 @@ kubectl get node <node-name> -o jsonpath='{.status.allocatable}' | grep -o 'smar
 
 The chart ships a minimal reference DaemonSet. For production, consider the upstream [smarter-device-manager Helm chart](https://gitlab.com/arm-research/smarter/smarter-device-manager) and set `fuseDevicePlugin.enabled: false` in your values.
 
-## Step 5: smoke test
+### 5.7 (OpenShell only) Verify the gateway and Istio mesh
+
+```bash
+# Verify the Sandbox CRD is installed:
+kubectl get crd sandboxes.agents.x-k8s.io
+# Expected: sandboxes.agents.x-k8s.io   <date>
+
+# Check all pods have Istio sidecars (2/2 Ready):
+kubectl -n astonish get pods
+# Expected:
+#   astonish-api-xxx         2/2   Running
+#   astonish-worker-xxx      2/2   Running
+#   astonish-openshell-0     2/2   Running
+
+# Verify Istio policies are applied:
+kubectl -n astonish get peerauthentication,authorizationpolicy
+# Expected:
+#   peerauthentication: astonish-openshell-permissive (PERMISSIVE)
+#   authorizationpolicy: astonish-openshell-mesh-allow (ALLOW)
+#   authorizationpolicy: astonish-openshell-sandbox-allow (ALLOW)
+
+# Verify sandbox namespace has NO Istio injection:
+kubectl get ns astonish-sandbox --show-labels | grep istio
+# Expected: istio-injection=disabled
+
+# Verify NetworkPolicy in sandbox namespace:
+kubectl -n astonish-sandbox get networkpolicy
+# Expected: astonish-sandbox-egress
+
+# Test gRPC connectivity from Astonish to gateway (through mesh):
+kubectl -n astonish exec deploy/astonish-api -c astonish -- \
+  wget -qO- --timeout=5 http://astonish-openshell:8080/ 2>&1
+# Expected: 404 Not Found (means: request passed AuthzPolicy, reached gateway)
+```
+
+**Why:** The OpenShell gateway runs as a subchart StatefulSet in the same namespace. Istio encrypts all traffic between Astonish and the gateway via mTLS (transparent to the application). The 404 on `/` confirms the full data path works — the gateway just doesn't serve HTTP on its gRPC root path.
+
+## Step 6: smoke test
+
+### K8s backend smoke test
 
 ```bash
 astonish sandbox k8s-smoke --overlay-mode fuse --privileged
@@ -416,6 +568,41 @@ astonish sandbox k8s-smoke --overlay-mode fuse --privileged
 ```
 
 Adjust `--overlay-mode` and `--privileged` flags to match your chosen path (e.g., `--overlay-mode kernel` for Path 2/4, drop `--privileged` for Path 1).
+
+### OpenShell backend smoke test
+
+The simplest way to verify the OpenShell backend is to create a chat session that triggers sandbox creation:
+
+```bash
+# Port-forward the API (or use ingress if configured):
+kubectl -n astonish port-forward svc/astonish-api 9393:9393 &
+
+# Create an org and user if not already done:
+astonish platform org create --name "Dev" --slug dev
+astonish platform org invite --org dev --email admin@example.com --password
+
+# Start a chat that exercises the sandbox:
+astonish chat --message "run echo hello in the sandbox"
+```
+
+**Watch sandbox creation in real-time** (in another terminal):
+
+```bash
+kubectl -n astonish-sandbox get pods -w
+# Expected: a sandbox pod appears, transitions to Running, then gets cleaned up
+```
+
+**What a successful flow looks like:**
+1. Sandbox pod created in `astonish-sandbox` namespace (via Agent Sandbox CRD)
+2. OpenShell supervisor injected as init-container, sandbox reaches Ready
+3. Exec command relayed through gateway → supervisor → sandbox
+4. Response returned to chat session
+5. Sandbox pod cleaned up on session end
+
+**If sandbox creation fails** — check the gateway logs:
+```bash
+kubectl -n astonish logs statefulset/astonish-openshell --tail=30
+```
 
 ### Optional: verify Studio access
 
@@ -456,7 +643,7 @@ Helm computes a diff between the stored release manifest and the newly rendered 
 ```bash
 # Re-run platform init to apply any new schema migrations:
 astonish platform init --host pg-host --user postgres --password 'yourpass' --suffix a1b2c3
-# Or from inside the cluster (Option B from Step 3).
+# Or from inside the cluster (Option B from Step 4).
 
 # Wait for seed Job if sandbox image changed:
 kubectl -n astonish-sandbox wait job/astonish-sandbox-seed \
@@ -493,7 +680,7 @@ When you edit your values file and re-run `helm upgrade`:
 helm uninstall astonish -n astonish
 # Verify nothing lingers:
 kubectl get all,pvc,cm,secret -n astonish-sandbox
-# Re-initialize the platform database (Step 3):
+# Re-initialize the platform database (Step 4):
 astonish platform init --host pg-host --user postgres --password 'yourpass'
 # Re-install:
 helm install astonish deploy/helm/astonish \
@@ -554,7 +741,7 @@ The label `pod-security.kubernetes.io/enforce` must match `sandbox.podSecurity` 
 kubectl describe node <node> | grep -A3 Allocatable | grep fuse
 ```
 
-Either install the device plugin (Step 4.6), switch to Path 3 (`overlay.privileged: true`, `podSecurity: privileged`), or ensure the node has the correct label.
+Either install the device plugin (Step 5.6), switch to Path 3 (`overlay.privileged: true`, `podSecurity: privileged`), or ensure the node has the correct label.
 
 ### Entrypoint fails: "mount: overlay: wrong fs type, bad option"
 
@@ -584,7 +771,7 @@ Set `sandbox.storage.storageClassName` in your values file to a valid RWX-capabl
 
 **Cause:** The platform database was not initialized before installing the chart. The api and worker pods expect the platform database and its schema to already exist.
 
-**Fix:** Run `astonish platform init` (Step 3). Once the database is initialized, the pods will recover on their next restart cycle (within ~30 seconds due to CrashLoopBackOff backoff).
+**Fix:** Run `astonish platform init` (Step 4). Once the database is initialized, the pods will recover on their next restart cycle (within ~30 seconds due to CrashLoopBackOff backoff).
 
 ```bash
 # Option A (from workstation):
@@ -596,6 +783,79 @@ kubectl run astonish-platform-init --rm -it --restart=Never \
   --command -- astonish platform init \
   --host pg-host --user postgres --password 'yourpass'
 ```
+
+### (OpenShell) Gateway unreachable: "gateway CreateSandbox: rpc error: code = Unavailable"
+
+**Cause:** The Astonish control plane cannot reach the OpenShell gateway gRPC endpoint.
+
+**Diagnosis:**
+```bash
+# Check the gateway address in the rendered config:
+kubectl -n astonish get cm astonish-config -o yaml | grep gateway_addr
+
+# Check if the gateway pod is running with sidecar:
+kubectl -n astonish get pods -l app.kubernetes.io/name=openshell
+# Expected: 2/2 Running
+
+# Test connectivity from inside the mesh:
+kubectl -n astonish exec deploy/astonish-api -c astonish -- \
+  wget -qO- --timeout=5 http://astonish-openshell:8080/ 2>&1
+# Expected: 404 (reached gateway). If 403: AuthorizationPolicy blocking.
+```
+
+**Common causes:**
+- Gateway pod not running or not ready (check `kubectl -n astonish describe pod astonish-openshell-0`)
+- Missing Istio sidecar on gateway (pod shows 1/1 instead of 2/2) — namespace may lack `istio-injection=enabled` label
+- AuthorizationPolicy rejecting traffic (403 Forbidden) — check pod labels match policy selectors
+- Gateway `FailedMount` for `sandbox-jwt` secret — `pkiInitJob.enabled` must be `true`
+
+### (OpenShell) Sandbox CRD not installed: "the server could not find the requested resource"
+
+**Cause:** The `agents.x-k8s.io/v1alpha1` Sandbox CRD was not installed before deploying.
+
+**Fix:**
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+```
+
+### (OpenShell) Supervisor not starting: main container stuck in "Waiting"
+
+**Cause:** The supervisor image cannot be pulled or the gateway's supervisor injection failed.
+
+**Diagnosis:**
+```bash
+# Check pod status:
+kubectl -n <sandbox-namespace> describe pod <pod>
+
+# Check gateway logs for injection errors:
+kubectl -n astonish logs statefulset/astonish-openshell --tail=30
+```
+
+**Common causes:**
+- Supervisor image not pullable (`ghcr.io/nvidia/openshell/supervisor:0.0.63` → ImagePullBackOff)
+- Gateway K8s driver misconfigured — check gateway TOML config in the ConfigMap
+- Cluster does not support the supervisor injection method (ImageVolume requires K8s 1.35+; falls back to init-container on older clusters)
+
+### (OpenShell) Gateway pod FailedMount for "sandbox-jwt"
+
+**Cause:** The `pkiInitJob.enabled` is set to `false` in the subchart values, so the pre-install hook that creates JWT signing keys never ran.
+
+**Fix:** Set `openshell.pkiInitJob.enabled: true` in your values file and run `helm upgrade`. The certgen hook will create the `{release}-openshell-jwt-keys` secret.
+
+### (OpenShell) 403 Forbidden from Astonish to gateway
+
+**Cause:** Istio AuthorizationPolicy is blocking traffic. The policy selector labels don't match the gateway pod labels.
+
+**Diagnosis:**
+```bash
+# Check gateway pod labels:
+kubectl -n astonish get pod astonish-openshell-0 --show-labels
+
+# Check AuthorizationPolicy selectors:
+kubectl -n astonish get authorizationpolicy -o yaml | grep -A3 matchLabels
+```
+
+The policy selectors must match the gateway pod's `app.kubernetes.io/name` and `app.kubernetes.io/instance` labels. If using a non-default release name, ensure consistency.
 
 ## Gardener (SAP open-source Kubernetes)
 
@@ -612,8 +872,14 @@ Notes for deploying on [Gardener](https://gardener.cloud/)-managed shoots:
 ## Reference
 
 - **Architecture:** `docs/architecture/sandbox-backends.md` — full design (Sections 4, 5, 10 cover the K8s backend).
+- **OpenShell Architecture:** `docs/architecture/openshell-sandbox-backend.md` — design for the OpenShell backend (client-only model, gRPC integration, session lifecycle).
 - **Chart source:** `deploy/helm/astonish/` — templates, helpers, validations.
 - **Values reference:** `deploy/helm/astonish/values.yaml` — exhaustive list of every tunable with inline documentation.
-- **Backend implementation:** `pkg/sandbox/k8s/` — Go source for pod builders, overlay dispatcher, security helpers.
-- **Config struct:** `pkg/config/app_config.go` → `SandboxKubernetesConfig`.
-- **Sandbox base image:** `docker/sandbox-base/Dockerfile` — multi-stage build producing the sandbox pod rootfs.
+- **Backend implementation (k8s):** `pkg/sandbox/k8s/` — Go source for pod builders, overlay dispatcher, security helpers.
+- **Backend implementation (openshell):** `pkg/sandbox/openshell/` — Go source for gRPC gateway client, session lifecycle, exec relay.
+- **Config struct (k8s):** `pkg/config/app_config.go` → `SandboxKubernetesConfig`.
+- **Config struct (openshell):** `pkg/config/app_config.go` → `SandboxOpenShellConfig`.
+- **Sandbox base image:** `docker/sandbox-base/Dockerfile` — multi-stage build producing the sandbox pod rootfs (k8s backend).
+- **Sandbox OpenShell image:** `docker/sandbox-openshell/Dockerfile` — NVIDIA sandbox base + Astonish agent tools.
+- **Proto stubs:** `pkg/sandbox/openshell/gen/openshellv1/` — generated Go gRPC stubs for the NVIDIA OpenShell API.
+- **NVIDIA OpenShell:** [github.com/NVIDIA/OpenShell](https://github.com/NVIDIA/OpenShell) — upstream project.

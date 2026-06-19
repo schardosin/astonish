@@ -212,6 +212,16 @@ type SubAgentManager struct {
 	// Injected into sub-agent prompts so they use it as fallback when web_fetch fails.
 	WebExtractToolName string
 
+	// MCPGroupResolver is a fallback resolver for MCP tool groups that are not
+	// found in the ToolGroups map at resolution time. This handles the race
+	// condition where async MCP tool discovery completes after the chat agent
+	// was initialized (ToolGroups is built at init time from cached_tools, but
+	// async discovery may populate cached_tools later). When set, resolveTools
+	// calls this function for any "mcp:<server>" name not in ToolGroups, and
+	// if it returns a non-nil ToolGroup, that group is injected into ToolGroups
+	// for the remainder of this session.
+	MCPGroupResolver func(ctx context.Context, serverName string) *ToolGroup
+
 	// Internal
 	sem          chan struct{}     // concurrency semaphore
 	lastTracesMu sync.Mutex        // protects lastTraces
@@ -957,6 +967,16 @@ func (m *SubAgentManager) resolveTools(ctx context.Context, request []string) ([
 	for _, name := range request {
 		if _, isGroup := m.ToolGroups[name]; isGroup {
 			groupNames = append(groupNames, name)
+		} else if serverName, isMCP := mcpServerNameFromGroup(name); isMCP && m.MCPGroupResolver != nil {
+			// Fallback: the LLM requested an MCP group that wasn't in ToolGroups
+			// at init time (race with async discovery). Try to resolve it now.
+			if resolved := m.MCPGroupResolver(ctx, serverName); resolved != nil {
+				m.ToolGroups[name] = resolved
+				groupNames = append(groupNames, name)
+				slog.Info("resolved MCP tool group via fallback", "group", name, "tools", len(resolved.Tools)+len(resolved.Toolsets))
+			} else {
+				individualNames[name] = true
+			}
 		} else {
 			individualNames[name] = true
 		}

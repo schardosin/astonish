@@ -219,7 +219,19 @@ func FlowRunHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: inject PG-backed credential store into context so
 	// BeforeToolCallback can resolve credentials from the database.
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalCredentials != nil || svc.Credentials != nil) {
-		ctx = store.WithCredentialStore(ctx, store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials))
+		merged := store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
+		ctx = store.WithCredentialStore(ctx, merged)
+		// Wire agent-level resolver as fallback
+		astonishAgent.CredentialStore = credentials.NewStoreAdapter(merged)
+		if astonishAgent.PendingSecrets == nil {
+			astonishAgent.PendingSecrets = credentials.NewPendingVault(nil)
+		}
+		// Hydrate redactor from PG store so credential values are masked in SSE
+		if astonishAgent.Redactor == nil {
+			astonishAgent.Redactor = credentials.NewRedactor()
+			ctx = credentials.WithRedactor(ctx, astonishAgent.Redactor)
+		}
+		astonishAgent.Redactor.HydrateFromStore(merged)
 	}
 
 	adkAgent, err := adkagent.New(adkagent.Config{

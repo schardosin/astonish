@@ -9258,34 +9258,42 @@ func (m *SandboxLayerMutation) ResetEdge(name string) error {
 // SandboxTemplateMutation represents an operation that mutates the SandboxTemplate nodes in the graph.
 type SandboxTemplateMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *uuid.UUID
-	slug            *string
-	scope           *sandboxtemplate.Scope
-	owner_id        *string
-	purpose         *string
-	name            *string
-	description     *string
-	base_config     *map[string]interface{}
-	configured_by   *uuid.UUID
-	configured_at   *time.Time
-	version         *int
-	addversion      *int
-	created_by      *uuid.UUID
-	created_at      *time.Time
-	updated_at      *time.Time
-	clearedFields   map[string]struct{}
-	parent          *uuid.UUID
-	clearedparent   bool
-	children        map[uuid.UUID]struct{}
-	removedchildren map[uuid.UUID]struct{}
-	clearedchildren bool
-	layer           *string
-	clearedlayer    bool
-	done            bool
-	oldValue        func(context.Context) (*SandboxTemplate, error)
-	predicates      []predicate.SandboxTemplate
+	op               Op
+	typ              string
+	id               *uuid.UUID
+	slug             *string
+	scope            *sandboxtemplate.Scope
+	owner_id         *string
+	purpose          *string
+	name             *string
+	description      *string
+	sandbox_image    *string
+	packages         *[]string
+	appendpackages   []string
+	build_status     *string
+	build_job_name   *string
+	build_error      *string
+	last_built_image *string
+	build_started_at *time.Time
+	base_config      *map[string]interface{}
+	configured_by    *uuid.UUID
+	configured_at    *time.Time
+	version          *int
+	addversion       *int
+	created_by       *uuid.UUID
+	created_at       *time.Time
+	updated_at       *time.Time
+	clearedFields    map[string]struct{}
+	parent           *uuid.UUID
+	clearedparent    bool
+	children         map[uuid.UUID]struct{}
+	removedchildren  map[uuid.UUID]struct{}
+	clearedchildren  bool
+	layer            *string
+	clearedlayer     bool
+	done             bool
+	oldValue         func(context.Context) (*SandboxTemplate, error)
+	predicates       []predicate.SandboxTemplate
 }
 
 var _ ent.Mutation = (*SandboxTemplateMutation)(nil)
@@ -9704,6 +9712,313 @@ func (m *SandboxTemplateMutation) TopLayerIDCleared() bool {
 func (m *SandboxTemplateMutation) ResetTopLayerID() {
 	m.layer = nil
 	delete(m.clearedFields, sandboxtemplate.FieldTopLayerID)
+}
+
+// SetSandboxImage sets the "sandbox_image" field.
+func (m *SandboxTemplateMutation) SetSandboxImage(s string) {
+	m.sandbox_image = &s
+}
+
+// SandboxImage returns the value of the "sandbox_image" field in the mutation.
+func (m *SandboxTemplateMutation) SandboxImage() (r string, exists bool) {
+	v := m.sandbox_image
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSandboxImage returns the old "sandbox_image" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldSandboxImage(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSandboxImage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSandboxImage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSandboxImage: %w", err)
+	}
+	return oldValue.SandboxImage, nil
+}
+
+// ClearSandboxImage clears the value of the "sandbox_image" field.
+func (m *SandboxTemplateMutation) ClearSandboxImage() {
+	m.sandbox_image = nil
+	m.clearedFields[sandboxtemplate.FieldSandboxImage] = struct{}{}
+}
+
+// SandboxImageCleared returns if the "sandbox_image" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) SandboxImageCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldSandboxImage]
+	return ok
+}
+
+// ResetSandboxImage resets all changes to the "sandbox_image" field.
+func (m *SandboxTemplateMutation) ResetSandboxImage() {
+	m.sandbox_image = nil
+	delete(m.clearedFields, sandboxtemplate.FieldSandboxImage)
+}
+
+// SetPackages sets the "packages" field.
+func (m *SandboxTemplateMutation) SetPackages(s []string) {
+	m.packages = &s
+	m.appendpackages = nil
+}
+
+// Packages returns the value of the "packages" field in the mutation.
+func (m *SandboxTemplateMutation) Packages() (r []string, exists bool) {
+	v := m.packages
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPackages returns the old "packages" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldPackages(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPackages is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPackages requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPackages: %w", err)
+	}
+	return oldValue.Packages, nil
+}
+
+// AppendPackages adds s to the "packages" field.
+func (m *SandboxTemplateMutation) AppendPackages(s []string) {
+	m.appendpackages = append(m.appendpackages, s...)
+}
+
+// AppendedPackages returns the list of values that were appended to the "packages" field in this mutation.
+func (m *SandboxTemplateMutation) AppendedPackages() ([]string, bool) {
+	if len(m.appendpackages) == 0 {
+		return nil, false
+	}
+	return m.appendpackages, true
+}
+
+// ClearPackages clears the value of the "packages" field.
+func (m *SandboxTemplateMutation) ClearPackages() {
+	m.packages = nil
+	m.appendpackages = nil
+	m.clearedFields[sandboxtemplate.FieldPackages] = struct{}{}
+}
+
+// PackagesCleared returns if the "packages" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) PackagesCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldPackages]
+	return ok
+}
+
+// ResetPackages resets all changes to the "packages" field.
+func (m *SandboxTemplateMutation) ResetPackages() {
+	m.packages = nil
+	m.appendpackages = nil
+	delete(m.clearedFields, sandboxtemplate.FieldPackages)
+}
+
+// SetBuildStatus sets the "build_status" field.
+func (m *SandboxTemplateMutation) SetBuildStatus(s string) {
+	m.build_status = &s
+}
+
+// BuildStatus returns the value of the "build_status" field in the mutation.
+func (m *SandboxTemplateMutation) BuildStatus() (r string, exists bool) {
+	v := m.build_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuildStatus returns the old "build_status" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldBuildStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuildStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuildStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuildStatus: %w", err)
+	}
+	return oldValue.BuildStatus, nil
+}
+
+// ResetBuildStatus resets all changes to the "build_status" field.
+func (m *SandboxTemplateMutation) ResetBuildStatus() {
+	m.build_status = nil
+}
+
+// SetBuildJobName sets the "build_job_name" field.
+func (m *SandboxTemplateMutation) SetBuildJobName(s string) {
+	m.build_job_name = &s
+}
+
+// BuildJobName returns the value of the "build_job_name" field in the mutation.
+func (m *SandboxTemplateMutation) BuildJobName() (r string, exists bool) {
+	v := m.build_job_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuildJobName returns the old "build_job_name" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldBuildJobName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuildJobName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuildJobName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuildJobName: %w", err)
+	}
+	return oldValue.BuildJobName, nil
+}
+
+// ResetBuildJobName resets all changes to the "build_job_name" field.
+func (m *SandboxTemplateMutation) ResetBuildJobName() {
+	m.build_job_name = nil
+}
+
+// SetBuildError sets the "build_error" field.
+func (m *SandboxTemplateMutation) SetBuildError(s string) {
+	m.build_error = &s
+}
+
+// BuildError returns the value of the "build_error" field in the mutation.
+func (m *SandboxTemplateMutation) BuildError() (r string, exists bool) {
+	v := m.build_error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuildError returns the old "build_error" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldBuildError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuildError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuildError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuildError: %w", err)
+	}
+	return oldValue.BuildError, nil
+}
+
+// ResetBuildError resets all changes to the "build_error" field.
+func (m *SandboxTemplateMutation) ResetBuildError() {
+	m.build_error = nil
+}
+
+// SetLastBuiltImage sets the "last_built_image" field.
+func (m *SandboxTemplateMutation) SetLastBuiltImage(s string) {
+	m.last_built_image = &s
+}
+
+// LastBuiltImage returns the value of the "last_built_image" field in the mutation.
+func (m *SandboxTemplateMutation) LastBuiltImage() (r string, exists bool) {
+	v := m.last_built_image
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastBuiltImage returns the old "last_built_image" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldLastBuiltImage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastBuiltImage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastBuiltImage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastBuiltImage: %w", err)
+	}
+	return oldValue.LastBuiltImage, nil
+}
+
+// ResetLastBuiltImage resets all changes to the "last_built_image" field.
+func (m *SandboxTemplateMutation) ResetLastBuiltImage() {
+	m.last_built_image = nil
+}
+
+// SetBuildStartedAt sets the "build_started_at" field.
+func (m *SandboxTemplateMutation) SetBuildStartedAt(t time.Time) {
+	m.build_started_at = &t
+}
+
+// BuildStartedAt returns the value of the "build_started_at" field in the mutation.
+func (m *SandboxTemplateMutation) BuildStartedAt() (r time.Time, exists bool) {
+	v := m.build_started_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBuildStartedAt returns the old "build_started_at" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldBuildStartedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBuildStartedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBuildStartedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBuildStartedAt: %w", err)
+	}
+	return oldValue.BuildStartedAt, nil
+}
+
+// ClearBuildStartedAt clears the value of the "build_started_at" field.
+func (m *SandboxTemplateMutation) ClearBuildStartedAt() {
+	m.build_started_at = nil
+	m.clearedFields[sandboxtemplate.FieldBuildStartedAt] = struct{}{}
+}
+
+// BuildStartedAtCleared returns if the "build_started_at" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) BuildStartedAtCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldBuildStartedAt]
+	return ok
+}
+
+// ResetBuildStartedAt resets all changes to the "build_started_at" field.
+func (m *SandboxTemplateMutation) ResetBuildStartedAt() {
+	m.build_started_at = nil
+	delete(m.clearedFields, sandboxtemplate.FieldBuildStartedAt)
 }
 
 // SetBaseConfig sets the "base_config" field.
@@ -10198,7 +10513,7 @@ func (m *SandboxTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SandboxTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 15)
+	fields := make([]string, 0, 22)
 	if m.slug != nil {
 		fields = append(fields, sandboxtemplate.FieldSlug)
 	}
@@ -10222,6 +10537,27 @@ func (m *SandboxTemplateMutation) Fields() []string {
 	}
 	if m.layer != nil {
 		fields = append(fields, sandboxtemplate.FieldTopLayerID)
+	}
+	if m.sandbox_image != nil {
+		fields = append(fields, sandboxtemplate.FieldSandboxImage)
+	}
+	if m.packages != nil {
+		fields = append(fields, sandboxtemplate.FieldPackages)
+	}
+	if m.build_status != nil {
+		fields = append(fields, sandboxtemplate.FieldBuildStatus)
+	}
+	if m.build_job_name != nil {
+		fields = append(fields, sandboxtemplate.FieldBuildJobName)
+	}
+	if m.build_error != nil {
+		fields = append(fields, sandboxtemplate.FieldBuildError)
+	}
+	if m.last_built_image != nil {
+		fields = append(fields, sandboxtemplate.FieldLastBuiltImage)
+	}
+	if m.build_started_at != nil {
+		fields = append(fields, sandboxtemplate.FieldBuildStartedAt)
 	}
 	if m.base_config != nil {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
@@ -10268,6 +10604,20 @@ func (m *SandboxTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.ParentTemplateID()
 	case sandboxtemplate.FieldTopLayerID:
 		return m.TopLayerID()
+	case sandboxtemplate.FieldSandboxImage:
+		return m.SandboxImage()
+	case sandboxtemplate.FieldPackages:
+		return m.Packages()
+	case sandboxtemplate.FieldBuildStatus:
+		return m.BuildStatus()
+	case sandboxtemplate.FieldBuildJobName:
+		return m.BuildJobName()
+	case sandboxtemplate.FieldBuildError:
+		return m.BuildError()
+	case sandboxtemplate.FieldLastBuiltImage:
+		return m.LastBuiltImage()
+	case sandboxtemplate.FieldBuildStartedAt:
+		return m.BuildStartedAt()
 	case sandboxtemplate.FieldBaseConfig:
 		return m.BaseConfig()
 	case sandboxtemplate.FieldConfiguredBy:
@@ -10307,6 +10657,20 @@ func (m *SandboxTemplateMutation) OldField(ctx context.Context, name string) (en
 		return m.OldParentTemplateID(ctx)
 	case sandboxtemplate.FieldTopLayerID:
 		return m.OldTopLayerID(ctx)
+	case sandboxtemplate.FieldSandboxImage:
+		return m.OldSandboxImage(ctx)
+	case sandboxtemplate.FieldPackages:
+		return m.OldPackages(ctx)
+	case sandboxtemplate.FieldBuildStatus:
+		return m.OldBuildStatus(ctx)
+	case sandboxtemplate.FieldBuildJobName:
+		return m.OldBuildJobName(ctx)
+	case sandboxtemplate.FieldBuildError:
+		return m.OldBuildError(ctx)
+	case sandboxtemplate.FieldLastBuiltImage:
+		return m.OldLastBuiltImage(ctx)
+	case sandboxtemplate.FieldBuildStartedAt:
+		return m.OldBuildStartedAt(ctx)
 	case sandboxtemplate.FieldBaseConfig:
 		return m.OldBaseConfig(ctx)
 	case sandboxtemplate.FieldConfiguredBy:
@@ -10385,6 +10749,55 @@ func (m *SandboxTemplateMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetTopLayerID(v)
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSandboxImage(v)
+		return nil
+	case sandboxtemplate.FieldPackages:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPackages(v)
+		return nil
+	case sandboxtemplate.FieldBuildStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuildStatus(v)
+		return nil
+	case sandboxtemplate.FieldBuildJobName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuildJobName(v)
+		return nil
+	case sandboxtemplate.FieldBuildError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuildError(v)
+		return nil
+	case sandboxtemplate.FieldLastBuiltImage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastBuiltImage(v)
+		return nil
+	case sandboxtemplate.FieldBuildStartedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBuildStartedAt(v)
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		v, ok := value.(map[string]interface{})
@@ -10486,6 +10899,15 @@ func (m *SandboxTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(sandboxtemplate.FieldTopLayerID) {
 		fields = append(fields, sandboxtemplate.FieldTopLayerID)
 	}
+	if m.FieldCleared(sandboxtemplate.FieldSandboxImage) {
+		fields = append(fields, sandboxtemplate.FieldSandboxImage)
+	}
+	if m.FieldCleared(sandboxtemplate.FieldPackages) {
+		fields = append(fields, sandboxtemplate.FieldPackages)
+	}
+	if m.FieldCleared(sandboxtemplate.FieldBuildStartedAt) {
+		fields = append(fields, sandboxtemplate.FieldBuildStartedAt)
+	}
 	if m.FieldCleared(sandboxtemplate.FieldBaseConfig) {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
 	}
@@ -10517,6 +10939,15 @@ func (m *SandboxTemplateMutation) ClearField(name string) error {
 		return nil
 	case sandboxtemplate.FieldTopLayerID:
 		m.ClearTopLayerID()
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		m.ClearSandboxImage()
+		return nil
+	case sandboxtemplate.FieldPackages:
+		m.ClearPackages()
+		return nil
+	case sandboxtemplate.FieldBuildStartedAt:
+		m.ClearBuildStartedAt()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ClearBaseConfig()
@@ -10561,6 +10992,27 @@ func (m *SandboxTemplateMutation) ResetField(name string) error {
 		return nil
 	case sandboxtemplate.FieldTopLayerID:
 		m.ResetTopLayerID()
+		return nil
+	case sandboxtemplate.FieldSandboxImage:
+		m.ResetSandboxImage()
+		return nil
+	case sandboxtemplate.FieldPackages:
+		m.ResetPackages()
+		return nil
+	case sandboxtemplate.FieldBuildStatus:
+		m.ResetBuildStatus()
+		return nil
+	case sandboxtemplate.FieldBuildJobName:
+		m.ResetBuildJobName()
+		return nil
+	case sandboxtemplate.FieldBuildError:
+		m.ResetBuildError()
+		return nil
+	case sandboxtemplate.FieldLastBuiltImage:
+		m.ResetLastBuiltImage()
+		return nil
+	case sandboxtemplate.FieldBuildStartedAt:
+		m.ResetBuildStartedAt()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ResetBaseConfig()

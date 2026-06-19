@@ -98,6 +98,32 @@ func (s *inMemoryToolVectorStore) Count() int {
 	return len(s.docs)
 }
 
+func (s *inMemoryToolVectorStore) DeleteByIDs(_ context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	toDelete := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		toDelete[id] = true
+	}
+
+	// Filter in place
+	n := 0
+	for i, d := range s.docs {
+		if !toDelete[d.ID] {
+			s.docs[n] = s.docs[i]
+			s.embeddings[n] = s.embeddings[i]
+			n++
+		}
+	}
+	s.docs = s.docs[:n]
+	s.embeddings = s.embeddings[:n]
+	return nil
+}
+
 // cosineSimilarity computes the cosine similarity between two vectors.
 func cosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {

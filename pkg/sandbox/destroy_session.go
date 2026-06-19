@@ -22,11 +22,16 @@ import (
 // destroys the session identified by sessionID. It is designed for best-effort
 // call sites (session-delete handlers, daemon cleanup cycles, CLI commands).
 //
+// sessRegistry may be nil; when non-nil, the backend uses it for session
+// lookup (critical in platform mode where sessions are stored in PostgreSQL
+// rather than the pod-local JSON file). Callers in platform mode should pass
+// a PG-backed registry built from the request's tenant context.
+//
 // Errors are returned for actionable failures (unreachable backend, context
 // cancelled). A nil error means the session is gone (or never existed).
 //
 // Timeout: if ctx has no deadline, a 30-second deadline is imposed.
-func DestroySessionEverywhere(ctx context.Context, appCfg *config.AppConfig, sessionID string) error {
+func DestroySessionEverywhere(ctx context.Context, appCfg *config.AppConfig, sessionID string, sessRegistry *SessionRegistry) error {
 	if appCfg == nil {
 		return fmt.Errorf("sandbox: DestroySessionEverywhere: nil app config")
 	}
@@ -34,7 +39,7 @@ func DestroySessionEverywhere(ctx context.Context, appCfg *config.AppConfig, ses
 		return nil // nothing to destroy
 	}
 
-	b, cleanup, err := BackendFromAppConfig(appCfg)
+	b, cleanup, err := BackendFromAppConfigWithSessions(appCfg, sessRegistry)
 	if err != nil {
 		return fmt.Errorf("sandbox: DestroySessionEverywhere: backend init: %w", err)
 	}
@@ -55,13 +60,15 @@ func DestroySessionEverywhere(ctx context.Context, appCfg *config.AppConfig, ses
 // TryDestroySession is a fire-and-forget wrapper around
 // DestroySessionEverywhere that logs warnings on failure. Suitable for
 // best-effort cleanup sites where the caller cannot propagate errors.
-func TryDestroySession(appCfg *config.AppConfig, sessionID string) {
+//
+// sessRegistry may be nil (falls back to local file registry for personal mode).
+func TryDestroySession(appCfg *config.AppConfig, sessionID string, sessRegistry *SessionRegistry) {
 	if appCfg == nil || sessionID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := DestroySessionEverywhere(ctx, appCfg, sessionID); err != nil {
+	if err := DestroySessionEverywhere(ctx, appCfg, sessionID, sessRegistry); err != nil {
 		slog.Warn("best-effort session destroy failed",
 			"component", "sandbox",
 			"session", sessionID,

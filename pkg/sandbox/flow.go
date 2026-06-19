@@ -44,7 +44,7 @@ func SetupFlowSandbox(appCfg *config.AppConfig, internalTools []tool.Tool) (*Flo
 	kind := BackendKind(appCfg.Sandbox.BackendKind())
 
 	switch kind {
-	case BackendKindK8s, BackendKindMock:
+	case BackendKindK8s, BackendKindOpenShell, BackendKindMock:
 		// Backend-agnostic path: any Backend implementation feeds a
 		// ToolNodePool via NewBackendPool. SetupFlowSandbox does NOT
 		// own the Backend — BackendFromAppConfig constructs it and

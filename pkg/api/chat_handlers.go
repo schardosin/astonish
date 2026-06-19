@@ -847,6 +847,10 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			if chain := resolveTemplateLayerChain(r.Context(), settings.TemplateName); len(chain) > 0 {
 				runner.InjectSandboxLayerChain(chain)
 			}
+			// On OpenShell, resolve the template name → custom image ref.
+			if img := resolveTemplateImage(r.Context(), settings.TemplateName); img != "" {
+				runner.InjectSandboxImage(img)
+			}
 		}
 	}
 
@@ -857,6 +861,10 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// already injected (team templates include @base in their own chain).
 	if chain := resolveBaseLayerChain(r.Context()); len(chain) > 0 {
 		runner.InjectSandboxLayerChainIfEmpty(chain)
+	}
+	// On OpenShell, resolve @base's custom image if set by admin.
+	if img := resolveBaseImage(r.Context()); img != "" {
+		runner.InjectSandboxImageIfEmpty(img)
 	}
 
 	// Inject per-team disabled tool list so the agent filters them out.

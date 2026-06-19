@@ -128,6 +128,26 @@ tolerations: []
 affinity: {}
 
 # =============================================================================
+# Service Mesh Integration
+# =============================================================================
+# Controls which mesh-specific resources (PeerAuthentication, AuthorizationPolicy,
+# namespace annotations, pod annotations) the chart renders.
+#
+# mesh.provider selects the mesh. Supported values:
+#   ""       — No mesh resources rendered. Use for clusters without a mesh,
+#              or when managing mesh policies externally.
+#   "istio"  — Renders Istio PeerAuthentication (PERMISSIVE on gateway) and
+#              AuthorizationPolicies (mesh full access, sandbox restricted).
+#              Adds istio-injection labels to namespaces.
+#
+# The relationship between mesh.provider and openshell.server.disableTls:
+#   mesh.provider: "istio" + disableTls: true   → mesh encrypts (recommended)
+#   mesh.provider: ""      + disableTls: false   → gateway's own mTLS (no mesh)
+#   mesh.provider: ""      + disableTls: true    → plaintext (dev/testing only)
+mesh:
+  provider: ""
+
+# =============================================================================
 # Sandbox subsystem (Phase F)
 # =============================================================================
 # Creates the sandbox namespace, RBAC, PVCs, and base-layer seed Job. When
@@ -199,6 +219,87 @@ sandbox:
         cpu: "1"
         memory: 1Gi
 
+  # ==========================================================================
+  # OpenShell backend configuration (sandbox.backend = "openshell")
+  # ==========================================================================
+  # When enabled, deploys the NVIDIA OpenShell gateway as a Helm subchart in
+  # the same namespace.
+  #
+  # Prerequisites (cluster-scoped, NOT managed by this chart):
+  #   1. Agent Sandbox CRD + controller:
+  #      kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
+  #   2. (Optional) Service mesh — set mesh.provider above to render mesh
+  #      resources automatically. Without a mesh, set openshell.server.disableTls
+  #      to false for gateway-native mTLS.
+  openshell:
+    # Enables the OpenShell subchart deployment.
+    # Also gates the Chart.yaml dependency condition.
+    enabled: false
+
+    # Override gRPC address. Empty = auto-derived from release name:
+    #   "{release}-openshell.{namespace}.svc.cluster.local:8080"
+    gateway:
+      addr: ""
+
+    # Sandbox container image (Astonish agent tooling + OpenShell supervisor).
+    image:
+      repository: schardosin/astonish-sandbox-openshell
+      tag: dev
+
+    # Container image registry for custom-built sandbox images.
+    # Required for the automated image build pipeline (P1).
+    registry:
+      # OCI registry URL prefix. Images are pushed as:
+      #   <url>/astonish-sandbox-<scope>:<content-hash>
+      # Examples: "docker.io/schardosin", "ghcr.io/schardosin", "harbor.internal:5000/astonish"
+      url: ""
+      # Name of a K8s Secret (type kubernetes.io/dockerconfigjson) containing
+      # registry credentials. Must exist in the control-plane namespace.
+      secretName: ""
+
+    # Kaniko-based image builder configuration.
+    builder:
+      # Pinned Kaniko executor image. Update to upgrade build tooling.
+      image: "gcr.io/kaniko-project/executor:v1.23.2"
+      # Namespace where build Jobs run. Empty = control-plane namespace.
+      namespace: ""
+      # Resource requests/limits for the Kaniko build pod.
+      resources:
+        requests:
+          cpu: 100m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
+
+    # Sandbox network egress policy.
+    # The K8s NetworkPolicy allows all egress at L3/L4. Fine-grained
+    # enforcement is handled by the OpenShell supervisor's network namespace
+    # proxy, controlled by this config.
+    #
+    # IMPORTANT: The supervisor denies ALL traffic when no network policies
+    # are configured. Presets resolve to a concrete allowlist that is always
+    # sent to the supervisor so sandboxes have usable internet access.
+    networkPolicy:
+      # Presets to enable. Each preset is a named group of allowed endpoints.
+      # Available: "default" (all below), "code_hosting", "package_registries",
+      #   "llm_apis", "tools", "system", "search", "cdn"
+      # When empty or contains "default", all presets are active.
+      # Port 0 = defaults to 443 in the proto mapping layer.
+      presets:
+        - "default"
+      # Additional endpoints beyond presets (operator-specific).
+      # Useful for internal services, private repos, custom APIs.
+      extraEndpoints: []
+      # Example:
+      # extraEndpoints:
+      #   - host: "internal-api.mycompany.com"
+      #     port: 443
+      #   - host: "*.mycompany.com"
+      #     port: 443
+      #   - host: "apt.internal.mycompany.com"
+      #     port: 80
+
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
   # equivalent to the Incus cgroup cap. A session can burst up to this
@@ -252,3 +353,47 @@ fuseDevicePlugin:
     limits:
       cpu: 100m
       memory: 50Mi
+
+# =============================================================================
+# OpenShell subchart values (forwarded to the NVIDIA OpenShell Helm chart)
+# =============================================================================
+# These are passed verbatim to the subchart via its alias "openshell".
+# Only rendered when sandbox.openshell.enabled=true (Chart.yaml condition).
+#
+# When mesh.provider is set, Istio/Linkerd handles encryption and the gateway
+# can listen plaintext (disableTls: true). Without a mesh, set disableTls: false
+# to use the gateway's built-in mTLS with auto-generated certificates.
+openshell:
+  nameOverride: openshell
+
+  server:
+    # Gateway TLS mode.
+    # true  = plaintext; rely on service mesh for encryption (recommended with mesh.provider)
+    # false = gateway terminates mTLS itself (recommended without mesh.provider)
+    disableTls: true
+    # Sandbox pods are created in the sandbox namespace managed by this chart.
+    # Must match the computed value of include "astonish.namespace.sandbox".
+    sandboxNamespace: "astonish-sandbox"
+    # Default sandbox image — Astonish agent tooling.
+    # Must match sandbox.openshell.image.repository:tag above.
+    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    auth:
+      # When mesh.provider is set, the mesh AuthorizationPolicy handles identity.
+      # Without a mesh, consider setting this to false and configuring gateway auth.
+      allowUnauthenticatedUsers: true
+    tls:
+      # Disable mTLS client certificate verification when using a service mesh
+      # or when disableTls=true. Set to a Secret name containing the client CA
+      # when using gateway-native mTLS without a mesh.
+      clientCaSecretName: ""
+
+  # The pkiInitJob MUST remain enabled: it generates the JWT signing keypair
+  # (astonish-openshell-jwt-keys) that the gateway always mounts for sandbox
+  # token issuance. As a side effect it also creates TLS secrets that are
+  # unused when disableTls=true — these are inert and harmless.
+  pkiInitJob:
+    enabled: true
+
+  # We manage our own NetworkPolicies (templates/openshell/networkpolicy.yaml).
+  networkPolicy:
+    enabled: false

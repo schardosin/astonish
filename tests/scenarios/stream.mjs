@@ -58,7 +58,7 @@ const REASON_RE = /^\s*[\w./-]+\.go:\d+:\s*(.+)$/
 // Bootstrap/seed framing lines also satisfy REASON_RE (they pass `t.Logf`
 // from helpers like e2eboot.Bootstrap) — exclude them so we surface the
 // actual failure/skip reason emitted by the test body.
-const REASON_NOISE_RE = /\[(e2eboot|seed)\]/
+const REASON_NOISE_RE = /\[(e2eboot[^\]]*|seed)\]/
 
 function extractReason(pkg, test) {
   const key = pkg + '::' + test

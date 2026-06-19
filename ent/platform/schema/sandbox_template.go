@@ -41,6 +41,37 @@ func (SandboxTemplate) Fields() []ent.Field {
 		field.String("top_layer_id").
 			Optional().
 			Nillable(),
+		// sandbox_image holds a fully-qualified OCI image reference for
+		// backends that use per-template container images (e.g., OpenShell).
+		// When non-empty, sandbox sessions created from this template use
+		// this image instead of the global default. Nullable — existing
+		// templates (incus/k8s) leave this unset and use LayerChain instead.
+		field.String("sandbox_image").
+			Optional().
+			Nillable(),
+		// packages holds the list of apt packages to install when building
+		// a custom sandbox image for this template. JSON-encoded string array.
+		field.JSON("packages", []string{}).
+			Optional(),
+		// build_status tracks the state of the last image build Job.
+		// Values: "", "building", "succeeded", "failed".
+		field.String("build_status").
+			Default(""),
+		// build_job_name is the K8s Job name of the currently-running or
+		// last-completed image build. Empty when no build has been triggered.
+		field.String("build_job_name").
+			Default(""),
+		// build_error stores the error message from the last failed build.
+		field.String("build_error").
+			Default(""),
+		// last_built_image is the full image reference produced by the last
+		// successful build. Used to detect no-op rebuilds.
+		field.String("last_built_image").
+			Default(""),
+		// build_started_at records when the last build was triggered.
+		field.Time("build_started_at").
+			Optional().
+			Nillable(),
 		field.JSON("base_config", map[string]any{}).
 			Optional(),
 		field.UUID("configured_by", uuid.UUID{}).

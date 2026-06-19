@@ -283,6 +283,8 @@ export interface TeamTemplateStatus {
   running: boolean
   templateName: string
   saved: boolean
+  sandboxImage?: string
+  backend?: string
 }
 
 export async function fetchTeamTemplateStatus(teamSlug?: string): Promise<TeamTemplateStatus> {
@@ -339,6 +341,18 @@ export async function startTeamTemplate(teamSlug?: string): Promise<{ status: st
   return res.json()
 }
 
+export async function setTeamTemplateImage(image: string, teamSlug?: string): Promise<void> {
+  const res = await teamFetch('/api/team/template/image', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image }),
+  }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || res.statusText)
+  }
+}
+
 /**
  * Returns the WebSocket URL for connecting to the team template terminal.
  * The URL uses the same host as the current page.
@@ -347,4 +361,79 @@ export async function startTeamTemplate(teamSlug?: string): Promise<{ status: st
 export function getTeamTerminalWsUrl(teamSlug: string): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${window.location.host}/api/sandbox/terminal?team=${encodeURIComponent(teamSlug)}`
+}
+
+// --- Team Image Build API (OpenShell / Kaniko) ---
+
+export interface TeamImageBuildCallbacks {
+  packages: string[]
+  teamSlug: string
+  onProgress: (msg: string) => void
+  onDone: (result: { image: string }) => void
+  onError: (err: string) => void
+}
+
+export function buildTeamImage({ packages, teamSlug, onProgress, onDone, onError }: TeamImageBuildCallbacks): { abort: () => void } {
+  const controller = new AbortController()
+
+  teamFetch('/api/team/template/build', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ packages }),
+    signal: controller.signal,
+  }, teamSlug)
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text()
+        try {
+          const body = JSON.parse(text)
+          onError(body.error || text || res.statusText)
+        } catch {
+          onError(text || res.statusText)
+        }
+        return
+      }
+
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop()!
+
+        let currentEvent = ''
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+          } else if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6)
+            try {
+              const data = JSON.parse(dataStr)
+              if (currentEvent === 'progress') {
+                onProgress(data.message || '')
+              } else if (currentEvent === 'done') {
+                onDone({ image: data.image })
+              } else if (currentEvent === 'error') {
+                onError(data.error || 'Unknown error')
+              }
+            } catch {
+              // ignore parse errors
+            }
+            currentEvent = ''
+          }
+        }
+      }
+    })
+    .catch((err: Error) => {
+      if (err.name !== 'AbortError') {
+        onError(err.message || 'Connection failed')
+      }
+    })
+
+  return { abort: () => controller.abort() }
 }

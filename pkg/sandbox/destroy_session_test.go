@@ -10,7 +10,7 @@ import (
 
 // TestDestroySessionEverywhere_NilAppConfig ensures clear error.
 func TestDestroySessionEverywhere_NilAppConfig(t *testing.T) {
-	err := DestroySessionEverywhere(context.Background(), nil, "abc123")
+	err := DestroySessionEverywhere(context.Background(), nil, "abc123", nil)
 	if err == nil {
 		t.Fatal("expected error for nil AppConfig")
 	}
@@ -23,7 +23,7 @@ func TestDestroySessionEverywhere_NilAppConfig(t *testing.T) {
 func TestDestroySessionEverywhere_EmptySessionID(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.Backend = "mock"
-	err := DestroySessionEverywhere(context.Background(), appCfg, "")
+	err := DestroySessionEverywhere(context.Background(), appCfg, "", nil)
 	if err != nil {
 		t.Fatalf("empty sessionID should be no-op, got: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestDestroySessionEverywhere_UnknownBackend(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.Backend = "docker"
 
-	err := DestroySessionEverywhere(context.Background(), appCfg, "session-xyz")
+	err := DestroySessionEverywhere(context.Background(), appCfg, "session-xyz", nil)
 	if err == nil {
 		t.Fatal("expected error for unknown backend kind")
 	}
@@ -47,12 +47,12 @@ func TestDestroySessionEverywhere_UnknownBackend(t *testing.T) {
 // TestTryDestroySession_NilAppConfig silent no-op.
 func TestTryDestroySession_NilAppConfig(t *testing.T) {
 	// Should not panic.
-	TryDestroySession(nil, "abc")
+	TryDestroySession(nil, "abc", nil)
 }
 
 // TestTryDestroySession_EmptySession silent no-op.
 func TestTryDestroySession_EmptySession(t *testing.T) {
 	appCfg := &config.AppConfig{}
 	appCfg.Sandbox.Backend = "mock"
-	TryDestroySession(appCfg, "")
+	TryDestroySession(appCfg, "", nil)
 }

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -25,6 +26,12 @@ import (
 // tool listing. Generous to account for npm package downloads on first use.
 const mcpDiscoveryTimeout = 5 * time.Minute
 
+// discoveryInFlight tracks servers currently being discovered to prevent
+// concurrent duplicate discovery goroutines within the same process. When
+// multiple API pods or concurrent HTTP requests trigger discovery for the
+// same server, only the first goroutine runs; subsequent calls are skipped.
+var discoveryInFlight sync.Map
+
 // asyncDiscoverAndCacheTools runs MCP tool discovery in a background goroutine
 // with a dedicated timeout (not tied to any HTTP request lifecycle). On success,
 // it writes the discovered tools to the DB via mcpStore.UpdateCachedTools.
@@ -32,13 +39,27 @@ const mcpDiscoveryTimeout = 5 * time.Minute
 // This is the standard pattern for all install and refresh paths. Callers save
 // the server config to the DB first, then fire this async. The HTTP response
 // returns immediately — tools appear in cached_tools within seconds to minutes.
-func asyncDiscoverAndCacheTools(mcpStore store.MCPServerStore, serverName string, serverCfg config.MCPServerConfig) {
+//
+// Discovery is deduplicated per server name: if a goroutine is already running
+// for the given server, subsequent calls are no-ops.
+//
+// sessRegistry may be nil; when non-nil, the sandbox backend uses it for
+// cross-replica session consistency (platform mode with PG-backed store).
+// Callers should build it from the HTTP request context BEFORE spawning the
+// goroutine (the request context is unavailable inside the goroutine).
+func asyncDiscoverAndCacheTools(mcpStore store.MCPServerStore, serverName string, serverCfg config.MCPServerConfig, sessRegistry *sandbox.SessionRegistry) {
+	if _, loaded := discoveryInFlight.LoadOrStore(serverName, struct{}{}); loaded {
+		slog.Info("MCP discovery already in progress, skipping duplicate", "server", serverName)
+		return
+	}
 	go func() {
+		defer discoveryInFlight.Delete(serverName)
+
 		ctx, cancel := context.WithTimeout(context.Background(), mcpDiscoveryTimeout)
 		defer cancel()
 
 		servers := map[string]config.MCPServerConfig{serverName: serverCfg}
-		discoveredTools := discoverMCPToolsForPlatform(ctx, serverName, servers)
+		discoveredTools := discoverMCPToolsForPlatform(ctx, serverName, servers, sessRegistry)
 		if discoveredTools == nil {
 			slog.Warn("async MCP discovery: no tools discovered", "server", serverName)
 			return
@@ -169,7 +190,7 @@ func RefreshMCPServerHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Run tool discovery asynchronously with a dedicated timeout
-		asyncDiscoverAndCacheTools(mcpStore, serverName, serverCfg)
+		asyncDiscoverAndCacheTools(mcpStore, serverName, serverCfg, buildPGSessionRegistry(r.Context()))
 
 		respondJSON(w, http.StatusOK, map[string]interface{}{"success": true})
 		return
@@ -219,7 +240,7 @@ func checkStdioMCPInstallable(transport string) error {
 //
 // Returns nil on error (logged). On hard failures (sandbox unavailable),
 // returns nil and logs a warning; callers surface this as a toolError.
-func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig) json.RawMessage {
+func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers map[string]config.MCPServerConfig, sessRegistry *sandbox.SessionRegistry) json.RawMessage {
 	serverCfg, ok := servers[serverName]
 	if !ok {
 		slog.Warn("MCP discovery: server config not found", "server", serverName)
@@ -233,7 +254,7 @@ func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers
 	}
 
 	// Stdio servers: must run in sandbox
-	data, err := discoverMCPToolsInSandbox(ctx, serverName, serverCfg)
+	data, err := discoverMCPToolsInSandbox(ctx, serverName, serverCfg, sessRegistry)
 	if err != nil {
 		slog.Warn("MCP sandbox discovery failed", "server", serverName, "error", err)
 		return nil
@@ -249,7 +270,7 @@ func discoverMCPToolsForPlatform(ctx context.Context, serverName string, servers
 // The flow mirrors invokeMCPToolInContainer but uses a disposable session
 // (not per-user, not tracked by the idle watchdog). The container is always
 // destroyed on return regardless of success/failure.
-func discoverMCPToolsInSandbox(ctx context.Context, serverName string, serverCfg config.MCPServerConfig) (json.RawMessage, error) {
+func discoverMCPToolsInSandbox(ctx context.Context, serverName string, serverCfg config.MCPServerConfig, sessRegistry *sandbox.SessionRegistry) (json.RawMessage, error) {
 	// Check sandbox availability
 	appCfg, err := config.LoadAppConfig()
 	if err != nil || appCfg == nil {
@@ -259,7 +280,9 @@ func discoverMCPToolsInSandbox(ctx context.Context, serverName string, serverCfg
 		return nil, fmt.Errorf("sandbox is not enabled — stdio MCP servers require sandbox for tool discovery (npx/node/uv are only available inside the sandbox)")
 	}
 
-	backend, cleanup, err := sandbox.BackendFromAppConfig(appCfg)
+	// Use PG-backed session registry when available (platform mode) for
+	// cross-replica consistency. Falls back to local JSON if nil.
+	backend, cleanup, err := sandbox.BackendFromAppConfigWithSessions(appCfg, sessRegistry)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox backend unavailable: %w", err)
 	}

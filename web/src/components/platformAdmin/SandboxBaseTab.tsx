@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Save } from 'lucide-react'
 import { InlineError, InlineSuccess, inputStyle } from './shared'
 import * as api from '../../api/platformSandbox'
-import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult } from '../../api/platformSandbox'
+import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult, UnsupportedBackendInfo, OpenShellBackendInfo } from '../../api/platformSandbox'
 
 // ---------------------------------------------------------------------------
 // SandboxBaseTab — Platform Admin: Configure Base Sandbox
@@ -11,6 +11,8 @@ import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult 
 export default function SandboxBaseTab() {
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState<BaseConfigSummary | null>(null)
+  const [unsupported, setUnsupported] = useState<UnsupportedBackendInfo | null>(null)
+  const [openshell, setOpenshell] = useState<OpenShellBackendInfo | null>(null)
   const [tools, setTools] = useState<OptionalTool[]>([])
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -22,6 +24,11 @@ export default function SandboxBaseTab() {
   const [extraSteps, setExtraSteps] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
 
+  // OpenShell image state
+  const [imageInput, setImageInput] = useState('')
+  const [savingImage, setSavingImage] = useState(false)
+  const [packagesInput, setPackagesInput] = useState('')
+
   // Build state
   const [building, setBuilding] = useState(false)
   const [buildLog, setBuildLog] = useState<string[]>([])
@@ -30,15 +37,33 @@ export default function SandboxBaseTab() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+    setUnsupported(null)
+    setOpenshell(null)
     try {
-      const [summaryData, toolsData] = await Promise.all([
-        api.getBaseConfig().catch(() => null),
-        api.listOptionalTools().catch(() => []),
-      ])
-      setSummary(summaryData)
+      const baseData = await api.getBaseConfig().catch(() => null)
+
+      // Check if backend doesn't support base configuration
+      if (baseData && 'unsupported_backend' in baseData && baseData.unsupported_backend) {
+        setUnsupported(baseData as UnsupportedBackendInfo)
+        setLoading(false)
+        return
+      }
+
+      // Check if backend is openshell (image-only mode)
+      if (baseData && 'backend' in baseData && baseData.backend === 'openshell') {
+        const info = baseData as OpenShellBackendInfo
+        setOpenshell(info)
+        setImageInput(info.sandbox_image || '')
+        setLoading(false)
+        return
+      }
+
+      const toolsData = await api.listOptionalTools().catch(() => [])
+      setSummary(baseData as BaseConfigSummary | null)
       setTools(toolsData)
 
       // Populate form from existing config if available
+      const summaryData = baseData as BaseConfigSummary | null
       if (summaryData?.config) {
         const cfg = summaryData.config
         setCore(cfg.core)
@@ -108,10 +133,211 @@ export default function SandboxBaseTab() {
     )
   }
 
+  const handleSaveImage = async () => {
+    setError('')
+    setSuccess('')
+    setSavingImage(true)
+    try {
+      await api.setBaseImage(imageInput.trim())
+      setSuccess(imageInput.trim() ? `Image set to: ${imageInput.trim()}` : 'Custom image cleared. Using default image.')
+      load()
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setSavingImage(false)
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
         <Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} />
+      </div>
+    )
+  }
+
+  if (unsupported) {
+    return (
+      <div className="p-6 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Base Sandbox Configuration</h3>
+        </div>
+        <div className="flex items-start gap-3 p-4 rounded-lg" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+          <Info size={18} className="mt-0.5 shrink-0" style={{ color: 'var(--accent)' }} />
+          <div className="space-y-2">
+            <p className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Not available with the {unsupported.backend} backend
+            </p>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              {unsupported.message}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (openshell) {
+    return (
+      <div className="p-6 space-y-6 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 120px)' }}>
+        {/* Header */}
+        <div>
+          <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Base Sandbox Image</h3>
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Configure the container image for the OpenShell sandbox backend. All sandboxes use this image unless overridden by a team template.
+          </p>
+        </div>
+
+        <InlineError msg={error} />
+        <InlineSuccess msg={success} />
+
+        {/* Current status */}
+        <div className="rounded-xl p-4 space-y-3" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Current Image</span>
+            {openshell.sandbox_image ? (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>
+                Custom
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'rgba(107, 114, 128, 0.1)', color: 'var(--text-muted)' }}>
+                Default
+              </span>
+            )}
+          </div>
+          <p className="text-xs font-mono break-all" style={{ color: 'var(--text-primary)' }}>
+            {openshell.sandbox_image || openshell.default_image || 'Not configured'}
+          </p>
+          {openshell.default_image && openshell.sandbox_image && (
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Default: <span className="font-mono">{openshell.default_image}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Image input form */}
+        <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Custom Image</h4>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Container Image Reference
+            </label>
+            <input
+              type="text"
+              value={imageInput}
+              onChange={e => setImageInput(e.target.value)}
+              placeholder={openshell.default_image || 'ghcr.io/org/custom-sandbox:latest'}
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
+              style={inputStyle}
+            />
+            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Leave empty to use the default image. The image must have the OpenShell supervisor installed and be compatible with the Landlock security policy.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+            {imageInput !== (openshell.sandbox_image || '') && (
+              <button
+                onClick={() => setImageInput(openshell.sandbox_image || '')}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{ color: 'var(--text-muted)', border: '1px solid var(--border-color)' }}
+              >
+                Reset
+              </button>
+            )}
+            <button
+              onClick={handleSaveImage}
+              disabled={savingImage || imageInput === (openshell.sandbox_image || '')}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white transition-opacity"
+              style={{ background: 'var(--accent)', opacity: (savingImage || imageInput === (openshell.sandbox_image || '')) ? 0.5 : 1 }}
+            >
+              {savingImage ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+              {savingImage ? 'Saving...' : 'Save Image'}
+            </button>
+          </div>
+        </div>
+
+        {/* Package-based image build */}
+        <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Build from Package List</h4>
+          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+            Specify apt packages to install. A new image will be built automatically using Kaniko and pushed to the configured registry.
+          </p>
+
+          <div className="space-y-2">
+            <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+              Packages (one per line)
+            </label>
+            <textarea
+              value={packagesInput}
+              onChange={e => setPackagesInput(e.target.value)}
+              placeholder={"curl\ngit\njq\nripgrep\npython3\nnodejs"}
+              rows={5}
+              disabled={building}
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono resize-y"
+              style={inputStyle}
+            />
+          </div>
+
+          {/* Build log */}
+          {buildLog.length > 0 && (
+            <div className="font-mono text-[11px] space-y-0.5 max-h-48 overflow-y-auto p-3 rounded-lg"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+              {buildLog.map((line, i) => (
+                <div key={i}>{line}</div>
+              ))}
+              {building && (
+                <div className="flex items-center gap-2 mt-1">
+                  <Loader2 size={10} className="animate-spin" /> Building...
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+            {building && (
+              <button
+                onClick={() => { abortRef.current?.(); setBuilding(false); setBuildLog(prev => [...prev, '--- Build cancelled ---']) }}
+                className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{ color: '#ef4444', border: '1px solid rgba(239, 68, 68, 0.3)' }}
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={() => {
+                const packages = packagesInput.trim().split('\n').map(l => l.trim()).filter(Boolean)
+                if (packages.length === 0) return
+                setError('')
+                setSuccess('')
+                setBuildLog([])
+                setBuilding(true)
+                const { abort } = api.buildBaseImage({
+                  packages,
+                  onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
+                  onDone: (result) => {
+                    setBuilding(false)
+                    setSuccess(`Build complete! Image: ${result.image}`)
+                    setImageInput(result.image)
+                    load()
+                  },
+                  onError: (err) => {
+                    setBuilding(false)
+                    setError(err)
+                  },
+                })
+                abortRef.current = abort
+              }}
+              disabled={building || !packagesInput.trim()}
+              className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white transition-opacity"
+              style={{ background: 'var(--accent)', opacity: (building || !packagesInput.trim()) ? 0.5 : 1 }}
+            >
+              {building ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+              {building ? 'Building...' : 'Build Image'}
+            </button>
+          </div>
+        </div>
       </div>
     )
   }

@@ -398,12 +398,18 @@ func TestWrapCommandRaw_NoWorkDirNoEnv(t *testing.T) {
 	if !strings.Contains(cmd[2], "exec 'npx' 'tavily-mcp'") {
 		t.Errorf("should contain exec, got: %s", cmd[2])
 	}
-	// Should inject TERM=dumb and NODE_OPTIONS by default.
+	// Should inject TERM=dumb, NODE_OPTIONS, CI, NO_COLOR by default.
 	if !strings.Contains(cmd[2], "NODE_OPTIONS='--no-warnings'") {
 		t.Errorf("should inject NODE_OPTIONS, got: %s", cmd[2])
 	}
 	if !strings.Contains(cmd[2], "TERM='dumb'") {
 		t.Errorf("should inject TERM=dumb, got: %s", cmd[2])
+	}
+	if !strings.Contains(cmd[2], "CI='1'") {
+		t.Errorf("should inject CI=1, got: %s", cmd[2])
+	}
+	if !strings.Contains(cmd[2], "NO_COLOR='1'") {
+		t.Errorf("should inject NO_COLOR=1, got: %s", cmd[2])
 	}
 }
 
@@ -428,7 +434,12 @@ func TestWrapCommandRaw_WithWorkDirAndEnv(t *testing.T) {
 }
 
 func TestWrapCommandRaw_DoesNotOverrideUserEnv(t *testing.T) {
-	cmd := wrapCommandRaw([]string{"cmd"}, "", map[string]string{"TERM": "xterm", "NODE_OPTIONS": "--max-old-space-size=4096"})
+	cmd := wrapCommandRaw([]string{"cmd"}, "", map[string]string{
+		"TERM":         "xterm",
+		"NODE_OPTIONS": "--max-old-space-size=4096",
+		"CI":           "false",
+		"NO_COLOR":     "0",
+	})
 	script := cmd[2]
 	// User-provided values should be preserved, not overridden by defaults.
 	if !strings.Contains(script, "TERM='xterm'") {
@@ -436,6 +447,12 @@ func TestWrapCommandRaw_DoesNotOverrideUserEnv(t *testing.T) {
 	}
 	if !strings.Contains(script, "NODE_OPTIONS='--max-old-space-size=4096'") {
 		t.Errorf("should preserve user NODE_OPTIONS, got: %s", script)
+	}
+	if !strings.Contains(script, "CI='false'") {
+		t.Errorf("should preserve user CI, got: %s", script)
+	}
+	if !strings.Contains(script, "NO_COLOR='0'") {
+		t.Errorf("should preserve user NO_COLOR, got: %s", script)
 	}
 }
 

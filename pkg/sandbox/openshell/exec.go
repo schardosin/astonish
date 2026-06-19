@@ -146,8 +146,17 @@ func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, 
 
 	command := wrapCommandRaw(opts.Command, opts.WorkDir, opts.Env)
 
+	// Pass PTY-suppression env vars at the gRPC level so the gateway sets
+	// them in the process environment before the shell even starts. This
+	// closes the race window between PTY allocation and shell execution.
+	// The shell's own "export" (inside wrapCommandRaw) is belt-and-suspenders.
 	conn, err := b.gateway.ExecStream(ctx, rec.PodName, ExecRequest{
-		Command:        command,
+		Command: command,
+		Env: map[string]string{
+			"TERM":     "dumb",
+			"CI":       "1",
+			"NO_COLOR": "1",
+		},
 		TTY:            false,
 		SeparateStderr: opts.SeparateStderr,
 	})
@@ -419,6 +428,12 @@ func wrapCommandRaw(command []string, workDir string, env map[string]string) []s
 	}
 	if _, ok := mergedEnv["NODE_OPTIONS"]; !ok {
 		mergedEnv["NODE_OPTIONS"] = "--no-warnings"
+	}
+	if _, ok := mergedEnv["CI"]; !ok {
+		mergedEnv["CI"] = "1"
+	}
+	if _, ok := mergedEnv["NO_COLOR"]; !ok {
+		mergedEnv["NO_COLOR"] = "1"
 	}
 
 	var buf bytes.Buffer

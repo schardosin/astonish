@@ -96,11 +96,11 @@ func (t *BackendMCPTransport) Connect(ctx context.Context) (mcp.Connection, erro
 
 	// Wrap the stream's Reader/Writer in an IOTransport.
 	// ExecStream implements io.Reader (stdout) and io.Writer (stdin).
-	// The jsonPrefixFilterReader discards non-JSON preamble lines
-	// (e.g. "Tavily MCP server running on stdio") that some servers
-	// print to stdout before the JSON-RPC stream starts.
+	// The jsonLineFilterReader discards any non-JSON lines (ANSI escapes,
+	// spinners, banners) that PTY contamination injects into the stream.
+	// Every line is checked — only lines starting with '{"' pass through.
 	rwc := &backendStreamRWC{stream: stream}
-	filteredReader := newJSONPrefixFilterReader(rwc)
+	filteredReader := newJSONLineFilterReader(rwc)
 
 	inner := &mcp.IOTransport{
 		Reader: filteredReader,
@@ -148,74 +148,107 @@ func (s *backendStreamRWC) Close() error {
 	return s.closeErr
 }
 
-// jsonPrefixFilterReader wraps an io.Reader and discards any non-JSON lines
-// before the first line that starts with '{'. Some MCP servers (e.g. tavily-mcp)
-// print human-readable startup messages to stdout before the JSON-RPC stream
-// begins. When connected via a PTY (OpenShell always allocates one), these
-// messages cannot be separated via stderr and would break json.Decoder.
+// jsonLineFilterReader wraps an io.Reader and only passes through lines that
+// begin with '{"' (a JSON-RPC message). All other lines are discarded. This
+// provides robust protection against PTY contamination from any source:
 //
-// After the first '{' byte is encountered, this reader becomes transparent
-// and passes all subsequent bytes through without inspection.
-type jsonPrefixFilterReader struct {
-	inner      io.ReadCloser
-	foundJSON  bool
-	buf        []byte // leftover from partial read that found JSON
-	bufOffset  int
+//   - ANSI escape sequences from PTY setup or terminal title changes
+//   - npx/uvx download spinners (which use ANSI progress indicators)
+//   - Shell motd/banner output
+//   - Node.js ExperimentalWarning messages
+//   - MCP server startup banners ("Server running on stdio")
+//
+// The MCP protocol uses NDJSON (newline-delimited JSON): one compact JSON
+// object per line, terminated by '\n'. Both the Go and TypeScript MCP SDKs
+// always emit single-line compact JSON, so a line-based filter is safe.
+//
+// Every line is checked — there is no "passthrough mode" transition.
+// This ensures interleaved contamination (e.g., spinner frames between
+// JSON responses) is always caught.
+type jsonLineFilterReader struct {
+	inner    io.ReadCloser
+	lineBuf  []byte // accumulates bytes until \n
+	passData []byte // current JSON line being served to caller
+	passOff  int    // read offset into passData
 }
 
-func newJSONPrefixFilterReader(r io.ReadCloser) *jsonPrefixFilterReader {
-	return &jsonPrefixFilterReader{inner: r}
+func newJSONLineFilterReader(r io.ReadCloser) *jsonLineFilterReader {
+	return &jsonLineFilterReader{inner: r}
 }
 
-func (f *jsonPrefixFilterReader) Read(p []byte) (int, error) {
-	// Fast path: after finding JSON, pass through directly.
-	if f.foundJSON {
-		// Drain any buffered leftover first.
-		if f.bufOffset < len(f.buf) {
-			n := copy(p, f.buf[f.bufOffset:])
-			f.bufOffset += n
-			if f.bufOffset >= len(f.buf) {
-				f.buf = nil
-				f.bufOffset = 0
+func (f *jsonLineFilterReader) Read(p []byte) (int, error) {
+	for {
+		// Serve buffered pass-through data first.
+		if f.passOff < len(f.passData) {
+			n := copy(p, f.passData[f.passOff:])
+			f.passOff += n
+			if f.passOff >= len(f.passData) {
+				f.passData = nil
+				f.passOff = 0
 			}
 			return n, nil
 		}
-		return f.inner.Read(p)
-	}
 
-	// Slow path: read and discard non-JSON lines until we find one starting with '{'.
-	tmp := make([]byte, len(p))
-	for {
-		n, err := f.inner.Read(tmp[:])
-		if n == 0 {
-			return 0, err
-		}
-
-		data := tmp[:n]
-		// Look for the first '{' in the data — that marks the start of JSON-RPC.
-		idx := bytes.IndexByte(data, '{')
-		if idx >= 0 {
-			f.foundJSON = true
-			// Everything from '{' onward is valid; discard anything before it.
-			remaining := data[idx:]
-			copied := copy(p, remaining)
-			if copied < len(remaining) {
-				// Buffer the excess.
-				f.buf = append([]byte(nil), remaining[copied:]...)
-				f.bufOffset = 0
+		// Process any complete lines already in lineBuf before reading more.
+		for {
+			idx := bytes.IndexByte(f.lineBuf, '\n')
+			if idx < 0 {
+				break
 			}
-			return copied, nil
+			line := f.lineBuf[:idx+1] // includes the \n
+			f.lineBuf = f.lineBuf[idx+1:]
+
+			if isJSONRPCLine(line) {
+				f.passData = append([]byte(nil), line...)
+				f.passOff = 0
+				n := copy(p, f.passData[f.passOff:])
+				f.passOff += n
+				if f.passOff >= len(f.passData) {
+					f.passData = nil
+					f.passOff = 0
+				}
+				return n, nil
+			}
+			// Non-JSON line — discard and continue processing lineBuf.
 		}
 
-		// No '{' found — entire chunk is non-JSON preamble, discard it.
-		// If the underlying reader errored (including EOF), propagate.
-		if err != nil {
-			return 0, err
+		// No complete JSON line available — read more from underlying stream.
+		tmp := make([]byte, 4096)
+		n, readErr := f.inner.Read(tmp)
+		if n > 0 {
+			f.lineBuf = append(f.lineBuf, tmp[:n]...)
+			continue // Loop back to process new data in lineBuf.
 		}
-		// Continue reading.
+
+		if readErr != nil {
+			// On EOF/error, check if lineBuf has an unterminated JSON line.
+			if len(f.lineBuf) > 0 && isJSONRPCLine(f.lineBuf) {
+				f.passData = f.lineBuf
+				f.lineBuf = nil
+				f.passOff = 0
+				n := copy(p, f.passData[f.passOff:])
+				f.passOff += n
+				if f.passOff >= len(f.passData) {
+					f.passData = nil
+					f.passOff = 0
+				}
+				return n, nil
+			}
+			return 0, readErr
+		}
 	}
 }
 
-func (f *jsonPrefixFilterReader) Close() error {
+// isJSONRPCLine returns true if the line starts with '{"' after stripping
+// any leading \r bytes. Every valid JSON-RPC message begins with {"
+// (e.g., {"jsonrpc":"2.0",...}). This is more specific than checking for
+// just '{' and eliminates any theoretical ANSI sequence that might contain
+// a lone '{' character.
+func isJSONRPCLine(line []byte) bool {
+	b := bytes.TrimLeft(line, "\r")
+	return len(b) >= 2 && b[0] == '{' && b[1] == '"'
+}
+
+func (f *jsonLineFilterReader) Close() error {
 	return f.inner.Close()
 }

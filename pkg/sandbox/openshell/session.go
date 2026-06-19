@@ -266,28 +266,49 @@ func (b *OpenShellBackend) DestroySession(ctx context.Context, sessionID string)
 		return err
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
-	if err != nil || rec == nil {
-		return nil // Idempotent.
-	}
+	rec, _ := b.sessions.GetSession(sessionID)
 
 	if b.gateway == nil {
-		return ErrNotImplementedYet
+		if rec != nil {
+			return ErrNotImplementedYet
+		}
+		// No gateway and no record — truly nothing to do.
+		return nil
 	}
 
-	// If the sandbox is still running, delete it via the gateway.
-	if rec.ContainerName != "" {
-		if err := b.gateway.DeleteSandbox(ctx, rec.ContainerName); err != nil {
-			// If the gateway says "not found", the sandbox is already gone —
-			// proceed to remove the DB record. Any other error is transient;
-			// keep the record alive so the periodic reconciler can retry.
-			if !isNotFound(err) {
-				return fmt.Errorf("openshell: delete sandbox %s: %w", rec.ContainerName, err)
+	// Determine the sandbox name to delete. Prefer the stored container
+	// name from the session record; fall back to deriving it from the
+	// session ID. This handles the case where the session DB record was
+	// already removed (e.g. chat session deleted first) but the pod is
+	// still running in the gateway.
+	name := ""
+	if rec != nil {
+		name = rec.ContainerName
+	}
+	if name == "" {
+		name = sandboxName(sessionID)
+	}
+
+	// Delete the sandbox via the gateway.
+	if err := b.gateway.DeleteSandbox(ctx, name); err != nil {
+		// If the gateway says "not found", the sandbox is already gone —
+		// proceed to remove the DB record. Any other error is transient;
+		// keep the record alive so the periodic reconciler can retry.
+		if !isNotFound(err) {
+			if rec != nil {
+				return fmt.Errorf("openshell: delete sandbox %s: %w", name, err)
 			}
+			// No DB record and gateway error — best-effort, nothing to
+			// preserve for the reconciler.
+			return nil
 		}
 	}
 
-	return b.sessions.Remove(sessionID)
+	// Remove the DB record if it exists.
+	if rec != nil {
+		return b.sessions.Remove(sessionID)
+	}
+	return nil
 }
 
 // SessionState queries the gateway for the current sandbox state.

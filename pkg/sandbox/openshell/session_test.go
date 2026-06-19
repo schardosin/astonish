@@ -332,12 +332,54 @@ func TestDestroySession_Success(t *testing.T) {
 	}
 }
 
-func TestDestroySession_IdempotentForMissing(t *testing.T) {
-	gw := &mockGateway{}
+func TestDestroySession_NoRecord_DeletesByDerivedName(t *testing.T) {
+	var deletedName string
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			deletedName = sandboxID
+			return nil
+		},
+	}
 	b := newTestBackendWithGateway(t, gw)
 
+	// No session record exists — should still attempt to delete the pod
+	// using the derived sandbox name.
 	if err := b.DestroySession(context.Background(), "never-existed"); err != nil {
 		t.Fatalf("DestroySession on missing: %v", err)
+	}
+
+	want := sandboxName("never-existed")
+	if deletedName != want {
+		t.Errorf("DeleteSandbox called with %q, want derived name %q", deletedName, want)
+	}
+}
+
+func TestDestroySession_NoRecord_GatewayNotFound(t *testing.T) {
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			return status.Error(codes.NotFound, "sandbox not found")
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	// No record and pod already gone — should be idempotent (no error).
+	if err := b.DestroySession(context.Background(), "phantom"); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+}
+
+func TestDestroySession_NoRecord_GatewayTransientError(t *testing.T) {
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			return status.Error(codes.Unavailable, "connection refused")
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	// No record and transient gateway error — best effort, no error returned
+	// (there's nothing to preserve for the reconciler).
+	if err := b.DestroySession(context.Background(), "orphan-pod"); err != nil {
+		t.Fatalf("DestroySession: expected nil for best-effort, got %v", err)
 	}
 }
 
@@ -397,6 +439,44 @@ func TestDestroySession_GatewayTransientError_KeepsRecord(t *testing.T) {
 	got, _ := b.sessions.GetSession("sess-retry")
 	if got == nil {
 		t.Error("session record should be preserved on transient error")
+	}
+}
+
+func TestDestroySession_EmptyContainerName_UsesDerivedName(t *testing.T) {
+	var deletedName string
+	gw := &mockGateway{
+		deleteFn: func(ctx context.Context, sandboxID string) error {
+			deletedName = sandboxID
+			return nil
+		},
+	}
+	b := newTestBackendWithGateway(t, gw)
+
+	// Session record exists but ContainerName is empty (e.g. evicted session).
+	rec := &store.SandboxSession{
+		SessionID:     "sess-evicted",
+		ChatSessionID: "sess-evicted",
+		Backend:       "openshell",
+		ContainerName: "",
+		State:         store.SandboxSessionStateEvicted,
+	}
+	if err := b.sessions.PutSession(rec); err != nil {
+		t.Fatalf("PutSession: %v", err)
+	}
+
+	if err := b.DestroySession(context.Background(), "sess-evicted"); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+
+	want := sandboxName("sess-evicted")
+	if deletedName != want {
+		t.Errorf("DeleteSandbox called with %q, want derived name %q", deletedName, want)
+	}
+
+	// Record should be removed.
+	got2, _ := b.sessions.GetSession("sess-evicted")
+	if got2 != nil {
+		t.Error("session should be removed after successful destroy")
 	}
 }
 

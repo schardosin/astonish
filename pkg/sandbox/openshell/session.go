@@ -443,9 +443,45 @@ func storeStateToSessionState(state store.SandboxSessionState) sandbox.SessionSt
 }
 
 func sandboxName(sessionID string) string {
-	id := sessionID
-	if len(id) > 8 {
-		id = id[:8]
+	const prefix = "astn-sess-"
+	const maxIDLen = 27
+	id := toDNSLabel(sessionID)
+	if len(id) > maxIDLen {
+		id = id[:maxIDLen]
 	}
-	return "astn-sess-" + id
+	// Re-trim trailing '-' in case truncation left one.
+	for len(id) > 0 && id[len(id)-1] == '-' {
+		id = id[:len(id)-1]
+	}
+	if id == "" {
+		id = "x"
+	}
+	return prefix + id
+}
+
+// toDNSLabel lower-cases the input and replaces any character that is
+// not [a-z0-9-] with '-'. Leading/trailing '-' are stripped. The result
+// is guaranteed to be a valid DNS-1123 label fragment.
+func toDNSLabel(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'A' && c <= 'Z':
+			out = append(out, c+('a'-'A'))
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			out = append(out, c)
+		case c == '-':
+			out = append(out, c)
+		default:
+			out = append(out, '-')
+		}
+	}
+	for len(out) > 0 && out[0] == '-' {
+		out = out[1:]
+	}
+	for len(out) > 0 && out[len(out)-1] == '-' {
+		out = out[:len(out)-1]
+	}
+	return string(out)
 }

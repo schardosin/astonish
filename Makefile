@@ -264,6 +264,106 @@ e2e-k8s-down:
 	done
 	@echo "E2E k8s infra removed."
 
+# ===========================================================================
+# E2E OpenShell sandbox infrastructure — provision/destroy the OpenShell
+# gateway and sandbox namespace for E2E tests against the OpenShell backend.
+#
+# Namespace layout (DEDICATED to e2e — never reuse a live install):
+#   control plane: astonishe2eos        (OpenShell gateway pod lives here)
+#   sandbox:       astonishe2eos-sandbox (sandbox pods spawned by gateway)
+#
+# The chart's api/worker pods are scaled to 0 — tests run in-process on the
+# host (same pattern as K8s e2e). Only the OpenShell gateway is deployed.
+# ===========================================================================
+E2E_OS_RELEASE := astonishe2eos
+E2E_OS_NS := astonishe2eos
+E2E_OS_SANDBOX_NS := astonishe2eos-sandbox
+
+e2e-openshell-up:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Pulling OpenShell subchart dependency..."
+	helm dependency update deploy/helm/astonish
+	@echo "Deploying OpenShell e2e infra ($(E2E_OS_NS) + $(E2E_OS_SANDBOX_NS))..."
+	helm upgrade --install $(E2E_OS_RELEASE) deploy/helm/astonish \
+		-n $(E2E_OS_NS) --create-namespace \
+		-f deploy/helm/astonish/values-e2e-openshell.yaml \
+		--history-max=3 \
+		--wait --timeout=10m
+	@echo "Verifying OpenShell gateway is Running..."
+	@for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+		PHASE=$$(kubectl get pod -n $(E2E_OS_NS) -l app.kubernetes.io/name=openshell \
+			-o jsonpath='{.items[0].status.phase}' 2>/dev/null); \
+		if [ "$$PHASE" = "Running" ]; then break; fi; \
+		if [ $$i -eq 15 ]; then \
+			echo "ERROR: OpenShell gateway not Running after 45s."; \
+			kubectl get pods -n $(E2E_OS_NS); \
+			exit 1; \
+		fi; \
+		sleep 3; \
+	done
+	@echo "OpenShell e2e infra ready."
+	@echo "  Gateway: $(E2E_OS_RELEASE)-openshell.$(E2E_OS_NS).svc.cluster.local:8080"
+
+e2e-openshell-down:
+	@which helm >/dev/null 2>&1 || { echo "ERROR: helm not found in PATH"; exit 1; }
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Tearing down OpenShell e2e infra..."
+	-helm uninstall $(E2E_OS_RELEASE) -n $(E2E_OS_NS) 2>/dev/null
+	-kubectl delete pods --all -n $(E2E_OS_SANDBOX_NS) --force --grace-period=0 --ignore-not-found 2>/dev/null
+	-kubectl delete ns $(E2E_OS_NS) --ignore-not-found
+	-kubectl delete ns $(E2E_OS_SANDBOX_NS) --ignore-not-found
+	@echo "OpenShell e2e infra removed."
+
+# Run E2E tests against the OpenShell backend.
+# Requires: ASTONISH_TEST_DSN, provider API key, OpenShell gateway Running.
+#
+# The tests run on the host, so we port-forward the in-cluster gateway to
+# localhost:18080 for the duration of the run. This avoids requiring the host
+# to resolve cluster-internal DNS names.
+E2E_OS_LOCAL_PORT := 18080
+
+test-e2e-openshell:
+	@if [ -z "$$ASTONISH_TEST_DSN" ]; then echo "ERROR: ASTONISH_TEST_DSN required"; exit 1; fi
+	@which kubectl >/dev/null 2>&1 || { echo "ERROR: kubectl not found in PATH"; exit 1; }
+	@echo "Preflight: verifying OpenShell gateway is Running..."
+	@PHASE=$$(kubectl get pod -n $(E2E_OS_NS) -l app.kubernetes.io/name=openshell \
+		-o jsonpath='{.items[0].status.phase}' 2>/dev/null); \
+	if [ "$$PHASE" != "Running" ]; then \
+		echo ""; \
+		echo "ERROR: OpenShell gateway not Running (phase=$$PHASE)."; \
+		echo "  Provision it with:    make e2e-openshell-up"; \
+		echo "  Tear it down with:    make e2e-openshell-down"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@echo "Preflight OK — OpenShell gateway Running."
+	@echo ""
+	@echo "Starting port-forward to OpenShell gateway (localhost:$(E2E_OS_LOCAL_PORT) → gateway:8080)..."
+	@kubectl port-forward -n $(E2E_OS_NS) \
+		svc/$(E2E_OS_RELEASE)-openshell $(E2E_OS_LOCAL_PORT):8080 \
+		>/dev/null 2>&1 & PF_PID=$$!; \
+	sleep 2; \
+	if ! kill -0 $$PF_PID 2>/dev/null; then \
+		echo "ERROR: port-forward failed to start."; \
+		exit 1; \
+	fi; \
+	echo "Port-forward running (PID $$PF_PID)."; \
+	echo ""; \
+	echo "Running E2E tests against OpenShell backend (~44 tests, typically 10-20 min)..."; \
+	set -o pipefail; \
+	ASTONISH_E2E_SANDBOX_BACKEND=openshell \
+	ASTONISH_E2E_SANDBOX_NAMESPACE=$(E2E_OS_SANDBOX_NS) \
+	ASTONISH_E2E_CONTROL_PLANE_NAMESPACE=$(E2E_OS_NS) \
+	ASTONISH_E2E_OPENSHELL_GATEWAY=localhost:$(E2E_OS_LOCAL_PORT) \
+	go test -tags=e2e -count=1 -p 1 -timeout=20m \
+		$(if $(RUN),-run $(RUN)) $(if $(VERBOSE),-v) -json ./tests/e2e/... \
+		| node tests/scenarios/stream.mjs /tmp/e2e-openshell-results.json; \
+	RESULT=$$?; \
+	kill $$PF_PID 2>/dev/null || true; \
+	node tests/scenarios/parse-run.mjs /tmp/e2e-openshell-results.json; \
+	exit $$RESULT
+
 # E2E inspector mode — long-lived single-instance for post-run UI inspection.
 #
 # Boots a long-lived in-process StudioServer (port 9394) and runs the entire

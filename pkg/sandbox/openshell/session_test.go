@@ -591,9 +591,17 @@ func TestSandboxName(t *testing.T) {
 		sessionID string
 		want      string
 	}{
-		{"abc12345-full-uuid", "astn-sess-abc12345"},
+		{"abc12345-full-uuid", "astn-sess-abc12345-full-uuid"},
 		{"short", "astn-sess-short"},
 		{"12345678", "astn-sess-12345678"},
+		// Synthetic app-mcp session IDs must not produce trailing hyphens.
+		{"app-mcp-bf345b3a-ebd9-4947-96ff-c1d6f7450923", "astn-sess-app-mcp-bf345b3a-ebd9-4947"},
+		// Uppercase is lowercased.
+		{"ABC-DEF-123", "astn-sess-abc-def-123"},
+		// Leading hyphens are stripped.
+		{"---leading", "astn-sess-leading"},
+		// Trailing hyphens after truncation are trimmed.
+		{"aaaaaaaaaaaaaaaaaaaaaaaaaaa-", "astn-sess-aaaaaaaaaaaaaaaaaaaaaaaaaaa"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.sessionID, func(t *testing.T) {

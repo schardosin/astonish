@@ -1,0 +1,153 @@
+# Astonish E2E values — OpenShell sandbox backend.
+#
+# This values file deploys only the OpenShell gateway + sandbox namespace for
+# end-to-end testing against the OpenShell backend. It mirrors values-e2e.yaml
+# (K8s backend) in structure but substitutes the gateway for the K8s layer
+# machinery (PVCs, seed Job, overlay).
+#
+# Namespace layout (DEDICATED to e2e — never reuse a live install):
+#   control plane: astonishe2eos        (gateway pod lives here)
+#   sandbox:       astonishe2eos-sandbox (sandbox pods spawned here)
+#
+# E2E tests run on the host (via `e2eboot.Bootstrap`) using the user's
+# kubeconfig. The chart's api/worker pods are scaled to 0.
+#
+# Install:
+#   helm dependency update deploy/helm/astonish
+#   helm upgrade --install astonishe2eos deploy/helm/astonish \
+#     -n astonishe2eos --create-namespace \
+#     -f deploy/helm/astonish/values-e2e-openshell.yaml \
+#     --wait --timeout=10m
+#
+# Uninstall:
+#   helm uninstall astonishe2eos -n astonishe2eos
+#   kubectl delete ns astonishe2eos astonishe2eos-sandbox --ignore-not-found
+
+# ------------------------------------------------------------------
+# Control-plane image (unused — pods stay at replicas: 0).
+# ------------------------------------------------------------------
+image:
+  repository: schardosin/astonish
+  tag: dev
+  pullPolicy: IfNotPresent
+
+# ------------------------------------------------------------------
+# Namespace prefix → astonishe2eos + astonishe2eos-sandbox.
+# ------------------------------------------------------------------
+namespaces:
+  prefix: astonishe2eos
+
+# ------------------------------------------------------------------
+# Throwaway in-cluster Secret (api/worker pods are scaled to 0).
+# ------------------------------------------------------------------
+secrets:
+  existingSecret: ""
+  masterKey: "e2e-throwaway-master-key-openshell"
+  jwtSecret: "e2e-throwaway-jwt-secret-openshell"
+  platformDSN: "postgres://unused:unused@127.0.0.1:5432/unused?sslmode=disable"
+
+# ------------------------------------------------------------------
+# Disable control-plane pods entirely.
+# ------------------------------------------------------------------
+api:
+  replicaCount: 0
+worker:
+  replicaCount: 0
+
+ingress:
+  enabled: false
+autoscaling:
+  enabled: false
+
+config:
+  storage:
+    backend: postgres
+    postgres:
+      instanceSuffix: ""
+
+# ------------------------------------------------------------------
+# Sandbox configuration — OpenShell backend.
+# ------------------------------------------------------------------
+sandbox:
+  enabled: true
+  backend: openshell
+  podSecurity: privileged
+
+  openshell:
+    enabled: true
+    gateway:
+      addr: ""  # auto-derived: astonishe2eos-openshell.astonishe2eos.svc.cluster.local:8080
+    image:
+      repository: schardosin/astonish-sandbox-openshell
+      tag: dev
+    registry:
+      url: ""
+      secretName: ""
+    builder:
+      image: "gcr.io/kaniko-project/executor:v1.23.2"
+      namespace: ""
+    networkPolicy:
+      presets:
+        - "default"
+      extraEndpoints: []
+
+  # Overlay settings (unused by OpenShell, but chart requires them).
+  overlay:
+    mode: fuse
+    privileged: true
+
+  # Image settings (K8s-specific, but chart renders them).
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  # Storage settings — required by chart validation even though OpenShell
+  # doesn't use PVCs. PVCs will be created but remain unused.
+  storage:
+    storageClassName: nfs-client
+    layers:
+      size: 1Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-layers
+    uppers:
+      size: 1Gi
+      accessMode: ReadWriteMany
+      pvcName: astonish-uppers
+
+  # Seed job — disabled for OpenShell (no @base layer to seed).
+  seed:
+    enabled: false
+
+  limits:
+    cpu: 2
+    memory: "2Gi"
+    processes: 500
+  requests:
+    cpuMillis: 100
+    memoryMiB: 256
+
+# No FUSE device plugin needed for OpenShell.
+fuseDevicePlugin:
+  enabled: false
+
+# ------------------------------------------------------------------
+# OpenShell subchart values (forwarded to NVIDIA OpenShell Helm chart).
+# ------------------------------------------------------------------
+openshell:
+  nameOverride: openshell
+
+  server:
+    disableTls: true
+    sandboxNamespace: "astonishe2eos-sandbox"
+    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    auth:
+      allowUnauthenticatedUsers: true
+    tls:
+      clientCaSecretName: ""
+
+  pkiInitJob:
+    enabled: true
+
+  networkPolicy:
+    enabled: false

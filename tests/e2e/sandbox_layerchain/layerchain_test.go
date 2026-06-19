@@ -38,6 +38,11 @@ func TestE2E_SandboxLayerChain(t *testing.T) {
 	if os.Getenv("ASTONISH_E2E_KEEP_ALIVE") == "1" {
 		t.Skip("SandboxLayerChain mutates global sandbox state; run with `make test-e2e` (isolated mode) instead.")
 	}
+	// This test exercises K8s-specific layer-chain PVC overlays which don't
+	// exist in OpenShell. Skip when running against the OpenShell backend.
+	if e2eboot.SandboxBackendName() == "openshell" {
+		t.Skip("SandboxLayerChain is K8s-specific (PVC overlays); skipped for OpenShell backend.")
+	}
 	requireSandboxInfra(t)
 	h := e2eboot.Bootstrap(t)
 

@@ -155,7 +155,9 @@ func ExtractSessionIDFromSSE(t *testing.T, events []SSEEvent) string {
 }
 
 // ChatAndWaitForPod sends a chat message, extracts the session ID from SSE,
-// derives the pod name, and waits for the pod to be Running.
+// derives the resource name, and waits for the sandbox to be ready.
+// Returns the session ID and the backend-specific resource identifier
+// (pod name for K8s, sandbox name for OpenShell).
 func (h *Harness) ChatAndWaitForPod(t *testing.T, message string) (sessionID, podName string) {
 	t.Helper()
 
@@ -167,21 +169,20 @@ func (h *Harness) ChatAndWaitForPod(t *testing.T, message string) (sessionID, po
 		t.Fatal("[e2eboot] failed to extract sessionId from SSE stream")
 	}
 
-	podName = DerivePodName(sessionID)
-	t.Logf("[e2eboot] Waiting for pod %s...", podName)
-	WaitForPodRunning(t, podName, 120*time.Second)
+	helper := GetSandboxHelper()
+	podName = helper.DeriveResourceID(sessionID)
+	t.Logf("[e2eboot] Waiting for sandbox %s (backend=%s)...", podName, helper.Backend())
+	helper.WaitForReady(t, sessionID, 120*time.Second)
 
-	// Give overlay composition a moment
-	time.Sleep(3 * time.Second)
 	return sessionID, podName
 }
 
-// CleanupSession deletes a session via the API and removes the pod.
+// CleanupSession deletes a session via the API and removes the sandbox.
 func (h *Harness) CleanupSession(t *testing.T, sessionID, podName string) {
 	t.Helper()
 	resp := h.Delete(t, "/api/studio/sessions/"+sessionID)
 	resp.Body.Close()
-	DeletePod(t, podName)
+	GetSandboxHelper().Cleanup(t, sessionID)
 }
 
 func (h *Harness) doWithHeaders(t *testing.T, method, path string, body any, timeout time.Duration, headers map[string]string) *http.Response {

@@ -64,6 +64,12 @@ func renderChart(t *testing.T) ([]byte, bool) {
 	root := chartDir(t)
 	valuesFile := filepath.Join(root, "values-dev-proxmox.yaml")
 
+	// Ensure subchart archives are present. The .tgz files are .gitignore'd
+	// (correctly — binary blobs don't belong in git) so a clean checkout
+	// won't have them. Chart.lock is committed for reproducibility, so
+	// `helm dependency build` can fetch them on demand.
+	ensureHelmDeps(t, root)
+
 	// Derive the release namespace from the values file's namespaces.prefix
 	// so the chart validation template's Release.Namespace check passes.
 	ns := helmNamespaceFromValues(t, valuesFile)
@@ -80,6 +86,22 @@ func renderChart(t *testing.T) ([]byte, bool) {
 		return nil, false
 	}
 	return stdout.Bytes(), true
+}
+
+// ensureHelmDeps runs `helm dependency build` if the charts/ directory is
+// missing subchart archives. Skips the test if OCI/network access is
+// unavailable (same graceful degradation as missing helm binary).
+func ensureHelmDeps(t *testing.T, chartRoot string) {
+	t.Helper()
+	chartsDir := filepath.Join(chartRoot, "charts")
+	matches, _ := filepath.Glob(filepath.Join(chartsDir, "*.tgz"))
+	if len(matches) > 0 {
+		return // Already have subchart archives.
+	}
+	depCmd := exec.Command("helm", "dependency", "build", chartRoot)
+	if out, err := depCmd.CombinedOutput(); err != nil {
+		t.Skipf("helm dependency build failed (no OCI registry access?): %v\n%s", err, out)
+	}
 }
 
 // helmNamespaceFromValues reads namespaces.prefix from a values YAML file.

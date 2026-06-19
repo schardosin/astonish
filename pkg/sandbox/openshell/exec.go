@@ -299,9 +299,10 @@ func (b *OpenShellBackend) PullFile(ctx context.Context, sessionID, filePath str
 	}
 
 	// Read the entire file content. For PullFile via synchronous exec,
-	// the data is already fully buffered anyway.
+	// the data is already fully buffered in resp.Stdout so the tar body
+	// cannot exceed what is already in memory.
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, tr); err != nil {
+	if _, err := io.Copy(&buf, tr); err != nil { //nolint:gosec // G110: source is bounded by synchronous exec response, not user-controlled decompression
 		return nil, fmt.Errorf("sandbox/openshell: PullFile(%s): extract tar body: %w", sessionID, err)
 	}
 

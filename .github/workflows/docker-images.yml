@@ -31,6 +31,7 @@ jobs:
       astonish_tags: ${{ steps.ctx.outputs.astonish_tags }}
       incus_tags: ${{ steps.ctx.outputs.incus_tags }}
       sandbox_base_tags: ${{ steps.ctx.outputs.sandbox_base_tags }}
+      sandbox_openshell_tags: ${{ steps.ctx.outputs.sandbox_openshell_tags }}
     steps:
       - name: Determine context
         id: ctx
@@ -44,6 +45,7 @@ jobs:
             echo "astonish_tags=schardosin/astonish:dev" >> "$GITHUB_OUTPUT"
             echo "incus_tags=schardosin/astonish-incus:dev" >> "$GITHUB_OUTPUT"
             echo "sandbox_base_tags=schardosin/astonish-sandbox-base:dev" >> "$GITHUB_OUTPUT"
+            echo "sandbox_openshell_tags=schardosin/astonish-sandbox-openshell:dev" >> "$GITHUB_OUTPUT"
           else
             TAG="$WORKFLOW_HEAD_BRANCH"
             echo "is_release=true" >> "$GITHUB_OUTPUT"
@@ -57,6 +59,9 @@ jobs:
             SANDBOX_BASE_TAGS="schardosin/astonish-sandbox-base:${TAG}"
             SANDBOX_BASE_TAGS="${SANDBOX_BASE_TAGS},schardosin/astonish-sandbox-base:latest"
             echo "sandbox_base_tags=$SANDBOX_BASE_TAGS" >> "$GITHUB_OUTPUT"
+            SANDBOX_OPENSHELL_TAGS="schardosin/astonish-sandbox-openshell:${TAG}"
+            SANDBOX_OPENSHELL_TAGS="${SANDBOX_OPENSHELL_TAGS},schardosin/astonish-sandbox-openshell:latest"
+            echo "sandbox_openshell_tags=$SANDBOX_OPENSHELL_TAGS" >> "$GITHUB_OUTPUT"
           fi
 
   # --------------------------------------------------------------------------
@@ -231,5 +236,54 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ needs.prepare.outputs.sandbox_base_tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # --------------------------------------------------------------------------
+  # Build and push schardosin/astonish-sandbox-openshell (amd64 only)
+  # Full-featured sandbox for NVIDIA OpenShell backend: CloakBrowser, KasmVNC,
+  # dev tools. Based on ghcr.io/nvidia/openshell-community/sandboxes/base which
+  # is amd64-only.
+  # --------------------------------------------------------------------------
+  build-sandbox-openshell:
+    name: Build and push astonish-sandbox-openshell
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build frontend
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: docker/sandbox-openshell/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ needs.prepare.outputs.sandbox_openshell_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

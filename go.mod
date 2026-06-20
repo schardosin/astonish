@@ -236,3 +236,7 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
 )
+
+// Force clipperhouse/displaywidth to v0.11.0 (MIT licensed) instead of v0.6.2
+// which is pulled transitively by entgo.io/ent and has an unknown license.
+replace github.com/clipperhouse/displaywidth v0.6.2 => github.com/clipperhouse/displaywidth v0.11.0

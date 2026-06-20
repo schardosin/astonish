@@ -44,6 +44,7 @@ func limitForPath(path, method string) int64 {
 		"/api/studio/apps",        // Visual app YAML can be large
 		"/api/sandbox/templates",  // Sandbox template creation
 		"/api/ai/chat",            // Chat messages with images/attachments
+		"/api/studio/chat",        // Studio chat with file attachments
 		"/api/fleet/sessions",     // Fleet session payloads
 		"/api/studio/sessions",    // Session import
 	}

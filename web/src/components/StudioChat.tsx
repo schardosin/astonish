@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow, Brain } from 'lucide-react'
+import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, Square, Copy, Check, Code, RotateCcw, Wrench, Clock, Search, Users, Info, FileText, Globe, ListChecks, AppWindow, Brain, Paperclip, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
 import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
-import type { ChatSession } from '../api/studioChat'
+import type { ChatSession, AttachmentPayload } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, UserMessage, AttachmentInfo } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -167,6 +167,25 @@ function SourceCitations({ urls }: { urls: string[] }) {
   )
 }
 
+// --- Attachment constants (outside component to avoid ESLint deps warnings) ---
+const MAX_ATTACHMENTS = 10
+const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+const ACCEPTED_MIME_TYPES = [
+  'text/plain', 'text/html', 'text/css', 'text/csv', 'text/xml', 'text/markdown',
+  'application/json', 'application/xml', 'application/yaml', 'application/pdf',
+  'application/x-yaml',
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+]
+const ACCEPTED_EXTENSIONS = '.txt,.html,.htm,.css,.csv,.xml,.md,.json,.yaml,.yml,.log,.pdf,.png,.jpg,.jpeg,.gif,.webp'
+
+interface PendingAttachment {
+  id: string
+  file: File
+  preview: string | null  // data URL for image previews
+  mimeType: string
+  name: string
+}
+
 export default function StudioChat({ theme, initialSessionId, pendingChatMessage, onPendingChatMessageConsumed, onSessionChange }: { theme: string; initialSessionId?: string | null; pendingChatMessage?: { message: string; systemContext?: string } | null; onPendingChatMessageConsumed?: () => void; onSessionChange?: (sessionId: string | null) => void }) {
   // Session state
   const [sessions, setSessions] = useState<SidebarSession[]>([])
@@ -231,6 +250,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const streamingTextRef = useRef('')
   const isNearBottomRef = useRef(true)
   const [showScrollButton, setShowScrollButton] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+
+  // Attachment state
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [isDragOver, setIsDragOver] = useState(false)
 
   const slashCommands = useMemo(() => [
     { cmd: '/help', desc: 'Show available commands' },
@@ -1178,17 +1202,149 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     loadSessions()
   }, [fleetSessionId, changeSession])
 
-  const sendMessage = useCallback((text: string, options: { systemContext?: string, pinnedToolGroups?: string[] } = {}) => {
-    if (!text.trim()) return
+  // --- Attachment handlers ---
+
+  const validateAndAddFiles = useCallback((files: FileList | File[]) => {
+    const fileArray = Array.from(files)
+    const errors: string[] = []
+
+    setAttachments(prev => {
+      const remaining = MAX_ATTACHMENTS - prev.length
+      if (remaining <= 0) {
+        errors.push(`Maximum ${MAX_ATTACHMENTS} files allowed`)
+        return prev
+      }
+
+      const toAdd: typeof prev = []
+      for (const file of fileArray.slice(0, remaining)) {
+        if (file.size > MAX_FILE_SIZE) {
+          errors.push(`${file.name} exceeds 10 MB limit`)
+          continue
+        }
+        // Check MIME type or extension
+        const isAcceptedMime = ACCEPTED_MIME_TYPES.some(t => file.type.startsWith(t.replace('*', '')))
+        const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+        const isAcceptedExt = ACCEPTED_EXTENSIONS.split(',').includes(ext)
+        if (!isAcceptedMime && !isAcceptedExt) {
+          errors.push(`${file.name}: unsupported file type`)
+          continue
+        }
+
+        const id = crypto.randomUUID()
+        let preview: string | null = null
+        if (file.type.startsWith('image/')) {
+          preview = URL.createObjectURL(file)
+        }
+        toAdd.push({ id, file, preview, mimeType: file.type || 'application/octet-stream', name: file.name })
+      }
+
+      if (fileArray.length > remaining) {
+        errors.push(`Only ${remaining} more file(s) can be added`)
+      }
+
+      return [...prev, ...toAdd]
+    })
+
+    // Show errors as console warnings (could be toast in the future)
+    if (errors.length > 0) {
+      console.warn('Attachment errors:', errors)
+    }
+  }, [])
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments(prev => {
+      const removed = prev.find(a => a.id === id)
+      if (removed?.preview) URL.revokeObjectURL(removed.preview)
+      return prev.filter(a => a.id !== id)
+    })
+  }, [])
+
+  const clearAttachments = useCallback(() => {
+    setAttachments(prev => {
+      prev.forEach(a => { if (a.preview) URL.revokeObjectURL(a.preview) })
+      return []
+    })
+  }, [])
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      validateAndAddFiles(e.target.files)
+      e.target.value = '' // Reset so same file can be re-selected
+    }
+  }, [validateAndAddFiles])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragOver(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      validateAndAddFiles(e.dataTransfer.files)
+    }
+  }, [validateAndAddFiles])
+
+  // Convert pending attachments to API payloads (base64)
+  const prepareAttachmentPayloads = useCallback(async (): Promise<AttachmentPayload[]> => {
+    const payloads: AttachmentPayload[] = []
+    for (const att of attachments) {
+      const arrayBuffer = await att.file.arrayBuffer()
+      const bytes = new Uint8Array(arrayBuffer)
+      let binary = ''
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i])
+      }
+      const base64 = btoa(binary)
+      payloads.push({
+        filename: att.name,
+        mimeType: att.mimeType,
+        data: base64,
+      })
+    }
+    return payloads
+  }, [attachments])
+
+  // --- End attachment handlers ---
+
+  const sendMessage = useCallback(async (text: string, options: { systemContext?: string, pinnedToolGroups?: string[] } = {}) => {
+    if (!text.trim() && attachments.length === 0) return
     const userMsg = text.trim()
 
     // Reset scroll position — user expects to see the conversation flow
     isNearBottomRef.current = true
     setShowScrollButton(false)
 
+    // Prepare attachments (async base64 encoding)
+    let attachmentPayloads: AttachmentPayload[] = []
+    let attachmentInfos: AttachmentInfo[] = []
+    if (attachments.length > 0) {
+      attachmentPayloads = await prepareAttachmentPayloads()
+      // For image previews in local messages, include base64 data for thumbnails
+      attachmentInfos = attachments.map(a => ({
+        filename: a.name,
+        mimeType: a.mimeType,
+        size: a.file.size,
+        data: a.mimeType.startsWith('image/') ? attachmentPayloads.find(p => p.filename === a.name)?.data : undefined,
+      }))
+    }
+
     // Add user message to chat (unless it's a slash command or internal action)
     if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_')) {
-      setMessages((prev: ChatMsg[]) => [...prev, { type: 'user', content: userMsg }])
+      const userChatMsg: UserMessage = { type: 'user', content: userMsg }
+      if (attachmentInfos.length > 0) {
+        userChatMsg.attachments = attachmentInfos
+      }
+      setMessages((prev: ChatMsg[]) => [...prev, userChatMsg])
     }
 
     setInput('')
@@ -1199,9 +1355,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     setSessionStartTime(Date.now())
     streamingTextRef.current = ''
 
+    // Clear attachments after capturing payloads
+    clearAttachments()
+
     const controller = connectChat({
       sessionId: activeSessionId || '',
       message: userMsg,
+      attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
       systemContext: options.systemContext || activeWizardContext || undefined,
       pinnedToolGroups: options.pinnedToolGroups || activePinnedToolGroups || undefined,
       onEvent: (eventType, data) => {
@@ -1757,7 +1917,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     })
 
     abortRef.current = controller
-  }, [activeSessionId, activeWizardContext, activePinnedToolGroups])
+  }, [activeSessionId, activeWizardContext, activePinnedToolGroups, attachments, prepareAttachmentPayloads, clearAttachments])
 
   // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
   useEffect(() => {
@@ -1816,7 +1976,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       return
     }
 
-    if (!input.trim()) return
+    if (!input.trim() && attachments.length === 0) return
     sendMessage(input)
   }
 
@@ -2116,12 +2276,32 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           ) : (
             messages.map((msg, index) => {
               if (msg.type === 'user') {
+                const userMsg = msg as UserMessage
                 return (
                   <div key={index} className="flex justify-end">
                     <div className="space-y-1 max-w-[80%]">
                       <div className="text-xs font-medium text-right" style={{ color: 'var(--text-muted)' }}>You</div>
                       <div className="chat-bubble-user p-3 rounded-lg">
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                        {userMsg.content && <p className="text-sm whitespace-pre-wrap">{userMsg.content}</p>}
+                        {userMsg.attachments && userMsg.attachments.length > 0 && (
+                          <div className={`flex flex-wrap gap-2 ${userMsg.content ? 'mt-2' : ''}`}>
+                            {userMsg.attachments.map((att, i) => (
+                              <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded text-xs"
+                                style={{ background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.15)' }}>
+                                {att.mimeType.startsWith('image/') && att.data ? (
+                                  <img
+                                    src={`data:${att.mimeType};base64,${att.data}`}
+                                    alt={att.filename}
+                                    className="w-10 h-10 rounded object-cover"
+                                  />
+                                ) : (
+                                  <FileText size={14} style={{ color: 'var(--text-muted)' }} />
+                                )}
+                                <span className="max-w-[100px] truncate opacity-80">{att.filename}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2612,7 +2792,23 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         </div>
 
         {/* Input Area */}
-        <div className="relative" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div
+          className="relative"
+          style={{ borderTop: '1px solid var(--border-color)' }}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {/* Drag overlay */}
+          {isDragOver && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center rounded-lg"
+              style={{ background: 'rgba(128, 90, 213, 0.15)', border: '2px dashed var(--accent, #805AD5)' }}>
+              <div className="text-sm font-medium" style={{ color: 'var(--accent, #805AD5)' }}>
+                Drop files here
+              </div>
+            </div>
+          )}
+
           {/* Slash command popup */}
           {showSlashPopup && filteredSlashCommands.length > 0 && (
             <div
@@ -2638,12 +2834,60 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             </div>
           )}
 
+          {/* Attachment preview strip */}
+          {attachments.length > 0 && (
+            <div className="flex items-center gap-2 px-4 pt-3 pb-1 overflow-x-auto">
+              {attachments.map(att => (
+                <div
+                  key={att.id}
+                  className="relative flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs shrink-0"
+                  style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+                >
+                  {att.preview ? (
+                    <img src={att.preview} alt={att.name} className="w-8 h-8 rounded object-cover" />
+                  ) : (
+                    <FileText size={16} style={{ color: 'var(--text-muted)' }} />
+                  )}
+                  <span className="max-w-[120px] truncate" style={{ color: 'var(--text-secondary)' }}>{att.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachment(att.id)}
+                    className="p-0.5 rounded hover:bg-red-500/20 transition-colors"
+                    title="Remove"
+                  >
+                    <X size={12} style={{ color: 'var(--text-muted)' }} />
+                  </button>
+                </div>
+              ))}
+              {attachments.length > 1 && (
+                <button
+                  type="button"
+                  onClick={clearAttachments}
+                  className="text-xs px-2 py-1 rounded hover:bg-red-500/20 transition-colors shrink-0"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            accept={ACCEPTED_EXTENSIONS}
+            onChange={handleFileSelect}
+            className="hidden"
+          />
+
           <form onSubmit={handleSubmit} className="flex items-end gap-3 p-4">
             {isStreaming && (
               <button
                 type="button"
                 onClick={handleStop}
-                className="px-3 py-2.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center gap-2"
+                className="h-[42px] px-3 bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors flex items-center justify-center gap-2"
                 title="Stop"
               >
                 <Square size={16} />
@@ -2652,7 +2896,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             {hasSessionMemories && (
               <button
                 type="button"
-                className="px-3 py-2.5 rounded-lg cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center"
+                className="h-[42px] px-3 rounded-lg cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center"
                 style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
                 title="View session memories — click to review and edit"
                 onClick={() => setShowMemoryPanel(true)}
@@ -2660,8 +2904,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 <Brain size={16} className="text-purple-400" />
               </button>
             )}
-            <div className="relative flex-1">
-              <textarea
+            {/* Attach file button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming && !isFleetMode}
+              className="h-[42px] px-3 rounded-lg cursor-pointer hover:opacity-80 transition-opacity flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              title="Attach files (images, PDFs, text files)"
+            >
+              <Paperclip size={16} style={{ color: attachments.length > 0 ? 'var(--accent, #805AD5)' : 'var(--text-muted)' }} />
+            </button>
+            <textarea
                 data-testid="chat-input"
                 ref={inputRef}
                 value={input}
@@ -2675,7 +2929,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       handleSlashSelect(selected.cmd)
                     } else if (isFleetMode && input.trim()) {
                       sendFleetHumanMessage(input)
-                    } else if (!isStreaming && input.trim()) {
+                    } else if (!isStreaming && (input.trim() || attachments.length > 0)) {
                       // Reuse slash validation from handleSubmit
                       if (input.startsWith('/') && !input.includes(' ')) return
                       sendMessage(input)
@@ -2683,6 +2937,24 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                     return
                   }
                   handleKeyDown(e)
+                }}
+                onPaste={(e) => {
+                  // Handle pasted files (e.g., screenshots from clipboard)
+                  const items = e.clipboardData?.items
+                  if (items) {
+                    const files: File[] = []
+                    for (let i = 0; i < items.length; i++) {
+                      const item = items[i]
+                      if (item.kind === 'file') {
+                        const file = item.getAsFile()
+                        if (file) files.push(file)
+                      }
+                    }
+                    if (files.length > 0) {
+                      e.preventDefault()
+                      validateAndAddFiles(files)
+                    }
+                  }
                 }}
                 disabled={isStreaming && !isFleetMode}
                 placeholder={
@@ -2694,10 +2966,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         : 'Type a message to the team...'
                     : isStreaming
                       ? 'Agent is responding...'
-                      : 'Type a message or / for commands...'
+                      : attachments.length > 0
+                        ? 'Add a message or press Enter to send attachments...'
+                        : 'Type a message or / for commands...'
                 }
                 rows={1}
-                className="w-full px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all text-sm resize-none overflow-hidden"
+                className="flex-1 px-4 py-2.5 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 disabled:opacity-60 disabled:cursor-not-allowed transition-all text-sm resize-none overflow-hidden"
                 style={{
                   background: 'var(--bg-tertiary)',
                   color: 'var(--text-primary)',
@@ -2706,12 +2980,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                   overflowY: 'auto',
                 }}
               />
-            </div>
             <button
               data-testid="send-button"
               type="submit"
-              disabled={(isStreaming && !isFleetMode) || !input.trim()}
-              className="px-4 py-2.5 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={(isStreaming && !isFleetMode) || (!input.trim() && attachments.length === 0)}
+              className="h-[42px] px-4 bg-[#805AD5] hover:bg-[#6B46C1] text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               <Send size={18} />
             </button>

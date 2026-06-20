@@ -27,14 +27,22 @@ import (
 	"google.golang.org/genai"
 )
 
+// ChatAttachment represents a file attached to a chat message.
+type ChatAttachment struct {
+	Filename string `json:"filename"`
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"` // base64-encoded file content
+}
+
 // StudioChatRequest is the request body for POST /api/studio/chat.
 type StudioChatRequest struct {
-	SessionID        string   `json:"sessionId,omitempty"`
-	Message          string   `json:"message"`
-	AutoApprove      bool     `json:"autoApprove,omitempty"`
-	Debug            bool     `json:"debug,omitempty"`            // reserved for future debug streaming
-	SystemContext    string   `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
-	PinnedToolGroups []string `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
+	SessionID        string           `json:"sessionId,omitempty"`
+	Message          string           `json:"message"`
+	Attachments      []ChatAttachment `json:"attachments,omitempty"`      // file attachments (base64)
+	AutoApprove      bool             `json:"autoApprove,omitempty"`
+	Debug            bool             `json:"debug,omitempty"`            // reserved for future debug streaming
+	SystemContext    string           `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
+	PinnedToolGroups []string         `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -130,6 +138,17 @@ type StudioMessage struct {
 	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)
 	AppVersion int    `json:"version,omitempty"` // version number (increments on refinement)
 	AppID      string `json:"appId,omitempty"`   // stable UUID for cross-turn matching
+
+	// file attachments on user messages — populated when session history is loaded
+	Attachments []AttachmentInfo `json:"attachments,omitempty"`
+}
+
+// AttachmentInfo describes a file attachment in session history display.
+type AttachmentInfo struct {
+	Filename string `json:"filename"`
+	MimeType string `json:"mimeType"`
+	Size     int    `json:"size"`            // byte count of the decoded file
+	Data     string `json:"data,omitempty"`  // base64 data (included for images to render thumbnails)
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -153,6 +172,19 @@ type PlanStepMsg struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	Status      string `json:"status"` // pending, running, complete, failed
+}
+
+// toAgentAttachments converts API ChatAttachments to agent.Attachment values.
+func toAgentAttachments(apiAtts []ChatAttachment) []agent.Attachment {
+	out := make([]agent.Attachment, len(apiAtts))
+	for i, a := range apiAtts {
+		out[i] = agent.Attachment{
+			Filename: a.Filename,
+			MimeType: a.MimeType,
+			Data:     a.Data,
+		}
+	}
+	return out
 }
 
 // StudioChatComponents holds the wired components needed by Studio chat handlers.
@@ -703,7 +735,11 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// Prepare user message
 	var userMsg *genai.Content
 	if msg != "" {
-		userMsg = agent.NewTimestampedUserContent(msg)
+		if len(req.Attachments) > 0 {
+			userMsg = agent.NewTimestampedUserContentWithAttachments(msg, toAgentAttachments(req.Attachments))
+		} else {
+			userMsg = agent.NewTimestampedUserContent(msg)
+		}
 	}
 
 	// Seed ActiveApp from system context when opening a saved app for refinement.

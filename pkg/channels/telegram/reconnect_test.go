@@ -192,6 +192,8 @@ func TestStart_StopsOnContextCancel(t *testing.T) {
 		BotToken:    "test-token",
 		APIEndpoint: fake.apiEndpoint(),
 	}, log.New(log.Writer(), "[test] ", 0))
+	// Short reconnect delay so backoff doesn't stall the test.
+	tg.reconnectDelay = 200 * time.Millisecond
 
 	// Use a short-lived context — cancel during backoff
 	ctx, cancel := context.WithCancel(context.Background())
@@ -276,6 +278,8 @@ func TestStart_ReconnectsAfterGetMeFailure(t *testing.T) {
 		BotToken:    "test-token",
 		APIEndpoint: fake.apiEndpoint(),
 	}, log.New(log.Writer(), "[test] ", 0))
+	// Use a short reconnect delay so retries happen within the test's timeout.
+	tg.reconnectDelay = 200 * time.Millisecond
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
@@ -319,6 +323,8 @@ func TestStart_StatusUpdatedDuringReconnect(t *testing.T) {
 		BotToken:    "test-token",
 		APIEndpoint: fake.apiEndpoint(),
 	}, log.New(log.Writer(), "[test] ", 0))
+	// Short reconnect delay so we can observe status during backoff.
+	tg.reconnectDelay = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
 

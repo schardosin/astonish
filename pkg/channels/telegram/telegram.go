@@ -61,6 +61,10 @@ type TelegramChannel struct {
 	status   channels.ChannelStatus
 	msgCount atomic.Int64
 
+	// reconnectDelay overrides initialReconnectDelay when non-zero.
+	// Used by tests to avoid slow backoff timers.
+	reconnectDelay time.Duration
+
 	// allowSet is built from config.AllowFrom for fast lookup.
 	allowMu  sync.RWMutex
 	allowSet map[string]bool
@@ -137,6 +141,9 @@ func (t *TelegramChannel) Start(ctx context.Context, handler channels.MessageHan
 	defer t.wg.Done()
 
 	delay := initialReconnectDelay
+	if t.reconnectDelay > 0 {
+		delay = t.reconnectDelay
+	}
 
 	for {
 		// Check if we should stop before attempting connection

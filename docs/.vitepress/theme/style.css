@@ -1,0 +1,104 @@
+/**
+ * Astonish Documentation - Purple Theme
+ * Based on SAP Gardener documentation style
+ */
+
+:root {
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: -webkit-linear-gradient(
+    120deg,
+    #4c1d95 30%,
+    #c4b5fd
+  );
+  --vp-home-hero-image-background-image: linear-gradient(
+    -45deg,
+    #4c1d95 50%,
+    #c4b5fd 50%
+  );
+  --vp-home-hero-image-filter: blur(44px);
+  --vp-button-brand-bg: #7c3aed;
+  --vp-button-brand-hover-bg: #6d28d9;
+  --vp-button-brand-active-bg: #5b21b6;
+}
+
+@media (min-width: 640px) {
+  :root {
+    --vp-home-hero-image-filter: blur(56px);
+  }
+}
+
+@media (min-width: 960px) {
+  :root {
+    --vp-home-hero-image-filter: blur(68px);
+  }
+}
+
+.VPHero .VPImage {
+  filter: drop-shadow(-2px 4px 6px rgba(0, 0, 0, 0.2));
+  padding: 18px;
+}
+
+@media (max-width: 960px) {
+  .VPHome .VPHero.has-image .main {
+    text-align: center;
+  }
+}
+
+/* Purple color system - Light mode */
+:root {
+  --vp-c-purple-1: #6d28d9;
+  --vp-c-purple-2: #7c3aed;
+  --vp-c-purple-3: #8b5cf6;
+  --vp-c-purple-soft: rgba(139, 92, 246, 0.14);
+}
+
+/* Purple color system - Dark mode */
+.dark {
+  --vp-c-purple-1: #a78bfa;
+  --vp-c-purple-2: #8b5cf6;
+  --vp-c-purple-3: #7c3aed;
+  --vp-c-purple-soft: rgba(139, 92, 246, 0.16);
+}
+
+/* Brand color mapping */
+:root {
+  --vp-c-brand-1: var(--vp-c-purple-1);
+  --vp-c-brand-2: var(--vp-c-purple-2);
+  --vp-c-brand-3: var(--vp-c-purple-3);
+  --vp-c-brand-soft: var(--vp-c-purple-soft);
+}
+
+/* Sidebar styling */
+#VPSidebarNav section.VPSidebarItem > .item .text {
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+}
+
+#VPSidebarNav div.VPSidebarItem > .item .text {
+  font-weight: 500;
+}
+
+#VPSidebarNav .VPSidebarItem.level-0 {
+  padding-bottom: 10px;
+}
+
+#VPSidebarNav .VPSidebarItem.level-0 > .item + .items {
+  border-left: 1px solid var(--vp-c-divider);
+  padding-left: 16px;
+}
+
+/* Mobile feature grid */
+@media (max-width: 640px) {
+  .VPHome .VPTeamMembers.small .container {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .VPHome .VPTeamMembers.small .container .item {
+    min-width: 0;
+  }
+
+  .VPHome .VPTeamMembersItem.small .profile {
+    padding: 18px 12px;
+  }
+}

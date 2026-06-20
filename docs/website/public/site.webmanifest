@@ -1,0 +1,14 @@
+{
+  "name": "Astonish",
+  "short_name": "Astonish",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ],
+  "theme_color": "#7c3aed",
+  "background_color": "#ffffff",
+  "display": "standalone"
+}

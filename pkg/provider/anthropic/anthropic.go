@@ -332,20 +332,37 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 			}
 
 			if part.InlineData != nil {
-				// Anthropic supports "image" type for images and "document" type for
-				// PDFs and text-based files (txt, md, json, xml, yaml, html, etc.)
-				contentType := "document"
-				if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
-					contentType = "image"
+				mimeType := part.InlineData.MIMEType
+				if strings.HasPrefix(mimeType, "image/") {
+					// Images: use "image" content block.
+					content = append(content, Content{
+						Type: "image",
+						Source: &ContentSource{
+							Type:      "base64",
+							MediaType: mimeType,
+							Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+						},
+					})
+				} else if mimeType == "application/pdf" {
+					// PDFs: use "document" content block.
+					content = append(content, Content{
+						Type: "document",
+						Source: &ContentSource{
+							Type:      "base64",
+							MediaType: mimeType,
+							Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+						},
+					})
+				} else {
+					// All other file types (text/markdown, text/html, application/json, etc.):
+					// Decode to string and send as a text block. The Anthropic API only
+					// accepts application/pdf and text/plain for "document" blocks.
+					textContent := string(part.InlineData.Data)
+					content = append(content, Content{
+						Type: "text",
+						Text: textContent,
+					})
 				}
-				content = append(content, Content{
-					Type: contentType,
-					Source: &ContentSource{
-						Type:      "base64",
-						MediaType: part.InlineData.MIMEType,
-						Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
-					},
-				})
 			}
 
 			if part.FunctionCall != nil {

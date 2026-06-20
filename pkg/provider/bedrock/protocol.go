@@ -158,19 +158,38 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 						})
 					}
 					if part.InlineData != nil {
-						// Bedrock supports "image" for images, "document" for PDFs and text files
-						contentType := "document"
-						if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
-							contentType = "image"
+						mimeType := part.InlineData.MIMEType
+						if strings.HasPrefix(mimeType, "image/") {
+							// Images: use "image" content block.
+							contentBlocks = append(contentBlocks, ContentBlock{
+								Type: "image",
+								Source: &ImageSource{
+									Type:      "base64",
+									MediaType: mimeType,
+									Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+								},
+							})
+						} else if mimeType == "application/pdf" {
+							// PDFs: use "document" content block.
+							contentBlocks = append(contentBlocks, ContentBlock{
+								Type: "document",
+								Source: &ImageSource{
+									Type:      "base64",
+									MediaType: mimeType,
+									Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+								},
+							})
+						} else {
+							// All other file types (text/markdown, text/html, application/json, etc.):
+							// Decode to string and send as a text block. The Bedrock API only accepts
+							// application/pdf and text/plain for "document" blocks — anything else
+							// would be rejected with 400.
+							textContent := string(part.InlineData.Data)
+							contentBlocks = append(contentBlocks, ContentBlock{
+								Type: "text",
+								Text: textContent,
+							})
 						}
-						contentBlocks = append(contentBlocks, ContentBlock{
-							Type: contentType,
-							Source: &ImageSource{
-								Type:      "base64",
-								MediaType: part.InlineData.MIMEType,
-								Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
-							},
-						})
 					}
 				}
 				bedrockReq.Messages = append(bedrockReq.Messages, Message{

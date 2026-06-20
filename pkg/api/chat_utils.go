@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -138,6 +139,26 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					Content: text,
 				})
 				lastInvocationID = eventInvID
+			}
+			// Handle InlineData parts (file attachments) — attach to the most
+			// recent user message in this event.
+			if part.InlineData != nil && role == "user" {
+				att := AttachmentInfo{
+					Filename: part.InlineData.DisplayName,
+					MimeType: part.InlineData.MIMEType,
+					Size:     len(part.InlineData.Data),
+				}
+				// Include base64 data for images (enables inline thumbnail display)
+				if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
+					att.Data = base64.StdEncoding.EncodeToString(part.InlineData.Data)
+				}
+				// Attach to the most recent user message
+				for i := len(messages) - 1; i >= 0; i-- {
+					if messages[i].Type == "user" {
+						messages[i].Attachments = append(messages[i].Attachments, att)
+						break
+					}
+				}
 			}
 			if part.FunctionCall != nil {
 				// Intercept delegate_tasks calls: buffer the task plan and

@@ -14,6 +14,15 @@ export interface FleetMessageItem {
 export interface UserMessage {
   type: 'user'
   content: string
+  attachments?: AttachmentInfo[]
+}
+
+// AttachmentInfo describes a file attachment (used in user messages for history display)
+export interface AttachmentInfo {
+  filename: string
+  mimeType: string
+  size: number        // byte count
+  data?: string       // base64 data (included for images to render thumbnails)
 }
 
 export interface AgentMessage {

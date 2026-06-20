@@ -45,9 +45,16 @@ export type SSEEventCallback = (eventType: string, data: Record<string, unknown>
 export type ErrorCallback = (error: Error) => void
 export type DoneCallback = () => void
 
+export interface AttachmentPayload {
+  filename: string
+  mimeType: string
+  data: string  // base64-encoded content (no data-url prefix)
+}
+
 export interface ConnectChatParams {
   sessionId?: string
   message?: string
+  attachments?: AttachmentPayload[]
   systemContext?: string
   pinnedToolGroups?: string[]
   autoApprove?: boolean
@@ -101,7 +108,7 @@ export async function fetchSubtaskEvents(sessionId: string, taskName: string): P
   return data.events || []
 }
 
-export function connectChat({ sessionId, message, systemContext, pinnedToolGroups, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
+export function connectChat({ sessionId, message, attachments, systemContext, pinnedToolGroups, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
@@ -110,6 +117,9 @@ export function connectChat({ sessionId, message, systemContext, pinnedToolGroup
         sessionId: sessionId || '',
         message: message || '',
         autoApprove: !!autoApprove,
+      }
+      if (attachments && attachments.length > 0) {
+        body.attachments = attachments
       }
       if (systemContext) {
         body.systemContext = systemContext

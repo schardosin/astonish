@@ -3,6 +3,7 @@ package vertex
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,6 +32,13 @@ type Part struct {
 	Text             string            `json:"text,omitempty"`
 	FunctionCall     *FunctionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *FunctionResponse `json:"functionResponse,omitempty"`
+	InlineData       *InlineData       `json:"inlineData,omitempty"`
+}
+
+// InlineData represents inline binary data (images, PDFs, etc.) for Vertex AI.
+type InlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"` // base64-encoded
 }
 
 type FunctionCall struct {
@@ -100,6 +108,12 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 			part := Part{}
 			if p.Text != "" {
 				part.Text = p.Text
+			}
+			if p.InlineData != nil {
+				part.InlineData = &InlineData{
+					MimeType: p.InlineData.MIMEType,
+					Data:     base64.StdEncoding.EncodeToString(p.InlineData.Data),
+				}
 			}
 			if p.FunctionCall != nil {
 				part.FunctionCall = &FunctionCall{

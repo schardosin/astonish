@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -441,6 +442,8 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 			var sb strings.Builder
 			var reasoningSB strings.Builder
 			var toolCalls []openai.ToolCall
+			var multiParts []openai.ChatMessagePart
+			hasInlineData := false
 
 			for _, part := range c.Parts {
 				if part.Text != "" {
@@ -451,6 +454,34 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 						reasoningSB.WriteString(part.Text)
 					} else {
 						sb.WriteString(part.Text)
+					}
+				}
+				if part.InlineData != nil && role == openai.ChatMessageRoleUser {
+					hasInlineData = true
+					mime := part.InlineData.MIMEType
+					if strings.HasPrefix(mime, "image/") || mime == "application/pdf" {
+						// Images and PDFs: send as image_url data URL (GPT-4o supports both)
+						dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(part.InlineData.Data)
+						multiParts = append(multiParts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeImageURL,
+							ImageURL: &openai.ChatMessageImageURL{
+								URL:    dataURL,
+								Detail: openai.ImageURLDetailAuto,
+							},
+						})
+					} else {
+						// Text-based files (txt, md, json, xml, yaml, html, etc.):
+						// Decode to string and include as a text part with filename context.
+						// OpenAI doesn't have a native "file" content type for chat.
+						filename := part.InlineData.DisplayName
+						if filename == "" {
+							filename = "attachment"
+						}
+						textContent := string(part.InlineData.Data)
+						multiParts = append(multiParts, openai.ChatMessagePart{
+							Type: openai.ChatMessagePartTypeText,
+							Text: fmt.Sprintf("[Attached file: %s]\n%s", filename, textContent),
+						})
 					}
 				}
 				if part.FunctionCall != nil {
@@ -485,8 +516,19 @@ func (p *Provider) toOpenAIMessages(req *model.LLMRequest) []openai.ChatCompleti
 			}
 
 			msg := openai.ChatCompletionMessage{
-				Role:    role,
-				Content: sb.String(),
+				Role: role,
+			}
+			if hasInlineData {
+				// Use MultiContent for messages with inline data (images, files)
+				if sb.Len() > 0 {
+					multiParts = append([]openai.ChatMessagePart{{
+						Type: openai.ChatMessagePartTypeText,
+						Text: sb.String(),
+					}}, multiParts...)
+				}
+				msg.MultiContent = multiParts
+			} else {
+				msg.Content = sb.String()
 			}
 			if reasoningSB.Len() > 0 {
 				msg.ReasoningContent = reasoningSB.String()

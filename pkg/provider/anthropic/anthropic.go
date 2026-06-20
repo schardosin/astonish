@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -330,6 +331,23 @@ func (p *Provider) toAnthropicRequest(req *model.LLMRequest, streaming bool) (*R
 				})
 			}
 
+			if part.InlineData != nil {
+				// Anthropic supports "image" type for images and "document" type for
+				// PDFs and text-based files (txt, md, json, xml, yaml, html, etc.)
+				contentType := "document"
+				if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
+					contentType = "image"
+				}
+				content = append(content, Content{
+					Type: contentType,
+					Source: &ContentSource{
+						Type:      "base64",
+						MediaType: part.InlineData.MIMEType,
+						Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+					},
+				})
+			}
+
 			if part.FunctionCall != nil {
 				argsBytes, _ := json.Marshal(part.FunctionCall.Args)
 				content = append(content, Content{
@@ -427,6 +445,14 @@ type Content struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"` // For tool_result
 	Content   string          `json:"content,omitempty"`     // For tool_result (can be string or list of content blocks)
 	IsError   bool            `json:"is_error,omitempty"`    // For tool_result
+	Source    *ContentSource  `json:"source,omitempty"`      // For image/document attachments
+}
+
+// ContentSource represents the source data for image/document content blocks.
+type ContentSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // e.g. "image/png", "application/pdf"
+	Data      string `json:"data"`       // base64-encoded data
 }
 
 type Response struct {

@@ -3,6 +3,7 @@ package bedrock
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -45,6 +46,14 @@ type ContentBlock struct {
 	Input     *map[string]interface{} `json:"input,omitempty"` // Pointer so we can control when it's included
 	ToolUseID string                  `json:"tool_use_id,omitempty"`
 	Content   string                  `json:"content,omitempty"`
+	Source    *ImageSource            `json:"source,omitempty"` // For image/document attachments
+}
+
+// ImageSource represents the source data for image/document content blocks in Bedrock.
+type ImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // e.g. "image/png", "application/pdf"
+	Data      string `json:"data"`       // base64-encoded data
 }
 
 // Response represents the Bedrock response payload.
@@ -129,17 +138,58 @@ func ConvertRequest(req *model.LLMRequest, maxTokens int) (*Request, error) {
 				Content: contentBlocks,
 			})
 		} else {
-			// Regular text message
-			var textBuilder strings.Builder
+			// Regular text message — may also contain InlineData parts (attachments)
+			hasInlineData := false
 			for _, part := range content.Parts {
-				if part.Text != "" {
-					textBuilder.WriteString(part.Text)
+				if part.InlineData != nil {
+					hasInlineData = true
+					break
 				}
 			}
-			bedrockReq.Messages = append(bedrockReq.Messages, Message{
-				Role:    role,
-				Content: textBuilder.String(),
-			})
+
+			if hasInlineData {
+				// Build content blocks array (text + image/document blocks)
+				var contentBlocks []ContentBlock
+				for _, part := range content.Parts {
+					if part.Text != "" {
+						contentBlocks = append(contentBlocks, ContentBlock{
+							Type: "text",
+							Text: part.Text,
+						})
+					}
+					if part.InlineData != nil {
+						// Bedrock supports "image" for images, "document" for PDFs and text files
+						contentType := "document"
+						if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
+							contentType = "image"
+						}
+						contentBlocks = append(contentBlocks, ContentBlock{
+							Type: contentType,
+							Source: &ImageSource{
+								Type:      "base64",
+								MediaType: part.InlineData.MIMEType,
+								Data:      base64.StdEncoding.EncodeToString(part.InlineData.Data),
+							},
+						})
+					}
+				}
+				bedrockReq.Messages = append(bedrockReq.Messages, Message{
+					Role:    role,
+					Content: contentBlocks,
+				})
+			} else {
+				// Plain text message
+				var textBuilder strings.Builder
+				for _, part := range content.Parts {
+					if part.Text != "" {
+						textBuilder.WriteString(part.Text)
+					}
+				}
+				bedrockReq.Messages = append(bedrockReq.Messages, Message{
+					Role:    role,
+					Content: textBuilder.String(),
+				})
+			}
 		}
 	}
 

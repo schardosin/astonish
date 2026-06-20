@@ -341,31 +341,31 @@ func init() {
 	// sandboxtemplate.DefaultDescription holds the default value on creation for the description field.
 	sandboxtemplate.DefaultDescription = sandboxtemplateDescDescription.Default.(string)
 	// sandboxtemplateDescBuildStatus is the schema descriptor for build_status field.
-	sandboxtemplateDescBuildStatus := sandboxtemplateFields[11].Descriptor()
+	sandboxtemplateDescBuildStatus := sandboxtemplateFields[12].Descriptor()
 	// sandboxtemplate.DefaultBuildStatus holds the default value on creation for the build_status field.
 	sandboxtemplate.DefaultBuildStatus = sandboxtemplateDescBuildStatus.Default.(string)
 	// sandboxtemplateDescBuildJobName is the schema descriptor for build_job_name field.
-	sandboxtemplateDescBuildJobName := sandboxtemplateFields[12].Descriptor()
+	sandboxtemplateDescBuildJobName := sandboxtemplateFields[13].Descriptor()
 	// sandboxtemplate.DefaultBuildJobName holds the default value on creation for the build_job_name field.
 	sandboxtemplate.DefaultBuildJobName = sandboxtemplateDescBuildJobName.Default.(string)
 	// sandboxtemplateDescBuildError is the schema descriptor for build_error field.
-	sandboxtemplateDescBuildError := sandboxtemplateFields[13].Descriptor()
+	sandboxtemplateDescBuildError := sandboxtemplateFields[14].Descriptor()
 	// sandboxtemplate.DefaultBuildError holds the default value on creation for the build_error field.
 	sandboxtemplate.DefaultBuildError = sandboxtemplateDescBuildError.Default.(string)
 	// sandboxtemplateDescLastBuiltImage is the schema descriptor for last_built_image field.
-	sandboxtemplateDescLastBuiltImage := sandboxtemplateFields[14].Descriptor()
+	sandboxtemplateDescLastBuiltImage := sandboxtemplateFields[15].Descriptor()
 	// sandboxtemplate.DefaultLastBuiltImage holds the default value on creation for the last_built_image field.
 	sandboxtemplate.DefaultLastBuiltImage = sandboxtemplateDescLastBuiltImage.Default.(string)
 	// sandboxtemplateDescVersion is the schema descriptor for version field.
-	sandboxtemplateDescVersion := sandboxtemplateFields[19].Descriptor()
+	sandboxtemplateDescVersion := sandboxtemplateFields[20].Descriptor()
 	// sandboxtemplate.DefaultVersion holds the default value on creation for the version field.
 	sandboxtemplate.DefaultVersion = sandboxtemplateDescVersion.Default.(int)
 	// sandboxtemplateDescCreatedAt is the schema descriptor for created_at field.
-	sandboxtemplateDescCreatedAt := sandboxtemplateFields[21].Descriptor()
+	sandboxtemplateDescCreatedAt := sandboxtemplateFields[22].Descriptor()
 	// sandboxtemplate.DefaultCreatedAt holds the default value on creation for the created_at field.
 	sandboxtemplate.DefaultCreatedAt = sandboxtemplateDescCreatedAt.Default.(func() time.Time)
 	// sandboxtemplateDescUpdatedAt is the schema descriptor for updated_at field.
-	sandboxtemplateDescUpdatedAt := sandboxtemplateFields[22].Descriptor()
+	sandboxtemplateDescUpdatedAt := sandboxtemplateFields[23].Descriptor()
 	// sandboxtemplate.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	sandboxtemplate.DefaultUpdatedAt = sandboxtemplateDescUpdatedAt.Default.(func() time.Time)
 	// sandboxtemplate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

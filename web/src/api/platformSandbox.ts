@@ -188,19 +188,19 @@ export function configureBase({ config, onProgress, onDone, onError }: Configure
 // --- Image Build API (OpenShell / Kaniko) ---
 
 export interface ImageBuildCallbacks {
-  packages: string[]
+  dockerfileBody: string
   onProgress: (msg: string) => void
   onDone: (result: { image: string }) => void
   onError: (err: string) => void
 }
 
-export function buildBaseImage({ packages, onProgress, onDone, onError }: ImageBuildCallbacks): { abort: () => void } {
+export function buildBaseImage({ dockerfileBody, onProgress, onDone, onError }: ImageBuildCallbacks): { abort: () => void } {
   const controller = new AbortController()
 
   adminFetch(`${BASE}/build`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ packages }),
+    body: JSON.stringify({ dockerfile_body: dockerfileBody }),
     signal: controller.signal,
   })
     .then(async (res) => {
@@ -274,4 +274,26 @@ export async function getBaseImageBuildStatus(): Promise<ImageBuildStatus> {
     throw new Error(`Failed to fetch build status: ${res.statusText}`)
   }
   return res.json()
+}
+
+// --- Platform Dockerfile CRUD ---
+
+export async function fetchPlatformDockerfile(): Promise<string> {
+  const res = await adminFetch(`${BASE}/dockerfile`)
+  if (!res.ok) return ''
+  const data = await res.json()
+  return data.dockerfile_body || ''
+}
+
+export async function savePlatformDockerfile(dockerfileBody: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await adminFetch(`${BASE}/dockerfile`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dockerfile_body: dockerfileBody }),
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    return { ok: false, error: data.error || res.statusText }
+  }
+  return { ok: true }
 }

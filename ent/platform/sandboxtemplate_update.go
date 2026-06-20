@@ -193,6 +193,26 @@ func (_u *SandboxTemplateUpdate) ClearPackages() *SandboxTemplateUpdate {
 	return _u
 }
 
+// SetDockerfileBody sets the "dockerfile_body" field.
+func (_u *SandboxTemplateUpdate) SetDockerfileBody(v string) *SandboxTemplateUpdate {
+	_u.mutation.SetDockerfileBody(v)
+	return _u
+}
+
+// SetNillableDockerfileBody sets the "dockerfile_body" field if the given value is not nil.
+func (_u *SandboxTemplateUpdate) SetNillableDockerfileBody(v *string) *SandboxTemplateUpdate {
+	if v != nil {
+		_u.SetDockerfileBody(*v)
+	}
+	return _u
+}
+
+// ClearDockerfileBody clears the value of the "dockerfile_body" field.
+func (_u *SandboxTemplateUpdate) ClearDockerfileBody() *SandboxTemplateUpdate {
+	_u.mutation.ClearDockerfileBody()
+	return _u
+}
+
 // SetBuildStatus sets the "build_status" field.
 func (_u *SandboxTemplateUpdate) SetBuildStatus(v string) *SandboxTemplateUpdate {
 	_u.mutation.SetBuildStatus(v)
@@ -562,6 +582,12 @@ func (_u *SandboxTemplateUpdate) sqlSave(ctx context.Context) (_node int, err er
 	if _u.mutation.PackagesCleared() {
 		_spec.ClearField(sandboxtemplate.FieldPackages, field.TypeJSON)
 	}
+	if value, ok := _u.mutation.DockerfileBody(); ok {
+		_spec.SetField(sandboxtemplate.FieldDockerfileBody, field.TypeString, value)
+	}
+	if _u.mutation.DockerfileBodyCleared() {
+		_spec.ClearField(sandboxtemplate.FieldDockerfileBody, field.TypeString)
+	}
 	if value, ok := _u.mutation.BuildStatus(); ok {
 		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)
 	}
@@ -895,6 +921,26 @@ func (_u *SandboxTemplateUpdateOne) AppendPackages(v []string) *SandboxTemplateU
 // ClearPackages clears the value of the "packages" field.
 func (_u *SandboxTemplateUpdateOne) ClearPackages() *SandboxTemplateUpdateOne {
 	_u.mutation.ClearPackages()
+	return _u
+}
+
+// SetDockerfileBody sets the "dockerfile_body" field.
+func (_u *SandboxTemplateUpdateOne) SetDockerfileBody(v string) *SandboxTemplateUpdateOne {
+	_u.mutation.SetDockerfileBody(v)
+	return _u
+}
+
+// SetNillableDockerfileBody sets the "dockerfile_body" field if the given value is not nil.
+func (_u *SandboxTemplateUpdateOne) SetNillableDockerfileBody(v *string) *SandboxTemplateUpdateOne {
+	if v != nil {
+		_u.SetDockerfileBody(*v)
+	}
+	return _u
+}
+
+// ClearDockerfileBody clears the value of the "dockerfile_body" field.
+func (_u *SandboxTemplateUpdateOne) ClearDockerfileBody() *SandboxTemplateUpdateOne {
+	_u.mutation.ClearDockerfileBody()
 	return _u
 }
 
@@ -1296,6 +1342,12 @@ func (_u *SandboxTemplateUpdateOne) sqlSave(ctx context.Context) (_node *Sandbox
 	}
 	if _u.mutation.PackagesCleared() {
 		_spec.ClearField(sandboxtemplate.FieldPackages, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.DockerfileBody(); ok {
+		_spec.SetField(sandboxtemplate.FieldDockerfileBody, field.TypeString, value)
+	}
+	if _u.mutation.DockerfileBodyCleared() {
+		_spec.ClearField(sandboxtemplate.FieldDockerfileBody, field.TypeString)
 	}
 	if value, ok := _u.mutation.BuildStatus(); ok {
 		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)

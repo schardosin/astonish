@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -20,7 +22,24 @@ import (
 
 // imageBuildRequest is the request body for build endpoints.
 type imageBuildRequest struct {
-	Packages []string `json:"packages"`
+	// DockerfileBody is the user-authored Dockerfile content (everything after
+	// FROM). Supports full Dockerfile syntax: RUN, ENV, WORKDIR, ARG, COPY, etc.
+	// FROM, ENTRYPOINT, CMD, and EXPOSE are rejected.
+	DockerfileBody string `json:"dockerfile_body"`
+
+	// Packages is deprecated — kept for backward compatibility. If set and
+	// DockerfileBody is empty, packages are auto-migrated to a Dockerfile body.
+	Packages []string `json:"packages,omitempty"`
+}
+
+// dockerfileBodyRequest is used for save-without-build endpoints.
+type dockerfileBodyRequest struct {
+	DockerfileBody string `json:"dockerfile_body"`
+}
+
+// dockerfileBodyResponse is the response for Dockerfile body GET endpoints.
+type dockerfileBodyResponse struct {
+	DockerfileBody string `json:"dockerfile_body"`
 }
 
 // imageBuildStatusResponse is the response for build status endpoints.
@@ -54,8 +73,19 @@ func PlatformImageBuildHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if len(req.Packages) == 0 {
-		respondError(w, http.StatusBadRequest, "at least one package is required")
+
+	// Resolve dockerfile body: prefer DockerfileBody, fall back to migrating
+	// legacy Packages field.
+	dockerfileBody := req.DockerfileBody
+	if dockerfileBody == "" && len(req.Packages) > 0 {
+		dockerfileBody = imagebuilder.MigratePackagesToDockerfile(req.Packages)
+	}
+	if strings.TrimSpace(dockerfileBody) == "" {
+		respondError(w, http.StatusBadRequest, "dockerfile_body is required (or packages for backward compatibility)")
+		return
+	}
+	if err := validateDockerfileBody(dockerfileBody); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -104,7 +134,7 @@ func PlatformImageBuildHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runImageBuild(r.Context(), w, flusher, &osCfg, &appCfg.Sandbox.Kubernetes, tplStore, base, baseImage, "base", req.Packages)
+	runImageBuild(r.Context(), w, flusher, &osCfg, &appCfg.Sandbox.Kubernetes, tplStore, base, baseImage, "base", dockerfileBody, "")
 }
 
 // PlatformImageBuildStatusHandler handles GET /api/platform/admin/sandbox/base/build/status.
@@ -167,8 +197,19 @@ func TeamImageBuildHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
-	if len(req.Packages) == 0 {
-		respondError(w, http.StatusBadRequest, "at least one package is required")
+
+	// Resolve dockerfile body: prefer DockerfileBody, fall back to migrating
+	// legacy Packages field.
+	dockerfileBody := req.DockerfileBody
+	if dockerfileBody == "" && len(req.Packages) > 0 {
+		dockerfileBody = imagebuilder.MigratePackagesToDockerfile(req.Packages)
+	}
+	if strings.TrimSpace(dockerfileBody) == "" {
+		respondError(w, http.StatusBadRequest, "dockerfile_body is required (or packages for backward compatibility)")
+		return
+	}
+	if err := validateDockerfileBody(dockerfileBody); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -217,17 +258,12 @@ func TeamImageBuildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	// Resolve base image: team's current image > platform base image > config default.
-	baseImage := ""
-	if tpl.SandboxImage != nil && *tpl.SandboxImage != "" {
-		baseImage = *tpl.SandboxImage
-	}
-	if baseImage == "" {
-		baseImage = resolveBaseImage(r.Context())
-	}
-	if baseImage == "" {
-		baseImage = osCfg.SandboxImage
-	}
+	// Always build from the ORIGINAL base image (Layer 1).
+	// Never use a previously-built custom image as base.
+	baseImage := osCfg.SandboxImage
+
+	// Resolve platform Dockerfile body (Layer 2) to merge with team body.
+	platformBody := resolvePlatformDockerfileBody(r.Context())
 
 	// Set up SSE streaming.
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -240,7 +276,7 @@ func TeamImageBuildHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	runImageBuild(r.Context(), w, flusher, &osCfg, &appCfg.Sandbox.Kubernetes, tplStore, tpl, baseImage, tc.TeamSlug, req.Packages)
+	runImageBuild(r.Context(), w, flusher, &osCfg, &appCfg.Sandbox.Kubernetes, tplStore, tpl, baseImage, tc.TeamSlug, platformBody, dockerfileBody)
 }
 
 // TeamImageBuildStatusHandler handles GET /api/team/template/build/status.
@@ -298,7 +334,8 @@ func runImageBuild(
 	tpl *store.SandboxTemplate,
 	baseImage string,
 	scope string,
-	packages []string,
+	platformBody string,
+	teamBody string,
 ) {
 	// Create the K8s client for spawning the build Job.
 	k8sClient, _, err := k8sbackend.NewClientFromOptions(k8sbackend.LoadConfigOptions{
@@ -326,11 +363,16 @@ func runImageBuild(
 	})
 
 	// Mark build as starting.
+	// Store the team body (or platform body for base builds) in the template record.
 	now := time.Now()
 	tpl.BuildStatus = "building"
 	tpl.BuildError = ""
 	tpl.BuildStartedAt = &now
-	tpl.Packages = packages
+	if scope == "base" {
+		tpl.DockerfileBody = &platformBody
+	} else {
+		tpl.DockerfileBody = &teamBody
+	}
 	_ = tplStore.Update(ctx, tpl)
 
 	onProgress := func(_ context.Context, msg string) {
@@ -339,9 +381,10 @@ func runImageBuild(
 
 	// Start the build (creates ConfigMap + Job).
 	result, err := builder.Build(ctx, imagebuilder.BuildSpec{
-		Scope:     scope,
-		BaseImage: baseImage,
-		Packages:  packages,
+		Scope:        scope,
+		BaseImage:    baseImage,
+		PlatformBody: platformBody,
+		TeamBody:     teamBody,
 	}, onProgress)
 	if err != nil {
 		tpl.BuildStatus = "failed"
@@ -362,8 +405,34 @@ func runImageBuild(
 
 	_ = builder.StreamLogs(buildCtx, result.JobName, onProgress)
 
-	// Check final status.
-	status, err := builder.GetBuildStatus(ctx, result.JobName)
+	// After StreamLogs returns (pod exited or context cancelled), poll for a
+	// terminal Job condition. The K8s Job controller typically reconciles within
+	// seconds, but if StreamLogs was interrupted by the build timeout while the
+	// pod is still running, we continue polling for up to 5 more minutes.
+	var status *imagebuilder.BuildStatus
+	pollDeadline := time.Now().Add(5 * time.Minute)
+	for attempt := 0; ; attempt++ {
+		status, err = builder.GetBuildStatus(ctx, result.JobName)
+		if err != nil {
+			break
+		}
+		if status.Phase == imagebuilder.BuildPhaseSucceeded || status.Phase == imagebuilder.BuildPhaseFailed {
+			break
+		}
+		if time.Now().After(pollDeadline) {
+			break
+		}
+		// Short backoff: 1s for first 10, then 5s thereafter.
+		if attempt < 10 {
+			time.Sleep(1 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+		// Keep the client informed that we're still waiting.
+		if attempt > 0 && attempt%10 == 0 {
+			SendSSE(w, flusher, "progress", map[string]string{"message": "Waiting for build to complete..."})
+		}
+	}
 	if err != nil {
 		tpl.BuildStatus = "failed"
 		tpl.BuildError = "failed to get build status: " + err.Error()
@@ -382,6 +451,18 @@ func runImageBuild(
 		tpl.BuildError = ""
 		if err := tplStore.Update(ctx, tpl); err != nil {
 			slog.Error("failed to update template after successful build", "error", err)
+		}
+
+		// For team-scoped builds, wire team settings so chat sessions use this image.
+		if tpl.Scope == store.SandboxTemplateScopeTeam && tpl.OwnerID != "" {
+			if svc := store.FromContext(ctx); svc != nil && svc.Settings != nil {
+				if settings, sErr := svc.Settings.Get(ctx); sErr == nil {
+					if settings.TemplateName != tpl.Slug {
+						settings.TemplateName = tpl.Slug
+						_ = svc.Settings.Save(ctx, settings)
+					}
+				}
+			}
 		}
 
 		SendSSE(w, flusher, "done", map[string]string{
@@ -417,4 +498,199 @@ func formatOptionalTime(t *time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+// ---------------------------------------------------------------------------
+// Dockerfile body validation
+// ---------------------------------------------------------------------------
+
+// forbiddenInstructionRe matches Dockerfile instructions that are controlled
+// by the platform and must not appear in user-authored bodies.
+var forbiddenInstructionRe = regexp.MustCompile(`(?mi)^\s*(FROM|ENTRYPOINT|CMD|EXPOSE)\s`)
+
+// validateDockerfileBody checks that the body doesn't contain forbidden
+// instructions and respects size limits.
+func validateDockerfileBody(body string) error {
+	if len(body) > 65536 {
+		return fmt.Errorf("dockerfile body too large (max 64KB)")
+	}
+	matches := forbiddenInstructionRe.FindAllString(body, 1)
+	if len(matches) > 0 {
+		instruction := strings.TrimSpace(matches[0])
+		return fmt.Errorf("forbidden instruction %q: FROM, ENTRYPOINT, CMD, and EXPOSE are controlled by the platform", instruction)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Dockerfile body CRUD endpoints
+// ---------------------------------------------------------------------------
+
+// TeamDockerfileGetHandler handles GET /api/team/template/dockerfile.
+// Returns the saved Dockerfile body for the team's template.
+func TeamDockerfileGetHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
+	tc := store.TenantContextFrom(r.Context())
+	if tc == nil || tc.TeamSlug == "" {
+		respondError(w, http.StatusBadRequest, "team context required")
+		return
+	}
+
+	db := getPlatformBackend()
+	if db == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	tplStore := db.SandboxTemplates()
+
+	templateName := "team-" + tc.TeamSlug
+	tpl, err := tplStore.GetBySlug(r.Context(), store.SandboxTemplateScopeTeam, tc.TeamSlug, templateName)
+	if err != nil || tpl == nil {
+		// No template yet — return empty body.
+		respondJSON(w, http.StatusOK, dockerfileBodyResponse{})
+		return
+	}
+
+	body := ""
+	if tpl.DockerfileBody != nil {
+		body = *tpl.DockerfileBody
+	} else if len(tpl.Packages) > 0 {
+		// Auto-migrate legacy packages to Dockerfile body for display.
+		body = imagebuilder.MigratePackagesToDockerfile(tpl.Packages)
+	}
+
+	respondJSON(w, http.StatusOK, dockerfileBodyResponse{DockerfileBody: body})
+}
+
+// TeamDockerfileSaveHandler handles PUT /api/team/template/dockerfile.
+// Saves the Dockerfile body without triggering a build.
+func TeamDockerfileSaveHandler(w http.ResponseWriter, r *http.Request) {
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
+	tc := store.TenantContextFrom(r.Context())
+	if tc == nil || tc.TeamSlug == "" {
+		respondError(w, http.StatusBadRequest, "team context required")
+		return
+	}
+
+	var req dockerfileBodyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := validateDockerfileBody(req.DockerfileBody); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	db := getPlatformBackend()
+	if db == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	tplStore := db.SandboxTemplates()
+
+	templateName := "team-" + tc.TeamSlug
+	tpl, err := tplStore.GetBySlug(r.Context(), store.SandboxTemplateScopeTeam, tc.TeamSlug, templateName)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to look up team template")
+		return
+	}
+	if tpl == nil {
+		// Create the template on-the-fly.
+		tpl = &store.SandboxTemplate{
+			Slug:           templateName,
+			Scope:          store.SandboxTemplateScopeTeam,
+			OwnerID:        tc.TeamSlug,
+			Name:           fmt.Sprintf("Team %s", tc.TeamSlug),
+			DockerfileBody: &req.DockerfileBody,
+			Version:        1,
+		}
+		if err := tplStore.Create(r.Context(), tpl); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to create team template: "+err.Error())
+			return
+		}
+	} else {
+		tpl.DockerfileBody = &req.DockerfileBody
+		if err := tplStore.Update(r.Context(), tpl); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save dockerfile: "+err.Error())
+			return
+		}
+	}
+
+	// Wire team settings so chat sessions resolve this template's image.
+	if svc := store.FromContext(r.Context()); svc != nil && svc.Settings != nil {
+		if settings, sErr := svc.Settings.Get(r.Context()); sErr == nil {
+			if settings.TemplateName != templateName {
+				settings.TemplateName = templateName
+				_ = svc.Settings.Save(r.Context(), settings)
+			}
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})
+}
+
+// PlatformDockerfileGetHandler handles GET /api/platform/admin/sandbox/base/dockerfile.
+func PlatformDockerfileGetHandler(w http.ResponseWriter, r *http.Request) {
+	db := getPlatformBackend()
+	if db == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	tplStore := db.SandboxTemplates()
+
+	base, err := tplStore.GetBySlug(r.Context(), store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || base == nil {
+		respondJSON(w, http.StatusOK, dockerfileBodyResponse{})
+		return
+	}
+
+	body := ""
+	if base.DockerfileBody != nil {
+		body = *base.DockerfileBody
+	} else if len(base.Packages) > 0 {
+		body = imagebuilder.MigratePackagesToDockerfile(base.Packages)
+	}
+
+	respondJSON(w, http.StatusOK, dockerfileBodyResponse{DockerfileBody: body})
+}
+
+// PlatformDockerfileSaveHandler handles PUT /api/platform/admin/sandbox/base/dockerfile.
+func PlatformDockerfileSaveHandler(w http.ResponseWriter, r *http.Request) {
+	var req dockerfileBodyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := validateDockerfileBody(req.DockerfileBody); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	db := getPlatformBackend()
+	if db == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform database not available")
+		return
+	}
+	tplStore := db.SandboxTemplates()
+
+	base, err := tplStore.GetBySlug(r.Context(), store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || base == nil {
+		respondError(w, http.StatusInternalServerError, "failed to look up @base template")
+		return
+	}
+
+	base.DockerfileBody = &req.DockerfileBody
+	if err := tplStore.Update(r.Context(), base); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save dockerfile: "+err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 }

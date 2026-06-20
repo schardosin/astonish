@@ -40,6 +40,8 @@ type SandboxTemplate struct {
 	SandboxImage *string `json:"sandbox_image,omitempty"`
 	// Packages holds the value of the "packages" field.
 	Packages []string `json:"packages,omitempty"`
+	// DockerfileBody holds the value of the "dockerfile_body" field.
+	DockerfileBody *string `json:"dockerfile_body,omitempty"`
 	// BuildStatus holds the value of the "build_status" field.
 	BuildStatus string `json:"build_status,omitempty"`
 	// BuildJobName holds the value of the "build_job_name" field.
@@ -125,7 +127,7 @@ func (*SandboxTemplate) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case sandboxtemplate.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case sandboxtemplate.FieldSlug, sandboxtemplate.FieldScope, sandboxtemplate.FieldOwnerID, sandboxtemplate.FieldPurpose, sandboxtemplate.FieldName, sandboxtemplate.FieldDescription, sandboxtemplate.FieldTopLayerID, sandboxtemplate.FieldSandboxImage, sandboxtemplate.FieldBuildStatus, sandboxtemplate.FieldBuildJobName, sandboxtemplate.FieldBuildError, sandboxtemplate.FieldLastBuiltImage:
+		case sandboxtemplate.FieldSlug, sandboxtemplate.FieldScope, sandboxtemplate.FieldOwnerID, sandboxtemplate.FieldPurpose, sandboxtemplate.FieldName, sandboxtemplate.FieldDescription, sandboxtemplate.FieldTopLayerID, sandboxtemplate.FieldSandboxImage, sandboxtemplate.FieldDockerfileBody, sandboxtemplate.FieldBuildStatus, sandboxtemplate.FieldBuildJobName, sandboxtemplate.FieldBuildError, sandboxtemplate.FieldLastBuiltImage:
 			values[i] = new(sql.NullString)
 		case sandboxtemplate.FieldBuildStartedAt, sandboxtemplate.FieldConfiguredAt, sandboxtemplate.FieldCreatedAt, sandboxtemplate.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -216,6 +218,13 @@ func (_m *SandboxTemplate) assignValues(columns []string, values []any) error {
 				if err := json.Unmarshal(*value, &_m.Packages); err != nil {
 					return fmt.Errorf("unmarshal field packages: %w", err)
 				}
+			}
+		case sandboxtemplate.FieldDockerfileBody:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field dockerfile_body", values[i])
+			} else if value.Valid {
+				_m.DockerfileBody = new(string)
+				*_m.DockerfileBody = value.String
 			}
 		case sandboxtemplate.FieldBuildStatus:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -381,6 +390,11 @@ func (_m *SandboxTemplate) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("packages=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Packages))
+	builder.WriteString(", ")
+	if v := _m.DockerfileBody; v != nil {
+		builder.WriteString("dockerfile_body=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("build_status=")
 	builder.WriteString(_m.BuildStatus)

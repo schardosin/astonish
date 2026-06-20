@@ -307,7 +307,11 @@ func resolveBaseImage(ctx context.Context) string {
 	if templates == nil {
 		return ""
 	}
+	return resolveBaseImageWith(ctx, templates)
+}
 
+// resolveBaseImageWith is the testable core of resolveBaseImage.
+func resolveBaseImageWith(ctx context.Context, templates store.SandboxTemplateStore) string {
 	// Look up the @base template (scope=global, slug="base", owner_id="").
 	tpl, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
 	if err != nil || tpl == nil {
@@ -315,6 +319,33 @@ func resolveBaseImage(ctx context.Context) string {
 	}
 	if tpl.SandboxImage != nil && *tpl.SandboxImage != "" {
 		return *tpl.SandboxImage
+	}
+	return ""
+}
+
+// resolvePlatformDockerfileBody returns the Dockerfile body from the @base
+// (platform) template. This is the platform admin's Layer 2 recipe that gets
+// merged into every team build.
+func resolvePlatformDockerfileBody(ctx context.Context) string {
+	backend := getPlatformBackend()
+	if backend == nil {
+		return ""
+	}
+	templates := backend.SandboxTemplates()
+	if templates == nil {
+		return ""
+	}
+	return resolvePlatformDockerfileBodyWith(ctx, templates)
+}
+
+// resolvePlatformDockerfileBodyWith is the testable core of resolvePlatformDockerfileBody.
+func resolvePlatformDockerfileBodyWith(ctx context.Context, templates store.SandboxTemplateStore) string {
+	tpl, err := templates.GetBySlug(ctx, store.SandboxTemplateScopeGlobal, "", "base")
+	if err != nil || tpl == nil {
+		return ""
+	}
+	if tpl.DockerfileBody != nil {
+		return *tpl.DockerfileBody
 	}
 	return ""
 }

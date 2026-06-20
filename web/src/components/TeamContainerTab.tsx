@@ -1,9 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
 import { Box, Play, Save, RotateCcw, Trash2, Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react'
+import CodeMirror from '@uiw/react-codemirror'
+import { StreamLanguage } from '@codemirror/language'
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
+import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { keymap, EditorView } from '@codemirror/view'
 import {
   fetchTeamTemplateStatus, createTeamTemplate, saveTeamTemplate,
   restoreTeamTemplate, deleteTeamTemplate, startTeamTemplate,
   setTeamTemplateImage, buildTeamImage,
+  fetchTeamDockerfile, saveTeamDockerfile,
   type TeamTemplateStatus,
 } from '../api/sandbox'
 
@@ -33,7 +39,9 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
   // OpenShell image state
   const [imageInput, setImageInput] = useState('')
   const [savingImage, setSavingImage] = useState(false)
-  const [packagesInput, setPackagesInput] = useState('')
+  const [dockerfileBody, setDockerfileBody] = useState('')
+  const [savedDockerfileBody, setSavedDockerfileBody] = useState('')
+  const [savingDockerfile, setSavingDockerfile] = useState(false)
   const [buildingImage, setBuildingImage] = useState(false)
   const [buildLog, setBuildLog] = useState<string[]>([])
   const buildAbortRef = useRef<(() => void) | null>(null)
@@ -46,6 +54,11 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
       // Populate image input for OpenShell backend
       if (s.backend === 'openshell') {
         setImageInput(s.sandboxImage || '')
+        // Load the saved Dockerfile body
+        fetchTeamDockerfile(teamSlug).then(body => {
+          setDockerfileBody(body)
+          setSavedDockerfileBody(body)
+        })
       }
       // Auto-show terminal if container is running
       if (s.exists && s.running) {
@@ -294,31 +307,52 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
           </div>
         )}
 
-        {/* Package-based image build */}
+        {/* Dockerfile-based image build */}
         {canManage && (
           <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Build from Package List</h4>
-            <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-              Specify apt packages to install. A new image will be built and set as this team's sandbox image.
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Dockerfile Recipe</h4>
+                <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                  Write Dockerfile instructions to customize the sandbox image. <code>FROM</code> is added automatically.
+                </p>
+              </div>
+              {dockerfileBody !== savedDockerfileBody && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(234, 179, 8, 0.1)', color: '#eab308', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                  Unsaved
+                </span>
+              )}
+            </div>
 
-            <div className="space-y-2">
-              <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-                Packages (one per line)
-              </label>
-              <textarea
-                value={packagesInput}
-                onChange={e => setPackagesInput(e.target.value)}
-                placeholder={"curl\ngit\njq\npython3"}
-                rows={4}
-                disabled={buildingImage}
-                className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono resize-y"
-                style={{
-                  background: 'var(--bg-tertiary)',
-                  border: '1px solid var(--border-color)',
-                  color: 'var(--text-primary)',
+            <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>
+              <CodeMirror
+                value={dockerfileBody}
+                onChange={setDockerfileBody}
+                height="200px"
+                extensions={[
+                  StreamLanguage.define(dockerFile),
+                  search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
+                  highlightSelectionMatches(),
+                  keymap.of(searchKeymap),
+                ]}
+                theme={theme === 'dark' ? 'dark' : 'light'}
+                editable={!buildingImage}
+                className="text-xs"
+                placeholder={"# Example:\nRUN apt-get update && apt-get install -y curl git\nRUN pip install requests\nENV MY_VAR=value"}
+                basicSetup={{
+                  lineNumbers: true,
+                  highlightActiveLineGutter: true,
+                  highlightActiveLine: true,
+                  foldGutter: false,
                 }}
               />
+            </div>
+
+            <div className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+              <Info size={12} style={{ color: '#3b82f6', flexShrink: 0 }} />
+              <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+                Allowed: RUN, ENV, ARG, WORKDIR, COPY --from=, LABEL. Forbidden: FROM, ENTRYPOINT, CMD, EXPOSE (controlled by platform).
+              </span>
             </div>
 
             {/* Build log */}
@@ -337,6 +371,28 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
             )}
 
             <div className="flex items-center justify-end gap-2">
+              {dockerfileBody !== savedDockerfileBody && (
+                <button
+                  onClick={async () => {
+                    setSavingDockerfile(true)
+                    setError('')
+                    const result = await saveTeamDockerfile(teamSlug, dockerfileBody)
+                    if (result.ok) {
+                      setSavedDockerfileBody(dockerfileBody)
+                      setSuccess('Dockerfile saved')
+                    } else {
+                      setError(result.error || 'Failed to save Dockerfile')
+                    }
+                    setSavingDockerfile(false)
+                  }}
+                  disabled={savingDockerfile}
+                  className={btnBase}
+                  style={{ color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+                >
+                  {savingDockerfile ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                  Save
+                </button>
+              )}
               {buildingImage && (
                 <button
                   onClick={() => { buildAbortRef.current?.(); setBuildingImage(false); setBuildLog(prev => [...prev, '--- Cancelled ---']) }}
@@ -348,32 +404,40 @@ export default function TeamContainerTab({ teamSlug, theme, canManage }: TeamCon
               )}
               <button
                 onClick={() => {
-                  const packages = packagesInput.trim().split('\n').map(l => l.trim()).filter(Boolean)
-                  if (packages.length === 0) return
+                  if (!dockerfileBody.trim()) return
                   setError('')
                   setSuccess('')
                   setBuildLog([])
                   setBuildingImage(true)
-                  const { abort } = buildTeamImage({
-                    packages,
-                    teamSlug,
-                    onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
-                    onDone: (result) => {
+                  // Save first, then build
+                  saveTeamDockerfile(teamSlug, dockerfileBody).then(saveResult => {
+                    if (!saveResult.ok) {
+                      setError(saveResult.error || 'Failed to save Dockerfile before build')
                       setBuildingImage(false)
-                      setSuccess(`Build complete! Image: ${result.image}`)
-                      setImageInput(result.image)
-                      loadStatus()
-                    },
-                    onError: (err) => {
-                      setBuildingImage(false)
-                      setError(err)
-                    },
+                      return
+                    }
+                    setSavedDockerfileBody(dockerfileBody)
+                    const { abort } = buildTeamImage({
+                      dockerfileBody,
+                      teamSlug,
+                      onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
+                      onDone: (result) => {
+                        setBuildingImage(false)
+                        setSuccess(`Build complete! Image: ${result.image}`)
+                        setImageInput(result.image)
+                        loadStatus()
+                      },
+                      onError: (err) => {
+                        setBuildingImage(false)
+                        setError(err)
+                      },
+                    })
+                    buildAbortRef.current = abort
                   })
-                  buildAbortRef.current = abort
                 }}
-                disabled={buildingImage || !packagesInput.trim()}
+                disabled={buildingImage || !dockerfileBody.trim()}
                 className={btnBase}
-                style={{ background: 'var(--accent)', color: '#fff', opacity: (buildingImage || !packagesInput.trim()) ? 0.5 : 1 }}
+                style={{ background: 'var(--accent)', color: '#fff', opacity: (buildingImage || !dockerfileBody.trim()) ? 0.5 : 1 }}
               >
                 {buildingImage ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
                 {buildingImage ? 'Building...' : 'Build Image'}

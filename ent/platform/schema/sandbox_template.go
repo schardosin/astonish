@@ -51,8 +51,17 @@ func (SandboxTemplate) Fields() []ent.Field {
 			Nillable(),
 		// packages holds the list of apt packages to install when building
 		// a custom sandbox image for this template. JSON-encoded string array.
+		// DEPRECATED: Use dockerfile_body instead for full Dockerfile control.
 		field.JSON("packages", []string{}).
 			Optional(),
+		// dockerfile_body stores the user-authored Dockerfile instructions
+		// (everything after FROM). Supports arbitrary Dockerfile syntax: RUN,
+		// ENV, WORKDIR, COPY --from=, etc. The FROM line is auto-prepended at
+		// build time using the platform's configured base image. ENTRYPOINT,
+		// CMD, EXPOSE, and FROM are rejected by API validation.
+		field.Text("dockerfile_body").
+			Optional().
+			Nillable(),
 		// build_status tracks the state of the last image build Job.
 		// Values: "", "building", "succeeded", "failed".
 		field.String("build_status").

@@ -1,7 +1,7 @@
 // Package imagebuilder provides Kaniko-based container image building for
-// the OpenShell sandbox backend. It generates Dockerfiles from package lists,
-// spawns Kaniko build Jobs in the control-plane namespace, and tracks build
-// progress via pod log streaming.
+// the OpenShell sandbox backend. It accepts user-authored Dockerfile bodies
+// (arbitrary instructions after FROM), spawns Kaniko build Jobs in the
+// control-plane namespace, and tracks build progress via pod log streaming.
 package imagebuilder
 
 import (
@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -55,11 +54,17 @@ type BuildSpec struct {
 	// or a team slug for team-scoped builds.
 	Scope string
 
-	// BaseImage is the FROM image in the generated Dockerfile.
+	// BaseImage is the original application-delivered image (Layer 1).
+	// Always used as the FROM base — never the previously-built image.
 	BaseImage string
 
-	// Packages is the list of apt packages to install.
-	Packages []string
+	// PlatformBody is the platform admin's Dockerfile recipe (Layer 2).
+	// Included in all builds. May be empty if the admin hasn't configured one.
+	PlatformBody string
+
+	// TeamBody is the team-specific Dockerfile recipe (Layer 3).
+	// Empty for platform builds, non-empty for team builds.
+	TeamBody string
 }
 
 // BuildResult is returned after a build Job is created.
@@ -90,28 +95,36 @@ const (
 	BuildPhaseUnknown   BuildPhase = "unknown"
 )
 
-// ImageTag computes the deterministic image reference for a given scope and
-// package list. The tag is the first 12 chars of SHA256(sorted packages).
-func (b *Builder) ImageTag(scope string, packages []string) string {
-	return ImageRef(b.cfg.RegistryURL, scope, packages)
+// ImageTag computes the deterministic image reference for a given spec.
+func (b *Builder) ImageTag(spec BuildSpec) string {
+	combined := CombinedBody(spec.PlatformBody, spec.TeamBody)
+	return ImageRef(b.cfg.RegistryURL, spec.Scope, combined)
 }
 
-// ImageRef computes the full image reference given a registry URL, scope, and packages.
-func ImageRef(registryURL, scope string, packages []string) string {
-	sorted := slices.Clone(packages)
-	slices.Sort(sorted)
-
-	h := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+// ImageRef computes the full image reference given a registry URL, scope, and
+// combined Dockerfile body. The tag is the first 12 chars of SHA256(body).
+func ImageRef(registryURL, scope, combinedBody string) string {
+	h := sha256.Sum256([]byte(combinedBody))
 	tag := hex.EncodeToString(h[:])[:12]
+	return fmt.Sprintf("%s/astonish-sandbox-%s:%s", registryURL, sanitizeDNS(scope), tag)
+}
 
-	return fmt.Sprintf("%s/astonish-sandbox-%s:%s", registryURL, scope, tag)
+// ContentHash returns the deterministic hash for a combined Dockerfile body.
+// Used to detect no-op rebuilds (same content → same hash → same image tag).
+func ContentHash(combinedBody string) string {
+	h := sha256.Sum256([]byte(combinedBody))
+	return hex.EncodeToString(h[:])[:12]
+}
+
+// CombinedBody merges platform and team Dockerfile bodies into a single string
+// for hashing purposes. The hash determines the image tag.
+func CombinedBody(platformBody, teamBody string) string {
+	return strings.TrimSpace(platformBody) + "\n---\n" + strings.TrimSpace(teamBody)
 }
 
 // JobName returns a deterministic Job name for a build.
-func JobName(scope string, packages []string) string {
-	sorted := slices.Clone(packages)
-	slices.Sort(sorted)
-	h := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+func JobName(scope, combinedBody string) string {
+	h := sha256.Sum256([]byte(combinedBody))
 	hash := hex.EncodeToString(h[:])[:8]
 	// K8s names must be <= 63 chars, DNS-safe.
 	name := fmt.Sprintf("astonish-build-%s-%s", sanitizeDNS(scope), hash)
@@ -122,10 +135,8 @@ func JobName(scope string, packages []string) string {
 }
 
 // ConfigMapName returns the ConfigMap name for a build's Dockerfile.
-func ConfigMapName(scope string, packages []string) string {
-	sorted := slices.Clone(packages)
-	slices.Sort(sorted)
-	h := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+func ConfigMapName(scope, combinedBody string) string {
+	h := sha256.Sum256([]byte(combinedBody))
 	hash := hex.EncodeToString(h[:])[:8]
 	name := fmt.Sprintf("astonish-build-df-%s-%s", sanitizeDNS(scope), hash)
 	if len(name) > 63 {
@@ -154,7 +165,8 @@ func sanitizeDNS(s string) string {
 }
 
 // BuildTimeout is the maximum time to wait for a Kaniko build to complete.
-const BuildTimeout = 10 * time.Minute
+// Large builds (e.g. gcloud CLI ~500MB) can take 15-20 min, so we allow 30 min.
+const BuildTimeout = 30 * time.Minute
 
 // Validate checks that the Builder is properly configured.
 func (b *Builder) Validate() error {

@@ -228,6 +228,9 @@ func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTe
 	if len(tpl.Packages) > 0 {
 		create.SetPackages(tpl.Packages)
 	}
+	if tpl.DockerfileBody != nil {
+		create.SetDockerfileBody(*tpl.DockerfileBody)
+	}
 	if tpl.BuildStatus != "" {
 		create.SetBuildStatus(tpl.BuildStatus)
 	}
@@ -350,6 +353,11 @@ func (ts *sandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTe
 	// Build-related fields.
 	if tpl.Packages != nil {
 		update.SetPackages(tpl.Packages)
+	}
+	if tpl.DockerfileBody != nil {
+		update.SetDockerfileBody(*tpl.DockerfileBody)
+	} else {
+		update.ClearDockerfileBody()
 	}
 	update.SetBuildStatus(tpl.BuildStatus)
 	update.SetBuildJobName(tpl.BuildJobName)
@@ -734,6 +742,7 @@ func entTemplateToStore(e *platforment.SandboxTemplate) *store.SandboxTemplate {
 		TopLayerID:     e.TopLayerID,
 		SandboxImage:   e.SandboxImage,
 		Packages:       e.Packages,
+		DockerfileBody: e.DockerfileBody,
 		BuildStatus:    e.BuildStatus,
 		BuildJobName:   e.BuildJobName,
 		BuildError:     e.BuildError,

@@ -9270,6 +9270,7 @@ type SandboxTemplateMutation struct {
 	sandbox_image    *string
 	packages         *[]string
 	appendpackages   []string
+	dockerfile_body  *string
 	build_status     *string
 	build_job_name   *string
 	build_error      *string
@@ -9826,6 +9827,55 @@ func (m *SandboxTemplateMutation) ResetPackages() {
 	m.packages = nil
 	m.appendpackages = nil
 	delete(m.clearedFields, sandboxtemplate.FieldPackages)
+}
+
+// SetDockerfileBody sets the "dockerfile_body" field.
+func (m *SandboxTemplateMutation) SetDockerfileBody(s string) {
+	m.dockerfile_body = &s
+}
+
+// DockerfileBody returns the value of the "dockerfile_body" field in the mutation.
+func (m *SandboxTemplateMutation) DockerfileBody() (r string, exists bool) {
+	v := m.dockerfile_body
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDockerfileBody returns the old "dockerfile_body" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldDockerfileBody(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDockerfileBody is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDockerfileBody requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDockerfileBody: %w", err)
+	}
+	return oldValue.DockerfileBody, nil
+}
+
+// ClearDockerfileBody clears the value of the "dockerfile_body" field.
+func (m *SandboxTemplateMutation) ClearDockerfileBody() {
+	m.dockerfile_body = nil
+	m.clearedFields[sandboxtemplate.FieldDockerfileBody] = struct{}{}
+}
+
+// DockerfileBodyCleared returns if the "dockerfile_body" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) DockerfileBodyCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldDockerfileBody]
+	return ok
+}
+
+// ResetDockerfileBody resets all changes to the "dockerfile_body" field.
+func (m *SandboxTemplateMutation) ResetDockerfileBody() {
+	m.dockerfile_body = nil
+	delete(m.clearedFields, sandboxtemplate.FieldDockerfileBody)
 }
 
 // SetBuildStatus sets the "build_status" field.
@@ -10513,7 +10563,7 @@ func (m *SandboxTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SandboxTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 22)
+	fields := make([]string, 0, 23)
 	if m.slug != nil {
 		fields = append(fields, sandboxtemplate.FieldSlug)
 	}
@@ -10543,6 +10593,9 @@ func (m *SandboxTemplateMutation) Fields() []string {
 	}
 	if m.packages != nil {
 		fields = append(fields, sandboxtemplate.FieldPackages)
+	}
+	if m.dockerfile_body != nil {
+		fields = append(fields, sandboxtemplate.FieldDockerfileBody)
 	}
 	if m.build_status != nil {
 		fields = append(fields, sandboxtemplate.FieldBuildStatus)
@@ -10608,6 +10661,8 @@ func (m *SandboxTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.SandboxImage()
 	case sandboxtemplate.FieldPackages:
 		return m.Packages()
+	case sandboxtemplate.FieldDockerfileBody:
+		return m.DockerfileBody()
 	case sandboxtemplate.FieldBuildStatus:
 		return m.BuildStatus()
 	case sandboxtemplate.FieldBuildJobName:
@@ -10661,6 +10716,8 @@ func (m *SandboxTemplateMutation) OldField(ctx context.Context, name string) (en
 		return m.OldSandboxImage(ctx)
 	case sandboxtemplate.FieldPackages:
 		return m.OldPackages(ctx)
+	case sandboxtemplate.FieldDockerfileBody:
+		return m.OldDockerfileBody(ctx)
 	case sandboxtemplate.FieldBuildStatus:
 		return m.OldBuildStatus(ctx)
 	case sandboxtemplate.FieldBuildJobName:
@@ -10763,6 +10820,13 @@ func (m *SandboxTemplateMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPackages(v)
+		return nil
+	case sandboxtemplate.FieldDockerfileBody:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDockerfileBody(v)
 		return nil
 	case sandboxtemplate.FieldBuildStatus:
 		v, ok := value.(string)
@@ -10905,6 +10969,9 @@ func (m *SandboxTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(sandboxtemplate.FieldPackages) {
 		fields = append(fields, sandboxtemplate.FieldPackages)
 	}
+	if m.FieldCleared(sandboxtemplate.FieldDockerfileBody) {
+		fields = append(fields, sandboxtemplate.FieldDockerfileBody)
+	}
 	if m.FieldCleared(sandboxtemplate.FieldBuildStartedAt) {
 		fields = append(fields, sandboxtemplate.FieldBuildStartedAt)
 	}
@@ -10945,6 +11012,9 @@ func (m *SandboxTemplateMutation) ClearField(name string) error {
 		return nil
 	case sandboxtemplate.FieldPackages:
 		m.ClearPackages()
+		return nil
+	case sandboxtemplate.FieldDockerfileBody:
+		m.ClearDockerfileBody()
 		return nil
 	case sandboxtemplate.FieldBuildStartedAt:
 		m.ClearBuildStartedAt()
@@ -10998,6 +11068,9 @@ func (m *SandboxTemplateMutation) ResetField(name string) error {
 		return nil
 	case sandboxtemplate.FieldPackages:
 		m.ResetPackages()
+		return nil
+	case sandboxtemplate.FieldDockerfileBody:
+		m.ResetDockerfileBody()
 		return nil
 	case sandboxtemplate.FieldBuildStatus:
 		m.ResetBuildStatus()

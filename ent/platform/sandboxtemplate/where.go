@@ -96,6 +96,11 @@ func SandboxImage(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldSandboxImage, v))
 }
 
+// DockerfileBody applies equality check predicate on the "dockerfile_body" field. It's identical to DockerfileBodyEQ.
+func DockerfileBody(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldDockerfileBody, v))
+}
+
 // BuildStatus applies equality check predicate on the "build_status" field. It's identical to BuildStatusEQ.
 func BuildStatus(v string) predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldEQ(FieldBuildStatus, v))
@@ -684,6 +689,81 @@ func PackagesIsNil() predicate.SandboxTemplate {
 // PackagesNotNil applies the NotNil predicate on the "packages" field.
 func PackagesNotNil() predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldNotNull(FieldPackages))
+}
+
+// DockerfileBodyEQ applies the EQ predicate on the "dockerfile_body" field.
+func DockerfileBodyEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEQ(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyNEQ applies the NEQ predicate on the "dockerfile_body" field.
+func DockerfileBodyNEQ(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNEQ(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyIn applies the In predicate on the "dockerfile_body" field.
+func DockerfileBodyIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIn(FieldDockerfileBody, vs...))
+}
+
+// DockerfileBodyNotIn applies the NotIn predicate on the "dockerfile_body" field.
+func DockerfileBodyNotIn(vs ...string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotIn(FieldDockerfileBody, vs...))
+}
+
+// DockerfileBodyGT applies the GT predicate on the "dockerfile_body" field.
+func DockerfileBodyGT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGT(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyGTE applies the GTE predicate on the "dockerfile_body" field.
+func DockerfileBodyGTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldGTE(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyLT applies the LT predicate on the "dockerfile_body" field.
+func DockerfileBodyLT(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLT(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyLTE applies the LTE predicate on the "dockerfile_body" field.
+func DockerfileBodyLTE(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldLTE(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyContains applies the Contains predicate on the "dockerfile_body" field.
+func DockerfileBodyContains(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContains(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyHasPrefix applies the HasPrefix predicate on the "dockerfile_body" field.
+func DockerfileBodyHasPrefix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasPrefix(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyHasSuffix applies the HasSuffix predicate on the "dockerfile_body" field.
+func DockerfileBodyHasSuffix(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldHasSuffix(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyIsNil applies the IsNil predicate on the "dockerfile_body" field.
+func DockerfileBodyIsNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIsNull(FieldDockerfileBody))
+}
+
+// DockerfileBodyNotNil applies the NotNil predicate on the "dockerfile_body" field.
+func DockerfileBodyNotNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotNull(FieldDockerfileBody))
+}
+
+// DockerfileBodyEqualFold applies the EqualFold predicate on the "dockerfile_body" field.
+func DockerfileBodyEqualFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldEqualFold(FieldDockerfileBody, v))
+}
+
+// DockerfileBodyContainsFold applies the ContainsFold predicate on the "dockerfile_body" field.
+func DockerfileBodyContainsFold(v string) predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldContainsFold(FieldDockerfileBody, v))
 }
 
 // BuildStatusEQ applies the EQ predicate on the "build_status" field.

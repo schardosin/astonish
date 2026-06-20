@@ -77,22 +77,24 @@ func NewPlatformServices(ctx context.Context, cfg Config) (*store.Services, *Sto
 
 	// Auto-migrate platform schema.
 	// For SQLite: run full Schema.Create (creates all tables — safe, no type conflicts).
-	// For PostgreSQL: scope to only the new platform_skills tables to avoid Ent
-	// trying to reconcile pre-existing column types on other tables (e.g.
-	// platform_mcp_servers id → uuid cast issue on existing deployments).
+	// For PostgreSQL: scope to specific tables to avoid Ent trying to reconcile
+	// pre-existing column types on other tables (e.g. platform_mcp_servers id →
+	// uuid cast issue on existing deployments).
 	if s.dialect == DialectSQLite {
 		if err := s.platformClient.Schema.Create(ctx); err != nil {
 			s.Close()
 			return nil, nil, fmt.Errorf("auto-migrate sqlite platform: %w", err)
 		}
 	} else {
-		skillTables := []*schema.Table{
+		migrateTables := []*schema.Table{
 			platformmigrate.PlatformSkillsTable,
 			platformmigrate.PlatformSkillFilesTable,
+			platformmigrate.SandboxLayersTable,      // required by SandboxTemplatesTable FK
+			platformmigrate.SandboxTemplatesTable,
 		}
-		if err := platformmigrate.Create(ctx, s.platformClient.Schema, skillTables); err != nil {
+		if err := platformmigrate.Create(ctx, s.platformClient.Schema, migrateTables); err != nil {
 			s.Close()
-			return nil, nil, fmt.Errorf("auto-migrate platform skill tables: %w", err)
+			return nil, nil, fmt.Errorf("auto-migrate platform tables: %w", err)
 		}
 	}
 

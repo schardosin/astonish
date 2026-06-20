@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -19,19 +20,20 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec, onProgress Progress
 	if err := b.Validate(); err != nil {
 		return nil, err
 	}
-	if len(spec.Packages) == 0 {
-		return nil, fmt.Errorf("imagebuilder: at least one package is required")
+	combined := CombinedBody(spec.PlatformBody, spec.TeamBody)
+	if strings.TrimSpace(spec.PlatformBody) == "" && strings.TrimSpace(spec.TeamBody) == "" {
+		return nil, fmt.Errorf("imagebuilder: at least one of platform or team dockerfile body is required")
 	}
 	if spec.BaseImage == "" {
 		return nil, fmt.Errorf("imagebuilder: base image is required")
 	}
 
-	destImage := b.ImageTag(spec.Scope, spec.Packages)
-	jobName := JobName(spec.Scope, spec.Packages)
-	cmName := ConfigMapName(spec.Scope, spec.Packages)
+	destImage := b.ImageTag(spec)
+	jobName := JobName(spec.Scope, combined)
+	cmName := ConfigMapName(spec.Scope, combined)
 
-	// Generate Dockerfile.
-	dockerfile := GenerateDockerfile(spec.BaseImage, spec.Packages)
+	// Generate full Dockerfile (FROM + platform body + team body).
+	dockerfile := GenerateDockerfile(spec.BaseImage, spec.PlatformBody, spec.TeamBody)
 
 	if onProgress != nil {
 		onProgress(ctx, "Generating Dockerfile...")
@@ -167,7 +169,6 @@ func (b *Builder) Build(ctx context.Context, spec BuildSpec, onProgress Progress
 		"namespace", b.cfg.Namespace,
 		"destination", destImage,
 		"scope", spec.Scope,
-		"packages", spec.Packages,
 	)
 
 	return &BuildResult{

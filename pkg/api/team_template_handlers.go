@@ -26,12 +26,13 @@ import (
 
 // TeamTemplateStatusResponse is the response for GET /api/team/template/status.
 type TeamTemplateStatusResponse struct {
-	Exists       bool   `json:"exists"`
-	Running      bool   `json:"running"`
-	TemplateName string `json:"templateName"`
-	Saved        bool   `json:"saved"`         // true if TeamSettings.TemplateName is set
-	SandboxImage string `json:"sandboxImage,omitempty"` // per-template container image (OpenShell)
-	Backend      string `json:"backend,omitempty"`      // "incus", "k8s", or "openshell"
+	Exists         bool   `json:"exists"`
+	Running        bool   `json:"running"`
+	TemplateName   string `json:"templateName"`
+	Saved          bool   `json:"saved"`                   // true if TeamSettings.TemplateName is set
+	SandboxImage   string `json:"sandboxImage,omitempty"`   // per-template container image (OpenShell)
+	Backend        string `json:"backend,omitempty"`        // "incus", "k8s", or "openshell"
+	HasDockerfile  bool   `json:"hasDockerfile,omitempty"`  // true if dockerfile_body is saved
 }
 
 // TeamTemplateStatusHandler handles GET /api/team/template/status.
@@ -95,6 +96,15 @@ func TeamTemplateStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Resolve per-template image (OpenShell).
 	if img := resolveTemplateImage(r.Context(), templateName); img != "" {
 		resp.SandboxImage = img
+	}
+
+	// Check if Dockerfile body exists for this template.
+	if db := getPlatformBackend(); db != nil {
+		if tplStore := db.SandboxTemplates(); tplStore != nil {
+			if tpl, _ := tplStore.GetBySlug(r.Context(), store.SandboxTemplateScopeTeam, tc.TeamSlug, templateName); tpl != nil {
+				resp.HasDockerfile = tpl.DockerfileBody != nil && *tpl.DockerfileBody != ""
+			}
+		}
 	}
 
 	// Include backend type so frontend can conditionally render UI.

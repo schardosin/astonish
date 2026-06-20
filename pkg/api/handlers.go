@@ -1093,6 +1093,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/team/template/image", TeamTemplateImageHandler).Methods("POST")
 	router.HandleFunc("/api/team/template/build", TeamImageBuildHandler).Methods("POST")
 	router.HandleFunc("/api/team/template/build/status", TeamImageBuildStatusHandler).Methods("GET")
+	router.HandleFunc("/api/team/template/dockerfile", TeamDockerfileGetHandler).Methods("GET")
+	router.HandleFunc("/api/team/template/dockerfile", TeamDockerfileSaveHandler).Methods("PUT")
 	router.HandleFunc("/api/team/template", TeamTemplateDeleteHandler).Methods("DELETE")
 
 	// Standard servers endpoints
@@ -1341,6 +1343,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 		router.HandleFunc("/api/platform/admin/sandbox/base/image", PlatformBaseImageHandler).Methods("POST")
 		router.HandleFunc("/api/platform/admin/sandbox/base/build", PlatformImageBuildHandler).Methods("POST")
 		router.HandleFunc("/api/platform/admin/sandbox/base/build/status", PlatformImageBuildStatusHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/sandbox/base/dockerfile", PlatformDockerfileGetHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/sandbox/base/dockerfile", PlatformDockerfileSaveHandler).Methods("PUT")
 		router.HandleFunc("/api/platform/admin/sandbox/base/tools", PlatformBaseConfigOptionalToolsHandler).Methods("GET")
 
 		// OpenShell orphan sandbox management

@@ -366,20 +366,20 @@ export function getTeamTerminalWsUrl(teamSlug: string): string {
 // --- Team Image Build API (OpenShell / Kaniko) ---
 
 export interface TeamImageBuildCallbacks {
-  packages: string[]
+  dockerfileBody: string
   teamSlug: string
   onProgress: (msg: string) => void
   onDone: (result: { image: string }) => void
   onError: (err: string) => void
 }
 
-export function buildTeamImage({ packages, teamSlug, onProgress, onDone, onError }: TeamImageBuildCallbacks): { abort: () => void } {
+export function buildTeamImage({ dockerfileBody, teamSlug, onProgress, onDone, onError }: TeamImageBuildCallbacks): { abort: () => void } {
   const controller = new AbortController()
 
   teamFetch('/api/team/template/build', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ packages }),
+    body: JSON.stringify({ dockerfile_body: dockerfileBody }),
     signal: controller.signal,
   }, teamSlug)
     .then(async (res) => {
@@ -436,4 +436,26 @@ export function buildTeamImage({ packages, teamSlug, onProgress, onDone, onError
     })
 
   return { abort: () => controller.abort() }
+}
+
+// --- Team Dockerfile CRUD ---
+
+export async function fetchTeamDockerfile(teamSlug: string): Promise<string> {
+  const res = await teamFetch('/api/team/template/dockerfile', {}, teamSlug)
+  if (!res.ok) return ''
+  const data = await res.json()
+  return data.dockerfile_body || ''
+}
+
+export async function saveTeamDockerfile(teamSlug: string, dockerfileBody: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await teamFetch('/api/team/template/dockerfile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dockerfile_body: dockerfileBody }),
+  }, teamSlug)
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    return { ok: false, error: data.error || res.statusText }
+  }
+  return { ok: true }
 }

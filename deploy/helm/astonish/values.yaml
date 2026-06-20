@@ -253,9 +253,14 @@ sandbox:
       #   <url>/astonish-sandbox-<scope>:<content-hash>
       # Examples: "docker.io/schardosin", "ghcr.io/schardosin", "harbor.internal:5000/astonish"
       url: ""
-      # Name of a K8s Secret (type kubernetes.io/dockerconfigjson) containing
-      # registry credentials. Must exist in the control-plane namespace.
+      # Name of the K8s Secret (type kubernetes.io/dockerconfigjson) used by Kaniko.
+      # If username/password are provided below, the chart creates this secret automatically.
       secretName: ""
+      # Direct credentials — when set, the chart creates the dockerconfigjson secret.
+      # For Docker Hub: username is your Docker Hub username, password is a PAT.
+      # For other registries: use appropriate credentials.
+      username: ""
+      password: ""
 
     # Kaniko-based image builder configuration.
     builder:

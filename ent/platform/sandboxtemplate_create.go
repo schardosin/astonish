@@ -139,6 +139,20 @@ func (_c *SandboxTemplateCreate) SetPackages(v []string) *SandboxTemplateCreate 
 	return _c
 }
 
+// SetDockerfileBody sets the "dockerfile_body" field.
+func (_c *SandboxTemplateCreate) SetDockerfileBody(v string) *SandboxTemplateCreate {
+	_c.mutation.SetDockerfileBody(v)
+	return _c
+}
+
+// SetNillableDockerfileBody sets the "dockerfile_body" field if the given value is not nil.
+func (_c *SandboxTemplateCreate) SetNillableDockerfileBody(v *string) *SandboxTemplateCreate {
+	if v != nil {
+		_c.SetDockerfileBody(*v)
+	}
+	return _c
+}
+
 // SetBuildStatus sets the "build_status" field.
 func (_c *SandboxTemplateCreate) SetBuildStatus(v string) *SandboxTemplateCreate {
 	_c.mutation.SetBuildStatus(v)
@@ -579,6 +593,10 @@ func (_c *SandboxTemplateCreate) createSpec() (*SandboxTemplate, *sqlgraph.Creat
 	if value, ok := _c.mutation.Packages(); ok {
 		_spec.SetField(sandboxtemplate.FieldPackages, field.TypeJSON, value)
 		_node.Packages = value
+	}
+	if value, ok := _c.mutation.DockerfileBody(); ok {
+		_spec.SetField(sandboxtemplate.FieldDockerfileBody, field.TypeString, value)
+		_node.DockerfileBody = &value
 	}
 	if value, ok := _c.mutation.BuildStatus(); ok {
 		_spec.SetField(sandboxtemplate.FieldBuildStatus, field.TypeString, value)

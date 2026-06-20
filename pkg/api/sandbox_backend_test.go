@@ -223,3 +223,229 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+// ---------------------------------------------------------------------------
+// resolveTemplateImageWith tests
+// ---------------------------------------------------------------------------
+
+func TestResolveTemplateImageWith_CustomImage(t *testing.T) {
+	ts := newMockTemplateStore()
+	img := "docker.io/schardosin/astonish-sandbox-general:5de96c7a79eb"
+	ts.templates["tpl-img-1"] = &store.SandboxTemplate{
+		ID:           "tpl-img-1",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: &img,
+	}
+
+	got := resolveTemplateImageWith(context.Background(), ts, "team-general")
+	if got != img {
+		t.Errorf("got %q, want %q", got, img)
+	}
+}
+
+func TestResolveTemplateImageWith_NilImage_ReturnsEmpty(t *testing.T) {
+	// Team template exists but SandboxImage is nil (reverted to default).
+	ts := newMockTemplateStore()
+	ts.templates["tpl-img-2"] = &store.SandboxTemplate{
+		ID:           "tpl-img-2",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: nil,
+	}
+
+	got := resolveTemplateImageWith(context.Background(), ts, "team-general")
+	if got != "" {
+		t.Errorf("got %q, want empty string for nil SandboxImage", got)
+	}
+}
+
+func TestResolveTemplateImageWith_EmptyStringImage_ReturnsEmpty(t *testing.T) {
+	// Edge case: SandboxImage pointer to empty string.
+	ts := newMockTemplateStore()
+	empty := ""
+	ts.templates["tpl-img-3"] = &store.SandboxTemplate{
+		ID:           "tpl-img-3",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: &empty,
+	}
+
+	got := resolveTemplateImageWith(context.Background(), ts, "team-general")
+	if got != "" {
+		t.Errorf("got %q, want empty string for ptr-to-empty SandboxImage", got)
+	}
+}
+
+func TestResolveTemplateImageWith_TemplateNotFound(t *testing.T) {
+	ts := newMockTemplateStore()
+
+	got := resolveTemplateImageWith(context.Background(), ts, "team-nonexistent")
+	if got != "" {
+		t.Errorf("got %q, want empty string for missing template", got)
+	}
+}
+
+func TestResolveTemplateImageWith_BadSlugPrefix(t *testing.T) {
+	// Slug without "team-" prefix should return empty immediately.
+	ts := newMockTemplateStore()
+	img := "docker.io/org/custom:v1"
+	ts.templates["tpl-img-4"] = &store.SandboxTemplate{
+		ID:           "tpl-img-4",
+		Slug:         "my-template",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: &img,
+	}
+
+	got := resolveTemplateImageWith(context.Background(), ts, "my-template")
+	if got != "" {
+		t.Errorf("got %q, want empty string for non-team slug", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// resolvePlatformDockerfileBodyWith tests
+// ---------------------------------------------------------------------------
+
+func TestResolvePlatformDockerfileBodyWith_HasBody(t *testing.T) {
+	ts := newMockTemplateStore()
+	body := "USER root\nRUN apt-get update && apt-get install -y git curl\nUSER sandbox"
+	ts.templates["base-tpl"] = &store.SandboxTemplate{
+		ID:             "base-tpl",
+		Slug:           "base",
+		Scope:          store.SandboxTemplateScopeGlobal,
+		OwnerID:        "",
+		DockerfileBody: &body,
+	}
+
+	got := resolvePlatformDockerfileBodyWith(context.Background(), ts)
+	if got != body {
+		t.Errorf("got %q, want %q", got, body)
+	}
+}
+
+func TestResolvePlatformDockerfileBodyWith_NilBody(t *testing.T) {
+	ts := newMockTemplateStore()
+	ts.templates["base-tpl"] = &store.SandboxTemplate{
+		ID:             "base-tpl",
+		Slug:           "base",
+		Scope:          store.SandboxTemplateScopeGlobal,
+		OwnerID:        "",
+		DockerfileBody: nil,
+	}
+
+	got := resolvePlatformDockerfileBodyWith(context.Background(), ts)
+	if got != "" {
+		t.Errorf("got %q, want empty string for nil DockerfileBody", got)
+	}
+}
+
+func TestResolvePlatformDockerfileBodyWith_NoBaseTemplate(t *testing.T) {
+	ts := newMockTemplateStore()
+	// Empty store, no @base template exists.
+
+	got := resolvePlatformDockerfileBodyWith(context.Background(), ts)
+	if got != "" {
+		t.Errorf("got %q, want empty string when @base template missing", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Image fallback chain tests
+//
+// These verify the core invariant: when a team has no custom image, the
+// system falls through to the platform image; when neither exists, it falls
+// through to the config default (represented as empty string here).
+// ---------------------------------------------------------------------------
+
+func TestImageFallbackChain_TeamCustom(t *testing.T) {
+	// When a team has a custom image, it takes priority.
+	ts := newMockTemplateStore()
+	teamImg := "docker.io/org/team-sandbox:abc123"
+	baseImg := "docker.io/org/platform-sandbox:def456"
+	ts.templates["team-tpl"] = &store.SandboxTemplate{
+		ID:           "team-tpl",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: &teamImg,
+	}
+	ts.templates["base-tpl"] = &store.SandboxTemplate{
+		ID:           "base-tpl",
+		Slug:         "base",
+		Scope:        store.SandboxTemplateScopeGlobal,
+		OwnerID:      "",
+		SandboxImage: &baseImg,
+	}
+
+	// Simulate the chat handler fallback: team first, then base.
+	ctx := context.Background()
+	img := resolveTemplateImageWith(ctx, ts, "team-general")
+	if img == "" {
+		img = resolveBaseImageWith(ctx, ts)
+	}
+	if img != teamImg {
+		t.Errorf("got %q, want team image %q to take priority", img, teamImg)
+	}
+}
+
+func TestImageFallbackChain_TeamReverted_UsesPlatform(t *testing.T) {
+	// Team reverted to default (SandboxImage = nil), platform has an image.
+	ts := newMockTemplateStore()
+	baseImg := "docker.io/org/platform-sandbox:def456"
+	ts.templates["team-tpl"] = &store.SandboxTemplate{
+		ID:           "team-tpl",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: nil, // reverted
+	}
+	ts.templates["base-tpl"] = &store.SandboxTemplate{
+		ID:           "base-tpl",
+		Slug:         "base",
+		Scope:        store.SandboxTemplateScopeGlobal,
+		OwnerID:      "",
+		SandboxImage: &baseImg,
+	}
+
+	ctx := context.Background()
+	img := resolveTemplateImageWith(ctx, ts, "team-general")
+	if img == "" {
+		img = resolveBaseImageWith(ctx, ts)
+	}
+	if img != baseImg {
+		t.Errorf("got %q, want platform image %q when team reverted", img, baseImg)
+	}
+}
+
+func TestImageFallbackChain_NoPlatform_UsesConfigDefault(t *testing.T) {
+	// Neither team nor platform has a custom image → empty (config default).
+	ts := newMockTemplateStore()
+	ts.templates["team-tpl"] = &store.SandboxTemplate{
+		ID:           "team-tpl",
+		Slug:         "team-general",
+		Scope:        store.SandboxTemplateScopeTeam,
+		OwnerID:      "general",
+		SandboxImage: nil,
+	}
+	ts.templates["base-tpl"] = &store.SandboxTemplate{
+		ID:           "base-tpl",
+		Slug:         "base",
+		Scope:        store.SandboxTemplateScopeGlobal,
+		OwnerID:      "",
+		SandboxImage: nil,
+	}
+
+	ctx := context.Background()
+	img := resolveTemplateImageWith(ctx, ts, "team-general")
+	if img == "" {
+		img = resolveBaseImageWith(ctx, ts)
+	}
+	if img != "" {
+		t.Errorf("got %q, want empty string (config default) when nothing set", img)
+	}
+}

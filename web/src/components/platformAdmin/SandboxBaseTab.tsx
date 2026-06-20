@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Loader2, Play, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Info, Save } from 'lucide-react'
+import CodeMirror from '@uiw/react-codemirror'
+import { StreamLanguage } from '@codemirror/language'
+import { dockerFile } from '@codemirror/legacy-modes/mode/dockerfile'
+import { search, searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { keymap, EditorView } from '@codemirror/view'
 import { InlineError, InlineSuccess, inputStyle } from './shared'
 import * as api from '../../api/platformSandbox'
 import type { BaseConfig, BaseConfigSummary, OptionalTool, ConfigureBuildResult, UnsupportedBackendInfo, OpenShellBackendInfo } from '../../api/platformSandbox'
@@ -27,7 +32,9 @@ export default function SandboxBaseTab() {
   // OpenShell image state
   const [imageInput, setImageInput] = useState('')
   const [savingImage, setSavingImage] = useState(false)
-  const [packagesInput, setPackagesInput] = useState('')
+  const [dockerfileBody, setDockerfileBody] = useState('')
+  const [savedDockerfileBody, setSavedDockerfileBody] = useState('')
+  const [savingDockerfile, setSavingDockerfile] = useState(false)
 
   // Build state
   const [building, setBuilding] = useState(false)
@@ -54,6 +61,11 @@ export default function SandboxBaseTab() {
         const info = baseData as OpenShellBackendInfo
         setOpenshell(info)
         setImageInput(info.sandbox_image || '')
+        // Load saved Dockerfile body
+        api.fetchPlatformDockerfile().then(body => {
+          setDockerfileBody(body)
+          setSavedDockerfileBody(body)
+        })
         setLoading(false)
         return
       }
@@ -258,26 +270,51 @@ export default function SandboxBaseTab() {
           </div>
         </div>
 
-        {/* Package-based image build */}
+        {/* Dockerfile-based image build */}
         <div className="rounded-xl p-4 space-y-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-          <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Build from Package List</h4>
-          <p className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
-            Specify apt packages to install. A new image will be built automatically using Kaniko and pushed to the configured registry.
-          </p>
+          <div className="flex items-center justify-between">
+            <div>
+              <h4 className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>Dockerfile Recipe</h4>
+              <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                Write Dockerfile instructions to customize the base sandbox image. <code>FROM</code> is added automatically.
+              </p>
+            </div>
+            {dockerfileBody !== savedDockerfileBody && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full" style={{ background: 'rgba(234, 179, 8, 0.1)', color: '#eab308', border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                Unsaved
+              </span>
+            )}
+          </div>
 
-          <div className="space-y-2">
-            <label className="block text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
-              Packages (one per line)
-            </label>
-            <textarea
-              value={packagesInput}
-              onChange={e => setPackagesInput(e.target.value)}
-              placeholder={"curl\ngit\njq\nripgrep\npython3\nnodejs"}
-              rows={5}
-              disabled={building}
-              className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono resize-y"
-              style={inputStyle}
+          <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--border-color)' }}>
+            <CodeMirror
+              value={dockerfileBody}
+              onChange={setDockerfileBody}
+              height="240px"
+              extensions={[
+                StreamLanguage.define(dockerFile),
+                search({ scrollToMatch: (range) => EditorView.scrollIntoView(range, { y: 'center', yMargin: 100 }) }),
+                highlightSelectionMatches(),
+                keymap.of(searchKeymap),
+              ]}
+              theme="dark"
+              editable={!building}
+              className="text-xs"
+              placeholder={"# Example:\nRUN apt-get update && apt-get install -y curl git\nRUN pip install requests\nENV MY_VAR=value"}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: true,
+                highlightActiveLine: true,
+                foldGutter: false,
+              }}
             />
+          </div>
+
+          <div className="flex items-center gap-2 p-2 rounded-lg" style={{ background: 'rgba(59, 130, 246, 0.05)', border: '1px solid rgba(59, 130, 246, 0.15)' }}>
+            <Info size={12} style={{ color: '#3b82f6', flexShrink: 0 }} />
+            <span className="text-[11px]" style={{ color: 'var(--text-muted)' }}>
+              Allowed: RUN, ENV, ARG, WORKDIR, COPY --from=, LABEL. Forbidden: FROM, ENTRYPOINT, CMD, EXPOSE (controlled by platform).
+            </span>
           </div>
 
           {/* Build log */}
@@ -296,6 +333,28 @@ export default function SandboxBaseTab() {
           )}
 
           <div className="flex items-center justify-end gap-2 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+            {dockerfileBody !== savedDockerfileBody && (
+              <button
+                onClick={async () => {
+                  setSavingDockerfile(true)
+                  setError('')
+                  const result = await api.savePlatformDockerfile(dockerfileBody)
+                  if (result.ok) {
+                    setSavedDockerfileBody(dockerfileBody)
+                    setSuccess('Dockerfile saved')
+                  } else {
+                    setError(result.error || 'Failed to save Dockerfile')
+                  }
+                  setSavingDockerfile(false)
+                }}
+                disabled={savingDockerfile}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+                style={{ color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+              >
+                {savingDockerfile ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                Save
+              </button>
+            )}
             {building && (
               <button
                 onClick={() => { abortRef.current?.(); setBuilding(false); setBuildLog(prev => [...prev, '--- Build cancelled ---']) }}
@@ -307,31 +366,39 @@ export default function SandboxBaseTab() {
             )}
             <button
               onClick={() => {
-                const packages = packagesInput.trim().split('\n').map(l => l.trim()).filter(Boolean)
-                if (packages.length === 0) return
+                if (!dockerfileBody.trim()) return
                 setError('')
                 setSuccess('')
                 setBuildLog([])
                 setBuilding(true)
-                const { abort } = api.buildBaseImage({
-                  packages,
-                  onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
-                  onDone: (result) => {
+                // Save first, then build
+                api.savePlatformDockerfile(dockerfileBody).then(saveResult => {
+                  if (!saveResult.ok) {
+                    setError(saveResult.error || 'Failed to save Dockerfile before build')
                     setBuilding(false)
-                    setSuccess(`Build complete! Image: ${result.image}`)
-                    setImageInput(result.image)
-                    load()
-                  },
-                  onError: (err) => {
-                    setBuilding(false)
-                    setError(err)
-                  },
+                    return
+                  }
+                  setSavedDockerfileBody(dockerfileBody)
+                  const { abort } = api.buildBaseImage({
+                    dockerfileBody,
+                    onProgress: (msg) => setBuildLog(prev => [...prev, msg]),
+                    onDone: (result) => {
+                      setBuilding(false)
+                      setSuccess(`Build complete! Image: ${result.image}`)
+                      setImageInput(result.image)
+                      load()
+                    },
+                    onError: (err) => {
+                      setBuilding(false)
+                      setError(err)
+                    },
+                  })
+                  abortRef.current = abort
                 })
-                abortRef.current = abort
               }}
-              disabled={building || !packagesInput.trim()}
+              disabled={building || !dockerfileBody.trim()}
               className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium text-white transition-opacity"
-              style={{ background: 'var(--accent)', opacity: (building || !packagesInput.trim()) ? 0.5 : 1 }}
+              style={{ background: 'var(--accent)', opacity: (building || !dockerfileBody.trim()) ? 0.5 : 1 }}
             >
               {building ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
               {building ? 'Building...' : 'Build Image'}

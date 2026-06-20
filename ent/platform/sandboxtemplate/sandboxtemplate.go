@@ -36,6 +36,8 @@ const (
 	FieldSandboxImage = "sandbox_image"
 	// FieldPackages holds the string denoting the packages field in the database.
 	FieldPackages = "packages"
+	// FieldDockerfileBody holds the string denoting the dockerfile_body field in the database.
+	FieldDockerfileBody = "dockerfile_body"
 	// FieldBuildStatus holds the string denoting the build_status field in the database.
 	FieldBuildStatus = "build_status"
 	// FieldBuildJobName holds the string denoting the build_job_name field in the database.
@@ -100,6 +102,7 @@ var Columns = []string{
 	FieldTopLayerID,
 	FieldSandboxImage,
 	FieldPackages,
+	FieldDockerfileBody,
 	FieldBuildStatus,
 	FieldBuildJobName,
 	FieldBuildError,
@@ -234,6 +237,11 @@ func ByTopLayerID(opts ...sql.OrderTermOption) OrderOption {
 // BySandboxImage orders the results by the sandbox_image field.
 func BySandboxImage(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSandboxImage, opts...).ToFunc()
+}
+
+// ByDockerfileBody orders the results by the dockerfile_body field.
+func ByDockerfileBody(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldDockerfileBody, opts...).ToFunc()
 }
 
 // ByBuildStatus orders the results by the build_status field.

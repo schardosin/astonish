@@ -72,7 +72,12 @@ type SandboxTemplate struct {
 	SandboxImage    *string                `json:"sandbox_image,omitempty"`
 	// Packages is the list of apt packages to install when building a custom
 	// sandbox image. Stored as JSON in the database.
+	// DEPRECATED: Use DockerfileBody instead for full Dockerfile control.
 	Packages        []string               `json:"packages,omitempty"`
+	// DockerfileBody stores the user-authored Dockerfile instructions
+	// (everything after FROM). When non-nil, it is the source of truth for
+	// image builds; Packages is ignored.
+	DockerfileBody  *string                `json:"dockerfile_body,omitempty"`
 	// BuildStatus tracks the image build state: "", "building", "succeeded", "failed".
 	BuildStatus     string                 `json:"build_status,omitempty"`
 	// BuildJobName is the K8s Job name of the current/last build.

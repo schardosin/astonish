@@ -31,25 +31,25 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/sashabaranov/go-openai v1.41.2
-	github.com/slack-go/slack v0.25.0
+	github.com/slack-go/slack v0.26.0
 	github.com/stephenafamo/goldmark-pdf v0.4.2
 	github.com/ysmood/gson v0.7.3
 	github.com/yuin/goldmark v1.8.2
 	go.starlark.net v0.0.0-20260326113308-fadfc96def35
-	golang.org/x/crypto v0.52.0
-	golang.org/x/image v0.41.0
-	golang.org/x/net v0.55.0
+	golang.org/x/crypto v0.53.0
+	golang.org/x/image v0.43.0
+	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.36.0
-	golang.org/x/sync v0.20.0
-	golang.org/x/term v0.43.0
+	golang.org/x/sync v0.21.0
+	golang.org/x/term v0.44.0
 	google.golang.org/adk v1.4.0
-	google.golang.org/genai v1.59.0
+	google.golang.org/genai v1.60.0
 	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	gopkg.in/yaml.v3 v3.0.1
-	k8s.io/api v0.36.1
-	k8s.io/apimachinery v0.36.1
-	k8s.io/client-go v0.36.1
+	k8s.io/api v0.36.2
+	k8s.io/apimachinery v0.36.2
+	k8s.io/client-go v0.36.2
 	modernc.org/sqlite v1.52.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -213,8 +213,8 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/exp v0.0.0-20260603202125-055de637280b // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/sys v0.45.0 // indirect
-	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect
 	google.golang.org/api v0.279.0 // indirect
@@ -225,7 +225,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
-	k8s.io/streaming v0.36.1 // indirect
+	k8s.io/streaming v0.36.2 // indirect
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5 // indirect
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

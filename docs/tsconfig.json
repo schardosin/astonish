@@ -1,5 +1,15 @@
 {
-  "extends": "astro/tsconfigs/strict",
-  "include": [".astro/types.d.ts", "**/*"],
-  "exclude": ["dist"]
+  "compilerOptions": {
+    "module": "esnext",
+    "allowJs": true,
+    "strict": true,
+    "jsx": "preserve",
+    "allowImportingTsExtensions": true,
+    "allowSyntheticDefaultImports": true,
+    "types": ["vite/client"]
+  },
+  "include": ["./.vitepress/**/*"],
+  "vueCompilerOptions": {
+    "vitePressExtensions": [".md"]
+  }
 }

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="64" height="64">
+  <!-- Linux Tux simplified -->
+  <ellipse cx="60" cy="68" rx="28" ry="35" fill="#333"/>
+  <ellipse cx="60" cy="42" rx="20" ry="22" fill="#333"/>
+  <ellipse cx="60" cy="72" rx="22" ry="28" fill="#f0c040"/>
+  <ellipse cx="52" cy="38" rx="4" ry="5" fill="#fff"/>
+  <ellipse cx="68" cy="38" rx="4" ry="5" fill="#fff"/>
+  <circle cx="53" cy="39" r="2" fill="#333"/>
+  <circle cx="69" cy="39" r="2" fill="#333"/>
+  <ellipse cx="60" cy="48" rx="5" ry="3" fill="#f0a030"/>
+  <path d="M40 95 Q42 105 50 108 L70 108 Q78 105 80 95" fill="#f0a030"/>
+</svg>

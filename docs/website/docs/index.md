@@ -7,13 +7,13 @@ Built in Go on Google's Agent Development Kit, Astonish combines autonomous tool
 - **Local (SQLite)** — Zero-config, runs entirely on your machine. SQLite handles storage and vector search out of the box. Install and start chatting in under a minute.
 - **Cloud (PostgreSQL)** — Multi-tenant with pgvector. Organizations, teams, shared memory, cascading configuration, and enterprise security for your whole team.
 
-Same binary, same 58+ tools, same platform. Your choice of database backend.
+Same binary, same 90+ tools, same platform. Your choice of database backend.
 
 ## Core Capabilities
 
-**Autonomous Agent Engine.** LLM-driven tool-use loops that solve problems dynamically. 58+ built-in tools spanning shell execution, file operations, web fetching, browser automation, memory, and more. Sub-agent delegation for complex multi-step tasks.
+**Autonomous Agent Engine.** LLM-driven tool-use loops that solve problems dynamically. 90+ built-in tools spanning shell execution, file operations, web fetching, browser automation, memory, and more. Sub-agent delegation for complex multi-step tasks.
 
-**15+ AI Providers.** OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, xAI, Ollama, LM Studio, SAP AI Core, LiteLLM, and others. Switch providers per conversation or set team-wide defaults.
+**12+ AI Providers.** OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, xAI, Ollama, LM Studio, SAP AI Core, LiteLLM, and others. Switch providers per conversation or set team-wide defaults.
 
 **MCP Native.** Any MCP-compatible server works out of the box. Admins can configure MCP servers at the team level and everyone gets instant access.
 
@@ -42,7 +42,8 @@ Resources cascade downward — provider configs, MCP servers, skills, and sandbo
 ```bash
 # Local — start immediately
 astonish setup         # Configure your AI provider
-astonish daemon        # Start the daemon (Studio available at http://localhost:9393)
+astonish daemon install  # Register as system service
+astonish daemon start    # Start the daemon (Studio available at http://localhost:9393)
 astonish chat          # Start solving problems
 
 # Cloud — scale to your team

@@ -41,11 +41,11 @@ export default withMermaid(defineConfig({
           text: 'Getting Started',
           items: [
             { text: 'Introduction', link: '/docs/' },
-            { text: 'Architecture', link: '/docs/getting-started/architecture' },
             { text: 'Installation', link: '/docs/getting-started/installation' },
             { text: 'Quick Start: Local', link: '/docs/getting-started/quick-start-local' },
             { text: 'Quick Start: Cloud', link: '/docs/getting-started/quick-start-cloud' },
             { text: 'Choose Your Interface', link: '/docs/getting-started/choose-your-interface' },
+            { text: 'Architecture', link: '/docs/getting-started/architecture' },
           ]
         },
         {

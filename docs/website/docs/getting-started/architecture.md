@@ -72,7 +72,7 @@ Every user's private space. Sessions, credentials, apps, and personal memory liv
 
 ### Agent Engine
 
-The execution core, built on Google's Agent Development Kit (ADK). The engine runs LLM-driven tool-use loops with 58+ built-in tools, delegates to sub-agents for complex tasks, distills successful sessions into reusable flows, and generates live React applications from natural language descriptions. The agent draws context from personal, team, and org memory simultaneously with intelligent weighting.
+The execution core, built on Google's Agent Development Kit (ADK). The engine runs LLM-driven tool-use loops with 90+ built-in tools, delegates to sub-agents for complex tasks, distills successful sessions into reusable flows, and generates live React applications from natural language descriptions. The agent draws context from personal, team, and org memory simultaneously with intelligent weighting.
 
 ## Key Design Principles
 

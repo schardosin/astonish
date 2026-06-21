@@ -13,10 +13,10 @@ The cloud deployment uses PostgreSQL with pgvector, enabling multi-tenant featur
 Export the PostgreSQL connection string:
 
 ```bash
-export ASTONISH_DSN="postgres://user:password@host:5432/astonish?sslmode=require"
+export ASTONISH_PLATFORM_DSN="postgres://user:password@host:5432/astonish?sslmode=require"
 ```
 
-Or add it to your shell profile for persistence. When a PostgreSQL DSN is configured, Astonish automatically uses PostgreSQL for all storage and multi-tenant features become available.
+Or add it to your shell profile for persistence. When `ASTONISH_PLATFORM_DSN` is set (or `platform_dsn` is configured in the YAML config), Astonish automatically uses PostgreSQL for all storage and multi-tenant features become available.
 
 ## 2. Initialize the Platform
 
@@ -33,20 +33,20 @@ This creates the platform database, sets up the encryption key hierarchy, and wa
 If you did not create an org during init, or want additional organizations:
 
 ```bash
-astonish platform org create engineering
+astonish platform org create --name "Engineering" --slug engineering
 ```
 
 ## 4. Invite Team Members
 
-Invite users by email. Assign roles and optionally assign to a team:
+Invite users by email. Specify the org, assign roles, and optionally assign to a team:
 
 ```bash
-astonish platform org invite --role admin alice@company.com
-astonish platform org invite --team backend bob@company.com
-astonish platform org invite carol@company.com
+astonish platform org invite --org engineering --email alice@company.com --role admin
+astonish platform org invite --org engineering --email bob@company.com --team backend
+astonish platform org invite --org engineering --email carol@company.com
 ```
 
-Roles: `owner`, `admin`, `member`. Members receive an invitation with login instructions.
+Roles: `owner`, `admin`, `member` (default: `member`). Users are added to the `general` team by default unless `--team` is specified.
 
 ## 5. Team Members Connect
 
@@ -68,13 +68,15 @@ Studio is available at `http://localhost:9393` when the daemon is running, or th
 
 ## Configure OIDC/SSO (Optional)
 
-For enterprise environments, connect your identity provider:
+For enterprise environments, connect your identity provider by configuring OIDC settings in the platform configuration file:
 
-```bash
-astonish platform auth configure-oidc \
-  --issuer https://accounts.google.com \
-  --client-id YOUR_CLIENT_ID \
-  --client-secret YOUR_CLIENT_SECRET
+```yaml
+# In your Astonish config (e.g., ~/.config/astonish/config.yaml)
+auth:
+  oidc:
+    issuer: https://accounts.google.com
+    client_id: YOUR_CLIENT_ID
+    client_secret: YOUR_CLIENT_SECRET
 ```
 
 OIDC group claims auto-map to Astonish team memberships. Users authenticate through your existing SSO flow.

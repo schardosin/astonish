@@ -14,7 +14,7 @@ Best for: flow design, generative UI, managing apps and settings, visual executi
 
 ### CLI
 
-The terminal-native chat interface with full lipgloss styling. Supports all agent capabilities including tool use, memory, and flow execution.
+A rich terminal chat interface with colors, markdown rendering, and interactive elements. Supports all agent capabilities including tool use, memory, and flow execution.
 
 ```bash
 astonish chat                           # New session

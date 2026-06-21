@@ -37,7 +37,7 @@ Or open Studio in your browser at `http://localhost:9393` for the full web inter
 
 ```bash
 astonish chat                           # New chat session
-astonish chat -p anthropic -m claude-4  # Use a specific provider and model
+astonish chat -p anthropic -m claude-sonnet-4-20250514  # Use a specific provider and model
 astonish chat --resume                  # Resume the last session
 astonish flows list                     # List distilled flows
 astonish flows run <name>               # Run a saved flow
@@ -45,12 +45,12 @@ astonish flows run <name>               # Run a saved flow
 
 ## What You Get
 
-- Full agent engine with 58+ tools
+- Full agent engine with 90+ tools
 - Personal memory with semantic search (built into SQLite)
 - Flow distillation (chat to reusable YAML)
 - Generative UI (describe apps, get live React dashboards)
 - MCP server support
-- All 15+ AI providers
+- All 12+ AI providers
 - Studio web interface at `http://localhost:9393`
 
 ## Next Steps

@@ -28,7 +28,7 @@ The script detects your OS and architecture, downloads the appropriate binary, a
 
 Requirements:
 
-- Go 1.24.4 or later
+- Go 1.26.0 or later
 - Node.js 18+ (for building the Studio UI)
 - Make
 
@@ -38,7 +38,7 @@ cd astonish
 make build-all
 ```
 
-This builds the React frontend and compiles the Go binary with the UI embedded. The resulting binary is at `./astonish`.
+This builds the Ent ORM client, React frontend, and compiles the Go binary with the UI embedded. The resulting binary is at `./astonish`.
 
 To build only the Go binary without the UI:
 

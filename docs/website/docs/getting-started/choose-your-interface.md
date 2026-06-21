@@ -1,8 +1,12 @@
 # Choose Your Interface
 
-Astonish provides multiple interfaces for different workflows and environments. All interfaces connect to the same agent engine and share sessions, memory, and flows.
+Astonish provides multiple interfaces for different workflows and environments. All interfaces connect to the same platform and share sessions, memory, and flows. The daemon must be running for all interfaces to function.
 
 ## Interfaces
+
+::: tip Recommended Starting Point
+New to Astonish? Start with **Studio** — it gives you the full visual experience with chat, flow design, generative UI, and settings management. You can always connect the CLI later for terminal workflows.
+:::
 
 ### Studio (Web UI)
 
@@ -14,9 +18,10 @@ Best for: flow design, generative UI, managing apps and settings, visual executi
 
 ### CLI
 
-A rich terminal chat interface with colors, markdown rendering, and interactive elements. Supports all agent capabilities including tool use, memory, and flow execution.
+A rich terminal chat interface with colors, markdown rendering, and interactive elements. Supports all agent capabilities including tool use, memory, and flow execution. Requires authentication via `astonish login` before use.
 
 ```bash
+astonish login http://localhost:9393    # Authenticate against the platform
 astonish chat                           # New session
 astonish chat -p openai -m gpt-4o      # Specific provider/model
 astonish chat --resume                  # Resume last session
@@ -26,7 +31,7 @@ Best for: quick interactions, scripting, developers who prefer the terminal.
 
 ### Remote CLI
 
-A rich terminal client for connecting to a cloud deployment from anywhere. Authenticates via password or SSO, then provides the full CLI experience against the remote platform.
+The same CLI used for local access, pointed at a remote server. Authenticates via password or SSO, then provides the full CLI experience against the remote platform.
 
 ```bash
 astonish login https://platform.yourcompany.com
@@ -70,4 +75,4 @@ Best for: team collaboration, integrating agent responses into existing Slack wo
 
 Interfaces are not mutually exclusive. You can run Studio for visual work while using the CLI for quick tasks, and have Telegram configured for mobile access. All interfaces share the same sessions, memory, and platform context.
 
-The daemon (`astonish daemon start`) must be running for channel integrations (Telegram, Email, Slack) and Studio to function.
+The daemon (`astonish daemon start`) must be running for all interfaces to function. The CLI authenticates against the daemon via `astonish login`.

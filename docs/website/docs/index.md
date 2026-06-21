@@ -4,7 +4,7 @@ Astonish is an AI agent platform that makes your whole team smarter. When one pe
 
 Built in Go on Google's Agent Development Kit, Astonish combines autonomous tool-use agents with three-tier memory, flow distillation, generative UI, and enterprise-grade multi-tenancy. It runs as a single binary with all platform capabilities regardless of deployment size:
 
-- **Local (SQLite)** — Zero-config, runs entirely on your machine. SQLite handles storage and vector search out of the box. Install and start chatting in under a minute.
+- **Local (SQLite)** — Runs entirely on your machine. SQLite handles storage and vector search out of the box. Full platform features with minimal setup.
 - **Cloud (PostgreSQL)** — Multi-tenant with pgvector. Organizations, teams, shared memory, cascading configuration, and enterprise security for your whole team.
 
 Same binary, same 90+ tools, same platform. Your choice of database backend.
@@ -40,16 +40,18 @@ Resources cascade downward — provider configs, MCP servers, skills, and sandbo
 ## How It Works
 
 ```bash
-# Local — start immediately
-astonish setup         # Configure your AI provider
-astonish daemon install  # Register as system service
-astonish daemon start    # Start the daemon (Studio available at http://localhost:9393)
-astonish chat          # Start solving problems
+# 1. Setup — configure backend and AI provider
+astonish setup                    # Interactive wizard (SQLite or PostgreSQL)
 
-# Cloud — scale to your team
-export ASTONISH_DSN="postgres://..."
-astonish platform init                         # Set up the platform
-astonish platform org invite alice@company.com # Invite your team
+# 2. Start the platform
+astonish daemon install           # Register as system service
+astonish daemon start             # Start the daemon
+
+# 3. Use Astonish
+# Open Studio at http://localhost:9393 and log in with your admin credentials
+# Or connect via CLI:
+astonish login http://localhost:9393
+astonish chat                     # Start solving problems
 ```
 
 The agent solves problems using autonomous tool-use loops. It selects tools, chains them together, and works through multi-step tasks without manual intervention. After a successful interaction, distill it into a reusable flow that anyone on the team can run.
@@ -66,22 +68,22 @@ Agent:  Saved: deploy_staging.yaml
 
 ## What's Next
 
-- [Architecture](./getting-started/architecture.md) — Understand the layer model
 - [Installation](./getting-started/installation.md) — Get Astonish on your machine
-- [Quick Start: Local](./getting-started/quick-start-local.md) — Start chatting in under a minute
-- [Quick Start: Cloud](./getting-started/quick-start-cloud.md) — Deploy for your team
+- [Quick Start: Local](./getting-started/quick-start-local.md) — Get up and running with SQLite
+- [Quick Start: Cloud](./getting-started/quick-start-cloud.md) — Deploy for your team with PostgreSQL
 - [Choose Your Interface](./getting-started/choose-your-interface.md) — Studio, CLI, Telegram, and more
+- [Architecture](./getting-started/architecture.md) — Understand the layer model
 
 ## At a Glance
 
 | Dimension | Local (SQLite) | Cloud (PostgreSQL) |
 |-----------|---------------|-------------------|
 | Database | SQLite (with built-in vector search) | PostgreSQL 15+ with pgvector |
-| Users | Single user | Multi-tenant (orgs, teams, members) |
-| Memory | Personal tier | Personal + Team + Organization tiers |
-| Security | Local credentials | Envelope encryption, OIDC/SSO, audit logs |
-| Channels | Studio, CLI | Studio, CLI, Remote CLI, Telegram, Email, Slack |
-| Sandboxes | Local | Per-org network-isolated (Incus/Kubernetes) |
-| Config | Local files | Cascading (platform → org → team → personal) |
+| Users | Single user / small team | Multi-tenant (orgs, teams, members) |
+| Memory | Personal + team tiers | Personal + Team + Organization tiers |
+| Security | Envelope encryption, audit logs | Envelope encryption, OIDC/SSO, audit logs |
+| Channels | Studio, CLI, Telegram, Email, Slack | Studio, CLI, Remote CLI, Telegram, Email, Slack |
+| Sandboxes | Local (Incus) | Per-org network-isolated (Incus/Kubernetes) |
+| Config | Platform config | Cascading (platform → org → team → personal) |
 
 Both deployments ship in the same binary and share the same agent engine, tools, and capabilities.

@@ -1,57 +1,74 @@
 # Quick Start: Local
 
-The local deployment uses SQLite for all storage and vector search. No external database, no server setup, no accounts to create. All platform features run locally out of the box.
+The local deployment uses SQLite as the platform backend. No external database or server setup needed — all platform features (authentication, encryption, sessions, memory) run locally out of the box.
 
 ## 1. Run the Setup Wizard
 
-After [installing](./installation.md) the binary, configure your AI provider:
+After [installing](./installation.md) the binary, run the setup wizard:
 
 ```bash
 astonish setup
 ```
 
-The wizard prompts you to select a provider (OpenAI, Anthropic, Google Gemini, etc.) and enter your API key. Configuration is stored locally in `~/.config/astonish/`.
+The wizard walks you through:
+
+1. **Deployment mode** — Choose SQLite (local) or PostgreSQL (cloud). Select SQLite for local use.
+2. **Organization** — Create your organization name and slug.
+3. **Admin account** — Set your admin email and password.
+4. **AI provider** — Select a provider (OpenAI, Anthropic, Google Gemini, etc.) and enter your API key.
+
+Configuration is stored in `~/.config/astonish/`.
 
 ## 2. Start the Daemon
 
-The daemon runs in the background and serves Studio, handles scheduled flows, channel integrations, and persistent sessions:
+The daemon runs the platform in the background — it serves Studio, manages sessions, handles scheduled flows, and channel integrations:
 
 ```bash
 astonish daemon install
 astonish daemon start
 ```
 
-This registers Astonish as a system service (launchd on macOS, systemd on Linux). Studio is immediately available at `http://localhost:9393`.
+This registers Astonish as a system service (launchd on macOS, systemd on Linux). The platform is now running.
 
-## 3. Start Chatting
+## 3. Open Studio
 
-Open a conversation in the terminal:
+Open your browser and navigate to:
 
-```bash
-astonish chat
+```
+http://localhost:9393
 ```
 
-Or open Studio in your browser at `http://localhost:9393` for the full web interface with the visual flow designer, apps tab, and chat interface.
+Log in with the admin email and password you created during setup. Studio gives you the full visual experience: chat interface, flow designer, apps tab, settings management, and real-time execution display.
 
-## Common Commands
+## 4. Connect the CLI (Optional)
+
+If you prefer working in the terminal, authenticate the CLI against your local platform:
 
 ```bash
-astonish chat                           # New chat session
-astonish chat -p anthropic -m claude-sonnet-4-20250514  # Use a specific provider and model
-astonish chat --resume                  # Resume the last session
-astonish flows list                     # List distilled flows
-astonish flows run <name>               # Run a saved flow
+astonish login http://localhost:9393
+```
+
+Enter your admin email and password when prompted. After login:
+
+```bash
+astonish chat                                      # New chat session
+astonish chat -p anthropic -m claude-sonnet-4-20250514  # Specific provider/model
+astonish chat --resume                             # Resume last session
+astonish flows list                                # List distilled flows
+astonish flows run <name>                          # Run a saved flow
 ```
 
 ## What You Get
 
 - Full agent engine with 90+ tools
-- Personal memory with semantic search (built into SQLite)
-- Flow distillation (chat to reusable YAML)
+- Personal memory with semantic search
+- Flow distillation (chat → reusable YAML workflows)
 - Generative UI (describe apps, get live React dashboards)
 - MCP server support
 - All 12+ AI providers
 - Studio web interface at `http://localhost:9393`
+- Envelope encryption for credentials
+- Session persistence across restarts
 
 ## Next Steps
 

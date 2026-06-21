@@ -33,7 +33,7 @@ Agent:  [distill] Analyzing execution trace (3 steps)...
 
         Nodes: fetch_prs → get_latest → summarize → post_summary
 
-        Saved to: ~/.config/astonish/flows/summarize-latest-pr.yaml
+        Saved as: summarize-latest-pr
 
         Would you like to edit the flow or schedule it?
 ```
@@ -80,18 +80,15 @@ edges:
     to: post_summary
 ```
 
-## Distillation Options
+## Using Distillation
 
-```bash
-# Distill with a custom name
-/distill --name deploy-checker
+Distillation is available in multiple contexts:
 
-# Distill only the last N steps
-/distill --steps 5
+- **Studio** — Type `/distill` in the chat. The agent previews the identified task and generates the flow immediately.
+- **CLI** — Type `/distill` during a chat session. The agent previews the task and asks for confirmation before generating.
+- **Agent tool** — The `distill_flow` tool can be called programmatically by the agent (e.g., during scheduled flows).
 
-# Distill and immediately schedule
-/distill --cron "0 9 * * 1-5"
-```
+The generated flow is saved to the platform and appears in your Flows list in Studio.
 
 ## Team Knowledge in Cloud Deployments
 

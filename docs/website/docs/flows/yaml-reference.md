@@ -228,13 +228,14 @@ edges:
 
 ## Validation
 
-```bash
-# Validate a flow file
-astonish flow validate ./my-flow.yaml
+Flows are validated automatically when imported or saved. You can also validate via CLI:
 
-# Validate all flows in a directory
-astonish flow validate ./flows/
+```bash
+# Import and validate a flow file
+astonish flows import ./my-flow.yaml
 ```
+
+In Studio, the visual flow editor validates in real-time as you build the flow, highlighting errors inline.
 
 ## Next Steps
 

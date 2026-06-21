@@ -166,15 +166,20 @@ Use the `output` mapping on any node to write results into state:
 
 ## Debugging Flows
 
-```bash
-# Dry-run with verbose output showing state at each step
-astonish flow run my-flow --dry-run --verbose
+In **Studio**, the flow editor provides a visual debugger that:
 
-# Show the resolved state after a specific node
-astonish flow run my-flow --break-at classify
+- Shows state changes at each node
+- Highlights the active node during execution
+- Displays intermediate outputs
+- Allows step-through execution
+
+From the **CLI**, run flows with debug output:
+
+```bash
+astonish flows run my-flow --debug
 ```
 
-In Studio, the flow debugger visualizes state changes at each node with a step-through interface.
+The `--debug` flag shows tool inputs and responses during execution.
 
 ## Next Steps
 

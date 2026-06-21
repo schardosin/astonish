@@ -5,8 +5,8 @@ Taps are git-based repositories of community and organization flows. They work l
 ## Adding a Tap
 
 ```bash
-# Add a community tap
-astonish tap add https://github.com/astonish-flows/devops
+# Add a community tap (supports shorthand or full URL)
+astonish tap add schardosin/astonish-flows
 
 # Add a private org tap (uses git credentials)
 astonish tap add https://github.com/myorg/astonish-flows
@@ -21,11 +21,8 @@ astonish tap add https://github.com/user/flows --name user-flows
 # List installed taps
 astonish tap list
 
-# Update all taps (git pull)
+# Update all tap manifests
 astonish tap update
-
-# Update a specific tap
-astonish tap update devops
 
 # Remove a tap
 astonish tap remove devops
@@ -33,18 +30,29 @@ astonish tap remove devops
 
 ## Installing Flows from Taps
 
+Use the flows store commands to browse and install from taps:
+
 ```bash
-# List available flows in a tap
-astonish tap flows devops
+# List available flows from all taps
+astonish flows store list
+
+# Filter by tag
+astonish flows store list --tag kubernetes
+
+# Search for flows
+astonish flows store search deploy
 
 # Install a flow
-astonish flow install devops/deploy-k8s
+astonish flows store install devops/deploy-k8s
 
-# Install with a custom name
-astonish flow install devops/deploy-k8s --as my-deploy
+# Uninstall
+astonish flows store uninstall deploy-k8s
+
+# Update all tap manifests
+astonish flows store update
 ```
 
-Installed flows are copied to your local flows directory and can be edited freely. Updates to the tap do not overwrite local modifications.
+Installed flows appear in your Flows list in Studio and can be edited or run like any other flow.
 
 ## Tap Repository Structure
 

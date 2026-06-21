@@ -33,19 +33,20 @@ The agent engine is shared across all interfaces. A conversation started in Tele
 
 ### Local (SQLite)
 
-In local deployments, channels use a static allowlist defined in your configuration file. Routing is simple — all messages go to your single agent context.
+In SQLite deployments, channels use a static allowlist defined in your configuration file. Routing uses your default org and team context.
 
 ```yaml
 channels:
   telegram:
-    token: "bot-token-here"
-    allowlist:
+    enabled: true
+    bot_token: "bot-token-here"
+    allow_from:
       - "123456789"  # Telegram user ID
 ```
 
 ### Cloud (PostgreSQL)
 
-In cloud deployments, channels gain additional capabilities:
+In PostgreSQL deployments, channels gain additional capabilities:
 
 - **Database-backed allowlists** — Managed through the platform admin API, not static config
 - **Dynamic per-message routing** — Each incoming message is routed to the correct organization and team based on sender identity or addressing

@@ -14,34 +14,47 @@ The Slack channel integrates Astonish into your Slack workspace, enabling AI age
    - `im:history`
    - `im:read`
    - `im:write`
-4. Install the app to your workspace and copy the **Bot User OAuth Token**
-5. Under **Event Subscriptions**, enable events and subscribe to:
+4. Install the app to your workspace and copy the **Bot User OAuth Token** (`xoxb-...`)
+5. For Socket Mode: Under **App-Level Tokens**, create a token with `connections:write` scope (`xapp-...`)
+6. Under **Event Subscriptions**, subscribe to:
    - `message.im`
    - `app_mention`
 
-### 2. Configure Astonish
+### 2. Configure via CLI
+
+Run the interactive setup wizard:
+
+```bash
+astonish channels setup slack
+```
+
+The wizard validates your bot token, collects the app-level token (for Socket Mode) or signing secret (for Events API), and stores credentials securely.
+
+Alternatively, configure manually:
 
 ```yaml
 channels:
   slack:
-    bot_token: "xoxb-..."
-    app_token: "xapp-..."  # For Socket Mode
-    signing_secret: "abc123..."
+    enabled: true
+    mode: "socket"              # "socket" (WebSocket) or "events" (HTTP webhook)
+    bot_token: "xoxb-..."       # Stored in credential store
+    app_token: "xapp-..."       # For Socket Mode (stored in credential store)
+    allow_from:
+      - "U0KRQLJ9H"            # Allowed Slack user IDs
 ```
 
-### 3. Start the Channel
+### 3. Start the Daemon
 
 ```bash
 astonish daemon start
 ```
 
-## Configuration Options
+## Connection Modes
 
-| Option | Description | Default |
-|--------|-------------|---------|
-| `bot_token` | Bot User OAuth Token (`xoxb-...`) | Required |
-| `app_token` | App-Level Token for Socket Mode (`xapp-...`) | Required |
-| `signing_secret` | Request signing secret | Required |
+| Mode | Transport | Use Case |
+|------|-----------|----------|
+| `socket` | WebSocket (Socket Mode) | Recommended for most setups. No public URL needed. |
+| `events` | HTTP webhook (Events API) | For environments requiring HTTP endpoints. Needs `signing_secret`. |
 
 ## Interaction Patterns
 
@@ -49,31 +62,40 @@ astonish daemon start
 - **Mention** — `@Astonish <message>` in any channel the bot is invited to
 - **Thread** — Replies within a thread maintain session context
 
-## Cloud Deployment
+## Available Commands
 
-### Workspace-to-Org Mapping
+Send these as messages to the bot:
 
-In cloud deployments, Slack workspaces are mapped to organizations:
+| Command | Description |
+|---------|-------------|
+| `/help` | Show available commands |
+| `/status` | Show provider, model, and session info |
+| `/new` | Start a new session |
+| `/distill` | Distill the last task into a reusable flow |
+| `/jobs` | Show scheduled jobs |
+| `/org <slug>` | Switch active organization |
+| `/team <slug>` | Switch active team |
+| `/context` | Show current routing context |
+| `/fleet` | Start a fleet session |
 
-```bash
-astonish platform org link-slack --org acme-corp --workspace-id T01ABC123
+## Multi-Tenant Routing (PostgreSQL)
+
+In PostgreSQL deployments, Slack gains multi-tenant capabilities:
+
+- **User linking** — Slack users link their account to their platform identity via `/link <code>`
+- **Context switching** — `/org` and `/team` commands change the active context
+- **Platform-managed access** — Access is governed by platform org membership rather than a static allowlist
+
+### Linking Slack to Platform Account
+
+```
+User: /link ABC123
+Bot:  ✓ Account linked. You're now connected as alice@acme.corp (org: acme, team: backend)
 ```
 
-All messages from a linked workspace are automatically routed to the corresponding organization. Users in multiple workspaces are routed based on which workspace the message originates from.
-
-### Team Routing
-
-Within an org, Slack channels can be mapped to teams:
+## Managing the Channel
 
 ```bash
-astonish platform team link-slack --team backend --channel-id C01XYZ789
+astonish channels status           # Check channel status
+astonish channels disable slack    # Disable the channel
 ```
-
-Users can also switch context with slash commands:
-
-- `/astonish org <name>` — Switch organization
-- `/astonish team <name>` — Switch team
-
-### Access Control
-
-In cloud deployments, access is governed by the platform's org membership rather than a static allowlist. Any user in a linked workspace who is also a member of the mapped organization can interact with the bot.

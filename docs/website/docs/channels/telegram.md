@@ -10,22 +10,31 @@ The Telegram channel connects Astonish to a Telegram bot, enabling real-time AI 
 2. Send `/newbot` and follow the prompts
 3. Copy the bot token (format: `123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11`)
 
-### 2. Configure Astonish
+### 2. Configure via CLI
 
-Add the Telegram section to your config file:
+Run the interactive setup wizard:
+
+```bash
+astonish channels setup telegram
+```
+
+The wizard validates your token via the Telegram API, detects users via polling, and stores the token securely in the encrypted credential store.
+
+Alternatively, configure manually in your config file:
 
 ```yaml
 channels:
   telegram:
-    token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
-    allowlist:
+    enabled: true
+    bot_token: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11"
+    allow_from:
       - "987654321"   # Your Telegram user ID
       - "123456789"   # Another allowed user
 ```
 
 To find your Telegram user ID, message [@userinfobot](https://t.me/userinfobot).
 
-### 3. Start the Channel
+### 3. Start the Daemon
 
 ```bash
 astonish daemon start
@@ -33,48 +42,40 @@ astonish daemon start
 
 The daemon manages the Telegram listener alongside other background services.
 
-## Configuration Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `token` | Bot API token from BotFather | Required |
-| `allowlist` | List of allowed Telegram user IDs | `[]` |
-| `parse_mode` | Message formatting (`Markdown`, `HTML`) | `Markdown` |
-
-## Supported Commands
+## Available Commands
 
 These commands are available within the Telegram chat:
 
 | Command | Description |
 |---------|-------------|
+| `/help` | Show available commands |
+| `/status` | Show provider, model, and session info |
 | `/new` | Start a new session |
-| `/model <name>` | Switch model |
-| `/status` | Show agent status |
+| `/distill` | Distill the last task into a reusable flow |
+| `/jobs` | Show scheduled jobs |
+| `/org <slug>` | Switch active organization |
+| `/team <slug>` | Switch active team |
+| `/context` | Show current routing context |
+| `/fleet` | Start a fleet session |
 
-## Cloud Deployment
+## Multi-Tenant Routing (PostgreSQL)
 
-In cloud deployments, the Telegram channel gains multi-tenant capabilities.
+In PostgreSQL deployments, the Telegram channel gains multi-tenant capabilities:
 
-### Database Allowlist
+- **Database-backed allowlist** — Managed through the platform, not static config. Changes take effect immediately without restarting.
+- **Dynamic routing** — Each message is routed to the correct organization and team based on the user's linked identity.
+- **Context switching** — Users can run `/org` and `/team` commands to change their active context.
 
-Instead of a static config list, allowed users are managed through the platform API:
+### Linking Telegram to Platform Account
 
-```bash
-astonish platform org invite --channel telegram --user-id 987654321
+Users link their Telegram account to their platform identity using a code:
+
+```
+User: /link ABC123
+Bot:  ✓ Account linked successfully. You're now connected as alice@acme.corp
 ```
 
-The allowlist is checked against the database on every incoming message, so changes take effect immediately without restarting the daemon.
-
-### Organization Routing
-
-When a user belongs to multiple organizations, Astonish routes messages to their default org. Users can switch context with in-chat commands:
-
-| Command | Description |
-|---------|-------------|
-| `/org <name>` | Switch active organization |
-| `/team <name>` | Switch active team within the current org |
-| `/org` | Show current organization |
-| `/team` | Show current team |
+The link code is generated in Studio under user settings.
 
 ### Example Interaction
 
@@ -89,4 +90,11 @@ User: What's the status of the migration task?
 Bot:  Based on the team's recent activity...
 ```
 
-Context switches persist for the duration of the conversation. Starting a new session (`/new`) resets to the user's default org and team.
+Context switches are persistent. Starting a new session (`/new`) resets to the user's default org and team.
+
+## Managing the Channel
+
+```bash
+astonish channels status             # Check channel status
+astonish channels disable telegram   # Disable the channel
+```

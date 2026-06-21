@@ -36,7 +36,7 @@ Generated apps have access to pre-bundled libraries — no installation needed:
 | Lucide React | Icon library |
 | Tailwind CSS v4 | Utility-first styling |
 
-For data connectivity, apps use [data hooks](./data-hooks.md) to fetch from APIs, call LLMs, or persist state — all without exposing credentials to the browser.
+For data connectivity, apps use [data hooks](./data-hooks.md) — `useAppData` for fetching, `useAppAction` for mutations, `useAppAI` for LLM calls, and `useAppState` for persistent storage — all backend-proxied so credentials never reach the browser.
 
 ## Comparison to Alternatives
 

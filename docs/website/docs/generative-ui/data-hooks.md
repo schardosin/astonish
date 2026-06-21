@@ -1,75 +1,40 @@
 # Data Hooks
 
-Data hooks connect Generative UI apps to live data sources, AI capabilities, and persistent storage. All three hooks are available globally in any generated app — no imports needed.
+Data hooks connect Generative UI apps to live data sources, AI capabilities, and persistent storage. All hooks are available globally in any generated app — no imports needed (though you can import from `'astonish'` for clarity).
 
 ## Overview
 
-| Hook | Purpose | Backed By |
-|------|---------|-----------|
-| `useAppData` | Fetch data from APIs and tools | MCP servers, REST/OAuth, static config |
-| `useAppAI` | Run LLM calls from the app | Configured AI provider |
-| `useAppState` | Persist key-value data | Per-user, per-app database storage |
+| Hook | Purpose | Returns |
+|------|---------|---------|
+| `useAppData(sourceId)` | Fetch data from APIs and MCP tools | `< data, loading, error, refetch >` |
+| `useAppAction(actionId)` | Trigger mutations/actions | `async (payload) => result` |
+| `useAppAI(options)` | Run LLM calls from the app | `async (prompt, callOptions?) => string` |
+| `useAppState()` | Per-app persistent SQLite database | `< exec(sql, params), query(sql, params) >` |
 
 All data fetching is **backend-proxied** — credentials, API keys, and OAuth tokens are stored server-side and never exposed to the iframe sandbox.
 
 ## useAppData
 
-Fetches data from external sources. Supports three modes:
+Fetches data from external sources via a string `sourceId`. The format determines the data source type.
 
-### MCP Tool Call
+### HTTP API
 
-Connect to any configured MCP server tool:
-
-```jsx
-function TicketDashboard() {
-  const { data, loading, error, refetch } = useAppData({
-    source: "mcp",
-    server: "jira",
-    tool: "list_tickets",
-    args: {
-      project: "ENG",
-      status: "open",
-    },
-    pollInterval: 30000, // Refresh every 30s
-  });
-
-  if (loading) return <div>Loading tickets...</div>;
-  if (error) return <div>Error: {error.message}</div>;
-
-  return (
-    <ul>
-      {data.tickets.map((t) => (
-        <li key={t.id}>{t.title} — {t.assignee}</li>
-      ))}
-    </ul>
-  );
-}
-```
-
-### REST API with OAuth
-
-Call any REST endpoint using stored OAuth credentials:
+Fetch from any HTTP endpoint:
 
 ```jsx
 function GitHubStats() {
-  const { data, loading } = useAppData({
-    source: "rest",
-    url: "https://api.github.com/repos/myorg/myrepo/stats/contributors",
-    credential: "github-oauth",    // References stored credential
-    method: "GET",
-    headers: {
-      "Accept": "application/vnd.github.v3+json",
-    },
-    transform: (raw) => raw.slice(0, 5), // Client-side transform
-  });
+  const < data, loading, error > = useAppData(
+    'http:GET:https://api.github.com/repos/myorg/myrepo/stats/contributors'
+  );
 
   if (loading) return <div>Loading...</div>;
+  if (error) return <div>Error: <error.message></div>;
 
   return (
     <div>
-      {data.map((contributor) => (
-        <div key={contributor.author.login}>
-          {contributor.author.login}: {contributor.total} commits
+      {data.slice(0, 5).map((contributor) => (
+        <div key=<contributor.author.login>>
+          <contributor.author.login>: <contributor.total> commits
         </div>
       ))}
     </div>
@@ -77,24 +42,78 @@ function GitHubStats() {
 }
 ```
 
-### Static Configuration
+### HTTP with Credential Authentication
 
-Provide data directly for prototyping or configuration-driven apps:
+Append `@credential-name` to authenticate using a stored credential:
 
 ```jsx
-function PricingTable() {
-  const { data } = useAppData({
-    source: "static",
-    value: {
-      plans: [
-        { name: "Starter", price: 0, features: ["5 flows", "1 agent"] },
-        { name: "Pro", price: 29, features: ["Unlimited flows", "10 agents", "Priority support"] },
-        { name: "Enterprise", price: null, features: ["Custom", "SSO", "SLA"] },
-      ],
-    },
-  });
+function PrivateRepos() {
+  const < data, loading > = useAppData(
+    'http:GET:https://api.github.com/user/repos@github-token'
+  );
 
-  return <PricingGrid plans={data.plans} />;
+  // credential is resolved server-side, never exposed to the browser
+}
+```
+
+### MCP Tool Call
+
+Connect to any configured MCP server tool:
+
+```jsx
+function TicketDashboard() {
+  const < data, loading, error > = useAppData(
+    'mcp:jira/list_tickets'
+  );
+
+  if (loading) return <div>Loading tickets...</div>;
+  if (error) return <div>Error: <error.message></div>;
+
+  return (
+    <ul>
+      {data.tickets.map((t) => (
+        <li key=<t.id>><t.title> — <t.assignee></li>
+      ))}
+    </ul>
+  );
+}
+```
+
+The sourceId format for MCP is `mcp:<server>/<tool>`.
+
+### Dynamic URLs
+
+For dynamic data, construct the sourceId with variables:
+
+```jsx
+function UserProfile(< userId >) {
+  const < data, loading > = useAppData(
+    'http:GET:https://api.example.com/users/' + encodeURIComponent(userId)
+  );
+  // ...
+}
+```
+
+## useAppAction
+
+Triggers mutations or write operations. Returns an async function:
+
+```jsx
+function CreateTicket() {
+  const createTicket = useAppAction('mcp:jira/create_ticket');
+  const [title, setTitle] = useState('');
+
+  const handleSubmit = async () => {
+    const result = await createTicket(< title, priority: 'medium' >);
+    console.log('Created:', result.id);
+  };
+
+  return (
+    <div>
+      <input value=<title> onChange=<(e) => setTitle(e.target.value)> />
+      <button onClick=<handleSubmit>>Create Ticket</button>
+    </div>
+  );
 }
 ```
 
@@ -104,82 +123,88 @@ Runs one-shot LLM calls from within the app. Useful for summarization, classific
 
 ```jsx
 function FeedbackAnalyzer() {
-  const [feedback, setFeedback] = useState("");
-  const { result, loading, run } = useAppAI({
-    prompt: `Classify this customer feedback into: positive, negative, neutral.
-             Then extract the key topics mentioned.
-             Feedback: "${feedback}"`,
-    schema: {
-      sentiment: "string",
-      topics: "string[]",
-      summary: "string",
-    },
-  });
+  const askAI = useAppAI(< system: 'You are a sentiment analysis expert.' >);
+  const [feedback, setFeedback] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const analyze = async () => {
+    setLoading(true);
+    const text = await askAI(
+      `Classify this feedback as positive, negative, or neutral. Extract key topics. Feedback: "$<feedback>"`,
+      < context: feedback >
+    );
+    setResult(text);
+    setLoading(false);
+  };
 
   return (
     <div>
       <textarea
-        value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
+        value=<feedback>
+        onChange=<(e) => setFeedback(e.target.value)>
         placeholder="Paste customer feedback..."
       />
-      <button onClick={run} disabled={loading}>
-        {loading ? "Analyzing..." : "Analyze"}
+      <button onClick=<analyze> disabled=<loading>>
+        <loading ? 'Analyzing...' : 'Analyze'>
       </button>
-      {result && (
-        <div>
-          <p>Sentiment: {result.sentiment}</p>
-          <p>Topics: {result.topics.join(", ")}</p>
-          <p>Summary: {result.summary}</p>
-        </div>
-      )}
+      {result && <p><result></p>}
     </div>
   );
 }
 ```
 
-The `schema` field provides structured output — the LLM response is parsed and validated against the declared shape. The `run` function is manually triggered (not automatic) to control when LLM calls happen.
+The `useAppAI` hook accepts an options object with a `system` prompt. It returns an async function that takes a user prompt and optional call options (like `< context >` for additional context).
 
 ## useAppState
 
-Persists key-value data per user, per app. State survives across sessions and browser refreshes.
+Provides a reactive SQLite database scoped per-user, per-app. State survives across sessions and browser refreshes.
 
 ```jsx
 function HabitTracker() {
-  const { state, setState, loading } = useAppState({
-    key: "habits",
-    defaultValue: {
-      habits: [],
-      completions: {},
-    },
-  });
+  const db = useAppState();
 
-  const addHabit = (name) => {
-    setState({
-      ...state,
-      habits: [...state.habits, { id: Date.now(), name }],
-    });
-  };
+  // Create table on first load
+  React.useEffect(() => <
+    db.exec(`CREATE TABLE IF NOT EXISTS habits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`);
+    db.exec(`CREATE TABLE IF NOT EXISTS completions (
+      habit_id INTEGER,
+      date TEXT,
+      PRIMARY KEY (habit_id, date)
+    )`);
+  >, []);
+
+  // Reactive query — auto-refreshes when data changes
+  const habits = db.query('SELECT * FROM habits ORDER BY created_at DESC');
+  const today = new Date().toISOString().split('T')[0];
+  const todayCompletions = db.query(
+    'SELECT habit_id FROM completions WHERE date = ?', [today]
+  );
+
+  const addHabit = (name) => <
+    db.exec('INSERT INTO habits (name) VALUES (?)', [name]);
+  >;
 
   const toggleToday = (habitId) => {
-    const today = new Date().toISOString().split("T")[0];
-    const key = `${habitId}_${today}`;
-    setState({
-      ...state,
-      completions: {
-        ...state.completions,
-        [key]: !state.completions[key],
-      },
-    });
+    const completed = todayCompletions.data?.some(c => c.habit_id === habitId);
+    if (completed) <
+      db.exec('DELETE FROM completions WHERE habit_id = ? AND date = ?', [habitId, today]);
+    > else <
+      db.exec('INSERT INTO completions (habit_id, date) VALUES (?, ?)', [habitId, today]);
+    >
   };
 
-  if (loading) return <div>Loading...</div>;
+  if (habits.loading) return <div>Loading...</div>;
 
   return (
     <div>
-      {state.habits.map((h) => (
-        <div key={h.id} onClick={() => toggleToday(h.id)}>
-          {h.name}
+      {habits.data?.map((h) => (
+        <div key=<h.id> onClick=<() => toggleToday(h.id)>>
+          <h.name>
         </div>
       ))}
     </div>
@@ -187,7 +212,11 @@ function HabitTracker() {
 }
 ```
 
-State is stored in the Astonish database and scoped to the individual user — even when an app is shared with a team, each user has their own independent state.
+Key features:
+- `db.exec(sql, params)` — Execute write/DDL statements
+- `db.query(sql, params)` — Reactive read queries (auto-refresh on mutations)
+- Results from `db.query()` have `.data`, `.loading`, `.error` properties
+- State is stored per-user, per-app — even shared apps have independent state per user
 
 ## Combining Hooks
 
@@ -195,27 +224,28 @@ Hooks compose naturally for data-driven interactive apps:
 
 ```jsx
 function SmartInventory() {
-  const { data: inventory } = useAppData({
-    source: "mcp",
-    server: "warehouse",
-    tool: "get_inventory",
-    pollInterval: 60000,
-  });
+  const < data: inventory > = useAppData('mcp:warehouse/get_inventory');
+  const db = useAppState();
+  const askAI = useAppAI(< system: 'You are an inventory analyst.' >);
 
-  const { state, setState } = useAppState({
-    key: "alerts",
-    defaultValue: { thresholds: {} },
-  });
+  const analyzeStock = async () => {
+    const analysis = await askAI(
+      `Identify items likely to run out within 7 days`,
+      < context: JSON.stringify(inventory) >
+    );
+    db.exec('INSERT INTO analyses (result, created_at) VALUES (?, datetime("now"))', [analysis]);
+  };
 
-  const { run: analyzeStock } = useAppAI({
-    prompt: `Given this inventory data, identify items likely to run
-             out within 7 days: ${JSON.stringify(inventory)}`,
-    schema: { atRisk: "object[]" },
-  });
-
-  // Combine all three for a reactive dashboard
+  // Combine all hooks for a reactive dashboard
 }
 ```
+
+## Security
+
+- All network requests are proxied through the Astonish backend
+- Credentials referenced via `@credential-name` are resolved server-side
+- The iframe sandbox prevents direct network access (`fetch` is blocked)
+- App code runs in a restricted Content Security Policy
 
 ## Next Steps
 

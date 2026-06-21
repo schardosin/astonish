@@ -1,4 +1,3 @@
----
 # Email Tools
 
 Eight tools for managing email: reading, sending, searching, and organizing messages.
@@ -82,4 +81,3 @@ Useful for automation workflows that need to wait for confirmation emails.
 - Delete operations always require confirmation
 
 See [Credentials](./credentials.md) for how email secrets are managed and [Tools Overview](./index.md) for the full tool catalog.
----

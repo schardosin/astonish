@@ -1,4 +1,3 @@
----
 # Browser Automation
 
 Astonish includes 34 browser automation tools for full web interaction, testing, and data extraction.

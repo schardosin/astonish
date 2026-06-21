@@ -1,4 +1,3 @@
----
 # Web & HTTP Tools
 
 Three tools for fetching web content, reading PDFs, and making HTTP API requests.

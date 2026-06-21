@@ -767,7 +767,7 @@ layout:
       y: 250
 `
     
-    setSelectedAgent({ id, name, description: description || name, source: '', isNew: true })
+    setSelectedAgent({ id, name: id, description: description || name, source: '', isNew: true })
     setSelectedNodeId(null)
     setEditingNode(null)
     setYamlContent(newYaml)

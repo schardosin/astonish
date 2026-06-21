@@ -7,92 +7,84 @@ Skills are markdown-based instruction files that teach the agent specific tools,
 When you ask the agent to perform a task, it checks available skills for relevance. If a match is found, the skill's content is injected into the agent's context, giving it detailed instructions for the task.
 
 Skills differ from memory:
-- **Memory** = facts the agent has learned (declarative)
-- **Skills** = instructions for how to do things (procedural)
+- **Memory** = facts the agent has learned (declarative knowledge)
+- **Skills** = instructions for how to do things (procedural knowledge)
 
-## Bundled Skills
+## Skill Structure
 
-Astonish ships with 9 built-in skills:
+A skill is a markdown file with a specific structure:
 
-| Skill | Description |
-|-------|-------------|
-| `git-workflow` | Branch management, commits, PRs |
-| `docker` | Container builds, compose, debugging |
-| `kubernetes` | kubectl operations, manifest authoring |
-| `terraform` | Infrastructure-as-code workflows |
-| `python-project` | Virtual envs, packaging, testing |
-| `node-project` | npm/yarn, builds, deployment |
-| `api-testing` | REST/GraphQL endpoint validation |
-| `database` | SQL queries, migrations, schema design |
-| `debugging` | Log analysis, profiling, root cause |
+```markdown
+# Skill Name
+
+## Description
+When this skill applies — used for matching against user requests.
+
+## Instructions
+Detailed steps, commands, code examples, and best practices.
+
+## References
+Links to documentation, API references, etc.
+```
+
+The `Description` section is critical — the agent uses it to determine when to load the skill.
+
+## Managing Skills
+
+Skills are managed through the platform at three scopes:
+
+| Scope | Managed By | Available To |
+|-------|------------|-------------|
+| Platform | Platform admin | All users |
+| Org | Org admin | All org members |
+| Team | Team admin | Team members |
+
+### In Studio
+
+Studio provides the primary interface for skill management:
+
+- Browse available skills
+- Create and edit skills
+- Install skills from ClawHub (community repository)
+- Configure skill scoping (team/org)
+
+### CLI
+
+The CLI provides read access to skills (requires platform connection):
+
+```bash
+astonish skills list              # List available skills
+astonish skills show <name>       # Show skill content
+astonish skills install <source>  # Install from ClawHub
+astonish skills create <name>     # Create a new skill template
+```
+
+::: tip Plural Command
+The CLI command is `astonish skills` (plural), not `astonish skill`.
+:::
 
 ## ClawHub Community Skills
 
-The [ClawHub](https://github.com/astonish-clawhub) organization hosts community-contributed skills. Install them via taps:
+The [ClawHub](https://github.com/astonish-clawhub) organization hosts community-contributed skills covering common tools and workflows. Install them via Studio or CLI.
 
-```bash
-astonish tap add https://github.com/astonish-clawhub/skills.git
-astonish skill install clawhub/aws-lambda
+## Agent Tool: skill_lookup
+
+During chat, the agent can search for relevant skills using the `skill_lookup` tool:
+
+```
+skill_lookup:
+  name: "docker"
 ```
 
-## Writing Custom Skills
+This loads the full skill instructions into the agent's context for the current task.
 
-Create a markdown file in `~/.config/astonish/skills/`:
+## Cascading Access
 
-```markdown
-# Skill: Deploy to Production
+Skills cascade through the platform hierarchy (see [Cascading Defaults](../platform/cascading-defaults.md)):
 
-## Description
-Handles production deployment for our Next.js app on Vercel.
+- Platform skills are available to everyone
+- Org skills are available to all org members
+- Team skills are available to team members
+- Skills from higher scopes cannot be removed at lower scopes, only supplemented
 
-## Steps
-1. Run `npm run build` to verify no build errors
-2. Run `npm test` to ensure tests pass
-3. Execute `vercel --prod` to deploy
-4. Verify deployment with `curl https://app.example.com/health`
-
-## Notes
-- Always check the #deployments Slack channel before deploying
-- Rollback command: `vercel rollback`
-```
-
-### Skill File Structure
-
-```markdown
-# Skill: <Name>
-
-## Description
-<When this skill applies — used for matching>
-
-## <Sections>
-<Detailed instructions, commands, code examples>
-```
-
-The `Description` section is critical—the agent uses it to determine when to load the skill.
-
-## Team-Scoped Skills (Cloud Deployment)
-
-In cloud deployments, skills can be shared at the team or org level:
-
-| Scope | Location | Managed By |
-|-------|----------|-----------|
-| Personal | Local filesystem | Individual |
-| Team | Platform storage | Team admin |
-| Org | Platform storage | Org admin |
-
-Team skills are automatically available to all team members without individual installation.
-
-## CLI Commands
-
-```bash
-# List available skills
-astonish skill list
-
-# Show skill content
-astonish skill show git-workflow
-
-# Install from tap
-astonish skill install <tap>/<skill-name>
-```
-
-See [Taps & Flow Store](../configuration/taps.md) for distributing skills via taps, and [Sub-agents](./sub-agents.md) for how delegated tasks inherit skill access.
+See [Sub-agents](./sub-agents.md) for how delegated tasks inherit skill access, and [Configuration](../configuration/mcp-servers.md) for MCP servers (another way to extend agent capabilities).

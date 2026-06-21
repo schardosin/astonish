@@ -1,74 +1,70 @@
 # Scheduler & Agent Tools
 
-Four tools for scheduling future tasks, delegating to parallel sub-agents, distilling sessions into flows, and looking up skills.
+Tools for scheduling future tasks, delegating to parallel sub-agents, distilling sessions into flows, and managing plans.
 
-## Tools
+## Scheduling Tools
 
 | Tool | Description | Confirmation |
 |------|-------------|-------------|
-| `schedule_task` | Schedule a task for future execution | always-confirm |
-| `delegate_tasks` | Spawn parallel child agents | always-confirm |
+| `schedule_job` | Create a scheduled job on a cron schedule | always-confirm |
+| `list_scheduled_jobs` | List all scheduled jobs with status | auto-approve |
+| `update_scheduled_job` | Update a job's schedule or enable/disable it | always-confirm |
+| `remove_scheduled_job` | Remove a scheduled job | always-confirm |
+
+### schedule_job
+
+Creates a recurring task that runs on a cron schedule:
+
+```
+schedule_job:
+  name: "daily-backup"
+  mode: "adaptive"
+  schedule: "0 2 * * *"
+  instructions: "Run database backup and upload to S3"
+```
+
+Modes:
+- **routine** — Runs a saved flow with fixed parameters (deterministic)
+- **adaptive** — An AI agent executes free-form instructions each run (flexible)
+
+The daemon must be running for scheduled jobs to execute.
+
+## Delegation Tools
+
+| Tool | Description | Confirmation |
+|------|-------------|-------------|
+| `delegate_tasks` | Spawn parallel child agents for concurrent work | always-confirm |
+| `announce_plan` | Show a structured plan checklist to the user | auto-approve |
+
+### delegate_tasks
+
+Spawns up to 10 parallel child agents. See [Sub-agents](../sub-agents.md) for full details.
+
+### announce_plan
+
+Displays a structured plan to the user before starting multi-step work. Plan steps are automatically tracked as sub-tasks complete.
+
+## Flow & Discovery Tools
+
+| Tool | Description | Confirmation |
+|------|-------------|-------------|
 | `distill_flow` | Convert current session into a reusable flow | always-confirm |
-| `skill_lookup` | Search available skills by description | auto-approve |
+| `run_flow` | Execute a saved flow | always-confirm |
+| `search_flows` | Search for saved flows/workflows | auto-approve |
+| `search_tools` | Discover available tools by description | auto-approve |
+| `skill_lookup` | Load instructions for a CLI tool or workflow | auto-approve |
+| `list_team_members` | List team members for delivery targeting | auto-approve |
 
-## schedule_task
+### distill_flow
 
-Schedules a task for later execution via the daemon:
+Converts the current conversation into a reusable flow file. Captures the sequence of tool calls, decision points, and parameters. Equivalent to the `/distill` slash command.
 
-```
-schedule_task:
-  description: "Run database backup and upload to S3"
-  cron: "0 2 * * *"
-  tools: ["shell_command", "http_request"]
-```
+### search_tools
 
-Options:
-- `cron` — Cron expression for recurring tasks
-- `run_at` — ISO timestamp for one-time tasks
-- `tools` — Tool allowlist for the scheduled execution
-- `flow` — Optional flow file to execute
+Searches for available tools by describing what you want to do. Found tools become available for the current session. Useful when the agent needs capabilities not in its default tool set.
 
-Requires the daemon to be running (`daemon.enabled: true` in config).
+### skill_lookup
 
-## delegate_tasks
+Loads detailed instructions for a specific CLI tool or workflow (e.g., `git`, `docker`, `kubernetes`). The instructions are injected into the agent's context for the current task.
 
-Spawns up to 10 parallel child agents for concurrent work:
-
-```
-delegate_tasks:
-  tasks:
-    - description: "Audit authentication module for vulnerabilities"
-      tools: ["read_file", "grep_search", "file_tree"]
-    - description: "Check dependency versions for known CVEs"
-      tools: ["shell_command", "read_file", "web_fetch"]
-    - description: "Review error handling patterns"
-      tools: ["read_file", "grep_search"]
-```
-
-Each child agent runs independently with its own session. Results are collected and returned to the primary agent. See [Sub-agents](../sub-agents.md) for full details.
-
-## distill_flow
-
-Converts the current conversation into a reusable flow file:
-
-```
-distill_flow:
-  name: "deploy-staging"
-  description: "Build, test, and deploy to staging environment"
-  output_path: "~/.config/astonish/flows/deploy-staging.yaml"
-```
-
-The distilled flow captures the sequence of tool calls, decision points, and parameters from the session. Equivalent to the `/distill` slash command.
-
-## skill_lookup
-
-Searches available skills by keyword or description:
-
-```
-skill_lookup:
-  query: "kubernetes pod debugging"
-```
-
-Returns matching skills with their descriptions and source (bundled, community, or custom). The agent uses this internally to decide which skills to load.
-
-See [Skills](../skills.md) for how skills work, [Sub-agents](../sub-agents.md) for delegation patterns, and [Sessions](../sessions.md) for flow distillation context.
+See [Skills](../skills.md) for how skills work, [Sub-agents](../sub-agents.md) for delegation patterns, and [Flows](../../flows/index.md) for flow distillation.

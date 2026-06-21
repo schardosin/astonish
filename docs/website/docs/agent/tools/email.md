@@ -1,31 +1,24 @@
+---
 # Email Tools
 
-Eight tools for managing email: reading, sending, searching, organizing folders, and handling attachments.
+Eight tools for managing email: reading, sending, searching, and organizing messages.
 
 ## Tools
 
 | Tool | Description | Confirmation |
 |------|-------------|-------------|
-| `email_list` | List messages in a folder | auto-approve |
+| `email_list` | List messages in the inbox | auto-approve |
 | `email_read` | Read a specific message | auto-approve |
+| `email_search` | Search messages by criteria | auto-approve |
 | `email_send` | Compose and send an email | always-confirm |
 | `email_reply` | Reply to a message | always-confirm |
-| `email_search` | Search messages by criteria | auto-approve |
-| `email_folders` | List available folders | auto-approve |
-| `email_move` | Move message to folder | always-confirm |
-| `email_attachment` | Download or read attachment | auto-approve |
+| `email_mark_read` | Mark messages as read or unread | always-confirm |
+| `email_delete` | Delete messages | always-confirm |
+| `email_wait` | Wait for an email matching criteria | auto-approve |
 
 ## Configuration
 
-Email tools require IMAP/SMTP credentials stored via the [credential system](./credentials.md):
-
-```bash
-# Store email credentials (agent will prompt or you can pre-configure)
-astonish credential store email-imap --value "imaps://user:pass@imap.example.com:993"
-astonish credential store email-smtp --value "smtp://user:pass@smtp.example.com:587"
-```
-
-Or configure in `config.yaml`:
+Email tools require IMAP/SMTP configuration. Set up email access in your config:
 
 ```yaml
 email:
@@ -33,13 +26,13 @@ email:
     host: "imap.example.com"
     port: 993
     tls: true
-    credential: "email-imap"
   smtp:
     host: "smtp.example.com"
     port: 587
     tls: true
-    credential: "email-smtp"
 ```
+
+Email credentials are stored securely via the [credential system](./credentials.md).
 
 ## Usage Examples
 
@@ -57,7 +50,6 @@ email_list:
 ```
 email_search:
   query: "from:boss@company.com subject:quarterly"
-  folder: "INBOX"
   since: "2025-06-01"
 ```
 
@@ -71,20 +63,23 @@ email_send:
   cc: "manager@company.com"
 ```
 
-### Handle attachments
+### Wait for email
 
 ```
-email_attachment:
-  message_id: "abc123"
-  attachment_index: 0
-  save_to: "/tmp/report.pdf"
+email_wait:
+  from: "ci@company.com"
+  subject: "Build Complete"
+  timeout: 300
 ```
+
+Useful for automation workflows that need to wait for confirmation emails.
 
 ## Security
 
 - Credentials are stored encrypted (AES-256-GCM)
 - Email content is never persisted to memory unless explicitly requested
-- Send operations always require confirmation
-- Attachment downloads are sandboxed to allowed directories
+- Send and reply operations always require confirmation
+- Delete operations always require confirmation
 
 See [Credentials](./credentials.md) for how email secrets are managed and [Tools Overview](./index.md) for the full tool catalog.
+---

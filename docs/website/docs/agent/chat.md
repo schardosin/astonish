@@ -4,7 +4,7 @@ The Astonish agent operates through an LLM-driven tool-use loop. You describe a 
 
 ## How It Works
 
-1. You send a message (CLI or Studio)
+1. You send a message (Studio or CLI)
 2. The LLM analyzes the request and selects appropriate tools
 3. Tools execute, and results feed back to the LLM
 4. The LLM decides: respond to you or invoke more tools
@@ -12,70 +12,65 @@ The Astonish agent operates through an LLM-driven tool-use loop. You describe a 
 
 There is no fixed pipeline. The agent dynamically adapts based on tool outputs, errors, and intermediate findings.
 
+## Studio
+
+The Studio chat interface at `http://localhost:9393` provides the full visual experience:
+
+- Real-time streaming responses
+- Inline tool execution visualization with expandable cards
+- File diffs for write operations
+- Artifact previews (reports, generated files)
+- Model selector dropdown
+- Session history sidebar with search
+- Token usage tracking
+
+<!-- IMAGE: Studio chat interface showing tool execution cards and streaming response -->
+
+## CLI
+
+The terminal chat interface provides the same agent capabilities:
+
+```bash
+astonish chat                                      # New session
+astonish chat -p anthropic -m claude-sonnet-4-20250514  # Specific provider/model
+astonish chat --resume <session-id>                # Resume a session
+astonish chat -r <session-id>                      # Short form
+astonish chat --auto-approve                       # Skip tool confirmations
+astonish chat --debug                              # Enable debug output
+astonish chat -w /path/to/project                  # Set working directory
+```
+
+::: warning Authentication Required
+The CLI requires authentication before use. Run `astonish login <server-url>` first. See [Remote CLI](../platform/remote-cli.md).
+:::
+
 ## Confirmation System
 
 Destructive or sensitive tool calls require confirmation before execution:
 
-- **auto-approve** — Tools like `read_file`, `grep_search` run without asking
+- **auto-approve** — Tools like `read_file`, `grep_search`, `memory_search` run without asking
 - **always-confirm** — Tools like `shell_command`, `write_file` prompt you first
-- **never-confirm** — Blocked tools that cannot be invoked
 
 In Studio, confirmations appear as inline approval cards. In CLI, you see a `[y/N]` prompt.
 
-Configure confirmation behavior in your config:
-
-```yaml
-tools:
-  auto_approve:
-    - read_file
-    - file_tree
-    - grep_search
-  always_confirm:
-    - shell_command
-    - write_file
-```
+Use `--auto-approve` on the CLI to skip all confirmations (use with caution).
 
 ## Slash Commands
 
+Slash commands are available in both Studio and CLI:
+
 | Command | Description |
 |---------|-------------|
-| `/distill` | Compress current session into a reusable flow |
-| `/clear` | Clear conversation history (keeps memory) |
-| `/model` | Switch AI model mid-session |
 | `/help` | Show available commands |
-| `/session` | Session management |
-
-## CLI Usage
-
-```bash
-# Start interactive chat
-astonish chat
-
-# Single-shot message
-astonish chat "explain the auth module"
-
-# Resume a previous session
-astonish chat --session <session-id>
-
-# Use a specific model
-astonish chat --model gpt-4o
-```
-
-## Studio Usage
-
-The Studio provides a web-based chat interface with:
-
-- Real-time streaming responses
-- Inline tool execution visualization
-- File diffs for write operations
-- Artifact previews (reports, generated files)
-- Model selector dropdown
-- Session history sidebar
-
-<!-- IMAGE: Studio chat interface showing tool execution cards and streaming response -->
+| `/status` | Show current provider, model, tools, and memory status |
+| `/new` | Start a fresh conversation (new session) |
+| `/compact` | Show context window usage and compaction status |
+| `/distill` | Distill the current session into a reusable flow |
+| `/fleet` | Start a fleet session |
+| `/drill` | Create a drill suite with guided wizard |
 
 ## Multi-Turn Context
 
-The agent maintains full context within a session. Reference previous messages, build on prior tool results, and incrementally refine solutions. For long-running sessions, use `/distill` to compress context into a flow.
+The agent maintains full context within a session. Reference previous messages, build on prior tool results, and incrementally refine solutions. For long-running sessions, the agent automatically compacts context when approaching token limits.
 
 See [Sessions](./sessions.md) for persistence details and [Tools Overview](./tools/index.md) for the complete tool catalog.

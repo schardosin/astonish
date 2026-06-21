@@ -1,13 +1,15 @@
+---
 # Web & HTTP Tools
 
-Two tools for fetching web content and making HTTP API requests.
+Three tools for fetching web content, reading PDFs, and making HTTP API requests.
 
 ## Tools
 
 | Tool | Description | Confirmation |
 |------|-------------|-------------|
 | `web_fetch` | Fetch and extract content from a URL | auto-approve |
-| `http_request` | Make arbitrary HTTP requests with full control | always-confirm (for mutating methods) |
+| `read_pdf` | Extract text content from a PDF file | auto-approve |
+| `http_request` | Make arbitrary HTTP requests with full control | always-confirm (mutating methods) |
 
 ## web_fetch
 
@@ -16,15 +18,22 @@ Retrieves a web page and extracts readable content (strips navigation, ads, scri
 ```
 web_fetch:
   url: "https://docs.example.com/api/reference"
-  format: "markdown"
 ```
 
-Options:
-- `format`: `markdown` (default), `text`, or `html`
-- `timeout`: Request timeout in seconds (default 30)
-- `headers`: Optional custom headers
+Returns clean, readable text extracted from the page. Auto-approved since it's read-only.
 
-GET requests via `web_fetch` are auto-approved. The tool is read-only and does not modify external state.
+::: warning Private Networks
+`web_fetch` and `http_request` cannot reach private/RFC1918 IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost. Use `shell_command` with `curl` for private network endpoints.
+:::
+
+## read_pdf
+
+Extracts text content from a PDF file (local path or URL):
+
+```
+read_pdf:
+  source: "/path/to/document.pdf"
+```
 
 ## http_request
 
@@ -36,21 +45,18 @@ http_request:
   url: "https://api.example.com/deployments"
   headers:
     Content-Type: "application/json"
-    Authorization: "Bearer ${API_TOKEN}"
-  body: |
-    {"environment": "staging", "ref": "main"}
+  body: '<"environment": "staging", "ref": "main">'
 ```
 
 Features:
-- All HTTP methods (GET, POST, PUT, PATCH, DELETE)
+- All HTTP methods (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)
 - Custom headers and body
 - Response includes status code, headers, and body
-- Timeout configuration
-- Credential injection (see below)
+- JSON Content-Type set automatically when body starts with `{` or `[`
 
 ### Credential Injection
 
-When used with [stored credentials](./credentials.md), the agent can inject secrets into requests without exposing them in conversation:
+When used with [stored credentials](./credentials.md), secrets are injected automatically:
 
 ```
 http_request:

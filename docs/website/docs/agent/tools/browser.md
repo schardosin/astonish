@@ -1,16 +1,7 @@
+---
 # Browser Automation
 
-Astonish includes 32 browser automation tools powered by Chrome DevTools Protocol (CDP) in pure Go. No Node.js, Puppeteer, or Playwright dependencies required.
-
-## Architecture
-
-The browser tools communicate directly with Chrome/Chromium via CDP WebSocket connections. Features:
-
-- Pure Go implementation (no external runtime)
-- Headless and headed modes
-- Stealth mode to avoid bot detection
-- Device emulation for mobile testing
-- Full page interaction (click, type, scroll, drag)
+Astonish includes 34 browser automation tools for full web interaction, testing, and data extraction.
 
 ## Configuration
 
@@ -22,105 +13,95 @@ browser:
   viewport:
     width: 1280
     height: 720
-  user_data_dir: ""
-  executable: ""         # Auto-detected if empty
 ```
 
-## Tool Categories
+Configure browser settings via `astonish config edit` or Studio Settings.
 
-### Navigation (4 tools)
+## Tools
+
+### Navigation
 
 | Tool | Description |
 |------|-------------|
 | `browser_navigate` | Go to a URL |
-| `browser_back` | Navigate back |
-| `browser_forward` | Navigate forward |
-| `browser_refresh` | Reload the page |
+| `browser_navigate_back` | Navigate back |
 
-### Interaction (8 tools)
+### Interaction
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Click an element by selector |
+| `browser_click` | Click an element |
 | `browser_type` | Type text into an input |
-| `browser_select` | Select dropdown option |
-| `browser_scroll` | Scroll page or element |
 | `browser_hover` | Hover over an element |
 | `browser_drag` | Drag and drop |
-| `browser_press_key` | Press keyboard key |
-| `browser_upload_file` | Upload file to input |
+| `browser_press_key` | Press a keyboard key |
+| `browser_select_option` | Select a dropdown option |
+| `browser_fill_form` | Fill multiple form fields at once |
+| `browser_file_upload` | Upload a file to an input |
+| `browser_handle_dialog` | Accept/dismiss browser dialogs |
 
-### Observation (8 tools)
-
-| Tool | Description |
-|------|-------------|
-| `browser_screenshot` | Capture page screenshot |
-| `browser_get_text` | Extract text from element |
-| `browser_get_html` | Get element HTML |
-| `browser_get_attribute` | Read element attribute |
-| `browser_get_url` | Current page URL |
-| `browser_get_title` | Current page title |
-| `browser_query_selector` | Find elements by CSS selector |
-| `browser_evaluate` | Execute JavaScript |
-
-### Tab Management (4 tools)
+### Observation
 
 | Tool | Description |
 |------|-------------|
-| `browser_new_tab` | Open a new tab |
-| `browser_close_tab` | Close current tab |
-| `browser_switch_tab` | Switch to a tab by index |
-| `browser_list_tabs` | List all open tabs |
+| `browser_snapshot` | Get page accessibility snapshot (structured content) |
+| `browser_take_screenshot` | Capture page screenshot |
+| `browser_console_messages` | Read browser console output |
+| `browser_network_requests` | View network request log |
+| `browser_response_body` | Get response body for a network request |
+| `browser_evaluate` | Execute JavaScript in page context |
+| `browser_run_code` | Run JavaScript with return value |
 
-### Session (4 tools)
-
-| Tool | Description |
-|------|-------------|
-| `browser_open` | Launch browser session |
-| `browser_close` | Close browser session |
-| `browser_cookies_get` | Read cookies |
-| `browser_cookies_set` | Set cookies |
-
-### Advanced (4 tools)
+### Tab & Window Management
 
 | Tool | Description |
 |------|-------------|
-| `browser_wait_for` | Wait for selector/condition |
-| `browser_emulate_device` | Set device (iPhone, iPad, etc.) |
-| `browser_network_intercept` | Intercept network requests |
+| `browser_tabs` | List all open tabs |
+| `browser_close` | Close browser or tab |
+| `browser_resize` | Resize browser viewport |
+| `browser_wait_for` | Wait for a selector or condition |
 | `browser_pdf` | Save page as PDF |
 
-## Stealth Mode
+### Cookies & Storage
 
-When `stealth: true`, the browser applies anti-detection techniques:
+| Tool | Description |
+|------|-------------|
+| `browser_cookies` | Get/set cookies |
+| `browser_storage` | Access localStorage/sessionStorage |
 
-- Removes `navigator.webdriver` flag
-- Randomizes fingerprint signals
-- Emulates human-like timing
-- Spoofs plugin and language lists
+### Environment Configuration
 
-## Device Emulation
+| Tool | Description |
+|------|-------------|
+| `browser_set_offline` | Simulate offline mode |
+| `browser_set_headers` | Set custom request headers |
+| `browser_set_credentials` | Set HTTP Basic Auth credentials |
+| `browser_set_geolocation` | Override geolocation |
+| `browser_set_media` | Set media features (dark mode, etc.) |
+| `browser_set_timezone` | Override timezone |
+| `browser_set_locale` | Override locale |
+| `browser_set_device` | Emulate a device (iPhone, iPad, etc.) |
 
-Test mobile layouts without physical devices:
+### Human Interaction
 
-```
-browser_emulate_device:
-  device: "iPhone 15 Pro"
-```
-
-Built-in device profiles include common phones, tablets, and desktop resolutions.
+| Tool | Description |
+|------|-------------|
+| `browser_request_human` | Request human intervention for CAPTCHAs, etc. |
 
 ## Example Workflow
 
 ```
-1. browser_open
-2. browser_navigate: "https://app.example.com/login"
-3. browser_type: selector="#email", text="user@example.com"
-4. browser_type: selector="#password", text="***"  (from credential_get)
-5. browser_click: selector="button[type=submit]"
-6. browser_wait_for: selector=".dashboard"
-7. browser_screenshot
-8. browser_close
+1. browser_navigate: "https://app.example.com/login"
+2. browser_type: selector="#email", text="user@example.com"
+3. browser_type: selector="#password", text="***"  (from resolve_credential)
+4. browser_click: selector="button[type=submit]"
+5. browser_wait_for: selector=".dashboard"
+6. browser_take_screenshot
+7. browser_close
 ```
+
+## Stealth Mode
+
+When `stealth: true`, the browser applies anti-detection techniques to avoid bot detection.
 
 See [Web & HTTP Tools](./web-http.md) for simpler page fetching and [Credentials](./credentials.md) for secure password handling in automation.

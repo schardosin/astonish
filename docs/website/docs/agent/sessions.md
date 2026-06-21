@@ -6,53 +6,50 @@ A session is a single conversation between you and the agent. Sessions persist a
 
 1. **Created** — A new session starts when you begin a chat
 2. **Active** — Messages, tool calls, and results are appended
-3. **Paused** — You disconnect; the session waits on disk
+3. **Paused** — You disconnect; the session persists in the database
 4. **Resumed** — You reconnect and continue from the last message
-5. **Archived** — Old sessions move to cold storage after inactivity
 
-## Storage Backends
+## Managing Sessions in Studio
 
-### Local (SQLite)
+Studio provides the primary session management experience:
 
-Sessions are stored in the SQLite database at `~/.local/share/astonish/`. Each session is a series of events (messages, tool calls, tool results, metadata) stored in structured tables with full indexing.
+- **Session sidebar** — Browse all sessions with search and filtering
+- **Resume** — Click any session to continue the conversation
+- **Delete** — Remove sessions you no longer need
+- **Session details** — View metadata (model, token usage, tool calls, timestamps)
 
-### Cloud (PostgreSQL)
-
-Sessions are stored in PostgreSQL with full indexing:
-
-- Full-text search across session content
-- Team-scoped visibility (team members can view shared sessions)
-- Retention policies managed by org admins
-- Concurrent access for collaborative sessions
-
-## Resuming Sessions
+## CLI Session Commands
 
 ```bash
-# List recent sessions
-astonish session list
+# List your sessions
+astonish sessions list
 
-# Resume by ID
-astonish chat --session abc123
+# Show session details/trace
+astonish sessions show <session-id>
 
-# Resume the most recent session
-astonish chat --resume
+# Resume a session in chat
+astonish chat --resume <session-id>
+astonish chat -r <session-id>
+
+# Delete a session
+astonish sessions delete <session-id>
+
+# Delete all sessions
+astonish sessions clear
 ```
 
-In Studio, the session sidebar shows all sessions with search and filtering.
+::: tip Plural Command
+The CLI command is `astonish sessions` (plural), not `astonish session`.
+:::
 
-## Team-Scoped Sessions (Cloud Deployment)
+## Session Storage
 
-Sessions can be shared within a team:
+Sessions are stored in the platform database:
 
-```bash
-# Share a session with your team
-astonish session share <session-id>
+- **SQLite** — Stored in the personal SQLite database file
+- **PostgreSQL** — Stored in your personal schema with full indexing and full-text search
 
-# List team sessions
-astonish session list --scope team
-```
-
-Shared sessions are read-only for other team members unless explicitly granted write access.
+In team deployments, sessions can be published to your team via Studio (see [Publish & Fork](../platform/publish-and-fork.md)).
 
 ## Session Metadata
 
@@ -64,14 +61,8 @@ Each session tracks:
 - Tool calls executed
 - Working directory context
 
-## Cleanup
+## Context Compaction
 
-```bash
-# Delete a session
-astonish session delete <session-id>
-
-# Prune sessions older than 30 days
-astonish session prune --older-than 30d
-```
+For long-running sessions approaching the model's context window limit, the agent automatically compacts older messages while preserving key context. Use the `/compact` slash command to check compaction status.
 
 See [Memory](./memory.md) for how to extract durable knowledge from sessions, and [Chat](./chat.md) for the interaction model.

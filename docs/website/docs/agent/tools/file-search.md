@@ -1,30 +1,25 @@
 # File & Search Tools
 
-Nine tools for reading, writing, navigating, and searching the filesystem.
+Six tools for reading, writing, editing, and searching the filesystem.
 
 ## Tools
 
 | Tool | Description | Confirmation |
 |------|-------------|-------------|
-| `read_file` | Read file contents (full or range) | auto-approve |
+| `read_file` | Read file contents | auto-approve |
 | `write_file` | Create or overwrite a file | always-confirm |
-| `edit_file` | Apply targeted edits to a file | always-confirm |
+| `edit_file` | Apply targeted find-and-replace edits | always-confirm |
 | `file_tree` | Display directory structure | auto-approve |
-| `grep_search` | Regex search across files | auto-approve |
-| `find_files` | Find files by name pattern | auto-approve |
-| `file_info` | Get file metadata (size, permissions, dates) | auto-approve |
-| `move_file` | Move or rename a file | always-confirm |
-| `delete_file` | Remove a file | always-confirm |
+| `grep_search` | Search for text patterns in files | auto-approve |
+| `find_files` | Find files by name pattern (glob) | auto-approve |
 
 ## read_file
 
-Reads file content with optional line range:
+Reads file content:
 
 ```
 read_file:
   path: "src/main.go"
-  start_line: 10
-  end_line: 50
 ```
 
 Supports binary detection (returns metadata instead of content for binary files).
@@ -35,7 +30,7 @@ Creates or overwrites a file. In Studio, renders a diff preview before confirmat
 
 ```
 write_file:
-  path: "config.yaml"
+  file_path: "config.yaml"
   content: |
     name: my-app
     version: 1.0.0
@@ -43,37 +38,51 @@ write_file:
 
 ## edit_file
 
-Applies surgical edits without rewriting the entire file:
+Applies surgical find-and-replace edits without rewriting the entire file:
 
 ```
 edit_file:
   path: "src/handler.go"
-  edits:
-    - old: "func handler(w http.ResponseWriter)"
-      new: "func handler(w http.ResponseWriter, r *http.Request)"
+  old_string: "func handler(w http.ResponseWriter)"
+  new_string: "func handler(w http.ResponseWriter, r *http.Request)"
 ```
+
+Supports:
+- Exact string matching (default)
+- Regex patterns (`regex: true`)
+- Replace all occurrences (`replace_all: true`)
 
 ## grep_search
 
-Regex-powered search across the filesystem:
+Searches for text patterns across files (uses ripgrep when available):
 
 ```
 grep_search:
   pattern: "TODO|FIXME"
-  path: "src/"
-  include: "*.go"
+  search_path: "src/"
+  include_globs: ["*.go"]
+  max_results: 50
+```
+
+## find_files
+
+Finds files by name pattern using glob matching:
+
+```
+find_files:
+  pattern: "*.test.ts"
+  search_path: "src/"
   max_results: 50
 ```
 
 ## file_tree
 
-Displays directory structure with configurable depth:
+Displays directory structure:
 
 ```
 file_tree:
   path: "."
   depth: 3
-  ignore: ["node_modules", ".git", "vendor"]
 ```
 
 See [Shell & Process Tools](./shell-process.md) for command execution and [Tools Overview](./index.md) for the full tool catalog.

@@ -1,6 +1,6 @@
 # Publish & Fork
 
-Resources in cloud deployments are **private by default**. You own your sessions, flows, apps, and memory entries. Sharing is always an explicit action — publish to your team, fork from your team.
+Resources in Astonish are **private by default**. You own your sessions, flows, apps, and memory entries. Sharing is always an explicit action — publish to your team, fork from your team.
 
 ## The Model
 
@@ -22,22 +22,13 @@ Resources in cloud deployments are **private by default**. You own your sessions
 - **Fork** — copy a team resource into your personal workspace for modification
 - **Promote** — elevate team knowledge to org level (admin action)
 
-## Publishing
+## How to Publish, Fork, and Promote
 
-Any team member can publish their own resources to the team:
+All publish, fork, and promote operations are performed through **Studio**:
 
-```bash
-# Publish a session
-astonish session publish sess_4a2c --to backend
-
-# Publish a flow
-astonish flow publish my-deploy-flow --to backend
-
-# Publish an app
-astonish app publish my-dashboard --to backend
-```
-
-Published resources appear in the team's shared space. The original remains in your personal schema — publishing creates a linked copy in the team schema.
+- **Publish**: In Studio, open a personal resource (session, flow, app, or memory entry) and use the "Publish to Team" action in the resource menu.
+- **Fork**: Browse team resources in Studio and use the "Fork to Personal" action to create your own copy.
+- **Promote**: Team admins and org admins can promote team resources to org level via the "Promote to Org" action.
 
 ### What Gets Published
 
@@ -48,55 +39,34 @@ Published resources appear in the team's shared space. The original remains in y
 | App | Source code, manifest | Local environment variables |
 | Memory | Content, embeddings, tags | Source session reference |
 
-## Forking
+## Publishing Details
 
-Team members can fork any published resource into their personal workspace:
+Published resources appear in the team's shared space. The original remains in your personal schema — publishing creates a linked copy in the team schema.
 
-```bash
-# Fork a team flow
-astonish flow fork team-deploy-flow
+Any team member can publish their own resources to the team. You cannot publish another user's resources.
 
-# Fork with a new name
-astonish flow fork team-deploy-flow --as my-deploy-variant
-```
+## Forking Details
 
-Forking creates an independent copy. Changes to your fork do not affect the team resource, and vice versa. Provenance metadata tracks the fork origin.
+Forking creates an independent copy in your personal workspace. Changes to your fork do not affect the team resource, and vice versa. Provenance metadata tracks the fork origin.
 
-## Promotion
+## Promotion Details
 
-Org admins and team admins can promote resources from team level to org level, making them available to every team:
+Org admins and team admins can promote resources from team level to org level, making them available to every team. Promotion is useful for:
 
-```bash
-# Promote a team flow to org level
-astonish flow promote team-deploy-flow --from backend --to org
-
-# Promote memory entries
-astonish memory promote mem_9c4d1e --from team backend --to org
-```
-
-Promotion is useful for:
 - Standards and best practices that apply org-wide
 - Flows that every team should have access to
 - Memory entries containing institutional knowledge
 
-## Unpublishing and Deletion
+## Unpublishing
 
-```bash
-# Remove from team (your personal copy remains)
-astonish session unpublish sess_4a2c --from backend
-
-# Delete entirely (personal + published copies)
-astonish session delete sess_4a2c --everywhere
-```
-
-Unpublishing removes the team copy but does not affect forks that other users have already created.
+Authors and team admins can unpublish resources via Studio. Unpublishing removes the team copy but does not affect forks that other users have already created.
 
 ## Permissions Summary
 
 | Action | Who Can Do It |
 |--------|--------------|
 | Publish to team | Any team member (own resources only) |
-| Fork from team | Any team member or viewer |
+| Fork from team | Any team member |
 | Unpublish from team | Author or team admin |
 | Promote to org | Team admin or org admin |
 | Demote from org | Org admin only |

@@ -1,6 +1,6 @@
 # Cascading Defaults
 
-Configuration in cloud deployments cascades through four levels: **platform → org → team → personal**. Each level can override settings from the level above, and the most specific value wins.
+Configuration in Astonish cascades through four levels: **platform → org → team → personal**. Each level can override settings from the level above, and the most specific value wins.
 
 ## Resolution Order
 
@@ -74,41 +74,31 @@ mcp_servers:
 
 MCP server lists are **merged** (additive), not replaced. The team gets `github`, `jira`, and `database`. A user can disable a server at their level but cannot remove it from the team's available set.
 
-## Setting Defaults
+## Managing Configuration
+
+Configuration at each level is managed through **Studio** (Settings panel):
+
+- **Platform level** — Platform Admin → Settings
+- **Org level** — Org Admin → Organization Settings
+- **Team level** — Team Admin → Team Settings
+- **Personal level** — User → Settings (personal overrides)
+
+The local config file (`~/.config/astonish/config.yaml`) can also be edited directly:
 
 ```bash
-# Platform admin sets global default
-astonish platform config set providers.default openai
-
-# Org admin sets org-level override
-astonish org config set providers.default anthropic
-
-# Team admin sets team-level override
-astonish team config set providers.anthropic.model claude-sonnet-4-20250514
-
-# User sets personal preference
-astonish config set providers.anthropic.temperature 0.2
+astonish config edit    # Opens config.yaml in your editor
+astonish config show    # Prints current config file contents
 ```
 
-## Viewing Resolved Configuration
+## How Resolution Works Internally
 
-```bash
-# Show fully resolved config for current context
-astonish config show --resolved
+When the agent starts a session, the platform merges configuration from all four levels. The merge strategy depends on the setting type:
 
-# Show where each value comes from
-astonish config show --resolved --show-origin
-```
+- **Scalar values** (model name, temperature): most specific wins
+- **Lists** (MCP servers, skills): merged additively from all levels
+- **Maps** (provider settings): deep-merged with most specific keys winning
 
-Example output with origins:
-
-```
-providers.default = anthropic          [org]
-providers.anthropic.model = claude-sonnet-4-20250514  [team]
-providers.anthropic.max_tokens = 8192  [team]
-providers.anthropic.temperature = 0.2  [personal]
-memory.embedding_model = text-embedding-3-small  [platform]
-```
+The resolved configuration is computed at session start and remains stable for the session's lifetime.
 
 ## Next Steps
 

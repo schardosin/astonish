@@ -1,13 +1,13 @@
 # Three-Tier Memory
 
-Astonish platform memory operates across three tiers — personal, team, and org — searched in parallel and merged with weighted Reciprocal Rank Fusion (RRF). This gives agents access to the full depth of organizational knowledge while prioritizing context that is most relevant to the user.
+Astonish memory operates across three tiers — personal, team, and org — searched in parallel and merged with weighted Reciprocal Rank Fusion (RRF). This gives agents access to the full depth of organizational knowledge while prioritizing context that is most relevant to the user.
 
 ## Tiers and Weights
 
 | Tier | Schema | Weight | Contains |
 |------|--------|--------|----------|
-| **Personal** | `personal_{user_id}` | 1.2× | Your sessions, notes, corrections, personal patterns |
-| **Team** | `team_{slug}` | 1.0× | Published team knowledge, shared sessions, team patterns |
+| **Personal** | `personal_<user_id>` | 1.2× | Your sessions, notes, corrections, personal patterns |
+| **Team** | `team_<slug>` | 1.0× | Published team knowledge, shared sessions, team patterns |
 | **Org** | `public` | 0.8× | Promoted org-wide knowledge, standards, institutional memory |
 
 The weight multiplier is applied during RRF score calculation. Personal memories rank slightly higher because they represent your specific context and preferences. Org memories rank slightly lower because they are more general.
@@ -39,43 +39,25 @@ User query: "How do we handle database migrations?"
 
 ### Hybrid Search
 
-Each tier uses hybrid search combining two PostgreSQL capabilities:
+Each tier uses hybrid search combining two capabilities:
 
-- **pgvector** — semantic similarity via embedding cosine distance
-- **tsvector** — keyword matching via PostgreSQL full-text search
+- **Vector similarity** — semantic search via embedding cosine distance (pgvector for PostgreSQL, built-in for SQLite)
+- **Full-text search** — keyword matching via PostgreSQL tsvector or SQLite FTS5
 
 Results from both methods are fused per-tier, then cross-tier RRF produces the final ranked list.
 
-```sql
--- Simplified: what happens inside each tier
-SELECT id, content,
-  (1.0 / (60 + vector_rank)) * :tier_weight AS vector_score,
-  (1.0 / (60 + fts_rank)) * :tier_weight AS fts_score
-FROM memory
-WHERE embedding <=> :query_vector < 0.8
-   OR tsv @@ plainto_tsquery(:query_text)
-ORDER BY (vector_score + fts_score) DESC
-LIMIT 20;
-```
-
 ## Knowledge Promotion Chain
 
-Knowledge flows upward through the tiers via explicit promotion:
+Knowledge flows upward through the tiers via explicit actions in **Studio**:
 
 ```
 Personal  ──publish──▶  Team  ──promote──▶  Org
 ```
 
-1. **Personal → Team**: any team member can publish a memory entry to their team. This makes it searchable by all team members.
-2. **Team → Org**: a team admin or org admin promotes team knowledge to org level, making it available to every team in the organization.
+1. **Personal → Team**: any team member can publish a memory entry to their team via Studio. This makes it searchable by all team members.
+2. **Team → Org**: a team admin or org admin promotes team knowledge to org level via Studio, making it available to every team in the organization.
 
-```bash
-# Publish a personal memory entry to your team
-astonish memory publish mem_7f3a2b --to team
-
-# Org admin promotes team knowledge to org level
-astonish memory promote mem_9c4d1e --from team backend --to org
-```
+The agent can also save knowledge directly during conversations using the `memory_save` tool. The tier is determined by the current context.
 
 Promotion copies the entry (with provenance metadata) — the original remains in its source tier.
 
@@ -83,30 +65,26 @@ Promotion copies the entry (with provenance metadata) — the original remains i
 
 Here is how knowledge compounds in practice:
 
-1. **Alice** debugs a tricky Kubernetes networking issue. Her session is stored in personal memory.
-2. Alice publishes the resolution to the **Backend team**. Now when any backend engineer hits a similar issue, the agent surfaces Alice's solution.
-3. The team admin notices this resolution is relevant org-wide and **promotes it to org level**.
+1. **Alice** debugs a tricky Kubernetes networking issue. The agent saves the resolution to her personal memory via `memory_save`.
+2. Alice publishes the resolution to the **Backend team** via Studio. Now when any backend engineer hits a similar issue, the agent surfaces Alice's solution.
+3. The team admin notices this resolution is relevant org-wide and **promotes it to org level** via Studio.
 4. **Dave** on the Frontend team later encounters the same networking issue. The agent finds the org-level memory and guides him through the fix — even though Dave never interacted with Alice.
 
 Each step is explicit. Knowledge does not leak upward automatically.
 
-## Memory Entry Structure
+## Memory During Chat
 
-```yaml
-id: mem_7f3a2b
-content: "PostgreSQL connection pooling with PgBouncer requires..."
-embedding: [0.023, -0.118, ...]    # 1536-dim vector
-tier: team
-source_session: sess_4a2c
-author: alice
-created_at: 2025-03-15T10:30:00Z
-promoted_from: personal
-tags: [postgresql, pgbouncer, connection-pooling]
-```
+The agent interacts with memory through built-in tools:
+
+- **`memory_save`** — saves facts to the user's personal memory tier
+- **`memory_search`** — searches across all three tiers with RRF fusion
+- **`memory_get`** — retrieves full context around a specific memory entry
+
+These tools are always available during chat sessions and sub-agent delegation.
 
 ## Configuring Memory
 
-Memory behavior can be tuned at each level via [Cascading Defaults](./cascading-defaults):
+Memory behavior can be tuned via the platform configuration:
 
 ```yaml
 memory:

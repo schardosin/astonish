@@ -1,6 +1,6 @@
 # Organizations & Teams
 
-Platform mode organizes users into a three-level hierarchy: **organizations**, **teams**, and **users**. Each level provides isolation boundaries and role-based access control.
+Astonish organizes users into a three-level hierarchy: **organizations**, **teams**, and **users**. Each level provides isolation boundaries and role-based access control.
 
 ## Hierarchy
 
@@ -25,9 +25,9 @@ A user belongs to exactly one organization and can be a member of multiple teams
 
 | Role | Permissions |
 |------|-------------|
-| **Owner** | Full control. Manage billing, delete org, promote admins. |
+| **Owner** | Full control. Manage org, promote admins, configure platform settings. |
 | **Admin** | Manage teams, invite/remove users, promote knowledge to org level, configure org defaults. |
-| **Member** | Join teams (by invite or self-service if enabled), use platform features within assigned teams. |
+| **Member** | Use platform features within assigned teams, publish personal resources to team. |
 
 ### Team Roles
 
@@ -35,91 +35,75 @@ A user belongs to exactly one organization and can be a member of multiple teams
 |------|-------------|
 | **Admin** | Manage team members, publish/unpublish resources, configure team defaults. |
 | **Member** | Read/write team resources, publish personal resources to team. |
-| **Viewer** | Read-only access to team memory and published resources. |
 
 ## Creating an Organization
 
+Organizations are created during the `astonish setup` wizard or via the platform CLI:
+
 ```bash
 # Platform admin creates an org
-astonish platform org create \
-  --name "Acme Corp" \
-  --slug acme \
-  --owner alice@acme.corp
+astonish platform org create --name "Acme Corp" --slug acme
 ```
 
-This provisions a new PostgreSQL database (`org_acme`), creates the `public` schema with org-wide tables, and assigns the owner.
+Optionally assign an existing user as owner:
+
+```bash
+astonish platform org create --name "Acme Corp" --slug acme --owner-email alice@acme.corp
+```
+
+This provisions a new database (PostgreSQL) or directory (SQLite), creates the org-wide schema, and assigns the owner.
 
 ## Managing Teams
 
+Teams are managed through **Studio** (Settings → Teams). The CLI provides read-only access:
+
 ```bash
-# Org admin creates a team
-astonish team create --name "Backend" --slug backend
-
-# List teams in current org
+# List teams in current org (requires login)
 astonish team list
-
-# Show team details
-astonish team show backend
 ```
 
-Team creation provisions a `team_backend` schema in the org database with the standard table set (memory, sessions, artifacts, config).
+Team creation, member management, and configuration are handled through the Studio web interface or during the initial `astonish setup` wizard.
 
 ## Inviting Members
 
 ```bash
-# Invite by email (sends invitation link)
-astonish org invite alice@acme.corp --role member
-
-# Add existing user to a team
-astonish team add-member backend --user alice --role admin
-
-# Remove from team
-astonish team remove-member backend --user bob
-
-# Bulk invite from file
-astonish org invite --from members.csv
+# Invite by email (platform admin)
+astonish platform org invite --org acme --email alice@acme.corp --role admin
+astonish platform org invite --org acme --email bob@acme.corp --team backend
+astonish platform org invite --org acme --email carol@acme.corp
 ```
+
+Flags:
+- `--org` — Organization slug (required)
+- `--email` — User's email address (required)
+- `--role` — Role: `owner`, `admin`, `member` (default: `member`)
+- `--team` — Also add user to this team (default: `general`)
+- `--name` — Display name (defaults to email prefix)
+- `--password` — Prompt for password instead of generating one
 
 When OIDC federation is configured, users authenticate through your identity provider and are auto-provisioned into the org on first login. See [Administration](./administration) for OIDC setup.
 
 ## Switching Context
 
-Users who belong to multiple teams can switch their active context:
+To switch your active org or team, log out and log back in with the desired context:
 
 ```bash
-# Show current context
-astonish status
-
-# Switch active team
-astonish use team frontend
-
-# All subsequent commands operate in the frontend team context
-astonish memory search "deployment patterns"
+astonish logout
+astonish login https://astonish.acme.corp --org acme --team frontend
 ```
 
-The active org/team context determines which schemas are searched during memory queries and where new resources are created.
+Or omit the flags to be prompted interactively during login.
 
-## Self-Service vs. Managed
+To check your current context:
 
-Organizations can choose between two membership models:
-
-- **Managed** (default) — admins explicitly invite users and assign teams
-- **Self-service** — any authenticated user with a matching email domain can join the org and request team access
-
-```yaml
-# org config
-membership:
-  mode: managed           # or "self-service"
-  allowed_domains:
-    - acme.corp
-  auto_join_teams:
-    - general
+```bash
+astonish status
 ```
 
 ## Data Isolation Guarantees
 
-- **Cross-org**: impossible. Separate databases with separate connection credentials.
-- **Cross-team**: enforced via PostgreSQL schema grants. A user's database role only has `USAGE` on their personal schema and their teams' schemas.
+- **Cross-org**: impossible. Separate databases (PostgreSQL) or separate directories (SQLite) with separate credentials.
+- **Cross-team**: enforced via PostgreSQL schema grants or separate SQLite files. A user can only access their personal schema plus the schemas of teams they belong to.
 - **Personal**: only the owning user has access. Not even org admins can read personal schemas without explicit consent.
 
 ## Next Steps

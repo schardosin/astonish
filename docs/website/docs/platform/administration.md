@@ -1,101 +1,141 @@
 # Administration
 
-This page covers platform initialization, org provisioning, user management, authentication setup, and migration from local to cloud deployments.
+This page covers platform setup, org provisioning, user management, and authentication configuration.
 
-## Platform Initialization
+## Platform Setup
+
+The recommended way to initialize the platform is via the setup wizard:
 
 ```bash
-# Initialize the platform database and schema
-astonish platform init --dsn "postgres://admin:secret@db.acme.corp:5432/astonish_platform"
+astonish setup
 ```
 
-This creates the `astonish_platform` database with tables for organizations, users, and platform-level configuration. The DSN can also be set via environment variable:
+The wizard handles backend selection (SQLite or PostgreSQL), database initialization, organization creation, admin account setup, and AI provider configuration in a single interactive flow.
+
+For PostgreSQL deployments, you can also set the DSN via environment variable before running setup:
 
 ```bash
 export ASTONISH_PLATFORM_DSN="postgres://admin:secret@db.acme.corp:5432/astonish_platform"
+astonish setup
+```
+
+### Platform Initialization (Advanced)
+
+If you need to re-initialize or bootstrap an existing database:
+
+```bash
 astonish platform init
 ```
 
-## Starting the Server
+This creates the platform database schema and runs migrations. The DSN is read from the config file or `ASTONISH_PLATFORM_DSN` environment variable.
+
+## Starting the Platform
+
+After setup, start the daemon:
 
 ```bash
-# Start platform server
-astonish platform serve --port 8080
-
-# With TLS
-astonish platform serve --port 8443 --tls-cert /etc/ssl/cert.pem --tls-key /etc/ssl/key.pem
-
-# With config file
-astonish platform serve --config /etc/astonish/platform.yaml
+astonish daemon install    # Register as system service
+astonish daemon start      # Start the platform
 ```
 
-Platform server configuration:
+Studio is available at `http://localhost:9393`. For debugging or foreground operation:
 
-```yaml
-# /etc/astonish/platform.yaml
-server:
-  port: 8080
-  host: 0.0.0.0
-database:
-  dsn: postgres://admin:secret@db.acme.corp:5432/astonish_platform
-  max_connections: 50
-auth:
-  method: oidc          # "builtin" or "oidc"
-  jwt_secret: ${JWT_SECRET}
-  session_ttl: 24h
+```bash
+astonish daemon run        # Run in foreground (useful for debugging)
+```
+
+Other daemon commands:
+
+```bash
+astonish daemon status     # Check if daemon is running
+astonish daemon stop       # Stop the daemon
+astonish daemon restart    # Restart the daemon
+astonish daemon logs       # View daemon logs
+astonish daemon uninstall  # Remove system service
 ```
 
 ## Organization Provisioning
 
 ```bash
 # Create an organization
-astonish platform org create --name "Acme Corp" --slug acme --owner alice@acme.corp
+astonish platform org create --name "Acme Corp" --slug acme
+
+# With an owner assigned
+astonish platform org create --name "Acme Corp" --slug acme --owner-email alice@acme.corp
 
 # List all organizations
 astonish platform org list
-
-# Show org details
-astonish platform org show acme
-
-# Delete an org (requires confirmation, destroys database)
-astonish platform org delete acme --confirm
 ```
-
-Org creation provisions a dedicated PostgreSQL database (`org_acme`) with the standard schema set. The designated owner receives the `owner` role automatically.
 
 ## User Management
 
+### Inviting Users
+
 ```bash
-# Create a user (built-in auth)
-astonish platform user create --email bob@acme.corp --org acme --role member
+# Invite a user to an org
+astonish platform org invite --org acme --email bob@acme.corp --role member
 
-# List users
-astonish platform user list --org acme
-
-# Change role
-astonish platform user set-role bob@acme.corp --org acme --role admin
-
-# Deactivate user (preserves data, revokes access)
-astonish platform user deactivate bob@acme.corp
-
-# Reactivate
-astonish platform user activate bob@acme.corp
+# Invite as admin with team assignment
+astonish platform org invite --org acme --email alice@acme.corp --role admin --team platform
 ```
 
-## Authentication Setup
+### Managing Users
+
+```bash
+# List users
+astonish platform user list
+
+# Show user details
+astonish platform user show <user-id-or-email>
+
+# Disable user access (preserves data, revokes login)
+astonish platform user disable <user-id-or-email>
+
+# Re-enable user
+astonish platform user enable <user-id-or-email>
+
+# Promote user to platform admin
+astonish platform user promote <user-id-or-email>
+
+# Demote from platform admin
+astonish platform user demote <user-id-or-email>
+
+# Reset password
+astonish platform user set-password <user-id-or-email>
+
+# Delete user
+astonish platform user delete <user-id-or-email>
+```
+
+### Other Platform Commands
+
+```bash
+# Generate a JWT secret
+astonish platform gen-secret
+
+# Check platform status
+astonish platform status
+
+# Issue an API token for a user
+astonish platform issue-token --user <email> --org <slug>
+
+# Audit sandbox usage
+astonish platform sandbox-audit
+```
+
+## Authentication
 
 ### Built-in Auth
 
 The default mode. Users authenticate with email/password. Passwords are hashed with bcrypt. Sessions use JWTs.
 
+Configured in `~/.config/astonish/config.yaml`:
+
 ```yaml
-auth:
-  method: builtin
-  jwt_secret: ${JWT_SECRET}
-  password_policy:
-    min_length: 12
-    require_uppercase: true
-    require_number: true
+storage:
+  auth:
+    mode: builtin
+    jwt_secret: "your-jwt-secret"   # Generated by 'astonish platform gen-secret'
 ```
 
 ### OIDC Federation
@@ -103,73 +143,40 @@ auth:
 For enterprise environments, federate with any OIDC-compliant provider:
 
 ```yaml
-auth:
-  method: oidc
-  oidc:
-    issuer: https://accounts.sap.com
-    client_id: ${OIDC_CLIENT_ID}
-    client_secret: ${OIDC_CLIENT_SECRET}
-    scopes: [openid, email, profile]
-    # Map OIDC claims to Astonish roles
-    claims_mapping:
-      email: email
-      name: name
-      org: custom:organization
+storage:
+  auth:
+    mode: oidc
+    oidc:
+      issuer: https://accounts.sap.com
+      client_id: $<OIDC_CLIENT_ID>
+      client_secret: $<OIDC_CLIENT_SECRET>
+      scopes: [openid, email, profile]
 ```
 
 Tested providers: SAP IAS, Azure AD, Okta, Google Workspace, Keycloak.
 
-Users are auto-provisioned on first login when their email domain matches an org's allowed domains (see [Organizations & Teams](./organizations-and-teams)).
+Users are auto-provisioned on first login when their email domain matches an org's allowed domains.
 
-## Migration from Local to Cloud
-
-Users running Astonish locally with SQLite can migrate their data to a cloud PostgreSQL deployment:
-
-```bash
-# Export local data
-astonish export --format archive --output ~/astonish-backup.tar.gz
-
-# Import into cloud platform (run as the user, after login)
-astonish platform migrate --from ~/astonish-backup.tar.gz
-```
-
-The migration imports:
-- Sessions and messages → personal schema
-- Memory entries → personal memory tier
-- Flows and apps → personal workspace
-- Configuration → personal config overrides
-
-After migration, the local SQLite database remains untouched as a backup.
-
-## Platform CLI Commands
+## Platform CLI Commands Summary
 
 | Command | Description |
 |---------|-------------|
-| `astonish platform init` | Initialize platform database |
-| `astonish platform serve` | Start platform server |
+| `astonish platform init` | Initialize/migrate platform database |
+| `astonish platform status` | Show platform status |
+| `astonish platform gen-secret` | Generate a JWT secret |
 | `astonish platform org create` | Provision new organization |
 | `astonish platform org list` | List all organizations |
-| `astonish platform org delete` | Remove organization |
-| `astonish platform user create` | Create user account |
-| `astonish platform user list` | List users in org |
-| `astonish platform user set-role` | Change user role |
-| `astonish platform user deactivate` | Suspend user access |
-| `astonish platform migrate` | Import local SQLite data |
-| `astonish platform backup` | Backup org database |
-| `astonish platform restore` | Restore from backup |
-
-## Backups
-
-```bash
-# Backup a specific org
-astonish platform backup --org acme --output /backups/acme-2025-03-15.sql.gz
-
-# Backup all orgs
-astonish platform backup --all --output-dir /backups/
-
-# Restore
-astonish platform restore --org acme --from /backups/acme-2025-03-15.sql.gz
-```
+| `astonish platform org invite` | Invite user to organization |
+| `astonish platform user list` | List platform users |
+| `astonish platform user show` | Show user details |
+| `astonish platform user disable` | Suspend user access |
+| `astonish platform user enable` | Restore user access |
+| `astonish platform user promote` | Promote to platform admin |
+| `astonish platform user demote` | Demote from platform admin |
+| `astonish platform user set-password` | Reset user password |
+| `astonish platform user delete` | Delete user |
+| `astonish platform issue-token` | Generate API token |
+| `astonish platform sandbox-audit` | Audit sandbox resources |
 
 ## Next Steps
 

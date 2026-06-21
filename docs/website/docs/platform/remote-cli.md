@@ -9,15 +9,20 @@ The same `astonish` binary works both locally and against a remote platform serv
 astonish login https://astonish.acme.corp
 ```
 
-This opens a browser for authentication (OIDC or built-in), then stores a refresh token locally. For headless environments:
+This prompts for your email and password interactively. For SSO-enabled environments:
 
 ```bash
-# Device code flow (no browser needed)
-astonish login https://astonish.acme.corp --device-code
-
-# API token (CI/CD pipelines)
-astonish login https://astonish.acme.corp --token $ASTONISH_TOKEN
+# SSO/OIDC login (uses device-code flow internally)
+astonish login https://astonish.acme.corp --sso
 ```
+
+You can also pre-select your org and team to skip interactive prompts:
+
+```bash
+astonish login https://astonish.acme.corp --org acme --team backend
+```
+
+Credentials are stored locally in `~/.config/astonish/remote.yaml`.
 
 ## Checking Status
 
@@ -25,88 +30,64 @@ astonish login https://astonish.acme.corp --token $ASTONISH_TOKEN
 astonish status
 ```
 
-```
-Server:   https://astonish.acme.corp
-User:     alice@acme.corp
-Org:      Acme Corp (acme)
-Team:     Backend (backend)
-Session:  sess_4a2c (active)
-Memory:   3 tiers (personal + backend + org)
-```
+Shows your current connection info: server URL, user, org, and team.
 
 ## Selecting Org and Team
 
-If you belong to multiple orgs or teams, switch context:
+Org and team context is set during login. To switch, log out and log back in:
 
 ```bash
-# Switch organization
-astonish use org globex
-
-# Switch team within current org
-astonish use team frontend
-
-# One-shot command in a different team context
-astonish --team platform memory search "deployment runbook"
+astonish logout
+astonish login https://astonish.acme.corp --org acme --team frontend
 ```
 
-## Running Commands Remotely
+If you omit `--org` and `--team`, the login flow will prompt you to select from available options interactively.
 
-Once logged in, most commands transparently hit the platform:
+## Available Commands in Remote Mode
 
-```bash
-# Search across all three memory tiers
-astonish memory search "connection pooling best practices"
-
-# Start a session (stored in your personal schema, uses team/org memory)
-astonish chat "Help me optimize this query"
-
-# List team flows
-astonish flow list --team
-
-# Run a team flow
-astonish flow run team-deploy-flow --env staging
-```
-
-## Offline and Local Fallback
-
-If the platform server is unreachable, the CLI falls back to local mode automatically. You can also force local execution:
+Once logged in, these commands work against the platform:
 
 ```bash
-# Force local mode (no server communication)
-astonish --local chat "Help me with this file"
-```
+# Chat (session stored on the platform)
+astonish chat
+astonish chat --resume <session-id>
 
-Sessions created offline can be synced when connectivity returns:
+# Sessions
+astonish sessions list
+astonish sessions show <session-id>
+astonish sessions delete <session-id>
 
-```bash
-astonish sync
-```
+# Flows
+astonish flows list
+astonish flows run <name>
+astonish flows show <name>
 
-## Session Management
-
-```bash
-# List your remote sessions
-astonish session list
-
-# Resume a session
-astonish session resume sess_4a2c
-
-# Switch between local and remote sessions
-astonish session list --local
-astonish session list --remote
+# Team and org context
+astonish team list
+astonish org list
+astonish status
 ```
 
 ## Configuration
 
-Remote CLI settings are stored in `~/.config/astonish/platform.yaml`:
+Remote CLI settings are stored in `~/.config/astonish/remote.yaml`:
 
 ```yaml
-server: https://astonish.acme.corp
+url: https://astonish.acme.corp
 org: acme
 team: backend
-auto_sync: true
-offline_mode: false
+user_email: alice@acme.corp
 ```
+
+This file is created automatically by `astonish login` and removed by `astonish logout`.
+
+## Logging Out
+
+```bash
+astonish logout
+```
+
+This removes the `remote.yaml` file and revokes the stored session.
 
 ## Next Steps
 

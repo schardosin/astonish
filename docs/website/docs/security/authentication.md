@@ -1,22 +1,8 @@
 # Authentication
 
-Astonish supports different authentication strategies depending on the deployment. Local deployments use lightweight device authorization; cloud deployments with PostgreSQL offer built-in JWT authentication and federated OIDC sign-in.
+Astonish uses JWT-based authentication with support for both built-in email/password login and federated OIDC sign-in. Both mechanisms can be enabled simultaneously.
 
-## Local (SQLite)
-
-In local deployments, Astonish runs as a single-user daemon. Authentication uses a **device authorization code** flow:
-
-```bash
-astonish auth login
-```
-
-The CLI opens a browser for device verification and stores the resulting token locally. No user management is required.
-
-## Cloud (PostgreSQL)
-
-Platform deployments support multiple users and teams. Two authentication mechanisms are available, and both can be enabled simultaneously.
-
-### Built-in Authentication
+## Built-in Authentication
 
 Built-in auth uses bcrypt-hashed passwords with JWT bearer tokens:
 
@@ -27,22 +13,22 @@ Built-in auth uses bcrypt-hashed passwords with JWT bearer tokens:
 
 Access tokens are short-lived to limit blast radius. Refresh tokens are stored as `HttpOnly`, `Secure`, `SameSite=Strict` cookies — inaccessible to client-side JavaScript.
 
-#### JWT Claims Structure
+### JWT Claims Structure
 
 ```json
-{
+<
   "sub": "user-uuid",
   "org": "org-uuid",
   "teams": ["backend", "infra"],
   "role": "member",
   "iat": 1718900000,
   "exp": 1718900900
-}
+>
 ```
 
 The `teams` array drives authorization decisions across the platform — sandbox access, credential resolution, and audit filtering all reference these claims.
 
-### OIDC Federation
+## OIDC Federation
 
 For enterprises with existing identity providers, Astonish federates authentication via **Authorization Code + PKCE**. Supported providers include:
 
@@ -51,37 +37,45 @@ For enterprises with existing identity providers, Astonish federates authenticat
 - Okta
 - Any standards-compliant OIDC provider
 
-#### Configuration
+### Configuration
 
-```yaml
-# config.yaml
-auth:
-  oidc:
-    issuer: https://accounts.example.com
-    client_id: astonish-platform
-    redirect_uri: https://astonish.example.com/auth/callback
-    scopes:
-      - openid
-      - profile
-      - groups
+OIDC providers are configured per-organization in the platform database. Each provider stores:
+
+| Field | Description |
+|-------|-------------|
+| `issuer_url` | OIDC issuer URL |
+| `discovery_url` | OpenID Connect discovery endpoint |
+| `client_id` | OAuth2 client ID |
+| `client_secret` | OAuth2 client secret (if required) |
+| `scopes` | Requested scopes (default: `openid, email, profile`) |
+| `team_claim` | JWT claim to map to team memberships |
+
+Multiple OIDC providers can be configured per organization — users choose their provider during login.
+
+### Team Auto-Mapping
+
+When the OIDC provider includes a groups/teams claim in the ID token, Astonish can automatically map those groups to internal team memberships using the `team_claim` field.
+
+On each login, team memberships are reconciled — users are added to teams matching their group claims. This keeps access in sync with your identity provider without manual administration.
+
+## CLI Login
+
+Connect to a platform instance:
+
+```bash
+# Email/password login
+astonish login https://astonish.example.com
+
+# SSO/OIDC login (opens browser)
+astonish login https://astonish.example.com --sso
+
+# Specify org and team
+astonish login https://astonish.example.com --org acme --team backend
 ```
 
-No `client_secret` is required — PKCE eliminates the need for server-side secrets in the authorization flow.
+The `--sso` flag initiates a device-code flow that opens the browser for identity provider authentication.
 
-#### Team Auto-Mapping
-
-When the OIDC provider includes a `groups` claim in the ID token, Astonish automatically maps those groups to internal team memberships:
-
-```yaml
-auth:
-  oidc:
-    team_mapping:
-      claim: groups
-      # Optional prefix stripping (e.g., "astonish-backend" → "backend")
-      strip_prefix: "astonish-"
-```
-
-On each login, team memberships are reconciled — users are added to teams matching their group claims and removed from teams no longer present. This keeps access in sync with your identity provider without manual administration.
+When multiple organizations or teams are available, the CLI prompts for interactive selection.
 
 ## Token Lifecycle
 
@@ -96,23 +90,15 @@ On each login, team memberships are reconciled — users are added to teams matc
 ```yaml
 auth:
   # HMAC-SHA256 signing key (required, generate with: openssl rand -hex 32)
-  jwt_secret: "${JWT_SECRET}"
+  jwt_secret: "$<JWT_SECRET>"
 
   # Built-in auth settings
   builtin:
     enabled: true
     password_min_length: 12
-
-  # OIDC federation
-  oidc:
-    enabled: true
-    issuer: https://login.example.com
-    client_id: astonish
-    redirect_uri: https://astonish.example.com/auth/callback
-    scopes: [openid, profile, groups]
-    team_mapping:
-      claim: groups
 ```
+
+OIDC providers are managed through the platform API and stored per-organization in the database, not in the config file.
 
 ## See Also
 

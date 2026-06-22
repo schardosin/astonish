@@ -21,13 +21,14 @@ Every audit entry captures:
 |-------|-------------|
 | `timestamp` | UTC time of the event |
 | `user_id` | Authenticated user who performed the action |
-| `org_id` | Organization context |
 | `team_id` | Team context (if applicable) |
-| `action` | Event type (e.g., `credential.created`, `session.started`) |
-| `resource` | Target resource identifier |
-| `ip_address` | Client IP address |
-| `session_id` | Session that generated the event |
-| `metadata` | Additional structured data (JSON) |
+| `action` | HTTP method (GET, POST, DELETE, etc.) |
+| `resource` | Route pattern and path of the request |
+| `detail` | Additional structured data (JSON — includes path, status code) |
+| `ip_address` | Client IP address (from X-Forwarded-For or RemoteAddr) |
+| `session_id` | Session that generated the event (if applicable) |
+
+Audit logging is implemented as HTTP middleware — every API request is automatically recorded without requiring explicit instrumentation in handlers. Writes are asynchronous to avoid adding latency to requests.
 
 ## Event Categories
 
@@ -37,7 +38,7 @@ Every audit entry captures:
 - **Administration** — user invited, team modified, org settings changed
 - **Sandboxes** — created, destroyed, resource limit changes
 
-## Access and Filtering
+## Viewing Audit Logs
 
 Audit logs are scoped by role:
 
@@ -45,15 +46,28 @@ Audit logs are scoped by role:
 - **Team admins** see events within their team.
 - **Members** see only their own events.
 
-Filter logs via the CLI:
+### In Studio
 
-```bash
-# All events for a team in the last 24h
-astonish audit list --team backend --since 24h
+Studio provides an audit log viewer under **Settings → Audit Log** with filters for action type, user, resource, and time range.
 
-# Credential access events for a specific user
-astonish audit list --user jane@example.com --action "credential.*"
+### Via API
+
+Query audit logs programmatically:
+
 ```
+GET /api/audit?action=POST&resource=/api/credentials&since=2024-01-01&limit=100
+```
+
+Supported query parameters:
+
+| Parameter | Description |
+|-----------|-------------|
+| `action` | Filter by HTTP method |
+| `resource` | Filter by resource path pattern |
+| `since` | Start time (ISO 8601) |
+| `until` | End time (ISO 8601) |
+| `limit` | Maximum records to return |
+| `offset` | Pagination offset |
 
 ## Retention
 

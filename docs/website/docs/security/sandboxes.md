@@ -8,49 +8,70 @@ Every organization's sandboxes run on a dedicated network segment. Containers fr
 
 ## Backends
 
-Astonish supports two sandbox backends depending on your deployment model.
+Astonish supports three sandbox backends depending on your deployment model.
 
-### Incus (LXC Containers)
+### OpenShell (NVIDIA)
 
-For non-Kubernetes deployments, Astonish uses [Incus](https://linuxcontainers.org/incus/) to manage LXC system containers with per-org bridge networks.
+The most secure backend, using NVIDIA's OpenShell Gateway with kernel-level isolation:
 
-#### Network Architecture
+- **Landlock LSM** — Linux Security Module enforcing per-sandbox filesystem policies with `best_effort` compatibility mode
+- **Seccomp** — system call filtering to restrict available kernel interfaces
+- **Network namespaces** — each sandbox gets its own network namespace; a supervisor proxy denies all egress by default
+- **Non-root execution** — commands run as the `sandbox` user with read-only system paths
 
-Each organization gets a dedicated bridge interface:
+#### Filesystem Policy
 
+| Access | Paths |
+|--------|-------|
+| Read-only | `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt` |
+| Read-write | `/sandbox` (workspace), `/tmp`, `/var/tmp`, `/home`, `/run` |
+
+Packages must be baked into the sandbox image at build time — `apt install` is blocked at runtime by design (requires root and writable system paths).
+
+#### Network Policy
+
+Egress is denied by default. Allow specific traffic using presets:
+
+| Preset | Allows |
+|--------|--------|
+| `code_hosting` | GitHub, GitLab, Bitbucket |
+| `package_registries` | npm, PyPI, apt mirrors |
+| `llm_apis` | OpenAI, Anthropic, etc. |
+| `tools` | Common developer tool APIs |
+| `search` | Search engines |
+| `cdn` | CDN providers |
+
+Custom endpoints can be added via configuration:
+
+```yaml
+sandbox:
+  openshell:
+    network_policy:
+      presets: ["code_hosting", "package_registries"]
+      extra_endpoints:
+        - host: "internal.corp.com"
+          port: 443
 ```
-org-a-br0  →  10.100.1.0/24  →  org-a containers only
-org-b-br0  →  10.100.2.0/24  →  org-b containers only
-org-c-br0  →  10.100.3.0/24  →  org-c containers only
-```
 
-Bridge-level isolation means org-a containers have no route to org-b, regardless of firewall rules.
+#### Authentication
 
-#### Container Naming
-
-Containers follow a deterministic naming convention:
-
-```
-astonish-{org}-{team}-{session-short-id}
-```
-
-For example: `astonish-acme-backend-a1b2c3`
-
-This makes it straightforward to identify, monitor, and clean up containers per org or team.
-
-#### Lifecycle
-
-1. Agent session starts → Astonish creates a container on the org's bridge.
-2. Tool calls execute inside the container with resource limits (CPU, memory, disk).
-3. Session ends → container is destroyed and network resources released.
+The OpenShell backend authenticates to the gateway via mTLS (client certificate + key + CA) or a static bearer token for development environments.
 
 ### Kubernetes
 
-For platform deployments on Kubernetes, sandboxes run as pods with NetworkPolicy-based isolation.
+For platform deployments on Kubernetes, sandboxes run as pods with NetworkPolicy-based isolation and portable overlay filesystems.
+
+#### Pod Security
+
+Sandbox pods are hardened with:
+- SecurityContext restrictions (non-root, read-only root filesystem where applicable)
+- RuntimeClassName support for additional isolation (gVisor, Kata)
+- User namespace isolation via `hostUsers: false`
+- Overlay filesystem via fuse-overlayfs (default) with kernel overlayfs fallback
 
 #### Pod Labels
 
-Every sandbox pod is labeled with org and team identifiers:
+Every sandbox pod is labeled for policy targeting:
 
 ```yaml
 metadata:
@@ -92,29 +113,70 @@ spec:
 
 Pods from org `acme` can only communicate with other `acme` pods. Cross-org traffic is denied by default.
 
+### Incus (LXC Containers)
+
+For non-Kubernetes deployments, Astonish uses [Incus](https://linuxcontainers.org/incus/) to manage LXC system containers with per-org bridge networks.
+
+#### Network Architecture
+
+Each organization gets a dedicated bridge interface:
+
+```
+org-a-br0  →  10.100.1.0/24  →  org-a containers only
+org-b-br0  →  10.100.2.0/24  →  org-b containers only
+```
+
+Bridge-level isolation means org-a containers have no route to org-b, regardless of firewall rules.
+
+#### Container Naming
+
+Containers follow a deterministic naming convention:
+
+```
+astonish-<org>-<team>-<session-short-id>
+```
+
+For example: `astonish-acme-backend-a1b2c3`
+
 ## Team-Scoped Sandbox Templates
 
-Organizations can define sandbox templates per team, controlling the base image, resource limits, and pre-installed tools:
+Organizations can define sandbox templates per team, controlling the base image, resource limits, and pre-installed packages:
 
 ```yaml
-sandboxes:
+sandbox:
   templates:
     backend:
       image: astonish-sandbox:python-3.12
       cpu: "2"
       memory: 4Gi
-      tools: [git, python, pip]
+      packages: [git, python3, python3-pip, curl]
     frontend:
       image: astonish-sandbox:node-22
       cpu: "1"
       memory: 2Gi
-      tools: [git, node, npm]
+      packages: [git, nodejs, npm]
 ```
 
-Templates are scoped to teams — the `backend` team gets Python environments while `frontend` gets Node.js.
+Templates are managed through Studio or the platform API. When packages are added, Astonish builds a new sandbox image automatically using Kaniko (no Docker daemon required).
+
+## Sandbox Auditing
+
+For Kubernetes deployments, audit sandbox storage for orphaned data:
+
+```bash
+astonish platform sandbox-audit
+```
+
+This spawns a remote audit pod that diffs on-disk PVC contents against database records, identifying orphaned sandbox data that can be reclaimed.
+
+Options:
+- `--reclaim` — automatically reclaim orphaned data
+- `--grace 24h` — grace period before reclaiming
+- `--namespace` — target namespace
+- `--kubeconfig` — path to kubeconfig
 
 ## See Also
 
-- [Deployment Overview](../deployment/index.md) — choosing between Incus and Kubernetes backends
-- [OpenShell](../deployment/openshell.md) — kernel-level agent isolation via NVIDIA OpenShell
+- [Deployment Overview](../deployment/index.md) — choosing between sandbox backends
+- [OpenShell](../deployment/openshell.md) — detailed OpenShell deployment guide
 - [Credential Security](./credential-security.md) — how secrets are injected into sandbox environments

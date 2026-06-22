@@ -1,6 +1,6 @@
 # Credential Security
 
-Astonish provides a secure credential store that keeps API keys, tokens, and other secrets encrypted at rest and invisible to the LLM at runtime. A five-layer redaction pipeline ensures that secrets never leak into model context, logs, or responses.
+Astonish provides a secure credential store that keeps API keys, tokens, and other secrets encrypted at rest and invisible to the LLM at runtime. A multi-layer redaction pipeline ensures that secrets never leak into model context, logs, or responses.
 
 ## Credential Store
 
@@ -13,21 +13,25 @@ Credentials are stored encrypted using [envelope encryption](./envelope-encrypti
 
 ### Credential Types
 
-- **API Key** — static bearer tokens for external services
-- **OAuth Client** — client ID + secret pairs for OAuth2 flows
-- **Token** — short-lived tokens with optional refresh configuration
-- **Custom** — arbitrary key-value secrets (e.g., database connection strings)
+| Type | Description |
+|------|-------------|
+| `api_key` | Custom header + value for API authentication |
+| `bearer` | Authorization: Bearer token |
+| `basic` | HTTP Basic Auth (username + password) |
+| `password` | Username + password for SSH, FTP, SMTP, databases |
+| `oauth_client_credentials` | OAuth2 client credentials with automatic token refresh |
+| `oauth_authorization_code` | User-authorized OAuth2 with refresh token |
 
-## 5-Layer Output Redaction
+## Output Redaction
 
-Astonish applies five independent redaction layers to guarantee secrets never reach the LLM context:
+Astonish applies multiple independent redaction layers to guarantee secrets never reach the LLM context:
 
 | Layer | Stage | Mechanism |
 |-------|-------|-----------|
-| 1 | Injection | Secrets are injected into tool call environments, never into the prompt |
+| 1 | Injection | Secrets are injected into tool call environments via placeholders, never into the prompt |
 | 2 | Tool output filtering | Tool stdout/stderr is scanned; matching values are replaced with `[REDACTED]` |
 | 3 | Context assembly | The context builder verifies no known secret values appear in assembled messages |
-| 4 | Response streaming | Outbound LLM responses are scanned against the active credential set |
+| 4 | Channel output | Outbound messages to channels (Telegram, Slack, etc.) are scanned against active credentials |
 | 5 | Audit and logs | All logging pipelines strip secret values before writing |
 
 Each layer operates independently. If one layer fails, the remaining layers still prevent exposure.
@@ -44,26 +48,35 @@ When an agent invokes a tool that requires credentials:
 
 At no point does the LLM see the credential value. The model only knows that a credential named (e.g.) `GITHUB_TOKEN` is available — never its contents.
 
-## CLI Management
+## Managing Credentials
+
+### In Studio
+
+Studio provides a credential manager under **Settings → Credentials** where you can add, view metadata, test, and remove credentials through a visual interface.
+
+### Via CLI
 
 ```bash
-# Store a personal credential
-astonish credential set my-api-key --type api_key --value "sk-..."
-
-# Store a team credential
-astonish credential set prod-github --team backend --type api_key --value "ghp_..."
+# Add a credential
+astonish credential add
 
 # List credentials (values are never displayed)
 astonish credential list
 
-# Rotate a credential
-astonish credential set prod-github --team backend --type api_key --value "ghp_new..."
+# Show credential metadata
+astonish credential show <name>
 
-# Delete a credential
-astonish credential delete my-api-key
+# Test a credential (validates it works)
+astonish credential test <name>
+
+# Remove a credential
+astonish credential remove <name>
+
+# Set or manage the master key
+astonish credential master-key
 ```
 
-Credential values are never echoed back in any command output. The `list` command shows names, types, scopes, and last-rotated timestamps only.
+Credential values are never echoed back in any command output. The `list` and `show` commands display names, types, scopes, and metadata only.
 
 ## See Also
 

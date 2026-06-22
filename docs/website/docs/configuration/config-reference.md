@@ -54,6 +54,8 @@ Platform → Org → Team
 | Context length | Team | Settings → General |
 | Web server configs (Tavily, Brave, etc.) | Team | Settings → General |
 | Memory embedding provider/model | Team | Settings → Memory |
+| Memory entries and embeddings | Personal / Team / Org | Stored per-scope in DB |
+| Chat sessions and history | Personal / Team | Stored per-scope in DB |
 | Sandbox template name | Team | Settings → Sandbox |
 | Disabled tools | Team | Settings → General |
 | MCP servers | Platform → Org → Team | Settings → MCP Servers |
@@ -110,13 +112,12 @@ chat:
   max_tool_calls: 0            # Max tool calls per turn (0 = unlimited)
   max_tools: 0                 # Max tools exposed to model (0 = all)
   auto_approve: false          # Auto-approve tool executions
-  workspace_dir: ""            # Default working directory
   flow_save_dir: ""            # Where distilled flows are saved
 
 # Session management
+# Note: In daemon mode, sessions are stored in the database.
+# These settings only affect the CLI console mode.
 sessions:
-  storage: "file"              # file | sqlite
-  base_dir: ""                 # Session storage directory
   compaction:
     enabled: true
     threshold: 0.8             # Context usage threshold to trigger compaction
@@ -124,11 +125,11 @@ sessions:
   cleanup:
     max_age_days: 5            # Auto-delete sessions older than this
 
-# Semantic memory (RAG)
+# Semantic memory
+# Note: Memory content (entries, embeddings) is stored in the database.
+# These settings control the embedding engine and search behavior.
 memory:
   enabled: true
-  memory_dir: ""               # Directory for memory markdown files
-  vector_dir: ""               # Directory for vector index
   embedding:
     provider: "auto"           # auto | openai | ollama | openai-compat
     model: ""
@@ -140,9 +141,6 @@ memory:
   search:
     max_results: 6
     min_score: 0.35
-  sync:
-    watch: true                # Watch for file changes
-    debounce_ms: 1500
 
 # Browser automation
 browser:

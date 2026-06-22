@@ -1,14 +1,73 @@
-# Config File Reference
+# Config Reference
 
-Astonish uses a YAML configuration file that controls agent behavior, provider selection, storage, authentication, and runtime options.
+Astonish configuration lives in two places depending on deployment mode:
+
+- **Personal mode** (local/SQLite): Everything is in `~/.config/astonish/config.yaml` and the local credential store
+- **Platform mode** (cloud/PostgreSQL): Infrastructure settings are in `config.yaml` (deployed via Helm ConfigMap), while tenant-specific settings (providers, models, tools) are stored in the database and managed through Studio Settings
+
+## Configuration Tiers (Platform Mode)
+
+In platform mode, tenant-specific settings cascade through three database-managed tiers:
+
+```
+Platform → Org → Team
+(lowest priority)      (highest priority)
+```
+
+Each tier can add or override settings from the tier above:
+
+| Tier | Managed By | Scope |
+|------|-----------|-------|
+| **Platform** | Platform superadmin | All orgs and teams |
+| **Org** | Org admin/owner | All teams in the organization |
+| **Team** | Team admin/owner | Single team |
+
+### What Lives in the Database (Platform Mode)
+
+| Setting | Cascade Tiers | Description |
+|---------|--------------|-------------|
+| Providers (API keys, endpoints) | Platform → Org → Team | AI provider configurations |
+| Default provider/model | Platform → Org → Team | Which provider and model to use by default |
+| Web search/extract tools | Team only | MCP servers for web search |
+| Context length | Team only | Max context window size |
+| Web servers (Tavily, etc.) | Team only | Web tool API keys |
+| Memory provider/model | Team only | Embedding configuration |
+| Sandbox template | Team only | Container template name |
+| Disabled tools | Team only | Tools blocked for this team |
+| MCP servers | Platform → Org → Team | External tool servers |
+| Secrets (API keys, tokens) | All tiers (encrypted) | Encrypted with master KEK |
+
+### What Lives in `config.yaml` (Shared Infrastructure)
+
+These settings are shared across all tenants and set at deploy time:
+
+| Setting | Description |
+|---------|-------------|
+| `storage.backend` | Database backend (`postgres` in platform mode) |
+| `storage.postgres.*` | Connection pool settings |
+| `storage.auth.*` | Authentication mode, token TTLs, OIDC config |
+| `sandbox.*` | Backend type, resource limits, K8s/OpenShell settings |
+| `daemon.*` | Port, log directory, Studio auth |
+| `chat.*` | System prompt, max tool calls, auto-approve |
+| `sessions.*` | Compaction, cleanup settings |
+| `memory.*` | RAG embedding, chunking, search defaults |
+| `browser.*` | Headless mode, viewport, proxy |
+| `sub_agents.*` | Delegation depth, concurrency, timeout |
+| `skills.*` | Skills system configuration |
+| `scheduler.*` | Job scheduler enabled/disabled |
+| `security.*` | Secret scanner settings |
 
 ## File Location
 
-Configuration is stored at `~/.config/astonish/config.yaml`. In cloud deployments with PostgreSQL, settings are managed per-team through the platform admin interface.
+```
+~/.config/astonish/config.yaml
+```
 
-## Full Structure
+In Kubernetes deployments, this file is rendered from the Helm chart ConfigMap and mounted into the pod.
 
-Below is the complete configuration with all available sections and their defaults:
+## Personal Mode: Full YAML Structure
+
+In personal/local mode, **all** configuration lives in `config.yaml`:
 
 ```yaml
 # General settings
@@ -23,15 +82,15 @@ general:
 # AI Providers (map of instance names to config)
 providers:
   anthropic:
-    api_key: "$<ANTHROPIC_API_KEY>"
+    api_key: "${ANTHROPIC_API_KEY}"
   openai:
-    api_key: "$<OPENAI_API_KEY>"
+    api_key: "${OPENAI_API_KEY}"
   ollama:
     base_url: "http://localhost:11434"
-  # For non-obvious names, use explicit type:
+  # For custom instance names, specify type explicitly:
   my-custom-provider:
     type: "openai"
-    api_key: "$<CUSTOM_KEY>"
+    api_key: "${CUSTOM_KEY}"
     base_url: "https://custom-endpoint.example.com/v1"
 
 # Chat behavior
@@ -128,7 +187,7 @@ channels:
     allow_from: []
   slack:
     enabled: false
-    mode: "socket"             # socket mode
+    mode: "socket"
     bot_token: ""
     app_token: ""
 
@@ -215,14 +274,47 @@ security:
     min_token_length: 16
 ```
 
+## Platform Mode: Helm ConfigMap
+
+In Kubernetes deployments, only infrastructure settings go into the ConfigMap. Provider and tenant settings are managed via Studio Settings (stored in the database):
+
+```yaml
+# What the Helm chart renders into config.yaml
+storage:
+  backend: "postgres"
+  postgres:
+    instance_suffix: ""
+    max_open_conns: 25
+    max_idle_conns: 5
+    conn_max_lifetime_minutes: 30
+  auth:
+    mode: "builtin"            # or "oidc"
+    access_token_ttl_minutes: 15
+    refresh_token_ttl_days: 90
+    allow_registration: true
+
+sandbox:
+  backend: "k8s"               # or "openshell"
+  limits:
+    memory: "2GB"
+    cpu: 2
+    processes: 500
+  kubernetes:
+    namespace: "astonish-sandbox"
+    sandbox_image: "schardosin/astonish-sandbox-base:latest"
+    overlay_mode: "fuse"
+```
+
+Secrets (master key, JWT secret, platform DSN) are injected as environment variables from Kubernetes Secrets — never in the ConfigMap.
+
 ## Environment Variable Substitution
 
-Any value can reference environment variables using `$<VAR_NAME>` syntax. This keeps secrets out of the config file:
+Any value in `config.yaml` can reference environment variables using `${VAR_NAME}` syntax:
 
 ```yaml
 providers:
   openai:
-    api_key: "$<OPENAI_API_KEY>"
+    api_key: "${OPENAI_API_KEY}"
 ```
 
 ## Minimal Local Config
@@ -236,13 +328,18 @@ general:
 
 providers:
   anthropic:
-    api_key: "$<ANTHROPIC_API_KEY>"
+    api_key: "${ANTHROPIC_API_KEY}"
 ```
 
 All other settings use sensible defaults (SQLite storage, memory enabled, daemon on port 9393).
 
-## Cloud Deployment
+## Managing Settings
 
-In cloud deployments with PostgreSQL, configuration is managed through the platform admin interface at multiple levels (platform, org, team). The `config.yaml` on disk is primarily for the local storage backend and daemon settings. Provider and tool configuration is stored in the database and managed via Studio Settings.
+| Mode | How to Configure |
+|------|-----------------|
+| **Personal** | Edit `~/.config/astonish/config.yaml` directly, or use `astonish setup` |
+| **Platform (infrastructure)** | Helm values → ConfigMap (deploy-time) |
+| **Platform (providers/tools)** | Studio Settings UI → stored in database |
+| **Platform (secrets)** | Studio Settings UI → encrypted in database |
 
 See [Providers](./providers.md) for supported AI backends and [MCP Servers](./mcp-servers.md) for tool extension.

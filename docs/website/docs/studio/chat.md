@@ -6,13 +6,9 @@ The Chat tab is Studio's primary interaction surface. It provides a rich convers
 
 Chat uses Server-Sent Events (SSE) to stream agent responses in real time. Tokens appear as they're generated — no waiting for the full response before seeing output.
 
-## Model Selector
+## Active Model Display
 
-The model dropdown in the chat header lets you switch providers and models mid-conversation:
-
-- Select any configured provider (OpenAI, Anthropic, Google, etc.)
-- Change models without starting a new session
-- Token usage is tracked per-model
+The top bar shows the currently active provider and model as a read-only indicator. To change which model is used, go to **Settings → Providers** and update the default. The change applies to all subsequent messages.
 
 ## Tool Call Visualization
 

@@ -127,13 +127,11 @@ Fields:
   resource_group: engineering
 ```
 
-## Switching Providers at Runtime
-
-Use the model selector dropdown in the Studio Chat header to switch between configured providers and models during a conversation. Changes take effect on the next message.
-
 ## Default Provider and Model
 
-The default provider and model are configured through Studio Settings → Providers. These cascade through the same 3-tier system (Platform → Org → Team), with the closest tier taking priority.
+The default provider and model are configured through **Studio Settings → Providers**. These cascade through the same 3-tier system (Platform → Org → Team), with the closest tier taking priority.
+
+The active provider and model are displayed as a read-only chip in the Studio top bar. To change which model is used, update the default in Settings — the change applies to all subsequent messages.
 
 ## Environment Variable Fallback
 

@@ -13,71 +13,85 @@ astonish flows <subcommand> [flags]
 ### List Flows
 
 ```bash
-# List all available flows
 astonish flows list
-
-# List with execution history
-astonish flows list --history
 ```
 
 ### Run a Flow
 
 ```bash
 # Run a flow by name
-astonish flows run my-flow
+astonish flows run <flow-name>
 
-# Run with input parameters
-astonish flows run my-flow --input '{"file": "data.csv", "format": "json"}'
+# Run with parameters
+astonish flows run my-flow -p file=data.csv -p format=json
 
-# Run with a parameter file
-astonish flows run my-flow --input-file params.json
+# Run with a specific model
+astonish flows run my-flow --provider openai --model gpt-4o
 
-# Dry run (validate without executing)
-astonish flows run my-flow --dry-run
+# Auto-approve all tool calls
+astonish flows run my-flow --auto-approve
+```
+
+### Show Flow Structure
+
+```bash
+# Visualize a flow's node structure
+astonish flows show <flow-name>
 ```
 
 ### Edit a Flow
 
 ```bash
-# Open flow in Studio's Flow Editor
-astonish flows edit my-flow
+# Open flow YAML file for editing
+astonish flows edit <flow-name>
 ```
 
-This launches Studio and navigates directly to the flow in the visual editor.
-
-### Delete a Flow
+### Import a Flow
 
 ```bash
-# Delete a flow
-astonish flows delete my-flow
+# Import a flow from a local YAML file
+astonish flows import <path-to-flow.yaml>
+```
 
-# Delete without confirmation prompt
-astonish flows delete my-flow --force
+### Remove a Flow
+
+```bash
+astonish flows remove <flow-name>
+```
+
+### Flow Store
+
+Browse and install flows from configured taps:
+
+```bash
+# List available flows from all taps
+astonish flows store list
+
+# Search for flows
+astonish flows store search <query>
+
+# Install a flow from a tap
+astonish flows store install <tap-name>/<flow-name>
+
+# Uninstall a tap flow
+astonish flows store uninstall <tap-name>/<flow-name>
+
+# Update all tap manifests
+astonish flows store update
 ```
 
 ## Flags for `run`
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--input` | `-i` | JSON string of input parameters |
-| `--input-file` | | Path to JSON file with parameters |
-| `--dry-run` | | Validate flow without executing |
-| `--verbose` | `-v` | Show detailed execution output |
-| `--timeout` | `-t` | Maximum execution time (e.g., `5m`) |
+| `--provider` | | AI provider to use |
+| `--model` | | Model name |
+| `-p` | | Parameter in `key=value` format (repeatable) |
+| `--auto-approve` | | Auto-approve all tool executions |
+| `--browser` | | Launch with embedded web browser UI |
+| `--port` | | Port for web server (with --browser, default: 8080) |
+| `--debug` | | Enable debug mode |
 
 ## Scheduling
 
-Flows can be scheduled for recurring execution using the [scheduler](./daemon-scheduler.md):
-
-```bash
-# Run a flow every day at 9am
-astonish scheduler add --flow my-flow --cron "0 9 * * *"
-```
-
-## Output
-
-Flow execution outputs are printed to stdout by default. Use `--output` to write results to a file:
-
-```bash
-astonish flows run report-gen --output report.md
-```
+Flows can be scheduled for recurring execution. Ask the agent to schedule a flow, or manage existing schedules with the [scheduler](./daemon-scheduler.md).

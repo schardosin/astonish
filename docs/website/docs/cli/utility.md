@@ -11,10 +11,12 @@ astonish setup
 ```
 
 Walks you through:
-- Selecting an AI provider
-- Entering API keys
+- Selecting a storage backend (SQLite or PostgreSQL)
+- Selecting an AI provider and entering API keys
 - Choosing a default model
-- Configuring optional features (daemon, channels)
+- Configuring web search tools
+- Setting up browser automation
+- Initializing container sandboxes (optional)
 
 ## `astonish status`
 
@@ -24,67 +26,116 @@ Display the current state of all Astonish subsystems:
 astonish status
 ```
 
-Output:
-```
-Astonish v0.12.0
-Database: sqlite
-Config: ~/.config/astonish/config.yaml
-Providers:
-  anthropic: configured (claude-sonnet)
-  openai: configured (gpt-4o)
-Daemon: running (http://localhost:9393)
-MCP Servers: 2 active
-Memory: 47 entries
-```
+Shows provider configuration, daemon status, MCP servers, memory state, and more.
 
-## `astonish version`
+## `astonish --version`
 
 Print version and build information:
 
 ```bash
-astonish version
+astonish --version
+# or
+astonish -v
 ```
 
-## `astonish memory`
-
-Manage the agent memory system:
-
-```bash
-# List stored memories
-astonish memory list
-
-# Search memories
-astonish memory search "database schema"
-
-# Clear all memories
-astonish memory clear
-
-# Clear a specific tier (cloud deployments)
-astonish memory clear --tier team
-```
+::: info
+This is a flag, not a subcommand. Use `--version` or `-v`.
+:::
 
 ## `astonish login`
 
-Authenticate with a cloud platform instance (cloud deployments only):
+Authenticate with a remote platform instance:
 
 ```bash
-# Interactive login
 astonish login
+```
 
-# Login with specific server
-astonish login --server https://astonish.company.com
+Used when connecting the CLI to a cloud-deployed Astonish platform. After login, commands like `chat`, `flows`, and `scheduler` operate against the remote server.
+
+## `astonish logout`
+
+Disconnect from the remote platform:
+
+```bash
+astonish logout
 ```
 
 ## `astonish studio`
 
-::: warning Deprecated
-The `astonish studio` command may be removed in a future release. Studio is now served automatically by the daemon at `http://localhost:9393`. Use `astonish daemon start` instead.
-:::
-
-Opens the Studio web UI in your default browser. This is a convenience shortcut that ensures the daemon is running and opens the browser:
+Open the Studio web UI in your default browser:
 
 ```bash
 astonish studio
 ```
+
+This is a convenience shortcut that ensures the daemon is running and opens the browser to `http://localhost:9393`. Local-only (cannot be used with remote servers).
+
+## `astonish config`
+
+Manage configuration:
+
+```bash
+astonish config
+```
+
+## `astonish tools`
+
+Manage MCP servers and tools:
+
+```bash
+# List all available tools
+astonish tools list
+
+# List MCP servers
+astonish tools servers
+
+# Refresh tool cache
+astonish tools refresh
+
+# Enable/disable an MCP server
+astonish tools enable <name>
+astonish tools disable <name>
+
+# Edit MCP configuration
+astonish tools edit
+
+# Browse MCP server store
+astonish tools store
+
+# Search tools
+astonish tools search <query>
+```
+
+## `astonish sessions`
+
+Manage chat sessions:
+
+```bash
+astonish sessions
+```
+
+## `astonish credentials`
+
+Manage the encrypted credential store (local-only):
+
+```bash
+astonish credentials
+```
+
+## `astonish sandbox`
+
+Manage container sandboxes (local-only):
+
+```bash
+astonish sandbox
+```
+
+## Deprecated Commands
+
+### `astonish memory`
+
+::: warning Deprecated
+The `memory` CLI command is no longer available. Memory is managed through the agent's built-in memory tools during chat sessions, or via Studio Settings.
+:::
 
 See [Studio Overview](../studio/) for details on the web interface.

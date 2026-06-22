@@ -1,6 +1,6 @@
 # Chat Commands
 
-The `astonish chat` command starts and manages interactive agent sessions from the terminal.
+The `astonish chat` command starts an interactive agent session from the terminal.
 
 ## Usage
 
@@ -10,72 +10,51 @@ astonish chat [flags]
 
 Running `astonish chat` with no arguments starts a new interactive session using your default provider and model.
 
-## Subcommands
-
-### Start a New Session
-
-```bash
-# New session with defaults
-astonish chat
-
-# New session with specific provider/model
-astonish chat --provider anthropic --model claude-sonnet
-
-# New session with an initial message
-astonish chat "Explain the authentication flow in this codebase"
-```
-
-### Resume a Session
-
-```bash
-# Resume the most recent session
-astonish chat --resume
-
-# Resume a specific session by ID
-astonish chat --resume <session-id>
-```
-
-### List Sessions
-
-```bash
-# List recent sessions
-astonish chat list
-
-# List with details (model, token count, timestamp)
-astonish chat list --verbose
-```
-
 ## Flags
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--provider` | `-p` | AI provider to use |
 | `--model` | `-m` | Model name |
-| `--resume` | `-r` | Resume a session (latest or by ID) |
-| `--flow` | `-f` | Start chat in the context of a flow |
-| `--no-tools` | | Disable tool use for this session |
-| `--system` | `-s` | Override system prompt |
+| `--resume` | `-r` | Resume a session by ID (or latest if no ID given) |
+| `--workspace` | `-w` | Working directory (default: current directory) |
+| `--auto-approve` | | Auto-approve all tool executions |
+| `--debug` | | Enable debug mode |
 
 ## Examples
 
 ```bash
-# Quick question (non-interactive, single response)
-astonish chat --once "What port does the API server use?"
+# Start a new chat with defaults
+astonish chat
 
-# Chat with a specific model
+# Chat with a specific provider and model
 astonish chat -p openai -m gpt-4o
 
-# Resume last conversation
+# Resume the most recent session
 astonish chat -r
+
+# Resume a specific session
+astonish chat -r abc123
+
+# Auto-approve all tool calls
+astonish chat --auto-approve
 ```
 
 ## In-Session Commands
 
-While in an active chat session, these commands are available:
+While in an active chat session, type `/` to access these commands:
 
 | Command | Description |
 |---------|-------------|
-| `/new` | Start a new session |
-| `/model <name>` | Switch model |
-| `/quit` | Exit the session |
-| `/clear` | Clear terminal display |
+| `/help` | Show available commands |
+| `/status` | Show provider, model, context, tools, and session info |
+| `/new` | Start a fresh conversation |
+| `/compact` | Show context window usage and compaction status |
+| `/distill` | Distill the current session into a reusable flow |
+| `/fleet` | Show available fleets and fleet commands |
+| `/fleet-plan` | Create a reusable fleet plan (redirects to Studio) |
+| `/drill` | Create a drill suite with guided wizard |
+| `/drill-add` | Add new drills to an existing suite |
+| `/authorize <code>` | Authorize a device to access Studio |
+
+Type `exit` or `quit` to end the session.

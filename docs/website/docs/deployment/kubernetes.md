@@ -9,7 +9,6 @@ This guide covers deploying Astonish as a multi-tenant platform on Kubernetes us
 - `kubectl` configured for your cluster
 - PostgreSQL 15+ with the `pgvector` extension enabled
 - A container registry accessible from the cluster
-- A 256-bit master encryption key
 
 ## Architecture
 
@@ -31,29 +30,54 @@ This guide covers deploying Astonish as a multi-tenant platform on Kubernetes us
 └─────────────────────────────────────────────────────┘
 ```
 
-## Step 1: Create Namespace
+## Step 1: Initialize the Database
+
+Run from a machine with network access to your PostgreSQL instance:
+
+```bash
+astonish platform init \
+  --host <postgres-host> \
+  --port 5432 \
+  --user postgres \
+  --password <postgres-admin-password> \
+  --sslmode require
+```
+
+This creates the platform database and runs migrations. It prints the connection DSN — save this for the Helm values.
+
+Available flags:
+
+| Flag | Default | Env Fallback | Description |
+|------|---------|--------------|-------------|
+| `--host` | (required) | `PGHOST` | PostgreSQL hostname |
+| `--port` | `5432` | `PGPORT` | PostgreSQL port |
+| `--user` | `postgres` | `PGUSER` | PostgreSQL admin user |
+| `--password` | (required) | `PGPASSWORD` | PostgreSQL admin password |
+| `--sslmode` | `prefer` | `PGSSLMODE` | SSL mode |
+| `--suffix` | auto-generated | — | Fixed instance suffix |
+
+## Step 2: Generate Secrets
+
+Generate the master encryption key and JWT signing secret:
+
+```bash
+astonish platform gen-secret   # → use as masterKey
+astonish platform gen-secret   # → use as jwtSecret
+```
+
+## Step 3: Create the Kubernetes Secret
 
 ```bash
 kubectl create namespace astonish
-```
 
-## Step 2: Configure Secrets
-
-Create the required secrets before installing the chart:
-
-```bash
-# Generate a master encryption key
-export MASTER_KEY=$(openssl rand -base64 32)
-
-# Create the secret
 kubectl create secret generic astonish-secrets \
   --namespace astonish \
-  --from-literal=master-key="$MASTER_KEY" \
-  --from-literal=jwt-secret="$(openssl rand -hex 32)" \
-  --from-literal=database-url="postgres://astonish:password@postgres:5432/astonish?sslmode=require"
+  --from-literal=master-key="<master-key-from-step-2>" \
+  --from-literal=jwt-secret="<jwt-secret-from-step-2>" \
+  --from-literal=platform-dsn="<dsn-from-step-1>"
 ```
 
-## Step 3: PostgreSQL Setup
+## Step 4: PostgreSQL Setup
 
 Astonish requires a PostgreSQL instance with `pgvector`. You can use a managed service (RDS, Cloud SQL, Azure Database) or deploy in-cluster.
 
@@ -69,37 +93,33 @@ Astonish uses **separate databases per organization** for tenant isolation. The 
 CREATE ROLE astonish WITH LOGIN PASSWORD 'secure-password' CREATEDB;
 ```
 
-## Step 4: Helm Values
+## Step 5: Helm Values
 
 Create a `values.yaml` file:
 
 ```yaml
-replicaCount: 2
-
 image:
-  repository: registry.astonish.dev/astonish
+  repository: schardosin/astonish
   tag: "latest"
+  pullPolicy: IfNotPresent
+
+namespaces:
+  prefix: astonish
+
+secrets:
+  existingSecret: "astonish-secrets"
 
 config:
-  mode: platform
-  log_level: info
+  storage:
+    backend: postgres
+    postgres:
+      instanceSuffix: ""  # Match the suffix from platform init
+  auth:
+    mode: local
+    registration: invite
 
-database:
-  existingSecret: astonish-secrets
-  secretKey: database-url
-
-encryption:
-  existingSecret: astonish-secrets
-  secretKey: master-key
-
-auth:
-  jwt:
-    existingSecret: astonish-secrets
-    secretKey: jwt-secret
-  oidc:
-    enabled: true
-    issuer: https://login.example.com
-    clientId: astonish-platform
+api:
+  replicaCount: 2
 
 ingress:
   enabled: true
@@ -114,80 +134,96 @@ ingress:
       hosts:
         - astonish.example.com
 
-sandboxes:
-  backend: kubernetes
-  resources:
-    defaultCpu: "1"
-    defaultMemory: 2Gi
-    maxCpu: "4"
-    maxMemory: 8Gi
-
-resources:
-  requests:
-    cpu: 500m
-    memory: 512Mi
+sandbox:
+  enabled: true
+  backend: k8s
+  image:
+    repository: schardosin/astonish-sandbox-base
+    tag: "latest"
+  storage:
+    storageClassName: "<your-rwx-storage-class>"
   limits:
-    cpu: "2"
-    memory: 2Gi
+    cpu: 2
+    memory: "2Gi"
+    processes: 500
+  requests:
+    cpuMillis: 100
+    memoryMiB: 256
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
 ```
 
-## Step 5: Install the Chart
+## Step 6: Install the Chart
 
 ```bash
-helm install astonish oci://registry.astonish.dev/charts/astonish \
+# From a local clone of the repository
+helm install astonish deploy/helm/astonish \
   --namespace astonish \
   --values values.yaml
 ```
 
-## Step 6: Initialize the Platform
+## Step 7: Create Organization and Users
 
-After the pods are running, bootstrap the database schema and create the initial admin:
+After the pods are running, create your organization and first user:
 
 ```bash
-# Port-forward to the API pod (or use the ingress)
-kubectl port-forward -n astonish svc/astonish 8080:8080 &
+export ASTONISH_PLATFORM_DSN="<dsn-from-step-1>"
+export ASTONISH_MASTER_KEY="<master-key-from-step-2>"
 
-# Initialize database (creates roles, runs migrations)
-astonish platform init \
-  --url https://astonish.example.com \
-  --admin-email admin@example.com
+# Create the organization
+astonish platform org create --name "My Organization" --slug myorg
+
+# Invite the first admin user
+astonish platform org invite \
+  --org myorg \
+  --email admin@example.com \
+  --role owner \
+  --password
 ```
 
-This command:
-1. Creates the application database schema
-2. Sets up the audit log table with restricted grants
-3. Creates the first organization and admin user
-4. Generates the initial org DEK (encrypted with the master KEK)
-
-## Step 7: Verify the Deployment
+## Step 8: Verify the Deployment
 
 ```bash
 # Check pod status
 kubectl get pods -n astonish
 
 # Check logs
-kubectl logs -n astonish -l app=astonish --tail=50
+kubectl logs -n astonish -l app.kubernetes.io/component=api --tail=50
 
-# Health check
-curl https://astonish.example.com/health
+# Liveness check
+curl https://astonish.example.com/api/healthz
+
+# Readiness check
+curl https://astonish.example.com/api/readyz
 ```
 
-Expected health response:
+## Access Studio
 
-```json
-{
-  "status": "healthy",
-  "database": "connected",
-  "version": "0.x.y"
-}
+### Via Ingress
+
+If you configured ingress, open `https://astonish.example.com` in your browser.
+
+### Via Port-Forward
+
+For local access without ingress:
+
+```bash
+kubectl -n astonish port-forward svc/astonish-api 9393:9393 &
+open http://localhost:9393
 ```
+
+Log in with the credentials you created during platform initialization.
 
 ## Upgrades
 
 Upgrade to a new version:
 
 ```bash
-helm upgrade astonish oci://registry.astonish.dev/charts/astonish \
+helm upgrade astonish deploy/helm/astonish \
   --namespace astonish \
   --values values.yaml \
   --set image.tag="new-version"
@@ -200,13 +236,14 @@ Astonish runs database migrations automatically on startup. For major version up
 The API server is stateless and can be horizontally scaled:
 
 ```yaml
-replicaCount: 4
+api:
+  replicaCount: 4
 
 autoscaling:
   enabled: true
   minReplicas: 2
   maxReplicas: 10
-  targetCPUUtilization: 70
+  targetCPUUtilizationPercentage: 70
 ```
 
 ## Troubleshooting
@@ -214,7 +251,7 @@ autoscaling:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Pod in CrashLoopBackOff | Missing secret or bad DB URL | Check `kubectl describe pod` and secret values |
-| 500 on `/health` | Database unreachable | Verify PostgreSQL connectivity and credentials |
+| `/api/readyz` returns 503 | Database unreachable | Verify PostgreSQL connectivity and credentials |
 | OIDC login fails | Incorrect issuer URL | Confirm the issuer matches your provider's discovery endpoint |
 | Sandbox pods not starting | Missing NetworkPolicy controller | Install a CNI that supports NetworkPolicy (Calico, Cilium) |
 

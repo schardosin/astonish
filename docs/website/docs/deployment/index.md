@@ -8,7 +8,7 @@ Astonish supports three deployment models, scaling from a single developer works
 |---|---|---|---|
 | **Use case** | Individual developer | Team/enterprise platform | Secure autonomous agents |
 | **Database** | SQLite | PostgreSQL + pgvector | PostgreSQL + pgvector |
-| **Auth** | Device code | JWT + OIDC federation | JWT + OIDC federation |
+| **Auth** | Local (setup wizard) | JWT + OIDC federation | JWT + OIDC federation |
 | **Sandboxes** | Local Incus containers | K8s pods + NetworkPolicy | OpenShell (kernel-level isolation) |
 | **Encryption** | Local keychain | Master KEK + per-org DEK | Master KEK + per-org DEK |
 | **Multi-tenant** | No | Yes | Yes |
@@ -36,7 +36,6 @@ Astonish supports three deployment models, scaling from a single developer works
 - Helm 3.x
 - PostgreSQL 15+ with pgvector extension
 - Container registry access for sandbox images
-- A 256-bit master encryption key
 
 ### Kubernetes (OpenShell)
 
@@ -59,11 +58,15 @@ Studio is available at `http://localhost:9393`. See [Running as a Service](./run
 ### Cloud (Kubernetes)
 
 ```bash
-helm install astonish oci://registry.astonish.dev/charts/astonish \
+# Initialize the database
+astonish platform init \
+  --host <postgres-host> \
+  --password <postgres-admin-password>
+
+# Install with Helm
+helm install astonish deploy/helm/astonish \
   --namespace astonish --create-namespace \
   --values values.yaml
-
-astonish platform init --config platform.yaml
 ```
 
 See [Kubernetes Deployment](./kubernetes.md) for the full guide.

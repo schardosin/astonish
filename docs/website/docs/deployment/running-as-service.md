@@ -14,6 +14,18 @@ This creates:
 - **macOS**: A launchd plist at `~/Library/LaunchAgents/dev.astonish.daemon.plist`
 - **Linux**: A systemd user unit at `~/.config/systemd/user/astonish.service`
 
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `9393` | HTTP port for Studio UI |
+
+Example with custom port:
+
+```bash
+astonish daemon install --port 8080
+```
+
 ## Starting and Stopping
 
 ```bash
@@ -30,13 +42,23 @@ astonish daemon restart
 astonish daemon status
 ```
 
-## Auto-Start on Boot
+## Running in Foreground
 
-The daemon is configured to start automatically on login by default. To disable auto-start:
+For debugging, run the daemon in the foreground instead of as a background service:
 
 ```bash
-astonish daemon install --no-autostart
+astonish daemon run
 ```
+
+This starts the server in the current terminal session with logs printed to stdout. Press `Ctrl+C` to stop.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `9393` | HTTP port for Studio UI |
+
+## Controlling Auto-Start
+
+The daemon is configured to start automatically on login by default.
 
 ### macOS (launchd)
 
@@ -65,9 +87,19 @@ systemctl --user enable astonish
 ## Viewing Logs
 
 ```bash
-# Tail live logs
+# Show recent logs (default: last 50 lines)
 astonish daemon logs
 
+# Follow live logs
+astonish daemon logs -f
+
+# Show last 100 lines
+astonish daemon logs -n 100
+```
+
+### OS-level log access
+
+```bash
 # macOS: view via system log
 log show --predicate 'subsystem == "dev.astonish.daemon"' --last 1h
 
@@ -86,6 +118,19 @@ astonish daemon uninstall
 ```
 
 This stops the service and removes the plist or systemd unit file.
+
+## All Daemon Subcommands
+
+| Command | Description |
+|---------|-------------|
+| `daemon install` | Register as a system service |
+| `daemon uninstall` | Remove the system service |
+| `daemon start` | Start the background service |
+| `daemon stop` | Stop the background service |
+| `daemon restart` | Restart the background service |
+| `daemon status` | Show current daemon status |
+| `daemon run` | Run in foreground (for debugging) |
+| `daemon logs` | View daemon logs |
 
 ## See Also
 

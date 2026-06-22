@@ -25,11 +25,65 @@ Additional services (Azure OpenAI, AWS Bedrock, DeepSeek, Together AI, Fireworks
 
 ### Studio Settings (Recommended)
 
-The primary way to manage providers is through **Studio Settings → Providers**. This stores configurations in the database with the 3-tier cascade:
+The primary way to manage providers is through **Studio Settings → Providers**. This stores configurations in the database using the 3-tier cascade system.
 
-- **Platform level** — Available to all users across all organizations
-- **Org level** — Available to all teams within an organization
-- **Team level** — Available to team members (highest priority)
+## 3-Tier Cascade Resolution
+
+Astonish resolves provider configuration using a **3-tier inheritance system** where the closest level to the user takes priority:
+
+```
+Platform (base) → Organization (overrides platform) → Team (overrides everything)
+```
+
+| Tier | Set By | Scope | Priority |
+|------|--------|-------|----------|
+| **Platform** | Platform admin | All organizations and teams | Lowest (base defaults) |
+| **Organization** | Org admin | All teams within the org | Overrides platform |
+| **Team** | Team admin | Only that team's members | Highest (wins always) |
+
+### How Resolution Works
+
+When a user sends a message, Astonish resolves which provider and model to use by applying layers in order:
+
+1. **Start with Platform settings** — These are the base defaults available to everyone. If the platform admin configured Anthropic as the default provider with `claude-sonnet-4-20250514`, that's the starting point.
+
+2. **Apply Organization settings** — If the org admin has set different defaults (e.g., a different model or added extra providers), those override the platform values. Any field left empty at the org level inherits from platform.
+
+3. **Apply Team settings** — If the team admin has configured providers or a different default model, those take final priority. Again, only non-empty values override — anything not set at the team level inherits from the org (or platform).
+
+### Inheritance Rules
+
+- **Default provider/model**: The closest non-empty value to the user wins. If the team sets a default model, it's used regardless of what org or platform say. If the team doesn't set one, the org value is checked, then platform.
+- **Provider configs are additive**: Providers defined at any level are merged together. A team can access providers configured at platform level without re-declaring them.
+- **Same-name providers override**: If a provider named `openai` exists at both platform and team level, the team's configuration (API key, base URL, etc.) takes precedence.
+
+### Example Scenario
+
+```
+Platform admin configures:
+  → Default provider: anthropic
+  → Default model: claude-sonnet-4-20250514
+  → Providers: anthropic, openai
+
+Org admin configures:
+  → (nothing — inherits everything from platform)
+
+Team "backend-eng" admin configures:
+  → Default model: claude-sonnet-4-20250514
+  → Providers: ollama (local models)
+
+Result for "backend-eng" members:
+  → Default provider: anthropic (inherited from platform)
+  → Default model: claude-sonnet-4-20250514 (team override)
+  → Available providers: anthropic, openai (platform) + ollama (team)
+```
+
+### Why This Matters
+
+- **Platform admins** set organization-wide defaults and approved providers
+- **Org admins** can customize for their organization without affecting others
+- **Team admins** can fine-tune for their team's specific needs (faster models for dev, stronger models for code review, local models for air-gapped work)
+- **No duplication needed** — teams inherit everything from above and only override what they need
 
 API keys are stored securely — at the platform level they go into a separate encrypted secrets table, at the team level they're stored in the team's database record.
 

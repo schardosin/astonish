@@ -1,18 +1,23 @@
 # Taps & Flow Store
 
-Taps are git-based extension repositories that distribute community flows, skills, and agent configurations for Astonish.
+Taps are git-based extension repositories that distribute community flows, skills, and MCP server configurations for Astonish.
 
 ## What Are Taps?
 
-A tap is a git repository containing reusable flows (agent instruction sets). When you add a tap, Astonish clones it locally and makes its contents available for use.
+A tap is a git repository containing reusable flows and tools. When you add a tap, Astonish fetches its manifest and makes its contents available for browsing and installation.
 
 ## Adding a Tap
 
 ```bash
+# Add by full URL
 astonish tap add https://github.com/example/astonish-flows.git
-```
 
-This clones the repository to `~/.config/astonish/taps/` and indexes its flows.
+# Add by GitHub shorthand (owner/repo)
+astonish tap add example/astonish-flows
+
+# Add with a custom alias
+astonish tap add example/astonish-flows --as my-flows
+```
 
 ## Managing Taps
 
@@ -20,30 +25,29 @@ This clones the repository to `~/.config/astonish/taps/` and indexes its flows.
 # List installed taps
 astonish tap list
 
-# Update all taps to latest
+# Update all tap manifests to latest
 astonish tap update
 
-# Update a specific tap
-astonish tap update example/astonish-flows
-
 # Remove a tap
-astonish tap remove example/astonish-flows
+astonish tap remove <name>
 ```
 
-## Listing Available Flows
+## Browsing and Installing Flows
 
-After adding taps, browse installable flows:
+After adding taps, browse and install available flows:
 
 ```bash
 # List all flows from all taps
-astonish flow list --available
+astonish flows store list
 
-# Install a flow
-astonish flow install devops/k8s-debug
+# Install a flow from a tap
+astonish flows store install <tap-name>/<flow-name>
 
-# List installed flows
-astonish flow list
+# Update all tap manifests
+astonish flows store update
 ```
+
+You can also browse and install flows from the **Flow Store** in Studio Settings.
 
 ## Tap Repository Structure
 

@@ -1,6 +1,6 @@
 # MCP Servers
 
-The Model Context Protocol (MCP) allows Astonish to connect to external tool servers, extending the agent's capabilities beyond its 58+ built-in tools.
+The Model Context Protocol (MCP) allows Astonish to connect to external tool servers, extending the agent's capabilities beyond its built-in tools.
 
 ## What Is MCP?
 
@@ -12,7 +12,7 @@ MCP is an open protocol for AI tool integration. An MCP server exposes tools (fu
 
 ## Configuration
 
-MCP servers are defined in `~/.config/astonish/mcp_config.json`. In cloud deployments, MCP servers can also be managed per-team through the platform admin API.
+MCP servers are defined in `~/.config/astonish/mcp_config.json`:
 
 ```json
 {
@@ -26,7 +26,7 @@ MCP servers are defined in `~/.config/astonish/mcp_config.json`. In cloud deploy
       "command": "gh-mcp-server",
       "args": [],
       "env": {
-        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        "GITHUB_TOKEN": "$<GITHUB_TOKEN>"
       },
       "transport": "stdio"
     },
@@ -34,12 +34,14 @@ MCP servers are defined in `~/.config/astonish/mcp_config.json`. In cloud deploy
       "url": "https://tools.example.com/mcp",
       "transport": "sse",
       "headers": {
-        "Authorization": "Bearer ${MCP_TOKEN}"
+        "Authorization": "Bearer $<MCP_TOKEN>"
       }
     }
   }
 }
 ```
+
+In cloud deployments, MCP servers can also be managed per-team through the platform admin interface in Studio Settings.
 
 ## Transport Types
 
@@ -58,17 +60,68 @@ The server runs as a child process. Astonish communicates via stdin/stdout. Best
 
 ### SSE (Server-Sent Events)
 
-The server is a remote HTTP endpoint. Astonish connects over the network. Best for shared team servers.
+The server is a remote HTTP endpoint using the SSE transport. Best for shared team servers.
 
 ```json
 {
   "url": "https://mcp.internal.company.com/sse",
   "transport": "sse",
   "headers": {
-    "Authorization": "Bearer ${TOKEN}"
+    "Authorization": "Bearer $<TOKEN>"
   }
 }
 ```
+
+### Streamable HTTP
+
+A newer HTTP-based transport for network MCP servers (supported in platform mode):
+
+```json
+{
+  "url": "https://mcp.internal.company.com/mcp",
+  "transport": "streamable-http",
+  "headers": {
+    "Authorization": "Bearer $<TOKEN>"
+  }
+}
+```
+
+## Managing MCP Servers via CLI
+
+MCP servers are managed through the `astonish tools` command:
+
+```bash
+# List all tools (built-in + MCP)
+astonish tools list
+
+# List MCP servers with status
+astonish tools servers
+
+# Refresh tool cache (reconnects to all MCP servers)
+astonish tools refresh
+
+# Enable/disable a server
+astonish tools enable <name>
+astonish tools disable <name>
+
+# Edit MCP configuration file
+astonish tools edit
+
+# Browse and install from MCP server store
+astonish tools store
+
+# Search tools by description
+astonish tools search <query>
+```
+
+## Managing via Studio
+
+In Studio, go to **Settings → MCP Servers** to:
+
+- Add or remove MCP servers
+- Enable/disable servers without removing config
+- View tools provided by each server
+- Refresh connections and reload tool definitions
 
 ## Cloud Deployment
 
@@ -83,32 +136,10 @@ In cloud deployments, MCP servers can be scoped at multiple levels:
 
 Admin-managed servers cannot be removed by users. They appear alongside any personal servers the user has configured.
 
-```json
-{
-  "mcpServers": {
-    "internal-api": {
-      "url": "https://tools.corp.com/mcp",
-      "transport": "sse",
-      "managed": true,
-      "scope": "org"
-    }
-  }
-}
-```
-
-## Tool Caching
-
-Astonish caches MCP tool schemas locally to avoid re-discovery on every session start. The cache is invalidated when the server configuration changes or on explicit refresh:
-
-```bash
-astonish mcp refresh
-astonish mcp list
-```
-
 ## Best Practices
 
 - Use `stdio` transport for development and local tools
-- Use `sse` transport for production shared servers
+- Use `sse` or `streamable-http` transport for production shared servers
 - Keep sensitive tokens in environment variables, not inline
 - In cloud deployments, prefer team-scoped servers over personal for shared tooling
 

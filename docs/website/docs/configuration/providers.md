@@ -1,41 +1,57 @@
 # AI Providers
 
-Astonish supports 15+ AI providers out of the box. You can configure multiple providers simultaneously and switch between them at runtime.
+Astonish supports multiple AI providers out of the box. You can configure several providers simultaneously and switch between them at runtime via the Studio model selector.
 
 ## Supported Providers
 
-| Provider | Models | Notes |
-|----------|--------|-------|
-| Anthropic | Claude 4, Sonnet, Haiku | Default recommended |
-| OpenAI | GPT-4o, GPT-4.1, o3 | Function calling support |
-| Google Gemini | Gemini 2.5 Pro/Flash | Multimodal |
-| Groq | Llama, Mixtral | Fast inference |
-| OpenRouter | Multi-provider proxy | Access many models |
-| xAI | Grok | Real-time knowledge |
-| Ollama | Local models | No API key required |
-| LM Studio | Local models | OpenAI-compatible |
-| SAP AI Core | Enterprise models | SAP ecosystem |
-| LiteLLM | Proxy gateway | Unified interface |
-| DeepSeek | DeepSeek V3/R1 | Reasoning models |
-| Azure OpenAI | GPT-4o, GPT-4.1 | Enterprise Azure |
-| AWS Bedrock | Claude, Titan | AWS-hosted |
-| Together AI | Open-source models | Fine-tuned variants |
-| Fireworks AI | Open-source models | Fast inference |
+| Provider | Type Key | Notes |
+|----------|----------|-------|
+| Anthropic | `anthropic` | Default recommended |
+| OpenAI | `openai` | Function calling support |
+| Google Gemini | `gemini` | Multimodal |
+| Groq | `groq` | Fast inference |
+| OpenRouter | `openrouter` | Multi-provider proxy |
+| xAI | `xai` | Grok models |
+| Ollama | `ollama` | Local models, no API key required |
+| LM Studio | `lm_studio` | Local models, OpenAI-compatible |
+| SAP AI Core | `sap_ai_core` | Enterprise SAP ecosystem |
+| LiteLLM | `litellm` | Unified proxy gateway |
+| Poe | `poe` | Poe platform models |
+
+Additional providers (Azure OpenAI, AWS Bedrock, DeepSeek, Together AI, Fireworks AI) can be configured using the `openai` type with a custom `base_url`, or through a LiteLLM proxy.
 
 ## Configuration
 
-Each provider entry requires a `name` and typically an `api_key`:
+Providers are configured as a map in `~/.config/astonish/config.yaml`. The map key is the instance name, and values are key-value pairs:
+
+```yaml
+general:
+  default_provider: "anthropic"
+  default_model: "claude-sonnet-4-20250514"
+
+providers:
+  anthropic:
+    api_key: "$<ANTHROPIC_API_KEY>"
+  openai:
+    api_key: "$<OPENAI_API_KEY>"
+```
+
+The `general.default_provider` field specifies which provider to use by default, and `general.default_model` sets the default model.
+
+### Provider Type Resolution
+
+When the instance name matches a known provider type (e.g., `anthropic`, `openai`, `ollama`), the type is inferred automatically. For custom instance names, specify the `type` explicitly:
 
 ```yaml
 providers:
-  - name: anthropic
-    api_key: "${ANTHROPIC_API_KEY}"
-    default: true
-    model: "claude-sonnet-4-20250514"
+  my-fast-model:
+    type: "openai"
+    api_key: "$<OPENAI_API_KEY>"
+    base_url: "https://api.openai.com/v1"
 
-  - name: openai
-    api_key: "${OPENAI_API_KEY}"
-    model: "gpt-4o"
+  my-reasoning-model:
+    type: "openai"
+    api_key: "$<OPENAI_API_KEY>"
 ```
 
 ### Local Providers
@@ -44,75 +60,70 @@ For Ollama or LM Studio, specify the base URL instead of an API key:
 
 ```yaml
 providers:
-  - name: ollama
+  ollama:
     base_url: "http://localhost:11434"
-    model: "llama3.1:70b"
 
-  - name: lm-studio
+  lm-studio:
+    type: "lm_studio"
     base_url: "http://localhost:1234/v1"
-    model: "local-model"
 ```
 
-### Multiple Instances
+### OpenAI-Compatible Endpoints
 
-You can register the same provider type multiple times with different configs:
+Any OpenAI-compatible API can be used with the `openai` type and a custom base URL:
 
 ```yaml
 providers:
-  - name: openai
-    label: "openai-fast"
-    api_key: "${OPENAI_API_KEY}"
-    model: "gpt-4o-mini"
+  deepseek:
+    type: "openai"
+    api_key: "$<DEEPSEEK_API_KEY>"
+    base_url: "https://api.deepseek.com/v1"
 
-  - name: openai
-    label: "openai-reasoning"
-    api_key: "${OPENAI_API_KEY}"
-    model: "o3"
-```
-
-Switch at runtime with `/model openai-reasoning` or via the Studio model selector.
-
-## Cloud Deployment Cascading
-
-In cloud deployments, provider configuration cascades through four levels:
-
-```
-Platform → Org → Team → Personal
-```
-
-Administrators can enforce allowed providers and models:
-
-```yaml
-# Org-level: restrict to approved providers
-org:
-  enforce_providers: true
-  providers:
-    - name: sap-ai-core
-      base_url: "https://api.ai.sap.com"
-      resource_group: "engineering"
-      default: true
-    - name: anthropic
-      api_key: "${ORG_ANTHROPIC_KEY}"
-```
-
-When `enforce_providers: true`, users cannot add personal providers—only select from those defined above them in the cascade.
-
-## Provider-Specific Options
-
-Some providers accept additional configuration:
-
-```yaml
-providers:
-  - name: azure-openai
-    api_key: "${AZURE_KEY}"
+  azure-openai:
+    type: "openai"
+    api_key: "$<AZURE_KEY>"
     base_url: "https://myinstance.openai.azure.com"
     api_version: "2024-06-01"
-    deployment: "gpt-4o"
-
-  - name: aws-bedrock
-    region: "us-east-1"
-    access_key: "${AWS_ACCESS_KEY}"
-    secret_key: "${AWS_SECRET_KEY}"
 ```
+
+### SAP AI Core
+
+SAP AI Core requires OAuth2 client credentials:
+
+```yaml
+providers:
+  sap-ai-core:
+    type: "sap_ai_core"
+    client_id: "$<SAP_CLIENT_ID>"
+    client_secret: "$<SAP_CLIENT_SECRET>"
+    auth_url: "https://auth.example.com/oauth/token"
+    base_url: "https://api.ai.sap.com"
+    resource_group: "engineering"
+```
+
+## Switching Providers at Runtime
+
+Use the model selector dropdown in the Studio Chat header to switch between configured providers and models during a conversation. Changes take effect on the next message.
+
+## Cloud Deployment
+
+In cloud deployments, provider configuration can be managed at multiple levels through the platform admin interface:
+
+- **Platform level** — Available to all users across all organizations
+- **Org level** — Available to all teams within an organization
+- **Team level** — Available to team members
+- **Personal** — User's own providers
+
+Administrators configure providers through **Studio Settings → Team Providers** or **Org Providers**.
+
+## Setup Wizard
+
+The easiest way to configure your first provider is through the interactive setup wizard:
+
+```bash
+astonish setup
+```
+
+This walks you through selecting a provider, entering your API key, and choosing a default model.
 
 See [Config Reference](./config-reference.md) for the full configuration file structure.

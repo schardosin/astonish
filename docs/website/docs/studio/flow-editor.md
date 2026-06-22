@@ -1,58 +1,72 @@
 # Flow Editor
 
-The Flow Editor provides a visual drag-and-drop interface for designing multi-step agent pipelines. Flows define sequences of agent actions, tool calls, and logic that execute as a unit.
-
-<!-- IMAGE: Flow editor canvas showing connected nodes -->
+The Flow Editor provides a visual interface for designing multi-step agent pipelines. Flows define sequences of agent actions, tool calls, and logic that execute as a unit.
 
 ## Canvas
 
-The flow canvas is an infinite, pannable workspace where you place and connect nodes. Each node represents a step in the flow — an agent call, a tool invocation, a conditional branch, or a data transformation.
+The flow canvas is an infinite, pannable workspace where you place and connect nodes. Each node represents a step in the flow — an LLM call, a tool invocation, user input, or a state update.
 
 ### Adding Nodes
 
-- **Drag from palette** — The left sidebar contains available node types
-- **Right-click** — Context menu to insert a node at the cursor position
-- **AI Assist** — Describe what you want and let AI generate nodes (see below)
+- **Toolbar** — Click node type buttons in the top-right panel to add nodes
+- **Plus button** — Click the "+" connector on an existing node to add a connected node
+- **AI Assist** — On an empty canvas, click "Create with AI" to generate a flow from a description
 
 ### Drawing Connections
 
 Click an output port on one node and drag to an input port on another to create a connection. Connections define execution order and data flow between steps.
 
+### Context Menu
+
+Right-click the canvas to access:
+- **Auto Layout** — Automatically arrange nodes using ELK layout algorithm
+- **Reset Zoom** — Return to default zoom level
+
 ## Node Types
 
-| Type | Description |
-|------|-------------|
-| **Agent** | Invoke the AI agent with a prompt |
-| **Tool** | Execute a specific tool directly |
-| **Condition** | Branch based on a value or expression |
-| **Transform** | Manipulate data between steps |
-| **Input** | Flow entry point (parameters) |
-| **Output** | Flow result |
+| Type | Icon | Description |
+|------|------|-------------|
+| **Start** | ▶ | Flow entry point (automatically created) |
+| **End** | ⏹ | Flow exit point (automatically created) |
+| **Input** | ✏️ | Collect user input during execution |
+| **LLM** | 🧠 | Invoke the AI agent with a prompt |
+| **Tool** | 🔧 | Execute a specific tool directly |
+| **Output** | 💬 | Display a result to the user |
+| **Update State** | ⚙️ | Modify flow state variables |
+
+The toolbar shows the addable types: Input, LLM, Tool, State, and Output. Start and End nodes are created automatically with new flows.
 
 ## AI Assist
 
-Click the **AI Assist** button or press `Ctrl+G` to open the generation prompt. Describe the node or sub-flow you need in natural language:
+AI Assist helps generate and modify flow nodes using natural language:
 
-```
-"Add a node that reads a CSV file and extracts the email column"
-```
+- **Create with AI** — Available on empty canvases, generates an entire flow from a description
+- **Node AI Assist** — When editing a node, click "AI Assist" to get help configuring it
+- **Multi-node Assist** — Select multiple nodes, then click the "AI Assist" button that appears to modify them together
 
-AI Assist generates the appropriate nodes and connections, placing them on the canvas for review before you commit them to the flow.
+AI Assist opens a chat panel where you describe what you need. The AI generates or modifies nodes and connections on the canvas.
 
-## Execution Mode
+## Running a Flow
 
-Click **Run** (or press `F5`) to execute the flow. The editor switches to execution mode:
+Click the **Run** button in the header to execute the flow. The editor switches to execution mode:
 
+- The canvas becomes read-only and a chat panel opens
+- Click **Start Execution** to begin
 - Active nodes highlight as they execute
-- Output appears in the panel below each node
-- Errors display inline with stack traces
-- The full execution log is available in the right panel
+- Output appears in the chat panel
+- Input nodes pause execution and prompt for user input
+- Errors display inline with details
 
-## Saving and Versioning
+Use the **Stop** button to abort execution, or **Start Again** to re-run after completion. Toggle **Auto-Approve** to skip tool call confirmations.
 
-Flows are saved automatically as you edit. Each save creates a version you can roll back to. Flows are stored in your Astonish config and can be exported as YAML for version control.
+## YAML Representation
 
-```bash
-# Run a flow from CLI
-astonish flows run my-flow --input '{"file": "data.csv"}'
-```
+Flows have a bidirectional YAML representation. You can:
+
+- Export flows as YAML for version control
+- Edit YAML directly and see changes reflected on the canvas
+- Share flows as YAML files
+
+## Saving
+
+Flows are saved automatically as you edit. They persist server-side and are accessible from the Flows tab sidebar.

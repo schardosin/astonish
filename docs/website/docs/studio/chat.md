@@ -30,10 +30,15 @@ Type `/` in the input to access available commands:
 
 | Command | Description |
 |---------|-------------|
-| `/new` | Start a new session |
-| `/model <name>` | Switch model |
-| `/flow <name>` | Execute a flow |
-| `/clear` | Clear the display (session preserved) |
+| `/help` | Show available commands |
+| `/status` | Show provider, model, and tools info |
+| `/new` | Start a fresh conversation |
+| `/compact` | Show context window usage |
+| `/distill` | Distill the current session into a reusable flow |
+| `/fleet` | Start a fleet-based task with specialized agents |
+| `/fleet-plan` | Create a reusable fleet plan |
+| `/drill` | Create a drill suite with guided wizard |
+| `/drill-add` | Add new drills to an existing suite |
 
 ## Artifact Rendering
 
@@ -50,11 +55,10 @@ Non-report file writes appear as compact download tiles linking to the Files pan
 The sidebar lists previous sessions with timestamps and preview text. Click any session to resume it. Sessions can be:
 
 - Resumed at any time
-- Forked to create a branch from a specific point
 - Deleted when no longer needed
 
 ## Input Features
 
 - **Multi-line input** — Shift+Enter for new lines
 - **File attachment** — Drag and drop files into the input area
-- **History navigation** — Arrow keys cycle through previous messages
+- **Slash command autocomplete** — Type `/` to see available commands with filtering

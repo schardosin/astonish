@@ -2,6 +2,47 @@
 
 The Settings panel is accessible from the gear icon in Studio's navigation. It provides configuration for all Astonish subsystems.
 
+## Settings Sections
+
+### Personal Settings
+
+These sections are available to all users:
+
+| Section | Description |
+|---------|-------------|
+| **Channels** | Configure communication channels (Telegram, Email, etc.) |
+| **Knowledge** | Browse and manage knowledge base files |
+| **Credentials** | Manage encrypted secrets (API keys, tokens, passwords) |
+
+### Resource Settings
+
+Manage reusable resources (available in personal/local mode):
+
+| Section | Description |
+|---------|-------------|
+| **Skills** | CLI tool skills available to the agent |
+| **Scheduler** | Scheduled jobs and recurring tasks |
+| **Repositories** | Git repositories (taps) for skills and tools |
+| **Flow Store** | Browse and manage saved flows |
+
+### System Settings
+
+Admin-level configuration for the platform:
+
+| Section | Description |
+|---------|-------------|
+| **General** | Core platform settings |
+| **Chat** | Chat behavior and defaults |
+| **Providers** | AI model provider configuration |
+| **Memory** | Semantic memory and embedding settings |
+| **MCP Servers** | Model Context Protocol server management |
+| **Sessions** | Session management and history |
+| **Sub-Agents** | Configure delegated sub-agent behavior |
+| **OpenCode** | OpenCode agent settings |
+| **Browser** | Browser automation configuration |
+| **Daemon** | Background service monitoring |
+| **Sandbox** | Container sandbox settings |
+
 ## Providers
 
 Configure AI model providers:
@@ -34,32 +75,46 @@ The credential store manages sensitive values (API keys, tokens, passwords) used
 
 ## Browser
 
-Settings for browser automation tools:
+Settings for browser automation:
 
 | Setting | Description |
 |---------|-------------|
 | Headless | Run browser without visible window |
-| Timeout | Maximum time for browser operations |
+| Navigation timeout | Maximum time for page loads |
 | Viewport | Default viewport dimensions |
+| Chrome path | Custom Chromium binary path |
+| Proxy | HTTP proxy for browser traffic |
+| Remote CDP URL | Connect to an existing Chrome DevTools Protocol instance |
 
 ## Memory
 
-Configure the [three-tier memory](../agent/) system:
+Configure the semantic memory system for RAG (Retrieval-Augmented Generation):
 
-- **Personal memory** — Private to the user
-- **Team memory** — Shared within a team (cloud deployments)
-- **Org memory** — Shared across the organization (cloud deployments)
-
-Each tier can be enabled or disabled, and you can view/edit stored memories.
+| Setting | Description |
+|---------|-------------|
+| Enable Memory | Toggle the memory system on/off |
+| Memory Directory | Path where memory markdown files are stored |
+| Vector Directory | Path for the vector index |
+| Embedding Provider | Provider for generating embeddings (local, OpenAI, Ollama) |
+| Chunking | Max characters and overlap for document splitting |
+| Search Defaults | Max results and minimum score threshold |
+| File Watcher | Auto-index changes to memory files |
 
 ## Daemon
 
 Monitor and control the background daemon:
 
-- **Status** — Running, stopped, or errored
-- **Start/Stop** — Control daemon from the UI
-- **Logs** — View recent daemon activity
-- **Channels** — Status of each active channel listener
+- **HTTP Port** — Port for Studio UI (default: 9393)
+- **Log Directory** — Where daemon logs are written
+- **Studio Authentication** — Enable/disable login and session TTL
+
+## Sandbox
+
+Configure the container sandbox environment for agent tool execution:
+
+- Backend type (Incus for local, Kubernetes for cloud)
+- Resource limits (CPU, memory, processes)
+- Network policies
 
 ## Cloud Deployment: Admin Panels
 
@@ -67,13 +122,24 @@ In cloud deployments, additional panels appear for users with admin roles:
 
 ### Team Admin
 
-- Invite or remove team members
-- Manage team-level settings and defaults
-- View team usage metrics
+- Manage team members and roles
+- Team-level provider configuration
+- Team MCP servers and skills
+- Team scheduler and flows
+- Container/sandbox settings per team
 
 ### Org Admin
 
-- Manage organization membership
-- Configure org-wide policies (allowed models, tool restrictions)
-- View aggregated usage across teams
-- Manage billing and quotas
+- Manage organization users
+- Org-wide provider configuration
+- Org-level skills and MCP servers
+- Audit log viewer
+
+### Platform Admin (Superadmin)
+
+- Manage all organizations
+- Platform-wide user management
+- Global provider and skill configuration
+- Platform MCP servers and channels
+- Authentication settings
+- Sandbox infrastructure management

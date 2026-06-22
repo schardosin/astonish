@@ -9,6 +9,7 @@ Studio is Astonish's web-based UI, served locally at `http://localhost:9393`. It
 | **Chat** | Interactive agent conversations with streaming responses |
 | **Flows** | Visual flow designer for multi-step agent pipelines |
 | **Fleet** | Multi-agent plan dashboard and coordination |
+| **Drill** | Test suites for agent validation and quality assurance |
 | **Apps** | Preview and manage generated applications |
 
 ## Launching Studio
@@ -20,17 +21,12 @@ astonish daemon start
 # Studio available at http://localhost:9393
 ```
 
-For development on the Studio UI itself, run with `--dev` to enable Vite hot module replacement:
+Or run in the foreground for debugging:
 
 ```bash
-astonish daemon start --dev
-# React dev server on http://localhost:5173
-# API backend on http://localhost:9393
+astonish daemon run
+# Studio available at http://localhost:9393 (logs printed to stdout)
 ```
-
-### Development Mode
-
-In dev mode, Vite serves the React frontend with hot module replacement on `http://localhost:5173`. The Go backend still runs on port 9393, and the frontend proxies API requests to it. Use this when working on the Studio UI itself.
 
 ## Cloud Deployment Features
 
@@ -43,8 +39,6 @@ Studio presents a login screen requiring authentication. Users authenticate with
 ### Team Switching
 
 After login, the top navigation shows your current organization and team. Click to switch between teams you have access to. All agent interactions — chat sessions, flows, and fleet plans — are scoped to the active team.
-
-<!-- IMAGE: Studio top navigation showing org/team selector -->
 
 ## Settings
 

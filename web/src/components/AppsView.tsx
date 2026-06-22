@@ -51,7 +51,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
   const [loading, setLoading] = useState(true)
   const [selectedApp, setSelectedApp] = useState<VisualApp | null>(null)
   const [showCode, setShowCode] = useState(false)
-  const [deleteConfirm, setDeleteConfirm] = useState<{ name: string; scope?: string } | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ slug: string; name: string; scope?: string } | null>(null)
   const [codeContent, setCodeContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null)
@@ -99,27 +99,27 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
     }
   }, [appName]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleOpenApp = useCallback(async (name: string) => {
+  const handleOpenApp = useCallback(async (slug: string) => {
     try {
-      const app = await fetchApp(name)
+      const app = await fetchApp(slug)
       setSelectedApp(app)
       setCodeContent(app.code)
       setShowCode(false)
       setSaveStatus(null)
       if (onNavigate) {
-        onNavigate(`/apps/${encodeURIComponent(name)}`)
+        onNavigate(`/apps/${encodeURIComponent(slug)}`)
       }
     } catch {
       // Ignore
     }
   }, [onNavigate])
 
-  const handleDeleteApp = useCallback(async (name: string, scope?: string) => {
+  const handleDeleteApp = useCallback(async (slug: string, scope?: string) => {
     try {
-      await deleteApp(name, scope)
+      await deleteApp(slug, scope)
       // When deleting with a specific scope, only remove matching items
-      setApps(prev => prev.filter(a => !(a.name === name && (!scope || a.scope === scope))))
-      if (selectedApp?.name === name) {
+      setApps(prev => prev.filter(a => !(a.slug === slug && (!scope || a.scope === scope))))
+      if (appName === slug) {
         setSelectedApp(null)
         if (onNavigate) onNavigate('/apps')
       }
@@ -127,7 +127,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
       // Ignore
     }
     setDeleteConfirm(null)
-  }, [selectedApp, onNavigate])
+  }, [appName, onNavigate])
 
   const handleSaveCode = useCallback(async () => {
     if (!selectedApp) return
@@ -238,7 +238,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
           </button>
 
           <button
-            onClick={() => setDeleteConfirm({ name: selectedApp.name })}
+            onClick={() => setDeleteConfirm({ slug: appName || selectedApp.name, name: selectedApp.name })}
             className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors cursor-pointer"
             style={{ color: 'var(--text-muted)' }}
             title="Delete this app"
@@ -253,7 +253,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
             style={{ background: 'rgba(239, 68, 68, 0.1)', borderBottom: '1px solid rgba(239, 68, 68, 0.2)' }}>
             <span style={{ color: '#ef4444' }}>Delete this app permanently?</span>
             <button
-              onClick={() => handleDeleteApp(deleteConfirm.name, deleteConfirm.scope)}
+              onClick={() => handleDeleteApp(deleteConfirm.slug, deleteConfirm.scope)}
               className="px-2 py-0.5 rounded text-white cursor-pointer"
               style={{ background: '#ef4444' }}
             >
@@ -312,13 +312,13 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
 
   const renderAppCard = (app: AppListItem) => (
     <div
-      key={`${app.scope || 'local'}-${app.name}`}
+      key={`${app.scope || 'local'}-${app.slug}`}
       className="group rounded-xl overflow-hidden cursor-pointer transition-all hover:shadow-lg"
       style={{
         border: '1px solid var(--border-color)',
         background: 'var(--bg-secondary)',
       }}
-      onClick={() => handleOpenApp(app.name)}
+      onClick={() => handleOpenApp(app.slug)}
     >
       <div className="p-4">
         <div className="flex items-start justify-between mb-2">
@@ -390,7 +390,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                setDeleteConfirm({ name: app.name, scope: app.scope })
+                setDeleteConfirm({ slug: app.slug, name: app.name, scope: app.scope })
               }}
               className="p-1 rounded transition-colors cursor-pointer"
               style={{ color: 'var(--text-muted)' }}
@@ -471,7 +471,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
                   Cancel
                 </button>
                 <button
-              onClick={() => handleDeleteApp(deleteConfirm.name, deleteConfirm.scope)}
+              onClick={() => handleDeleteApp(deleteConfirm.slug, deleteConfirm.scope)}
                   className="px-3 py-1.5 rounded text-xs text-white cursor-pointer"
                   style={{ background: '#ef4444' }}
                 >

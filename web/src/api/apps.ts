@@ -9,6 +9,7 @@ const API_BASE = '/api'
 // --- Types ---
 
 export interface AppListItem {
+  slug: string
   name: string
   description: string
   version: number

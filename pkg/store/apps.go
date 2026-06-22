@@ -7,6 +7,7 @@ import (
 
 // AppListItem is a summary of a saved app.
 type AppListItem struct {
+	Slug        string    `json:"slug"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	Version     int       `json:"version"`

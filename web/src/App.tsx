@@ -1418,7 +1418,7 @@ layout:
   // Publish a personal app to the team
   const handlePublishApp = useCallback(async (app: AppListItem) => {
     try {
-      await publishAppToTeam(app.name)
+      await publishAppToTeam(app.slug)
       showToast(`App "${app.name}" published to team`, 'success')
     } catch (err) {
       showToast(`Failed to publish app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')
@@ -1428,7 +1428,7 @@ layout:
   // Fork a team app to personal
   const handleForkApp = useCallback(async (app: AppListItem) => {
     try {
-      await forkAppToPersonal(app.name)
+      await forkAppToPersonal(app.slug)
       showToast(`App "${app.name}" forked to personal`, 'success')
     } catch (err) {
       showToast(`Failed to fork app: ${err instanceof Error ? err.message : 'Unknown error'}`, 'error')

@@ -110,6 +110,7 @@ func (s *teamAppStore) List(ctx context.Context) ([]store.AppListItem, error) {
 	items := make([]store.AppListItem, len(apps))
 	for i, a := range apps {
 		items[i] = store.AppListItem{
+			Slug:        a.Slug,
 			Name:        a.Name,
 			Description: a.Description,
 			Version:     a.Version,

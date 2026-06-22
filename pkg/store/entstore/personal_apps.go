@@ -122,6 +122,7 @@ func (as *personalAppStore) List(ctx context.Context) ([]store.AppListItem, erro
 	items := make([]store.AppListItem, len(ents))
 	for i, e := range ents {
 		items[i] = store.AppListItem{
+			Slug:        e.Slug,
 			Name:        e.Name,
 			Description: e.Description,
 			Version:     e.Version,

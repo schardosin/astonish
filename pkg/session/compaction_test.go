@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -25,12 +26,12 @@ func makeFuncCallContent(role, funcName string, args map[string]any) *genai.Cont
 }
 
 func TestEstimateTokens_TextOnly(t *testing.T) {
-	// 400 chars / 4 = ~100 tokens
+	// 400 chars / 3 = ~133 tokens
 	text := strings.Repeat("a", 400)
 	contents := []*genai.Content{makeContent("user", text)}
 	tokens := EstimateTokens(contents)
-	if tokens != 100 {
-		t.Errorf("EstimateTokens() = %d, want 100", tokens)
+	if tokens != 133 {
+		t.Errorf("EstimateTokens() = %d, want 133", tokens)
 	}
 }
 
@@ -73,8 +74,8 @@ func TestNewCompactor(t *testing.T) {
 	if c.ContextWindow != 200000 {
 		t.Errorf("ContextWindow = %d, want 200000", c.ContextWindow)
 	}
-	if c.Threshold != 0.8 {
-		t.Errorf("Threshold = %f, want 0.8", c.Threshold)
+	if c.Threshold != 0.7 {
+		t.Errorf("Threshold = %f, want 0.7", c.Threshold)
 	}
 	if c.PreserveRecent != 4 {
 		t.Errorf("PreserveRecent = %d, want 4", c.PreserveRecent)
@@ -157,14 +158,13 @@ func TestCompactContents_WithTruncation(t *testing.T) {
 		t.Fatalf("CompactContents() error = %v", err)
 	}
 
-	// Should be: 1 summary + 2 recent = 3
-	if len(result) != 3 {
-		t.Errorf("len(result) = %d, want 3", len(result))
+	// Should be: 1 summary + 1 task anchor + 2 recent = 4
+	// Task anchor = "Now let's talk about deployment" (last user text in old portion)
+	if len(result) != 4 {
+		t.Errorf("len(result) = %d, want 4", len(result))
 	}
 
-	// First message should be the summary.
-	// The summary role adapts to ensure role alternation with the first
-	// recent message. Here the first recent is "user", so summary is "model".
+	// First message should be the summary (role "model" because task anchor is "user")
 	if result[0].Role != "model" {
 		t.Errorf("summary role = %q, want %q", result[0].Role, "model")
 	}
@@ -172,13 +172,21 @@ func TestCompactContents_WithTruncation(t *testing.T) {
 	if !strings.Contains(summaryText, "Context Summary") {
 		t.Errorf("summary should contain 'Context Summary', got %q", summaryText[:min(80, len(summaryText))])
 	}
+
+	// Second message should be the task anchor
+	if result[1].Role != "user" {
+		t.Errorf("task anchor role = %q, want 'user'", result[1].Role)
+	}
+	if !strings.Contains(result[1].Parts[0].Text, "deployment") {
+		t.Errorf("task anchor should mention 'deployment', got %q", result[1].Parts[0].Text)
+	}
 }
 
 func TestCompactContents_WithLLM(t *testing.T) {
 	c := NewCompactor(100)
 	c.PreserveRecent = 2
 	c.LLM = func(ctx context.Context, prompt string) (string, error) {
-		return "Summary: The user asked about Go programming and the model provided examples.", nil
+		return "CURRENT TASK: The user asked about Go testing.\nPROGRESS: Examples were provided.\nCOMPLETED: Go basics explained.", nil
 	}
 
 	contents := []*genai.Content{
@@ -195,13 +203,14 @@ func TestCompactContents_WithLLM(t *testing.T) {
 		t.Fatalf("CompactContents() error = %v", err)
 	}
 
-	if len(result) != 3 {
-		t.Errorf("len(result) = %d, want 3", len(result))
+	// 1 summary + 1 task anchor + 2 recent = 4
+	if len(result) != 4 {
+		t.Errorf("len(result) = %d, want 4", len(result))
 	}
 
 	summaryText := result[0].Parts[0].Text
-	if !strings.Contains(summaryText, "Go programming") {
-		t.Errorf("summary should contain LLM output, got %q", summaryText[:min(80, len(summaryText))])
+	if !strings.Contains(summaryText, "CURRENT TASK") {
+		t.Errorf("summary should contain LLM output with 'CURRENT TASK', got %q", summaryText[:min(80, len(summaryText))])
 	}
 }
 
@@ -232,7 +241,7 @@ func TestCompactContents_IncrementsCount(t *testing.T) {
 func TestTokenUsage(t *testing.T) {
 	c := NewCompactor(200000)
 	contents := []*genai.Content{
-		makeContent("user", strings.Repeat("x", 4000)), // ~1000 tokens
+		makeContent("user", strings.Repeat("x", 4000)), // ~1333 tokens at 3 chars/token
 	}
 
 	// Before ShouldCompact, usage is 0
@@ -247,8 +256,8 @@ func TestTokenUsage(t *testing.T) {
 	// After ShouldCompact, usage is updated
 	c.ShouldCompact(contents)
 	est, win = c.TokenUsage()
-	if est != 1000 {
-		t.Errorf("estimated = %d, want 1000", est)
+	if est != 1333 {
+		t.Errorf("estimated = %d, want 1333", est)
 	}
 	if win != 200000 {
 		t.Errorf("window = %d, want 200000", win)
@@ -273,13 +282,169 @@ func TestCompactContents_LLMFailureFallback(t *testing.T) {
 		t.Fatalf("CompactContents() error = %v (should fallback, not fail)", err)
 	}
 
-	// Should still compact using truncation fallback
-	if len(result) != 2 {
-		t.Errorf("len(result) = %d, want 2", len(result))
+	// Should still compact using truncation fallback.
+	// Result: summary(model) + task anchor(user) + recent(user) = 3 items
+	// Task anchor is "old message 1" (last user text in old portion)
+	if len(result) != 3 {
+		t.Errorf("len(result) = %d, want 3", len(result))
 	}
 	summaryText := result[0].Parts[0].Text
 	if !strings.Contains(summaryText, "Context Summary") {
 		t.Errorf("fallback summary should contain 'Context Summary'")
+	}
+}
+
+func TestForceNextCompaction(t *testing.T) {
+	c := NewCompactor(200000) // 200K window
+
+	// Small content that would not normally trigger compaction.
+	contents := []*genai.Content{
+		makeContent("user", "hello"),
+	}
+
+	// Should not compact normally.
+	if c.ShouldCompact(contents) {
+		t.Fatal("ShouldCompact should be false for tiny content")
+	}
+
+	// Force next compaction.
+	c.ForceNextCompaction()
+
+	// Now it should compact.
+	if !c.ShouldCompact(contents) {
+		t.Fatal("ShouldCompact should be true after ForceNextCompaction")
+	}
+
+	// One-shot: subsequent call should NOT compact again.
+	if c.ShouldCompact(contents) {
+		t.Fatal("ShouldCompact should be false after force flag consumed")
+	}
+}
+
+func makeFuncResponseContent(role, funcName string, response map[string]any) *genai.Content {
+	return &genai.Content{
+		Parts: []*genai.Part{{
+			FunctionResponse: &genai.FunctionResponse{
+				Name:     funcName,
+				Response: response,
+			},
+		}},
+		Role: role,
+	}
+}
+
+func TestAdjustSplitForToolPairs_NoAdjustment(t *testing.T) {
+	// When the split point lands on a non-tool-response message, no adjustment.
+	contents := []*genai.Content{
+		makeContent("user", "old"),
+		makeContent("model", "old response"),
+		makeContent("user", "recent question"),       // splitIdx = 2
+		makeContent("model", "recent answer"),
+	}
+	got := adjustSplitForToolPairs(contents, 2)
+	if got != 2 {
+		t.Errorf("adjustSplitForToolPairs = %d, want 2 (no change)", got)
+	}
+}
+
+func TestAdjustSplitForToolPairs_OrphanedToolResponse(t *testing.T) {
+	// Split lands on a tool response — must include the preceding fn_call.
+	contents := []*genai.Content{
+		makeContent("user", "old"),                                               // 0
+		makeContent("model", "old response"),                                     // 1
+		makeFuncCallContent("model", "shell_command", map[string]any{"cmd": "ls"}), // 2
+		makeFuncResponseContent("user", "shell_command", map[string]any{"output": "file.txt"}), // 3 ← naive splitIdx
+		makeContent("model", "Here are the files"),                               // 4
+		makeContent("user", "thanks"),                                            // 5
+	}
+	// Naive split at 3 would orphan the tool response.
+	got := adjustSplitForToolPairs(contents, 3)
+	if got != 2 {
+		t.Errorf("adjustSplitForToolPairs = %d, want 2 (moved back to include fn_call)", got)
+	}
+}
+
+func TestAdjustSplitForToolPairs_MultipleOrphans(t *testing.T) {
+	// Split lands on a tool response preceded by another tool response.
+	contents := []*genai.Content{
+		makeContent("user", "old"),                                               // 0
+		makeFuncCallContent("model", "tool_a", map[string]any{}),                 // 1
+		makeFuncResponseContent("user", "tool_a", map[string]any{}),              // 2
+		makeFuncCallContent("model", "tool_b", map[string]any{}),                 // 3
+		makeFuncResponseContent("user", "tool_b", map[string]any{}),              // 4 ← naive splitIdx
+		makeContent("model", "done"),                                             // 5
+	}
+	got := adjustSplitForToolPairs(contents, 4)
+	// Should move back to 3 (tool_b fn_call, which is NOT a fn_response).
+	if got != 3 {
+		t.Errorf("adjustSplitForToolPairs = %d, want 3", got)
+	}
+}
+
+func TestCompactContents_PreservesToolPairs(t *testing.T) {
+	c := NewCompactor(100)
+	c.PreserveRecent = 2 // Would naively split at len-2
+
+	// 6 messages: the naive split at idx=4 lands on a tool response
+	contents := []*genai.Content{
+		makeContent("user", "what files exist?"),                                  // 0
+		makeContent("model", "Let me check"),                                     // 1
+		makeFuncCallContent("model", "shell_command", map[string]any{"cmd": "ls"}), // 2
+		makeFuncResponseContent("user", "shell_command", map[string]any{"output": "a.go b.go"}), // 3
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "a.go"}), // 4 ← naive splitIdx
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "package main"}), // 5
+	}
+
+	result, err := c.CompactContents(context.Background(), contents)
+	if err != nil {
+		t.Fatalf("CompactContents error: %v", err)
+	}
+
+	// The preserved portion must start with the fn_call (idx 4), not a fn_response.
+	// Since contents[4] is a fn_call (not fn_response), splitIdx stays at 4.
+	// Result: summary + contents[4:] = 3 items
+	if len(result) < 3 {
+		t.Fatalf("len(result) = %d, want >= 3", len(result))
+	}
+
+	// Verify no orphaned tool responses: the second item (after summary)
+	// should be the fn_call, not a fn_response.
+	secondItem := result[1]
+	if hasFunctionResponse(secondItem) {
+		t.Errorf("first preserved message should not be a tool response")
+	}
+}
+
+func TestCompactContents_OrphanedToolResponseFixed(t *testing.T) {
+	c := NewCompactor(100)
+	c.PreserveRecent = 3 // Naive split at len-3 = index 3
+
+	// The naive split at idx=3 lands on a tool response (orphaned fn_call at idx=2)
+	contents := []*genai.Content{
+		makeContent("user", "question"),                                           // 0
+		makeContent("model", "thinking..."),                                       // 1
+		makeFuncCallContent("model", "shell_command", map[string]any{"cmd": "ls"}), // 2
+		makeFuncResponseContent("user", "shell_command", map[string]any{"out": "files"}), // 3 ← naive splitIdx
+		makeContent("model", "Here are the files"),                                // 4
+		makeContent("user", "thanks"),                                             // 5
+	}
+
+	result, err := c.CompactContents(context.Background(), contents)
+	if err != nil {
+		t.Fatalf("CompactContents error: %v", err)
+	}
+
+	// Split moved back from 3 to 2, preserving the fn_call.
+	// Old = [0,1], recent = [2,3,4,5]
+	// Task anchor: "question" (last user text in old)
+	// Result: summary + task_anchor + 4 preserved = 6 items
+	if len(result) != 6 {
+		t.Errorf("len(result) = %d, want 6 (summary + task_anchor + 4 preserved)", len(result))
+	}
+
+	// result[0] = summary(model), result[1] = task anchor(user), result[2] = fn_call(model)
+	if len(result) >= 3 && !hasFunctionCall(result[2]) {
+		t.Errorf("expected fn_call at result[2], got role=%q", result[2].Role)
 	}
 }
 
@@ -288,4 +453,144 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestFindLastUserTextInstruction_Found(t *testing.T) {
+	contents := []*genai.Content{
+		makeContent("user", "What is Go?"),
+		makeContent("model", "Go is a language"),
+		makeContent("user", "Let's work on Security docs"),
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "security.md"}),
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "# Security"}),
+	}
+
+	result := findLastUserTextInstruction(contents)
+	if result == nil {
+		t.Fatal("expected non-nil task anchor")
+	}
+	if result.Role != "user" {
+		t.Errorf("role = %q, want 'user'", result.Role)
+	}
+	if !strings.Contains(result.Parts[0].Text, "Security docs") {
+		t.Errorf("expected task anchor to contain 'Security docs', got %q", result.Parts[0].Text)
+	}
+	if !strings.Contains(result.Parts[0].Text, "[Active user instruction]") {
+		t.Errorf("expected prefix '[Active user instruction]'")
+	}
+}
+
+func TestFindLastUserTextInstruction_SkipsToolResponses(t *testing.T) {
+	// All user messages are tool responses — should return nil
+	contents := []*genai.Content{
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "a.go"}),
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "data"}),
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "b.go"}),
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "data"}),
+	}
+
+	result := findLastUserTextInstruction(contents)
+	if result != nil {
+		t.Errorf("expected nil for all-tool-response contents, got %v", result)
+	}
+}
+
+func TestFindLastUserTextInstruction_Empty(t *testing.T) {
+	result := findLastUserTextInstruction(nil)
+	if result != nil {
+		t.Errorf("expected nil for nil contents")
+	}
+	result = findLastUserTextInstruction([]*genai.Content{})
+	if result != nil {
+		t.Errorf("expected nil for empty contents")
+	}
+}
+
+func TestCompactContents_TaskAnchorPreserved(t *testing.T) {
+	c := NewCompactor(100)
+	c.PreserveRecent = 2 // Only keeps last 2 messages (tool call + response)
+
+	// Simulate a tool-heavy session: user instruction followed by many tool calls
+	contents := []*genai.Content{
+		makeContent("user", "Let's work on Security & Compliance"), // task instruction
+		makeContent("model", "I'll read the security docs"),
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "security.md"}),
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "# Security\nLong content here..."}),
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "auth.md"}),
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "# Auth\nMore content..."}),
+		makeFuncCallContent("model", "read_file", map[string]any{"path": "crypto.md"}),               // preserved[-2]
+		makeFuncResponseContent("user", "read_file", map[string]any{"content": "# Crypto\nStuff..."}), // preserved[-1]
+	}
+
+	result, err := c.CompactContents(context.Background(), contents)
+	if err != nil {
+		t.Fatalf("CompactContents error: %v", err)
+	}
+
+	// The result should contain the task anchor text somewhere
+	found := false
+	for _, content := range result {
+		for _, p := range content.Parts {
+			if p != nil && strings.Contains(p.Text, "Security & Compliance") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Error("task anchor 'Security & Compliance' not found in compacted result")
+		for i, c := range result {
+			for _, p := range c.Parts {
+				if p != nil && p.Text != "" {
+					t.Logf("  result[%d] role=%s: %s", i, c.Role, truncateText(p.Text, 100))
+				}
+			}
+		}
+	}
+}
+
+func TestSummarize_CollapsesRepetitiveToolCalls(t *testing.T) {
+	c := NewCompactor(200000)
+	var capturedPrompt string
+	c.LLM = func(ctx context.Context, prompt string) (string, error) {
+		capturedPrompt = prompt
+		return "CURRENT TASK: Testing\nPROGRESS: Done\nCOMPLETED: Nothing", nil
+	}
+
+	// Build contents with 10 consecutive read_file calls
+	contents := []*genai.Content{
+		makeContent("user", "Read all the security files"),
+	}
+	for i := 0; i < 10; i++ {
+		contents = append(contents,
+			makeFuncCallContent("model", "read_file", map[string]any{"path": fmt.Sprintf("file%d.md", i)}),
+			makeFuncResponseContent("user", "read_file", map[string]any{"content": "data"}),
+		)
+	}
+
+	_, err := c.summarize(context.Background(), contents)
+	if err != nil {
+		t.Fatalf("summarize error: %v", err)
+	}
+
+	// The prompt should NOT have 10 separate "Called tool: read_file" lines.
+	// It should have a collapsed "read_file (×10 repeated calls)" entry.
+	if strings.Contains(capturedPrompt, "×10") {
+		// Good: collapsed
+	} else {
+		// Count occurrences of "Called tool: read_file"
+		count := strings.Count(capturedPrompt, "Called tool: read_file")
+		if count > 2 {
+			t.Errorf("expected collapsed tool calls, but found %d separate 'Called tool: read_file' entries", count)
+		}
+	}
+
+	// The prompt should contain the user's text instruction
+	if !strings.Contains(capturedPrompt, "Read all the security files") {
+		t.Error("summarizer prompt should contain user text")
+	}
+
+	// The prompt should ask about CURRENT TASK
+	if !strings.Contains(capturedPrompt, "CURRENT TASK") {
+		t.Error("summarizer prompt should ask about CURRENT TASK")
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -14,11 +15,43 @@ import (
 	"context"
 
 	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // ---------------------------------------------------------------------------
 // Exec (non-interactive, synchronous)
 // ---------------------------------------------------------------------------
+
+// ensureSessionRunning checks if the session's sandbox is evicted (idle timeout)
+// and transparently recreates it. Returns the up-to-date session record.
+func (b *OpenShellBackend) ensureSessionRunning(ctx context.Context, sessionID, caller string) (*store.SandboxSession, error) {
+	rec, err := b.sessions.GetSession(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/openshell: %s(%s): lookup session: %w", caller, sessionID, err)
+	}
+	if rec == nil {
+		return nil, fmt.Errorf("sandbox/openshell: %s: session %q has no sandbox", caller, sessionID)
+	}
+
+	// Auto-resume evicted sessions (idle timeout recycled the pod).
+	if rec.State == store.SandboxSessionStateEvicted {
+		slog.Info("auto-resuming evicted sandbox", "component", "openshell",
+			"session", sessionID[:min(8, len(sessionID))])
+		if err := b.StartSession(ctx, sessionID); err != nil {
+			return nil, fmt.Errorf("sandbox/openshell: %s(%s): auto-resume failed: %w", caller, sessionID, err)
+		}
+		// Re-fetch with updated PodName.
+		rec, err = b.sessions.GetSession(sessionID)
+		if err != nil {
+			return nil, fmt.Errorf("sandbox/openshell: %s(%s): post-resume lookup: %w", caller, sessionID, err)
+		}
+	}
+
+	if rec == nil || rec.PodName == "" {
+		return nil, fmt.Errorf("sandbox/openshell: %s: session %q has no sandbox", caller, sessionID)
+	}
+	return rec, nil
+}
 
 // Exec runs a command in the session's sandbox and returns the result.
 // The command is routed through the OpenShell Gateway's exec API which
@@ -34,12 +67,9 @@ func (b *OpenShellBackend) Exec(ctx context.Context, sessionID string, opts sand
 		return nil, ErrNotImplementedYet
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
+	rec, err := b.ensureSessionRunning(ctx, sessionID, "Exec")
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/openshell: Exec(%s): lookup session: %w", sessionID, err)
-	}
-	if rec == nil || rec.PodName == "" {
-		return nil, fmt.Errorf("sandbox/openshell: Exec: session %q has no sandbox", sessionID)
+		return nil, err
 	}
 
 	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
@@ -51,6 +81,8 @@ func (b *OpenShellBackend) Exec(ctx context.Context, sessionID string, opts sand
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/openshell: Exec(%s): %w", sessionID, err)
 	}
+
+	b.sessions.TouchActivity(sessionID)
 
 	return &sandbox.ExecResult{
 		ExitCode: resp.ExitCode,
@@ -77,12 +109,9 @@ func (b *OpenShellBackend) ExecInteractive(ctx context.Context, sessionID string
 		return nil, ErrNotImplementedYet
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
+	rec, err := b.ensureSessionRunning(ctx, sessionID, "ExecInteractive")
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/openshell: ExecInteractive(%s): lookup session: %w", sessionID, err)
-	}
-	if rec == nil || rec.PodName == "" {
-		return nil, fmt.Errorf("sandbox/openshell: ExecInteractive: session %q has no sandbox", sessionID)
+		return nil, err
 	}
 
 	command := wrapCommand(opts.Command, opts.WorkDir, opts.Env)
@@ -115,6 +144,8 @@ func (b *OpenShellBackend) ExecInteractive(ctx context.Context, sessionID string
 	// separate streams. For now, PTY mode merges stdout+stderr
 	// (standard terminal behaviour), so SeparateStderr is a no-op.
 
+	b.sessions.TouchActivity(sessionID)
+
 	return stream, nil
 }
 
@@ -136,12 +167,9 @@ func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, 
 		return nil, ErrNotImplementedYet
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
+	rec, err := b.ensureSessionRunning(ctx, sessionID, "ExecStreaming")
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/openshell: ExecStreaming(%s): lookup session: %w", sessionID, err)
-	}
-	if rec == nil || rec.PodName == "" {
-		return nil, fmt.Errorf("sandbox/openshell: ExecStreaming: session %q has no sandbox", sessionID)
+		return nil, err
 	}
 
 	command := wrapCommandRaw(opts.Command, opts.WorkDir, opts.Env)
@@ -170,6 +198,8 @@ func (b *OpenShellBackend) ExecStreaming(ctx context.Context, sessionID string, 
 		done:           make(chan struct{}),
 	}
 
+	b.sessions.TouchActivity(sessionID)
+
 	return stream, nil
 }
 
@@ -197,12 +227,9 @@ func (b *OpenShellBackend) PushFile(ctx context.Context, sessionID, filePath str
 		return ErrNotImplementedYet
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
+	rec, err := b.ensureSessionRunning(ctx, sessionID, "PushFile")
 	if err != nil {
-		return fmt.Errorf("sandbox/openshell: PushFile(%s): lookup session: %w", sessionID, err)
-	}
-	if rec == nil || rec.PodName == "" {
-		return fmt.Errorf("sandbox/openshell: PushFile: session %q has no sandbox", sessionID)
+		return err
 	}
 
 	dir, name := path.Split(filePath)
@@ -236,6 +263,9 @@ func (b *OpenShellBackend) PushFile(ctx context.Context, sessionID, filePath str
 	if resp.ExitCode != 0 {
 		return fmt.Errorf("sandbox/openshell: PushFile(%s): tar exit %d: %s", sessionID, resp.ExitCode, string(resp.Stderr))
 	}
+
+	b.sessions.TouchActivity(sessionID)
+
 	return nil
 }
 
@@ -260,12 +290,9 @@ func (b *OpenShellBackend) PullFile(ctx context.Context, sessionID, filePath str
 		return nil, ErrNotImplementedYet
 	}
 
-	rec, err := b.sessions.GetSession(sessionID)
+	rec, err := b.ensureSessionRunning(ctx, sessionID, "PullFile")
 	if err != nil {
-		return nil, fmt.Errorf("sandbox/openshell: PullFile(%s): lookup session: %w", sessionID, err)
-	}
-	if rec == nil || rec.PodName == "" {
-		return nil, fmt.Errorf("sandbox/openshell: PullFile: session %q has no sandbox", sessionID)
+		return nil, err
 	}
 
 	dir, name := path.Split(filePath)
@@ -305,6 +332,8 @@ func (b *OpenShellBackend) PullFile(ctx context.Context, sessionID, filePath str
 	if _, err := io.Copy(&buf, tr); err != nil { //nolint:gosec // G110: source is bounded by synchronous exec response, not user-controlled decompression
 		return nil, fmt.Errorf("sandbox/openshell: PullFile(%s): extract tar body: %w", sessionID, err)
 	}
+
+	b.sessions.TouchActivity(sessionID)
 
 	return io.NopCloser(&buf), nil
 }

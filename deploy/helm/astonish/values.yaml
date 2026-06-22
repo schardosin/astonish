@@ -307,6 +307,11 @@ sandbox:
       #   - host: "apt.internal.mycompany.com"
       #     port: 80
 
+    # Idle timeout (minutes) before the watchdog evicts an unused sandbox pod.
+    # 0 = disable idle eviction (pods run indefinitely).
+    # Evicted sessions are transparently recreated on next tool call (~5-10s).
+    idleTimeoutMinutes: 240
+
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
   # equivalent to the Incus cgroup cap. A session can burst up to this

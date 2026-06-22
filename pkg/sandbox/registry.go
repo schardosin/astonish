@@ -415,6 +415,13 @@ func (r *SessionRegistry) SetPinned(containerName string, pinned bool) error {
 	return r.store.SetPinned(ctx, sess.SessionID, pinned)
 }
 
+// TouchActivity bumps the LastActiveAt timestamp for the given session.
+// Called by the OpenShell backend on every exec/push/pull to drive the idle
+// timeout watchdog.
+func (r *SessionRegistry) TouchActivity(sessionID string) {
+	_ = r.store.TouchActivity(context.Background(), sessionID)
+}
+
 // --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------

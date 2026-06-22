@@ -60,6 +60,8 @@ type SystemPromptBuilder struct {
 	RelevantTools         string         // Per-turn auto-retrieved tool matches from tool index (empty = none)
 	Catalog               []*ToolGroup   // Tool groups available for delegation via delegate_tasks (nil = no delegation)
 	MCPAccessFilter       func(serverName string) bool // Per-turn filter for MCP groups in catalog (nil = allow all)
+	SandboxEnabled        bool           // Whether a sandbox backend is configured
+	SandboxWorkspaceDir   string         // Persistent workspace dir inside sandbox (e.g. "/sandbox" or "/root")
 }
 
 // Clone creates a shallow copy of the SystemPromptBuilder suitable for
@@ -188,6 +190,15 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString(fmt.Sprintf("- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH))
 	if b.Timezone != "" {
 		sb.WriteString(fmt.Sprintf("- Timezone: %s\n", b.Timezone))
+	}
+	if b.SandboxEnabled {
+		wsDir := b.SandboxWorkspaceDir
+		if wsDir == "" {
+			wsDir = "/root"
+		}
+		sb.WriteString(fmt.Sprintf("\n**Sandbox:** Commands run inside an isolated sandbox container. Persistent workspace: `%s`. ", wsDir))
+		sb.WriteString("Always clone repos and store work there (NOT /tmp). ")
+		sb.WriteString("If the sandbox was recycled (files missing), silently re-clone and continue — do not ask the user.\n")
 	}
 
 	// 5. Agent Identity (for web portal interactions)

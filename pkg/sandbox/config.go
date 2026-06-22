@@ -23,7 +23,7 @@ func DefaultSandboxConfig() config.SandboxConfig {
 		Network: "bridged",
 		Prune: config.SandboxPruneConfig{
 			OrphanCheckHours:   6,
-			IdleTimeoutMinutes: 10,
+			IdleTimeoutMinutes: 60,
 		},
 	}
 }

@@ -246,4 +246,62 @@ func (s *Store) PruneStaleSandboxSessions(ctx context.Context) (int, error) {
 	return total, nil
 }
 
+// ListIdleSandboxSessions returns all running (non-pinned) sandbox sessions
+// across all team schemas whose last_active_at is before the given cutoff.
+// Used by the idle watchdog to find sessions that should be evicted.
+func (s *Store) ListIdleSandboxSessions(ctx context.Context, cutoff time.Time) ([]store.SandboxSession, error) {
+	teamSchemas, err := s.ListTeamSchemas(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("ListIdleSandboxSessions: list team schemas: %w", err)
+	}
+
+	var result []store.SandboxSession
+	for _, ts := range teamSchemas {
+		sessStore := s.sandboxSessionsForSchema(ts.orgDBName, ts.schemaName)
+		if sessStore == nil {
+			continue
+		}
+		sessions, lErr := sessStore.List(ctx, store.SandboxSessionFilter{State: store.SandboxSessionStateRunning})
+		if lErr != nil {
+			slog.Debug("ListIdleSandboxSessions: list failed", "db", ts.orgDBName, "schema", ts.schemaName, "error", lErr)
+			continue
+		}
+		for _, sess := range sessions {
+			if sess.Pinned {
+				continue
+			}
+			if sess.LastActiveAt.IsZero() || sess.LastActiveAt.Before(cutoff) {
+				result = append(result, *sess)
+			}
+		}
+	}
+	return result, nil
+}
+
+// MarkSandboxSessionEvicted finds the given sandbox session (by SessionID)
+// across all team schemas and sets its state to Evicted, clearing container/pod
+// names. Used by the idle watchdog after pod deletion.
+func (s *Store) MarkSandboxSessionEvicted(ctx context.Context, sessionID string) error {
+	teamSchemas, err := s.ListTeamSchemas(ctx)
+	if err != nil {
+		return fmt.Errorf("MarkSandboxSessionEvicted: list team schemas: %w", err)
+	}
+
+	for _, ts := range teamSchemas {
+		sessStore := s.sandboxSessionsForSchema(ts.orgDBName, ts.schemaName)
+		if sessStore == nil {
+			continue
+		}
+		sess, gErr := sessStore.Get(ctx, sessionID)
+		if gErr != nil || sess == nil {
+			continue
+		}
+		sess.State = store.SandboxSessionStateEvicted
+		sess.ContainerName = ""
+		sess.PodName = ""
+		return sessStore.Put(ctx, sess)
+	}
+	return fmt.Errorf("MarkSandboxSessionEvicted: session %q not found", sessionID)
+}
+
 

@@ -84,6 +84,18 @@ func IsServerError(err error) bool {
 	return false
 }
 
+// IsContextOverflow returns true if the error is a 400 Bad Request that likely
+// indicates the request exceeded the model's context window. Providers return
+// 400 for various reasons, but when the compactor estimates token usage is high,
+// a 400 is almost certainly a context overflow.
+func IsContextOverflow(err error) bool {
+	var llmErr *LLMError
+	if errors.As(err, &llmErr) {
+		return llmErr.StatusCode == http.StatusBadRequest
+	}
+	return false
+}
+
 // GetRetryAfter extracts the RetryAfter duration from an LLMError, if present.
 func GetRetryAfter(err error) time.Duration {
 	var llmErr *LLMError

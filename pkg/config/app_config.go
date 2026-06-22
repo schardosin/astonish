@@ -114,6 +114,12 @@ type SandboxOpenShellConfig struct {
 	// NetworkPolicy configures sandbox egress enforcement via the OpenShell
 	// supervisor's network namespace proxy.
 	NetworkPolicy NetworkPolicyConfig `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
+
+	// IdleTimeoutMinutes evicts sandbox pods that have had no exec activity
+	// for this duration. The pod is deleted (state → evicted) and recreated
+	// transparently on the next tool call. Default: 240 (4 hours). Set to
+	// -1 to disable idle eviction entirely.
+	IdleTimeoutMinutes *int `yaml:"idle_timeout_minutes,omitempty" json:"idle_timeout_minutes,omitempty"`
 }
 
 // RegistryConfig holds OCI registry connection details for pushing
@@ -280,6 +286,18 @@ func (c *SandboxOpenShellConfig) OpenShellGatewayTLS() bool {
 		return true
 	}
 	return *c.GatewayTLS
+}
+
+// OpenShellIdleTimeout returns the idle timeout for OpenShell sandbox pods.
+// Default: 4 hours. Returns 0 (disabled) when set to a negative value.
+func (c *SandboxOpenShellConfig) OpenShellIdleTimeout() time.Duration {
+	if c.IdleTimeoutMinutes == nil {
+		return 4 * time.Hour // default
+	}
+	if *c.IdleTimeoutMinutes <= 0 {
+		return 0 // disabled
+	}
+	return time.Duration(*c.IdleTimeoutMinutes) * time.Minute
 }
 
 // SecurityConfig controls security features like proactive secret detection.

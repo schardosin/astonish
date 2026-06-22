@@ -24,7 +24,7 @@ type Compactor struct {
 	// ContextWindow is the total token budget for the model.
 	ContextWindow int
 	// Threshold is the fraction (0-1) at which compaction triggers.
-	// Default 0.8 (compact when 80% full).
+	// Default 0.7 (compact when 70% full).
 	Threshold float64
 	// PreserveRecent is how many recent messages to keep uncompacted.
 	// Default 4.
@@ -37,20 +37,24 @@ type Compactor struct {
 	// Stats tracking
 	lastEstimatedTokens int
 	compactionCount     int
+	forceCompact        bool // one-shot flag: force compaction on next ShouldCompact call
 }
 
 // NewCompactor creates a Compactor with the given context window size.
 func NewCompactor(contextWindow int) *Compactor {
 	return &Compactor{
 		ContextWindow:  contextWindow,
-		Threshold:      0.8,
+		Threshold:      0.7,
 		PreserveRecent: 4,
 	}
 }
 
 // EstimateTokens estimates the token count for a slice of Contents.
-// Uses a simple heuristic: ~4 characters per token for English text,
-// adjusted upward for function calls/responses which have JSON overhead.
+// Uses a conservative heuristic: ~3 characters per token. This ratio was
+// calibrated against real sessions heavy in tool calls and structured JSON
+// content where the actual measured ratio is ~3.05 chars/token. A lower ratio
+// is intentionally conservative — it's better to compact slightly too early
+// than to overflow the provider's context window and get 400 errors.
 func EstimateTokens(contents []*genai.Content) int {
 	total := 0
 	for _, c := range contents {
@@ -62,21 +66,21 @@ func EstimateTokens(contents []*genai.Content) int {
 				continue
 			}
 			if p.Text != "" {
-				// ~4 chars per token for natural language
-				total += len(p.Text) / 4
+				// ~3 chars per token (conservative; covers code/JSON-heavy conversations)
+				total += len(p.Text) / 3
 			}
 			if p.FunctionCall != nil {
 				// Function call: name + JSON args, estimate generously
 				total += 20 // name + overhead
 				for k, v := range p.FunctionCall.Args {
-					total += len(k)/4 + estimateValueTokens(v)
+					total += len(k)/3 + estimateValueTokens(v)
 				}
 			}
 			if p.FunctionResponse != nil {
 				// Function response: name + JSON response
 				total += 20 // name + overhead
 				for k, v := range p.FunctionResponse.Response {
-					total += len(k)/4 + estimateValueTokens(v)
+					total += len(k)/3 + estimateValueTokens(v)
 				}
 			}
 		}
@@ -88,11 +92,11 @@ func EstimateTokens(contents []*genai.Content) int {
 func estimateValueTokens(v any) int {
 	switch val := v.(type) {
 	case string:
-		return len(val) / 4
+		return len(val) / 3
 	case map[string]any:
 		total := 0
 		for k, inner := range val {
-			total += len(k)/4 + estimateValueTokens(inner)
+			total += len(k)/3 + estimateValueTokens(inner)
 		}
 		return total
 	case []any:
@@ -114,7 +118,14 @@ func (c *Compactor) ShouldCompact(contents []*genai.Content) bool {
 	estimated := EstimateTokens(contents)
 	c.mu.Lock()
 	c.lastEstimatedTokens = estimated
+	forced := c.forceCompact
+	if forced {
+		c.forceCompact = false // consume the one-shot flag
+	}
 	c.mu.Unlock()
+	if forced {
+		return true
+	}
 	threshold := int(float64(c.ContextWindow) * c.Threshold)
 	return estimated > threshold
 }
@@ -133,13 +144,37 @@ func (c *Compactor) CompactionCount() int {
 	return c.compactionCount
 }
 
+// ForceNextCompaction forces the next ShouldCompact call to return true,
+// regardless of token estimation. Used as an emergency measure when a 400
+// context overflow is detected — the heuristic underestimated, so we force
+// compaction on the retry attempt.
+func (c *Compactor) ForceNextCompaction() {
+	c.mu.Lock()
+	c.forceCompact = true
+	c.mu.Unlock()
+}
+
 // CompactContents compacts the contents by summarizing older messages and
 // keeping the most recent ones intact. Returns the new contents slice.
 //
 // Strategy:
 //  1. Split contents into [old | recent] at the PreserveRecent boundary
-//  2. Summarize the old portion into a single system message
-//  3. Prepend the summary to the recent messages
+//  2. Adjust the split point to avoid orphaning tool responses (see below)
+//  3. Extract the last user text instruction from old contents (task anchor)
+//  4. Summarize the old portion into a single system message
+//  5. Build result: summary + task anchor + recent messages
+//
+// Tool-pair safety: OpenAI/Anthropic/Bedrock APIs require every tool response
+// message to have a matching tool_call in the preceding assistant message.
+// If the naive split would place a tool response at the start of the preserved
+// portion (orphaning its matching tool_call in the summarized section), we
+// move the split backward to include the matching assistant message.
+//
+// Task anchor: In tool-heavy sessions, the preserved recent messages are often
+// all tool call/response pairs with no task context. To prevent the model from
+// losing track of what it's doing, we extract the most recent user TEXT message
+// (not a tool response) from the old portion and insert it after the summary.
+// This ensures the current task instruction always survives compaction.
 func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Content) ([]*genai.Content, error) {
 	if len(contents) <= c.PreserveRecent {
 		return contents, nil // nothing to compact
@@ -151,8 +186,20 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 	}
 
 	splitIdx := len(contents) - preserve
+
+	// Adjust split point to avoid orphaning tool responses.
+	// Walk backward from splitIdx while the item at splitIdx has a FunctionResponse
+	// whose matching FunctionCall is in the "old" portion. Include both the
+	// call and the response in the preserved section.
+	splitIdx = adjustSplitForToolPairs(contents, splitIdx)
+
 	oldContents := contents[:splitIdx]
 	recentContents := contents[splitIdx:]
+
+	// Extract the last user text instruction from old contents.
+	// This is the "task anchor" — it ensures the model retains the active task
+	// even when all preserved recent messages are tool call/response pairs.
+	taskAnchor := findLastUserTextInstruction(oldContents)
 
 	// Build summary
 	summary, err := c.summarize(ctx, oldContents)
@@ -162,11 +209,16 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 		summary = c.truncationSummary(oldContents)
 	}
 
-	// Create the summary message. Default to "user" role, but if the first
-	// recent message is also "user", use "model" to preserve role alternation.
-	// Anthropic and Bedrock reject consecutive same-role messages with 400.
+	// Determine summary role for proper role alternation.
+	// The sequence will be: summary → [taskAnchor?] → recentContents[0]...
+	// We need to ensure no consecutive same-role messages.
+	firstAfterSummary := recentContents
+	if taskAnchor != nil {
+		firstAfterSummary = []*genai.Content{taskAnchor}
+	}
+
 	summaryRole := "user"
-	if len(recentContents) > 0 && recentContents[0].Role == "user" {
+	if len(firstAfterSummary) > 0 && firstAfterSummary[0].Role == "user" {
 		summaryRole = "model"
 	}
 	summaryContent := &genai.Content{
@@ -177,9 +229,23 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 		Role: summaryRole,
 	}
 
-	// Build compacted result: summary + recent
-	result := make([]*genai.Content, 0, 1+len(recentContents))
+	// Build compacted result: summary + [task anchor] + recent
+	resultCap := 1 + len(recentContents)
+	if taskAnchor != nil {
+		resultCap++
+	}
+	result := make([]*genai.Content, 0, resultCap)
 	result = append(result, summaryContent)
+	if taskAnchor != nil {
+		// Only include the task anchor if it wouldn't create a role alternation
+		// violation (consecutive same-role messages).
+		if summaryContent.Role != taskAnchor.Role {
+			result = append(result, taskAnchor)
+		} else {
+			// Merge task anchor text into summary to avoid role violation
+			summaryContent.Parts[0].Text += "\n\n[Active user instruction]: " + taskAnchor.Parts[0].Text
+		}
+	}
 	result = append(result, recentContents...)
 
 	c.mu.Lock()
@@ -189,10 +255,95 @@ func (c *Compactor) CompactContents(ctx context.Context, contents []*genai.Conte
 
 	if c.DebugMode {
 		slog.Debug("compacted messages", "component", "compactor",
-			"before", len(contents), "after", len(result), "estimatedTokens", EstimateTokens(result))
+			"before", len(contents), "after", len(result), "estimatedTokens", EstimateTokens(result),
+			"taskAnchor", taskAnchor != nil)
 	}
 
 	return result, nil
+}
+
+// findLastUserTextInstruction scans backward through contents to find the most
+// recent user message that contains meaningful text (not a FunctionResponse).
+// Returns a Content with the user's instruction, prefixed for clarity.
+// Returns nil if no suitable user text is found in the old portion.
+func findLastUserTextInstruction(contents []*genai.Content) *genai.Content {
+	for i := len(contents) - 1; i >= 0; i-- {
+		c := contents[i]
+		if c == nil || c.Role != "user" {
+			continue
+		}
+		// Check that this message has meaningful text (not just a tool response)
+		for _, p := range c.Parts {
+			if p == nil {
+				continue
+			}
+			if p.FunctionResponse != nil {
+				break // this is a tool response, skip it
+			}
+			if p.Text != "" {
+				// Found a real user text instruction
+				return &genai.Content{
+					Parts: []*genai.Part{{
+						Text: "[Active user instruction]: " + p.Text,
+					}},
+					Role: "user",
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// summarize uses the LLM to create a concise summary of old messages.
+// adjustSplitForToolPairs moves splitIdx backward to ensure the preserved
+// portion doesn't start with an orphaned tool response. An orphaned tool
+// response is one whose matching FunctionCall is in contents[:splitIdx].
+//
+// The algorithm: while contents[splitIdx] has FunctionResponse parts, move
+// splitIdx backward by 1. This includes the preceding message (which should
+// be the matching FunctionCall). Repeat until the first preserved item is
+// NOT a tool response.
+//
+// Safety cap: move back at most 8 extra positions to avoid degenerate cases
+// where the entire tail is interleaved call/response pairs.
+func adjustSplitForToolPairs(contents []*genai.Content, splitIdx int) int {
+	const maxBacktrack = 8
+
+	moved := 0
+	for splitIdx > 0 && moved < maxBacktrack {
+		if !hasFunctionResponse(contents[splitIdx]) {
+			break // safe: first preserved item is not a tool response
+		}
+		splitIdx--
+		moved++
+	}
+	return splitIdx
+}
+
+// hasFunctionResponse returns true if the Content has any FunctionResponse part.
+func hasFunctionResponse(c *genai.Content) bool {
+	if c == nil {
+		return false
+	}
+	for _, p := range c.Parts {
+		if p != nil && p.FunctionResponse != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFunctionCall returns true if the Content has any FunctionCall part.
+func hasFunctionCall(c *genai.Content) bool {
+	if c == nil {
+		return false
+	}
+	for _, p := range c.Parts {
+		if p != nil && p.FunctionCall != nil {
+			return true
+		}
+	}
+	return false
 }
 
 // summarize uses the LLM to create a concise summary of old messages.
@@ -201,11 +352,34 @@ func (c *Compactor) summarize(ctx context.Context, contents []*genai.Content) (s
 		return c.truncationSummary(contents), nil
 	}
 
-	// Build a text representation of the old conversation
+	// Build a text representation of the old conversation.
+	// Collapses repetitive consecutive tool calls (e.g., 55× read_file)
+	// into a single counted entry to reduce noise and let the summarizer
+	// focus on meaningful content.
 	var sb strings.Builder
-	sb.WriteString("Summarize the following conversation history concisely. ")
-	sb.WriteString("Preserve key facts, decisions, file paths, variable names, and outcomes. ")
-	sb.WriteString("Omit redundant tool call details but keep what tools accomplished.\n\n")
+	sb.WriteString("Summarize the following conversation history. Focus on:\n")
+	sb.WriteString("1. CURRENT TASK: What is the user's most recent request? What was the model actively working on?\n")
+	sb.WriteString("2. PROGRESS: What has been accomplished so far? What step was the model on when this history ends?\n")
+	sb.WriteString("3. KEY FACTS: Important decisions, file paths, variable names, and outcomes.\n")
+	sb.WriteString("4. COMPLETED WORK: What earlier tasks finished successfully.\n\n")
+	sb.WriteString("Start your summary with 'CURRENT TASK:' stating what's actively being worked on.\n")
+	sb.WriteString("Then 'PROGRESS:' with what's been done for that task.\n")
+	sb.WriteString("Then 'COMPLETED:' listing earlier finished work.\n\n")
+
+	var lastToolName string
+	var toolRepeatCount int
+
+	flushToolRepeat := func() {
+		if toolRepeatCount > 0 {
+			if toolRepeatCount == 1 {
+				sb.WriteString(fmt.Sprintf("[model] Called tool: %s\n[tool] %s responded\n", lastToolName, lastToolName))
+			} else {
+				sb.WriteString(fmt.Sprintf("[model] Called tool: %s (×%d repeated calls)\n", lastToolName, toolRepeatCount))
+			}
+			toolRepeatCount = 0
+			lastToolName = ""
+		}
+	}
 
 	for _, content := range contents {
 		if content == nil {
@@ -220,16 +394,29 @@ func (c *Compactor) summarize(ctx context.Context, contents []*genai.Content) (s
 				continue
 			}
 			if p.Text != "" {
+				flushToolRepeat()
 				sb.WriteString(fmt.Sprintf("[%s]: %s\n", role, truncateText(p.Text, 500)))
 			}
 			if p.FunctionCall != nil {
-				sb.WriteString(fmt.Sprintf("[%s] Called tool: %s\n", role, p.FunctionCall.Name))
+				if p.FunctionCall.Name == lastToolName {
+					toolRepeatCount++
+				} else {
+					flushToolRepeat()
+					lastToolName = p.FunctionCall.Name
+					toolRepeatCount = 1
+				}
 			}
 			if p.FunctionResponse != nil {
-				sb.WriteString(fmt.Sprintf("[tool] %s responded\n", p.FunctionResponse.Name))
+				// Function responses are counted with their calls (don't emit separately)
+				if p.FunctionResponse.Name != lastToolName {
+					// Mismatched response — emit it
+					flushToolRepeat()
+					sb.WriteString(fmt.Sprintf("[tool] %s responded\n", p.FunctionResponse.Name))
+				}
 			}
 		}
 	}
+	flushToolRepeat()
 
 	prompt := sb.String()
 

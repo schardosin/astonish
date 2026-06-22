@@ -1236,6 +1236,88 @@ func Run(cfg RunConfig) error {
 		}()
 	}
 
+	// --- OpenShell idle timeout watchdog (periodic) ---
+	// Evicts sandbox pods that have been idle (no exec/push/pull) for longer
+	// than the configured idle timeout. Evicted sessions are transparently
+	// recreated on the next tool call (see exec.go ensureSessionRunning).
+	if appCfg.Storage.Backend == "postgres" && sandbox.BackendKind(appCfg.Sandbox.BackendKind()) == sandbox.BackendKindOpenShell {
+		idleTimeout := appCfg.Sandbox.OpenShell.OpenShellIdleTimeout()
+		if idleTimeout > 0 {
+			go func() {
+				// Initial delay: let the system stabilize.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(60 * time.Second):
+				}
+
+				ticker := time.NewTicker(5 * time.Minute)
+				defer ticker.Stop()
+
+				runIdleEviction := func() {
+					osCfg := appCfg.Sandbox.OpenShell
+					gateway, gwErr := openshell.NewGatewayClientFromConfig(openshell.GRPCClientConfig{
+						Addr:           osCfg.GatewayAddr,
+						TLS:            osCfg.OpenShellGatewayTLS(),
+						ClientCertPath: osCfg.ClientCertPath,
+						ClientKeyPath:  osCfg.ClientKeyPath,
+						CACertPath:     osCfg.CACertPath,
+						AuthToken:      osCfg.AuthToken,
+					})
+					if gwErr != nil {
+						slog.Warn("openshell idle watchdog: failed to connect to gateway", "error", gwErr)
+						return
+					}
+					defer gateway.Close()
+
+					cutoff := time.Now().Add(-idleTimeout)
+					sessions, listErr := entStore.ListIdleSandboxSessions(ctx, cutoff)
+					if listErr != nil {
+						slog.Warn("openshell idle watchdog: failed to list idle sessions", "error", listErr)
+						return
+					}
+
+					var evicted int
+					for _, sess := range sessions {
+						sandboxID := sess.ContainerName
+						if sandboxID != "" {
+							if delErr := gateway.DeleteSandbox(ctx, sandboxID); delErr != nil {
+								slog.Warn("openshell idle watchdog: failed to delete sandbox",
+									"session", sess.SessionID, "sandbox", sandboxID, "error", delErr)
+								continue
+							}
+						}
+						if markErr := entStore.MarkSandboxSessionEvicted(ctx, sess.SessionID); markErr != nil {
+							slog.Warn("openshell idle watchdog: failed to mark session evicted",
+								"session", sess.SessionID, "error", markErr)
+							continue
+						}
+						evicted++
+						slog.Info("openshell idle watchdog: evicted idle sandbox",
+							"session", sess.SessionID[:min(8, len(sess.SessionID))],
+							"idle_for", time.Since(sess.LastActiveAt).Round(time.Second).String())
+					}
+					if evicted > 0 {
+						slog.Info("openshell idle watchdog: eviction pass complete", "evicted", evicted)
+					}
+				}
+
+				// First pass.
+				runIdleEviction()
+
+				// Subsequent passes every 5 minutes.
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						runIdleEviction()
+					}
+				}
+			}()
+		}
+	}
+
 	// Create and start the Studio server
 	var studioOpts []launcher.StudioOption
 	studioOpts = append(studioOpts, launcher.WithServices(svc))

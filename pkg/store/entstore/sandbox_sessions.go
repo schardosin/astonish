@@ -226,6 +226,18 @@ func (s *teamSandboxSessionStore) SetUpperLayer(ctx context.Context, sessionID, 
 	return nil
 }
 
+func (s *teamSandboxSessionStore) TouchActivity(ctx context.Context, sessionID string) error {
+	n, err := s.client.SandboxSession.Update().
+		Where(sandboxsession.IDEQ(sessionID)).
+		SetLastActiveAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("sandbox session touch activity: %w", err)
+	}
+	_ = n // no-op if absent
+	return nil
+}
+
 // --- Helpers ---
 
 func entSandboxToStore(row *teament.SandboxSession) *store.SandboxSession {

@@ -274,6 +274,17 @@ func (s *localSessionStore) SetUpperLayer(_ context.Context, sessionID, upperLay
 	return s.saveLocked()
 }
 
+func (s *localSessionStore) TouchActivity(_ context.Context, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[sessionID]
+	if !ok {
+		return nil // no-op if absent
+	}
+	e.LastActiveAt = time.Now().UTC()
+	return s.saveLocked()
+}
+
 // Compile-time assertion.
 var _ store.SandboxSessionStore = (*localSessionStore)(nil)
 

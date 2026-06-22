@@ -212,6 +212,14 @@ type SubAgentManager struct {
 	// Injected into sub-agent prompts so they use it as fallback when web_fetch fails.
 	WebExtractToolName string
 
+	// SandboxEnabled indicates whether commands run inside an isolated sandbox.
+	// When true, sub-agent prompts include workspace and recovery guidance.
+	SandboxEnabled bool
+
+	// SandboxWorkspaceDir is the persistent workspace directory inside the sandbox.
+	// Sub-agents are instructed to use this for all work (not /tmp).
+	SandboxWorkspaceDir string
+
 	// MCPGroupResolver is a fallback resolver for MCP tool groups that are not
 	// found in the ToolGroups map at resolution time. This handles the race
 	// condition where async MCP tool discovery completes after the chat agent
@@ -1160,6 +1168,17 @@ func (m *SubAgentManager) buildChildPrompt(ctx context.Context, task SubAgentTas
 		if childToolSet["browser_navigate"] {
 			sb.WriteString("- **Browser tools** (`browser_navigate`, `browser_snapshot`, etc.) — for navigating websites to get live/current data (prices, availability, dynamic content). Prefer browser when the task requires what a site shows *right now*, not what was indexed days ago.\n")
 		}
+	}
+
+	// Sandbox workspace/recovery guidance for sub-agents
+	if m.SandboxEnabled {
+		wsDir := m.SandboxWorkspaceDir
+		if wsDir == "" {
+			wsDir = "/root"
+		}
+		sb.WriteString("\n## Sandbox\n")
+		sb.WriteString(fmt.Sprintf("- Your shell commands run inside an isolated sandbox. Persistent workspace: `%s`.\n", wsDir))
+		sb.WriteString("- Always work in the persistent workspace (NOT /tmp). If files are missing (sandbox was recycled), silently re-clone and continue.\n")
 	}
 
 	// Inject skill index so sub-agents know which skills exist and can

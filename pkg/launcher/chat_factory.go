@@ -888,6 +888,17 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		Catalog:      sortedGroups,
 	}
 
+	// Sandbox workspace guidance
+	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
+		promptBuilder.SandboxEnabled = true
+		switch sandbox.BackendKind(cfg.AppConfig.Sandbox.BackendKind()) {
+		case sandbox.BackendKindOpenShell:
+			promptBuilder.SandboxWorkspaceDir = "/sandbox"
+		default:
+			promptBuilder.SandboxWorkspaceDir = "/root"
+		}
+	}
+
 	// Check web tool availability (across all MCP toolsets, not just active)
 	if webSearchConfigured, serverName, toolName := api.IsWebSearchConfigured(); webSearchConfigured {
 		for _, lt := range lazyToolsets {
@@ -1392,6 +1403,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		if promptBuilder.WebExtractAvailable && promptBuilder.WebExtractToolName != "" {
 			subAgentMgr.WebExtractToolName = strings.ReplaceAll(promptBuilder.WebExtractToolName, "-", "_")
 		}
+		// Wire sandbox guidance so sub-agents know about workspace and recovery.
+		subAgentMgr.SandboxEnabled = promptBuilder.SandboxEnabled
+		subAgentMgr.SandboxWorkspaceDir = promptBuilder.SandboxWorkspaceDir
 		// Alias sub-agent sessions to the parent's sandbox container so they
 		// share the same container instead of each creating a new one.
 		if sandboxNodePool != nil {

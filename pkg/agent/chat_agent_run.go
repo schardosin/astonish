@@ -559,6 +559,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		lastToolCallSeen := false
 		anyTextYielded := false
 		unknownToolRetries := 0
+		contextOverflowRetried := false // only retry context overflow once
 
 		// Track the last FunctionCall parts seen so we can build synthetic
 		// error responses when ADK rejects an unknown tool name.
@@ -598,6 +599,20 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 						lastFunctionCalls = nil
 						retried = true
 						break // re-run llmAgent to let the LLM see the error and retry
+					}
+
+					// Check for context overflow (400 Bad Request). When the compactor
+					// exists, force emergency compaction by temporarily setting threshold
+					// to 0 so the BeforeModelCallback will compact on the next call.
+					// This handles cases where the heuristic underestimates token usage
+					// and the request exceeds the provider's context window.
+					if llmerror.IsContextOverflow(err) && c.Compactor != nil && !contextOverflowRetried {
+						contextOverflowRetried = true
+						c.Compactor.ForceNextCompaction()
+						slog.Info("context overflow detected, forcing emergency compaction and retrying",
+							"component", "chat", "error", err)
+						retried = true
+						break // retry with forced compaction
 					}
 
 					// Non-retryable error, or retries exhausted

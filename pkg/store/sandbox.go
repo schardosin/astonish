@@ -437,6 +437,11 @@ type SandboxSessionStore interface {
 	// for the corresponding LayerStore ref_count adjustment in the same
 	// transaction when applicable (pgstore provides that guarantee).
 	SetUpperLayer(ctx context.Context, sessionID, upperLayerID string) error
+
+	// TouchActivity bumps LastActiveAt to now(). Called on every sandbox
+	// exec/push/pull to drive the idle timeout watchdog. No-op if the row
+	// is absent.
+	TouchActivity(ctx context.Context, sessionID string) error
 }
 
 // SandboxSessionProvider is an optional interface that PlatformBackend

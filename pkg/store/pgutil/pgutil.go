@@ -82,9 +82,16 @@ func PlatformDBExists(ctx context.Context, anyDSN, suffix string) (bool, error) 
 	}
 	defer conn.Close(ctx)
 
+	return PlatformDBExistsConn(ctx, conn, suffix)
+}
+
+// PlatformDBExistsConn checks whether a platform database with the given suffix
+// already exists, using an existing connection. This avoids opening multiple
+// connections which can be problematic with kubectl port-forward tunnels.
+func PlatformDBExistsConn(ctx context.Context, conn *pgx.Conn, suffix string) (bool, error) {
 	dbName := config.PlatformDBName(suffix)
 	var exists bool
-	err = conn.QueryRow(ctx,
+	err := conn.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`,
 		dbName,
 	).Scan(&exists)

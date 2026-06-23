@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
@@ -182,15 +183,16 @@ func handlePlatformInit(args []string) error {
 	fmt.Println()
 
 	// Connect to the admin database to check/generate suffix.
+	// We open a single connection and reuse it for all existence checks
+	// to avoid issues with kubectl port-forward dropping connections.
 	fmt.Printf("Connecting to PostgreSQL at %s:%d... ", pgHost, pgPort)
 	tempDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, "postgres", pgSSLMode)
-
-	// Verify connectivity by checking if admin DB is reachable.
-	_, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, "connectivity_check_probe")
-	if checkErr != nil {
+	adminConn, err := pgx.Connect(ctx, tempDSN)
+	if err != nil {
 		fmt.Println("FAILED")
-		return fmt.Errorf("cannot connect to PostgreSQL: %w", checkErr)
+		return fmt.Errorf("cannot connect to PostgreSQL: %w", err)
 	}
+	defer adminConn.Close(ctx)
 	fmt.Println("OK")
 
 	// Determine suffix.
@@ -200,7 +202,7 @@ func handlePlatformInit(args []string) error {
 		// If it exists, we run migrations (upgrade path).
 		// If it doesn't exist, we create it (fresh install with fixed suffix).
 		fmt.Printf("Checking database %s... ", config.PlatformDBName(suffix))
-		exists, err := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 		if err != nil {
 			fmt.Println("FAILED")
 			return fmt.Errorf("failed to check database existence: %w", err)
@@ -216,7 +218,7 @@ func handlePlatformInit(args []string) error {
 		fmt.Print("Generating instance suffix... ")
 		suffix = config.GenerateInstanceSuffix()
 		for attempts := 0; attempts < 5; attempts++ {
-			exists, err := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
+			exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 			if err != nil {
 				fmt.Println("FAILED")
 				return fmt.Errorf("failed to check database existence: %w", err)

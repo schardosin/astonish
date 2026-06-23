@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -112,15 +113,25 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	// This namespaces all databases so multiple Astonish instances can share a PG host.
 	suffix := config.GenerateInstanceSuffix()
 
-	// Build a temporary DSN (pointing to any DB on the host — we'll create the real one).
+	// Build a temporary DSN and open a single connection for collision checks.
+	// Reusing one connection avoids issues with kubectl port-forward dropping
+	// subsequent TCP connections.
 	tempDSN := pgutil.BuildDSN(req.Host, req.Port, req.User, req.Password, "postgres", req.SSLMode)
 
-	// Check for suffix collision (extremely unlikely, but handle it)
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
+	adminConn, connErr := pgx.Connect(ctx, tempDSN)
+	if connErr != nil {
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to connect to PostgreSQL: " + cleanPGError(connErr.Error()),
+		})
+		return
+	}
+	defer adminConn.Close(ctx)
+
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, checkErr := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 		if checkErr != nil {
 			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 				Error: "Failed to check database existence: " + cleanPGError(checkErr.Error()),

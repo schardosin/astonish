@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -1795,13 +1796,20 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	// Generate a unique instance suffix for this deployment.
 	suffix := config.GenerateInstanceSuffix()
 
-	// Build a temporary DSN to check for collisions.
+	// Build a temporary DSN and open a single connection for collision checks.
+	// Reusing one connection avoids issues with kubectl port-forward dropping
+	// subsequent TCP connections.
 	tempDSN := pgutil.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
+	ctx := context.Background()
+	adminConn, connErr := pgx.Connect(ctx, tempDSN)
+	if connErr != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", connErr)
+	}
+	defer adminConn.Close(ctx)
 
 	// Check for suffix collision (extremely unlikely).
-	ctx := context.Background()
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgutil.PlatformDBExists(ctx, tempDSN, suffix)
+		exists, checkErr := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 		if checkErr != nil {
 			return fmt.Errorf("failed to check database existence: %w", checkErr)
 		}

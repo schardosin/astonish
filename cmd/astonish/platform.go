@@ -192,7 +192,6 @@ func handlePlatformInit(args []string) error {
 		fmt.Println("FAILED")
 		return fmt.Errorf("cannot connect to PostgreSQL: %w", err)
 	}
-	defer adminConn.Close(ctx)
 	fmt.Println("OK")
 
 	// Determine suffix.
@@ -205,6 +204,7 @@ func handlePlatformInit(args []string) error {
 		exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 		if err != nil {
 			fmt.Println("FAILED")
+			adminConn.Close(ctx)
 			return fmt.Errorf("failed to check database existence: %w", err)
 		}
 		if exists {
@@ -221,6 +221,7 @@ func handlePlatformInit(args []string) error {
 			exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
 			if err != nil {
 				fmt.Println("FAILED")
+				adminConn.Close(ctx)
 				return fmt.Errorf("failed to check database existence: %w", err)
 			}
 			if !exists {
@@ -231,11 +232,18 @@ func handlePlatformInit(args []string) error {
 		fmt.Println(suffix)
 	}
 
+	// Close the admin connection before bootstrap to free up the port-forward
+	// tunnel. BootstrapPlatform opens its own connections and kubectl
+	// port-forward can only handle a limited number of concurrent connections.
+	adminConn.Close(ctx)
+
 	// Build the platform DSN with the actual platform DB name.
 	platformDBName := config.PlatformDBName(suffix)
 	platformDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, platformDBName, pgSSLMode)
 
 	// Bootstrap: create database (if needed), ensure roles, and run migrations.
+	// This also verifies the store is functional (opens the DB, pings it, runs
+	// schema migrations, applies grants).
 	if dbAlreadyExists {
 		fmt.Printf("Running migrations on %s... ", platformDBName)
 	} else {
@@ -248,19 +256,6 @@ func handlePlatformInit(args []string) error {
 		fmt.Println("FAILED")
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
-	fmt.Println("OK")
-
-	// Verify connectivity via entstore.
-	fmt.Print("Verifying platform store... ")
-	_, es, err := entstore.NewPlatformServices(ctx, entstore.Config{
-		DSN:            platformDSN,
-		InstanceSuffix: suffix,
-	})
-	if err != nil {
-		fmt.Println("FAILED")
-		return fmt.Errorf("store verification failed: %w", err)
-	}
-	es.Close()
 	fmt.Println("OK")
 
 	fmt.Println()

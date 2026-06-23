@@ -55,10 +55,10 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("connect to postgres: %w", err)
 	}
-	defer adminDB.Close()
 
 	// Ensure roles exist.
 	if err := pgutil.EnsureRoles(ctx, adminDB); err != nil {
+		adminDB.Close()
 		return fmt.Errorf("ensure roles: %w", err)
 	}
 
@@ -66,6 +66,7 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	var exists bool
 	err = adminDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&exists)
 	if err != nil {
+		adminDB.Close()
 		return fmt.Errorf("check database existence: %w", err)
 	}
 
@@ -74,16 +75,29 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 		// This value comes from the operator-controlled DSN, but we validate
 		// defensively to prevent SQL injection via CREATE DATABASE.
 		if strings.ContainsAny(dbName, `"'\;`) {
+			adminDB.Close()
 			return fmt.Errorf("invalid database name: %s", dbName)
 		}
 		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
 		if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil { // CodeQL[go/sql-injection]: dbName is operator-controlled (from DSN config) and validated above
+			adminDB.Close()
 			return fmt.Errorf("create database: %w", err)
 		}
 	}
 
+	// Close the admin connection before opening the platform DB.
+	// This avoids holding multiple connections simultaneously, which is
+	// important for kubectl port-forward tunnels that can't handle many
+	// concurrent connections reliably.
+	adminDB.Close()
+
 	// 2. Open the target database and run Ent schema migration.
-	s, err := New(ctx, cfg)
+	// Limit pool size to minimize concurrent connections through the tunnel.
+	bootstrapCfg := cfg
+	if bootstrapCfg.MaxOpenConns <= 0 {
+		bootstrapCfg.MaxOpenConns = 2
+	}
+	s, err := New(ctx, bootstrapCfg)
 	if err != nil {
 		return fmt.Errorf("open new database: %w", err)
 	}

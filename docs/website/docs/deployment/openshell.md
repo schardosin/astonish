@@ -69,27 +69,6 @@ kubectl create secret generic astonish-secrets \
   --from-literal=platform-dsn="<dsn-from-step-1>"
 ```
 
-### 4. Create Organization and Users
-
-Set environment variables for CLI access:
-
-```bash
-export ASTONISH_PLATFORM_DSN="<dsn-from-step-1>"
-export ASTONISH_MASTER_KEY="<master-key-from-step-2>"
-```
-
-Create your organization and first user:
-
-```bash
-./astonish platform org create --name "My Organization" --slug myorg
-
-./astonish platform org invite \
-  --org myorg \
-  --email admin@company.com \
-  --role owner \
-  --password
-```
-
 ## Helm Values
 
 Create a `values-openshell.yaml` file for your deployment. Below is a complete production-ready example.
@@ -314,7 +293,7 @@ kubectl -n astonish port-forward svc/astonish-api 9393:9393 &
 open http://localhost:9393
 ```
 
-Log in with the credentials you created during platform initialization.
+The first user to register will become the organization owner with full admin access. A default organization and team are created automatically on first signup.
 
 ## Notes
 

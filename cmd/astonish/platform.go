@@ -296,9 +296,9 @@ func handlePlatformInit(args []string) error {
 	fmt.Printf("      instance_suffix: %q\n", suffix)
 	fmt.Println()
 	if !dbAlreadyExists {
-		fmt.Println("Next steps:")
-		fmt.Println("  1. Create an organization:  astonish platform org create --name 'My Org' --slug my-org")
-		fmt.Println("  2. Invite users:            astonish platform org invite --org my-org --email user@example.com")
+		fmt.Println("The first user to register via Studio will become the organization")
+		fmt.Println("owner with full admin access. A default organization and team will")
+		fmt.Println("be created automatically.")
 	}
 
 	return nil

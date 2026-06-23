@@ -166,26 +166,7 @@ helm install astonish deploy/helm/astonish \
   --values values.yaml
 ```
 
-## Step 7: Create Organization and Users
-
-After the pods are running, create your organization and first user:
-
-```bash
-export ASTONISH_PLATFORM_DSN="<dsn-from-step-1>"
-export ASTONISH_MASTER_KEY="<master-key-from-step-2>"
-
-# Create the organization
-astonish platform org create --name "My Organization" --slug myorg
-
-# Invite the first admin user
-astonish platform org invite \
-  --org myorg \
-  --email admin@example.com \
-  --role owner \
-  --password
-```
-
-## Step 8: Verify the Deployment
+## Step 7: Verify the Deployment
 
 ```bash
 # Check pod status
@@ -216,7 +197,7 @@ kubectl -n astonish port-forward svc/astonish-api 9393:9393 &
 open http://localhost:9393
 ```
 
-Log in with the credentials you created during platform initialization.
+The first user to register will become the organization owner with full admin access. A default organization and team are created automatically on first signup.
 
 ## Upgrades
 

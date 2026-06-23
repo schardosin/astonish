@@ -3,6 +3,7 @@ package astonish
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -11,7 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
@@ -182,14 +183,22 @@ func handlePlatformInit(args []string) error {
 	fmt.Println("=== Astonish Platform Init ===")
 	fmt.Println()
 
-	// Connect to the admin database to check/generate suffix.
-	// We open a single connection and reuse it for all existence checks
-	// to avoid issues with kubectl port-forward dropping connections.
+	// Connect to the admin database ("postgres") and keep this single connection
+	// alive for the entire init flow. Using *sql.DB keeps the underlying TCP
+	// socket pooled, which is critical for kubectl port-forward tunnels that
+	// die when connections are closed and re-opened.
 	fmt.Printf("Connecting to PostgreSQL at %s:%d... ", pgHost, pgPort)
 	tempDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, "postgres", pgSSLMode)
-	adminConn, err := pgx.Connect(ctx, tempDSN)
+	adminDB, err := sql.Open("pgx", tempDSN)
 	if err != nil {
 		fmt.Println("FAILED")
+		return fmt.Errorf("cannot connect to PostgreSQL: %w", err)
+	}
+	adminDB.SetMaxOpenConns(1)
+	adminDB.SetMaxIdleConns(1)
+	if err := adminDB.PingContext(ctx); err != nil {
+		fmt.Println("FAILED")
+		adminDB.Close()
 		return fmt.Errorf("cannot connect to PostgreSQL: %w", err)
 	}
 	fmt.Println("OK")
@@ -201,10 +210,10 @@ func handlePlatformInit(args []string) error {
 		// If it exists, we run migrations (upgrade path).
 		// If it doesn't exist, we create it (fresh install with fixed suffix).
 		fmt.Printf("Checking database %s... ", config.PlatformDBName(suffix))
-		exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
+		exists, err := pgutil.PlatformDBExistsDB(ctx, adminDB, suffix)
 		if err != nil {
 			fmt.Println("FAILED")
-			adminConn.Close(ctx)
+			adminDB.Close()
 			return fmt.Errorf("failed to check database existence: %w", err)
 		}
 		if exists {
@@ -218,10 +227,10 @@ func handlePlatformInit(args []string) error {
 		fmt.Print("Generating instance suffix... ")
 		suffix = config.GenerateInstanceSuffix()
 		for attempts := 0; attempts < 5; attempts++ {
-			exists, err := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
+			exists, err := pgutil.PlatformDBExistsDB(ctx, adminDB, suffix)
 			if err != nil {
 				fmt.Println("FAILED")
-				adminConn.Close(ctx)
+				adminDB.Close()
 				return fmt.Errorf("failed to check database existence: %w", err)
 			}
 			if !exists {
@@ -232,18 +241,14 @@ func handlePlatformInit(args []string) error {
 		fmt.Println(suffix)
 	}
 
-	// Close the admin connection before bootstrap to free up the port-forward
-	// tunnel. BootstrapPlatform opens its own connections and kubectl
-	// port-forward can only handle a limited number of concurrent connections.
-	adminConn.Close(ctx)
-
 	// Build the platform DSN with the actual platform DB name.
 	platformDBName := config.PlatformDBName(suffix)
 	platformDSN := pgutil.BuildDSN(pgHost, pgPort, pgUser, pgPassword, platformDBName, pgSSLMode)
 
 	// Bootstrap: create database (if needed), ensure roles, and run migrations.
-	// This also verifies the store is functional (opens the DB, pings it, runs
-	// schema migrations, applies grants).
+	// Pass adminDB so bootstrap reuses our existing connection for admin ops
+	// (role creation, CREATE DATABASE) instead of opening a new one through
+	// the port-forward tunnel.
 	if dbAlreadyExists {
 		fmt.Printf("Running migrations on %s... ", platformDBName)
 	} else {
@@ -252,10 +257,14 @@ func handlePlatformInit(args []string) error {
 	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: suffix,
-	}); err != nil {
+	}, adminDB); err != nil {
 		fmt.Println("FAILED")
+		adminDB.Close()
 		return fmt.Errorf("bootstrap failed: %w", err)
 	}
+	// Close adminDB after bootstrap is done — bootstrap's platform DB connection
+	// is now the only active one.
+	adminDB.Close()
 	fmt.Println("OK")
 
 	fmt.Println()

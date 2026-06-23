@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/schardosin/astonish/pkg/config"
@@ -113,26 +114,35 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	// This namespaces all databases so multiple Astonish instances can share a PG host.
 	suffix := config.GenerateInstanceSuffix()
 
-	// Build a temporary DSN and open a single connection for collision checks.
-	// Reusing one connection avoids issues with kubectl port-forward dropping
-	// subsequent TCP connections.
+	// Build a temporary DSN and open a single *sql.DB connection for the entire
+	// admin phase. Using *sql.DB keeps the TCP socket pooled, which is critical
+	// for kubectl port-forward tunnels.
 	tempDSN := pgutil.BuildDSN(req.Host, req.Port, req.User, req.Password, "postgres", req.SSLMode)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	adminConn, connErr := pgx.Connect(ctx, tempDSN)
+	adminDB, connErr := sql.Open("pgx", tempDSN)
 	if connErr != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to connect to PostgreSQL: " + cleanPGError(connErr.Error()),
 		})
 		return
 	}
-	defer adminConn.Close(ctx)
+	adminDB.SetMaxOpenConns(1)
+	adminDB.SetMaxIdleConns(1)
+	if connErr = adminDB.PingContext(ctx); connErr != nil {
+		adminDB.Close()
+		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
+			Error: "Failed to connect to PostgreSQL: " + cleanPGError(connErr.Error()),
+		})
+		return
+	}
 
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
+		exists, checkErr := pgutil.PlatformDBExistsDB(ctx, adminDB, suffix)
 		if checkErr != nil {
+			adminDB.Close()
 			respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 				Error: "Failed to check database existence: " + cleanPGError(checkErr.Error()),
 			})
@@ -149,16 +159,19 @@ func PlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 	platformDSN := pgutil.BuildDSN(req.Host, req.Port, req.User, req.Password, platformDBName, req.SSLMode)
 
 	// Bootstrap: create DB and run migrations via entstore.
+	// Pass adminDB so bootstrap reuses our existing connection.
 	entCfg := entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: suffix,
 	}
-	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entCfg, adminDB); err != nil {
+		adminDB.Close()
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to initialize platform database: " + cleanPGError(err.Error()),
 		})
 		return
 	}
+	adminDB.Close()
 
 	// Generate JWT secret and save config.
 	jwtSecret := config.GenerateJWTSecret()
@@ -282,7 +295,7 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
 		DataDir: dataDir,
 	}
-	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entCfg, nil); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{
 			Error: "Failed to initialize SQLite database: " + err.Error(),
 		})

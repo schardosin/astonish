@@ -17,8 +17,13 @@ import (
 // ensures PG roles, runs Ent schema auto-migration, and applies PG-specific
 // extras (extensions, specialized indexes, triggers, RLS, grants, seed data).
 //
+// If adminDB is non-nil, it is used for admin operations (role creation,
+// CREATE DATABASE) instead of opening a new connection. This is important
+// for kubectl port-forward tunnels where opening multiple connections is
+// unreliable. The caller retains ownership of adminDB (must close it).
+//
 // For SQLite this simply creates the store and runs Schema.Create().
-func BootstrapPlatform(ctx context.Context, cfg Config) error {
+func BootstrapPlatform(ctx context.Context, cfg Config, adminDB *sql.DB) error {
 	if cfg.DSN == "" {
 		return fmt.Errorf("DSN is required")
 	}
@@ -51,14 +56,21 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("parse DSN: %w", err)
 	}
 
-	adminDB, err := sql.Open("pgx", adminDSN)
-	if err != nil {
-		return fmt.Errorf("connect to postgres: %w", err)
+	// Use caller-provided adminDB or open a new one.
+	ownAdminDB := false
+	if adminDB == nil {
+		adminDB, err = sql.Open("pgx", adminDSN)
+		if err != nil {
+			return fmt.Errorf("connect to postgres: %w", err)
+		}
+		ownAdminDB = true
 	}
 
 	// Ensure roles exist.
 	if err := pgutil.EnsureRoles(ctx, adminDB); err != nil {
-		adminDB.Close()
+		if ownAdminDB {
+			adminDB.Close()
+		}
 		return fmt.Errorf("ensure roles: %w", err)
 	}
 
@@ -66,7 +78,9 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	var exists bool
 	err = adminDB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)", dbName).Scan(&exists)
 	if err != nil {
-		adminDB.Close()
+		if ownAdminDB {
+			adminDB.Close()
+		}
 		return fmt.Errorf("check database existence: %w", err)
 	}
 
@@ -75,12 +89,16 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 		// This value comes from the operator-controlled DSN, but we validate
 		// defensively to prevent SQL injection via CREATE DATABASE.
 		if strings.ContainsAny(dbName, `"'\;`) {
-			adminDB.Close()
+			if ownAdminDB {
+				adminDB.Close()
+			}
 			return fmt.Errorf("invalid database name: %s", dbName)
 		}
 		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(dbName, `"`, `""`))
 		if _, err := adminDB.ExecContext(ctx, "CREATE DATABASE "+quoted); err != nil { // CodeQL[go/sql-injection]: dbName is operator-controlled (from DSN config) and validated above
-			adminDB.Close()
+			if ownAdminDB {
+				adminDB.Close()
+			}
 			return fmt.Errorf("create database: %w", err)
 		}
 	}
@@ -89,7 +107,9 @@ func BootstrapPlatform(ctx context.Context, cfg Config) error {
 	// This avoids holding multiple connections simultaneously, which is
 	// important for kubectl port-forward tunnels that can't handle many
 	// concurrent connections reliably.
-	adminDB.Close()
+	if ownAdminDB {
+		adminDB.Close()
+	}
 
 	// 2. Open the target database and run Ent schema migration.
 	// Limit pool size to minimize concurrent connections through the tunnel.

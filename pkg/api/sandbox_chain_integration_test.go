@@ -56,7 +56,7 @@ func setupChainTestDB(t *testing.T) *entstore.Store {
 	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: suffix,
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("BootstrapPlatform: %v", err)
 	}
 	t.Cleanup(func() { dropTestDB(t, dsn, dbName) })

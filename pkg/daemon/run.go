@@ -182,7 +182,7 @@ func Run(cfg RunConfig) error {
 		// Auto-bootstrap for postgres mode
 		if appCfg.Storage.Backend == "postgres" {
 			logger.Printf("Platform store init failed, attempting auto-bootstrap: %v", err)
-			if bootstrapErr := entstore.BootstrapPlatform(context.Background(), entCfg); bootstrapErr != nil {
+			if bootstrapErr := entstore.BootstrapPlatform(context.Background(), entCfg, nil); bootstrapErr != nil {
 				return fmt.Errorf("failed to initialize platform storage: %w (auto-bootstrap also failed: %v)", err, bootstrapErr)
 			}
 			logger.Printf("Auto-bootstrap succeeded, retrying platform store init")

@@ -204,7 +204,7 @@ func BootstrapPlatformCore(ctx context.Context, opts CoreOptions) (*CoreHarness,
 	if err != nil {
 		return nil, err
 	}
-	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: opts.Suffix}); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: opts.Suffix}, nil); err != nil {
 		return nil, fmt.Errorf("BootstrapPlatform: %w", err)
 	}
 

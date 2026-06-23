@@ -123,7 +123,7 @@ func Bootstrap(t *testing.T) *Harness {
 	// Bootstrap fresh platform
 	t.Logf("[e2eboot] Bootstrapping platform (suffix=%s)...", suffix)
 	platformDSN := buildDSN(t, dsn, suffix)
-	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: suffix}); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entstore.Config{DSN: platformDSN, InstanceSuffix: suffix}, nil); err != nil {
 		t.Fatalf("[e2eboot] BootstrapPlatform: %v", err)
 	}
 	t.Cleanup(func() { DropAllDBsWithSuffix(ctx, dsn, suffix, t) })

@@ -98,6 +98,20 @@ func PlatformDBExistsConn(ctx context.Context, conn *pgx.Conn, suffix string) (b
 	return exists, err
 }
 
+// PlatformDBExistsDB checks whether a platform database with the given suffix
+// already exists, using an existing *sql.DB connection pool. Preferred over
+// PlatformDBExists when the caller needs to keep the connection alive for
+// subsequent operations (e.g., through kubectl port-forward tunnels).
+func PlatformDBExistsDB(ctx context.Context, db *sql.DB, suffix string) (bool, error) {
+	dbName := config.PlatformDBName(suffix)
+	var exists bool
+	err := db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`,
+		dbName,
+	).Scan(&exists)
+	return exists, err
+}
+
 // PostgreSQL roles used by the platform.
 const (
 	// RolePlatformAdmin owns all databases and runs migrations.

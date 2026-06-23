@@ -3,6 +3,7 @@ package astonish
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"database/sql"
 	"fmt"
 	"log/slog"
 	"os"
@@ -15,7 +16,7 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -1796,21 +1797,28 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	// Generate a unique instance suffix for this deployment.
 	suffix := config.GenerateInstanceSuffix()
 
-	// Build a temporary DSN and open a single connection for collision checks.
-	// Reusing one connection avoids issues with kubectl port-forward dropping
-	// subsequent TCP connections.
+	// Build a temporary DSN and open a single *sql.DB connection for the
+	// entire admin phase. Using *sql.DB keeps the TCP socket pooled, which
+	// is critical for kubectl port-forward tunnels that die when connections
+	// are closed and re-opened.
 	tempDSN := pgutil.BuildDSN(pgHost, port, pgUser, pgPassword, "postgres", pgSSLMode)
 	ctx := context.Background()
-	adminConn, connErr := pgx.Connect(ctx, tempDSN)
+	adminDB, connErr := sql.Open("pgx", tempDSN)
 	if connErr != nil {
 		return fmt.Errorf("failed to connect to PostgreSQL: %w", connErr)
 	}
-	defer adminConn.Close(ctx)
+	adminDB.SetMaxOpenConns(1)
+	adminDB.SetMaxIdleConns(1)
+	if connErr = adminDB.PingContext(ctx); connErr != nil {
+		adminDB.Close()
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", connErr)
+	}
 
 	// Check for suffix collision (extremely unlikely).
 	for attempts := 0; attempts < 5; attempts++ {
-		exists, checkErr := pgutil.PlatformDBExistsConn(ctx, adminConn, suffix)
+		exists, checkErr := pgutil.PlatformDBExistsDB(ctx, adminDB, suffix)
 		if checkErr != nil {
+			adminDB.Close()
 			return fmt.Errorf("failed to check database existence: %w", checkErr)
 		}
 		if !exists {
@@ -1827,11 +1835,13 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	fmt.Println()
 	fmt.Printf("  Connecting to PostgreSQL at %s:%d...\n", pgHost, port)
 
-	// Bootstrap the platform database.
+	// Bootstrap the platform database. Pass adminDB so bootstrap reuses our
+	// existing connection for admin ops instead of opening a new one.
 	if err := entstore.BootstrapPlatform(ctx, entstore.Config{
 		DSN:            platformDSN,
 		InstanceSuffix: suffix,
-	}); err != nil {
+	}, adminDB); err != nil {
+		adminDB.Close()
 		fmt.Println()
 		fmt.Printf("  ✗ Failed: %v\n", err)
 		fmt.Println()
@@ -1858,6 +1868,7 @@ func handlePlatformModeSetup(cfg *config.AppConfig) error {
 	}
 
 	fmt.Println("  ✓ Platform database initialized")
+	adminDB.Close()
 	fmt.Println()
 
 	// Generate JWT secret and save to config.
@@ -1962,7 +1973,7 @@ func handleSQLitePlatformSetup(cfg *config.AppConfig) error {
 		DSN:     "file:" + filepath.Join(dataDir, "platform.db"),
 		DataDir: dataDir,
 	}
-	if err := entstore.BootstrapPlatform(ctx, entCfg); err != nil {
+	if err := entstore.BootstrapPlatform(ctx, entCfg, nil); err != nil {
 		fmt.Println()
 		fmt.Printf("  ✗ Failed to initialize database: %v\n", err)
 		fmt.Println()

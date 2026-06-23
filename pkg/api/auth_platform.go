@@ -144,13 +144,18 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		req.DisplayName = strings.Split(req.Email, "@")[0]
 	}
 
-	// Check if registration is allowed
-	if !pa.authCfg.IsRegistrationAllowed() {
+	// Check if this is the first user (org bootstrap) — always allowed regardless
+	// of registration policy, since someone must be able to set up the platform.
+	ctx := r.Context()
+	orgCount, _ := pa.pgStore.Organizations().Count(ctx)
+	isFirstUser := orgCount == 0
+
+	// Check if registration is allowed (DB override > YAML config).
+	// The first-user bootstrap is exempt — the platform must be initializable.
+	if !isFirstUser && !pa.isRegistrationEffectivelyAllowed(ctx) {
 		respondError(w, http.StatusForbidden, "registration is disabled; contact your administrator for an invitation")
 		return
 	}
-
-	ctx := r.Context()
 
 	// Check if email is already taken
 	existing, _ := pa.pgStore.Users().GetByEmail(ctx, req.Email)
@@ -166,15 +171,11 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this is the first user (org bootstrap)
-	orgCount, _ := pa.pgStore.Organizations().Count(ctx)
-	isFirstUser := orgCount == 0
-
 	// Determine initial status:
 	// - First user: always "active" (bootstrap, no one to verify against)
 	// - Subsequent users: "pending_verification" if email verification is required
 	initialStatus := "active"
-	if !isFirstUser && pa.authCfg.IsEmailVerificationRequired() {
+	if !isFirstUser && pa.isEmailVerificationEffectivelyRequired(ctx) {
 		initialStatus = "pending_verification"
 	}
 
@@ -210,7 +211,7 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Non-first user: do NOT auto-assign to any org or team.
 	// Team admins will add them later via POST /api/teams/{slug}/members.
 
-	if pa.authCfg.IsEmailVerificationRequired() {
+	if pa.isEmailVerificationEffectivelyRequired(ctx) {
 		// Send verification code
 		if err := pa.sendRegistrationVerificationCode(ctx, user); err != nil {
 			slog.Error("failed to send verification code", "email", user.Email, "error", err)
@@ -637,11 +638,35 @@ func (pa *PlatformAuth) handleSetupStatus(w http.ResponseWriter, r *http.Request
 
 	resp := map[string]any{
 		"initialized":        count > 0,
-		"allow_registration": pa.authCfg.IsRegistrationAllowed(),
+		"allow_registration": pa.isRegistrationEffectivelyAllowed(ctx),
 		"auth_mode":          pa.authCfg.Mode,
 	}
 
 	respondJSON(w, http.StatusOK, resp)
+}
+
+// --- Effective auth policy (DB override > YAML config) ---
+
+// isRegistrationEffectivelyAllowed checks platform_settings.auth.allow_registration first,
+// falling back to the YAML config value. This allows superadmins to toggle registration
+// at runtime from the Platform Admin UI without restarting the daemon.
+// The first-user bootstrap flow is always allowed regardless of this setting.
+func (pa *PlatformAuth) isRegistrationEffectivelyAllowed(ctx context.Context) bool {
+	settings, err := pa.pgStore.PlatformSettings().Get(ctx)
+	if err == nil && settings != nil && settings.Auth != nil && settings.Auth.AllowRegistration != nil {
+		return *settings.Auth.AllowRegistration
+	}
+	return pa.authCfg.IsRegistrationAllowed()
+}
+
+// isEmailVerificationEffectivelyRequired checks platform_settings.auth.require_email_verification
+// first, falling back to the YAML config value.
+func (pa *PlatformAuth) isEmailVerificationEffectivelyRequired(ctx context.Context) bool {
+	settings, err := pa.pgStore.PlatformSettings().Get(ctx)
+	if err == nil && settings != nil && settings.Auth != nil && settings.Auth.RequireEmailVerification != nil {
+		return *settings.Auth.RequireEmailVerification
+	}
+	return pa.authCfg.IsEmailVerificationRequired()
 }
 
 // --- Internal helpers ---

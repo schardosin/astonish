@@ -364,3 +364,28 @@ export async function deleteOIDCProvider(id: string): Promise<void> {
   })
   await throwIfNotOk(res, 'Failed to delete OIDC provider')
 }
+
+// --- Auth Settings (Registration Policy) ---
+
+export interface PlatformAuthSettings {
+  allow_registration: boolean
+  require_email_verification: boolean
+}
+
+export async function getPlatformAuthSettings(): Promise<PlatformAuthSettings> {
+  const res = await adminFetch(`${ADMIN_BASE}/auth-settings`)
+  await throwIfNotOk(res, 'Failed to load auth settings')
+  return res.json()
+}
+
+export async function savePlatformAuthSettings(
+  settings: Partial<PlatformAuthSettings>
+): Promise<PlatformAuthSettings> {
+  const res = await adminFetch(`${ADMIN_BASE}/auth-settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+  await throwIfNotOk(res, 'Failed to save auth settings')
+  return res.json()
+}

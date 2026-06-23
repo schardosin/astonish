@@ -687,6 +687,21 @@ func slugifyOrgName(name string) string {
 // It's set during daemon initialization via SetPlatformBackend.
 var platformBackendInstance store.PlatformBackend
 
+// platformAuthInstance holds the PlatformAuth singleton.
+// Set during daemon initialization via SetPlatformAuth.
+var platformAuthInstance *PlatformAuth
+
+// SetPlatformAuth registers the platform auth instance for use by handlers
+// that need to resolve effective auth settings (DB override merged with YAML config).
+func SetPlatformAuth(pa *PlatformAuth) {
+	platformAuthInstance = pa
+}
+
+// getPlatformAuth returns the registered PlatformAuth instance, or nil.
+func getPlatformAuth() *PlatformAuth {
+	return platformAuthInstance
+}
+
 // SetPlatformBackend sets the platform backend.
 func SetPlatformBackend(backend store.PlatformBackend) {
 	platformBackendInstance = backend

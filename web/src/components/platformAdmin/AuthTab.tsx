@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } from 'react'
-import { Plus, Trash2, Loader2, Edit2, Shield, ToggleLeft, ToggleRight, Globe, Eye, EyeOff } from 'lucide-react'
+import { Plus, Trash2, Loader2, Edit2, Shield, ToggleLeft, ToggleRight, Globe, Eye, EyeOff, UserPlus, Mail } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
-import type { OIDCProvider } from '../../api/platformAdmin'
+import type { OIDCProvider, PlatformAuthSettings } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, gradientAmber, inputStyle } from './shared'
 
 // ---------------------------------------------------------------------------
@@ -17,6 +17,11 @@ export default function AuthTab() {
   const [editingProvider, setEditingProvider] = useState<OIDCProvider | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
 
+  // Auth settings state
+  const [authSettings, setAuthSettings] = useState<PlatformAuthSettings | null>(null)
+  const [authSettingsLoading, setAuthSettingsLoading] = useState<boolean>(true)
+  const [authSettingsSaving, setAuthSettingsSaving] = useState<string | null>(null) // tracks which field is saving
+
   const load = useCallback(async () => {
     setLoading(true); setError('')
     try {
@@ -29,7 +34,19 @@ export default function AuthTab() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  const loadAuthSettings = useCallback(async () => {
+    setAuthSettingsLoading(true)
+    try {
+      const data = await adminApi.getPlatformAuthSettings()
+      setAuthSettings(data)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setAuthSettingsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load(); void loadAuthSettings() }, [load, loadAuthSettings])
 
   // Auto-dismiss
   useEffect(() => {
@@ -38,6 +55,22 @@ export default function AuthTab() {
   useEffect(() => {
     if (error) { const t = setTimeout(() => setError(''), 5000); return () => clearTimeout(t) }
   }, [error])
+
+  const handleToggleAuthSetting = async (field: keyof PlatformAuthSettings) => {
+    if (!authSettings) return
+    setAuthSettingsSaving(field)
+    try {
+      const newValue = !authSettings[field]
+      const updated = await adminApi.savePlatformAuthSettings({ [field]: newValue })
+      setAuthSettings(updated)
+      const label = field === 'allow_registration' ? 'Self-registration' : 'Email verification'
+      setSuccess(`${label} ${newValue ? 'enabled' : 'disabled'}`)
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setAuthSettingsSaving(null)
+    }
+  }
 
   const handleToggleEnabled = async (provider: OIDCProvider) => {
     setTogglingId(provider.id)
@@ -75,8 +108,95 @@ export default function AuthTab() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {/* Header description + action bar */}
+        {/* --- Registration Policy Section --- */}
+        <div className="mb-6">
+          <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Registration Policy</h3>
+          <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
+            Control how new users can join the platform. Disable self-registration to allow only admin-invited users or OIDC-provisioned accounts.
+          </p>
+
+          {authSettingsLoading ? (
+            <div className="flex items-center gap-2 py-4">
+              <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>Loading settings...</span>
+            </div>
+          ) : authSettings && (
+            <div className="space-y-3">
+              {/* Allow self-registration toggle */}
+              <div
+                className="flex items-center justify-between p-4 rounded-xl"
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg" style={{ background: authSettings.allow_registration ? 'rgba(34, 197, 94, 0.1)' : 'rgba(107, 114, 128, 0.1)' }}>
+                    <UserPlus size={16} style={{ color: authSettings.allow_registration ? '#22c55e' : 'var(--text-muted)' }} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Allow self-registration</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      When disabled, only administrators can create new user accounts. Users cannot sign up on their own.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleToggleAuthSetting('allow_registration')}
+                  disabled={authSettingsSaving === 'allow_registration'}
+                  className="p-1.5 rounded-lg transition-opacity hover:opacity-80 flex-shrink-0 ml-4"
+                  title={authSettings.allow_registration ? 'Disable registration' : 'Enable registration'}
+                  style={{ color: authSettings.allow_registration ? '#22c55e' : 'var(--text-muted)' }}
+                >
+                  {authSettingsSaving === 'allow_registration' ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : authSettings.allow_registration ? (
+                    <ToggleRight size={24} />
+                  ) : (
+                    <ToggleLeft size={24} />
+                  )}
+                </button>
+              </div>
+
+              {/* Require email verification toggle */}
+              <div
+                className="flex items-center justify-between p-4 rounded-xl"
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="p-2 rounded-lg" style={{ background: authSettings.require_email_verification ? 'rgba(34, 197, 94, 0.1)' : 'rgba(107, 114, 128, 0.1)' }}>
+                    <Mail size={16} style={{ color: authSettings.require_email_verification ? '#22c55e' : 'var(--text-muted)' }} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Require email verification</div>
+                    <div className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                      When enabled, new users must verify their email address with a 6-digit code before their account becomes active.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleToggleAuthSetting('require_email_verification')}
+                  disabled={authSettingsSaving === 'require_email_verification'}
+                  className="p-1.5 rounded-lg transition-opacity hover:opacity-80 flex-shrink-0 ml-4"
+                  title={authSettings.require_email_verification ? 'Disable verification' : 'Enable verification'}
+                  style={{ color: authSettings.require_email_verification ? '#22c55e' : 'var(--text-muted)' }}
+                >
+                  {authSettingsSaving === 'require_email_verification' ? (
+                    <Loader2 size={20} className="animate-spin" />
+                  ) : authSettings.require_email_verification ? (
+                    <ToggleRight size={24} />
+                  ) : (
+                    <ToggleLeft size={24} />
+                  )}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Divider */}
+        <div className="border-t mb-6" style={{ borderColor: 'var(--border-color)' }} />
+
+        {/* --- SSO / OIDC Providers Section --- */}
         <div className="mb-4">
+          <h3 className="text-sm font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Identity Providers (SSO)</h3>
           <p className="text-xs mb-3" style={{ color: 'var(--text-muted)' }}>
             Configure external identity providers for Single Sign-On (SSO). Supports any OIDC-compliant provider (SAP IAS, Azure AD, Okta, Google, Keycloak, etc.).
             Users must be pre-provisioned in Astonish before they can authenticate via SSO.

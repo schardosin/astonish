@@ -285,6 +285,7 @@ func Run(cfg RunConfig) error {
 	var platformAuth *api.PlatformAuth
 
 	platformAuth = api.NewPlatformAuth(appCfg.Storage.Auth, backend, appCfg.Storage)
+	api.SetPlatformAuth(platformAuth)
 	// Wire up link code store for registration email verification
 	platformAuth.SetLinkCodeStoreForAuth(backend.NewLinkCodeStore())
 	if appCfg.Storage.Auth.GetJWTSecret() == "" {

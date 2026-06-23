@@ -1326,6 +1326,10 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminUpdateOIDCProviderHandler).Methods("PATCH")
 		router.HandleFunc("/api/platform/admin/oidc-providers/{id}", PlatformAdminDeleteOIDCProviderHandler).Methods("DELETE")
 
+		// Auth policy settings (superadmin only)
+		router.HandleFunc("/api/platform/admin/auth-settings", PlatformAdminGetAuthSettingsHandler).Methods("GET")
+		router.HandleFunc("/api/platform/admin/auth-settings", PlatformAdminSaveAuthSettingsHandler).Methods("PUT")
+
 		// Channel adapter management (superadmin only)
 		router.HandleFunc("/api/platform/admin/channels", PlatformAdminListChannelsHandler).Methods("GET")
 		router.HandleFunc("/api/platform/admin/channels/{type}", PlatformAdminSaveChannelHandler).Methods("PUT")

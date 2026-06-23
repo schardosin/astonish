@@ -1,0 +1,122 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// platformAuthSettingsResponse is returned by GET /api/platform/admin/auth-settings.
+// It represents the effective auth policy (DB override merged with config defaults).
+type platformAuthSettingsResponse struct {
+	AllowRegistration        bool `json:"allow_registration"`
+	RequireEmailVerification bool `json:"require_email_verification"`
+}
+
+// platformAuthSettingsRequest is accepted by PUT /api/platform/admin/auth-settings.
+type platformAuthSettingsRequest struct {
+	AllowRegistration        *bool `json:"allow_registration"`
+	RequireEmailVerification *bool `json:"require_email_verification"`
+}
+
+// PlatformAdminGetAuthSettingsHandler handles GET /api/platform/admin/auth-settings.
+// Returns the effective auth settings (DB values merged with YAML defaults).
+// Requires superadmin.
+func PlatformAdminGetAuthSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	settings, err := backend.PlatformSettings().Get(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to load platform settings")
+		return
+	}
+
+	// Build effective values: DB override > YAML config default.
+	pa := getPlatformAuth()
+	resp := platformAuthSettingsResponse{
+		AllowRegistration:        effectiveAllowRegistration(settings, pa),
+		RequireEmailVerification: effectiveRequireEmailVerification(settings, pa),
+	}
+
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// PlatformAdminSaveAuthSettingsHandler handles PUT /api/platform/admin/auth-settings.
+// Persists auth policy settings into the platform_settings table.
+// Requires superadmin.
+func PlatformAdminSaveAuthSettingsHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	var req platformAuthSettingsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Load existing platform settings (preserves providers, channels, etc.).
+	settings, err := backend.PlatformSettings().Get(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to load platform settings")
+		return
+	}
+
+	// Initialize auth sub-struct if nil.
+	if settings.Auth == nil {
+		settings.Auth = &store.PlatformAuthSettings{}
+	}
+
+	// Apply requested changes.
+	if req.AllowRegistration != nil {
+		settings.Auth.AllowRegistration = req.AllowRegistration
+	}
+	if req.RequireEmailVerification != nil {
+		settings.Auth.RequireEmailVerification = req.RequireEmailVerification
+	}
+
+	// Persist.
+	if err := backend.PlatformSettings().Save(ctx, settings); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save auth settings")
+		return
+	}
+
+	// Return the effective settings after save.
+	pa := getPlatformAuth()
+	resp := platformAuthSettingsResponse{
+		AllowRegistration:        effectiveAllowRegistration(settings, pa),
+		RequireEmailVerification: effectiveRequireEmailVerification(settings, pa),
+	}
+	respondJSON(w, http.StatusOK, resp)
+}
+
+// effectiveAllowRegistration resolves the allow_registration value:
+// DB override (if non-nil) > YAML config > true (default).
+func effectiveAllowRegistration(settings *store.PlatformSettings, pa *PlatformAuth) bool {
+	if settings != nil && settings.Auth != nil && settings.Auth.AllowRegistration != nil {
+		return *settings.Auth.AllowRegistration
+	}
+	if pa != nil {
+		return pa.authCfg.IsRegistrationAllowed()
+	}
+	return true
+}
+
+// effectiveRequireEmailVerification resolves the require_email_verification value:
+// DB override (if non-nil) > YAML config > true (default).
+func effectiveRequireEmailVerification(settings *store.PlatformSettings, pa *PlatformAuth) bool {
+	if settings != nil && settings.Auth != nil && settings.Auth.RequireEmailVerification != nil {
+		return *settings.Auth.RequireEmailVerification
+	}
+	if pa != nil {
+		return pa.authCfg.IsEmailVerificationRequired()
+	}
+	return true
+}

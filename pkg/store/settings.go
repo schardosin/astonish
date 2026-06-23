@@ -23,6 +23,24 @@ type PlatformSettings struct {
 	// Channels holds per-channel-type configuration (non-secret fields).
 	// Secrets (tokens, passwords) are stored separately in platform_secrets.
 	Channels *PlatformChannelSettings `json:"channels,omitempty"`
+
+	// Auth holds platform-wide authentication policy settings.
+	// These override the corresponding YAML config values when set.
+	Auth *PlatformAuthSettings `json:"auth,omitempty"`
+}
+
+// PlatformAuthSettings holds platform-wide authentication policy that can be
+// changed at runtime via the Platform Admin UI. When a field is non-nil it
+// overrides the corresponding value from the YAML config file.
+type PlatformAuthSettings struct {
+	// AllowRegistration controls whether new users can self-register.
+	// nil means "use YAML config default" (which itself defaults to true).
+	AllowRegistration *bool `json:"allow_registration,omitempty"`
+
+	// RequireEmailVerification controls whether self-registered users must
+	// verify their email before their account becomes active.
+	// nil means "use YAML config default" (which itself defaults to true).
+	RequireEmailVerification *bool `json:"require_email_verification,omitempty"`
 }
 
 // PlatformChannelSettings groups configuration for all supported channel adapters.

@@ -162,6 +162,59 @@ This is because the gateway uses different identifiers for lifecycle
 operations (human-readable name) vs exec routing (internal UUID that
 maps to the supervisor's relay stream).
 
+### Workspace Storage (Ephemeral)
+
+The OpenShell Gateway K8s driver attaches a workspace PVC (`/sandbox`)
+to each sandbox pod by default — a 2Gi `ReadWriteOnce` PVC that adds
+significant latency (~35s on Cinder/OpenStack StorageClasses) to pod
+startup.
+
+**Astonish eliminates this** via a Kyverno ClusterPolicy that mutates
+sandbox **Pods** at admission time (after the Sandbox controller creates
+them):
+
+1. Intercepts Pods in the sandbox namespace that have a `workspace`
+   volume backed by `persistentVolumeClaim`
+2. Replaces that volume entry with `emptyDir: { sizeLimit: "2Gi" }`
+
+The Sandbox controller still creates the PVC from `volumeClaimTemplates`
+(because mutating the CRD's VCTs causes the controller to skip the
+workspace volume injection entirely, breaking the pod). However, since
+the pod no longer references the PVC, it starts immediately without
+waiting for provisioning. The orphaned PVC has an ownerReference to
+the Sandbox and is cascade-deleted on Sandbox destruction — no cleanup
+needed.
+
+The `/sandbox` directory is fast, ephemeral, and lost on pod restart.
+
+**Why not a gRPC-level fix?** The `volume_claim_templates` proto field
+is `google.protobuf.Struct` (serializes as JSON Object), but the Sandbox
+CRD's `spec.volumeClaimTemplates` expects a JSON Array. The gateway
+passes the Struct directly to the CRD, causing schema validation errors.
+The `driver_config` field has no volume-related options. The
+`workspace_default_storage_size = "0"` config suppresses PVC creation
+but not the volume mount reference (pod stuck Pending). No gRPC-level
+mechanism works in OpenShell v0.0.63.
+
+**Configuration:**
+
+```yaml
+# values.yaml
+sandbox:
+  openshell:
+    ephemeralWorkspace: true  # Requires Kyverno installed
+```
+
+**Prerequisite:** Kyverno must be installed in the cluster:
+```bash
+helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+```
+
+**Policy location:** `templates/openshell/kyverno-policy.yaml`
+
+**Disposable:** Remove once OpenShell fixes workspace PVC injection
+upstream (issues #967/#971).
+
 ---
 
 ## 4. Agent Tool Execution

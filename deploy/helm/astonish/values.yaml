@@ -312,6 +312,14 @@ sandbox:
     # Evicted sessions are transparently recreated on next tool call (~5-10s).
     idleTimeoutMinutes: 240
 
+    # Replace the default workspace PVC with emptyDir via Kyverno mutation.
+    # The OpenShell gateway injects a 2Gi workspace PVC into every sandbox pod.
+    # On Cinder-backed clusters this adds ~35s of provisioning latency.
+    # When enabled, a Kyverno ClusterPolicy strips the volumeClaimTemplates
+    # and replaces the workspace volume with emptyDir — zero PVC latency.
+    # REQUIRES: Kyverno installed in the cluster.
+    ephemeralWorkspace: false
+
   # Resource limits for sandbox session pods.
   # The "limits" block defines the per-session CEILING (cgroup throttle) —
   # equivalent to the Incus cgroup cap. A session can burst up to this

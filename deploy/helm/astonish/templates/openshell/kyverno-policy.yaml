@@ -1,0 +1,71 @@
+{{- if and .Values.sandbox.openshell.enabled .Values.sandbox.openshell.ephemeralWorkspace }}
+---
+# Kyverno ClusterPolicy: Replace OpenShell workspace PVC with emptyDir.
+#
+# The OpenShell gateway always injects a 2Gi workspace PVC into every Sandbox
+# CRD. On Cinder-backed clusters (OpenStack), PVC provisioning adds ~35s of
+# latency to sandbox startup because the pod waits for the PVC to bind.
+#
+# This policy intercepts sandbox Pods at admission time (after the Sandbox
+# controller creates them) and replaces the "workspace" PVC volume with an
+# emptyDir. The pod starts immediately without waiting for PVC provisioning.
+#
+# The Sandbox controller still creates the PVC from volumeClaimTemplates, but
+# since the pod doesn't reference it, startup is not blocked. The PVC has an
+# ownerReference to the Sandbox and is cascade-deleted when the Sandbox is
+# destroyed — no orphans.
+#
+# PREREQUISITE: Kyverno must be installed in the cluster.
+#   helm install kyverno kyverno/kyverno -n kyverno --create-namespace
+#
+# This policy is disposable — remove once OpenShell fixes workspace PVC
+# injection upstream (issues #967/#971).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "astonish.fullname" . }}-sandbox-emptydir
+  labels:
+    {{- include "astonish.labels" . | nindent 4 }}
+    app.kubernetes.io/component: openshell-workspace
+  annotations:
+    policies.kyverno.io/title: "Replace OpenShell workspace PVC with emptyDir"
+    policies.kyverno.io/category: "Astonish Sandbox"
+    policies.kyverno.io/severity: "medium"
+    policies.kyverno.io/description: >-
+      Mutates sandbox Pods at admission time to replace the workspace PVC volume
+      with emptyDir, eliminating Cinder PVC provisioning latency (~28s).
+spec:
+  # failurePolicy: Fail ensures sandbox pods are not created with PVC volumes
+  # if Kyverno cannot process them. Change to Ignore if you prefer slow over broken.
+  failurePolicy: Fail
+  rules:
+    - name: replace-workspace-pvc-with-emptydir
+      match:
+        any:
+        - resources:
+            kinds:
+              - v1/Pod
+            namespaces:
+              - {{ include "astonish.namespace.sandbox" . }}
+      # Only mutate pods that have a workspace volume with a PVC source.
+      preconditions:
+        all:
+        - key: "{{`{{ request.object.spec.volumes[?(@.name=='workspace')].persistentVolumeClaim | length(@) }}`}}"
+          operator: GreaterThanOrEquals
+          value: 1
+      mutate:
+        foreach:
+        - list: request.object.spec.volumes
+          preconditions:
+            all:
+            - key: "{{`{{ element.name }}`}}"
+              operator: Equals
+              value: workspace
+          patchesJson6902: |-
+            - op: replace
+              path: /spec/volumes/{{`{{ elementIndex }}`}}
+              value:
+                name: workspace
+                emptyDir:
+                  sizeLimit: "2Gi"
+{{- end }}

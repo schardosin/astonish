@@ -75,6 +75,7 @@ sandbox:
 
   openshell:
     enabled: true
+    ephemeralWorkspace: true  # Kyverno: strip workspace PVC, use emptyDir
     gateway:
       addr: ""  # auto-derived: astonishe2eos-openshell.astonishe2eos.svc.cluster.local:8080
     image:

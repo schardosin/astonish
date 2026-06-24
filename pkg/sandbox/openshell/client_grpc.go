@@ -158,16 +158,18 @@ func bearerTokenStreamInterceptor(token string) grpc.StreamClientInterceptor {
 // ---------------------------------------------------------------------------
 
 func (c *grpcGatewayClient) CreateSandbox(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+	template := &pb.SandboxTemplate{
+		Image:       req.Image,
+		Environment: req.Env,
+		Labels:      req.Labels,
+	}
+
 	pbReq := &pb.CreateSandboxRequest{
 		Name:   req.Name,
 		Labels: req.Labels,
 		Spec: &pb.SandboxSpec{
-			Template: &pb.SandboxTemplate{
-				Image:       req.Image,
-				Environment: req.Env,
-				Labels:      req.Labels,
-			},
-			Policy: mapPolicyToProto(req.Policy),
+			Template: template,
+			Policy:   mapPolicyToProto(req.Policy),
 		},
 	}
 

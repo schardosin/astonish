@@ -205,10 +205,10 @@ sandbox:
     ephemeralWorkspace: true  # Requires Kyverno installed
 ```
 
-**Prerequisite:** Kyverno must be installed in the cluster:
-```bash
-helm install kyverno kyverno/kyverno -n kyverno --create-namespace
-```
+**Prerequisite:** Kyverno 1.12+ must be installed in the cluster.
+See the [OpenShell Deployment Guide](../website/docs/deployment/openshell.md#4-install-kyverno-recommended-for-production)
+for detailed installation instructions, version requirements, HA configuration,
+and troubleshooting.
 
 **Policy location:** `templates/openshell/kyverno-policy.yaml`
 

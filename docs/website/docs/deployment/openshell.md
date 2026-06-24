@@ -31,6 +31,65 @@ Verify the CRD is installed:
 kubectl get crd sandboxes.agents.x-k8s.io
 ```
 
+### 4. Install Kyverno (Recommended for Production)
+
+[Kyverno](https://kyverno.io) is a Kubernetes-native policy engine that Astonish uses to eliminate workspace PVC provisioning latency. Without it, every sandbox pod waits for a 2Gi PVC to provision before starting — adding **~35 seconds on Cinder/OpenStack** clusters and 5-15s on EBS gp2/gp3.
+
+With Kyverno installed and `ephemeralWorkspace: true` set, a ClusterPolicy mutates sandbox pods at admission time to replace the PVC-backed workspace volume with a fast `emptyDir`. Sandbox startup drops to **3-5 seconds** regardless of StorageClass speed.
+
+**When to install:**
+
+- **Required** if you set `sandbox.openshell.ephemeralWorkspace: true` (recommended for production)
+- **Not needed** if your cluster has fast block storage provisioning (local-path, NVMe-backed CSI < 2s) or if you need persistent workspace data across sandbox restarts (rare)
+
+**Install Kyverno:**
+
+```bash
+# Add the Kyverno Helm repository
+helm repo add kyverno https://kyverno.github.io/kyverno/
+helm repo update
+
+# Install Kyverno (v1.12+ required; v1.18+ recommended)
+helm install kyverno kyverno/kyverno \
+  --namespace kyverno \
+  --create-namespace \
+  --set admissionController.replicas=3 \
+  --set backgroundController.replicas=2 \
+  --wait
+```
+
+For high-availability production clusters, use 3 admission controller replicas. For dev/test, a single replica is fine:
+
+```bash
+# Minimal install for dev/test
+helm install kyverno kyverno/kyverno \
+  --namespace kyverno \
+  --create-namespace \
+  --wait
+```
+
+**Verify Kyverno is running:**
+
+```bash
+# All pods should be Running
+kubectl -n kyverno get pods
+
+# The admission webhook should be registered
+kubectl get mutatingwebhookconfigurations | grep kyverno
+```
+
+Expected output:
+
+```
+kyverno-resource-mutating-webhook-cfg   ...   ...
+```
+
+**Important notes:**
+
+- Kyverno is a **cluster-wide** tool. If it's already installed in your cluster (by another team or platform), skip this step — the Astonish ClusterPolicy will work with any existing Kyverno 1.12+ installation.
+- Kyverno is **not** bundled as a subchart dependency. It must be installed separately before deploying Astonish with `ephemeralWorkspace: true`.
+- The Astonish ClusterPolicy is **disposable** — it works around a limitation in OpenShell v0.0.63 (issues [#967](https://github.com/NVIDIA/OpenShell/issues/967), [#971](https://github.com/NVIDIA/OpenShell/issues/971)). Once upstream fixes workspace PVC injection, remove the policy by setting `ephemeralWorkspace: false`.
+
 ## Platform Initialization
 
 ### 1. Initialize the Database
@@ -140,6 +199,8 @@ sandbox:
 
   openshell:
     enabled: true
+    # Eliminate workspace PVC latency via Kyverno pod mutation (requires Kyverno)
+    ephemeralWorkspace: true
     # Gateway address — leave empty for auto-derived:
     #   "{release}-openshell.{namespace}.svc.cluster.local:8080"
     gateway:
@@ -313,6 +374,8 @@ OpenShell supervisor containers require elevated privileges (`SYS_ADMIN`, `NET_A
 
 The chart requires a `storageClassName` for validation even though OpenShell does not use the overlay PVC system. The PVCs are created but remain unused. Set this to any available RWX StorageClass in your cluster.
 
+Note: The workspace PVC that OpenShell creates per sandbox is separate from this storage class — it uses the cluster's default StorageClass. To eliminate workspace PVC latency, see [Workspace Storage (Ephemeral Mode)](#workspace-storage-ephemeral-mode) below.
+
 ### Network Policy Presets
 
 By default, sandboxes can reach common external services (code hosting, package registries, LLM APIs, CDNs). The OpenShell supervisor enforces these rules at the network namespace level — the Kubernetes NetworkPolicy is permissive, and fine-grained enforcement happens inside the sandbox.
@@ -344,6 +407,86 @@ The `namespaces.prefix` value drives all namespace names:
 | `prefix: astonish-prod` | Control plane: `astonish-prod`, Sandboxes: `astonish-prod-sandbox` |
 
 The `openshell.server.sandboxNamespace` must match the computed sandbox namespace.
+
+### Workspace Storage (Ephemeral Mode)
+
+By default, the OpenShell gateway injects a 2Gi `ReadWriteOnce` PersistentVolumeClaim into every sandbox pod for the `/sandbox` workspace directory. On clusters with slow block storage provisioning (Cinder/OpenStack, EBS gp2), this PVC provisioning dominates sandbox startup time — **adding 15-35+ seconds** before the pod can start.
+
+**How ephemeral mode works:**
+
+When `sandbox.openshell.ephemeralWorkspace: true` is set and Kyverno is installed, the Astonish Helm chart deploys a `ClusterPolicy` that:
+
+1. Intercepts sandbox Pod creation at admission time (after the Sandbox controller assembles the pod spec)
+2. Finds the `workspace` volume (which references a PVC)
+3. Replaces it with `emptyDir: { sizeLimit: "2Gi" }`
+
+The pod starts immediately — no PVC provisioning wait. The `/sandbox` directory is backed by the node's filesystem (tmpfs or disk, depending on kubelet configuration).
+
+**Trade-offs:**
+
+| Aspect | With PVC (default) | With emptyDir (ephemeral) |
+|--------|-------------------|--------------------------|
+| Startup latency | 15-35s (Cinder) | 3-5s |
+| Data persistence | Survives pod restart | Lost on pod restart |
+| Storage accounting | Per-PVC billing | Part of node ephemeral storage |
+| Cleanup | PVC deleted with Sandbox | Automatic (pod termination) |
+| Capacity | Fixed 2Gi PVC | Shared node ephemeral storage (2Gi soft limit) |
+
+For most use cases, ephemeral mode is preferred: chat sessions are short-lived, sandboxes are destroyed after idle timeout, and workspace data does not need to survive restarts.
+
+**Enable ephemeral mode:**
+
+```yaml
+sandbox:
+  openshell:
+    ephemeralWorkspace: true  # Requires Kyverno (see Prerequisites §4)
+```
+
+**Verify the policy is active:**
+
+```bash
+# The ClusterPolicy should exist and report "Ready"
+kubectl get clusterpolicy -l app.kubernetes.io/component=openshell-workspace
+
+# Expected output:
+# NAME                        ADMISSION   BACKGROUND   ...   MESSAGE
+# astonish-sandbox-emptydir   true        true         ...   Ready
+```
+
+**Verify a sandbox pod uses emptyDir:**
+
+```bash
+# After creating a sandbox (or starting a chat), inspect the pod:
+kubectl -n <sandbox-namespace> get pods
+kubectl -n <sandbox-namespace> get pod <sandbox-pod> -o jsonpath='{.spec.volumes[?(@.name=="workspace")]}'
+
+# Expected: {"emptyDir":{"sizeLimit":"2Gi"},"name":"workspace"}
+# NOT:      {"name":"workspace","persistentVolumeClaim":{"claimName":"..."}}
+```
+
+**Troubleshooting:**
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| Sandbox pods stuck `Pending` with volume error | Kyverno not installed or policy not deployed | Install Kyverno, run `helm upgrade` |
+| `ClusterPolicy` shows `Ready: false` | Kyverno webhook not registered | Check `kubectl -n kyverno get pods`, restart if needed |
+| Pod has PVC volume despite `ephemeralWorkspace: true` | Policy not matching (wrong namespace) | Verify `openshell.server.sandboxNamespace` matches `namespaces.prefix` + `-sandbox` |
+| Kyverno logs show "failed to apply rule" | Kyverno version too old (< 1.12) | Upgrade Kyverno to 1.12+ |
+| Pod starts but `/sandbox` writes fail with ENOSPC | Node ephemeral storage full | Increase node disk or reduce `sizeLimit` |
+
+**Disabling ephemeral mode:**
+
+To revert to PVC-backed workspace storage (e.g., if you need persistent workspace data):
+
+```yaml
+sandbox:
+  openshell:
+    ephemeralWorkspace: false  # Default — Kyverno policy not deployed
+```
+
+Run `helm upgrade` — the ClusterPolicy will be removed and new sandboxes will use PVC storage.
+
+**Note on orphaned PVCs:** When ephemeral mode is active, the Sandbox controller still creates a PVC (from `volumeClaimTemplates` in the Sandbox CRD). This PVC remains `Pending` (never bound, since no pod references it) and is automatically cascade-deleted when the Sandbox is destroyed via its `ownerReference`. No manual cleanup is required.
 
 ## See Also
 

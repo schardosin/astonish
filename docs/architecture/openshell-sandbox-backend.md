@@ -301,7 +301,7 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
             },
             ReadWrite: []string{
                 "/sandbox", "/tmp", "/var/tmp", "/home", "/run",
-                "/dev/ptmx", "/dev/pts",   // PTY allocation (kernel 6.10+ ABI v5)
+                "/dev/pts",            // PTY devices directory (kernel 6.10+ ABI v5)
             },
         },
     }
@@ -317,10 +317,13 @@ requires PTY allocation via `/dev/ptmx` for interactive terminal support
 (password prompts, interactive CLIs, etc.).
 
 The supervisor pre-opens `PathFd`s for all paths in the filesystem policy
-**before** calling `landlock_restrict_self()`. Including `/dev/ptmx` and
-`/dev/pts` in `ReadWrite` ensures the agent can allocate PTYs on any
-kernel version. Without these entries, `openpty()` / `pty.StartWithSize()`
-fails with `EACCES` on kernels 6.10+.
+**before** calling `landlock_restrict_self()`. Including `/dev/pts` in
+`ReadWrite` ensures the agent can allocate PTYs on any kernel version
+(the real PTY master device `/dev/pts/ptmx` is accessible via this directory).
+
+> **Note:** `/dev/ptmx` is typically a symlink to `/dev/pts/ptmx`. It cannot
+> be listed directly because the supervisor refuses to `chown` symlinks
+> (potential privilege escalation). We list `/dev/pts` instead.
 
 > **Supervisor version requirement:** OpenShell supervisor ≥ 0.0.70 is
 > recommended. Earlier versions may have issues with device path handling
@@ -334,8 +337,7 @@ fails with `EACCES` on kernels 6.10+.
 | `/tmp`, `/var/tmp` | Read-Write | Temporary files for tool execution |
 | `/home` | Read-Write | User home directories |
 | `/run` | Read-Write | Runtime state (sockets, PIDs) |
-| `/dev/ptmx` | Read-Write | PTY master device (interactive shell support) |
-| `/dev/pts` | Read-Write | PTY slave devices directory |
+| `/dev/pts` | Read-Write | PTY devices directory (includes ptmx master device) |
 | `/usr`, `/bin`, `/sbin` | Read-Only | System executables (git, node, python) |
 | `/lib`, `/lib64` | Read-Only | Shared libraries |
 | `/etc` | Read-Only | System configuration (resolv.conf, etc.) |

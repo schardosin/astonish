@@ -14,17 +14,22 @@ func TestDefaultSandboxPolicy_IncludesPTYDevices(t *testing.T) {
 	}
 	policy := defaultSandboxPolicy(cfg)
 
-	// Verify /dev/ptmx and /dev/pts are in read-write paths.
+	// Verify /dev/pts is in read-write paths (covers PTY allocation).
+	// /dev/ptmx is NOT listed because it's a symlink (supervisor refuses
+	// to chown symlinks). The real device is /dev/pts/ptmx which is
+	// accessible via the /dev/pts directory entry.
 	rwSet := make(map[string]bool)
 	for _, p := range policy.Filesystem.ReadWrite {
 		rwSet[p] = true
 	}
 
-	if !rwSet["/dev/ptmx"] {
-		t.Error("expected /dev/ptmx in read-write paths")
-	}
 	if !rwSet["/dev/pts"] {
 		t.Error("expected /dev/pts in read-write paths")
+	}
+
+	// /dev/ptmx must NOT be in the policy (it's a symlink).
+	if rwSet["/dev/ptmx"] {
+		t.Error("/dev/ptmx should NOT be in policy — it's a symlink that breaks supervisor prepare_filesystem()")
 	}
 
 	// Verify standard workspace paths are still present.
@@ -104,8 +109,8 @@ func TestDefaultSandboxPolicy_ExtraFilesystemPaths(t *testing.T) {
 	}
 
 	// Verify defaults are still present.
-	if !rwSet["/dev/ptmx"] {
-		t.Error("expected /dev/ptmx still present with extra paths")
+	if !rwSet["/dev/pts"] {
+		t.Error("expected /dev/pts still present with extra paths")
 	}
 }
 

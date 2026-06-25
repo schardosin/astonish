@@ -403,12 +403,16 @@ The sandbox filesystem is controlled by Linux Landlock LSM. Astonish
 configures the policy to allow:
 
 - **Read-only:** `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`, `/dev/null`, `/dev/urandom`
-- **Read-write:** `/sandbox`, `/tmp`, `/var/tmp`, `/home`, `/run`, `/dev/ptmx`, `/dev/pts`
+- **Read-write:** `/sandbox`, `/tmp`, `/var/tmp`, `/home`, `/run`, `/dev/pts`
 
-The `/dev/ptmx` and `/dev/pts` paths are required for PTY allocation
-(interactive shell support). On kernel 6.10+, Landlock ABI v5 restricts
-`ioctl` on device files — without these paths explicitly listed, the
-`shell_command` tool's PTY allocation would fail with `Permission denied`.
+The `/dev/pts` path is required for PTY allocation (interactive shell
+support). On kernel 6.10+, Landlock ABI v5 restricts `ioctl` on device
+files — without this path explicitly listed, the `shell_command` tool's
+PTY allocation would fail with `Permission denied`.
+
+> **Note:** `/dev/ptmx` is typically a symlink and cannot be listed directly
+> (the supervisor refuses to chown symlinks). PTY allocation works through
+> `/dev/pts/ptmx` which is accessible via the `/dev/pts` directory entry.
 
 **Extending the filesystem policy:**
 

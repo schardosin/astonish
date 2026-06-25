@@ -316,7 +316,7 @@ sandbox:
     # Extend the default sandbox Landlock filesystem policy.
     # The base policy already includes:
     #   read-only:  /usr, /bin, /sbin, /lib, /lib64, /etc, /opt, /dev/null, /dev/urandom
-    #   read-write: /sandbox, /tmp, /var/tmp, /home, /run, /dev/ptmx, /dev/pts
+    #   read-write: /sandbox, /tmp, /var/tmp, /home, /run, /dev/pts
     # Use this to add additional paths without modifying the default set.
     filesystemPolicy:
       extraReadOnly: []

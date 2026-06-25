@@ -11,10 +11,11 @@ import "github.com/schardosin/astonish/pkg/config"
 //     SandboxOpenShellConfig.LandlockCompatibility.
 //   - System paths are read-only (executables, libraries, config).
 //   - Workspace, temp, and runtime paths are read-write.
-//   - /dev/ptmx and /dev/pts are read-write — required for PTY allocation
-//     inside sandboxes running on kernel 6.10+ (Landlock ABI v5 restricts
+//   - /dev/pts is read-write — required for PTY allocation inside sandboxes
+//     running on kernel 6.10+ (Landlock ABI v5 restricts
 //     LANDLOCK_ACCESS_FS_IOCTL_DEV). The supervisor pre-opens PathFds for
-//     these before landlock_restrict_self().
+//     this path before landlock_restrict_self(). /dev/ptmx is NOT listed
+//     because it's a symlink (supervisor refuses to chown symlinks).
 //   - /root is NOT included — the sandboxed process runs as user "sandbox"
 //     with home directory at /sandbox.
 //   - Network: the supervisor's proxy denies all egress when no
@@ -57,10 +58,15 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
 				// PTY device nodes — required for shell_command's interactive
 				// terminal support (password prompts, interactive CLIs).
 				// The supervisor pre-opens PathFds for these paths BEFORE
-				// calling landlock_restrict_self(), so ioctl on /dev/ptmx
+				// calling landlock_restrict_self(), so ioctl on /dev/pts/ptmx
 				// is permitted even under Landlock ABI v5 (kernel 6.10+)
 				// which restricts LANDLOCK_ACCESS_FS_IOCTL_DEV.
-				"/dev/ptmx",
+				//
+				// NOTE: /dev/ptmx is typically a symlink to /dev/pts/ptmx —
+				// the supervisor refuses to chown symlinks (privilege escalation
+				// risk). We list the real paths instead:
+				//   /dev/pts      — devpts mountpoint (slave PTY devices)
+				//   /dev/pts/ptmx — actual PTY master device file
 				"/dev/pts",
 			},
 		},

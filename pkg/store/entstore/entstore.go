@@ -69,6 +69,13 @@ type Store struct {
 	orgClients sync.Map
 	// Deduplicates concurrent ForOrg calls for the same slug.
 	orgFlight singleflight.Group
+
+	// Cached sandbox session stores (map[string]*cachedSandboxSessionStore).
+	// Key: "orgDBName|schemaName". Prevents connection leaks from repeated
+	// sandboxSessionsForSchema calls in background workers.
+	sandboxSessClients sync.Map
+	// Deduplicates concurrent sandbox session store opens.
+	sandboxSessFlight singleflight.Group
 }
 
 // Config holds configuration for creating a new Store.
@@ -215,6 +222,16 @@ func (s *Store) openSQLite(ctx context.Context, dsn string) error {
 
 // Close releases all database connections.
 func (s *Store) Close() error {
+	// Close cached sandbox session pools.
+	s.sandboxSessClients.Range(func(key, value interface{}) bool {
+		if entry, ok := value.(*cachedSandboxSessionStore); ok {
+			entry.client.Close()
+			entry.db.Close()
+		}
+		s.sandboxSessClients.Delete(key)
+		return true
+	})
+
 	if s.platformClient != nil {
 		if err := s.platformClient.Close(); err != nil {
 			return err

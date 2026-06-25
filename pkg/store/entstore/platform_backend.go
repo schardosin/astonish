@@ -16,6 +16,15 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 )
 
+// cachedSandboxSessionStore holds a cached *sql.DB and Ent client for a
+// specific team schema. Used by sandboxSessionsForSchema to avoid leaking
+// connection pools on repeated calls from background workers.
+type cachedSandboxSessionStore struct {
+	db     *sql.DB
+	client *teament.Client
+	store  *teamSandboxSessionStore
+}
+
 // --- store.TenantRouter ---
 // ForOrg, ProvisionOrg, DecommissionOrg are implemented in tenant_router.go.
 
@@ -160,37 +169,70 @@ func (s *Store) ListTeamSchemas(ctx context.Context) ([]teamSchemaRef, error) {
 	return refs, nil
 }
 
-// sandboxSessionsForSchema opens a connection to the given team schema within
-// the given org database and returns a SandboxSessionStore. Returns nil if the
-// connection fails or if sandbox_sessions table doesn't exist.
+// sandboxSessionsForSchema returns a cached SandboxSessionStore for the given
+// team schema within the given org database. The underlying *sql.DB is opened
+// once and reused across calls — preventing the connection leak that previously
+// occurred when background workers called this every 5 minutes.
+//
+// Returns nil if the connection fails or if sandbox_sessions table doesn't exist.
 func (s *Store) sandboxSessionsForSchema(orgDBName, schemaName string) store.SandboxSessionStore {
-	dsn, err := s.deriveSchemaAwareDSN(orgDBName, schemaName)
+	cacheKey := orgDBName + "|" + schemaName
+
+	// Fast path: check cache.
+	if cached, ok := s.sandboxSessClients.Load(cacheKey); ok {
+		return cached.(*cachedSandboxSessionStore).store
+	}
+
+	// Serialize concurrent opens for the same key.
+	result, err, _ := s.sandboxSessFlight.Do(cacheKey, func() (interface{}, error) {
+		// Double-check cache.
+		if cached, ok := s.sandboxSessClients.Load(cacheKey); ok {
+			return cached, nil
+		}
+
+		dsn, err := s.deriveSchemaAwareDSN(orgDBName, schemaName)
+		if err != nil {
+			return nil, fmt.Errorf("derive DSN: %w", err)
+		}
+
+		db, err := sql.Open("pgx", dsn)
+		if err != nil {
+			return nil, fmt.Errorf("open: %w", err)
+		}
+
+		// Apply pool limits to prevent unbounded connection growth.
+		db.SetMaxOpenConns(s.maxOpenConns)
+		db.SetMaxIdleConns(s.maxIdleConns)
+		db.SetConnMaxLifetime(s.connMaxLifetime)
+
+		// Check if sandbox_sessions table exists in this schema.
+		var exists bool
+		err = db.QueryRow(`SELECT EXISTS(
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = $1 AND table_name = 'sandbox_sessions'
+		)`, schemaName).Scan(&exists)
+		if err != nil || !exists {
+			db.Close()
+			return nil, fmt.Errorf("table not found")
+		}
+
+		drv := entsql.OpenDB(dialect.Postgres, db)
+		client := teament.NewClient(teament.Driver(drv))
+		entry := &cachedSandboxSessionStore{
+			db:     db,
+			client: client,
+			store:  &teamSandboxSessionStore{client: client},
+		}
+
+		s.sandboxSessClients.Store(cacheKey, entry)
+		return entry, nil
+	})
 	if err != nil {
-		slog.Debug("sandboxSessionsForSchema: derive DSN failed", "db", orgDBName, "schema", schemaName, "error", err)
+		slog.Debug("sandboxSessionsForSchema: open failed",
+			"db", orgDBName, "schema", schemaName, "error", err)
 		return nil
 	}
-
-	db, err := sql.Open("pgx", dsn)
-	if err != nil {
-		slog.Debug("sandboxSessionsForSchema: open failed", "db", orgDBName, "schema", schemaName, "error", err)
-		return nil
-	}
-
-	// Check if sandbox_sessions table exists in this schema.
-	var exists bool
-	err = db.QueryRow(`SELECT EXISTS(
-		SELECT 1 FROM information_schema.tables
-		WHERE table_schema = $1 AND table_name = 'sandbox_sessions'
-	)`, schemaName).Scan(&exists)
-	if err != nil || !exists {
-		db.Close()
-		return nil
-	}
-
-	drv := entsql.OpenDB(dialect.Postgres, db)
-	client := teament.NewClient(teament.Driver(drv))
-
-	return &teamSandboxSessionStore{client: client}
+	return result.(*cachedSandboxSessionStore).store
 }
 
 // PruneStaleSandboxSessions removes sandbox_sessions records whose

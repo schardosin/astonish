@@ -397,6 +397,52 @@ sandbox:
           port: 443
 ```
 
+### Landlock Filesystem Policy
+
+The sandbox filesystem is controlled by Linux Landlock LSM. Astonish
+configures the policy to allow:
+
+- **Read-only:** `/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`, `/dev/null`, `/dev/urandom`
+- **Read-write:** `/sandbox`, `/tmp`, `/var/tmp`, `/home`, `/run`, `/dev/ptmx`, `/dev/pts`
+
+The `/dev/ptmx` and `/dev/pts` paths are required for PTY allocation
+(interactive shell support). On kernel 6.10+, Landlock ABI v5 restricts
+`ioctl` on device files — without these paths explicitly listed, the
+`shell_command` tool's PTY allocation would fail with `Permission denied`.
+
+**Extending the filesystem policy:**
+
+```yaml
+sandbox:
+  openshell:
+    filesystemPolicy:
+      extraReadOnly:
+        - /data/shared-models
+      extraReadWrite:
+        - /mnt/scratch
+```
+
+**Landlock enforcement mode:**
+
+```yaml
+sandbox:
+  openshell:
+    # "best_effort" (default) — degrades gracefully on kernels without Landlock
+    # "hard_requirement" — fails sandbox startup if Landlock can't be enforced
+    landlockCompatibility: "best_effort"
+```
+
+Use `hard_requirement` when debugging Landlock issues — it provides fast,
+clear failure instead of silent degradation.
+
+:::note Supervisor Version
+OpenShell supervisor ≥ 0.0.70 is recommended for reliable PTY device
+handling on kernel 6.10+. Earlier versions may have issues with device
+path pre-opening during `prepare_filesystem()` (see OpenShell Issue #749).
+Upgrade by bumping the subchart version in `Chart.yaml` and running
+`helm dependency update`.
+:::
+
 ### Namespace Convention
 
 The `namespaces.prefix` value drives all namespace names:

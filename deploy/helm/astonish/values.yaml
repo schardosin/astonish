@@ -307,6 +307,27 @@ sandbox:
       #   - host: "apt.internal.mycompany.com"
       #     port: 80
 
+    # Landlock LSM enforcement mode for sandbox processes.
+    # "best_effort" (default): degrades gracefully on kernels without Landlock.
+    # "hard_requirement": fails sandbox startup if Landlock can't be enforced.
+    # Use "hard_requirement" for debugging Landlock-related issues (fast failure).
+    landlockCompatibility: "best_effort"
+
+    # Extend the default sandbox Landlock filesystem policy.
+    # The base policy already includes:
+    #   read-only:  /usr, /bin, /sbin, /lib, /lib64, /etc, /opt, /dev/null, /dev/urandom
+    #   read-write: /sandbox, /tmp, /var/tmp, /home, /run, /dev/ptmx, /dev/pts
+    # Use this to add additional paths without modifying the default set.
+    filesystemPolicy:
+      extraReadOnly: []
+      extraReadWrite: []
+      # Example:
+      # extraReadOnly:
+      #   - /data/shared-models
+      # extraReadWrite:
+      #   - /mnt/scratch
+      #   - /dev/fuse
+
     # Idle timeout (minutes) before the watchdog evicts an unused sandbox pod.
     # 0 = disable idle eviction (pods run indefinitely).
     # Evicted sessions are transparently recreated on next tool call (~5-10s).

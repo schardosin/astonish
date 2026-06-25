@@ -115,6 +115,16 @@ type SandboxOpenShellConfig struct {
 	// supervisor's network namespace proxy.
 	NetworkPolicy NetworkPolicyConfig `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
 
+	// LandlockCompatibility controls Landlock enforcement mode for sandboxes.
+	// "best_effort" (default): degrades gracefully on kernels without Landlock.
+	// "hard_requirement": fails sandbox startup if Landlock can't be enforced.
+	LandlockCompatibility string `yaml:"landlock_compatibility,omitempty" json:"landlock_compatibility,omitempty"`
+
+	// FilesystemPolicy allows extending the default sandbox Landlock filesystem
+	// rules with additional paths. Useful for granting access to custom device
+	// nodes or operator-specific mount points without modifying code.
+	FilesystemPolicy FilesystemPolicyConfig `yaml:"filesystem_policy,omitempty" json:"filesystem_policy,omitempty"`
+
 	// IdleTimeoutMinutes evicts sandbox pods that have had no exec activity
 	// for this duration. The pod is deleted (state → evicted) and recreated
 	// transparently on the next tool call. Default: 240 (4 hours). Set to
@@ -169,6 +179,20 @@ type NetworkPolicyConfig struct {
 type NetworkEndpointConfig struct {
 	Host string `yaml:"host" json:"host"`
 	Port uint32 `yaml:"port,omitempty" json:"port,omitempty"`
+}
+
+// FilesystemPolicyConfig allows operators to extend the default Landlock
+// filesystem rules applied to sandboxes. The base policy always includes
+// standard system paths (read-only) and workspace/PTY paths (read-write);
+// this config appends additional entries.
+type FilesystemPolicyConfig struct {
+	// ExtraReadOnly adds additional read-only paths to the default set.
+	// Example: ["/data/shared-models"]
+	ExtraReadOnly []string `yaml:"extra_read_only,omitempty" json:"extra_read_only,omitempty"`
+
+	// ExtraReadWrite adds additional read-write paths to the default set.
+	// Example: ["/mnt/scratch", "/dev/fuse"]
+	ExtraReadWrite []string `yaml:"extra_read_write,omitempty" json:"extra_read_write,omitempty"`
 }
 
 // SandboxKubernetesConfig captures the operator-tunable knobs for the

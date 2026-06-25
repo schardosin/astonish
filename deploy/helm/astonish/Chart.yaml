@@ -21,6 +21,8 @@ maintainers:
 dependencies:
   - name: helm-chart
     alias: openshell
+    # TODO: Upgrade to 0.0.70 for Landlock ABI v5 PTY fix on kernel 6.10+.
+    # Run `helm dependency update` after bumping.
     version: "0.0.63"
     repository: "oci://ghcr.io/nvidia/openshell"
     condition: sandbox.openshell.enabled

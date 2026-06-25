@@ -109,6 +109,24 @@ data:
             {{- end }}
           {{- end }}
         {{- end }}
+        {{- if .Values.sandbox.openshell.landlockCompatibility }}
+        landlock_compatibility: {{ .Values.sandbox.openshell.landlockCompatibility | quote }}
+        {{- end }}
+        {{- if .Values.sandbox.openshell.filesystemPolicy }}
+        filesystem_policy:
+          {{- with .Values.sandbox.openshell.filesystemPolicy.extraReadOnly }}
+          extra_read_only:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.sandbox.openshell.filesystemPolicy.extraReadWrite }}
+          extra_read_write:
+            {{- range . }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
         {{- if .Values.sandbox.openshell.idleTimeoutMinutes }}
         idle_timeout_minutes: {{ .Values.sandbox.openshell.idleTimeoutMinutes }}
         {{- end }}

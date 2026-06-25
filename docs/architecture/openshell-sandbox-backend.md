@@ -70,7 +70,7 @@ graph TB
 | Component | Image / Artifact | Purpose |
 |-----------|-----------------|---------|
 | **Gateway** | `ghcr.io/nvidia/openshell/gateway:0.0.63` | Sandbox lifecycle, exec relay, policy distribution |
-| **Supervisor** | `ghcr.io/nvidia/openshell/supervisor:0.0.63` | PID 1 inside sandboxes, Landlock/seccomp enforcement |
+| **Supervisor** | `ghcr.io/nvidia/openshell/supervisor:0.0.63` | PID 1 inside sandboxes, Landlock/seccomp enforcement (≥0.0.70 recommended for kernel 6.10+ PTY fix) |
 | **Helm Chart** | `oci://ghcr.io/nvidia/openshell/helm-chart:0.0.63` | Deploys gateway + RBAC (subchart of Astonish) |
 
 #### Astonish Provides
@@ -286,34 +286,45 @@ The filesystem policy is defined in `pkg/sandbox/openshell/policy.go`
 and passed to the gateway at sandbox creation time:
 
 ```go
-func defaultSandboxPolicy() *SandboxPolicySpec {
+func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec {
     return &SandboxPolicySpec{
         Version: 1,
         Landlock: &LandlockSpec{
-            Compatibility: "best_effort",
+            Compatibility: cfg.LandlockCompatibility, // default: "best_effort"
         },
         Filesystem: &FilesystemSpec{
             IncludeWorkdir: true,
             ReadOnly: []string{
-                "/usr",
-                "/bin",
-                "/sbin",
-                "/lib",
-                "/lib64",
-                "/etc",
-                "/opt",
+                "/usr", "/bin", "/sbin", "/lib", "/lib64",
+                "/etc", "/opt",
+                "/dev/null", "/dev/urandom",
             },
             ReadWrite: []string{
-                "/sandbox",
-                "/tmp",
-                "/var/tmp",
-                "/home",
-                "/run",
+                "/sandbox", "/tmp", "/var/tmp", "/home", "/run",
+                "/dev/ptmx", "/dev/pts",   // PTY allocation (kernel 6.10+ ABI v5)
             },
         },
     }
 }
 ```
+
+### PTY Device Access (Kernel 6.10+ / Landlock ABI v5)
+
+Linux kernel 6.10 introduced Landlock ABI v5 which adds the
+`LANDLOCK_ACCESS_FS_IOCTL_DEV` restriction — blocking `ioctl` operations
+on device files unless explicitly permitted. The `shell_command` tool
+requires PTY allocation via `/dev/ptmx` for interactive terminal support
+(password prompts, interactive CLIs, etc.).
+
+The supervisor pre-opens `PathFd`s for all paths in the filesystem policy
+**before** calling `landlock_restrict_self()`. Including `/dev/ptmx` and
+`/dev/pts` in `ReadWrite` ensures the agent can allocate PTYs on any
+kernel version. Without these entries, `openpty()` / `pty.StartWithSize()`
+fails with `EACCES` on kernels 6.10+.
+
+> **Supervisor version requirement:** OpenShell supervisor ≥ 0.0.70 is
+> recommended. Earlier versions may have issues with device path handling
+> in `prepare_filesystem()` (see OpenShell Issue #749).
 
 ### Path Access Matrix
 
@@ -323,22 +334,42 @@ func defaultSandboxPolicy() *SandboxPolicySpec {
 | `/tmp`, `/var/tmp` | Read-Write | Temporary files for tool execution |
 | `/home` | Read-Write | User home directories |
 | `/run` | Read-Write | Runtime state (sockets, PIDs) |
+| `/dev/ptmx` | Read-Write | PTY master device (interactive shell support) |
+| `/dev/pts` | Read-Write | PTY slave devices directory |
 | `/usr`, `/bin`, `/sbin` | Read-Only | System executables (git, node, python) |
 | `/lib`, `/lib64` | Read-Only | Shared libraries |
 | `/etc` | Read-Only | System configuration (resolv.conf, etc.) |
 | `/opt` | Read-Only | Optional packages |
+| `/dev/null` | Read-Only | Null device |
+| `/dev/urandom` | Read-Only | Random number generator |
 | `/root` | **Denied** | Not in policy — agent runs as user `sandbox` |
-| `/proc`, `/sys`, `/dev` | **Not in Landlock** | Handled by container + seccomp |
+| `/proc`, `/sys` | **Not in Landlock** | Handled by container + seccomp |
 
 **`IncludeWorkdir: true`** tells the supervisor to automatically add the
 container's working directory (`/sandbox`) to the read-write list,
 ensuring the agent always has write access to its workspace.
 
 **`best_effort` compatibility** means Landlock degrades gracefully:
-- If the kernel supports Landlock v4 → full enforcement
-- If the kernel supports Landlock v1-v3 → partial enforcement (missing
+- If the kernel supports Landlock v5 → full enforcement (including IOCTL_DEV)
+- If the kernel supports Landlock v1-v4 → partial enforcement (missing
   newer restrictions silently skipped)
 - If the kernel has no Landlock → no enforcement, supervisor logs warning
+
+### Configurable Policy Extensions
+
+Operators can extend the default filesystem policy without code changes:
+
+```yaml
+# values.yaml
+sandbox:
+  openshell:
+    landlockCompatibility: "best_effort"  # or "hard_requirement"
+    filesystemPolicy:
+      extraReadOnly:
+        - /data/shared-models
+      extraReadWrite:
+        - /mnt/scratch
+```
 
 ---
 

@@ -9,8 +9,26 @@ import (
 // All installed skills are listed (eligible and ineligible) so the agent can discover
 // them. Ineligible skills are marked with their missing requirements.
 // Full skill content is loaded on-demand via the skill_lookup tool.
+// Built-in skills are always prepended to ensure they appear regardless of
+// whether any user/platform skills are configured.
 func BuildSkillIndex(skills []Skill) string {
-	if len(skills) == 0 {
+	// Merge: builtins first, then caller-provided skills.
+	// Caller skills override builtins on name collision.
+	builtins := BuiltinSkills()
+	seen := make(map[string]bool, len(skills))
+	for _, s := range skills {
+		seen[s.Name] = true
+	}
+
+	var merged []Skill
+	for _, b := range builtins {
+		if !seen[b.Name] {
+			merged = append(merged, b)
+		}
+	}
+	merged = append(merged, skills...)
+
+	if len(merged) == 0 {
 		return ""
 	}
 
@@ -24,7 +42,7 @@ func BuildSkillIndex(skills []Skill) string {
 	sb.WriteString("use `resolve_credential` or `list_credentials` to find matching credentials in the store, then pass the resolved values ")
 	sb.WriteString("(as `{{CREDENTIAL:name:field}}` placeholders) directly in shell commands. Do NOT skip a skill because an env var is unset.\n\n")
 
-	for _, skill := range skills {
+	for _, skill := range merged {
 		if skill.IsEligible() {
 			sb.WriteString(fmt.Sprintf("- **%s**: %s\n", skill.Name, skill.Description))
 		} else {

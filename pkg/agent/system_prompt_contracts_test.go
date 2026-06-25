@@ -160,35 +160,24 @@ func TestSystemPromptContracts_GenerativeUI(t *testing.T) {
 	// Frontend: StudioChat.tsx:681-703 + inline regex at :2204
 	assertContains(t, prompt, "astonish-app", "astonish-app fence name — backend regex appPreviewFenceRe and frontend regex both match this exact string")
 
-	// Contract 5: useAppData — app sandbox API
-	// Frontend: AppPreviewCard.tsx injects useAppData as a global
-	assertContains(t, prompt, "useAppData", "useAppData function — AppPreviewCard.tsx injects this as a pre-built global for sandbox data fetching")
-
-	// Contract 6: useAppAction — app sandbox mutations
-	assertContains(t, prompt, "useAppAction", "useAppAction function — AppPreviewCard.tsx injects this for sandbox mutations")
-
-	// Contract 7: useAppAI — in-app AI
-	assertContains(t, prompt, "useAppAI", "useAppAI function — AppPreviewCard.tsx injects this for in-app AI calls")
-
-	// Contract 8: useAppState — persistent SQLite
-	assertContains(t, prompt, "useAppState", "useAppState function — AppPreviewCard.tsx injects this for persistent SQLite state")
-
-	// Contract 9: Dark theme styling
-	assertContains(t, prompt, "dark palette", "dark palette styling — apps must match Studio dark theme")
-	assertContains(t, prompt, "gray-950", "gray-950 page background — standard dark theme page color")
-	assertContains(t, prompt, "gray-900", "gray-900 card background — standard dark theme card color")
-
-	// Contract 9b: Transparent outermost container
-	assertContains(t, prompt, "transparent", "transparent root background — app must not set bg on outermost container for proper embedding")
+	// Contract: skill_lookup instruction — the model MUST be told to load the
+	// generative-ui skill before generating any visual app. This replaced the
+	// inline API documentation that was previously in Tier 1.
+	assertContains(t, prompt, "skill_lookup", "skill_lookup instruction — model must call skill_lookup to load generative-ui docs before generating apps")
+	assertContains(t, prompt, "generative-ui", "generative-ui skill name — must appear in Available Skills index and/or the instruction text")
 
 	// Contract 10: No fetch/XMLHttpRequest — sandbox restriction
-	// Frontend: sandbox blocks these; prompt must tell LLM to use useAppData instead
-	assertContains(t, prompt, "fetch()", "fetch() blocked — sandbox blocks raw fetch, LLM must use useAppData instead")
+	// These hard constraints remain in Tier 1 because violations cause runtime errors.
+	assertContains(t, prompt, "fetch()", "fetch() blocked — sandbox blocks raw fetch, LLM must be warned even before loading skill")
 	assertContains(t, prompt, "XMLHttpRequest", "XMLHttpRequest blocked — sandbox blocks raw XHR")
 	assertContains(t, prompt, "axios", "axios blocked — sandbox blocks third-party HTTP libs")
 
-	// Contract 19: Credential authentication syntax @credential-name
-	assertContains(t, prompt, "@credential-name", "credential @-syntax — useAppData('url@credential-name') resolves credentials server-side")
+	// Contract: Available modules constraint
+	assertContains(t, prompt, "lucide-react", "lucide-react available — sandbox module list in Tier 1 hard constraints")
+	assertContains(t, prompt, "recharts", "recharts available — sandbox module list in Tier 1 hard constraints")
+
+	// Contract: No component libraries
+	assertContains(t, prompt, "No component libraries", "no component libraries — sandbox constraint remains in Tier 1")
 
 	// Contract 3: Mermaid diagrams for reports
 	assertContains(t, prompt, "mermaid", "mermaid blocks — MermaidBlock.tsx renders ```mermaid fences inside report markdown")
@@ -206,19 +195,6 @@ func TestSystemPromptContracts_GenerativeUI(t *testing.T) {
 	assertContains(t, prompt, "write_file", "write_file tool — Step 1 of the report contract: persist the markdown file on disk")
 	assertContains(t, prompt, "astonish-report", "astonish-report fence — Step 2 of the report contract: signal the file as a report so the frontend embeds it inline")
 	assertContains(t, prompt, "path:", "astonish-report fence requires `path:` — the path MUST match the absolute path passed to write_file or the marker is silently dropped")
-
-	// useAppData sourceId format
-	assertContains(t, prompt, `"http:GET:`, "useAppData HTTP sourceId format — frontend parses this prefix to route data requests")
-	assertContains(t, prompt, `"mcp:`, "useAppData MCP sourceId format — frontend parses this prefix to route MCP tool calls")
-
-	// No component libraries
-	assertContains(t, prompt, "No component libraries", "no component libraries — sandbox only has React, Tailwind, Recharts, Lucide")
-
-	// React 19 + Tailwind v4 + Recharts + Lucide
-	assertContains(t, prompt, "React 19", "React 19 — sandbox ships this version")
-	assertContains(t, prompt, "Tailwind CSS v4", "Tailwind CSS v4 — sandbox ships this version")
-	assertContains(t, prompt, "Recharts", "Recharts available — sandbox includes this charting library")
-	assertContains(t, prompt, "Lucide", "Lucide icons available — sandbox includes this icon set")
 }
 
 func TestSystemPromptContracts_Delegation(t *testing.T) {
@@ -404,10 +380,15 @@ func TestSystemPromptContracts_Conditional_Minimal(t *testing.T) {
 	assertNotContains(t, prompt, "## Behavior Instructions", "no instructions when InstructionsContent empty")
 	assertNotContains(t, prompt, "## Knowledge For This Task", "no knowledge when RelevantKnowledge empty")
 	assertNotContains(t, prompt, "## Relevant Tools For This Request", "no relevant tools when RelevantTools empty")
-	assertNotContains(t, prompt, "## Available Skills", "no skills when SkillIndex empty")
 	assertNotContains(t, prompt, "## Available Fleets", "no fleets when FleetSection empty")
-	assertNotContains(t, prompt, "skill_lookup", "no skill_lookup reference when SkillIndex empty")
 	assertNotContains(t, prompt, `search_tools(query="*")`, "no search_tools guidance when tool not present")
+
+	// Built-in skills (e.g. generative-ui) are ALWAYS present in the Available
+	// Skills section, even when no user/platform skills are configured. This is
+	// intentional — the model must always know to call skill_lookup for app generation.
+	assertContains(t, prompt, "## Available Skills", "built-in skills always present even with empty SkillIndex")
+	assertContains(t, prompt, "skill_lookup", "skill_lookup always present — needed for generative-ui skill")
+	assertContains(t, prompt, "generative-ui", "generative-ui built-in skill always listed")
 }
 
 func TestSystemPromptContracts_Conditional_CatalogOnly(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/skills"
 	"google.golang.org/adk/tool"
 )
 
@@ -305,9 +306,17 @@ func (b *SystemPromptBuilder) Build() string {
 	}
 
 	// 6c2. Skill index (lightweight listing of available CLI tool skills)
+	// Always include built-in skills even if no user/platform skills are configured.
 	if b.SkillIndex != "" {
 		sb.WriteString("\n")
 		sb.WriteString(b.SkillIndex)
+	} else {
+		// No injected skill index — generate one with just built-in skills
+		builtinIndex := skills.BuildSkillIndex(nil)
+		if builtinIndex != "" {
+			sb.WriteString("\n")
+			sb.WriteString(builtinIndex)
+		}
 	}
 
 	// 6j. Fleet awareness (when fleet definitions are loaded)
@@ -318,21 +327,11 @@ func (b *SystemPromptBuilder) Build() string {
 	// 6k. Generative UI critical rules (always present in prompt)
 	sb.WriteString("\n## Visual Apps (Generative UI)\n\n")
 	sb.WriteString("When users ask to build a UI, dashboard, app, or visual component, generate a React component inside an `astonish-app` code fence.\n")
-	sb.WriteString("CRITICAL RULES:\n")
-	sb.WriteString("- NEVER use fetch(), XMLHttpRequest, or axios — they are BLOCKED in the sandbox.\n")
-	sb.WriteString("- For ANY external data (APIs, URLs the user provides), use `useAppData(sourceId)` which is a pre-injected global function (no import needed).\n")
-	sb.WriteString("  sourceId format: `\"http:GET:<url>\"` for HTTP or `\"mcp:<server>/<tool>\"` for MCP tools.\n")
-	sb.WriteString("  Example: `const { data, loading, error } = useAppData('http:GET:https://api.example.com/data')`\n")
-	sb.WriteString("  Dynamic URLs: useAppData('http:GET:https://api.example.com/' + encodeURIComponent(variable))\n")
-	sb.WriteString("  Authenticated APIs: append `@credential-name` to the URL, e.g. `useAppData('http:GET:https://api.example.com/data@my-api-key')`. The credential is resolved server-side from the Astonish credential store.\n")
-	sb.WriteString("- For mutations, use `useAppAction(actionId)` which returns an async function.\n")
-	sb.WriteString("- For in-app AI (summarize, classify, analyze), use `useAppAI({ system: '...' })` which returns an async function: `const text = await askAI(prompt, { context: data })`.\n")
-	sb.WriteString("- For persistent data, use `useAppState()` — a reactive SQLite database (db.exec/db.query) that survives refreshes.\n")
-	sb.WriteString("- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).\n")
-	sb.WriteString("- Use ONLY native HTML elements styled with Tailwind. Define helper components as top-level functions ABOVE the main export — never nested inside it.\n")
-	sb.WriteString("- Do NOT set background on the outermost container — it must be transparent.\n")
-	sb.WriteString("- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.\n")
-	sb.WriteString("Search memory for \"generative-ui\" for full documentation and examples.\n")
+	sb.WriteString("**MANDATORY:** Before generating ANY visual app, call `skill_lookup` with name `generative-ui` to load the complete documentation. Do NOT generate app code without loading this skill first — it contains the only correct APIs, design system, and sandbox constraints.\n")
+	sb.WriteString("Sandbox hard constraints (violations cause runtime errors):\n")
+	sb.WriteString("- fetch(), XMLHttpRequest, and axios are BLOCKED — the skill documents the correct alternatives\n")
+	sb.WriteString("- Only react, recharts, lucide-react, and astonish modules exist — no other imports work\n")
+	sb.WriteString("- No component libraries (no shadcn/ui, no Material UI) — use native HTML + Tailwind\n")
 
 	// 6l. Reports contract (always present — must be unconditional, not
 	// hidden behind vector retrieval, because the LLM cannot retrieve

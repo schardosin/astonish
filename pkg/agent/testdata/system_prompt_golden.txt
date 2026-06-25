@@ -115,21 +115,11 @@ Examples: `tools: ["browser"]`, `tools: ["core", "web"]`, `tools: ["core", "mcp:
 ## Visual Apps (Generative UI)
 
 When users ask to build a UI, dashboard, app, or visual component, generate a React component inside an `astonish-app` code fence.
-CRITICAL RULES:
-- NEVER use fetch(), XMLHttpRequest, or axios — they are BLOCKED in the sandbox.
-- For ANY external data (APIs, URLs the user provides), use `useAppData(sourceId)` which is a pre-injected global function (no import needed).
-  sourceId format: `"http:GET:<url>"` for HTTP or `"mcp:<server>/<tool>"` for MCP tools.
-  Example: `const { data, loading, error } = useAppData('http:GET:https://api.example.com/data')`
-  Dynamic URLs: useAppData('http:GET:https://api.example.com/' + encodeURIComponent(variable))
-  Authenticated APIs: append `@credential-name` to the URL, e.g. `useAppData('http:GET:https://api.example.com/data@my-api-key')`. The credential is resolved server-side from the Astonish credential store.
-- For mutations, use `useAppAction(actionId)` which returns an async function.
-- For in-app AI (summarize, classify, analyze), use `useAppAI({ system: '...' })` which returns an async function: `const text = await askAI(prompt, { context: data })`.
-- For persistent data, use `useAppState()` — a reactive SQLite database (db.exec/db.query) that survives refreshes.
-- Only React 19, Tailwind CSS v4, Recharts, and Lucide icons are available. No component libraries (no shadcn/ui).
-- Use ONLY native HTML elements styled with Tailwind. Define helper components as top-level functions ABOVE the main export — never nested inside it.
-- Do NOT set background on the outermost container — it must be transparent.
-- Style: dark palette with gray-950 page, gray-900 cards with border-gray-800 rounded-xl, gray-800 inputs with border-gray-700 rounded-lg. Use semantic accent colors (emerald=positive, blue=info, purple=totals, amber=warnings, red=errors). Use gradient KPI cards like from-emerald-900/40 to-emerald-950/40 with matching border.
-Search memory for "generative-ui" for full documentation and examples.
+**MANDATORY:** Before generating ANY visual app, call `skill_lookup` with name `generative-ui` to load the complete documentation. Do NOT generate app code without loading this skill first — it contains the only correct APIs, design system, and sandbox constraints.
+Sandbox hard constraints (violations cause runtime errors):
+- fetch(), XMLHttpRequest, and axios are BLOCKED — the skill documents the correct alternatives
+- Only react, recharts, lucide-react, and astonish modules exist — no other imports work
+- No component libraries (no shadcn/ui, no Material UI) — use native HTML + Tailwind
 
 ## Reports
 

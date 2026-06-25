@@ -7,8 +7,15 @@ import (
 
 func TestBuildSkillIndexEmpty(t *testing.T) {
 	result := BuildSkillIndex(nil)
-	if result != "" {
-		t.Errorf("Expected empty string for nil skills, got %q", result)
+	// Even with nil user skills, built-in skills (e.g. generative-ui) are always included
+	if result == "" {
+		t.Error("Expected non-empty index — built-in skills should always be present")
+	}
+	if !strings.Contains(result, "generative-ui") {
+		t.Error("Built-in generative-ui skill should always appear in index")
+	}
+	if !strings.Contains(result, "## Available Skills") {
+		t.Error("Missing header")
 	}
 }
 

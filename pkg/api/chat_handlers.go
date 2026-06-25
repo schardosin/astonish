@@ -1335,7 +1335,9 @@ func buildMergedSkillIndex(ctx context.Context, platformStore, orgStore, teamSto
 	}
 
 	if len(all) == 0 {
-		return ""
+		// Even with no platform/org/team skills, BuildSkillIndex will include
+		// built-in skills (e.g. generative-ui). Pass empty slice.
+		return skills.BuildSkillIndex(nil)
 	}
 
 	// Deduplicate preferring later entries (team > org > platform).

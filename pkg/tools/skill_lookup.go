@@ -40,10 +40,16 @@ type SkillLookupResult struct {
 //
 // At runtime, this function checks the context for tenant-scoped skill
 // stores (platform + org + team) injected via store.WithSkillStores.
-// Resolution order: team > org > platform (team wins on name collision).
+// Resolution order: team > org > platform > static/builtin (team wins on name collision).
 func SkillLookup(allSkills []skills.Skill) func(ctx tool.Context, args SkillLookupArgs) (SkillLookupResult, error) {
-	// Build index of any statically-provided skills (filesystem-based, personal mode)
-	staticIndex := make(map[string]*skills.Skill, len(allSkills))
+	// Build index: start with built-in skills, then overlay caller-provided
+	// (filesystem-based) skills. User-provided skills override builtins on
+	// name collision.
+	builtins := skills.BuiltinSkills()
+	staticIndex := make(map[string]*skills.Skill, len(builtins)+len(allSkills))
+	for i := range builtins {
+		staticIndex[builtins[i].Name] = &builtins[i]
+	}
 	for i := range allSkills {
 		staticIndex[allSkills[i].Name] = &allSkills[i]
 	}

@@ -120,8 +120,9 @@ func TestBuildChannelSkillIndex_EmptyStores(t *testing.T) {
 
 	result := buildChannelSkillIndex(context.Background(), ss)
 
-	if result != "" {
-		t.Errorf("expected empty string for empty stores, got %q", result)
+	// Even with no user/platform skills, built-in skills are always included
+	if !strings.Contains(result, "generative-ui") {
+		t.Error("expected built-in generative-ui skill in index even with empty stores")
 	}
 }
 
@@ -130,8 +131,9 @@ func TestBuildChannelSkillIndex_NilStores(t *testing.T) {
 	// All nil
 	ss := &store.SkillStores{}
 	result := buildChannelSkillIndex(context.Background(), ss)
-	if result != "" {
-		t.Errorf("expected empty string for nil stores, got %q", result)
+	// Built-in skills are always present
+	if !strings.Contains(result, "generative-ui") {
+		t.Error("expected built-in generative-ui skill even with nil stores")
 	}
 
 	// Only team set

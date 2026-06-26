@@ -139,6 +139,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 		return &api.StudioChatComponents{
 			ChatAgent:         result.ChatAgent,
 			LLM:               result.LLM,
+			SwappableLLM:      result.SwappableLLM,
 			SessionService:    result.SessionService,
 			ProviderName:      result.ProviderName,
 			ModelName:         result.ModelName,
@@ -151,6 +152,15 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			Cleanup:           result.Cleanup,
 		}, nil
 	})
+
+	// Wire a pre-warm context builder for auto-PreWarm on Reset().
+	// In non-daemon (personal) mode, a simple background context suffices.
+	// The daemon overrides this with a richer context that includes platform stores.
+	if s.platformAuth == nil {
+		api.SetPreWarmContextFunc(func() context.Context {
+			return context.Background()
+		})
+	}
 
 	router := mux.NewRouter()
 

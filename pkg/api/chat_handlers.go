@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
+	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/fleet"
@@ -192,6 +193,7 @@ func toAgentAttachments(apiAtts []ChatAttachment) []agent.Attachment {
 type StudioChatComponents struct {
 	ChatAgent         *agent.ChatAgent
 	LLM               model.LLM
+	SwappableLLM      *provider.SwappableLLM // for hot-swap on model change (nil = hot-swap disabled)
 	SessionService    session.Service
 	ProviderName      string
 	ModelName         string
@@ -209,6 +211,10 @@ type ChatManager struct {
 	mu         sync.Mutex
 	components *StudioChatComponents
 	initFn     func(ctx context.Context) (*StudioChatComponents, error)
+
+	// preWarmCtxFn builds a context suitable for PreWarm. Set by the daemon
+	// at startup so that Reset() can automatically trigger background re-init.
+	preWarmCtxFn func() context.Context
 
 	// active holds cancel functions for in-flight SSE streams keyed by session ID.
 	active map[string]context.CancelFunc
@@ -240,6 +246,14 @@ func SetStudioChatInitFunc(fn func(ctx context.Context) (*StudioChatComponents, 
 	GetChatManager().initFn = fn
 }
 
+// SetPreWarmContextFunc sets a function that builds a context suitable for
+// background PreWarm calls. This enables Reset() to automatically start
+// re-initialization in the background so the next request doesn't pay the
+// full initialization cost.
+func SetPreWarmContextFunc(fn func() context.Context) {
+	GetChatManager().preWarmCtxFn = fn
+}
+
 // Reset tears down the current chat agent so the next request re-initializes
 // with fresh config from disk. This is called when settings change (provider,
 // model, MCP, etc.) to ensure new chats pick up the updated configuration.
@@ -256,13 +270,26 @@ func (cm *ChatManager) Reset() {
 	getChatRunnerRegistry().StopAll()
 
 	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	if cm.components != nil {
 		if cm.components.Cleanup != nil {
 			cm.components.Cleanup()
 		}
 		cm.components = nil
+	}
+	cm.mu.Unlock()
+
+	// Trigger background re-initialization so the next request is fast.
+	// This avoids the user having to wait for full init on their first message
+	// after a settings change.
+	if cm.preWarmCtxFn != nil {
+		go func() {
+			ctx := cm.preWarmCtxFn()
+			if err := cm.PreWarm(ctx); err != nil {
+				slog.Warn("background pre-warm after reset failed (will retry on next request)", "error", err)
+			} else {
+				slog.Info("chat agent re-initialized after settings change")
+			}
+		}()
 	}
 }
 
@@ -277,6 +304,61 @@ func (cm *ChatManager) ShutdownContainers() {
 	if cm.components != nil && cm.components.ShutdownSandbox != nil {
 		cm.components.ShutdownSandbox()
 	}
+}
+
+// HotSwapLLM replaces the LLM provider/model without destroying the rest of
+// the chat infrastructure (tools, MCP servers, sandbox, ToolIndex, etc.).
+// This is called when only the model/provider has changed, avoiding the full
+// teardown-and-rebuild cycle that causes the first-message delay.
+//
+// Returns true if hot-swap was performed, false if a full Reset is needed
+// (e.g., components not initialized or SwappableLLM not available).
+func (cm *ChatManager) HotSwapLLM(ctx context.Context, providerName, modelName string) bool {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if cm.components == nil {
+		slog.Warn("[hot-swap] FAILED: components is nil (chat agent not initialized yet)")
+		return false
+	}
+	if cm.components.SwappableLLM == nil {
+		slog.Warn("[hot-swap] FAILED: SwappableLLM is nil (factory didn't create it)")
+		return false
+	}
+
+	// Load the effective app config for provider resolution.
+	// Detect platform mode from the request context (store.Services presence).
+	isPlatform := store.FromContext(ctx) != nil
+	appCfg := EffectiveAppConfigFromContext(ctx, isPlatform)
+
+	slog.Info("[hot-swap] creating new LLM provider",
+		"provider", providerName, "model", modelName, "isPlatform", isPlatform)
+
+	// Create the new LLM
+	newLLM, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
+	if err != nil {
+		slog.Warn("[hot-swap] FAILED: GetProvider error",
+			"provider", providerName, "model", modelName, "error", err)
+		return false
+	}
+
+	// Swap the underlying LLM — all closures (compactor, reflector, etc.)
+	// that reference the SwappableLLM will automatically use the new one.
+	cm.components.SwappableLLM.Swap(newLLM)
+
+	// Update metadata
+	cm.components.ProviderName = providerName
+	cm.components.ModelName = modelName
+
+	// Update compactor with new context window size
+	if cm.components.Compactor != nil {
+		contextWindow := provider.ResolveContextWindowCached(ctx, providerName, modelName, appCfg)
+		cm.components.Compactor.SetContextWindow(contextWindow)
+	}
+
+	slog.Info("[hot-swap] SUCCESS — LLM swapped without Reset()",
+		"provider", providerName, "model", modelName)
+	return true
 }
 
 // PreWarm initializes the chat agent in the background so the first request is fast.

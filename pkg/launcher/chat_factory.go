@@ -62,6 +62,7 @@ type ChatFactoryConfig struct {
 type ChatFactoryResult struct {
 	ChatAgent             *agent.ChatAgent
 	LLM                   model.LLM
+	SwappableLLM          *provider.SwappableLLM // hot-swappable LLM wrapper (nil in non-Studio callers)
 	ProviderName          string
 	ModelName             string
 	Compactor             *persistentsession.Compactor
@@ -163,7 +164,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if cfg.DebugMode {
 		slog.Debug("initializing LLM provider", "component", "chat-factory")
 	}
-	llm, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
+	rawLLM, err := provider.GetProvider(ctx, cfg.ProviderName, cfg.ModelName, cfg.AppConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize provider '%s' with model '%s': %w",
 			cfg.ProviderName, cfg.ModelName, err)
@@ -171,6 +172,11 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	if cfg.DebugMode {
 		slog.Debug("provider initialized", "component", "chat-factory", "provider", cfg.ProviderName, "model", cfg.ModelName)
 	}
+
+	// Wrap in SwappableLLM so the model can be hot-swapped without rebuilding
+	// the entire ChatAgent (tools, MCP, sandbox, ToolIndex all survive).
+	swappableLLM := provider.NewSwappableLLM(rawLLM)
+	var llm model.LLM = swappableLLM
 
 	// --- 2. Initialize internal tools ---
 	// Tools are organized into groups. The main thread gets only essential tools
@@ -1645,6 +1651,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	return &ChatFactoryResult{
 		ChatAgent:             chatAgent,
 		LLM:                   llm,
+		SwappableLLM:          swappableLLM,
 		ProviderName:          cfg.ProviderName,
 		ModelName:             cfg.ModelName,
 		Compactor:             compactor,

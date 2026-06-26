@@ -29,16 +29,66 @@ func NewInMemoryToolVectorStore(embeddingFunc EmbedFunc) (ToolVectorStore, error
 }
 
 func (s *inMemoryToolVectorStore) AddDocuments(ctx context.Context, docs []ToolVectorDoc, concurrency int) error {
+	if len(docs) == 0 {
+		return nil
+	}
+
+	// Clamp concurrency to valid range
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > len(docs) {
+		concurrency = len(docs)
+	}
+
+	// For single concurrency or single doc, use simple sequential path
+	if concurrency == 1 || len(docs) == 1 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for _, d := range docs {
+			emb, err := s.embeddingFunc(ctx, d.Content)
+			if err != nil {
+				return err
+			}
+			s.docs = append(s.docs, d)
+			s.embeddings = append(s.embeddings, emb)
+		}
+		return nil
+	}
+
+	// Concurrent embedding: fan out embedding calls, collect results in order
+	type embedResult struct {
+		embedding []float32
+		err       error
+	}
+
+	results := make([]embedResult, len(docs))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+
+	for i, d := range docs {
+		wg.Add(1)
+		go func(idx int, doc ToolVectorDoc) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire slot
+			defer func() { <-sem }() // release slot
+
+			emb, err := s.embeddingFunc(ctx, doc.Content)
+			results[idx] = embedResult{embedding: emb, err: err}
+		}(i, d)
+	}
+	wg.Wait()
+
+	// Check for errors and append results under the lock
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, d := range docs {
-		emb, err := s.embeddingFunc(ctx, d.Content)
-		if err != nil {
-			return err
+	for i, r := range results {
+		if r.err != nil {
+			return r.err
 		}
-		s.docs = append(s.docs, d)
-		s.embeddings = append(s.embeddings, emb)
+		s.docs = append(s.docs, docs[i])
+		s.embeddings = append(s.embeddings, r.embedding)
 	}
 	return nil
 }

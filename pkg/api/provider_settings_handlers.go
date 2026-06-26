@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -84,8 +85,21 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reset chat agent so next request picks up fresh config
-	GetChatManager().Reset()
+	// If only the default model/provider changed (no provider configs modified),
+	// try hot-swap to avoid the expensive full teardown-and-rebuild cycle.
+	hotSwapped := false
+	if len(req.Providers) == 0 && req.DefaultProvider != "" && req.DefaultModel != "" {
+		slog.Info("[hot-swap] default-only change detected (platform providers handler)",
+			"provider", req.DefaultProvider, "model", req.DefaultModel)
+		hotSwapped = GetChatManager().HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+	}
+
+	if !hotSwapped {
+		slog.Info("[hot-swap] not performed (platform providers handler), falling back to full Reset()")
+		GetChatManager().Reset()
+	} else {
+		slog.Info("[hot-swap] succeeded (platform providers handler) — no Reset() needed")
+	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config
 	if cm := GetChannelManager(); cm != nil {
@@ -158,8 +172,21 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reset chat agent so next request picks up fresh config
-	GetChatManager().Reset()
+	// If only the default model/provider changed (no provider configs modified),
+	// try hot-swap to avoid the expensive full teardown-and-rebuild cycle.
+	hotSwapped := false
+	if len(req.Providers) == 0 && req.DefaultProvider != "" && req.DefaultModel != "" {
+		slog.Info("[hot-swap] default-only change detected (org providers handler)",
+			"provider", req.DefaultProvider, "model", req.DefaultModel)
+		hotSwapped = GetChatManager().HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+	}
+
+	if !hotSwapped {
+		slog.Info("[hot-swap] not performed (org providers handler), falling back to full Reset()")
+		GetChatManager().Reset()
+	} else {
+		slog.Info("[hot-swap] succeeded (org providers handler) — no Reset() needed")
+	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config
 	if cm := GetChannelManager(); cm != nil {

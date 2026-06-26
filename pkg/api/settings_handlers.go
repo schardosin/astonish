@@ -221,9 +221,11 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	// Platform mode: persist settings to team DB instead of filesystem
 	svc := store.FromRequest(r)
 	if svc != nil && svc.Mode == store.ModePlatform && svc.Settings != nil {
+		slog.Info("[settings] UpdateSettingsHandler: routing to platform mode")
 		updateSettingsPlatform(w, r, svc, req)
 		return
 	}
+	slog.Info("[settings] UpdateSettingsHandler: using filesystem mode")
 
 	cfg, err := config.LoadAppConfig()
 	if err != nil {
@@ -334,8 +336,34 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		regenerateOpenCodeConfig(freshCfg)
 	}
 
-	// Reset the Studio chat agent so the next request picks up fresh config.
-	GetChatManager().Reset()
+	// If only the model/provider selection changed (not provider configs or other
+	// settings), try a fast LLM hot-swap that avoids the full teardown-and-rebuild
+	// cycle. This eliminates the 30-60+ second delay on first message after a
+	// model change, since tools, MCP servers, sandbox, and ToolIndex all survive.
+	hotSwapped := false
+	if req.General != nil && req.Providers == nil {
+		newProvider := req.General.DefaultProvider
+		newModel := req.General.DefaultModel
+		slog.Info("[hot-swap] model-only change detected (filesystem mode)",
+			"provider", newProvider, "model", newModel)
+		if newProvider != "" && newModel != "" {
+			hotSwapped = GetChatManager().HotSwapLLM(r.Context(), newProvider, newModel)
+		} else {
+			slog.Warn("[hot-swap] skipped: empty provider or model",
+				"provider", newProvider, "model", newModel)
+		}
+	} else {
+		slog.Info("[hot-swap] skipped: not a model-only change (filesystem mode)",
+			"hasGeneral", req.General != nil, "hasProviders", req.Providers != nil)
+	}
+
+	if !hotSwapped {
+		slog.Info("[hot-swap] not performed, falling back to full Reset()")
+		// Full reset: provider configs changed, or hot-swap not possible.
+		GetChatManager().Reset()
+	} else {
+		slog.Info("[hot-swap] succeeded — no Reset() needed")
+	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config
 	if cm := GetChannelManager(); cm != nil {
@@ -416,8 +444,31 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 		return
 	}
 
-	// Reset the Studio chat agent so the next request picks up fresh config.
-	GetChatManager().Reset()
+	// If only the model/provider selection changed, try hot-swap for instant response.
+	hotSwapped := false
+	if req.General != nil && req.Providers == nil {
+		newProvider := req.General.DefaultProvider
+		newModel := req.General.DefaultModel
+		slog.Info("[hot-swap] model-only change detected (platform mode)",
+			"provider", newProvider, "model", newModel)
+		if newProvider != "" && newModel != "" {
+			hotSwapped = GetChatManager().HotSwapLLM(r.Context(), newProvider, newModel)
+		} else {
+			slog.Warn("[hot-swap] skipped: empty provider or model",
+				"provider", newProvider, "model", newModel)
+		}
+	} else {
+		slog.Info("[hot-swap] skipped: not a model-only change (platform mode)",
+			"hasGeneral", req.General != nil, "hasProviders", req.Providers != nil)
+	}
+
+	if !hotSwapped {
+		slog.Info("[hot-swap] not performed (platform mode), falling back to full Reset()")
+		// Full reset: provider configs changed, or hot-swap not possible.
+		GetChatManager().Reset()
+	} else {
+		slog.Info("[hot-swap] succeeded (platform mode) — no Reset() needed")
+	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config
 	if cm := GetChannelManager(); cm != nil {

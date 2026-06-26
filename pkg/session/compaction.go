@@ -49,6 +49,14 @@ func NewCompactor(contextWindow int) *Compactor {
 	}
 }
 
+// SetContextWindow updates the context window size (thread-safe).
+// Used when the model is hot-swapped to a model with a different context window.
+func (c *Compactor) SetContextWindow(contextWindow int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.ContextWindow = contextWindow
+}
+
 // EstimateTokens estimates the token count for a slice of Contents.
 // Uses a conservative heuristic: ~3 characters per token. This ratio was
 // calibrated against real sessions heavy in tool calls and structured JSON

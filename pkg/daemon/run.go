@@ -1339,7 +1339,8 @@ func Run(cfg RunConfig) error {
 	}
 
 	// Pre-warm the Studio chat agent in the background so the first web request is fast.
-	go func() {
+	// Also register the context builder so that Reset() can auto-PreWarm after settings changes.
+	buildPreWarmCtx := func() context.Context {
 		// Build an enriched Services clone for pre-warm that includes the
 		// default org/team stores. Without these, the chat factory cannot
 		// resolve MCP server configs (e.g., Tavily) or team settings
@@ -1364,7 +1365,12 @@ func Run(cfg RunConfig) error {
 				}
 			}
 		}
-		warmCtx := store.WithServices(ctx, warmSvc)
+		return store.WithServices(ctx, warmSvc)
+	}
+	api.SetPreWarmContextFunc(buildPreWarmCtx)
+
+	go func() {
+		warmCtx := buildPreWarmCtx()
 		if err := api.GetChatManager().PreWarm(warmCtx); err != nil {
 			logger.Printf("Studio chat pre-warm failed (will retry on first request): %v", err)
 		} else {

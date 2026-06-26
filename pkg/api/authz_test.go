@@ -414,7 +414,7 @@ func TestRequireTeamAdmin(t *testing.T) {
 
 			if tt.name == "personal mode always passes" {
 				// Personal mode — no platform services
-				personalSvc := &store.Services{Mode: store.ModePersonal}
+				personalSvc := &store.Services{Mode: "personal"}
 				r = authzRequest(tt.user, personalSvc, nil)
 			} else {
 				r = authzRequest(tt.user, svc, tc)
@@ -452,7 +452,7 @@ func TestRequirePlatformServices(t *testing.T) {
 		},
 		{
 			name:       "personal mode → 503",
-			svc:        &store.Services{Mode: store.ModePersonal},
+			svc:        &store.Services{Mode: "personal"},
 			expectNil:  true,
 			expectCode: http.StatusServiceUnavailable,
 		},
@@ -582,7 +582,7 @@ func TestCanManageTeam(t *testing.T) {
 		{
 			name:   "personal mode — always true",
 			user:   &PlatformUser{ID: "anyone", Role: "member"},
-			useSvc: &store.Services{Mode: store.ModePersonal},
+			useSvc: &store.Services{Mode: "personal"},
 			expect: true,
 		},
 		{
@@ -669,7 +669,7 @@ func TestIsTeamAdmin(t *testing.T) {
 	t.Parallel()
 
 	t.Run("personal mode returns true", func(t *testing.T) {
-		svc := &store.Services{Mode: store.ModePersonal}
+		svc := &store.Services{Mode: "personal"}
 		user := &PlatformUser{ID: "u1", Role: "member"}
 		r := authzRequest(user, svc, nil)
 		if !IsTeamAdmin(r) {

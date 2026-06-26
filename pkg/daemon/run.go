@@ -1329,9 +1329,6 @@ func Run(cfg RunConfig) error {
 		api.SetPlatformBackend(entStore)
 		api.SetPlatformSecrets(entStore.Secrets())
 	}
-	if configDir != "" {
-		studioOpts = append(studioOpts, launcher.WithConfigDir(configDir))
-	}
 	studio, err := launcher.NewStudioServer(port, studioOpts...)
 	if err != nil {
 		logger.Printf("Failed to start HTTP server: %v", err)
@@ -1368,6 +1365,7 @@ func Run(cfg RunConfig) error {
 		return store.WithServices(ctx, warmSvc)
 	}
 	api.SetPreWarmContextFunc(buildPreWarmCtx)
+	api.SetLLMPool(llmPool)
 
 	go func() {
 		warmCtx := buildPreWarmCtx()

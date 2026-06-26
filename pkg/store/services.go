@@ -125,13 +125,10 @@ type Services struct {
 	TenantRouter TenantRouter
 }
 
-// DeploymentMode indicates whether Astonish is running in personal or platform mode.
+// DeploymentMode indicates the operational mode of Astonish.
 type DeploymentMode string
 
 const (
-	// ModePersonal is the default single-user mode with file-based storage.
-	ModePersonal DeploymentMode = "personal"
-
-	// ModePlatform is the multi-tenant mode with PostgreSQL storage.
+	// ModePlatform is the multi-tenant mode with PostgreSQL/SQLite storage.
 	ModePlatform DeploymentMode = "platform"
 )

@@ -59,7 +59,7 @@ func TestIsPlatformMode_NoServices(t *testing.T) {
 
 func TestIsPlatformMode_PersonalMode(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/test", nil)
-	svc := &store.Services{Mode: store.ModePersonal}
+	svc := &store.Services{Mode: "personal"}
 	ctx := store.WithServices(r.Context(), svc)
 	r = r.WithContext(ctx)
 	if isPlatformMode(r) {
@@ -159,7 +159,7 @@ func (m *mockAuditStore) getEntries() []*store.AuditEntry {
 func TestAuditMiddleware_PersonalMode_Noop(t *testing.T) {
 	audit := &mockAuditStore{}
 	svc := &store.Services{
-		Mode:  store.ModePersonal,
+		Mode:  "personal",
 		Audit: audit,
 	}
 

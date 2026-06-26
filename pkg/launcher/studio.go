@@ -39,7 +39,6 @@ type StudioServer struct {
 	platformAuth  *api.PlatformAuth   // non-nil in platform mode
 	backend       studioBackend       // non-nil in platform mode
 	tenantMW      func(http.Handler) http.Handler // tenant resolution middleware
-	configDir     string              // config dir for settings
 	services      *store.Services
 }
 
@@ -80,13 +79,6 @@ func WithBackend(b studioBackend) StudioOption {
 func WithTenantMiddleware(mw func(http.Handler) http.Handler) StudioOption {
 	return func(s *StudioServer) {
 		s.tenantMW = mw
-	}
-}
-
-// WithConfigDir sets the personal-mode config directory path.
-func WithConfigDir(dir string) StudioOption {
-	return func(s *StudioServer) {
-		s.configDir = dir
 	}
 }
 
@@ -282,37 +274,6 @@ func (s *StudioServer) Serve() error {
 // Shutdown gracefully shuts down the server with a timeout.
 func (s *StudioServer) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
-}
-
-// RunStudio starts the Studio web server (blocking, for CLI use).
-// In platform mode, this requires a configured backend (SQLite or PG).
-// Use the daemon's WithBackend/WithPlatformAuth options for full functionality.
-func RunStudio(port int) error {
-	studio, err := NewStudioServer(port, WithServices(nil))
-	if err != nil {
-		fmt.Printf("\n")
-		fmt.Printf("  Failed to start Astonish Studio\n")
-		fmt.Printf("\n")
-		fmt.Printf("  Error: %v\n", err)
-		fmt.Printf("\n")
-		if isPortInUse(err) {
-			fmt.Printf("  Port %d is already in use. Try one of these:\n", port)
-			fmt.Printf("     - Stop the other process using port %d\n", port)
-			fmt.Printf("     - Use a different port: astonish studio --port 9394\n")
-		}
-		fmt.Printf("\n")
-		return err
-	}
-
-	fmt.Printf("\n")
-	fmt.Printf("  Astonish Studio is running!\n")
-	fmt.Printf("\n")
-	fmt.Printf("  Local:   http://localhost:%d\n", port)
-	fmt.Printf("\n")
-	fmt.Printf("  Press Ctrl+C to stop\n")
-	fmt.Printf("\n")
-
-	return studio.Serve()
 }
 
 // isPortInUse checks if the error indicates the port is already in use

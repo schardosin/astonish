@@ -7,12 +7,99 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 )
+
+// testSchedulerStore adapts scheduler.Store to store.SchedulerStore for tests.
+type testSchedulerStore struct {
+	ss *scheduler.Store
+	mu sync.Mutex
+}
+
+func (s *testSchedulerStore) List(_ context.Context) []*store.ScheduledJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	jobs := s.ss.List()
+	out := make([]*store.ScheduledJob, len(jobs))
+	for i, j := range jobs {
+		out[i] = s.toStoreJob(j)
+	}
+	return out
+}
+
+func (s *testSchedulerStore) Get(_ context.Context, id string) *store.ScheduledJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j := s.ss.Get(id)
+	if j == nil {
+		return nil
+	}
+	return s.toStoreJob(j)
+}
+
+func (s *testSchedulerStore) GetByName(_ context.Context, name string) *store.ScheduledJob {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, j := range s.ss.List() {
+		if j.Name == name {
+			return s.toStoreJob(j)
+		}
+	}
+	return nil
+}
+
+func (s *testSchedulerStore) Add(_ context.Context, job *store.ScheduledJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sj := storeJobToSchedulerJob(job)
+	err := s.ss.Add(sj)
+	if err == nil {
+		// Copy back generated ID
+		job.ID = sj.ID
+	}
+	return err
+}
+
+func (s *testSchedulerStore) Update(_ context.Context, job *store.ScheduledJob) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ss.Update(storeJobToSchedulerJob(job))
+}
+
+func (s *testSchedulerStore) Remove(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ss.Remove(id)
+}
+
+func (s *testSchedulerStore) toStoreJob(j *scheduler.Job) *store.ScheduledJob {
+	return &store.ScheduledJob{
+		ID:   j.ID,
+		Name: j.Name,
+		Mode: string(j.Mode),
+		Schedule: store.JobSchedule{
+			Cron:     j.Schedule.Cron,
+			Timezone: j.Schedule.Timezone,
+		},
+		Payload: store.JobPayload{
+			Flow:         j.Payload.Flow,
+			Params:       j.Payload.Params,
+			Instructions: j.Payload.Instructions,
+		},
+		Delivery: store.JobDelivery{
+			Channel: j.Delivery.Channel,
+			Target:  j.Delivery.Target,
+			Mode:    string(j.Delivery.Mode),
+		},
+		Enabled:   j.Enabled,
+		CreatedAt: j.CreatedAt,
+		LastRun:   j.LastRun,
+	}
+}
 
 // newTestSchedulerStore creates a store.SchedulerStore backed by a temp file for testing.
 func newTestSchedulerStore(t *testing.T) store.SchedulerStore {
@@ -22,7 +109,7 @@ func newTestSchedulerStore(t *testing.T) store.SchedulerStore {
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	return filestore.NewSchedulerStore(ss)
+	return &testSchedulerStore{ss: ss}
 }
 
 func TestHandleCreateJob_FlatJSON(t *testing.T) {

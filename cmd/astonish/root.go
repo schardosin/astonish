@@ -59,9 +59,6 @@ func Execute() error {
 	case "tap":
 		mustNotBeRemote("tap")
 		return handleTapCommand(os.Args[2:])
-	case "studio":
-		mustNotBeRemote("studio")
-		return handleStudioCommand(os.Args[2:])
 	case "setup":
 		mustNotBeRemote("setup")
 		return handleSetupCommand()
@@ -110,7 +107,7 @@ func printUsage() {
 	fmt.Println("usage: astonish [-h] [-v] {login,logout,status,org,team,chat,sessions,flows,...} ...")
 	fmt.Println("")
 	fmt.Println("positional arguments:")
-	fmt.Println("  {chat,sessions,flows,tap,studio,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,platform}")
+	fmt.Println("  {chat,sessions,flows,tap,daemon,channels,scheduler,fleet,credential,skills,sandbox,drill,config,setup,tools,memory,platform}")
 	fmt.Println("                        Astonish CLI commands")
 	fmt.Println("    login               Connect to a remote Astonish server")
 	fmt.Println("    logout              Disconnect from the remote server")
@@ -121,7 +118,6 @@ func printUsage() {
 	fmt.Println("    sessions            Manage persistent sessions")
 	fmt.Println("    flows               Design and run AI flows")
 	fmt.Println("    tap                 Manage extension repositories")
-	fmt.Println("    studio              Launch the visual editor")
 	fmt.Println("    daemon              Manage the background daemon service")
 	fmt.Println("    channels            Manage communication channels")
 	fmt.Println("    scheduler           Manage scheduled jobs")
@@ -142,7 +138,7 @@ func printUsage() {
 }
 
 // mustNotBeRemote exits with an error if the CLI is in remote mode.
-// Some commands (daemon, studio, sandbox, etc.) only make sense locally.
+// Some commands (daemon, sandbox, etc.) only make sense locally.
 func mustNotBeRemote(cmd string) {
 	if !client.IsRemoteMode() {
 		return
@@ -154,10 +150,7 @@ func mustNotBeRemote(cmd string) {
 	}
 	fmt.Fprintf(os.Stderr, "Error: '%s' is not available in remote mode.\n", cmd)
 	fmt.Fprintf(os.Stderr, "You are connected to %s.\n", url)
-	if cmd == "studio" {
-		fmt.Fprintf(os.Stderr, "Open %s in your browser instead.\n", url)
-	}
-	fmt.Fprintf(os.Stderr, "Use 'astonish logout' to disconnect and return to personal mode.\n")
+	fmt.Fprintf(os.Stderr, "Use 'astonish logout' to disconnect.\n")
 	os.Exit(1)
 }
 

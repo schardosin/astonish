@@ -34,6 +34,16 @@ func (r *PlatformReflector) merger() *MemoryMerger {
 	return r.Merger
 }
 
+// effectiveLLM returns the per-request LLM from context if available,
+// otherwise falls back to the reflector's default LLM. This ensures the
+// reflector uses the team's configured model in platform mode.
+func (r *PlatformReflector) effectiveLLM(ctx context.Context) model.LLM {
+	if override := LLMFromContext(ctx); override != nil {
+		return override
+	}
+	return r.LLM
+}
+
 // MemorySaveOrMergeFunc returns a store.MemorySaveOrMergeFunc that tools can use
 // to save memory entries with cross-session dedup/merge. This is injected into
 // the runner context so the memory_save tool can perform intelligent merging
@@ -185,7 +195,7 @@ func (r *PlatformReflector) runReflection(ctx context.Context, trace *ExecutionT
 	defer reflectCancel()
 
 	var lastResp *model.LLMResponse
-	for resp, err := range r.LLM.GenerateContent(reflectCtx, req, false) {
+	for resp, err := range r.effectiveLLM(ctx).GenerateContent(reflectCtx, req, false) {
 		if err != nil {
 			slog.Debug("platform reflection LLM error", "component", "platform-reflector", "error", err)
 			return
@@ -339,7 +349,7 @@ func (r *PlatformReflector) runExtraction(ctx context.Context, memStore store.Me
 	defer extractCancel()
 
 	var lastResp *model.LLMResponse
-	for resp, err := range r.LLM.GenerateContent(extractCtx, llmReq, false) {
+	for resp, err := range r.effectiveLLM(ctx).GenerateContent(extractCtx, llmReq, false) {
 		if err != nil {
 			slog.Debug("platform extraction LLM error",
 				"component", "platform-reflector",

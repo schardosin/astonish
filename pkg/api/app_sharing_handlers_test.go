@@ -450,7 +450,7 @@ func TestAppPromoteToOrg_NonAdmin(t *testing.T) {
 func TestAppPromoteToOrg_PersonalMode(t *testing.T) {
 	t.Parallel()
 
-	svc := &store.Services{Mode: store.ModePersonal}
+	svc := &store.Services{Mode: "personal"}
 	r := appSharingRequest(t, "POST", "/api/apps/promote", AppPromoteRequest{Slug: "app", TeamSlug: "team"}, svc, nil)
 	w := httptest.NewRecorder()
 

@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } from 'react'
+import { useState, useEffect, useCallback, lazy, Suspense, type FormEvent, type ChangeEvent } from 'react'
 import { Plus, Trash2, Loader2, Pause, Play, Search } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { AdminOrg } from '../../api/platformAdmin'
 import { InlineError, InlineSuccess, StatusBadge, gradientAmber, inputStyle } from './shared'
+
+const OrgDetailView = lazy(() => import('./OrgDetailView'))
 
 // ---------------------------------------------------------------------------
 // Organizations Tab
@@ -15,6 +17,7 @@ export default function OrgsTab() {
   const [success, setSuccess] = useState<string>('')
   const [showCreate, setShowCreate] = useState<boolean>(false)
   const [filter, setFilter] = useState<string>('')
+  const [selectedOrg, setSelectedOrg] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -69,6 +72,15 @@ export default function OrgsTab() {
       setSuccess(`Organization "${slug}" deleted`)
       load()
     } catch (e) { setError((e as Error).message) }
+  }
+
+  // If an org is selected, show its detail view
+  if (selectedOrg) {
+    return (
+      <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--text-muted)' }} /></div>}>
+        <OrgDetailView orgSlug={selectedOrg} onBack={() => { setSelectedOrg(null); load() }} />
+      </Suspense>
+    )
   }
 
   return (
@@ -128,7 +140,12 @@ export default function OrgsTab() {
             </thead>
             <tbody>
               {filtered.map(org => (
-                <tr key={org.id} className="border-t" style={{ borderColor: 'var(--border-color)' }}>
+                <tr
+                  key={org.id}
+                  className="border-t cursor-pointer transition-colors hover:bg-[var(--bg-tertiary)]"
+                  style={{ borderColor: 'var(--border-color)' }}
+                  onClick={() => setSelectedOrg(org.slug)}
+                >
                   <td className="py-3 px-3">
                     <div className="font-medium" style={{ color: 'var(--text-primary)' }}>{org.name}</div>
                     <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{org.slug}</div>
@@ -140,7 +157,7 @@ export default function OrgsTab() {
                     {new Date(org.created_at).toLocaleDateString()}
                   </td>
                   <td className="py-3 px-3">
-                    <div className="flex items-center justify-end gap-1">
+                    <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
                       {org.status === 'active' && (
                         <button onClick={() => handleSuspend(org.slug)} className="p-1.5 rounded-lg transition-opacity hover:opacity-80" style={{ color: '#f59e0b' }} title="Suspend">
                           <Pause size={14} />

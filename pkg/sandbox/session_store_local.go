@@ -30,9 +30,14 @@ type localSessionStore struct {
 	filePath string
 }
 
-// newLocalSessionStore constructs the personal-mode session store rooted at
+// NewLocalSessionStore constructs a file-backed session store rooted at
 // dataDir. On first call it loads sandbox_sessions.json if present; a
 // missing file is not an error.
+func NewLocalSessionStore(dataDir string) (store.SandboxSessionStore, error) {
+	return newLocalSessionStore(dataDir)
+}
+
+// newLocalSessionStore is the internal implementation.
 func newLocalSessionStore(dataDir string) (store.SandboxSessionStore, error) {
 	if dataDir == "" {
 		return nil, errors.New("sandbox session store: dataDir is required")

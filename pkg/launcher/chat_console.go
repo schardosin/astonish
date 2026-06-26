@@ -964,6 +964,14 @@ func printRecentHistory(sess session.Session, maxExchanges int, colorCyan, color
 // This is used during hot-swap to rebuild the distiller's closure with a new provider.
 func makeLLMFunc(llm model.LLM) func(ctx context.Context, prompt string) (string, error) {
 	return func(ctx context.Context, prompt string) (string, error) {
+		// Prefer per-request LLM override (team-specific model in platform mode)
+		// over the factory-time default. This ensures compaction/summarization
+		// uses the same model as the main chat for this team.
+		effectiveLLM := agent.LLMFromContext(ctx)
+		if effectiveLLM == nil {
+			effectiveLLM = llm
+		}
+
 		req := &model.LLMRequest{
 			Contents: []*genai.Content{
 				{
@@ -973,7 +981,7 @@ func makeLLMFunc(llm model.LLM) func(ctx context.Context, prompt string) (string
 			},
 		}
 		var text string
-		for resp, err := range llm.GenerateContent(ctx, req, false) {
+		for resp, err := range effectiveLLM.GenerateContent(ctx, req, false) {
 			if err != nil {
 				return text, err
 			}

@@ -133,6 +133,99 @@ export async function deleteOrg(slug: string): Promise<void> {
   await throwIfNotOk(res, 'Failed to delete organization')
 }
 
+// --- Org Team Management API ---
+
+export async function createOrgTeam(
+  orgSlug: string,
+  params: { name: string; slug?: string }
+): Promise<AdminTeam> {
+  const res = await adminFetch(`${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  })
+  await throwIfNotOk(res, 'Failed to create team')
+  return res.json()
+}
+
+export async function deleteOrgTeam(orgSlug: string, teamSlug: string): Promise<void> {
+  const res = await adminFetch(
+    `${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams/${encodeURIComponent(teamSlug)}`,
+    { method: 'DELETE', credentials: 'include' }
+  )
+  await throwIfNotOk(res, 'Failed to delete team')
+}
+
+export interface TeamMemberDetail {
+  user_id: string
+  team_id: string
+  role: string
+  joined_at: string
+  email: string
+  display_name: string
+}
+
+export async function listOrgTeamMembers(
+  orgSlug: string,
+  teamSlug: string
+): Promise<TeamMemberDetail[]> {
+  const res = await adminFetch(
+    `${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams/${encodeURIComponent(teamSlug)}/members`,
+    { credentials: 'include' }
+  )
+  await throwIfNotOk(res, 'Failed to list team members')
+  const data = await res.json()
+  return data.members
+}
+
+export async function addOrgTeamMember(
+  orgSlug: string,
+  teamSlug: string,
+  params: { email: string; role?: string }
+): Promise<void> {
+  const res = await adminFetch(
+    `${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams/${encodeURIComponent(teamSlug)}/members`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    }
+  )
+  await throwIfNotOk(res, 'Failed to add member to team')
+}
+
+export async function removeOrgTeamMember(
+  orgSlug: string,
+  teamSlug: string,
+  userId: string
+): Promise<void> {
+  const res = await adminFetch(
+    `${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams/${encodeURIComponent(teamSlug)}/members/${encodeURIComponent(userId)}`,
+    { method: 'DELETE', credentials: 'include' }
+  )
+  await throwIfNotOk(res, 'Failed to remove member from team')
+}
+
+export async function setOrgTeamMemberRole(
+  orgSlug: string,
+  teamSlug: string,
+  userId: string,
+  role: string
+): Promise<void> {
+  const res = await adminFetch(
+    `${ADMIN_BASE}/orgs/${encodeURIComponent(orgSlug)}/teams/${encodeURIComponent(teamSlug)}/members/${encodeURIComponent(userId)}/role`,
+    {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role }),
+    }
+  )
+  await throwIfNotOk(res, 'Failed to update member role')
+}
+
 // --- User API ---
 
 export async function listUsers(): Promise<AdminUser[]> {

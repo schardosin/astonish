@@ -763,6 +763,11 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			reflectCtx = store.WithMemoryStore(reflectCtx, store.MemoryStoreFromContext(ctx))
 			reflectCtx = store.WithSessionID(reflectCtx, store.SessionIDFromContext(ctx))
 			reflectCtx = store.WithUserID(reflectCtx, store.UserIDFromContext(ctx))
+			// Propagate per-request LLM override so the reflector uses the
+			// team's configured model (not the global singleton default).
+			if llmOverride := LLMFromContext(ctx); llmOverride != nil {
+				reflectCtx = WithLLM(reflectCtx, llmOverride)
+			}
 			go func() {
 				tCtx, tCancel := context.WithTimeout(reflectCtx, 120*time.Second)
 				defer tCancel()

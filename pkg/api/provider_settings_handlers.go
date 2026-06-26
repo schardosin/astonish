@@ -85,20 +85,28 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If only the default model/provider changed (no provider configs modified),
-	// try hot-swap to avoid the expensive full teardown-and-rebuild cycle.
-	hotSwapped := false
-	if len(req.Providers) == 0 && req.DefaultProvider != "" && req.DefaultModel != "" {
-		slog.Info("[hot-swap] default-only change detected (platform providers handler)",
-			"provider", req.DefaultProvider, "model", req.DefaultModel)
-		hotSwapped = GetChatManager().HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
-	}
+	cm := GetChatManager()
 
-	if !hotSwapped {
-		slog.Info("[hot-swap] not performed (platform providers handler), falling back to full Reset()")
-		GetChatManager().Reset()
+	// Provider config changes require pool invalidation so cached LLM instances
+	// with old API keys/URLs are dropped. Default-only changes don't need this
+	// since per-request resolution (ResolveEffectiveConfig) picks up the new
+	// default automatically from the DB on every chat message.
+	if len(req.Providers) > 0 {
+		slog.Info("[settings] platform provider configs changed, invalidating LLM pool")
+		cm.InvalidateLLMPool()
+		// Also hot-swap the fallback singleton LLM (used in non-platform mode
+		// and as the default when pool resolution isn't available).
+		cm.Reset()
 	} else {
-		slog.Info("[hot-swap] succeeded (platform providers handler) — no Reset() needed")
+		slog.Info("[settings] platform defaults changed (no provider config change)",
+			"provider", req.DefaultProvider, "model", req.DefaultModel)
+		// Invalidate pool so any entries for the OLD default are refreshed
+		// if the admin also changed provider configs previously.
+		cm.InvalidateLLMPool()
+		// Hot-swap the singleton LLM for non-platform/personal mode fallback.
+		if req.DefaultProvider != "" && req.DefaultModel != "" {
+			cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+		}
 	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config
@@ -172,20 +180,21 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If only the default model/provider changed (no provider configs modified),
-	// try hot-swap to avoid the expensive full teardown-and-rebuild cycle.
-	hotSwapped := false
-	if len(req.Providers) == 0 && req.DefaultProvider != "" && req.DefaultModel != "" {
-		slog.Info("[hot-swap] default-only change detected (org providers handler)",
-			"provider", req.DefaultProvider, "model", req.DefaultModel)
-		hotSwapped = GetChatManager().HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
-	}
+	cm := GetChatManager()
 
-	if !hotSwapped {
-		slog.Info("[hot-swap] not performed (org providers handler), falling back to full Reset()")
-		GetChatManager().Reset()
+	// Same logic as platform: invalidate pool on provider config changes,
+	// hot-swap singleton on default-only changes.
+	if len(req.Providers) > 0 {
+		slog.Info("[settings] org provider configs changed, invalidating LLM pool")
+		cm.InvalidateLLMPool()
+		cm.Reset()
 	} else {
-		slog.Info("[hot-swap] succeeded (org providers handler) — no Reset() needed")
+		slog.Info("[settings] org defaults changed (no provider config change)",
+			"provider", req.DefaultProvider, "model", req.DefaultModel)
+		cm.InvalidateLLMPool()
+		if req.DefaultProvider != "" && req.DefaultModel != "" {
+			cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+		}
 	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config

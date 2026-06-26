@@ -84,6 +84,14 @@ func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 	}
 }
 
+// InjectLLM adds a per-request LLM override to the runner's context.
+// When present, ChatAgent.Run will use this LLM instead of the agent's default,
+// enabling per-team provider resolution (platform → org → team hierarchy).
+// Must be called before Run().
+func (cr *ChatRunner) InjectLLM(llm model.LLM) {
+	cr.ctx = agent.WithLLM(cr.ctx, llm)
+}
+
 // InjectCredentialStore adds a tenant-scoped credential store to the runner's
 // context so that tool functions can retrieve it via store.CredentialStoreFromContext.
 // Must be called before Run().
@@ -709,9 +717,14 @@ func (cr *ChatRunner) Run(
 	// titleWaitTimeout) before closing subscribers, so the session_title
 	// SSE event reaches the browser if the LLM responds in time.
 	if cr.IsNew && msg != "" && titleSetter != nil {
+		// Prefer per-request LLM (team-specific) over the singleton for title generation.
+		titleLLM := agent.LLMFromContext(cr.ctx)
+		if titleLLM == nil {
+			titleLLM = llm
+		}
 		go func() {
 			defer close(cr.titleDone)
-			generateStudioSessionTitle(llm, titleSetter, cr.SessionID, msg, func(title string) {
+			generateStudioSessionTitle(titleLLM, titleSetter, cr.SessionID, msg, func(title string) {
 				cr.emitEvent("session_title", map[string]any{"title": title})
 			})
 		}()

@@ -1257,8 +1257,20 @@ export default function SettingsPage({
           {categories.map((category, catIdx) => (
             <div key={catIdx}>
               {category.label && (
-                <div className="px-3 pt-4 pb-1.5 text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-                  {category.label}
+                <div className="px-3 pt-4 pb-1.5 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                    {category.label}
+                  </span>
+                  {isPlatformMode && isAdmin && category.label.startsWith('Team') && (
+                    <button
+                      onClick={() => setShowCreateModal(true)}
+                      className="p-0.5 rounded transition-colors hover:bg-[var(--bg-tertiary)]"
+                      style={{ color: 'var(--text-muted)' }}
+                      title="Create Team"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  )}
                 </div>
               )}
 

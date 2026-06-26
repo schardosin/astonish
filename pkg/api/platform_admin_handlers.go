@@ -656,6 +656,356 @@ func PlatformAdminRemoveUserFromOrgHandler(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// --- Platform Admin: Org Team Management Endpoints ---
+
+// PlatformAdminCreateTeamHandler handles POST /api/platform/admin/orgs/{slug}/teams
+func PlatformAdminCreateTeamHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	orgSlug := mux.Vars(r)["slug"]
+	ctx := r.Context()
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.Slug = strings.ToLower(strings.TrimSpace(req.Slug))
+
+	if req.Name == "" {
+		respondError(w, http.StatusBadRequest, "team name is required")
+		return
+	}
+	if req.Slug == "" {
+		req.Slug = slugify(req.Name)
+	}
+	if len(req.Slug) < 2 || len(req.Slug) > 50 || !slugRegex.MatchString(req.Slug) {
+		respondError(w, http.StatusBadRequest, "invalid slug: must be 2-50 lowercase alphanumeric characters with hyphens")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	// Check for duplicate slug
+	existing, _ := orgDS.Teams().GetTeamBySlug(ctx, req.Slug)
+	if existing != nil {
+		respondError(w, http.StatusConflict, "a team with this slug already exists")
+		return
+	}
+
+	team := &store.Team{
+		ID:         uuid.New().String(),
+		Name:       req.Name,
+		Slug:       req.Slug,
+		SchemaName: entstore.TeamSchemaName(req.Slug),
+		CreatedAt:  time.Now(),
+	}
+
+	if err := orgDS.Teams().CreateTeam(ctx, team); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create team")
+		return
+	}
+
+	// Provision the team schema
+	if err := orgDS.ProvisionTeam(ctx, req.Slug); err != nil {
+		slog.Warn("team created but schema provisioning failed", "team", req.Slug, "org", orgSlug, "error", err)
+		respondError(w, http.StatusInternalServerError, "team created but schema provisioning failed")
+		return
+	}
+
+	respondJSON(w, http.StatusCreated, team)
+}
+
+// PlatformAdminDeleteTeamHandler handles DELETE /api/platform/admin/orgs/{slug}/teams/{teamSlug}
+func PlatformAdminDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	vars := mux.Vars(r)
+	orgSlug := vars["slug"]
+	teamSlug := vars["teamSlug"]
+
+	if teamSlug == "general" {
+		respondError(w, http.StatusForbidden, "cannot delete the default team")
+		return
+	}
+
+	ctx := r.Context()
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	if err := orgDS.Teams().DeleteTeam(ctx, team.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to delete team")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// PlatformAdminListTeamMembersHandler handles GET /api/platform/admin/orgs/{slug}/teams/{teamSlug}/members
+func PlatformAdminListTeamMembersHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	vars := mux.Vars(r)
+	orgSlug := vars["slug"]
+	teamSlug := vars["teamSlug"]
+	ctx := r.Context()
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	members, err := orgDS.Teams().ListMembers(ctx, team.ID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list members")
+		return
+	}
+
+	// Enrich members with user details from platform users store
+	userStore := backend.Users()
+	for _, m := range members {
+		u, err := userStore.GetByID(ctx, m.UserID)
+		if err == nil && u != nil {
+			m.Email = u.Email
+			m.DisplayName = u.DisplayName
+		}
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"members": members})
+}
+
+// PlatformAdminAddTeamMemberHandler handles POST /api/platform/admin/orgs/{slug}/teams/{teamSlug}/members
+func PlatformAdminAddTeamMemberHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	vars := mux.Vars(r)
+	orgSlug := vars["slug"]
+	teamSlug := vars["teamSlug"]
+	ctx := r.Context()
+
+	var req struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.Email = strings.TrimSpace(req.Email)
+	if req.Email == "" {
+		respondError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "member"
+	}
+	if req.Role != "admin" && req.Role != "member" && req.Role != "viewer" {
+		respondError(w, http.StatusBadRequest, "role must be admin, member, or viewer")
+		return
+	}
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	// Resolve user by email
+	user, err := backend.Users().GetByEmail(ctx, req.Email)
+	if err != nil || user == nil {
+		respondError(w, http.StatusNotFound, "user not found with this email")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	// Auto-add user to org if not already a member
+	existingOrgRole, _ := backend.Organizations().GetMemberRole(ctx, user.ID, org.ID)
+	if existingOrgRole == "" {
+		if err := backend.Organizations().AddMember(ctx, user.ID, org.ID, "member"); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to add user to organization")
+			return
+		}
+		// Provision personal schema in the org DB
+		_ = orgDS.ProvisionPersonalSchema(ctx, user.ID)
+	}
+
+	// Add to team
+	if err := orgDS.Teams().AddMember(ctx, &store.TeamMembership{
+		UserID:   user.ID,
+		TeamID:   team.ID,
+		Role:     req.Role,
+		JoinedAt: time.Now(),
+	}); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to add member to team")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "added"})
+}
+
+// PlatformAdminRemoveTeamMemberHandler handles DELETE /api/platform/admin/orgs/{slug}/teams/{teamSlug}/members/{userID}
+func PlatformAdminRemoveTeamMemberHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	vars := mux.Vars(r)
+	orgSlug := vars["slug"]
+	teamSlug := vars["teamSlug"]
+	targetUserID := vars["userID"]
+	ctx := r.Context()
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	if err := orgDS.Teams().RemoveMember(ctx, targetUserID, team.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to remove member")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+// PlatformAdminSetTeamMemberRoleHandler handles PUT /api/platform/admin/orgs/{slug}/teams/{teamSlug}/members/{userID}/role
+func PlatformAdminSetTeamMemberRoleHandler(w http.ResponseWriter, r *http.Request) {
+	_, backend := platformAdminGuard(w, r)
+	if backend == nil {
+		return
+	}
+
+	vars := mux.Vars(r)
+	orgSlug := vars["slug"]
+	teamSlug := vars["teamSlug"]
+	targetUserID := vars["userID"]
+	ctx := r.Context()
+
+	var req struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Role != "admin" && req.Role != "member" && req.Role != "viewer" {
+		respondError(w, http.StatusBadRequest, "role must be admin, member, or viewer")
+		return
+	}
+
+	// Verify org exists
+	org, err := backend.Organizations().GetBySlug(ctx, orgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	orgDS, err := backend.ForOrg(orgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization data store")
+		return
+	}
+
+	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
+	if err := orgDS.Teams().SetRole(ctx, targetUserID, team.ID, req.Role); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to update role")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
 // --- Helpers ---
 
 func isValidOrgSlug(s string) bool {

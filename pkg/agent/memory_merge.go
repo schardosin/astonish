@@ -36,6 +36,15 @@ type MemoryMerger struct {
 	DebugMode bool
 }
 
+// effectiveLLM returns the per-request LLM from context if available,
+// otherwise falls back to the merger's default LLM.
+func (mm *MemoryMerger) effectiveLLM(ctx context.Context) model.LLM {
+	if override := LLMFromContext(ctx); override != nil {
+		return override
+	}
+	return mm.LLM
+}
+
 // MergeResult describes the outcome of a merge attempt.
 type MergeResult struct {
 	// Action is one of: "insert" (no existing match), "skip" (pure duplicate),
@@ -229,7 +238,7 @@ func (mm *MemoryMerger) mergeViaLLM(ctx context.Context, existingContent, propos
 	defer cancel()
 
 	var lastResp *model.LLMResponse
-	for resp, err := range mm.LLM.GenerateContent(mergeCtx, req, false) {
+	for resp, err := range mm.effectiveLLM(ctx).GenerateContent(mergeCtx, req, false) {
 		if err != nil {
 			return "", fmt.Errorf("merge LLM error: %w", err)
 		}

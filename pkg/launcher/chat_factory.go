@@ -121,9 +121,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// (daemonSecretGetter) that reads from platform_secrets first. Do NOT
 			// overwrite it — otherwise IsStandardServerInstalled() will read from
 			// the file-based store and miss keys that are only in the DB.
-			if !cfg.PlatformMode {
-				config.SetInstalledSecretGetter(cs.GetSecret)
-			}
+			// (Platform mode is always active; this getter is set by the daemon.)
 
 			// Wire credential store into API handlers
 			api.SetAPICredentialStore(cs)

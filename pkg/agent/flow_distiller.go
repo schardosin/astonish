@@ -64,6 +64,12 @@ func NewFlowDistiller(
 ) *FlowDistiller {
 	return &FlowDistiller{
 		LLM: func(ctx context.Context, prompt string) (string, error) {
+			// Prefer per-request LLM override (team-specific model) over factory default.
+			effectiveLLM := LLMFromContext(ctx)
+			if effectiveLLM == nil {
+				effectiveLLM = llm
+			}
+
 			req := &model.LLMRequest{
 				Contents: []*genai.Content{
 					{
@@ -73,7 +79,7 @@ func NewFlowDistiller(
 				},
 			}
 			var text string
-			for resp, err := range llm.GenerateContent(ctx, req, false) {
+			for resp, err := range effectiveLLM.GenerateContent(ctx, req, false) {
 				if err != nil {
 					return text, err
 				}

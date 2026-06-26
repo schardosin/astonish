@@ -66,7 +66,7 @@ func printFleetUsage() {
 	fmt.Println("  delete (rm) <key>    Delete a fleet plan")
 	fmt.Println("  templates            List available fleet templates")
 	fmt.Println("")
-	fmt.Println("To create a new fleet plan, use Studio UI: astonish studio")
+	fmt.Println("To create a new fleet plan, use the Studio UI.")
 	fmt.Println("Then type /fleet-plan in the chat, or use the Fleet tab.")
 }
 
@@ -165,7 +165,7 @@ func handleFleetList() error {
 
 	if len(plans) == 0 {
 		fmt.Println("No fleet plans.")
-		fmt.Println("\nCreate plans through Studio UI (astonish studio) using the /fleet-plan command.")
+		fmt.Println("\nCreate plans through the Studio UI using the /fleet-plan command.")
 		return nil
 	}
 
@@ -563,7 +563,7 @@ func handleFleetTemplates() error {
 	w.Flush()
 
 	fmt.Printf("\n%d template(s) available\n", len(result.Fleets))
-	fmt.Println("\nTo create a plan from a template, use Studio UI: astonish studio")
+	fmt.Println("\nTo create a plan from a template, use the Studio UI.")
 	return nil
 }
 

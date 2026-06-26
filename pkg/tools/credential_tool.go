@@ -7,7 +7,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -28,20 +27,136 @@ func GetCredentialStore() *credentials.Store {
 }
 
 // getEffectiveCredStore returns the tenant-scoped credential store from the
-// context (platform mode) or wraps the file-based global (personal mode).
-// Returns nil if neither is available.
+// context (injected by ChatRunner in platform mode).
+// Falls back to the global credentialStoreVar (file-based, for console mode and tests).
+// Returns nil if no store is available.
 func getEffectiveCredStore(ctx context.Context) store.CredentialStore {
-	// Platform mode: credential store injected into context by ChatRunner
 	if ctx != nil {
 		if cs := store.CredentialStoreFromContext(ctx); cs != nil {
 			return cs
 		}
 	}
-	// Personal mode: wrap the global file-based store
+	// Fallback: wrap the file-based credential store for console/test use.
 	if credentialStoreVar != nil {
-		return filestore.NewCredentialStore(credentialStoreVar)
+		return &fileCredStoreAdapter{s: credentialStoreVar}
 	}
 	return nil
+}
+
+// fileCredStoreAdapter adapts *credentials.Store (file-based, no context)
+// to the store.CredentialStore interface. Used as fallback in console mode
+// and unit tests where no platform DB is available.
+type fileCredStoreAdapter struct {
+	s *credentials.Store
+}
+
+func (a *fileCredStoreAdapter) Get(_ context.Context, name string) *store.Credential {
+	c := a.s.Get(name)
+	if c == nil {
+		return nil
+	}
+	return credToStoreCred(c)
+}
+
+func (a *fileCredStoreAdapter) Set(_ context.Context, name string, cred *store.Credential) error {
+	return a.s.Set(name, storeCredToCred(cred))
+}
+
+func (a *fileCredStoreAdapter) Remove(_ context.Context, name string) error {
+	return a.s.Remove(name)
+}
+
+func (a *fileCredStoreAdapter) List(_ context.Context) map[string]store.CredentialType {
+	raw := a.s.List()
+	out := make(map[string]store.CredentialType, len(raw))
+	for k, v := range raw {
+		out[k] = store.CredentialType(v)
+	}
+	return out
+}
+
+func (a *fileCredStoreAdapter) Count(_ context.Context) int {
+	return a.s.Count()
+}
+
+func (a *fileCredStoreAdapter) Resolve(_ context.Context, name string) (string, string, error) {
+	return a.s.Resolve(name)
+}
+
+func (a *fileCredStoreAdapter) InvalidateToken(_ context.Context, name string) {
+	a.s.InvalidateToken(name)
+}
+
+func (a *fileCredStoreAdapter) SetSecret(_ context.Context, key, value string) error {
+	return a.s.SetSecret(key, value)
+}
+
+func (a *fileCredStoreAdapter) SetSecretBatch(_ context.Context, secrets map[string]string) error {
+	return a.s.SetSecretBatch(secrets)
+}
+
+func (a *fileCredStoreAdapter) GetSecret(_ context.Context, key string) string {
+	return a.s.GetSecret(key)
+}
+
+func (a *fileCredStoreAdapter) RemoveSecret(_ context.Context, key string) error {
+	return a.s.RemoveSecret(key)
+}
+
+func (a *fileCredStoreAdapter) HasSecrets(_ context.Context) bool {
+	return a.s.HasSecrets()
+}
+
+func (a *fileCredStoreAdapter) SecretCount(_ context.Context) int {
+	return a.s.SecretCount()
+}
+
+func (a *fileCredStoreAdapter) ListSecrets(_ context.Context) []string {
+	return a.s.ListSecrets()
+}
+
+func (a *fileCredStoreAdapter) Reload(_ context.Context) error {
+	return a.s.Reload()
+}
+
+// credToStoreCred converts a file-based credentials.Credential to a store.Credential.
+func credToStoreCred(c *credentials.Credential) *store.Credential {
+	return &store.Credential{
+		Type:         store.CredentialType(c.Type),
+		Header:       c.Header,
+		Value:        c.Value,
+		Token:        c.Token,
+		Username:     c.Username,
+		Password:     c.Password,
+		AuthURL:      c.AuthURL,
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Scope:        c.Scope,
+		TokenURL:     c.TokenURL,
+		AccessToken:  c.AccessToken,
+		RefreshToken: c.RefreshToken,
+		TokenExpiry:  c.TokenExpiry,
+	}
+}
+
+// storeCredToCred converts a store.Credential to a file-based credentials.Credential.
+func storeCredToCred(c *store.Credential) *credentials.Credential {
+	return &credentials.Credential{
+		Type:         credentials.CredentialType(c.Type),
+		Header:       c.Header,
+		Value:        c.Value,
+		Token:        c.Token,
+		Username:     c.Username,
+		Password:     c.Password,
+		AuthURL:      c.AuthURL,
+		ClientID:     c.ClientID,
+		ClientSecret: c.ClientSecret,
+		Scope:        c.Scope,
+		TokenURL:     c.TokenURL,
+		AccessToken:  c.AccessToken,
+		RefreshToken: c.RefreshToken,
+		TokenExpiry:  c.TokenExpiry,
+	}
 }
 
 // --- save_credential tool ---

@@ -218,159 +218,13 @@ func UpdateSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Platform mode: persist settings to team DB instead of filesystem
 	svc := store.FromRequest(r)
-	if svc != nil && svc.Mode == store.ModePlatform && svc.Settings != nil {
-		slog.Info("[settings] UpdateSettingsHandler: routing to platform mode")
-		updateSettingsPlatform(w, r, svc, req)
-		return
-	}
-	slog.Info("[settings] UpdateSettingsHandler: using filesystem mode")
-
-	cfg, err := config.LoadAppConfig()
-	if err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to load config: "+err.Error())
+	if svc == nil || svc.Settings == nil {
+		respondError(w, http.StatusServiceUnavailable, "Settings store not available")
 		return
 	}
 
-	// Update general settings if provided
-	if req.General != nil {
-		cfg.General.DefaultProvider = req.General.DefaultProvider
-		cfg.General.DefaultModel = req.General.DefaultModel
-		cfg.General.WebSearchTool = req.General.WebSearchTool
-		cfg.General.WebExtractTool = req.General.WebExtractTool
-		if req.General.ContextLength > 0 {
-			cfg.General.ContextLength = req.General.ContextLength
-		}
-	}
-
-	// Update provider settings if provided
-	if req.Providers != nil {
-		// Check if this is a full providers array replacement (DELETE + ADD workflow)
-		if len(req.Providers) > 0 {
-			firstKey := ""
-			for k := range req.Providers {
-				firstKey = k
-				break
-			}
-			// If the first key is "__replace_all__", treat providers as full replacement array
-			if firstKey == "__replace_all__" {
-				var newProviders []map[string]string
-				if err := json.Unmarshal([]byte(req.Providers["__replace_all__"]["__array__"]), &newProviders); err == nil {
-					// Build new providers map from array
-					newProvidersMap := make(map[string]config.ProviderConfig)
-					for _, p := range newProviders {
-						name := p["name"]
-						if name != "" {
-							newProvidersMap[name] = make(config.ProviderConfig)
-							for k, v := range p {
-								if k != "name" {
-									newProvidersMap[name][k] = v
-								}
-							}
-						}
-					}
-					cfg.Providers = newProvidersMap
-				}
-			} else {
-				// Original behavior: update individual provider fields
-				for providerName, providerFields := range req.Providers {
-					if cfg.Providers == nil {
-						cfg.Providers = make(map[string]config.ProviderConfig)
-					}
-					if cfg.Providers[providerName] == nil {
-						cfg.Providers[providerName] = make(config.ProviderConfig)
-					}
-					for key, value := range providerFields {
-						// Only update if value is not masked placeholder
-						if value != "" && !isMaskedValue(value) {
-							cfg.Providers[providerName][key] = value
-						}
-					}
-				}
-			}
-		}
-
-		// Extract secrets from provider configs and store in credential store.
-		// Then scrub secrets from the config struct before saving to YAML.
-		if store := getAPICredentialStore(); store != nil {
-			secrets := make(map[string]string)
-			for instanceName, pCfg := range cfg.Providers {
-				provType := config.GetProviderType(instanceName, pCfg)
-				if provType == "" {
-					provType = instanceName
-				}
-				for _, key := range providerSecretKeys(provType) {
-					if val, has := pCfg[key]; has && val != "" {
-						storeKey := "provider." + instanceName + "." + key
-						secrets[storeKey] = val
-					}
-				}
-			}
-			if len(secrets) > 0 {
-				if err := store.SetSecretBatch(secrets); err != nil {
-					slog.Warn("failed to save provider secrets to credential store", "error", err)
-				} else {
-					// Scrub secrets from config before saving to YAML
-					credentials.ScrubAppConfig(cfg)
-				}
-			}
-		}
-	}
-
-	if err := config.SaveAppConfig(cfg); err != nil {
-		respondError(w, http.StatusInternalServerError, "Failed to save config: "+err.Error())
-		return
-	}
-
-	// Re-setup environment variables (prefer credential store path)
-	if store := getAPICredentialStore(); store != nil {
-		config.SetupAllProviderEnvFromStore(cfg, store.GetSecret)
-	} else {
-		config.SetupAllProviderEnv(cfg)
-	}
-
-	// Regenerate the managed OpenCode config since provider/model may have changed.
-	// Reload config from disk to get the clean version (secrets were scrubbed above).
-	if freshCfg := effectiveAppConfig(r); freshCfg != nil {
-		regenerateOpenCodeConfig(freshCfg)
-	}
-
-	// If only the model/provider selection changed (not provider configs or other
-	// settings), try a fast LLM hot-swap that avoids the full teardown-and-rebuild
-	// cycle. This eliminates the 30-60+ second delay on first message after a
-	// model change, since tools, MCP servers, sandbox, and ToolIndex all survive.
-	hotSwapped := false
-	if req.General != nil && req.Providers == nil {
-		newProvider := req.General.DefaultProvider
-		newModel := req.General.DefaultModel
-		slog.Info("[hot-swap] model-only change detected (filesystem mode)",
-			"provider", newProvider, "model", newModel)
-		if newProvider != "" && newModel != "" {
-			hotSwapped = GetChatManager().HotSwapLLM(r.Context(), newProvider, newModel)
-		} else {
-			slog.Warn("[hot-swap] skipped: empty provider or model",
-				"provider", newProvider, "model", newModel)
-		}
-	} else {
-		slog.Info("[hot-swap] skipped: not a model-only change (filesystem mode)",
-			"hasGeneral", req.General != nil, "hasProviders", req.Providers != nil)
-	}
-
-	if !hotSwapped {
-		slog.Info("[hot-swap] not performed, falling back to full Reset()")
-		// Full reset: provider configs changed, or hot-swap not possible.
-		GetChatManager().Reset()
-	} else {
-		slog.Info("[hot-swap] succeeded — no Reset() needed")
-	}
-
-	// Invalidate channel LLM pool so channels pick up the new provider config
-	if cm := GetChannelManager(); cm != nil {
-		cm.InvalidateLLMPool()
-	}
-
-	respondJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	updateSettingsPlatform(w, r, svc, req)
 }
 
 // updateSettingsPlatform handles the PUT in platform mode, persisting settings
@@ -444,30 +298,22 @@ func updateSettingsPlatform(w http.ResponseWriter, r *http.Request, svc *store.S
 		return
 	}
 
-	// If only the model/provider selection changed, try hot-swap for instant response.
-	hotSwapped := false
-	if req.General != nil && req.Providers == nil {
-		newProvider := req.General.DefaultProvider
-		newModel := req.General.DefaultModel
-		slog.Info("[hot-swap] model-only change detected (platform mode)",
-			"provider", newProvider, "model", newModel)
-		if newProvider != "" && newModel != "" {
-			hotSwapped = GetChatManager().HotSwapLLM(r.Context(), newProvider, newModel)
-		} else {
-			slog.Warn("[hot-swap] skipped: empty provider or model",
-				"provider", newProvider, "model", newModel)
-		}
-	} else {
-		slog.Info("[hot-swap] skipped: not a model-only change (platform mode)",
-			"hasGeneral", req.General != nil, "hasProviders", req.Providers != nil)
-	}
+	cm := GetChatManager()
 
-	if !hotSwapped {
-		slog.Info("[hot-swap] not performed (platform mode), falling back to full Reset()")
-		// Full reset: provider configs changed, or hot-swap not possible.
-		GetChatManager().Reset()
+	// In platform mode with per-request LLM resolution, we don't need to
+	// hot-swap or reset the global singleton when a team changes its default —
+	// the next request will resolve the correct LLM from the DB automatically.
+	// We only invalidate the pool when provider configs change.
+	if req.Providers != nil {
+		slog.Info("[settings] team provider configs changed (platform mode), invalidating + reset")
+		cm.InvalidateLLMPool()
+		cm.Reset()
 	} else {
-		slog.Info("[hot-swap] succeeded (platform mode) — no Reset() needed")
+		slog.Info("[settings] team defaults changed (platform mode), invalidating pool",
+			"provider", req.General.DefaultProvider, "model", req.General.DefaultModel)
+		// Invalidate pool in case provider configs were changed previously
+		// and cached entries are stale.
+		cm.InvalidateLLMPool()
 	}
 
 	// Invalidate channel LLM pool so channels pick up the new provider config

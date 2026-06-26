@@ -9,7 +9,6 @@ import (
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 )
 
 // effectiveUserID returns the user ID for the current request.
@@ -42,35 +41,28 @@ func effectiveCredentialStore(r *http.Request) store.CredentialStore {
 
 // effectiveCredentialStoreScoped returns the credential store for the given scope.
 func effectiveCredentialStoreScoped(r *http.Request, scope string) store.CredentialStore {
-	if svc := store.FromRequest(r); svc != nil && svc.Mode == store.ModePlatform {
-		switch scope {
-		case "personal":
-			return svc.PersonalCredentials
-		case "team":
-			return svc.Credentials
-		default:
-			// Merged: personal-first, team-fallback
-			if svc.PersonalCredentials != nil || svc.Credentials != nil {
-				return store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
-			}
-			return svc.Credentials
+	svc := store.FromRequest(r)
+	if svc == nil {
+		return nil
+	}
+	switch scope {
+	case "personal":
+		return svc.PersonalCredentials
+	case "team":
+		return svc.Credentials
+	default:
+		// Merged: personal-first, team-fallback
+		if svc.PersonalCredentials != nil || svc.Credentials != nil {
+			return store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials)
 		}
+		return svc.Credentials
 	}
-	// Fall back to the personal-mode singleton.
-	if cs := getAPICredentialStore(); cs != nil {
-		return filestore.NewCredentialStore(cs)
-	}
-	return nil
 }
 
 // effectivePersonalCredentialStore returns just the personal credential store.
 func effectivePersonalCredentialStore(r *http.Request) store.CredentialStore {
 	if svc := store.FromRequest(r); svc != nil && svc.PersonalCredentials != nil {
 		return svc.PersonalCredentials
-	}
-	// In personal mode, the single store IS the personal store.
-	if cs := getAPICredentialStore(); cs != nil {
-		return filestore.NewCredentialStore(cs)
 	}
 	return nil
 }

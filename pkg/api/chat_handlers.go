@@ -216,6 +216,11 @@ type ChatManager struct {
 	// at startup so that Reset() can automatically trigger background re-init.
 	preWarmCtxFn func() context.Context
 
+	// llmPool caches LLM instances keyed by provider+model. Used in platform
+	// mode to resolve per-request LLMs based on team/org/platform hierarchy
+	// without creating a new HTTP client for every message.
+	llmPool *provider.Pool
+
 	// active holds cancel functions for in-flight SSE streams keyed by session ID.
 	active map[string]context.CancelFunc
 	amu    sync.Mutex
@@ -252,6 +257,21 @@ func SetStudioChatInitFunc(fn func(ctx context.Context) (*StudioChatComponents, 
 // full initialization cost.
 func SetPreWarmContextFunc(fn func() context.Context) {
 	GetChatManager().preWarmCtxFn = fn
+}
+
+// SetLLMPool sets the shared LLM pool on the ChatManager. In platform mode,
+// the pool is used for per-request LLM resolution (team/org/platform hierarchy)
+// instead of using the singleton SwappableLLM for all requests.
+func SetLLMPool(pool *provider.Pool) {
+	GetChatManager().llmPool = pool
+}
+
+// InvalidateLLMPool drops all cached LLM instances so the next request creates
+// fresh ones. Call this when provider configurations change (API keys, etc.).
+func (cm *ChatManager) InvalidateLLMPool() {
+	if cm.llmPool != nil {
+		cm.llmPool.Invalidate()
+	}
 }
 
 // Reset tears down the current chat agent so the next request re-initializes
@@ -1031,6 +1051,28 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// shows the AppPreviewCard immediately (before the LLM responds).
 	if seededAppPreview != nil {
 		runner.emitEvent("app_preview", seededAppPreview)
+	}
+
+	// Per-request LLM resolution: In platform mode, resolve the effective
+	// provider/model based on the team → org → platform hierarchy and inject
+	// it into the runner context. This ensures each team uses their configured
+	// model regardless of what other teams/admins have set.
+	if svc := store.FromRequest(r); svc != nil && cm.llmPool != nil {
+		appCfg := provider.ResolveEffectiveConfig(r.Context(), svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+		if appCfg.General.DefaultProvider != "" {
+			resolvedLLM, llmErr := cm.llmPool.Get(r.Context(), appCfg.General.DefaultProvider, appCfg.General.DefaultModel, appCfg)
+			if llmErr != nil {
+				slog.Warn("per-request LLM resolution failed, using default",
+					"provider", appCfg.General.DefaultProvider,
+					"model", appCfg.General.DefaultModel,
+					"error", llmErr)
+			} else {
+				runner.InjectLLM(resolvedLLM)
+				slog.Debug("per-request LLM injected",
+					"provider", appCfg.General.DefaultProvider,
+					"model", appCfg.General.DefaultModel)
+			}
+		}
 	}
 
 	registry := getChatRunnerRegistry()

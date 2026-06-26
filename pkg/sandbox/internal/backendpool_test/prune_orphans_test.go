@@ -10,7 +10,6 @@ import (
 
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/sandbox/mock"
-	"github.com/schardosin/astonish/pkg/store/filestore"
 )
 
 // TestPruneOrphansForBackend_DeletesUnreferenced creates three mock sessions,
@@ -20,7 +19,7 @@ import (
 func TestPruneOrphansForBackend_DeletesUnreferenced(t *testing.T) {
 	// Set up store-backed registry in a temp dir.
 	dir := t.TempDir()
-	st, err := filestore.NewSandboxSessionStore(dir)
+	st, err := sandbox.NewLocalSessionStore(dir)
 	if err != nil {
 		t.Fatalf("NewSandboxSessionStore: %v", err)
 	}
@@ -84,7 +83,7 @@ func TestPruneOrphansForBackend_DeletesUnreferenced(t *testing.T) {
 // It should be pruned if older than 1 hour.
 func TestPruneOrphansForBackend_UnregisteredOldSession(t *testing.T) {
 	dir := t.TempDir()
-	st, err := filestore.NewSandboxSessionStore(dir)
+	st, err := sandbox.NewLocalSessionStore(dir)
 	if err != nil {
 		t.Fatalf("NewSandboxSessionStore: %v", err)
 	}
@@ -136,7 +135,7 @@ func TestPruneOrphansForBackend_UnregisteredOldSession(t *testing.T) {
 // TestPruneOrphansForBackend_CancelledContext stops early.
 func TestPruneOrphansForBackend_CancelledContext(t *testing.T) {
 	dir := t.TempDir()
-	st, err := filestore.NewSandboxSessionStore(dir)
+	st, err := sandbox.NewLocalSessionStore(dir)
 	if err != nil {
 		t.Fatalf("NewSandboxSessionStore: %v", err)
 	}

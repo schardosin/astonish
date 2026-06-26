@@ -279,8 +279,9 @@ func AppStateExecHandler(w http.ResponseWriter, r *http.Request) {
 	slug := apps.Slugify(req.AppName)
 
 	// Determine if PG dialect translation is needed.
+	_, isPG := svc.AppStateSQL.(pgDetector)
 	sqlStr := req.SQL
-	if _, isPG := svc.AppStateSQL.(pgDetector); isPG {
+	if isPG {
 		sqlStr = sqliteToPostgres(req.SQL)
 		// PRAGMA → no-op in PG; return success with zero rows affected
 		if sqlStr == "" {
@@ -294,6 +295,13 @@ func AppStateExecHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Schema reconciliation: if this is a CREATE TABLE IF NOT EXISTS, check
+	// whether the table already exists with fewer columns and add any missing
+	// ones via ALTER TABLE. This handles the common case where a user refines
+	// an app (adds fields) and re-saves — the old table persists but needs
+	// the new columns.
+	reconcileCreateTable(r.Context(), svc.AppStateSQL, slug, sqlStr, isPG)
 
 	rowsAffected, lastInsertID, err := svc.AppStateSQL.Exec(r.Context(), slug, sqlStr, req.Params...)
 	if err != nil {

@@ -276,29 +276,6 @@ func (s *StudioServer) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-// isPortInUse checks if the error indicates the port is already in use
-func isPortInUse(err error) bool {
-	if err == nil {
-		return false
-	}
-	errStr := err.Error()
-	return contains(errStr, "address already in use") ||
-		contains(errStr, "bind: address already in use") ||
-		contains(errStr, "Only one usage of each socket address")
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
-}
-
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // getWebAssets returns the web assets filesystem
 // Priority: 1. Filesystem (for dev), 2. Embedded (for production)

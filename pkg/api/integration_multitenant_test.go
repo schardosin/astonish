@@ -335,7 +335,6 @@ func TestIntegration_MT6_IsolationUnderLoad(t *testing.T) {
 	type result struct {
 		teamIdx int
 		text    string
-		err     error
 	}
 
 	results := make(chan result, numTeams*usersPerTeam)

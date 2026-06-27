@@ -12,9 +12,8 @@ export default withMermaid(defineConfig({
   title: "Astonish",
   description: "AI Agent Platform That Makes Your Whole Team Smarter",
   head: [
-    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
-    ['link', { rel: 'shortcut icon', href: '/favicon.ico' }],
-    ['link', { rel: 'manifest', href: '/site.webmanifest' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/astonish/astonish-logo.svg' }],
+    ['link', { rel: 'manifest', href: '/astonish/site.webmanifest' }],
     ['meta', { name: 'theme-color', content: '#7c3aed' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:site_name', content: 'Astonish' }],

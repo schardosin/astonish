@@ -3,7 +3,7 @@
   "short_name": "Astonish",
   "icons": [
     {
-      "src": "/favicon.svg",
+      "src": "/astonish/astonish-logo.svg",
       "type": "image/svg+xml",
       "sizes": "any"
     }

@@ -109,6 +109,9 @@ func (m *mockOrgDataStore) ProvisionTeam(_ context.Context, _ string) error {
 func (m *mockOrgDataStore) ProvisionPersonalSchema(_ context.Context, _ string) error {
 	return nil
 }
+func (m *mockOrgDataStore) DropTeamSchema(_ context.Context, _ string) error {
+	return nil
+}
 func (m *mockOrgDataStore) Close() error { return nil }
 
 // mockTeamDataStore implements store.TeamDataStore

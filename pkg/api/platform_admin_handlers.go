@@ -271,7 +271,9 @@ func PlatformAdminUpdateOrgHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // PlatformAdminDeleteOrgHandler handles DELETE /api/platform/admin/orgs/{slug}
-// Permanently deletes an org — only allowed if status is 'suspended'.
+// Permanently deletes an org — only allowed if status is 'suspended' or 'decommissioned'.
+// For suspended orgs: decommissions first (drops DB), then removes the record.
+// For decommissioned orgs: removes the record directly (DB already dropped).
 func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 	_, backend := platformAdminGuard(w, r)
 	if backend == nil {
@@ -287,19 +289,24 @@ func PlatformAdminDeleteOrgHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if org.Status != "suspended" {
-		respondError(w, http.StatusBadRequest, "organization must be suspended before permanent deletion")
+	if org.Status == "active" {
+		respondError(w, http.StatusBadRequest, "organization must be suspended or decommissioned before permanent deletion")
 		return
 	}
 
-	// Decommission (drops the org database)
-	if err := backend.DecommissionOrg(ctx, slug); err != nil {
-		slog.Warn("failed to decommission org database", "slug", slug, "error", err)
+	// For suspended orgs, decommission first (drops the org database).
+	if org.Status == "suspended" {
+		if err := backend.DecommissionOrg(ctx, slug); err != nil {
+			slog.Warn("failed to decommission org database", "slug", slug, "error", err)
+		}
 	}
 
-	// Update status to decommissioned
-	org.Status = "decommissioned"
-	_ = backend.Organizations().Update(ctx, org)
+	// Permanently remove the org record from the platform database.
+	if err := backend.Organizations().Delete(ctx, org.ID); err != nil {
+		slog.Warn("failed to delete org record", "slug", slug, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to permanently delete organization")
+		return
+	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"message": fmt.Sprintf("Organization %q permanently deleted", slug),
@@ -746,11 +753,6 @@ func PlatformAdminDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 	orgSlug := vars["slug"]
 	teamSlug := vars["teamSlug"]
 
-	if teamSlug == "general" {
-		respondError(w, http.StatusForbidden, "cannot delete the default team")
-		return
-	}
-
 	ctx := r.Context()
 
 	// Verify org exists
@@ -766,6 +768,17 @@ func PlatformAdminDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Prevent deleting the last team in the org.
+	count, err := orgDS.Teams().CountTeams(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to count teams")
+		return
+	}
+	if count <= 1 {
+		respondError(w, http.StatusForbidden, "cannot delete the last team in the organization")
+		return
+	}
+
 	team, err := orgDS.Teams().GetTeamBySlug(ctx, teamSlug)
 	if err != nil || team == nil {
 		respondError(w, http.StatusNotFound, "team not found")
@@ -775,6 +788,11 @@ func PlatformAdminDeleteTeamHandler(w http.ResponseWriter, r *http.Request) {
 	if err := orgDS.Teams().DeleteTeam(ctx, team.ID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete team")
 		return
+	}
+
+	// Drop the team's database schema to reclaim resources.
+	if err := orgDS.DropTeamSchema(ctx, teamSlug); err != nil {
+		slog.Warn("team deleted but schema drop failed", "team", teamSlug, "org", orgSlug, "error", err)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})

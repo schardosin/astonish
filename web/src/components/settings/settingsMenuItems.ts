@@ -1,7 +1,7 @@
 import {
   Settings, Key, Server, MessageSquare, Globe, Radio, Database,
   Brain, GitFork, Terminal, Wand2, Clock, Shield, Box,
-  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound
+  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound, Layers
 } from 'lucide-react'
 
 export interface SettingsMenuItem {
@@ -42,6 +42,8 @@ export const RESOURCE_ITEMS: SettingsMenuItem[] = [
 
 // Organization management — org admin/owner only (platform mode)
 export const ORG_ITEMS: SettingsMenuItem[] = [
+  { id: 'org-general', label: 'General', icon: Settings },
+  { id: 'org-teams', label: 'Teams', icon: Layers },
   { id: 'org-users', label: 'Users', icon: UserCog },
   { id: 'org-providers', label: 'Providers', icon: Key },
   { id: 'org-skills', label: 'Skills', icon: Wand2 },

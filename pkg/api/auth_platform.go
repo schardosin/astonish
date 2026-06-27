@@ -608,6 +608,13 @@ func (pa *PlatformAuth) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Look up the org to return its full details (name, id).
+	orgResp := authOrgResponse{Slug: claims.OrgSlug}
+	if org, err := pa.pgStore.Organizations().GetBySlug(r.Context(), claims.OrgSlug); err == nil && org != nil {
+		orgResp.ID = org.ID
+		orgResp.Name = org.Name
+	}
+
 	respondJSON(w, http.StatusOK, map[string]any{
 		"user": authUserResponse{
 			ID:           claims.UserID,
@@ -616,10 +623,7 @@ func (pa *PlatformAuth) handleMe(w http.ResponseWriter, r *http.Request) {
 			Role:         claims.Role,
 			PlatformRole: claims.PlatformRole,
 		},
-		"org": authOrgResponse{
-			Name: "",
-			Slug: claims.OrgSlug,
-		},
+		"org":  orgResp,
 		"team": claims.DefaultTeamSlug,
 	})
 }

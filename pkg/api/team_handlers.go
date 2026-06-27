@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
@@ -22,20 +23,22 @@ func RegisterTeamRoutes(router *mux.Router, pa *PlatformAuth) {
 	router.HandleFunc("/api/teams", pa.handleListTeams).Methods("GET")
 	router.HandleFunc("/api/teams", pa.handleCreateTeam).Methods("POST")
 	router.HandleFunc("/api/teams/{slug}", pa.handleGetTeam).Methods("GET")
+	router.HandleFunc("/api/teams/{slug}", pa.handleUpdateTeam).Methods("PATCH")
 	router.HandleFunc("/api/teams/{slug}", pa.handleDeleteTeam).Methods("DELETE")
 
 	// Organization switching (authenticated, multi-org support)
 	router.HandleFunc("/api/orgs", pa.handleListUserOrgs).Methods("GET")
 	router.HandleFunc("/api/orgs/switch", pa.handleSwitchOrg).Methods("POST")
 
+	// Organization management (org admin/owner)
+	router.HandleFunc("/api/org", pa.handleGetOrg).Methods("GET")
+	router.HandleFunc("/api/org", pa.handleUpdateOrg).Methods("PATCH")
+
 	// Team membership
 	router.HandleFunc("/api/teams/{slug}/members", pa.handleListTeamMembers).Methods("GET")
 	router.HandleFunc("/api/teams/{slug}/members", pa.handleAddTeamMember).Methods("POST")
 	router.HandleFunc("/api/teams/{slug}/members/{userID}", pa.handleRemoveTeamMember).Methods("DELETE")
 	router.HandleFunc("/api/teams/{slug}/members/{userID}/role", pa.handleSetTeamRole).Methods("PUT")
-
-	// Org info
-	router.HandleFunc("/api/org", pa.handleGetOrg).Methods("GET")
 
 	// Team members with delivery channels (for scheduler UI)
 	router.HandleFunc("/api/team/members/channels", TeamMemberChannelsHandler(pa)).Methods("GET")
@@ -69,7 +72,25 @@ func (pa *PlatformAuth) handleListTeams(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]any{"teams": teams})
+	// Enrich with member counts.
+	type teamEntry struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Slug        string `json:"slug"`
+		MemberCount int    `json:"member_count"`
+	}
+	result := make([]teamEntry, 0, len(teams))
+	for _, t := range teams {
+		count, _ := orgDataStore.Teams().CountMembers(r.Context(), t.ID)
+		result = append(result, teamEntry{
+			ID:          t.ID,
+			Name:        t.Name,
+			Slug:        t.Slug,
+			MemberCount: count,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, map[string]any{"teams": result})
 }
 
 // --- Handler: POST /api/teams ---
@@ -183,22 +204,27 @@ func (pa *PlatformAuth) handleGetTeam(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, team)
 }
 
-// --- Handler: DELETE /api/teams/{slug} ---
+// --- Handler: PATCH /api/teams/{slug} ---
+// Renames a team. Only org admins/owners can rename teams.
 
-func (pa *PlatformAuth) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
+func (pa *PlatformAuth) handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
 	user := GetPlatformUser(r)
 	if user == nil {
 		respondError(w, http.StatusUnauthorized, "authentication required")
 		return
 	}
 	if !CanManageOrg(user) {
-		respondError(w, http.StatusForbidden, "only org admins can delete teams")
+		respondError(w, http.StatusForbidden, "only org admins can rename teams")
 		return
 	}
 
 	slug := mux.Vars(r)["slug"]
-	if slug == "general" {
-		respondError(w, http.StatusForbidden, "cannot delete the default team")
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		respondError(w, http.StatusBadRequest, "name is required")
 		return
 	}
 
@@ -215,9 +241,62 @@ func (pa *PlatformAuth) handleDeleteTeam(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	if err := orgDataStore.Teams().RenameTeam(ctx, team.ID, strings.TrimSpace(req.Name)); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to rename team")
+		return
+	}
+
+	team.Name = strings.TrimSpace(req.Name)
+	respondJSON(w, http.StatusOK, team)
+}
+
+// --- Handler: DELETE /api/teams/{slug} ---
+
+func (pa *PlatformAuth) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
+	user := GetPlatformUser(r)
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if !CanManageOrg(user) {
+		respondError(w, http.StatusForbidden, "only org admins can delete teams")
+		return
+	}
+
+	slug := mux.Vars(r)["slug"]
+
+	ctx := r.Context()
+	orgDataStore, err := pa.pgStore.ForOrg(user.OrgSlug)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to access organization")
+		return
+	}
+
+	// Prevent deleting the last team in the org.
+	count, err := orgDataStore.Teams().CountTeams(ctx)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to count teams")
+		return
+	}
+	if count <= 1 {
+		respondError(w, http.StatusForbidden, "cannot delete the last team in the organization")
+		return
+	}
+
+	team, err := orgDataStore.Teams().GetTeamBySlug(ctx, slug)
+	if err != nil || team == nil {
+		respondError(w, http.StatusNotFound, "team not found")
+		return
+	}
+
 	if err := orgDataStore.Teams().DeleteTeam(ctx, team.ID); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to delete team")
 		return
+	}
+
+	// Drop the team's database schema to reclaim resources.
+	if err := orgDataStore.DropTeamSchema(ctx, slug); err != nil {
+		slog.Warn("team deleted but schema drop failed", "team", slug, "error", err)
 	}
 
 	respondJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -511,6 +590,44 @@ func (pa *PlatformAuth) handleGetOrg(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, org)
 }
 
+// --- Handler: PATCH /api/org ---
+// Allows org admins/owners to rename their organization (display name only).
+
+func (pa *PlatformAuth) handleUpdateOrg(w http.ResponseWriter, r *http.Request) {
+	user := GetPlatformUser(r)
+	if user == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	if !CanManageOrg(user) {
+		respondError(w, http.StatusForbidden, "only org admins can update the organization")
+		return
+	}
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.Name) == "" {
+		respondError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+
+	ctx := r.Context()
+	org, err := pa.pgStore.Organizations().GetBySlug(ctx, user.OrgSlug)
+	if err != nil || org == nil {
+		respondError(w, http.StatusNotFound, "organization not found")
+		return
+	}
+
+	org.Name = strings.TrimSpace(req.Name)
+	if err := pa.pgStore.Organizations().Update(ctx, org); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to update organization")
+		return
+	}
+
+	respondJSON(w, http.StatusOK, org)
+}
+
 // --- Helpers ---
 
 func slugify(name string) string {
@@ -551,6 +668,10 @@ func (pa *PlatformAuth) handleListUserOrgs(w http.ResponseWriter, r *http.Reques
 
 	result := make([]orgEntry, 0, len(orgs))
 	for _, m := range orgs {
+		// Only show active organizations in the user-facing selector.
+		if m.OrgStatus != "active" {
+			continue
+		}
 		result = append(result, orgEntry{
 			ID:   m.OrgID,
 			Name: m.OrgName,

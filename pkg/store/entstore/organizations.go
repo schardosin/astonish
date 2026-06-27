@@ -101,6 +101,21 @@ func (os *orgStore) Update(ctx context.Context, org *store.Organization) error {
 		Exec(ctx)
 }
 
+func (os *orgStore) Delete(ctx context.Context, id string) error {
+	oid, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid org ID: %w", err)
+	}
+
+	// Delete all memberships for this org first.
+	_, _ = os.client.OrgMembership.Delete().
+		Where(orgmembership.OrgIDEQ(oid)).
+		Exec(ctx)
+
+	// Delete the org record itself.
+	return os.client.Organization.DeleteOneID(oid).Exec(ctx)
+}
+
 func (os *orgStore) Count(ctx context.Context) (int, error) {
 	return os.client.Organization.Query().Count(ctx)
 }
@@ -168,6 +183,7 @@ func (os *orgStore) GetUserOrgs(ctx context.Context, userID string) ([]*store.Or
 		if m.Edges.Organization != nil {
 			om.OrgSlug = m.Edges.Organization.Slug
 			om.OrgName = m.Edges.Organization.Name
+			om.OrgStatus = string(m.Edges.Organization.Status)
 		}
 		result = append(result, om)
 	}

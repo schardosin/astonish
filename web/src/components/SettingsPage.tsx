@@ -802,6 +802,316 @@ function OrgProvidersTab() {
 }
 
 // ---------------------------------------------------------------------------
+// OrgGeneralView — Org settings: rename organization
+// ---------------------------------------------------------------------------
+
+function OrgGeneralView({ org, onOrgUpdated }: { org: { id: string; name: string; slug: string }; onOrgUpdated?: () => void }) {
+  const [name, setName] = useState(org.name)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
+  useEffect(() => { setName(org.name) }, [org.name])
+
+  const handleSave = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!name.trim()) { setError('Name is required'); return }
+    setSaving(true); setError(''); setSuccess('')
+    try {
+      const { updateOrg } = await import('../api/platform')
+      await updateOrg(name.trim())
+      setSuccess('Organization name updated')
+      if (onOrgUpdated) onOrgUpdated()
+    } catch (err) {
+      setError(errMsg(err, 'Failed to update organization'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="p-6 max-w-xl space-y-6">
+      <form onSubmit={handleSave} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Organization Name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={e => setName(e.target.value)}
+            className="w-full px-4 py-2.5 rounded-xl text-sm outline-none"
+            style={inputStyle}
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Slug</label>
+          <input
+            type="text"
+            value={org.slug}
+            disabled
+            className="w-full px-4 py-2.5 rounded-xl text-sm outline-none opacity-60"
+            style={inputStyle}
+          />
+          <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>Slug cannot be changed after creation.</p>
+        </div>
+        {error && <InlineError msg={error} />}
+        {success && <div className="text-sm px-3 py-2 rounded-lg" style={{ background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>{success}</div>}
+        <button
+          type="submit"
+          disabled={saving || name.trim() === org.name}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          style={gradientPurple}
+        >
+          {saving ? <Loader2 size={14} className="animate-spin" /> : null}
+          Save Changes
+        </button>
+      </form>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// OrgTeamsView — Manage teams for the current organization (org admin/owner)
+// ---------------------------------------------------------------------------
+
+function OrgTeamsView({ onTeamsChanged }: { onTeamsChanged?: () => void }) {
+  const [teams, setTeams] = useState<Team[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+  const [showCreate, setShowCreate] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newSlug, setNewSlug] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [editingTeam, setEditingTeam] = useState<string | null>(null)
+  const [editName, setEditName] = useState('')
+  const [renaming, setRenaming] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<{ slug: string; name: string; memberCount: number } | null>(null)
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('')
+    try {
+      const data = await fetchTeams()
+      setTeams(data)
+    } catch (err) {
+      setError(errMsg(err, 'Failed to load teams'))
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (success) { const t = setTimeout(() => setSuccess(''), 3000); return () => clearTimeout(t) }
+  }, [success])
+  useEffect(() => {
+    if (error) { const t = setTimeout(() => setError(''), 5000); return () => clearTimeout(t) }
+  }, [error])
+
+  const handleCreate = async (e: FormEvent) => {
+    e.preventDefault()
+    if (!newName.trim()) { setError('Team name is required'); return }
+    setCreating(true); setError('')
+    try {
+      const slug = newSlug.trim() || slugify(newName.trim())
+      await createTeam(newName.trim(), slug)
+      setSuccess(`Team "${newName.trim()}" created`)
+      setShowCreate(false); setNewName(''); setNewSlug('')
+      load()
+      if (onTeamsChanged) onTeamsChanged()
+    } catch (err) {
+      setError(errMsg(err, 'Failed to create team'))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDelete = async (slug: string, name: string, memberCount: number) => {
+    setDeleteConfirm({ slug, name, memberCount })
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+    const { slug, name } = deleteConfirm
+    setDeleteConfirm(null)
+    try {
+      await deleteTeam(slug)
+      setSuccess(`Team "${name}" deleted`)
+      load()
+      if (onTeamsChanged) onTeamsChanged()
+    } catch (err) {
+      setError(errMsg(err, 'Failed to delete team'))
+    }
+  }
+
+  const handleRename = async (slug: string) => {
+    if (!editName.trim()) return
+    setRenaming(true)
+    try {
+      const { renameTeam } = await import('../api/platform')
+      await renameTeam(slug, editName.trim())
+      setSuccess(`Team renamed to "${editName.trim()}"`)
+      setEditingTeam(null); setEditName('')
+      load()
+      if (onTeamsChanged) onTeamsChanged()
+    } catch (err) {
+      setError(errMsg(err, 'Failed to rename team'))
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  return (
+    <div className="p-6">
+      {/* Status messages */}
+      {error && <div className="mb-4"><InlineError msg={error} /></div>}
+      {success && <div className="mb-4 text-sm px-3 py-2 rounded-lg" style={{ background: 'rgba(34, 197, 94, 0.1)', color: '#22c55e' }}>{success}</div>}
+
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Manage teams in your organization. Each team has its own resources, members, and workspace.</p>
+        <button
+          onClick={() => setShowCreate(true)}
+          className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-white hover:opacity-90 shrink-0"
+          style={gradientPurple}
+        >
+          <Plus size={14} /> New Team
+        </button>
+      </div>
+
+      {/* Teams list */}
+      {loading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 size={24} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
+        </div>
+      ) : teams.length === 0 ? (
+        <p className="text-center py-12 text-sm" style={{ color: 'var(--text-muted)' }}>No teams yet.</p>
+      ) : (
+        <div className="space-y-2">
+          {teams.map(team => (
+            <div key={team.slug} className="flex items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}>
+              {editingTeam === team.slug ? (
+                <div className="flex-1 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleRename(team.slug); if (e.key === 'Escape') setEditingTeam(null) }}
+                    className="flex-1 px-3 py-1.5 rounded-lg text-sm outline-none"
+                    style={inputStyle}
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => handleRename(team.slug)}
+                    disabled={renaming || !editName.trim()}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+                    style={gradientPurple}
+                  >
+                    {renaming ? <Loader2 size={12} className="animate-spin" /> : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => setEditingTeam(null)}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium"
+                    style={{ background: 'var(--bg-secondary)', color: 'var(--text-secondary)' }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>{team.name}</div>
+                    <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{team.slug}</div>
+                  </div>
+                  <button
+                    onClick={() => { setEditingTeam(team.slug); setEditName(team.name) }}
+                    className="px-2.5 py-1 rounded-lg text-xs font-medium transition-colors hover:bg-[var(--bg-secondary)]"
+                    style={{ color: 'var(--text-secondary)' }}
+                    title="Rename Team"
+                  >
+                    Rename
+                  </button>
+                  {teams.length > 1 && (
+                    <button
+                      onClick={() => handleDelete(team.slug, team.name, team.member_count || 0)}
+                      className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
+                      style={{ color: 'var(--danger)' }}
+                      title="Delete Team"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create Team Modal */}
+      {showCreate && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)} />
+          <div className="relative w-full max-w-md mx-4 rounded-2xl shadow-2xl overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
+            <div className="px-6 py-5" style={gradientPurple}>
+              <h2 className="text-lg font-semibold text-white">Create Team</h2>
+              <p className="text-sm text-white/70 mt-0.5">Add a new team to the organization</p>
+            </div>
+            <form onSubmit={handleCreate} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Name *</label>
+                <input type="text" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Engineering" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Slug <span className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>(auto-generated if empty)</span></label>
+                <input type="text" value={newSlug} onChange={e => setNewSlug(e.target.value)} placeholder="engineering" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button type="button" onClick={() => setShowCreate(false)} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
+                <button type="submit" disabled={creating} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={gradientPurple}>
+                  {creating ? <Loader2 size={16} className="animate-spin" /> : 'Create Team'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Team Confirmation */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Delete Team</h3>
+            <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+              {deleteConfirm.memberCount > 0 ? (
+                <>There {deleteConfirm.memberCount === 1 ? 'is' : 'are'} <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm.memberCount} member{deleteConfirm.memberCount !== 1 ? 's' : ''}</strong> in this team. They will be removed.<br /><br /></>
+              ) : null}
+              Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm.name}</strong>? This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
+                style={{ background: '#ef4444' }}
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // TeamProvidersTab — wraps ProvidersSettings with team-scoped data + inherited platform/org providers
 // ---------------------------------------------------------------------------
 
@@ -1115,12 +1425,6 @@ export default function SettingsPage({
   const [teamsLoading, setTeamsLoading] = useState(false)
   const [teamsError, setTeamsError] = useState('')
   const [callerRoles, setCallerRoles] = useState<Record<string, string>>({})
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newSlug, setNewSlug] = useState('')
-  const [newDesc, setNewDesc] = useState('')
-  const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState('')
 
   // Resolve which team is selected — use activeTeam from TopBar context (no separate picker)
   const resolvedTeamSlug = urlTeamSlug || activeTeam || (allTeams.length === 1 ? allTeams[0].slug : '') || ''
@@ -1193,7 +1497,7 @@ export default function SettingsPage({
   if (resolvedSection === 'team') {
     resolvedSection = `team-${urlTeamTab || 'members'}`
   } else if (resolvedSection === 'org') {
-    resolvedSection = `org-${subsection || 'users'}`
+    resolvedSection = `org-${subsection || 'general'}`
   } else if (resolvedSection === 'platform') {
     resolvedSection = `platform-${subsection || 'orgs'}`
   }
@@ -1204,26 +1508,6 @@ export default function SettingsPage({
   // Determine which data to load (for system-level settings sections)
   const isSystemSection = !activeSection.startsWith('team-') && !activeSection.startsWith('org-') && !activeSection.startsWith('platform-')
   const data = useSettingsData(isSystemSection ? activeSection : '')
-
-  // --- Team CRUD handlers ---
-  const handleCreateTeam = async (e: FormEvent) => {
-    e.preventDefault(); setCreating(true); setCreateError('')
-    try {
-      await createTeam(newName, newSlug, newDesc)
-      setShowCreateModal(false); setNewName(''); setNewSlug(''); setNewDesc('')
-      await loadTeams()
-    } catch (err) { setCreateError(errMsg(err, 'Failed to create team')) }
-    finally { setCreating(false) }
-  }
-
-  const handleDeleteTeam = async () => {
-    if (!resolvedTeamSlug || resolvedTeamSlug === 'general') return
-    try {
-      await deleteTeam(resolvedTeamSlug)
-      await loadTeams()
-      if (onSectionChange) onSectionChange(`team-members`)
-    } catch (err) { setTeamsError(errMsg(err, 'Failed to delete team')) }
-  }
 
   // Navigate to a team tab with slug
   const navigateTeamTab = (tab: string, slug?: string) => {
@@ -1261,16 +1545,6 @@ export default function SettingsPage({
                   <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
                     {category.label}
                   </span>
-                  {isPlatformMode && isAdmin && category.label.startsWith('Team') && (
-                    <button
-                      onClick={() => setShowCreateModal(true)}
-                      className="p-0.5 rounded transition-colors hover:bg-[var(--bg-tertiary)]"
-                      style={{ color: 'var(--text-muted)' }}
-                      title="Create Team"
-                    >
-                      <Plus size={14} />
-                    </button>
-                  )}
                 </div>
               )}
 
@@ -1343,12 +1617,6 @@ export default function SettingsPage({
           <h3 className="text-xl font-semibold" style={{ color: 'var(--text-primary)' }}>
             {activeLabel}
           </h3>
-          {/* Delete team button (when in team section, admin, not 'general' team) */}
-          {activeSection.startsWith('team-') && isAdmin && selectedTeam && selectedTeam.slug !== 'general' && (
-            <button onClick={handleDeleteTeam} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium hover:opacity-90" style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)', border: '1px solid rgba(239, 68, 68, 0.2)' }}>
-              <Trash2 size={12} />Delete Team
-            </button>
-          )}
         </div>
 
         {/* Content */}
@@ -1380,6 +1648,14 @@ export default function SettingsPage({
           )}
 
           {/* Organization sections */}
+          {activeSection === 'org-general' && org && (
+            <OrgGeneralView org={org} onOrgUpdated={() => { /* could refresh org context */ }} />
+          )}
+
+          {activeSection === 'org-teams' && (
+            <OrgTeamsView onTeamsChanged={() => { loadTeams() }} />
+          )}
+
           {activeSection === 'org-users' && user && org && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <UserManagement theme={theme as 'dark' | 'light'} user={user} org={org} />
@@ -1468,40 +1744,6 @@ export default function SettingsPage({
           )}
         </div>
       </div>
-
-      {/* Create team modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreateModal(false)} />
-          <div className="relative w-full max-w-md mx-4 rounded-2xl shadow-2xl overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
-            <div className="px-6 py-5" style={gradientPurple}>
-              <h2 className="text-lg font-semibold text-white">Create Team</h2>
-              <p className="text-sm text-white/70 mt-0.5">Add a new team to your organization</p>
-            </div>
-            <form onSubmit={handleCreateTeam} className="p-6 space-y-4">
-              <InlineError msg={createError} />
-              <div>
-                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Name</label>
-                <input type="text" value={newName} onChange={e => { setNewName(e.target.value); setNewSlug(slugify(e.target.value)) }} placeholder="Engineering" required className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} autoFocus />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Slug</label>
-                <input type="text" value={newSlug} onChange={e => setNewSlug(e.target.value)} placeholder="engineering" required className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1.5" style={{ color: 'var(--text-secondary)' }}>Description</label>
-                <input type="text" value={newDesc} onChange={e => setNewDesc(e.target.value)} placeholder="Optional description" className="w-full px-4 py-2.5 rounded-xl text-sm outline-none" style={inputStyle} />
-              </div>
-              <div className="flex gap-3 pt-2">
-                <button type="button" onClick={() => { setShowCreateModal(false); setCreateError('') }} className="flex-1 px-4 py-3 rounded-xl text-sm font-medium" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>Cancel</button>
-                <button type="submit" disabled={creating} className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-white hover:opacity-90 disabled:opacity-50" style={gradientPurple}>
-                  {creating ? <Loader2 size={16} className="animate-spin" /> : 'Create Team'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

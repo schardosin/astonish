@@ -666,6 +666,51 @@ func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
 	return nil
 }
 
+func (o *orgDataStore) DropTeamSchema(ctx context.Context, slug string) error {
+	if err := validateSlug(slug); err != nil {
+		return fmt.Errorf("drop team schema: %w", err)
+	}
+	switch o.dialect {
+	case DialectPostgres:
+		schemaName := teamSchemaName(slug)
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
+
+		// Close any cached client for this team schema.
+		o.mu.Lock()
+		if cached, ok := o.teams[slug]; ok {
+			cached.client.Close()
+			cached.db.Close()
+			delete(o.teams, slug)
+		}
+		o.mu.Unlock()
+
+		if _, err := o.db.ExecContext(ctx, "DROP SCHEMA IF EXISTS "+quoted+" CASCADE"); err != nil { // CodeQL[go/sql-injection]: slug is validated by validateSlug allowlist, schemaName is properly quoted
+			return fmt.Errorf("drop team schema %s: %w", schemaName, err)
+		}
+		slog.Info("dropped team schema", "org", o.orgSlug, "team", slug, "schema", schemaName)
+
+	case DialectSQLite:
+		// Close any cached client for this team.
+		o.mu.Lock()
+		if cached, ok := o.teams[slug]; ok {
+			cached.client.Close()
+			cached.db.Close()
+			delete(o.teams, slug)
+		}
+		o.mu.Unlock()
+
+		dbPath := filepath.Join(o.parentStore.dataDir, "orgs", o.orgSlug, "teams", slug+".db")
+		if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove team database file: %w", err)
+		}
+		// Also remove WAL/SHM files if present.
+		_ = os.Remove(dbPath + "-wal")
+		_ = os.Remove(dbPath + "-shm")
+		slog.Info("dropped team database (sqlite)", "org", o.orgSlug, "team", slug)
+	}
+	return nil
+}
+
 func (o *orgDataStore) ProvisionPersonalSchema(ctx context.Context, userID string) error {
 	if err := validateUserID(userID); err != nil {
 		return fmt.Errorf("provision personal schema: %w", err)

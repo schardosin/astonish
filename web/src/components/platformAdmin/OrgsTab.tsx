@@ -18,6 +18,8 @@ export default function OrgsTab() {
   const [showCreate, setShowCreate] = useState<boolean>(false)
   const [filter, setFilter] = useState<string>('')
   const [selectedOrg, setSelectedOrg] = useState<string | null>(null)
+  const [suspendConfirm, setSuspendConfirm] = useState<string | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -49,7 +51,13 @@ export default function OrgsTab() {
   )
 
   const handleSuspend = async (slug: string) => {
-    if (!confirm(`Suspend organization "${slug}"? Members will lose access.`)) return
+    setSuspendConfirm(slug)
+  }
+
+  const confirmSuspend = async () => {
+    if (!suspendConfirm) return
+    const slug = suspendConfirm
+    setSuspendConfirm(null)
     try {
       await adminApi.updateOrg(slug, { status: 'suspended' })
       setSuccess(`Organization "${slug}" suspended`)
@@ -66,7 +74,13 @@ export default function OrgsTab() {
   }
 
   const handleDelete = async (slug: string) => {
-    if (!confirm(`PERMANENTLY DELETE organization "${slug}"? This cannot be undone.`)) return
+    setDeleteConfirm(slug)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteConfirm) return
+    const slug = deleteConfirm
+    setDeleteConfirm(null)
     try {
       await adminApi.deleteOrg(slug)
       setSuccess(`Organization "${slug}" deleted`)
@@ -173,6 +187,11 @@ export default function OrgsTab() {
                           </button>
                         </>
                       )}
+                      {org.status === 'decommissioned' && (
+                        <button onClick={() => handleDelete(org.slug)} className="p-1.5 rounded-lg transition-opacity hover:opacity-80" style={{ color: 'var(--danger)' }} title="Remove Record">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -190,6 +209,64 @@ export default function OrgsTab() {
           onError={setError}
           onSuccess={setSuccess}
         />
+      )}
+
+      {/* Suspend Org Confirmation */}
+      {suspendConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Suspend Organization</h3>
+            <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+              Suspend <strong style={{ color: 'var(--text-primary)' }}>{suspendConfirm}</strong>? Members will lose access.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setSuspendConfirm(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmSuspend}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
+                style={{ background: '#f59e0b' }}
+              >
+                <Pause size={14} /> Suspend
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Org Confirmation */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Permanently Delete Organization</h3>
+            <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+              This will <strong style={{ color: '#ef4444' }}>permanently delete</strong> organization <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm}</strong>. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteConfirm(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDelete}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
+                style={{ background: '#ef4444' }}
+              >
+                <Trash2 size={14} /> Delete Forever
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   )

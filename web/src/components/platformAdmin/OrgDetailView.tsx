@@ -20,6 +20,7 @@ export default function OrgDetailView({ orgSlug, onBack }: OrgDetailViewProps) {
   const [success, setSuccess] = useState<string>('')
   const [showCreateTeam, setShowCreateTeam] = useState<boolean>(false)
   const [expandedTeam, setExpandedTeam] = useState<string | null>(null)
+  const [deleteTeamConfirm, setDeleteTeamConfirm] = useState<{ slug: string; name: string } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true); setError('')
@@ -43,12 +44,18 @@ export default function OrgDetailView({ orgSlug, onBack }: OrgDetailViewProps) {
     if (error) { const t = setTimeout(() => setError(''), 5000); return () => clearTimeout(t) }
   }, [error])
 
-  const handleDeleteTeam = async (teamSlug: string) => {
-    if (!confirm(`Delete team "${teamSlug}"? Members will be removed from this team.`)) return
+  const handleDeleteTeam = async (teamSlug: string, teamName: string) => {
+    setDeleteTeamConfirm({ slug: teamSlug, name: teamName })
+  }
+
+  const confirmDeleteTeam = async () => {
+    if (!deleteTeamConfirm) return
+    const { slug } = deleteTeamConfirm
+    setDeleteTeamConfirm(null)
     try {
-      await adminApi.deleteOrgTeam(orgSlug, teamSlug)
-      setSuccess(`Team "${teamSlug}" deleted`)
-      if (expandedTeam === teamSlug) setExpandedTeam(null)
+      await adminApi.deleteOrgTeam(orgSlug, slug)
+      setSuccess(`Team "${slug}" deleted`)
+      if (expandedTeam === slug) setExpandedTeam(null)
       load()
     } catch (e) { setError((e as Error).message) }
   }
@@ -128,8 +135,9 @@ export default function OrgDetailView({ orgSlug, onBack }: OrgDetailViewProps) {
                 team={team}
                 orgSlug={orgSlug}
                 isExpanded={expandedTeam === team.slug}
+                isLastTeam={teams.length <= 1}
                 onToggle={() => setExpandedTeam(expandedTeam === team.slug ? null : team.slug)}
-                onDelete={() => handleDeleteTeam(team.slug)}
+                onDelete={() => handleDeleteTeam(team.slug, team.name)}
                 onError={setError}
                 onSuccess={setSuccess}
               />
@@ -181,6 +189,35 @@ export default function OrgDetailView({ orgSlug, onBack }: OrgDetailViewProps) {
           onSuccess={setSuccess}
         />
       )}
+
+      {/* Delete Team Confirmation */}
+      {deleteTeamConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+          <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+            style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+            <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Delete Team</h3>
+            <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+              Are you sure you want to delete <strong style={{ color: 'var(--text-primary)' }}>{deleteTeamConfirm.name}</strong>? All members will be removed and this cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setDeleteTeamConfirm(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmDeleteTeam}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
+                style={{ background: '#ef4444' }}
+              >
+                <Trash2 size={14} /> Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -193,16 +230,18 @@ interface TeamRowProps {
   team: AdminTeam
   orgSlug: string
   isExpanded: boolean
+  isLastTeam: boolean
   onToggle: () => void
   onDelete: () => void
   onError: (msg: string) => void
   onSuccess: (msg: string) => void
 }
 
-function TeamRow({ team, orgSlug, isExpanded, onToggle, onDelete, onError, onSuccess }: TeamRowProps) {
+function TeamRow({ team, orgSlug, isExpanded, isLastTeam, onToggle, onDelete, onError, onSuccess }: TeamRowProps) {
   const [members, setMembers] = useState<TeamMemberDetail[]>([])
   const [loadingMembers, setLoadingMembers] = useState<boolean>(false)
   const [showAddMember, setShowAddMember] = useState<boolean>(false)
+  const [removeMemberConfirm, setRemoveMemberConfirm] = useState<{ userId: string; email: string } | null>(null)
 
   const loadMembers = useCallback(async () => {
     setLoadingMembers(true)
@@ -221,7 +260,13 @@ function TeamRow({ team, orgSlug, isExpanded, onToggle, onDelete, onError, onSuc
   }, [isExpanded, loadMembers])
 
   const handleRemoveMember = async (userId: string, email: string) => {
-    if (!confirm(`Remove "${email}" from team "${team.name}"?`)) return
+    setRemoveMemberConfirm({ userId, email })
+  }
+
+  const confirmRemoveMember = async () => {
+    if (!removeMemberConfirm) return
+    const { userId, email } = removeMemberConfirm
+    setRemoveMemberConfirm(null)
     try {
       await adminApi.removeOrgTeamMember(orgSlug, team.slug, userId)
       onSuccess(`Removed "${email}" from team`)
@@ -237,8 +282,6 @@ function TeamRow({ team, orgSlug, isExpanded, onToggle, onDelete, onError, onSuc
     } catch (e) { onError((e as Error).message) }
   }
 
-  const isDefault = team.slug === 'general'
-
   return (
     <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
       {/* Team header row */}
@@ -251,16 +294,11 @@ function TeamRow({ team, orgSlug, isExpanded, onToggle, onDelete, onError, onSuc
         </span>
         <div className="flex-1">
           <span className="font-medium text-sm" style={{ color: 'var(--text-primary)' }}>{team.name}</span>
-          {isDefault && (
-            <span className="ml-2 px-1.5 py-0.5 rounded text-[10px] font-medium" style={{ background: 'rgba(107, 114, 128, 0.15)', color: '#6b7280' }}>
-              default
-            </span>
-          )}
         </div>
         <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--text-muted)' }}>
           <Users size={12} /> {team.slug}
         </span>
-        {!isDefault && (
+        {!isLastTeam && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete() }}
             className="p-1.5 rounded-lg transition-opacity hover:opacity-80"
@@ -347,6 +385,35 @@ function TeamRow({ team, orgSlug, isExpanded, onToggle, onDelete, onError, onSuc
               onError={onError}
               onSuccess={onSuccess}
             />
+          )}
+
+          {/* Remove Member Confirmation */}
+          {removeMemberConfirm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
+              <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"
+                style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+                <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Remove Member</h3>
+                <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+                  Remove <strong style={{ color: 'var(--text-primary)' }}>{removeMemberConfirm.email}</strong> from team <strong style={{ color: 'var(--text-primary)' }}>{team.name}</strong>?
+                </p>
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={() => setRemoveMemberConfirm(null)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium"
+                    style={{ color: 'var(--text-secondary)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={confirmRemoveMember}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-all"
+                    style={{ background: '#ef4444' }}
+                  >
+                    <Trash2 size={14} /> Remove
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

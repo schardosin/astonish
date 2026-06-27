@@ -106,6 +106,7 @@ type OrgDataStore interface {
 	// Provisioning operations.
 	ProvisionTeam(ctx context.Context, slug string) error
 	ProvisionPersonalSchema(ctx context.Context, userID string) error
+	DropTeamSchema(ctx context.Context, slug string) error
 
 	Close() error
 }
@@ -208,6 +209,7 @@ type OrganizationStore interface {
 	GetBySlug(ctx context.Context, slug string) (*Organization, error)
 	List(ctx context.Context) ([]*Organization, error)
 	Update(ctx context.Context, org *Organization) error
+	Delete(ctx context.Context, id string) error
 	Count(ctx context.Context) (int, error)
 
 	// Org membership management.
@@ -222,12 +224,13 @@ type OrganizationStore interface {
 
 // OrgMembership represents a user's membership in an organization.
 type OrgMembership struct {
-	UserID   string    `json:"user_id"`
-	OrgID    string    `json:"org_id"`
-	OrgSlug  string    `json:"org_slug"`
-	OrgName  string    `json:"org_name"`
-	Role     string    `json:"role"` // owner, admin, member
-	JoinedAt time.Time `json:"joined_at"`
+	UserID    string    `json:"user_id"`
+	OrgID     string    `json:"org_id"`
+	OrgSlug   string    `json:"org_slug"`
+	OrgName   string    `json:"org_name"`
+	OrgStatus string    `json:"org_status"` // active, suspended, decommissioned
+	Role      string    `json:"role"`       // owner, admin, member
+	JoinedAt  time.Time `json:"joined_at"`
 }
 
 // UserWithRole is a User with their role within an organization.
@@ -361,11 +364,14 @@ type TeamManagementStore interface {
 	ListTeams(ctx context.Context) ([]*Team, error)
 	ListTeamsForUser(ctx context.Context, userID string) ([]*Team, error)
 	DeleteTeam(ctx context.Context, id string) error
+	RenameTeam(ctx context.Context, id string, name string) error
+	CountTeams(ctx context.Context) (int, error)
 
 	AddMember(ctx context.Context, membership *TeamMembership) error
 	RemoveMember(ctx context.Context, userID, teamID string) error
 	SetRole(ctx context.Context, userID, teamID, role string) error
 	ListMembers(ctx context.Context, teamID string) ([]*TeamMembership, error)
+	CountMembers(ctx context.Context, teamID string) (int, error)
 	GetUserTeams(ctx context.Context, userID string) ([]*TeamMembership, error)
 	IsTeamMember(ctx context.Context, userID, teamSlug string) (bool, error)
 	GetMemberRole(ctx context.Context, userID, teamID string) (string, error)

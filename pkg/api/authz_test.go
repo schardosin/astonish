@@ -44,6 +44,9 @@ func (m *mockTeamMgmt) ListTeamsForUser(_ context.Context, _ string) ([]*store.T
 	return nil, nil
 }
 func (m *mockTeamMgmt) DeleteTeam(_ context.Context, _ string) error { return nil }
+func (m *mockTeamMgmt) RenameTeam(_ context.Context, _, _ string) error { return nil }
+func (m *mockTeamMgmt) CountTeams(_ context.Context) (int, error)      { return len(m.teams), nil }
+func (m *mockTeamMgmt) CountMembers(_ context.Context, _ string) (int, error) { return 0, nil }
 func (m *mockTeamMgmt) AddMember(_ context.Context, _ *store.TeamMembership) error {
 	return nil
 }
@@ -83,6 +86,9 @@ func (m *authzOrgDataStore) ProvisionTeam(_ context.Context, _ string) error {
 	return nil
 }
 func (m *authzOrgDataStore) ProvisionPersonalSchema(_ context.Context, _ string) error {
+	return nil
+}
+func (m *authzOrgDataStore) DropTeamSchema(_ context.Context, _ string) error {
 	return nil
 }
 func (m *authzOrgDataStore) Close() error { return nil }

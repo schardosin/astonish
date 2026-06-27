@@ -40,6 +40,7 @@ export interface Team {
   name: string
   description: string
   created_at: string
+  member_count?: number
 }
 
 export interface TeamMember {
@@ -82,6 +83,19 @@ export async function deleteTeam(slug: string): Promise<void> {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to delete team')
   }
+}
+
+export async function renameTeam(slug: string, name: string): Promise<Team> {
+  const res = await teamFetch(`/api/teams/${slug}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to rename team')
+  }
+  return res.json()
 }
 
 export interface TeamMembersResponse {
@@ -131,6 +145,19 @@ export async function setTeamMemberRole(slug: string, userID: string, role: stri
 export async function fetchOrg(): Promise<OrgInfo> {
   const res = await teamFetch('/api/org')
   if (!res.ok) await throwBackendError(res, 'Failed to fetch org info')
+  return res.json()
+}
+
+export async function updateOrg(name: string): Promise<OrgInfo> {
+  const res = await teamFetch('/api/org', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to update organization')
+  }
   return res.json()
 }
 

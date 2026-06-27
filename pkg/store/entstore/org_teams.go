@@ -109,7 +109,33 @@ func (ts *orgTeamStore) DeleteTeam(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("invalid team ID: %w", err)
 	}
+	// Delete all memberships for this team first (foreign key constraint).
+	_, _ = ts.client.TeamMembership.Delete().
+		Where(teammembership.TeamIDEQ(tid)).
+		Exec(ctx)
 	return ts.client.Team.DeleteOneID(tid).Exec(ctx)
+}
+
+func (ts *orgTeamStore) RenameTeam(ctx context.Context, id string, name string) error {
+	tid, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid team ID: %w", err)
+	}
+	return ts.client.Team.UpdateOneID(tid).SetName(name).Exec(ctx)
+}
+
+func (ts *orgTeamStore) CountTeams(ctx context.Context) (int, error) {
+	return ts.client.Team.Query().Count(ctx)
+}
+
+func (ts *orgTeamStore) CountMembers(ctx context.Context, teamID string) (int, error) {
+	tid, err := uuid.Parse(teamID)
+	if err != nil {
+		return 0, fmt.Errorf("invalid team ID: %w", err)
+	}
+	return ts.client.TeamMembership.Query().
+		Where(teammembership.TeamIDEQ(tid)).
+		Count(ctx)
 }
 
 func (ts *orgTeamStore) AddMember(ctx context.Context, m *store.TeamMembership) error {

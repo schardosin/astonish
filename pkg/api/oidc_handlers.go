@@ -467,6 +467,12 @@ func (h *SSOHandler) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Step 1: Try to find user by OIDC subject
 	user, err := pgStore.Users().GetByOIDC(ctx, issuer, subject)
+	if err != nil {
+		slog.Error("OIDC user lookup failed", "error", err, "issuer", issuer, "subject", subject)
+		h.failDeviceSession(sess, "user lookup failed")
+		h.renderCallbackError(w, "An internal error occurred. Please try again.")
+		return
+	}
 	if user == nil && email != "" {
 		// Step 2: Fall back to email match and auto-link.
 		// Only allow auto-linking if the IdP has verified the email address.

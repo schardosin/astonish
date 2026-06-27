@@ -515,6 +515,7 @@ install: build-all
 clean:
 	@echo "Cleaning up build artifacts..."
 	rm -rf $(BINARY_NAME)
+	rm -f astonish-linux-amd64 astonish-linux-arm64
 	rm -rf $(WEB_DIR)/dist
 	rm -rf $(WEB_DIR)/node_modules
 	@echo "Cleanup complete!"
@@ -545,7 +546,7 @@ e2e-env-rebuild:
 	@echo "Astonish running at http://localhost:9393"
 
 # Docker Production - Persistent environment
-docker-up:
+docker-up: build-linux build-linux-arm64
 	@echo "Starting persistent container..."
 	docker compose up -d --build
 	@echo "Astonish running at http://localhost:9393"
@@ -556,7 +557,7 @@ docker-down:
 	docker compose down
 	@echo "Container stopped."
 
-docker-rebuild:
+docker-rebuild: build-linux build-linux-arm64
 	@echo "Rebuilding persistent container..."
 	docker compose down
 	docker compose up -d --build
@@ -594,12 +595,12 @@ endif
 # Cross-compile Linux binary (for macOS/Windows dev pushing into sandbox containers)
 build-linux:
 	@echo "Cross-compiling Linux amd64 binary..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux-amd64 .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-amd64 .
 	@echo "Linux binary built: astonish-linux-amd64"
 
 build-linux-arm64:
 	@echo "Cross-compiling Linux arm64 binary..."
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o astonish-linux-arm64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-arm64 .
 	@echo "Linux binary built: astonish-linux-arm64"
 
 # Generate Go gRPC stubs from vendored NVIDIA OpenShell proto files
@@ -635,11 +636,11 @@ ensure-builder:
 	@docker buildx use astonish-builder
 
 # Build and push the main Astonish image (multi-arch)
-push-dev: ensure-builder
+# Cross-compiles Go on the host to avoid QEMU segfaults with Go 1.26.
+push-dev: ensure-builder build-linux build-linux-arm64
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) (linux/amd64,linux/arm64)..."
 	docker buildx build --platform linux/amd64,linux/arm64 \
 		-f docker/astonish/Dockerfile \
-		--build-arg VERSION=$(DEV_TAG) \
 		-t $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) \
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish:$(DEV_TAG)"
@@ -684,11 +685,10 @@ push-all-dev: push-dev push-incus-dev push-sandbox-base-dev push-sandbox-openshe
 DEV_ARCH ?= $(shell uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')
 
 # Fast: build and push main Astonish API image (single arch)
-push-dev-fast: ensure-builder
+push-dev-fast: ensure-builder build-linux build-linux-arm64
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) (linux/$(DEV_ARCH) only)..."
 	docker buildx build --platform linux/$(DEV_ARCH) \
 		-f docker/astonish/Dockerfile \
-		--build-arg VERSION=$(DEV_TAG) \
 		-t $(DOCKER_REGISTRY)/astonish:$(DEV_TAG) \
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish:$(DEV_TAG)"

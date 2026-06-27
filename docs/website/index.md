@@ -16,7 +16,7 @@ hero:
       text: View on GitHub
       link: https://github.com/schardosin/astonish
   image:
-    src: /astonish-logo.svg
+    src: /logo_icon_background.svg
     alt: Astonish
 
 features:

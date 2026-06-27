@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	platforment "github.com/schardosin/astonish/ent/platform"
+	"github.com/schardosin/astonish/ent/platform/loginsession"
 	"github.com/schardosin/astonish/ent/platform/organization"
 	"github.com/schardosin/astonish/ent/platform/orgmembership"
 	"github.com/schardosin/astonish/pkg/store"
@@ -107,10 +108,19 @@ func (os *orgStore) Delete(ctx context.Context, id string) error {
 		return fmt.Errorf("invalid org ID: %w", err)
 	}
 
-	// Delete all memberships for this org first.
-	_, _ = os.client.OrgMembership.Delete().
+	// Delete all login sessions for this org first (FK: NO ACTION).
+	if _, err := os.client.LoginSession.Delete().
+		Where(loginsession.OrgIDEQ(oid)).
+		Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete login sessions: %w", err)
+	}
+
+	// Delete all memberships for this org (FK: NO ACTION).
+	if _, err := os.client.OrgMembership.Delete().
 		Where(orgmembership.OrgIDEQ(oid)).
-		Exec(ctx)
+		Exec(ctx); err != nil {
+		return fmt.Errorf("failed to delete memberships: %w", err)
+	}
 
 	// Delete the org record itself.
 	return os.client.Organization.DeleteOneID(oid).Exec(ctx)

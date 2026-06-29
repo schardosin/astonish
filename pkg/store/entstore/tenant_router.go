@@ -829,10 +829,33 @@ func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
 	switch o.dialect {
 	case DialectPostgres:
 		schemaName := teamSchemaName(teamSlug)
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
+
+		// Ensure the PG schema exists (idempotent). Handles the case where
+		// a team record was created but ProvisionTeam failed or was skipped.
+		if _, err := o.db.ExecContext(context.Background(), "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil { // CodeQL[go/sql-injection]: teamSlug validated by caller, schemaName is quoted
+			return nil, fmt.Errorf("ensure team schema %s: %w", schemaName, err)
+		}
+
 		client, db, err := o.openTeamDBBySchema(schemaName)
 		if err != nil {
 			return nil, err
 		}
+
+		// Auto-migrate: create any missing tables/columns.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
+			db.Close()
+			client.Close()
+			return nil, fmt.Errorf("auto-migrate team schema %s: %w", schemaName, err)
+		}
+
+		// Apply PG extras (idempotent — skips already-existing objects).
+		if err := o.parentStore.applyPGExtras(context.Background(), ScopeTeam, db); err != nil {
+			slog.Warn("openTeamDB: pg extras failed", "schema", schemaName, "error", err)
+		}
+
 		return &teamDataStore{
 			teamSlug:  teamSlug,
 			orgSlug:   o.orgSlug,
@@ -913,10 +936,34 @@ func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error)
 	switch o.dialect {
 	case DialectPostgres:
 		schemaName := personalSchemaName(userID)
+		quoted := fmt.Sprintf(`"%s"`, strings.ReplaceAll(schemaName, `"`, `""`))
+
+		// Ensure the PG schema exists (idempotent). This handles the case
+		// where a user switches to an org before ProvisionPersonalSchema was
+		// explicitly called for them.
+		if _, err := o.db.ExecContext(context.Background(), "CREATE SCHEMA IF NOT EXISTS "+quoted); err != nil { // CodeQL[go/sql-injection]: userID is validated, schemaName is quoted
+			return nil, fmt.Errorf("ensure personal schema %s: %w", schemaName, err)
+		}
+
 		client, db, err := o.openPersonalDBBySchema(schemaName)
 		if err != nil {
 			return nil, err
 		}
+
+		// Auto-migrate: create any missing tables/columns.
+		if err := client.Schema.Create(context.Background(),
+			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+		); err != nil {
+			db.Close()
+			client.Close()
+			return nil, fmt.Errorf("auto-migrate personal schema %s: %w", schemaName, err)
+		}
+
+		// Apply PG extras (idempotent — skips already-existing objects).
+		if err := o.parentStore.applyPGExtras(context.Background(), ScopePersonal, db); err != nil {
+			slog.Warn("openPersonalDB: pg extras failed", "schema", schemaName, "error", err)
+		}
+
 		return &personalDataStore{
 			userID:    userID,
 			client:    client,

@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Checkout homebrew-astonish
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: schardosin/homebrew-astonish
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}

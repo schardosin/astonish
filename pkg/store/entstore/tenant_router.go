@@ -612,23 +612,29 @@ func (o *orgDataStore) ProvisionTeam(ctx context.Context, slug string) error {
 		defer db.Close()
 		defer client.Close()
 
+		// Ensure pgvector extension exists (database-wide, idempotent).
+		// Required for vector(384) columns in memories table.
+		if _, err := db.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("ProvisionTeam: could not ensure pgvector extension", "team", slug, "error", err)
+		}
+
 		if err := client.Schema.Create(ctx); err != nil {
 			return fmt.Errorf("migrate team schema: %w", err)
 		}
 
-		// Apply PG-specific extras (indexes, triggers).
+		// Apply PG-specific extras (indexes, triggers) — non-fatal.
 		if err := o.parentStore.applyPGExtras(ctx, ScopeTeam, db); err != nil {
-			return fmt.Errorf("apply team pg extras: %w", err)
+			slog.Warn("ProvisionTeam: pg extras failed (non-fatal)", "team", slug, "error", err)
 		}
 
 		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
 		if err := o.parentStore.applySQLiteExtras(ctx, ScopeTeam, db); err != nil {
-			return fmt.Errorf("apply team sqlite extras: %w", err)
+			slog.Warn("ProvisionTeam: sqlite extras failed (non-fatal)", "team", slug, "error", err)
 		}
 
 		// Apply grants for app role.
 		if err := pgutil.ApplyGrants(ctx, db, "team"); err != nil {
-			return fmt.Errorf("apply team grants: %w", err)
+			slog.Warn("ProvisionTeam: grants failed (non-fatal)", "team", slug, "error", err)
 		}
 
 		slog.Info("provisioned team schema", "org", o.orgSlug, "team", slug, "schema", schemaName)
@@ -732,23 +738,29 @@ func (o *orgDataStore) ProvisionPersonalSchema(ctx context.Context, userID strin
 		defer db.Close()
 		defer client.Close()
 
+		// Ensure pgvector extension exists (database-wide, idempotent).
+		// Required for vector(384) columns in memories table.
+		if _, err := db.ExecContext(ctx, "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("ProvisionPersonalSchema: could not ensure pgvector extension", "user", userID, "error", err)
+		}
+
 		if err := client.Schema.Create(ctx); err != nil {
 			return fmt.Errorf("migrate personal schema: %w", err)
 		}
 
-		// Apply PG-specific extras (indexes, triggers).
+		// Apply PG-specific extras (indexes, triggers) — non-fatal.
 		if err := o.parentStore.applyPGExtras(ctx, ScopePersonal, db); err != nil {
-			return fmt.Errorf("apply personal pg extras: %w", err)
+			slog.Warn("ProvisionPersonalSchema: pg extras failed (non-fatal)", "user", userID, "error", err)
 		}
 
 		// Apply SQLite-specific extras (FTS5 virtual tables, triggers).
 		if err := o.parentStore.applySQLiteExtras(ctx, ScopePersonal, db); err != nil {
-			return fmt.Errorf("apply personal sqlite extras: %w", err)
+			slog.Warn("ProvisionPersonalSchema: sqlite extras failed (non-fatal)", "user", userID, "error", err)
 		}
 
 		// Apply grants for app role.
 		if err := pgutil.ApplyGrants(ctx, db, "personal"); err != nil {
-			return fmt.Errorf("apply personal grants: %w", err)
+			slog.Warn("ProvisionPersonalSchema: grants failed (non-fatal)", "user", userID, "error", err)
 		}
 
 		slog.Info("provisioned personal schema", "org", o.orgSlug, "user", userID, "schema", schemaName)
@@ -840,6 +852,12 @@ func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
 		client, db, err := o.openTeamDBBySchema(schemaName)
 		if err != nil {
 			return nil, err
+		}
+
+		// Ensure pgvector extension exists (database-wide, idempotent).
+		// Required for vector(384) columns in memories table.
+		if _, err := db.ExecContext(context.Background(), "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("openTeamDB: could not ensure pgvector extension", "team", teamSlug, "error", err)
 		}
 
 		// Auto-migrate: create any missing tables/columns.
@@ -948,6 +966,12 @@ func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error)
 		client, db, err := o.openPersonalDBBySchema(schemaName)
 		if err != nil {
 			return nil, err
+		}
+
+		// Ensure pgvector extension exists (database-wide, idempotent).
+		// Required for vector(384) columns in memories table.
+		if _, err := db.ExecContext(context.Background(), "CREATE EXTENSION IF NOT EXISTS vector"); err != nil {
+			slog.Warn("openPersonalDB: could not ensure pgvector extension", "user", userID, "error", err)
 		}
 
 		// Auto-migrate: create any missing tables/columns.

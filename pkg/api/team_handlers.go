@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -163,7 +164,8 @@ func (pa *PlatformAuth) handleCreateTeam(w http.ResponseWriter, r *http.Request)
 
 	// Provision the team schema
 	if err := orgDataStore.ProvisionTeam(ctx, req.Slug); err != nil {
-		respondError(w, http.StatusInternalServerError, "team created but schema provisioning failed")
+		slog.Error("team schema provisioning failed", "team", req.Slug, "org", user.OrgSlug, "error", err)
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("team created but schema provisioning failed: %v", err))
 		return
 	}
 

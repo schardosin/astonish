@@ -159,6 +159,10 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 			// Populate team-scoped stores if team is known
 			if tc.TeamSlug != "" {
 				teamStore := orgStore.ForTeam(tc.TeamSlug)
+				if teamStore == nil {
+					http.Error(w, `{"error":"team database unavailable"}`, http.StatusServiceUnavailable)
+					return
+				}
 				reqSvc.Sessions = teamStore.Sessions()
 				reqSvc.Memory = teamStore.Memories()
 				reqSvc.Credentials = teamStore.Credentials()
@@ -177,6 +181,10 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				// Wire personal stores
 				if tc.UserID != "" {
 					personalStore := orgStore.ForUser(tc.UserID)
+					if personalStore == nil {
+						http.Error(w, `{"error":"personal database unavailable"}`, http.StatusServiceUnavailable)
+						return
+					}
 					reqSvc.PersonalSessions = personalStore.Sessions()
 					reqSvc.PersonalFlows = personalStore.Flows()
 					reqSvc.PersonalApps = personalStore.Apps()
@@ -186,7 +194,9 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				// Build three-tier memory searcher
 				var personalMem store.MemoryStore
 				if tc.UserID != "" {
-					personalMem = orgStore.ForUser(tc.UserID).Memories()
+					if ps := orgStore.ForUser(tc.UserID); ps != nil {
+						personalMem = ps.Memories()
+					}
 				}
 				reqSvc.MemorySearcher = store.NewThreeTierSearcher(store.ThreeTierMemoryStoreConfig{
 					Personal: personalMem,

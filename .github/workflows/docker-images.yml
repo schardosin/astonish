@@ -74,7 +74,7 @@ jobs:
     needs: prepare
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
 
@@ -147,7 +147,7 @@ jobs:
     needs: prepare
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
 
@@ -219,7 +219,7 @@ jobs:
     needs: prepare
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
 
@@ -271,7 +271,7 @@ jobs:
     needs: prepare
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.prepare.outputs.is_release == 'true' && needs.prepare.outputs.version_tag || github.ref }}
 

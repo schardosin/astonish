@@ -750,7 +750,7 @@ func ExchangeMSGraphToken(ctx context.Context, tokenURL, clientID, clientSecret,
 		"client_secret": {clientSecret},
 		"refresh_token": {refreshToken},
 		"grant_type":    {"refresh_token"},
-		"scope":         {"https://graph.microsoft.com/.default offline_access"},
+		"scope":         {"https://graph.microsoft.com/.default"},
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))

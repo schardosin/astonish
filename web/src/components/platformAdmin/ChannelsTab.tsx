@@ -120,7 +120,8 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await adminApi.testEmailConnection()
+      // Send current form secrets so test works even before saving
+      const result = await adminApi.testEmailConnection(secrets)
       setTestResult(result)
     } catch (e) {
       setTestResult({ status: 'error', message: (e as Error).message })

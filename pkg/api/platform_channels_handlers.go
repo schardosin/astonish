@@ -579,6 +579,8 @@ func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSetti
 
 // PlatformAdminTestEmailHandler handles POST /api/platform/admin/channels/email/test.
 // It verifies the email credential can be resolved and the mailbox is accessible.
+// Accepts an optional JSON body with { "secrets": { "key": "value" } } to test
+// with unsaved form values (falls back to stored secrets for any missing keys).
 func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 	if RequirePlatformAdmin(w, r) == nil {
 		return
@@ -588,6 +590,20 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 	if secrets == nil {
 		respondError(w, http.StatusServiceUnavailable, "secret store not available")
 		return
+	}
+
+	// Parse optional request body with secret overrides from the form
+	var body struct {
+		Secrets map[string]string `json:"secrets"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // ignore error — body may be empty
+
+	// Helper: get secret from form override first, then stored value
+	getSecret := func(key string) string {
+		if v, ok := body.Secrets[key]; ok && v != "" && v != "__CLEAR__" {
+			return v
+		}
+		return secrets.GetSecret(key)
 	}
 
 	backend := getPlatformBackend()
@@ -608,7 +624,7 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 
 	if emailCfg.Provider != "msgraph" {
 		// For IMAP/SMTP, just confirm the password secret is configured
-		password := secrets.GetSecret("channels.email.password")
+		password := getSecret("channels.email.password")
 		if password == "" {
 			respondJSON(w, http.StatusOK, map[string]any{
 				"status":  "error",
@@ -623,11 +639,11 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Microsoft Graph: read secrets from platform secrets and do token exchange
-	tenantID := secrets.GetSecret("channels.email.tenant_id")
-	clientID := secrets.GetSecret("channels.email.client_id")
-	clientSecret := secrets.GetSecret("channels.email.client_secret") // optional for public clients
-	refreshToken := secrets.GetSecret("channels.email.refresh_token")
+	// Microsoft Graph: read secrets from platform secrets (with form overrides) and do token exchange
+	tenantID := getSecret("channels.email.tenant_id")
+	clientID := getSecret("channels.email.client_id")
+	clientSecret := getSecret("channels.email.client_secret") // optional for public clients
+	refreshToken := getSecret("channels.email.refresh_token")
 
 	if tenantID == "" || clientID == "" || refreshToken == "" {
 		missing := []string{}

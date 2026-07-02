@@ -31,58 +31,50 @@ type channelSecretAt struct {
 	Configured bool  `json:"configured"`
 }
 
+// channelSecretDef defines a single secret field for a channel.
+type channelSecretDef struct {
+	key      string
+	label    string
+	optional bool
+}
+
 // channelDefinition defines the metadata for each channel type.
 type channelDefinition struct {
 	description string
-	secrets     []struct {
-		key   string
-		label string
-	}
+	secrets     []channelSecretDef
 }
 
 var channelDefinitions = map[string]channelDefinition{
 	"telegram": {
 		description: "Telegram Bot (via BotFather)",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.telegram.bot_token", "Bot Token"},
+		secrets: []channelSecretDef{
+			{key: "channels.telegram.bot_token", label: "Bot Token"},
 		},
 	},
 	"email": {
 		description: "Email (IMAP/SMTP)",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.email.password", "IMAP/SMTP Password"},
+		secrets: []channelSecretDef{
+			{key: "channels.email.password", label: "IMAP/SMTP Password"},
 		},
 	},
 	"slack": {
 		description: "Slack App",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.slack.bot_token", "Bot Token (xoxb-...)"},
-			{"channels.slack.app_token", "App-Level Token (xapp-...)"},
-			{"channels.slack.signing_secret", "Signing Secret"},
-			{"channels.slack.client_id", "OAuth Client ID"},
-			{"channels.slack.client_secret", "OAuth Client Secret"},
+		secrets: []channelSecretDef{
+			{key: "channels.slack.bot_token", label: "Bot Token (xoxb-...)"},
+			{key: "channels.slack.app_token", label: "App-Level Token (xapp-...)"},
+			{key: "channels.slack.signing_secret", label: "Signing Secret"},
+			{key: "channels.slack.client_id", label: "OAuth Client ID"},
+			{key: "channels.slack.client_secret", label: "OAuth Client Secret"},
 		},
 	},
 }
 
 // emailMSGraphSecrets defines the secrets needed for Microsoft Graph provider.
-var emailMSGraphSecrets = []struct {
-	key   string
-	label string
-}{
-	{"channels.email.tenant_id", "Tenant ID"},
-	{"channels.email.client_id", "Client ID"},
-	{"channels.email.client_secret", "Client Secret"},
-	{"channels.email.refresh_token", "Refresh Token"},
+var emailMSGraphSecrets = []channelSecretDef{
+	{key: "channels.email.tenant_id", label: "Tenant ID"},
+	{key: "channels.email.client_id", label: "Client ID"},
+	{key: "channels.email.client_secret", label: "Client Secret (optional)", optional: true},
+	{key: "channels.email.refresh_token", label: "Refresh Token"},
 }
 
 // PlatformAdminListChannelsHandler handles GET /api/platform/admin/channels.
@@ -177,7 +169,7 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 		for _, s := range emailSecrets {
 			configured := secrets.GetSecret(s.key) != ""
 			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
-			if !configured {
+			if !configured && !s.optional {
 				allSecretsSet = false
 			}
 		}
@@ -321,10 +313,7 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 	// Save secrets (only non-empty values; empty means "keep existing")
 	if len(body.Secrets) > 0 {
 		// Determine allowed secret keys based on channel type and provider
-		var secretDefs []struct {
-			key   string
-			label string
-		}
+		var secretDefs []channelSecretDef
 		if channelType == "email" {
 			provider, _ := body.Config["provider"].(string)
 			if provider == "msgraph" {

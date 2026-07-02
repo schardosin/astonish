@@ -134,6 +134,7 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			Type:        "email",
 			Description: def.description,
 			Config:      map[string]any{},
+			Secrets:     []channelSecretAt{},
 		}
 		emailProvider := ""
 		if channels.Email != nil {

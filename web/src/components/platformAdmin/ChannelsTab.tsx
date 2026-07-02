@@ -181,11 +181,11 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
           )}
 
           {/* Secrets (hidden for msgraph which uses credential store) */}
-          {channel.secrets.length > 0 && !(channel.type === 'email' && form.provider === 'msgraph') && (
+          {(channel.secrets || []).length > 0 && !(channel.type === 'email' && form.provider === 'msgraph') && (
           <div className="pt-2">
             <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
             <div className="space-y-2">
-              {channel.secrets.map(s => (
+              {(channel.secrets || []).map(s => (
                 <div key={s.key}>
                   <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
                     {s.label}

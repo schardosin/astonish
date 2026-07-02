@@ -58,11 +58,12 @@ type PlatformTelegramConfig struct {
 // PlatformEmailConfig holds non-secret Email channel settings.
 type PlatformEmailConfig struct {
 	Enabled      bool   `json:"enabled"`
-	Provider     string `json:"provider,omitempty"`      // "imap" (default) or "gmail"
+	Provider     string `json:"provider,omitempty"`      // "imap" (default), "gmail", or "msgraph"
 	IMAPServer   string `json:"imap_server"`             // e.g. "imap.gmail.com:993"
 	SMTPServer   string `json:"smtp_server"`             // e.g. "smtp.gmail.com:587"
 	Address      string `json:"address"`                 // agent's email address
 	Username     string `json:"username,omitempty"`      // login username (defaults to address)
+	Credential   string `json:"credential,omitempty"`    // credential store name (for msgraph provider)
 	PollInterval int    `json:"poll_interval,omitempty"` // seconds, default 30
 	Folder       string `json:"folder,omitempty"`        // default "INBOX"
 	MarkRead     *bool  `json:"mark_read,omitempty"`     // default true

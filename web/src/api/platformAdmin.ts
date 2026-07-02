@@ -352,6 +352,15 @@ export async function deleteChannel(channelType: string): Promise<{ message: str
   return res.json()
 }
 
+export async function testEmailConnection(): Promise<{ status: string; message: string; email?: string; displayName?: string }> {
+  const res = await adminFetch(`${ADMIN_BASE}/channels/email/test`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  await throwIfNotOk(res, 'Failed to test email connection')
+  return res.json()
+}
+
 // --- Web Services (Standard MCP Servers) ---
 
 export interface WebServiceInfo {

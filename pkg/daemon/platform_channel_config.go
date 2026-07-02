@@ -49,14 +49,20 @@ func loadChannelsConfigFromDB(backend platformDB, logger *Logger) config.Channel
 		out.Email.SMTPServer = ch.Email.SMTPServer
 		out.Email.Address = ch.Email.Address
 		out.Email.Username = ch.Email.Username
+		out.Email.Credential = ch.Email.Credential
 		out.Email.PollInterval = ch.Email.PollInterval
 		out.Email.Folder = ch.Email.Folder
 		out.Email.MarkRead = ch.Email.MarkRead
 		out.Email.MaxBodyChars = ch.Email.MaxBodyChars
 
 		if enabled && logger != nil {
-			logger.Printf("[channels] DB config: Email enabled address=%s imap=%s smtp=%s",
-				out.Email.Address, out.Email.IMAPServer, out.Email.SMTPServer)
+			if ch.Email.Provider == "msgraph" {
+				logger.Printf("[channels] DB config: Email enabled (msgraph) address=%s credential=%s",
+					out.Email.Address, out.Email.Credential)
+			} else {
+				logger.Printf("[channels] DB config: Email enabled address=%s imap=%s smtp=%s",
+					out.Email.Address, out.Email.IMAPServer, out.Email.SMTPServer)
+			}
 		}
 	}
 

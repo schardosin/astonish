@@ -81,6 +81,8 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
   const [secrets, setSecrets] = useState<Record<string, string>>({})
   const [enabled, setEnabled] = useState<boolean>(channel.enabled)
   const [saving, setSaving] = useState<boolean>(false)
+  const [testing, setTesting] = useState<boolean>(false)
+  const [testResult, setTestResult] = useState<{ status: string; message: string; email?: string } | null>(null)
 
   useEffect(() => {
     setForm({ ...channel.config })
@@ -111,6 +113,19 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
       onDeleted(result.message)
     } catch (e) {
       onError((e as Error).message)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const result = await adminApi.testEmailConnection()
+      setTestResult(result)
+    } catch (e) {
+      setTestResult({ status: 'error', message: (e as Error).message })
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -193,11 +208,28 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
             <button onClick={handleDelete} className="px-3 py-2 rounded-lg text-xs font-medium" style={{ color: '#ef4444' }}>
               <Trash2 size={12} className="inline mr-1" />Remove Channel
             </button>
-            <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
-              {saving ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
-              Save & Apply
-            </button>
+            <div className="flex items-center gap-2">
+              {channel.type === 'email' && (
+                <button onClick={handleTestConnection} disabled={testing} className="px-3 py-2 rounded-lg text-xs font-medium" style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+                  {testing ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                  {testing ? 'Testing...' : 'Test Connection'}
+                </button>
+              )}
+              <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
+                {saving ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                Save & Apply
+              </button>
+            </div>
           </div>
+          {/* Test result */}
+          {testResult && (
+            <div className="text-xs px-2 py-1 rounded" style={{
+              color: testResult.status === 'ok' ? '#22c55e' : '#ef4444',
+              background: testResult.status === 'ok' ? '#22c55e15' : '#ef444415',
+            }}>
+              {testResult.message}{testResult.email ? ' (' + testResult.email + ')' : ''}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -223,34 +255,55 @@ interface EmailConfigFieldsProps {
 
 function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
   const update = (key: string, value: string | number | boolean) => setForm({ ...form, [key]: value })
+  const isMSGraph = (form.provider || 'imap') === 'msgraph'
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>IMAP Server</label>
-          <input
-            type="text"
-            value={form.imap_server || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('imap_server', e.target.value)}
-            placeholder="imap.gmail.com:993"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>SMTP Server</label>
-          <input
-            type="text"
-            value={form.smtp_server || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('smtp_server', e.target.value)}
-            placeholder="smtp.gmail.com:587"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          />
-        </div>
+      {/* Provider selection - prominent at the top */}
+      <div>
+        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider</label>
+        <select
+          value={form.provider || 'imap'}
+          onChange={(e: ChangeEvent<HTMLSelectElement>) => update('provider', e.target.value)}
+          className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+          style={inputStyle}
+        >
+          <option value="imap">IMAP/SMTP</option>
+          <option value="gmail">Gmail (IMAP/SMTP)</option>
+          <option value="msgraph">Microsoft 365 (Graph API)</option>
+        </select>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+
+      {/* IMAP/SMTP fields (hidden for msgraph) */}
+      {!isMSGraph && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>IMAP Server</label>
+            <input
+              type="text"
+              value={form.imap_server || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('imap_server', e.target.value)}
+              placeholder="imap.gmail.com:993"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>SMTP Server</label>
+            <input
+              type="text"
+              value={form.smtp_server || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('smtp_server', e.target.value)}
+              placeholder="smtp.gmail.com:587"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Email address + Username (username hidden for msgraph) */}
+      <div className={isMSGraph ? '' : 'grid grid-cols-2 gap-3'}>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Email Address</label>
           <input
@@ -262,31 +315,42 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
+        {!isMSGraph && (
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
+            <input
+              type="text"
+              value={form.username || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('username', e.target.value)}
+              placeholder="(defaults to address)"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Microsoft Graph credential field */}
+      {isMSGraph && (
         <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
+          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Credential Name</label>
           <input
             type="text"
-            value={form.username || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('username', e.target.value)}
-            placeholder="(defaults to address)"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+            value={form.credential || ''}
+            onChange={(e: ChangeEvent<HTMLInputElement>) => update('credential', e.target.value)}
+            placeholder="email-microsoft"
+            className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
             style={inputStyle}
           />
+          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+            Name of the credential (type: oauth_authorization_code) containing your
+            Microsoft 365 refresh token, client ID, and client secret.
+          </p>
         </div>
-      </div>
+      )}
+
+      {/* Behavior settings */}
       <div className="grid grid-cols-3 gap-3">
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider</label>
-          <select
-            value={form.provider || 'imap'}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => update('provider', e.target.value)}
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          >
-            <option value="imap">IMAP</option>
-            <option value="gmail">Gmail</option>
-          </select>
-        </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Poll Interval (sec)</label>
           <input
@@ -307,18 +371,6 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Mark Read</label>
-          <button
-            onClick={() => update('mark_read', !(form.mark_read ?? true))}
-            className="text-xs"
-            style={{ color: (form.mark_read ?? true) ? '#22c55e' : 'var(--text-muted)' }}
-          >
-            {(form.mark_read ?? true) ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-          </button>
-        </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Max Body Chars</label>
           <input
@@ -329,6 +381,16 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Mark Read</label>
+        <button
+          onClick={() => update('mark_read', !(form.mark_read ?? true))}
+          className="text-xs"
+          style={{ color: (form.mark_read ?? true) ? '#22c55e' : 'var(--text-muted)' }}
+        >
+          {(form.mark_read ?? true) ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+        </button>
       </div>
     </div>
   )

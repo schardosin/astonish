@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
@@ -141,6 +142,7 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			info.Config["smtp_server"] = channels.Email.SMTPServer
 			info.Config["address"] = channels.Email.Address
 			info.Config["username"] = channels.Email.Username
+			info.Config["credential"] = channels.Email.Credential
 			info.Config["poll_interval"] = channels.Email.PollInterval
 			info.Config["folder"] = channels.Email.Folder
 			info.Config["max_body_chars"] = channels.Email.MaxBodyChars
@@ -263,6 +265,9 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if v, ok := body.Config["username"].(string); ok {
 			cfg.Username = v
+		}
+		if v, ok := body.Config["credential"].(string); ok {
+			cfg.Credential = v
 		}
 		if v, ok := body.Config["poll_interval"]; ok {
 			cfg.PollInterval = toInt(v)
@@ -530,4 +535,111 @@ func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSetti
 		return nil
 	}
 	return settings.Channels
+}
+
+// PlatformAdminTestEmailHandler handles POST /api/platform/admin/channels/email/test.
+// It verifies the email credential can be resolved and the mailbox is accessible.
+func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
+	backend := getPlatformBackend()
+	if backend == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform backend not available")
+		return
+	}
+
+	// Load the email config
+	settingsStore := backend.PlatformSettings()
+	settings, err := settingsStore.Get(r.Context())
+	if err != nil || settings == nil || settings.Channels == nil || settings.Channels.Email == nil {
+		respondError(w, http.StatusBadRequest, "no email channel configured")
+		return
+	}
+
+	emailCfg := settings.Channels.Email
+
+	if emailCfg.Provider != "msgraph" {
+		// For IMAP/SMTP, just confirm the secrets are configured
+		secrets := getPlatformSecrets()
+		if secrets == nil {
+			respondError(w, http.StatusServiceUnavailable, "secret store not available")
+			return
+		}
+		password := secrets.GetSecret("channels.email.password")
+		if password == "" {
+			respondError(w, http.StatusBadRequest, "email password not configured")
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "ok",
+			"message": "IMAP/SMTP credentials are configured (connection not tested)",
+		})
+		return
+	}
+
+	// Microsoft Graph: resolve the credential and test the connection
+	credName := emailCfg.Credential
+	if credName == "" {
+		respondError(w, http.StatusBadRequest, "credential name not configured for msgraph provider")
+		return
+	}
+
+	credStore := getAPICredentialStore()
+	if credStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "credential store not available")
+		return
+	}
+
+	_, headerValue, err := credStore.Resolve(credName)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Failed to resolve credential: " + err.Error(),
+		})
+		return
+	}
+
+	// Test the Graph API connection with /me endpoint
+	token := headerValue
+	if len(token) > 7 && token[:7] == "Bearer " {
+		token = token[7:]
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://graph.microsoft.com/v1.0/me", nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to build request")
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Connection failed: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Graph API returned " + resp.Status,
+		})
+		return
+	}
+
+	// Decode user info for confirmation
+	var meResp struct {
+		Mail        string `json:"mail"`
+		DisplayName string `json:"displayName"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&meResp)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"message":     "Connected successfully",
+		"email":       meResp.Mail,
+		"displayName": meResp.DisplayName,
+	})
 }

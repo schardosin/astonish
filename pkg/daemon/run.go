@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -544,6 +545,43 @@ func Run(cfg RunConfig) error {
 		}
 
 		emailCh := loadChannelsConfigFromDB(backend, logger).Email
+
+		// Microsoft Graph provider uses OAuth credential store instead of password
+		if emailCh.Provider == "msgraph" {
+			credName := emailCh.Credential
+			if credName == "" {
+				credName = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.credential")
+			}
+			if credName == "" || emailCh.Address == "" {
+				return
+			}
+			if factoryResult.CredentialStore == nil {
+				logger.Printf("Warning: msgraph email provider requires credential store but none is available")
+				return
+			}
+			// Create a TokenFunc that resolves the credential on each call
+			credStore := factoryResult.CredentialStore
+			tokenFunc := func() (string, error) {
+				_, headerValue, err := credStore.Resolve(credName)
+				if err != nil {
+					return "", fmt.Errorf("resolve credential %q: %w", credName, err)
+				}
+				// headerValue is "Bearer <token>" — extract just the token
+				token := strings.TrimPrefix(headerValue, "Bearer ")
+				return token, nil
+			}
+			setupEmailTools(&emailToolConfig{
+				Provider:     "msgraph",
+				Address:      emailCh.Address,
+				Folder:       emailCh.Folder,
+				MaxBodyChars: emailCh.MaxBodyChars,
+				TokenFunc:    tokenFunc,
+			})
+			logger.Printf("Email tools initialized via Microsoft Graph (%s)", emailCh.Address)
+			return
+		}
+
+		// IMAP/SMTP provider — requires password
 		emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
 		if emailPassword == "" || emailCh.IMAPServer == "" ||
 			emailCh.SMTPServer == "" || emailCh.Address == "" {
@@ -1512,6 +1550,8 @@ type emailToolConfig struct {
 	Password     string
 	Folder       string
 	MaxBodyChars int
+	// TokenFunc provides a valid OAuth2 access token (for msgraph provider).
+	TokenFunc emailpkg.TokenFunc
 }
 
 // setupEmailTools creates an email client and registers it for the email tools.
@@ -1525,6 +1565,7 @@ func setupEmailTools(cfg *emailToolConfig) {
 		Password:     cfg.Password,
 		Folder:       cfg.Folder,
 		MaxBodyChars: cfg.MaxBodyChars,
+		TokenFunc:    cfg.TokenFunc,
 	}
 	client, err := emailpkg.NewClient(emailCfg)
 	if err != nil {

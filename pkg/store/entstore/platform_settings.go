@@ -230,14 +230,20 @@ func (s *Store) Secrets() *PlatformSecretsStore {
 	return &PlatformSecretsStore{client: s.platformClient}
 }
 
-// GetSecret returns the secret value for the given key, or "" if not found.
+// GetSecret returns the decrypted secret value for the given key, or "" if not found.
 func (ps *PlatformSecretsStore) GetSecret(key string) string {
 	ctx := context.Background()
 	row, err := ps.client.PlatformSecret.Get(ctx, key)
 	if err != nil {
 		return ""
 	}
-	return string(row.Value)
+	masterKey := loadMasterKey()
+	plaintext, err := decryptSecret(row.Value, masterKey)
+	if err != nil {
+		slog.Warn("failed to decrypt platform secret", "key", key, "error", err)
+		return ""
+	}
+	return string(plaintext)
 }
 
 // SetSecret stores a secret value. Creates or updates the entry.

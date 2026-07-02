@@ -276,10 +276,12 @@ function App() {
   const [pendingChatMessage, setPendingChatMessage] = useState<{ message: string; systemContext?: string } | null>(null)
   const [sandboxStatus, setSandboxStatus] = useState<SandboxStatus | null>(null)
 
-  // Check if setup is required on mount
+  // Check if setup is required (wait for platform detection + auth in platform mode)
   useEffect(() => {
+    if (!isPlatformChecked) return
+    if (isPlatformMode && !auth.isAuthenticated) return
     checkSetupStatus()
-  }, [])
+  }, [isPlatformChecked, isPlatformMode, auth.isAuthenticated])
 
   const checkSetupStatus = async () => {
     try {
@@ -301,7 +303,7 @@ function App() {
   // Fetch sandbox status (for security badge in top bar).
   // In platform mode, this endpoint requires auth — wait until authenticated.
   // In personal mode, fetch immediately (no auth required).
-  const sandboxAuthReady = !isPlatformMode || auth.isAuthenticated
+  const sandboxAuthReady = isPlatformChecked && (!isPlatformMode || auth.isAuthenticated)
   useEffect(() => {
     if (!sandboxAuthReady) return
     fetchSandboxStatus()
@@ -396,7 +398,7 @@ function App() {
   // resolved asynchronously via fetchTeams). Firing too early sends requests
   // without the X-Astonish-Team header, which may return empty/wrong data
   // and overwrite the correct results that arrive later.
-  const teamReady = !isPlatformMode || !!activeTeam
+  const teamReady = isPlatformChecked && (!isPlatformMode || !!activeTeam)
 
   // Load agents, tools, and settings from API on mount and when team changes
   useEffect(() => {
@@ -407,8 +409,10 @@ function App() {
     }
   }, [showSetupWizard, isCheckingSetup, teamReady, activeTeam])
 
-  // Check for updates on mount
+  // Check for updates (wait for platform detection + auth in platform mode)
+  const versionAuthReady = isPlatformChecked && (!isPlatformMode || auth.isAuthenticated)
   useEffect(() => {
+    if (!versionAuthReady) return
     const initUpdateCheck = async () => {
       const currentVersion = await loadAppVersion()      // Always load version on page load
 
@@ -436,7 +440,7 @@ function App() {
     }
 
     initUpdateCheck()
-  }, [])
+  }, [versionAuthReady])
 
   // Auto-dismiss toast after 3 seconds (except for persistent toasts like updates)
   useEffect(() => {

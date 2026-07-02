@@ -1446,9 +1446,10 @@ export default function SettingsPage({
     if (isPlatformMode) loadTeams()
   }, [isPlatformMode, loadTeams])
 
-  // Load caller role for selected team
+  // Load caller role for selected team (only if team exists in loaded teams list)
   useEffect(() => {
     if (!resolvedTeamSlug || callerRoles[resolvedTeamSlug]) return
+    if (allTeams.length > 0 && !allTeams.find(t => t.slug === resolvedTeamSlug)) return
     let cancelled = false
     const load = async () => {
       try {
@@ -1458,7 +1459,7 @@ export default function SettingsPage({
     }
     load()
     return () => { cancelled = true }
-  }, [resolvedTeamSlug, callerRoles])
+  }, [resolvedTeamSlug, callerRoles, allTeams])
 
   const canManageTeam = isAdmin || callerRoles[resolvedTeamSlug] === 'admin' || callerRoles[resolvedTeamSlug] === 'org_admin'
 

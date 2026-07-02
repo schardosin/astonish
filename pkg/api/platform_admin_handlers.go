@@ -209,13 +209,19 @@ func PlatformAdminGetOrgHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get members
+	// Get members (ensure non-nil slice so JSON serializes as [] not null)
 	members, _ := backend.Organizations().ListMembers(ctx, org.ID)
+	if members == nil {
+		members = []*store.UserWithRole{}
+	}
 
-	// Get teams
+	// Get teams (ensure non-nil slice so JSON serializes as [] not null)
 	var teams []*store.Team
 	if orgDS, err := backend.ForOrg(slug); err == nil {
 		teams, _ = orgDS.Teams().ListTeams(ctx)
+	}
+	if teams == nil {
+		teams = []*store.Team{}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -833,6 +839,9 @@ func PlatformAdminListTeamMembersHandler(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to list members")
 		return
+	}
+	if members == nil {
+		members = []*store.TeamMembership{}
 	}
 
 	// Enrich members with user details from platform users store

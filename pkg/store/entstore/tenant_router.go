@@ -144,6 +144,8 @@ func (s *Store) deriveDSN(dbName string) (string, error) {
 
 // deriveSchemaAwareDSN returns a DSN targeting a specific PG schema within a database.
 // It sets search_path=<schema>,public so the connection targets the given schema.
+// The schema name is double-quoted as a PG identifier to handle names containing
+// characters (e.g. hyphens) that are invalid in bare identifiers.
 func (s *Store) deriveSchemaAwareDSN(dbName, schemaName string) (string, error) {
 	u, err := url.Parse(s.platformDSN)
 	if err != nil {
@@ -151,7 +153,8 @@ func (s *Store) deriveSchemaAwareDSN(dbName, schemaName string) (string, error) 
 	}
 	u.Path = "/" + dbName
 	q := u.Query()
-	q.Set("search_path", schemaName+",public")
+	quoted := `"` + strings.ReplaceAll(schemaName, `"`, `""`) + `"`
+	q.Set("search_path", quoted+",public")
 	u.RawQuery = q.Encode()
 	return u.String(), nil
 }

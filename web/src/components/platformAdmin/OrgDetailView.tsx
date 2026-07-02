@@ -79,7 +79,9 @@ export default function OrgDetailView({ orgSlug, onBack }: OrgDetailViewProps) {
     )
   }
 
-  const { organization: org, members: orgMembers, teams } = orgDetail
+  const { organization: org, members: rawMembers, teams: rawTeams } = orgDetail
+  const orgMembers = rawMembers ?? []
+  const teams = rawTeams ?? []
 
   return (
     <>
@@ -247,7 +249,7 @@ function TeamRow({ team, orgSlug, isExpanded, isLastTeam, onToggle, onDelete, on
     setLoadingMembers(true)
     try {
       const data = await adminApi.listOrgTeamMembers(orgSlug, team.slug)
-      setMembers(data)
+      setMembers(data ?? [])
     } catch (e) {
       onError((e as Error).message)
     } finally {

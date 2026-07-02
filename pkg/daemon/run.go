@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -546,30 +545,62 @@ func Run(cfg RunConfig) error {
 
 		emailCh := loadChannelsConfigFromDB(backend, logger).Email
 
-		// Microsoft Graph provider uses OAuth credential store instead of password
+		// Microsoft Graph provider uses platform secrets for OAuth tokens
 		if emailCh.Provider == "msgraph" {
-			credName := emailCh.Credential
-			if credName == "" {
-				credName = resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.credential")
-			}
-			if credName == "" || emailCh.Address == "" {
+			if emailCh.Address == "" {
 				return
 			}
-			if factoryResult.CredentialStore == nil {
-				logger.Printf("Warning: msgraph email provider requires credential store but none is available")
+			// Resolve the 4 OAuth secrets from platform secrets
+			tenantID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.tenant_id")
+			clientID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_id")
+			clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret")
+			refreshToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+			if tenantID == "" || clientID == "" || clientSecret == "" || refreshToken == "" {
+				logger.Printf("Warning: msgraph email provider missing required secrets (tenant_id, client_id, client_secret, refresh_token)")
 				return
 			}
-			// Create a TokenFunc that resolves the credential on each call
-			credStore := factoryResult.CredentialStore
+			tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)
+
+			// Token cache: exchange once and reuse until near expiry
+			var (
+				cachedToken string
+				tokenExpiry time.Time
+				tokenMu     sync.Mutex
+			)
+
 			tokenFunc := func() (string, error) {
-				_, headerValue, err := credStore.Resolve(credName)
-				if err != nil {
-					return "", fmt.Errorf("resolve credential %q: %w", credName, err)
+				tokenMu.Lock()
+				defer tokenMu.Unlock()
+
+				// Return cached token if still valid (with 5-minute buffer)
+				if cachedToken != "" && time.Now().Before(tokenExpiry.Add(-5*time.Minute)) {
+					return cachedToken, nil
 				}
-				// headerValue is "Bearer <token>" — extract just the token
-				token := strings.TrimPrefix(headerValue, "Bearer ")
-				return token, nil
+
+				// Get current refresh token (may have been rotated by the API test handler)
+				currentRefresh := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+				if currentRefresh == "" {
+					currentRefresh = refreshToken
+				}
+
+				tokenResp, err := emailpkg.ExchangeMSGraphToken(context.Background(), tokenURL, clientID, clientSecret, currentRefresh)
+				if err != nil {
+					return "", fmt.Errorf("msgraph token exchange: %w", err)
+				}
+
+				cachedToken = tokenResp.AccessToken
+				tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+				// Persist rotated refresh token via platform secrets API
+				if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != currentRefresh {
+					if ps := api.GetPlatformSecrets(); ps != nil {
+						_ = ps.SetSecret("channels.email.refresh_token", tokenResp.RefreshToken)
+					}
+				}
+
+				return cachedToken, nil
 			}
+
 			setupEmailTools(&emailToolConfig{
 				Provider:     "msgraph",
 				Address:      emailCh.Address,

@@ -730,3 +730,54 @@ func extractLinks(text string) []string {
 	}
 	return links
 }
+
+// --- Token Exchange ---
+
+// MSGraphTokenResponse is the response from the Microsoft identity token endpoint.
+type MSGraphTokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresIn    int    `json:"expires_in"`
+	TokenType    string `json:"token_type"`
+}
+
+// ExchangeMSGraphToken exchanges a refresh token for a new access token (and
+// possibly a rotated refresh token) using the Microsoft identity platform.
+// The tokenURL should be https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token.
+func ExchangeMSGraphToken(ctx context.Context, tokenURL, clientID, clientSecret, refreshToken string) (*MSGraphTokenResponse, error) {
+	data := url.Values{
+		"client_id":     {clientID},
+		"client_secret": {clientSecret},
+		"refresh_token": {refreshToken},
+		"grant_type":    {"refresh_token"},
+		"scope":         {"https://graph.microsoft.com/.default offline_access"},
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("build token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("token exchange request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp MSGraphTokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("parse token response: %w", err)
+	}
+	if tokenResp.AccessToken == "" {
+		return nil, fmt.Errorf("token response missing access_token")
+	}
+	return &tokenResp, nil
+}

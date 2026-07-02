@@ -143,8 +143,8 @@ type Config struct {
 	Password   string
 
 	// Microsoft Graph settings (used by "msgraph" provider)
-	// Credential is the name of the oauth_authorization_code credential
-	// in the encrypted credential store that holds the OAuth2 tokens.
+	// Credential is unused in platform mode (secrets stored as platform secrets).
+	// Retained for backward compatibility with personal-mode configs.
 	Credential string
 	// TokenFunc provides a valid OAuth2 access token on each call.
 	// Set by the daemon when wiring up the msgraph provider.

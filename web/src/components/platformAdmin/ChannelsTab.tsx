@@ -180,8 +180,8 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
             <SlackConfigFields form={form} setForm={setForm} />
           )}
 
-          {/* Secrets (hidden for msgraph which uses credential store) */}
-          {(channel.secrets || []).length > 0 && !(channel.type === 'email' && form.provider === 'msgraph') && (
+          {/* Secrets */}
+          {(channel.secrets || []).length > 0 && (
           <div className="pt-2">
             <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
             <div className="space-y-2">
@@ -331,25 +331,6 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
           </div>
         )}
       </div>
-
-      {/* Microsoft Graph credential field */}
-      {isMSGraph && (
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Credential Name</label>
-          <input
-            type="text"
-            value={form.credential || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('credential', e.target.value)}
-            placeholder="email-microsoft"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
-            style={inputStyle}
-          />
-          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-            Name of the credential (type: oauth_authorization_code) containing your
-            Microsoft 365 refresh token, client ID, and client secret.
-          </p>
-        </div>
-      )}
 
       {/* Behavior settings */}
       <div className="grid grid-cols-3 gap-3">

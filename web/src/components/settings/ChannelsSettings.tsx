@@ -65,7 +65,6 @@ export default function ChannelsSettings({ config, onSaved }: { config: Record<s
       address: '',
       username: '',
       password: '',
-      credential: '',
       poll_interval: 30,
       allow_from: [],
       folder: 'INBOX',
@@ -100,7 +99,6 @@ export default function ChannelsSettings({ config, onSaved }: { config: Record<s
           address: em.address || '',
           username: em.username || '',
           password: em.password || '',
-          credential: em.credential || '',
           poll_interval: em.poll_interval || 30,
           allow_from: em.allow_from || [],
           folder: em.folder || 'INBOX',
@@ -222,54 +220,34 @@ export default function ChannelsSettings({ config, onSaved }: { config: Record<s
         onExpand={() => setEmailExpanded(!emailExpanded)}
       >
         <div className="space-y-4">
-          {/* Provider Selection */}
-          <div>
-            <label className="block text-sm font-medium mb-2" style={labelStyle}>
-              Provider
-            </label>
-            <select
-              value={form.email.provider}
-              onChange={(e) => updateEmail({ provider: e.target.value })}
-              className={inputClass}
-              style={inputStyle}
-            >
-              <option value="imap">IMAP/SMTP</option>
-              <option value="gmail">Gmail (IMAP/SMTP)</option>
-              <option value="msgraph">Microsoft 365 (Graph API)</option>
-            </select>
-          </div>
-
-          {/* IMAP/SMTP fields (hidden for msgraph) */}
-          {form.email.provider !== 'msgraph' && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                  IMAP Server
-                </label>
-                <input
-                  type="text"
-                  value={form.email.imap_server}
-                  onChange={(e) => updateEmail({ imap_server: e.target.value })}
-                  placeholder="imap.gmail.com:993"
-                  className={inputClass + ' font-mono'}
-                  style={inputStyle}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                  SMTP Server
-                </label>
-                <input
-                  type="text"
-                  value={form.email.smtp_server}
-                  onChange={(e) => updateEmail({ smtp_server: e.target.value })}
-                  placeholder="smtp.gmail.com:587"
-                  className={inputClass + ' font-mono'}
-                  style={inputStyle}
-                />
-              </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                IMAP Server
+              </label>
+              <input
+                type="text"
+                value={form.email.imap_server}
+                onChange={(e) => updateEmail({ imap_server: e.target.value })}
+                placeholder="imap.gmail.com:993"
+                className={inputClass + ' font-mono'}
+                style={inputStyle}
+              />
             </div>
-          )}
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                SMTP Server
+              </label>
+              <input
+                type="text"
+                value={form.email.smtp_server}
+                onChange={(e) => updateEmail({ smtp_server: e.target.value })}
+                placeholder="smtp.gmail.com:587"
+                className={inputClass + ' font-mono'}
+                style={inputStyle}
+              />
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium mb-2" style={labelStyle}>
@@ -285,58 +263,34 @@ export default function ChannelsSettings({ config, onSaved }: { config: Record<s
             />
           </div>
 
-          {/* Username/Password fields (hidden for msgraph) */}
-          {form.email.provider !== 'msgraph' && (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                  Username
-                </label>
-                <input
-                  type="text"
-                  value={form.email.username}
-                  onChange={(e) => updateEmail({ username: e.target.value })}
-                  placeholder="Same as email (default)"
-                  className={inputClass}
-                  style={inputStyle}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                  Password
-                </label>
-                <input
-                  type="password"
-                  value={form.email.password}
-                  onChange={(e) => updateEmail({ password: e.target.value })}
-                  placeholder="App password"
-                  className={inputClass}
-                  style={inputStyle}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Microsoft Graph credential field */}
-          {form.email.provider === 'msgraph' && (
+          <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-2" style={labelStyle}>
-                Credential Name
+                Username
               </label>
               <input
                 type="text"
-                value={form.email.credential}
-                onChange={(e) => updateEmail({ credential: e.target.value })}
-                placeholder="email-microsoft"
-                className={inputClass + ' font-mono'}
+                value={form.email.username}
+                onChange={(e) => updateEmail({ username: e.target.value })}
+                placeholder="Same as email (default)"
+                className={inputClass}
                 style={inputStyle}
               />
-              <p className="text-xs mt-1" style={hintStyle}>
-                Name of the credential (type: oauth_authorization_code) containing your
-                Microsoft 365 refresh token, client ID, and client secret.
-              </p>
             </div>
-          )}
+            <div>
+              <label className="block text-sm font-medium mb-2" style={labelStyle}>
+                Password
+              </label>
+              <input
+                type="password"
+                value={form.email.password}
+                onChange={(e) => updateEmail({ password: e.target.value })}
+                placeholder="App password"
+                className={inputClass}
+                style={inputStyle}
+              />
+            </div>
+          </div>
 
           <div>
             <label className="block text-sm font-medium mb-2" style={labelStyle}>

@@ -3,11 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -70,6 +72,17 @@ var channelDefinitions = map[string]channelDefinition{
 			{"channels.slack.client_secret", "OAuth Client Secret"},
 		},
 	},
+}
+
+// emailMSGraphSecrets defines the secrets needed for Microsoft Graph provider.
+var emailMSGraphSecrets = []struct {
+	key   string
+	label string
+}{
+	{"channels.email.tenant_id", "Tenant ID"},
+	{"channels.email.client_id", "Client ID"},
+	{"channels.email.client_secret", "Client Secret"},
+	{"channels.email.refresh_token", "Refresh Token"},
 }
 
 // PlatformAdminListChannelsHandler handles GET /api/platform/admin/channels.
@@ -155,15 +168,17 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 				info.Config["mark_read"] = true
 			}
 		}
+		// Pick the right secrets list based on provider
+		emailSecrets := def.secrets
+		if emailProvider == "msgraph" {
+			emailSecrets = emailMSGraphSecrets
+		}
 		allSecretsSet := true
-		// msgraph uses credential store, not a password secret
-		if emailProvider != "msgraph" {
-			for _, s := range def.secrets {
-				configured := secrets.GetSecret(s.key) != ""
-				info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
-				if !configured {
-					allSecretsSet = false
-				}
+		for _, s := range emailSecrets {
+			configured := secrets.GetSecret(s.key) != ""
+			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
+			if !configured {
+				allSecretsSet = false
 			}
 		}
 		info.SecretsSet = allSecretsSet
@@ -305,9 +320,23 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save secrets (only non-empty values; empty means "keep existing")
 	if len(body.Secrets) > 0 {
-		def := channelDefinitions[channelType]
-		allowedKeys := make(map[string]bool, len(def.secrets))
-		for _, s := range def.secrets {
+		// Determine allowed secret keys based on channel type and provider
+		var secretDefs []struct {
+			key   string
+			label string
+		}
+		if channelType == "email" {
+			provider, _ := body.Config["provider"].(string)
+			if provider == "msgraph" {
+				secretDefs = emailMSGraphSecrets
+			} else {
+				secretDefs = channelDefinitions["email"].secrets
+			}
+		} else {
+			secretDefs = channelDefinitions[channelType].secrets
+		}
+		allowedKeys := make(map[string]bool, len(secretDefs))
+		for _, s := range secretDefs {
 			allowedKeys[s.key] = true
 		}
 
@@ -546,6 +575,16 @@ func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSetti
 // PlatformAdminTestEmailHandler handles POST /api/platform/admin/channels/email/test.
 // It verifies the email credential can be resolved and the mailbox is accessible.
 func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
+	if RequirePlatformAdmin(w, r) == nil {
+		return
+	}
+
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusServiceUnavailable, "secret store not available")
+		return
+	}
+
 	backend := getPlatformBackend()
 	if backend == nil {
 		respondError(w, http.StatusServiceUnavailable, "platform backend not available")
@@ -563,15 +602,13 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 	emailCfg := settings.Channels.Email
 
 	if emailCfg.Provider != "msgraph" {
-		// For IMAP/SMTP, just confirm the secrets are configured
-		secrets := getPlatformSecrets()
-		if secrets == nil {
-			respondError(w, http.StatusServiceUnavailable, "secret store not available")
-			return
-		}
+		// For IMAP/SMTP, just confirm the password secret is configured
 		password := secrets.GetSecret("channels.email.password")
 		if password == "" {
-			respondError(w, http.StatusBadRequest, "email password not configured")
+			respondJSON(w, http.StatusOK, map[string]any{
+				"status":  "error",
+				"message": "Email password not configured",
+			})
 			return
 		}
 		respondJSON(w, http.StatusOK, map[string]any{
@@ -581,40 +618,55 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Microsoft Graph: resolve the credential and test the connection
-	credName := emailCfg.Credential
-	if credName == "" {
-		respondError(w, http.StatusBadRequest, "credential name not configured for msgraph provider")
-		return
-	}
+	// Microsoft Graph: read secrets from platform secrets and do token exchange
+	tenantID := secrets.GetSecret("channels.email.tenant_id")
+	clientID := secrets.GetSecret("channels.email.client_id")
+	clientSecret := secrets.GetSecret("channels.email.client_secret")
+	refreshToken := secrets.GetSecret("channels.email.refresh_token")
 
-	credStore := getAPICredentialStore()
-	if credStore == nil {
-		respondError(w, http.StatusServiceUnavailable, "credential store not available")
-		return
-	}
-
-	_, headerValue, err := credStore.Resolve(credName)
-	if err != nil {
+	if tenantID == "" || clientID == "" || clientSecret == "" || refreshToken == "" {
+		missing := []string{}
+		if tenantID == "" {
+			missing = append(missing, "Tenant ID")
+		}
+		if clientID == "" {
+			missing = append(missing, "Client ID")
+		}
+		if clientSecret == "" {
+			missing = append(missing, "Client Secret")
+		}
+		if refreshToken == "" {
+			missing = append(missing, "Refresh Token")
+		}
 		respondJSON(w, http.StatusOK, map[string]any{
 			"status":  "error",
-			"message": "Failed to resolve credential: " + err.Error(),
+			"message": fmt.Sprintf("Missing secrets: %s", missing),
 		})
 		return
 	}
 
-	// Test the Graph API connection with /me endpoint
-	token := headerValue
-	if len(token) > 7 && token[:7] == "Bearer " {
-		token = token[7:]
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)
+	tokenResp, err := email.ExchangeMSGraphToken(r.Context(), tokenURL, clientID, clientSecret, refreshToken)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Token exchange failed: " + err.Error(),
+		})
+		return
 	}
 
+	// Persist rotated refresh token if Microsoft returned a new one
+	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
+		_ = secrets.SetSecret("channels.email.refresh_token", tokenResp.RefreshToken)
+	}
+
+	// Test the Graph API connection with /me endpoint
 	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://graph.microsoft.com/v1.0/me", nil)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to build request")
 		return
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)

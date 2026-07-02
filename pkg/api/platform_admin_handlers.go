@@ -1114,3 +1114,18 @@ func SetPlatformSecrets(s platformSecrets) {
 func getPlatformSecrets() platformSecrets {
 	return platformSecretsInstance
 }
+
+// PlatformSecretWriter is an exported interface for writing platform secrets.
+// Used by the daemon to persist rotated OAuth tokens.
+type PlatformSecretWriter interface {
+	SetSecret(key, value string) error
+}
+
+// GetPlatformSecrets returns the platform secrets store as a PlatformSecretWriter,
+// or nil if unavailable. Used by external packages (e.g. daemon) for token rotation.
+func GetPlatformSecrets() PlatformSecretWriter {
+	if platformSecretsInstance == nil {
+		return nil
+	}
+	return platformSecretsInstance
+}

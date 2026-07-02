@@ -180,7 +180,8 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
             <SlackConfigFields form={form} setForm={setForm} />
           )}
 
-          {/* Secrets */}
+          {/* Secrets (hidden for msgraph which uses credential store) */}
+          {channel.secrets.length > 0 && !(channel.type === 'email' && form.provider === 'msgraph') && (
           <div className="pt-2">
             <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
             <div className="space-y-2">
@@ -202,6 +203,7 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
               ))}
             </div>
           </div>
+          )}
 
           {/* Actions */}
           <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--border-color)' }}>

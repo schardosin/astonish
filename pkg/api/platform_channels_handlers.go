@@ -135,8 +135,10 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			Description: def.description,
 			Config:      map[string]any{},
 		}
+		emailProvider := ""
 		if channels.Email != nil {
 			info.Enabled = channels.Email.Enabled
+			emailProvider = channels.Email.Provider
 			info.Config["provider"] = channels.Email.Provider
 			info.Config["imap_server"] = channels.Email.IMAPServer
 			info.Config["smtp_server"] = channels.Email.SMTPServer
@@ -153,11 +155,14 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		allSecretsSet := true
-		for _, s := range def.secrets {
-			configured := secrets.GetSecret(s.key) != ""
-			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
-			if !configured {
-				allSecretsSet = false
+		// msgraph uses credential store, not a password secret
+		if emailProvider != "msgraph" {
+			for _, s := range def.secrets {
+				configured := secrets.GetSecret(s.key) != ""
+				info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
+				if !configured {
+					allSecretsSet = false
+				}
 			}
 		}
 		info.SecretsSet = allSecretsSet

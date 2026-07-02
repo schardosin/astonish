@@ -621,19 +621,16 @@ func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
 	// Microsoft Graph: read secrets from platform secrets and do token exchange
 	tenantID := secrets.GetSecret("channels.email.tenant_id")
 	clientID := secrets.GetSecret("channels.email.client_id")
-	clientSecret := secrets.GetSecret("channels.email.client_secret")
+	clientSecret := secrets.GetSecret("channels.email.client_secret") // optional for public clients
 	refreshToken := secrets.GetSecret("channels.email.refresh_token")
 
-	if tenantID == "" || clientID == "" || clientSecret == "" || refreshToken == "" {
+	if tenantID == "" || clientID == "" || refreshToken == "" {
 		missing := []string{}
 		if tenantID == "" {
 			missing = append(missing, "Tenant ID")
 		}
 		if clientID == "" {
 			missing = append(missing, "Client ID")
-		}
-		if clientSecret == "" {
-			missing = append(missing, "Client Secret")
 		}
 		if refreshToken == "" {
 			missing = append(missing, "Refresh Token")

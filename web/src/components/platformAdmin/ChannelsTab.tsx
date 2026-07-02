@@ -190,7 +190,7 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
               msgraph: [
                 { key: 'channels.email.tenant_id', label: 'Tenant ID' },
                 { key: 'channels.email.client_id', label: 'Client ID' },
-                { key: 'channels.email.client_secret', label: 'Client Secret' },
+                { key: 'channels.email.client_secret', label: 'Client Secret (optional)' },
                 { key: 'channels.email.refresh_token', label: 'Refresh Token' },
               ],
             }

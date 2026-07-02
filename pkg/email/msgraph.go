@@ -747,10 +747,12 @@ type MSGraphTokenResponse struct {
 func ExchangeMSGraphToken(ctx context.Context, tokenURL, clientID, clientSecret, refreshToken string) (*MSGraphTokenResponse, error) {
 	data := url.Values{
 		"client_id":     {clientID},
-		"client_secret": {clientSecret},
 		"refresh_token": {refreshToken},
 		"grant_type":    {"refresh_token"},
 		"scope":         {"https://graph.microsoft.com/.default"},
+	}
+	if clientSecret != "" {
+		data.Set("client_secret", clientSecret)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(data.Encode()))

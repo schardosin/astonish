@@ -553,10 +553,10 @@ func Run(cfg RunConfig) error {
 			// Resolve the 4 OAuth secrets from platform secrets
 			tenantID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.tenant_id")
 			clientID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_id")
-			clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret")
+			clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret") // optional for public clients
 			refreshToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
-			if tenantID == "" || clientID == "" || clientSecret == "" || refreshToken == "" {
-				logger.Printf("Warning: msgraph email provider missing required secrets (tenant_id, client_id, client_secret, refresh_token)")
+			if tenantID == "" || clientID == "" || refreshToken == "" {
+				logger.Printf("Warning: msgraph email provider missing required secrets (tenant_id, client_id, refresh_token)")
 				return
 			}
 			tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)

@@ -22,15 +22,17 @@ import (
 
 // Config holds configuration for the Email channel adapter.
 type Config struct {
-	// Provider selects the implementation: "imap" or "gmail". Default: "imap".
+	// Provider selects the implementation: "imap", "gmail", or "msgraph". Default: "imap".
 	Provider string
-	// IMAP/SMTP server addresses
+	// IMAP/SMTP server addresses (not used for msgraph)
 	IMAPServer string
 	SMTPServer string
 	// Agent's email address and login credentials
 	Address  string
 	Username string
 	Password string
+	// TokenFunc provides a valid OAuth2 access token (used by msgraph provider).
+	TokenFunc emailpkg.TokenFunc
 	// Behavior
 	PollInterval time.Duration // How often to check for new emails. Default: 30s
 	AllowFrom    []string      // Allowed sender addresses (empty = block all, ["*"] = allow all)
@@ -114,7 +116,7 @@ func (e *EmailChannel) ID() string { return "email" }
 // Name returns a human-readable name.
 func (e *EmailChannel) Name() string { return "Email" }
 
-// Start connects to the IMAP server and begins polling for new emails.
+// Start connects to the email server and begins polling for new emails.
 // It calls handler for each normalized inbound email. Blocks until ctx
 // is cancelled or Stop is called.
 func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandler) error {
@@ -126,6 +128,7 @@ func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandle
 		Address:      e.config.Address,
 		Username:     e.config.Username,
 		Password:     e.config.Password,
+		TokenFunc:    e.config.TokenFunc,
 		Folder:       e.config.Folder,
 		MarkRead:     e.config.MarkRead,
 		MaxBodyChars: e.config.MaxBodyChars,
@@ -152,7 +155,11 @@ func (e *EmailChannel) Start(ctx context.Context, handler channels.MessageHandle
 	}
 	e.mu.Unlock()
 
-	e.logger.Printf("[email] Connected as %s (IMAP: %s)", e.config.Address, e.config.IMAPServer)
+	if e.config.Provider == "msgraph" {
+		e.logger.Printf("[email] Connected as %s (Microsoft Graph)", e.config.Address)
+	} else {
+		e.logger.Printf("[email] Connected as %s (IMAP: %s)", e.config.Address, e.config.IMAPServer)
+	}
 
 	// Create cancellable context for polling
 	pollCtx, cancel := context.WithCancel(ctx)

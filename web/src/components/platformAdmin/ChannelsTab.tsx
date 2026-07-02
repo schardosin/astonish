@@ -81,6 +81,8 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
   const [secrets, setSecrets] = useState<Record<string, string>>({})
   const [enabled, setEnabled] = useState<boolean>(channel.enabled)
   const [saving, setSaving] = useState<boolean>(false)
+  const [testing, setTesting] = useState<boolean>(false)
+  const [testResult, setTestResult] = useState<{ status: string; message: string; email?: string } | null>(null)
 
   useEffect(() => {
     setForm({ ...channel.config })
@@ -111,6 +113,20 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
       onDeleted(result.message)
     } catch (e) {
       onError((e as Error).message)
+    }
+  }
+
+  const handleTestConnection = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      // Send current form secrets so test works even before saving
+      const result = await adminApi.testEmailConnection(secrets)
+      setTestResult(result)
+    } catch (e) {
+      setTestResult({ status: 'error', message: (e as Error).message })
+    } finally {
+      setTesting(false)
     }
   }
 
@@ -166,38 +182,101 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
           )}
 
           {/* Secrets */}
-          <div className="pt-2">
-            <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
-            <div className="space-y-2">
-              {channel.secrets.map(s => (
-                <div key={s.key}>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
-                    {s.label}
-                    {s.configured && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
-                  </label>
-                  <input
-                    type="password"
-                    value={secrets[s.key] || ''}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
-                    placeholder={s.configured ? '(set -- leave blank to keep)' : 'Enter value...'}
-                    className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
-                    style={inputStyle}
-                  />
+          {(() => {
+            // For email channels, determine secrets based on the currently selected provider
+            // (not the saved one from backend) so the UI updates immediately on dropdown change.
+            const emailSecretsByProvider: Record<string, { key: string; label: string }[]> = {
+              imap: [{ key: 'channels.email.password', label: 'IMAP/SMTP Password' }],
+              gmail: [{ key: 'channels.email.password', label: 'IMAP/SMTP Password' }],
+              msgraph: [
+                { key: 'channels.email.tenant_id', label: 'Tenant ID' },
+                { key: 'channels.email.client_id', label: 'Client ID' },
+                { key: 'channels.email.client_secret', label: 'Client Secret (optional)' },
+                { key: 'channels.email.refresh_token', label: 'Refresh Token' },
+              ],
+            }
+            const secretsList = channel.type === 'email'
+              ? (emailSecretsByProvider[form.provider || 'imap'] || emailSecretsByProvider.imap)
+              : (channel.secrets || [])
+            // Build a lookup for "configured" status from backend data
+            const configuredMap: Record<string, boolean> = {}
+            for (const s of (channel.secrets || [])) {
+              configuredMap[s.key] = s.configured
+            }
+            if (secretsList.length === 0) return null
+            return (
+              <div className="pt-2">
+                <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
+                <div className="space-y-2">
+                  {secretsList.map((s: { key: string; label: string }) => (
+                    <div key={s.key}>
+                      <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                        {s.label}
+                        {configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="password"
+                          value={secrets[s.key] === '__CLEAR__' ? '' : (secrets[s.key] || '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
+                          placeholder={configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' ? '(set -- leave blank to keep)' : 'Enter value...'}
+                          className="flex-1 px-3 py-2 rounded-lg text-xs outline-none font-mono"
+                          style={inputStyle}
+                          disabled={secrets[s.key] === '__CLEAR__'}
+                        />
+                        {configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' && (
+                          <button
+                            type="button"
+                            onClick={() => setSecrets(prev => ({ ...prev, [s.key]: '__CLEAR__' }))}
+                            className="px-2 py-2 rounded text-xs"
+                            style={{ color: '#ef4444' }}
+                            title="Clear this secret"
+                          >✕</button>
+                        )}
+                        {secrets[s.key] === '__CLEAR__' && (
+                          <button
+                            type="button"
+                            onClick={() => setSecrets(prev => ({ ...prev, [s.key]: '' }))}
+                            className="px-2 py-2 rounded text-xs"
+                            style={{ color: 'var(--text-muted)' }}
+                            title="Undo clear"
+                          >↩</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
+              </div>
+            )
+          })()}
 
           {/* Actions */}
           <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--border-color)' }}>
             <button onClick={handleDelete} className="px-3 py-2 rounded-lg text-xs font-medium" style={{ color: '#ef4444' }}>
               <Trash2 size={12} className="inline mr-1" />Remove Channel
             </button>
-            <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
-              {saving ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
-              Save & Apply
-            </button>
+            <div className="flex items-center gap-2">
+              {channel.type === 'email' && (
+                <button onClick={handleTestConnection} disabled={testing} className="px-3 py-2 rounded-lg text-xs font-medium" style={{ color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>
+                  {testing ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                  {testing ? 'Testing...' : 'Test Connection'}
+                </button>
+              )}
+              <button onClick={handleSave} disabled={saving} className="px-4 py-2 rounded-lg text-xs font-medium text-white" style={{ background: 'var(--accent)' }}>
+                {saving ? <Loader2 size={12} className="animate-spin inline mr-1" /> : null}
+                Save & Apply
+              </button>
+            </div>
           </div>
+          {/* Test result */}
+          {testResult && (
+            <div className="text-xs px-2 py-1 rounded" style={{
+              color: testResult.status === 'ok' ? '#22c55e' : '#ef4444',
+              background: testResult.status === 'ok' ? '#22c55e15' : '#ef444415',
+            }}>
+              {testResult.message}{testResult.email ? ' (' + testResult.email + ')' : ''}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -223,34 +302,55 @@ interface EmailConfigFieldsProps {
 
 function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
   const update = (key: string, value: string | number | boolean) => setForm({ ...form, [key]: value })
+  const isMSGraph = (form.provider || 'imap') === 'msgraph'
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>IMAP Server</label>
-          <input
-            type="text"
-            value={form.imap_server || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('imap_server', e.target.value)}
-            placeholder="imap.gmail.com:993"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>SMTP Server</label>
-          <input
-            type="text"
-            value={form.smtp_server || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('smtp_server', e.target.value)}
-            placeholder="smtp.gmail.com:587"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          />
-        </div>
+      {/* Provider selection - prominent at the top */}
+      <div>
+        <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider</label>
+        <select
+          value={form.provider || 'imap'}
+          onChange={(e: ChangeEvent<HTMLSelectElement>) => update('provider', e.target.value)}
+          className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+          style={inputStyle}
+        >
+          <option value="imap">IMAP/SMTP</option>
+          <option value="gmail">Gmail (IMAP/SMTP)</option>
+          <option value="msgraph">Microsoft 365 (Graph API)</option>
+        </select>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+
+      {/* IMAP/SMTP fields (hidden for msgraph) */}
+      {!isMSGraph && (
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>IMAP Server</label>
+            <input
+              type="text"
+              value={form.imap_server || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('imap_server', e.target.value)}
+              placeholder="imap.gmail.com:993"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>SMTP Server</label>
+            <input
+              type="text"
+              value={form.smtp_server || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('smtp_server', e.target.value)}
+              placeholder="smtp.gmail.com:587"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Email address + Username (username hidden for msgraph) */}
+      <div className={isMSGraph ? '' : 'grid grid-cols-2 gap-3'}>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Email Address</label>
           <input
@@ -262,31 +362,23 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
-          <input
-            type="text"
-            value={form.username || ''}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => update('username', e.target.value)}
-            placeholder="(defaults to address)"
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          />
-        </div>
+        {!isMSGraph && (
+          <div>
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Username</label>
+            <input
+              type="text"
+              value={form.username || ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => update('username', e.target.value)}
+              placeholder="(defaults to address)"
+              className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+              style={inputStyle}
+            />
+          </div>
+        )}
       </div>
+
+      {/* Behavior settings */}
       <div className="grid grid-cols-3 gap-3">
-        <div>
-          <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Provider</label>
-          <select
-            value={form.provider || 'imap'}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => update('provider', e.target.value)}
-            className="w-full px-3 py-2 rounded-lg text-xs outline-none"
-            style={inputStyle}
-          >
-            <option value="imap">IMAP</option>
-            <option value="gmail">Gmail</option>
-          </select>
-        </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Poll Interval (sec)</label>
           <input
@@ -307,18 +399,6 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Mark Read</label>
-          <button
-            onClick={() => update('mark_read', !(form.mark_read ?? true))}
-            className="text-xs"
-            style={{ color: (form.mark_read ?? true) ? '#22c55e' : 'var(--text-muted)' }}
-          >
-            {(form.mark_read ?? true) ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
-          </button>
-        </div>
         <div>
           <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-secondary)' }}>Max Body Chars</label>
           <input
@@ -329,6 +409,16 @@ function EmailConfigFields({ form, setForm }: EmailConfigFieldsProps) {
             style={inputStyle}
           />
         </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>Mark Read</label>
+        <button
+          onClick={() => update('mark_read', !(form.mark_read ?? true))}
+          className="text-xs"
+          style={{ color: (form.mark_read ?? true) ? '#22c55e' : 'var(--text-muted)' }}
+        >
+          {(form.mark_read ?? true) ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+        </button>
       </div>
     </div>
   )

@@ -3,10 +3,13 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/config"
+	"github.com/schardosin/astonish/pkg/email"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -28,47 +31,50 @@ type channelSecretAt struct {
 	Configured bool  `json:"configured"`
 }
 
+// channelSecretDef defines a single secret field for a channel.
+type channelSecretDef struct {
+	key      string
+	label    string
+	optional bool
+}
+
 // channelDefinition defines the metadata for each channel type.
 type channelDefinition struct {
 	description string
-	secrets     []struct {
-		key   string
-		label string
-	}
+	secrets     []channelSecretDef
 }
 
 var channelDefinitions = map[string]channelDefinition{
 	"telegram": {
 		description: "Telegram Bot (via BotFather)",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.telegram.bot_token", "Bot Token"},
+		secrets: []channelSecretDef{
+			{key: "channels.telegram.bot_token", label: "Bot Token"},
 		},
 	},
 	"email": {
 		description: "Email (IMAP/SMTP)",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.email.password", "IMAP/SMTP Password"},
+		secrets: []channelSecretDef{
+			{key: "channels.email.password", label: "IMAP/SMTP Password"},
 		},
 	},
 	"slack": {
 		description: "Slack App",
-		secrets: []struct {
-			key   string
-			label string
-		}{
-			{"channels.slack.bot_token", "Bot Token (xoxb-...)"},
-			{"channels.slack.app_token", "App-Level Token (xapp-...)"},
-			{"channels.slack.signing_secret", "Signing Secret"},
-			{"channels.slack.client_id", "OAuth Client ID"},
-			{"channels.slack.client_secret", "OAuth Client Secret"},
+		secrets: []channelSecretDef{
+			{key: "channels.slack.bot_token", label: "Bot Token (xoxb-...)"},
+			{key: "channels.slack.app_token", label: "App-Level Token (xapp-...)"},
+			{key: "channels.slack.signing_secret", label: "Signing Secret"},
+			{key: "channels.slack.client_id", label: "OAuth Client ID"},
+			{key: "channels.slack.client_secret", label: "OAuth Client Secret"},
 		},
 	},
+}
+
+// emailMSGraphSecrets defines the secrets needed for Microsoft Graph provider.
+var emailMSGraphSecrets = []channelSecretDef{
+	{key: "channels.email.tenant_id", label: "Tenant ID"},
+	{key: "channels.email.client_id", label: "Client ID"},
+	{key: "channels.email.client_secret", label: "Client Secret (optional)", optional: true},
+	{key: "channels.email.refresh_token", label: "Refresh Token"},
 }
 
 // PlatformAdminListChannelsHandler handles GET /api/platform/admin/channels.
@@ -133,14 +139,18 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 			Type:        "email",
 			Description: def.description,
 			Config:      map[string]any{},
+			Secrets:     []channelSecretAt{},
 		}
+		emailProvider := ""
 		if channels.Email != nil {
 			info.Enabled = channels.Email.Enabled
+			emailProvider = channels.Email.Provider
 			info.Config["provider"] = channels.Email.Provider
 			info.Config["imap_server"] = channels.Email.IMAPServer
 			info.Config["smtp_server"] = channels.Email.SMTPServer
 			info.Config["address"] = channels.Email.Address
 			info.Config["username"] = channels.Email.Username
+			info.Config["credential"] = channels.Email.Credential
 			info.Config["poll_interval"] = channels.Email.PollInterval
 			info.Config["folder"] = channels.Email.Folder
 			info.Config["max_body_chars"] = channels.Email.MaxBodyChars
@@ -150,11 +160,16 @@ func PlatformAdminListChannelsHandler(w http.ResponseWriter, r *http.Request) {
 				info.Config["mark_read"] = true
 			}
 		}
+		// Pick the right secrets list based on provider
+		emailSecrets := def.secrets
+		if emailProvider == "msgraph" {
+			emailSecrets = emailMSGraphSecrets
+		}
 		allSecretsSet := true
-		for _, s := range def.secrets {
+		for _, s := range emailSecrets {
 			configured := secrets.GetSecret(s.key) != ""
 			info.Secrets = append(info.Secrets, channelSecretAt{Key: s.key, Label: s.label, Configured: configured})
-			if !configured {
+			if !configured && !s.optional {
 				allSecretsSet = false
 			}
 		}
@@ -264,6 +279,9 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 		if v, ok := body.Config["username"].(string); ok {
 			cfg.Username = v
 		}
+		if v, ok := body.Config["credential"].(string); ok {
+			cfg.Credential = v
+		}
 		if v, ok := body.Config["poll_interval"]; ok {
 			cfg.PollInterval = toInt(v)
 		}
@@ -294,9 +312,20 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Save secrets (only non-empty values; empty means "keep existing")
 	if len(body.Secrets) > 0 {
-		def := channelDefinitions[channelType]
-		allowedKeys := make(map[string]bool, len(def.secrets))
-		for _, s := range def.secrets {
+		// Determine allowed secret keys based on channel type and provider
+		var secretDefs []channelSecretDef
+		if channelType == "email" {
+			provider, _ := body.Config["provider"].(string)
+			if provider == "msgraph" {
+				secretDefs = emailMSGraphSecrets
+			} else {
+				secretDefs = channelDefinitions["email"].secrets
+			}
+		} else {
+			secretDefs = channelDefinitions[channelType].secrets
+		}
+		allowedKeys := make(map[string]bool, len(secretDefs))
+		for _, s := range secretDefs {
 			allowedKeys[s.key] = true
 		}
 
@@ -312,6 +341,11 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if value == "" {
 				continue // empty = keep existing
+			}
+			if value == "__CLEAR__" {
+				// Explicitly remove the secret
+				_ = secretStore.RemoveSecret(key)
+				continue
 			}
 			if err := secretStore.SetSecret(key, value); err != nil {
 				respondError(w, http.StatusInternalServerError, "failed to save secret: "+err.Error())
@@ -530,4 +564,147 @@ func GetPlatformChannelSettings(ctx context.Context) *store.PlatformChannelSetti
 		return nil
 	}
 	return settings.Channels
+}
+
+// PlatformAdminTestEmailHandler handles POST /api/platform/admin/channels/email/test.
+// It verifies the email credential can be resolved and the mailbox is accessible.
+// Accepts an optional JSON body with { "secrets": { "key": "value" } } to test
+// with unsaved form values (falls back to stored secrets for any missing keys).
+func PlatformAdminTestEmailHandler(w http.ResponseWriter, r *http.Request) {
+	if RequirePlatformAdmin(w, r) == nil {
+		return
+	}
+
+	secrets := getPlatformSecrets()
+	if secrets == nil {
+		respondError(w, http.StatusServiceUnavailable, "secret store not available")
+		return
+	}
+
+	// Parse optional request body with secret overrides from the form
+	var body struct {
+		Secrets map[string]string `json:"secrets"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body) // ignore error — body may be empty
+
+	// Helper: get secret from form override first, then stored value
+	getSecret := func(key string) string {
+		if v, ok := body.Secrets[key]; ok && v != "" && v != "__CLEAR__" {
+			return v
+		}
+		return secrets.GetSecret(key)
+	}
+
+	backend := getPlatformBackend()
+	if backend == nil {
+		respondError(w, http.StatusServiceUnavailable, "platform backend not available")
+		return
+	}
+
+	// Load the email config
+	settingsStore := backend.PlatformSettings()
+	settings, err := settingsStore.Get(r.Context())
+	if err != nil || settings == nil || settings.Channels == nil || settings.Channels.Email == nil {
+		respondError(w, http.StatusBadRequest, "no email channel configured")
+		return
+	}
+
+	emailCfg := settings.Channels.Email
+
+	if emailCfg.Provider != "msgraph" {
+		// For IMAP/SMTP, just confirm the password secret is configured
+		password := getSecret("channels.email.password")
+		if password == "" {
+			respondJSON(w, http.StatusOK, map[string]any{
+				"status":  "error",
+				"message": "Email password not configured",
+			})
+			return
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "ok",
+			"message": "IMAP/SMTP credentials are configured (connection not tested)",
+		})
+		return
+	}
+
+	// Microsoft Graph: read secrets from platform secrets (with form overrides) and do token exchange
+	tenantID := getSecret("channels.email.tenant_id")
+	clientID := getSecret("channels.email.client_id")
+	clientSecret := getSecret("channels.email.client_secret") // optional for public clients
+	refreshToken := getSecret("channels.email.refresh_token")
+
+	if tenantID == "" || clientID == "" || refreshToken == "" {
+		missing := []string{}
+		if tenantID == "" {
+			missing = append(missing, "Tenant ID")
+		}
+		if clientID == "" {
+			missing = append(missing, "Client ID")
+		}
+		if refreshToken == "" {
+			missing = append(missing, "Refresh Token")
+		}
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": fmt.Sprintf("Missing secrets: %s", missing),
+		})
+		return
+	}
+
+	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)
+	tokenResp, err := email.ExchangeMSGraphToken(r.Context(), tokenURL, clientID, clientSecret, refreshToken)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Token exchange failed: " + err.Error(),
+		})
+		return
+	}
+
+	// Persist rotated refresh token if Microsoft returned a new one
+	if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != refreshToken {
+		_ = secrets.SetSecret("channels.email.refresh_token", tokenResp.RefreshToken)
+	}
+
+	// Test the Graph API connection with /me endpoint
+	req, err := http.NewRequestWithContext(r.Context(), "GET", "https://graph.microsoft.com/v1.0/me", nil)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to build request")
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+tokenResp.AccessToken)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Connection failed: " + err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respondJSON(w, http.StatusOK, map[string]any{
+			"status":  "error",
+			"message": "Graph API returned " + resp.Status,
+		})
+		return
+	}
+
+	// Decode user info for confirmation
+	var meResp struct {
+		Mail        string `json:"mail"`
+		DisplayName string `json:"displayName"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&meResp)
+
+	respondJSON(w, http.StatusOK, map[string]any{
+		"status":      "ok",
+		"message":     "Connected successfully",
+		"email":       meResp.Mail,
+		"displayName": meResp.DisplayName,
+	})
 }

@@ -441,39 +441,98 @@ func Run(cfg RunConfig) error {
 		// Register Email channel (inbound polling) only if explicitly enabled (DB is source of truth)
 		var emailConfigError string
 		if chCfg.Email.IsEmailEnabled() {
-			emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
-			if emailPassword == "" {
-				emailConfigError = "password not configured"
-				logger.Printf("Warning: Email channel enabled but no password found")
-			} else if chCfg.Email.IMAPServer == "" || chCfg.Email.SMTPServer == "" {
-				emailConfigError = "IMAP/SMTP servers not configured"
-				logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
-			} else {
-				pollInterval := time.Duration(chCfg.Email.GetPollInterval()) * time.Second
-				emailAllowFrom := chCfg.Email.AllowFrom
-				if backend != nil {
-					emailAllowFrom = nil
+			pollInterval := time.Duration(chCfg.Email.GetPollInterval()) * time.Second
+			emailAllowFrom := chCfg.Email.AllowFrom
+			if backend != nil {
+				emailAllowFrom = nil
+			}
+
+			if chCfg.Email.Provider == "msgraph" {
+				// Microsoft Graph provider — uses OAuth token exchange
+				tenantID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.tenant_id")
+				clientID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_id")
+				clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret")
+				refreshToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+				if tenantID == "" || clientID == "" || refreshToken == "" {
+					emailConfigError = "Microsoft Graph secrets not configured (tenant_id, client_id, refresh_token)"
+					logger.Printf("Warning: Email channel enabled but msgraph secrets missing")
+				} else if chCfg.Email.Address == "" {
+					emailConfigError = "email address not configured"
+					logger.Printf("Warning: Email channel enabled but no address configured")
+				} else {
+					tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)
+					var (
+						cachedToken string
+						tokenExpiry time.Time
+						tokenMu     sync.Mutex
+					)
+					tokenFunc := func() (string, error) {
+						tokenMu.Lock()
+						defer tokenMu.Unlock()
+						if cachedToken != "" && time.Now().Before(tokenExpiry.Add(-5*time.Minute)) {
+							return cachedToken, nil
+						}
+						currentRefresh := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+						if currentRefresh == "" {
+							currentRefresh = refreshToken
+						}
+						tokenResp, err := emailpkg.ExchangeMSGraphToken(context.Background(), tokenURL, clientID, clientSecret, currentRefresh)
+						if err != nil {
+							return "", fmt.Errorf("msgraph token exchange: %w", err)
+						}
+						cachedToken = tokenResp.AccessToken
+						tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+						if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != currentRefresh {
+							if ps := api.GetPlatformSecrets(); ps != nil {
+								_ = ps.SetSecret("channels.email.refresh_token", tokenResp.RefreshToken)
+							}
+						}
+						return cachedToken, nil
+					}
+
+					em := emailchan.New(&emailchan.Config{
+						Provider:     "msgraph",
+						Address:      chCfg.Email.Address,
+						TokenFunc:    tokenFunc,
+						PollInterval: pollInterval,
+						AllowFrom:    emailAllowFrom,
+						Folder:       chCfg.Email.Folder,
+						MarkRead:     chCfg.Email.IsMarkRead(),
+						MaxBodyChars: chCfg.Email.MaxBodyChars,
+						Commands:     mgr.Commands(),
+					}, log.Default())
+					em.SetThreadIndex(backend.NewThreadIndex())
+					mgr.Register(em)
+					logger.Printf("Email channel registered via Microsoft Graph (%s)", chCfg.Email.Address)
 				}
-				em := emailchan.New(&emailchan.Config{
-					Provider:     chCfg.Email.Provider,
-					IMAPServer:   chCfg.Email.IMAPServer,
-					SMTPServer:   chCfg.Email.SMTPServer,
-					Address:      chCfg.Email.Address,
-					Username:     chCfg.Email.Username,
-					Password:     emailPassword,
-					PollInterval: pollInterval,
-					AllowFrom:    emailAllowFrom,
-					Folder:       chCfg.Email.Folder,
-					MarkRead:     chCfg.Email.IsMarkRead(),
-					MaxBodyChars: chCfg.Email.MaxBodyChars,
-					Commands:     mgr.Commands(),
-				}, log.Default())
-				// Inject thread index for per-thread email sessions.
-				// Each email thread gets its own session; replies chain back
-				// to the same session via In-Reply-To / References headers.
-				em.SetThreadIndex(backend.NewThreadIndex())
-				mgr.Register(em)
-				logger.Printf("Email channel registered (%s)", chCfg.Email.Address)
+			} else {
+				// IMAP/SMTP provider
+				emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
+				if emailPassword == "" {
+					emailConfigError = "password not configured"
+					logger.Printf("Warning: Email channel enabled but no password found")
+				} else if chCfg.Email.IMAPServer == "" || chCfg.Email.SMTPServer == "" {
+					emailConfigError = "IMAP/SMTP servers not configured"
+					logger.Printf("Warning: Email channel enabled but IMAP/SMTP servers not configured")
+				} else {
+					em := emailchan.New(&emailchan.Config{
+						Provider:     chCfg.Email.Provider,
+						IMAPServer:   chCfg.Email.IMAPServer,
+						SMTPServer:   chCfg.Email.SMTPServer,
+						Address:      chCfg.Email.Address,
+						Username:     chCfg.Email.Username,
+						Password:     emailPassword,
+						PollInterval: pollInterval,
+						AllowFrom:    emailAllowFrom,
+						Folder:       chCfg.Email.Folder,
+						MarkRead:     chCfg.Email.IsMarkRead(),
+						MaxBodyChars: chCfg.Email.MaxBodyChars,
+						Commands:     mgr.Commands(),
+					}, log.Default())
+					em.SetThreadIndex(backend.NewThreadIndex())
+					mgr.Register(em)
+					logger.Printf("Email channel registered (%s)", chCfg.Email.Address)
+				}
 			}
 		}
 
@@ -544,6 +603,75 @@ func Run(cfg RunConfig) error {
 		}
 
 		emailCh := loadChannelsConfigFromDB(backend, logger).Email
+
+		// Microsoft Graph provider uses platform secrets for OAuth tokens
+		if emailCh.Provider == "msgraph" {
+			if emailCh.Address == "" {
+				return
+			}
+			// Resolve the 4 OAuth secrets from platform secrets
+			tenantID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.tenant_id")
+			clientID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_id")
+			clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret") // optional for public clients
+			refreshToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+			if tenantID == "" || clientID == "" || refreshToken == "" {
+				logger.Printf("Warning: msgraph email provider missing required secrets (tenant_id, client_id, refresh_token)")
+				return
+			}
+			tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", tenantID)
+
+			// Token cache: exchange once and reuse until near expiry
+			var (
+				cachedToken string
+				tokenExpiry time.Time
+				tokenMu     sync.Mutex
+			)
+
+			tokenFunc := func() (string, error) {
+				tokenMu.Lock()
+				defer tokenMu.Unlock()
+
+				// Return cached token if still valid (with 5-minute buffer)
+				if cachedToken != "" && time.Now().Before(tokenExpiry.Add(-5*time.Minute)) {
+					return cachedToken, nil
+				}
+
+				// Get current refresh token (may have been rotated by the API test handler)
+				currentRefresh := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+				if currentRefresh == "" {
+					currentRefresh = refreshToken
+				}
+
+				tokenResp, err := emailpkg.ExchangeMSGraphToken(context.Background(), tokenURL, clientID, clientSecret, currentRefresh)
+				if err != nil {
+					return "", fmt.Errorf("msgraph token exchange: %w", err)
+				}
+
+				cachedToken = tokenResp.AccessToken
+				tokenExpiry = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+				// Persist rotated refresh token via platform secrets API
+				if tokenResp.RefreshToken != "" && tokenResp.RefreshToken != currentRefresh {
+					if ps := api.GetPlatformSecrets(); ps != nil {
+						_ = ps.SetSecret("channels.email.refresh_token", tokenResp.RefreshToken)
+					}
+				}
+
+				return cachedToken, nil
+			}
+
+			setupEmailTools(&emailToolConfig{
+				Provider:     "msgraph",
+				Address:      emailCh.Address,
+				Folder:       emailCh.Folder,
+				MaxBodyChars: emailCh.MaxBodyChars,
+				TokenFunc:    tokenFunc,
+			})
+			logger.Printf("Email tools initialized via Microsoft Graph (%s)", emailCh.Address)
+			return
+		}
+
+		// IMAP/SMTP provider — requires password
 		emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
 		if emailPassword == "" || emailCh.IMAPServer == "" ||
 			emailCh.SMTPServer == "" || emailCh.Address == "" {
@@ -1512,6 +1640,8 @@ type emailToolConfig struct {
 	Password     string
 	Folder       string
 	MaxBodyChars int
+	// TokenFunc provides a valid OAuth2 access token (for msgraph provider).
+	TokenFunc emailpkg.TokenFunc
 }
 
 // setupEmailTools creates an email client and registers it for the email tools.
@@ -1525,6 +1655,7 @@ func setupEmailTools(cfg *emailToolConfig) {
 		Password:     cfg.Password,
 		Folder:       cfg.Folder,
 		MaxBodyChars: cfg.MaxBodyChars,
+		TokenFunc:    cfg.TokenFunc,
 	}
 	client, err := emailpkg.NewClient(emailCfg)
 	if err != nil {

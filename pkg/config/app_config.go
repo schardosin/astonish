@@ -1220,19 +1220,27 @@ func (c *TelegramConfig) IsTelegramEnabled() bool {
 type EmailConfig struct {
 	// Enabled controls whether the Email adapter is active. Default: false (nil means false).
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
-	// Provider selects the implementation: "imap" or "gmail". Default: "imap".
+	// Provider selects the implementation: "imap", "gmail", or "msgraph". Default: "imap".
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	// IMAPServer is the IMAP server address (e.g., "imap.gmail.com:993").
+	// Not used when Provider is "msgraph".
 	IMAPServer string `yaml:"imap_server,omitempty" json:"imap_server,omitempty"`
 	// SMTPServer is the SMTP server address (e.g., "smtp.gmail.com:587").
+	// Not used when Provider is "msgraph".
 	SMTPServer string `yaml:"smtp_server,omitempty" json:"smtp_server,omitempty"`
 	// Address is the agent's email address.
 	Address string `yaml:"address,omitempty" json:"address,omitempty"`
 	// Username is the IMAP/SMTP login username. Often same as Address.
+	// Not used when Provider is "msgraph".
 	Username string `yaml:"username,omitempty" json:"username,omitempty"`
 	// Password is the IMAP/SMTP password or app password.
 	// After credential migration, this will be empty (stored in encrypted store).
+	// Not used when Provider is "msgraph".
 	Password string `yaml:"password,omitempty" json:"password,omitempty"`
+	// Credential is the name of the credential in the encrypted credential store.
+	// Required when Provider is "msgraph" — must reference an oauth_authorization_code
+	// credential holding the Microsoft Graph OAuth2 tokens.
+	Credential string `yaml:"credential,omitempty" json:"credential,omitempty"`
 	// PollInterval is seconds between inbox checks. Default: 30.
 	PollInterval int `yaml:"poll_interval,omitempty" json:"poll_interval,omitempty"`
 	// AllowFrom is a list of email addresses allowed to trigger the agent.

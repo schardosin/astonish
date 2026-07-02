@@ -5,6 +5,7 @@ package email
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
@@ -131,15 +132,23 @@ type Client interface {
 
 // Config holds configuration for creating an email client.
 type Config struct {
-	// Provider selects the implementation: "imap" or "gmail"
+	// Provider selects the implementation: "imap", "gmail", or "msgraph"
 	Provider string
 
-	// IMAP/SMTP settings
+	// IMAP/SMTP settings (used by "imap" and "gmail" providers)
 	IMAPServer string
 	SMTPServer string
 	Address    string
 	Username   string
 	Password   string
+
+	// Microsoft Graph settings (used by "msgraph" provider)
+	// Credential is unused in platform mode (secrets stored as platform secrets).
+	// Retained for backward compatibility with personal-mode configs.
+	Credential string
+	// TokenFunc provides a valid OAuth2 access token on each call.
+	// Set by the daemon when wiring up the msgraph provider.
+	TokenFunc TokenFunc
 
 	// Behavior
 	PollInterval time.Duration
@@ -165,7 +174,12 @@ func NewClient(cfg *Config) (Client, error) {
 		cfg = DefaultConfig()
 	}
 	switch cfg.Provider {
-	case "imap", "":
+	case "msgraph":
+		if cfg.TokenFunc == nil {
+			return nil, fmt.Errorf("msgraph provider requires TokenFunc to be set (configure a credential)")
+		}
+		return NewMSGraphClient(cfg, cfg.TokenFunc), nil
+	case "imap", "gmail", "":
 		return NewIMAPSMTPClient(cfg), nil
 	default:
 		return NewIMAPSMTPClient(cfg), nil

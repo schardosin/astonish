@@ -754,7 +754,9 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 
 	prompt := fmt.Sprintf(
 		"Generate a concise title (5-7 words max) for a conversation that starts with this message. "+
-			"Return ONLY the title, no quotes, no punctuation at the end.\n\nUser message: %s", userMessage)
+			"Return ONLY the title text, nothing else. "+
+			"Do not include any thinking, reasoning, analysis, or explanation. "+
+			"No quotes, no markdown, no punctuation at the end.\n\nUser message: %s", userMessage)
 
 	req := &model.LLMRequest{
 		Contents: []*genai.Content{
@@ -767,12 +769,17 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 	}
 
 	var title string
-	for resp, err := range llm.GenerateContent(ctx, req, false) {
+	for resp, err := range llm.GenerateContent(ctx, req, true) {
 		if err != nil {
 			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content == nil {
+			continue
+		}
+		// In streaming mode, skip partial chunks — only use the final
+		// aggregated response to avoid duplicating content.
+		if resp.Partial {
 			continue
 		}
 		for _, part := range resp.Content.Parts {

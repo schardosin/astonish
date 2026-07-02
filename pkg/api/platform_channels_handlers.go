@@ -353,6 +353,11 @@ func PlatformAdminSaveChannelHandler(w http.ResponseWriter, r *http.Request) {
 			if value == "" {
 				continue // empty = keep existing
 			}
+			if value == "__CLEAR__" {
+				// Explicitly remove the secret
+				_ = secretStore.RemoveSecret(key)
+				continue
+			}
 			if err := secretStore.SetSecret(key, value); err != nil {
 				respondError(w, http.StatusInternalServerError, "failed to save secret: "+err.Error())
 				return

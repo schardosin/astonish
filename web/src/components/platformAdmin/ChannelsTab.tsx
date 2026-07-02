@@ -211,16 +211,37 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
                     <div key={s.key}>
                       <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
                         {s.label}
-                        {configuredMap[s.key] && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
+                        {configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
                       </label>
-                      <input
-                        type="password"
-                        value={secrets[s.key] || ''}
-                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
-                        placeholder={configuredMap[s.key] ? '(set -- leave blank to keep)' : 'Enter value...'}
-                        className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
-                        style={inputStyle}
-                      />
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="password"
+                          value={secrets[s.key] === '__CLEAR__' ? '' : (secrets[s.key] || '')}
+                          onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
+                          placeholder={configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' ? '(set -- leave blank to keep)' : 'Enter value...'}
+                          className="flex-1 px-3 py-2 rounded-lg text-xs outline-none font-mono"
+                          style={inputStyle}
+                          disabled={secrets[s.key] === '__CLEAR__'}
+                        />
+                        {configuredMap[s.key] && secrets[s.key] !== '__CLEAR__' && (
+                          <button
+                            type="button"
+                            onClick={() => setSecrets(prev => ({ ...prev, [s.key]: '__CLEAR__' }))}
+                            className="px-2 py-2 rounded text-xs"
+                            style={{ color: '#ef4444' }}
+                            title="Clear this secret"
+                          >✕</button>
+                        )}
+                        {secrets[s.key] === '__CLEAR__' && (
+                          <button
+                            type="button"
+                            onClick={() => setSecrets(prev => ({ ...prev, [s.key]: '' }))}
+                            className="px-2 py-2 rounded text-xs"
+                            style={{ color: 'var(--text-muted)' }}
+                            title="Undo clear"
+                          >↩</button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>

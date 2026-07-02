@@ -181,29 +181,52 @@ function ChannelCard({ channel, expanded, onToggle, onSaved, onError, onDeleted 
           )}
 
           {/* Secrets */}
-          {(channel.secrets || []).length > 0 && (
-          <div className="pt-2">
-            <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
-            <div className="space-y-2">
-              {(channel.secrets || []).map(s => (
-                <div key={s.key}>
-                  <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
-                    {s.label}
-                    {s.configured && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
-                  </label>
-                  <input
-                    type="password"
-                    value={secrets[s.key] || ''}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
-                    placeholder={s.configured ? '(set -- leave blank to keep)' : 'Enter value...'}
-                    className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
-                    style={inputStyle}
-                  />
+          {(() => {
+            // For email channels, determine secrets based on the currently selected provider
+            // (not the saved one from backend) so the UI updates immediately on dropdown change.
+            const emailSecretsByProvider: Record<string, { key: string; label: string }[]> = {
+              imap: [{ key: 'channels.email.password', label: 'IMAP/SMTP Password' }],
+              gmail: [{ key: 'channels.email.password', label: 'IMAP/SMTP Password' }],
+              msgraph: [
+                { key: 'channels.email.tenant_id', label: 'Tenant ID' },
+                { key: 'channels.email.client_id', label: 'Client ID' },
+                { key: 'channels.email.client_secret', label: 'Client Secret' },
+                { key: 'channels.email.refresh_token', label: 'Refresh Token' },
+              ],
+            }
+            const secretsList = channel.type === 'email'
+              ? (emailSecretsByProvider[form.provider || 'imap'] || emailSecretsByProvider.imap)
+              : (channel.secrets || [])
+            // Build a lookup for "configured" status from backend data
+            const configuredMap: Record<string, boolean> = {}
+            for (const s of (channel.secrets || [])) {
+              configuredMap[s.key] = s.configured
+            }
+            if (secretsList.length === 0) return null
+            return (
+              <div className="pt-2">
+                <label className="block text-xs font-semibold mb-2" style={{ color: 'var(--text-secondary)' }}>Credentials</label>
+                <div className="space-y-2">
+                  {secretsList.map((s: { key: string; label: string }) => (
+                    <div key={s.key}>
+                      <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
+                        {s.label}
+                        {configuredMap[s.key] && <span className="ml-1.5 text-xs" style={{ color: '#22c55e' }}>&#9679;</span>}
+                      </label>
+                      <input
+                        type="password"
+                        value={secrets[s.key] || ''}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setSecrets(prev => ({ ...prev, [s.key]: e.target.value }))}
+                        placeholder={configuredMap[s.key] ? '(set -- leave blank to keep)' : 'Enter value...'}
+                        className="w-full px-3 py-2 rounded-lg text-xs outline-none font-mono"
+                        style={inputStyle}
+                      />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </div>
-          )}
+              </div>
+            )
+          })()}
 
           {/* Actions */}
           <div className="flex items-center justify-between pt-3" style={{ borderTop: '1px solid var(--border-color)' }}>

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/mailer"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/entstore"
 	"golang.org/x/crypto/bcrypt"
@@ -419,6 +420,13 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create user: %v", err))
 		return
 	}
+
+	// Send platform welcome email to the new user.
+	mailer.SendAsync(ctx, mailer.Welcome{
+		Recipient:   user.Email,
+		DisplayName: user.DisplayName,
+		AppURL:      resolveAppURL(r),
+	})
 
 	respondJSON(w, http.StatusCreated, map[string]any{
 		"user":    user,

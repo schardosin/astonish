@@ -668,6 +668,10 @@ func sanitizeName(name string) string {
 
 // GetFlowsDir returns the new flows directory (for user-created flows)
 func GetFlowsDir() (string, error) {
+	// Honor XDG_CONFIG_HOME on all platforms for portability and test isolation.
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "astonish", "flows"), nil
+	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err

@@ -1357,6 +1357,10 @@ func GetConfigDir() (string, error) {
 			}
 		}
 	}
+	// Honor XDG_CONFIG_HOME on all platforms for portability and test isolation.
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "astonish"), nil
+	}
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return "", err

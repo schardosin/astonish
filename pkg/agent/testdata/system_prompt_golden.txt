@@ -43,7 +43,7 @@ The knowledge section already contains the most relevant memory results for this
 ## Environment
 
 - Working directory: /home/user/project
-- OS: linux/amd64
+- OS: PLATFORM/ARCH
 - Timezone: America/New_York
 
 ## Agent Identity

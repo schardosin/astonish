@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -87,11 +88,19 @@ func assertNotContains(t *testing.T, prompt, substr, description string) {
 	}
 }
 
+// normalizePrompt replaces platform-dependent values with canonical placeholders
+// so the golden file is stable across OS/arch combinations.
+var osLineRe = regexp.MustCompile(`- OS: \S+/\S+`)
+
+func normalizePrompt(s string) string {
+	return osLineRe.ReplaceAllString(s, "- OS: PLATFORM/ARCH")
+}
+
 // ─── Golden Snapshot Test ────────────────────────────────────────────────────
 
 func TestSystemPromptBuilder_Golden(t *testing.T) {
 	builder := maximalBuilder()
-	prompt := builder.Build()
+	prompt := normalizePrompt(builder.Build())
 
 	goldenPath := filepath.Join("testdata", "system_prompt_golden.txt")
 
@@ -108,10 +117,12 @@ func TestSystemPromptBuilder_Golden(t *testing.T) {
 		t.Fatalf("golden file not found: %s\nRun with -update to generate it:\n  go test ./pkg/agent -run TestSystemPromptBuilder_Golden -update", goldenPath)
 	}
 
-	if prompt != string(golden) {
+	goldenStr := normalizePrompt(string(golden))
+
+	if prompt != goldenStr {
 		// Find first differing line for a useful error message
 		promptLines := strings.Split(prompt, "\n")
-		goldenLines := strings.Split(string(golden), "\n")
+		goldenLines := strings.Split(goldenStr, "\n")
 
 		firstDiff := -1
 		maxLines := len(promptLines)

@@ -159,13 +159,13 @@ Whether you are looking to automate complex daily tasks, scale dynamic workflows
 
 Here is a quick look at what you can do starting today:
 
-💬 Converse & Collaborate — Chat seamlessly with AI agents in natural language to iterate on ideas in real-time.
+💬 Interactive Chat Sandbox — This is not your standard chatbot. Every conversation is backed by its own dedicated, fully isolated container. Your AI agents have the real-world capability to securely connect via SSH, spawn interactive PTY shell sessions, manipulate browsers, and execute code on the fly.
 
-⚡ Visual Automation — Build and deploy complex Flows visually, without wrestling with the underlying logic.
+⚡ Visual Automation — Build and deploy complex "Flows" visually, without wrestling with the underlying logic.
 
 🔌 Limitless Connections — Use MCP Servers to securely plug your agents directly into your external tools and data sources.
 
-🧠 Shared Intelligence — Build personal Knowledge bases, and share reusable Skills and resources across your Teams & Organizations.
+🧠 Shared Intelligence — Build personal Knowledge bases, and share reusable Skills and resources across your Teams & Orgs.
 
 The best way to learn is to jump right in and build your first agent.
 
@@ -183,10 +183,10 @@ func (m Welcome) HTMLBody() string {
 		paragraph("Whether you are looking to automate complex daily tasks, scale dynamic workflows, or empower your entire team to innovate faster, you now have everything you need in one place.") +
 		paragraph("<strong>Here is a quick look at what you can do starting today:</strong>") +
 		`<table style="width: 100%; border-collapse: collapse; margin: 16px 0 24px;">` +
-		benefitRow("\U0001F4AC", "Converse &amp; Collaborate", "Chat seamlessly with AI agents in natural language to iterate on ideas in real-time.") +
-		benefitRow("\u26A1", "Visual Automation", "Build and deploy complex Flows visually, without wrestling with the underlying logic.") +
+		benefitRow("\U0001F4AC", "Interactive Chat Sandbox", "This is not your standard chatbot. Every conversation is backed by its own dedicated, fully isolated container. Your AI agents have the real-world capability to securely connect via SSH, spawn interactive PTY shell sessions, manipulate browsers, and execute code on the fly.") +
+		benefitRow("\u26A1", "Visual Automation", "Build and deploy complex &quot;Flows&quot; visually, without wrestling with the underlying logic.") +
 		benefitRow("\U0001F50C", "Limitless Connections", "Use MCP Servers to securely plug your agents directly into your external tools and data sources.") +
-		benefitRow("\U0001F9E0", "Shared Intelligence", "Build personal Knowledge bases, and share reusable Skills and resources across your Teams &amp; Organizations.") +
+		benefitRow("\U0001F9E0", "Shared Intelligence", "Build personal Knowledge bases, and share reusable Skills and resources across your Teams &amp; Orgs.") +
 		`</table>` +
 		paragraph("The best way to learn is to jump right in and build your first agent.") +
 		button("Get Started", m.AppURL) +

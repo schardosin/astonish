@@ -165,7 +165,7 @@ Here is a quick look at what you can do starting today:
 
 🔌 Limitless Connections — Use MCP Servers to securely plug your agents directly into your external tools and data sources.
 
-🧠 Shared Intelligence — Build personal Knowledge bases, and share reusable Skills and resources across your Teams & Orgs.
+🧠 Shared Intelligence — Knowledge compounds automatically from every conversation. When you solve a tricky problem, the solution enters your memory and surfaces whenever anyone on your team hits the same issue. Personal insights stay private until you choose to share them — then they benefit everyone.
 
 The best way to learn is to jump right in and build your first agent.
 
@@ -186,7 +186,7 @@ func (m Welcome) HTMLBody() string {
 		benefitRow("\U0001F4AC", "Interactive Chat Sandbox", "This is not your standard chatbot. Every conversation is backed by its own dedicated, fully isolated container. Your AI agents have the real-world capability to securely connect via SSH, spawn interactive PTY shell sessions, manipulate browsers, and execute code on the fly.") +
 		benefitRow("\u26A1", "Visual Automation", "Build and deploy complex &quot;Flows&quot; visually, without wrestling with the underlying logic.") +
 		benefitRow("\U0001F50C", "Limitless Connections", "Use MCP Servers to securely plug your agents directly into your external tools and data sources.") +
-		benefitRow("\U0001F9E0", "Shared Intelligence", "Build personal Knowledge bases, and share reusable Skills and resources across your Teams &amp; Orgs.") +
+		benefitRow("\U0001F9E0", "Shared Intelligence", "Knowledge compounds automatically from every conversation. When you solve a tricky problem, the solution enters your memory and surfaces whenever anyone on your team hits the same issue. Personal insights stay private until you choose to share them &mdash; then they benefit everyone.") +
 		`</table>` +
 		paragraph("The best way to learn is to jump right in and build your first agent.") +
 		button("Get Started", m.AppURL) +

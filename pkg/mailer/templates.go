@@ -201,23 +201,15 @@ func (m Welcome) HTMLBody() string {
 }
 
 // benefitRow renders a single benefit row with emoji, bold title, and description.
+// Includes a subtle top separator line for visual structure.
 func benefitRow(emoji, title, desc string) string {
 	return fmt.Sprintf(`<tr>
-  <td style="padding: 10px 12px 10px 0; vertical-align: top; font-size: 20px; width: 36px;">%s</td>
-  <td style="padding: 10px 0; color: #4b5563; font-size: 14px; line-height: 1.6;"><strong style="color: #1f2937;">%s</strong><br>%s</td>
+  <td colspan="2" style="padding: 0;"><div class="benefit-row-sep" style="border-top: 1px solid #f0f0f5; margin: 0;"></div></td>
+</tr>
+<tr>
+  <td style="padding: 16px 16px 16px 0; vertical-align: top; font-size: 24px; width: 44px; line-height: 1;">%s</td>
+  <td style="padding: 16px 0;"><strong class="benefit-title" style="color: #1f2937; font-size: 15px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</strong><br><span class="benefit-desc" style="color: #4b5563; font-size: 14px; line-height: 1.7; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</span></td>
 </tr>`, emoji, title, desc)
-}
-
-// wrapHTMLWithFooter is like wrapHTML but allows a custom footer sign-off.
-func wrapHTMLWithFooter(innerHTML, signoff string) string {
-	return fmt.Sprintf(`<!DOCTYPE html>
-<html>
-<body style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 20px; color: #1f2937; background: #ffffff;">
-%s
-<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
-<p style="color: #9ca3af; font-size: 12px; text-align: center;">&mdash; <strong>%s</strong></p>
-</body>
-</html>`, innerHTML, signoff)
 }
 
 // ---------------------------------------------------------------------------

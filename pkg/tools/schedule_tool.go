@@ -292,6 +292,8 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		} else if schedulerAccessVar != nil {
 			// Personal mode: use HTTP bridge
 			result, execErr = schedulerAccessVar.RunNow(ctx, job.ID)
+		} else {
+			execErr = fmt.Errorf("no execution path available (scheduler not configured)")
 		}
 		status := "test_complete"
 		msg := fmt.Sprintf("Job %q created and tested. The job is currently DISABLED — ask the user if the test result looks good, and if so, call update_scheduled_job to enable it.", args.Name)

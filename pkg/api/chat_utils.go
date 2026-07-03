@@ -27,6 +27,14 @@ type SessionTitleSetter interface {
 	SetSessionTitle(ctx context.Context, sessionID, title string) error
 }
 
+// SessionTitleChecker extends SessionTitleSetter with the ability to check
+// whether a session already has a title. Used by the retry-on-subsequent-message
+// logic to avoid redundant LLM calls.
+type SessionTitleChecker interface {
+	SessionTitleSetter
+	GetSessionTitle(ctx context.Context, sessionID string) (string, error)
+}
+
 // titleThinkTagRe strips <think>/<thinking> blocks that some models emit in
 // title-generation responses.
 var titleThinkTagRe = regexp.MustCompile(`(?s)<(?:think|thinking)>.*?</(?:think|thinking)>`)
@@ -769,17 +777,12 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 	}
 
 	var title string
-	for resp, err := range llm.GenerateContent(ctx, req, true) {
+	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
 			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
 			return
 		}
 		if resp.Content == nil {
-			continue
-		}
-		// In streaming mode, skip partial chunks — only use the final
-		// aggregated response to avoid duplicating content.
-		if resp.Partial {
 			continue
 		}
 		for _, part := range resp.Content.Parts {
@@ -797,7 +800,15 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 	if idx := strings.Index(title, "<thinking"); idx >= 0 {
 		title = title[:idx]
 	}
+	// Strip plain-text thinking preambles that some models emit without XML tags.
+	// These typically start with a recognizable prefix followed by multi-line reasoning.
+	title = stripThinkingPreamble(title)
 	title = strings.TrimSpace(title)
+
+	// Fallback: if the LLM produced nothing usable, derive a title from the user message.
+	if title == "" {
+		title = fallbackTitle(userMessage)
+	}
 	if title == "" {
 		slog.Debug("session title generation produced empty result", "session_id", sessionID)
 		return
@@ -811,6 +822,87 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 	} else if onTitle != nil {
 		onTitle(title)
 	}
+}
+
+// thinkingPreambleRe matches common plain-text thinking preambles that models
+// like Qwen emit at the start of their response instead of using XML tags.
+var thinkingPreambleRe = regexp.MustCompile(`(?i)^(thinking process|thinking|reasoning|let me think|analysis|thought process)\s*:?\s*\n`)
+
+// stripThinkingPreamble removes plain-text thinking/reasoning content from
+// a title string. If the text starts with a thinking header followed by
+// multi-line reasoning, we extract only the last short line (the actual title).
+// If no clean title line is found, returns empty string (caller uses fallback).
+func stripThinkingPreamble(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+
+	// Check if the text looks like thinking output:
+	// - starts with a known thinking preamble, OR
+	// - contains numbered lists / markdown bold patterns typical of reasoning
+	looksLikeThinking := thinkingPreambleRe.MatchString(text) ||
+		(strings.Contains(text, "\n") && (strings.Contains(text, "1.") || strings.Contains(text, "**")))
+
+	if !looksLikeThinking {
+		return text
+	}
+
+	// The actual title is typically the last short non-empty line after
+	// the model finishes its thinking. Walk lines backwards.
+	lines := strings.Split(text, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		// Skip empty lines, markdown formatting, numbered items, and long lines
+		if line == "" {
+			continue
+		}
+		if len(line) > 80 {
+			continue
+		}
+		// Skip lines that look like reasoning (numbered, bold markers, bullets)
+		if len(line) > 0 && (line[0] == '-' || line[0] == '*' || line[0] == '#') {
+			continue
+		}
+		if len(line) > 1 && line[0] >= '0' && line[0] <= '9' && (line[1] == '.' || line[1] == ')') {
+			continue
+		}
+		if len(line) > 2 && line[0] >= '0' && line[0] <= '9' && line[1] >= '0' && line[1] <= '9' && (line[2] == '.' || line[2] == ')') {
+			continue
+		}
+		// Skip lines with thinking preamble pattern
+		if thinkingPreambleRe.MatchString(line + "\n") {
+			continue
+		}
+		// This looks like a clean title line — strip any surrounding quotes/markdown
+		line = strings.Trim(line, "\"'`*_")
+		if line != "" {
+			return line
+		}
+	}
+
+	return ""
+}
+
+// fallbackTitle derives a short title from the user message when LLM title
+// generation fails or produces empty output.
+func fallbackTitle(userMessage string) string {
+	// Strip timestamp prefix if present (e.g., "[2026-03-20 14:30:05 UTC]\n")
+	msg := userTimestampRe.ReplaceAllString(userMessage, "")
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	// Take up to 50 characters, breaking at word boundary
+	if len(msg) <= 50 {
+		return msg
+	}
+	// Find last space before 50 chars
+	cut := strings.LastIndex(msg[:50], " ")
+	if cut <= 10 {
+		cut = 50
+	}
+	return msg[:cut] + "..."
 }
 
 // toInt converts an interface{} to int (handles float64 from JSON).

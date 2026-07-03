@@ -682,6 +682,8 @@ func TestSandboxName(t *testing.T) {
 		{"---leading", "astn-sess-leading"},
 		// Trailing hyphens after truncation are trimmed.
 		{"aaaaaaaaaaaaaaaaaaaaaaaaaaa-", "astn-sess-aaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		// Colons (invalid in DNS labels) are replaced with hyphens.
+		{"scheduler:adaptive:15306607-314c-4631-afc9-7315aea8e389", "astn-sess-scheduler-adaptive-15306607"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.sessionID, func(t *testing.T) {
@@ -708,6 +710,8 @@ func TestSanitizeLabelValue(t *testing.T) {
 		{"hello world!", "helloworld"},
 		{"valid-123_name.ok", "valid-123_name.ok"},
 		{"", ""},
+		// Colons are stripped (scheduler session keys).
+		{"scheduler:adaptive:abc-123", "scheduleradaptiveabc-123"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

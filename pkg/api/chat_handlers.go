@@ -18,6 +18,7 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/fleet"
@@ -1030,20 +1031,36 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		runner.InjectTenantSlugs(tc.OrgSlug, tc.TeamSlug)
 	}
 
-	// Inject RunJobFunc so schedule_job test execution works in platform mode
-	// (bypasses the unauthenticated HTTP bridge which can't pass auth middleware).
-	if exec := GetExecutor(); exec != nil {
-		reqSvc := store.FromRequest(r)
+	// Inject RunJobFunc so schedule_job test execution works in platform mode.
+	// In decoupled deployments (ASTONISH_MODE=api), the global executor lives on
+	// the worker pod, so we construct a lightweight local executor from the
+	// ChatManager components that are already available on the API pod.
+	if reqSvc := store.FromRequest(r); reqSvc != nil && reqSvc.Scheduler != nil {
 		runner.InjectRunJobFunc(func(ctx context.Context, jobID string) (string, error) {
-			if reqSvc == nil || reqSvc.Scheduler == nil {
-				return "", fmt.Errorf("scheduler store not available")
-			}
 			storeJob := reqSvc.Scheduler.Get(ctx, jobID)
 			if storeJob == nil {
 				return "", fmt.Errorf("job %q not found", jobID)
 			}
 			job := storeJobToSchedulerJob(storeJob)
-			return exec.Execute(ctx, job)
+
+			// Prefer the global executor (available on worker/default mode pods).
+			if exec := GetExecutor(); exec != nil {
+				return exec.Execute(ctx, job)
+			}
+
+			// API mode: construct a local executor from ChatManager components.
+			cm := GetChatManager()
+			if cm.components == nil || cm.components.ChatAgent == nil {
+				return "", fmt.Errorf("chat agent not initialized — cannot test-execute job")
+			}
+			localExec := &scheduler.Executor{
+				ChatAgent:      cm.components.ChatAgent,
+				SessionService: cm.components.SessionService,
+				ProviderName:   cm.components.ProviderName,
+				ModelName:      cm.components.ModelName,
+				RunHeadless:    GetRunHeadlessFunc(),
+			}
+			return localExec.Execute(ctx, job)
 		})
 	}
 

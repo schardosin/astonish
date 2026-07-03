@@ -148,6 +148,26 @@ func (os *orgStore) AddMember(ctx context.Context, userID, orgID, role string) e
 	return err
 }
 
+func (os *orgStore) SetMemberRole(ctx context.Context, userID, orgID, role string) error {
+	uid, err := uuid.Parse(userID)
+	if err != nil {
+		return fmt.Errorf("invalid user ID: %w", err)
+	}
+	oid, err := uuid.Parse(orgID)
+	if err != nil {
+		return fmt.Errorf("invalid org ID: %w", err)
+	}
+
+	_, err = os.client.OrgMembership.Update().
+		Where(
+			orgmembership.UserIDEQ(uid),
+			orgmembership.OrgIDEQ(oid),
+		).
+		SetRole(orgmembership.Role(role)).
+		Save(ctx)
+	return err
+}
+
 func (os *orgStore) RemoveMember(ctx context.Context, userID, orgID string) error {
 	uid, err := uuid.Parse(userID)
 	if err != nil {

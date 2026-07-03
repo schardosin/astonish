@@ -1507,10 +1507,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'session_title':
-            // Update the session title in the sidebar
-            if (data.title) {
+            // Update the session title in the sidebar.
+            // Use sessionId from the event payload to avoid stale closure issues
+            // (activeSessionId may still be null for newly created sessions).
+            if (data.title && data.sessionId) {
               setSessions(prev =>
-                prev.map(s => s.id === activeSessionId ? { ...s, title: data.title as string } : s)
+                prev.map(s => s.id === data.sessionId ? { ...s, title: data.title as string } : s)
               )
             }
             break

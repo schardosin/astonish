@@ -56,8 +56,8 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 
 	labels := map[string]string{
 		"astonish.io/type":       "fleet",
-		"astonish.io/fleet-key":  spec.FleetKey,
-		"astonish.io/session-id": spec.FleetKey,
+		"astonish.io/fleet-key":  sanitizeLabelValue(spec.FleetKey),
+		"astonish.io/session-id": sanitizeLabelValue(spec.FleetKey),
 	}
 	if spec.OrgSlug != "" {
 		labels["astonish.io/org"] = spec.OrgSlug

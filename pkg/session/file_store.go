@@ -393,6 +393,15 @@ func (s *FileStore) GetSessionMeta(sessionID string) (*SessionMeta, error) {
 	return s.index.Get(sessionID)
 }
 
+// GetSessionTitle returns the title for a session, or empty string if not set.
+func (s *FileStore) GetSessionTitle(_ context.Context, sessionID string) (string, error) {
+	meta, err := s.index.Get(sessionID)
+	if err != nil {
+		return "", err
+	}
+	return meta.Title, nil
+}
+
 // SetSessionTitle updates the title in the index for a given session.
 func (s *FileStore) SetSessionTitle(_ context.Context, sessionID, title string) error {
 	return s.index.Update(sessionID, func(meta *SessionMeta) {

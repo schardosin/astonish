@@ -35,6 +35,30 @@ func GetExecutor() *scheduler.Executor {
 	return executorInstance
 }
 
+// runHeadlessFunc holds the headless runner function for routine job execution.
+// Set by the daemon at startup (all modes) via SetRunHeadlessFunc.
+// Used by the RunJobFunc in chat_handlers.go to construct a local executor on
+// API pods that don't have the global scheduler Executor.
+var (
+	runHeadlessMu   sync.RWMutex
+	runHeadlessFn   scheduler.RunHeadlessFunc
+)
+
+// SetRunHeadlessFunc registers the headless runner function.
+// Called by the daemon at startup for all modes (api, worker, default).
+func SetRunHeadlessFunc(fn scheduler.RunHeadlessFunc) {
+	runHeadlessMu.Lock()
+	defer runHeadlessMu.Unlock()
+	runHeadlessFn = fn
+}
+
+// GetRunHeadlessFunc returns the registered headless runner, or nil if not set.
+func GetRunHeadlessFunc() scheduler.RunHeadlessFunc {
+	runHeadlessMu.RLock()
+	defer runHeadlessMu.RUnlock()
+	return runHeadlessFn
+}
+
 // Legacy globals — kept for personal mode backward compatibility where
 // the single-instance Scheduler engine is still used for the tick loop.
 var (

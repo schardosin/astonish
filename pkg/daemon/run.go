@@ -597,9 +597,19 @@ func Run(cfg RunConfig) error {
 	// IMAP/SMTP credentials are configured (from the platform DB), regardless
 	// of whether the email channel adapter itself is enabled.
 	// Called both at startup and during reloads to pick up credential changes.
+	//
+	// NOTE: This must work even when factoryResult is nil (API-mode pods don't
+	// build a ChatAgent). Secrets are resolved from the platform DB (backend)
+	// with an optional fallback to the file-based credential store.
 	initEmailTools := func() {
-		if factoryResult == nil {
+		if backend == nil {
 			return
+		}
+
+		// Credential store fallback: nil-safe (platform DB is the primary source).
+		var credStore *credentials.Store
+		if factoryResult != nil {
+			credStore = factoryResult.CredentialStore
 		}
 
 		emailCh := loadChannelsConfigFromDB(backend, logger).Email
@@ -610,10 +620,10 @@ func Run(cfg RunConfig) error {
 				return
 			}
 			// Resolve the 4 OAuth secrets from platform secrets
-			tenantID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.tenant_id")
-			clientID := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_id")
-			clientSecret := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.client_secret") // optional for public clients
-			refreshToken := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+			tenantID := resolveDaemonSecret(backend, credStore, "channels.email.tenant_id")
+			clientID := resolveDaemonSecret(backend, credStore, "channels.email.client_id")
+			clientSecret := resolveDaemonSecret(backend, credStore, "channels.email.client_secret") // optional for public clients
+			refreshToken := resolveDaemonSecret(backend, credStore, "channels.email.refresh_token")
 			if tenantID == "" || clientID == "" || refreshToken == "" {
 				logger.Printf("Warning: msgraph email provider missing required secrets (tenant_id, client_id, refresh_token)")
 				return
@@ -637,7 +647,7 @@ func Run(cfg RunConfig) error {
 				}
 
 				// Get current refresh token (may have been rotated by the API test handler)
-				currentRefresh := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.refresh_token")
+				currentRefresh := resolveDaemonSecret(backend, credStore, "channels.email.refresh_token")
 				if currentRefresh == "" {
 					currentRefresh = refreshToken
 				}
@@ -672,7 +682,7 @@ func Run(cfg RunConfig) error {
 		}
 
 		// IMAP/SMTP provider — requires password
-		emailPassword := resolveDaemonSecret(backend, factoryResult.CredentialStore, "channels.email.password")
+		emailPassword := resolveDaemonSecret(backend, credStore, "channels.email.password")
 		if emailPassword == "" || emailCh.IMAPServer == "" ||
 			emailCh.SMTPServer == "" || emailCh.Address == "" {
 			return
@@ -961,6 +971,11 @@ func Run(cfg RunConfig) error {
 	// Skipped in API mode — only default and worker modes run the scheduler.
 	var mtSched *MultiTenantScheduler
 	var schedExec *scheduler.Executor
+
+	// Register the headless runner for ALL modes (including API mode).
+	// API pods need this to construct a local executor for schedule_job test
+	// execution (test_first=true) without routing through the worker.
+	api.SetRunHeadlessFunc(makeHeadlessRunner())
 
 	// fleetSessionStore holds the PG-backed session store used for fleet
 	// sessions in platform mode. In personal mode it remains nil, and

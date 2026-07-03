@@ -160,8 +160,10 @@ CRITICAL RULES:
 - Just execute the task and return the formatted result`,
 	})
 
-	// Create a per-job session key for isolation
-	sessionKey := fmt.Sprintf("scheduler:adaptive:%s", job.ID)
+	// Create a per-job session key for isolation.
+	// Use dashes (not colons) — session IDs flow into Kubernetes label values
+	// which only allow [a-z0-9A-Z._-].
+	sessionKey := fmt.Sprintf("scheduler-adaptive-%s", job.ID)
 	userID := store.SystemUserID
 	appName := "astonish"
 

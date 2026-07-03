@@ -214,6 +214,7 @@ type OrganizationStore interface {
 
 	// Org membership management.
 	AddMember(ctx context.Context, userID, orgID, role string) error
+	SetMemberRole(ctx context.Context, userID, orgID, role string) error
 	RemoveMember(ctx context.Context, userID, orgID string) error
 	GetUserOrgs(ctx context.Context, userID string) ([]*OrgMembership, error)
 	GetMemberRole(ctx context.Context, userID, orgID string) (string, error)

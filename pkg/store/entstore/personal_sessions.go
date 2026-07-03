@@ -371,6 +371,14 @@ func (ss *personalSessionStore) SetSessionTitle(ctx context.Context, sessionID, 
 		Exec(ctx)
 }
 
+func (ss *personalSessionStore) GetSessionTitle(ctx context.Context, sessionID string) (string, error) {
+	meta, err := ss.GetSessionMeta(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	return meta.Title, nil
+}
+
 func (ss *personalSessionStore) ListChildren(ctx context.Context, parentID string) ([]store.SessionMeta, error) {
 	ents, err := ss.client.Session.Query().
 		Where(session.ParentIDEQ(parentID)).

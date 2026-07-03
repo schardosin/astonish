@@ -711,12 +711,25 @@ func (cr *ChatRunner) Run(
 		})
 	}
 
-	// Generate title for new sessions after first exchange.
+	// Generate title for new sessions after first exchange, or retry for
+	// existing sessions that still have no title (previous attempt may have failed).
 	// Runs asynchronously — the deferred done event fires immediately so the
 	// UI isn't blocked. The defer block waits on cr.titleDone (up to
 	// titleWaitTimeout) before closing subscribers, so the session_title
 	// SSE event reaches the browser if the LLM responds in time.
+	needsTitle := false
 	if cr.IsNew && msg != "" && titleSetter != nil {
+		needsTitle = true
+	} else if !cr.IsNew && msg != "" && titleSetter != nil {
+		// Check if session still has no title — retry generation.
+		if checker, ok := titleSetter.(SessionTitleChecker); ok {
+			if existing, err := checker.GetSessionTitle(cr.ctx, cr.SessionID); err == nil && existing == "" {
+				needsTitle = true
+			}
+		}
+	}
+
+	if needsTitle {
 		// Prefer per-request LLM (team-specific) over the singleton for title generation.
 		titleLLM := agent.LLMFromContext(cr.ctx)
 		if titleLLM == nil {
@@ -725,7 +738,7 @@ func (cr *ChatRunner) Run(
 		go func() {
 			defer close(cr.titleDone)
 			generateStudioSessionTitle(titleLLM, titleSetter, cr.SessionID, msg, func(title string) {
-				cr.emitEvent("session_title", map[string]any{"title": title})
+				cr.emitEvent("session_title", map[string]any{"title": title, "sessionId": cr.SessionID})
 			})
 		}()
 	} else {

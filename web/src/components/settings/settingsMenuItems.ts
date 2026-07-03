@@ -32,14 +32,6 @@ export const TEAM_ITEMS: SettingsMenuItem[] = [
   { id: 'team-container', label: 'Container', icon: Box },
 ]
 
-// Resources — personal mode (no team scoping)
-export const RESOURCE_ITEMS: SettingsMenuItem[] = [
-  { id: 'skills', label: 'Skills', icon: Wand2 },
-  { id: 'scheduler', label: 'Scheduler', icon: Clock },
-  { id: 'taps', label: 'Repositories', icon: GitBranch },
-  { id: 'flows', label: 'Flow Store', icon: Store },
-]
-
 // Organization management — org admin/owner only (platform mode)
 export const ORG_ITEMS: SettingsMenuItem[] = [
   { id: 'org-general', label: 'General', icon: Settings },
@@ -51,7 +43,8 @@ export const ORG_ITEMS: SettingsMenuItem[] = [
   { id: 'org-audit', label: 'Audit', icon: FileText },
 ]
 
-// Platform administration — superadmin only (platform mode)
+// Platform administration — superadmin only
+// Combines infrastructure management + system configuration.
 export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-orgs', label: 'Organizations', icon: Building2 },
   { id: 'platform-users', label: 'Users', icon: UserCog },
@@ -61,9 +54,42 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-channels', label: 'Channels', icon: Radio },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
   { id: 'platform-sandbox', label: 'Base Sandbox', icon: Box },
+  // System configuration (formerly "System" section)
+  { id: 'platform-general', label: 'General', icon: Settings },
+  { id: 'platform-chat', label: 'Chat', icon: MessageSquare },
+  { id: 'platform-memory', label: 'Memory', icon: Brain },
+  { id: 'platform-sessions', label: 'Sessions', icon: Database },
+  { id: 'platform-sub-agents', label: 'Sub-Agents', icon: GitFork },
+  { id: 'platform-open-code', label: 'OpenCode', icon: Terminal },
+  { id: 'platform-browser', label: 'Browser', icon: Globe },
+  { id: 'platform-daemon', label: 'Daemon', icon: Shield },
+  { id: 'platform-sandbox-settings', label: 'Sandbox', icon: Box },
 ]
 
-// Administration — system config, admin/owner only
+// Mapping from platform-prefixed system section IDs to their SettingsContent IDs.
+// Used by SettingsPage to strip the prefix before delegating to SettingsContent.
+export const PLATFORM_SYSTEM_SECTIONS: Record<string, string> = {
+  'platform-general': 'general',
+  'platform-chat': 'chat',
+  'platform-memory': 'memory',
+  'platform-sessions': 'sessions',
+  'platform-sub-agents': 'sub_agents',
+  'platform-open-code': 'open_code',
+  'platform-browser': 'browser',
+  'platform-daemon': 'daemon',
+  'platform-sandbox-settings': 'sandbox',
+}
+
+// Section keys that use the full config API
+export const FULL_CONFIG_SECTIONS = [
+  'chat', 'browser', 'channels', 'sessions', 'memory',
+  'sub_agents', 'skills', 'scheduler', 'daemon', 'sandbox',
+  'identity', 'open_code'
+]
+
+// --- Deprecated exports (kept for backward compatibility) ---
+
+// @deprecated Use PLATFORM_ITEMS (system items are now merged into Platform)
 export const SYSTEM_ITEMS: SettingsMenuItem[] = [
   { id: 'general', label: 'General', icon: Settings },
   { id: 'chat', label: 'Chat', icon: MessageSquare },
@@ -78,19 +104,20 @@ export const SYSTEM_ITEMS: SettingsMenuItem[] = [
   { id: 'sandbox', label: 'Sandbox', icon: Box },
 ]
 
-// Legacy alias — kept for useSettingsData and other references
+// @deprecated Legacy alias
 export const ADMIN_ITEMS = SYSTEM_ITEMS
 
-// All items combined (for personal mode settings page)
+// @deprecated Personal mode no longer exists
+export const RESOURCE_ITEMS: SettingsMenuItem[] = [
+  { id: 'skills', label: 'Skills', icon: Wand2 },
+  { id: 'scheduler', label: 'Scheduler', icon: Clock },
+  { id: 'taps', label: 'Repositories', icon: GitBranch },
+  { id: 'flows', label: 'Flow Store', icon: Store },
+]
+
+// @deprecated Personal mode no longer exists
 export const ALL_MENU_ITEMS: SettingsMenuItem[] = [
   ...PERSONAL_ITEMS,
   ...RESOURCE_ITEMS,
   ...SYSTEM_ITEMS,
-]
-
-// Section keys that use the full config API
-export const FULL_CONFIG_SECTIONS = [
-  'chat', 'browser', 'channels', 'sessions', 'memory',
-  'sub_agents', 'skills', 'scheduler', 'daemon', 'sandbox',
-  'identity', 'open_code'
 ]

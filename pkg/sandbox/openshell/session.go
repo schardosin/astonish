@@ -89,10 +89,12 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		"ASTONISH_SESSION_ID": spec.SessionID,
 	}
 
-	// Build labels.
+	// Build labels. Sanitize session ID for K8s label compliance (values
+	// allow only [a-zA-Z0-9._-]). The primary fix is at session-key creation
+	// (scheduler/executor.go); this is defense-in-depth.
 	labels := map[string]string{
 		"astonish.io/type":       "session",
-		"astonish.io/session-id": spec.SessionID,
+		"astonish.io/session-id": sanitizeLabelValue(spec.SessionID),
 	}
 	if spec.OrgSlug != "" {
 		labels["astonish.io/org"] = spec.OrgSlug
@@ -188,7 +190,7 @@ func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) e
 
 	labels := map[string]string{
 		"astonish.io/type":       "session",
-		"astonish.io/session-id": sessionID,
+		"astonish.io/session-id": sanitizeLabelValue(sessionID),
 	}
 
 	// Resolve the container image: prefer the image stored in the session

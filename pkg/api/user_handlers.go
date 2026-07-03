@@ -477,7 +477,7 @@ func (pa *PlatformAuth) handleSetUserOrgRole(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	if err := pa.pgStore.Organizations().AddMember(ctx, targetID, org.ID, req.Role); err != nil {
+	if err := pa.pgStore.Organizations().SetMemberRole(ctx, targetID, org.ID, req.Role); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to update role")
 		return
 	}

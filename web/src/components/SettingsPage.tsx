@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, lazy, Suspense, type FormEvent } from 'react'
 import { ChevronRight, Download, Plus, Trash2, UserPlus, AlertCircle, Loader2, Key } from 'lucide-react'
 import SettingsContent from './settings/SettingsContent'
-import { PERSONAL_ITEMS, RESOURCE_ITEMS, TEAM_ITEMS, ORG_ITEMS, PLATFORM_ITEMS, SYSTEM_ITEMS } from './settings/settingsMenuItems'
+import { PERSONAL_ITEMS, TEAM_ITEMS, ORG_ITEMS, PLATFORM_ITEMS, PLATFORM_SYSTEM_SECTIONS } from './settings/settingsMenuItems'
 import type { SettingsMenuItem } from './settings/settingsMenuItems'
 import { useSettingsData } from '../hooks/useSettingsData'
 import type { UpdateInfo, MCPServerConfig, SettingsData, ProviderInfo } from './settings/settingsApi'
@@ -1468,28 +1468,25 @@ export default function SettingsPage({
   const adminOnlyTeamItems = new Set(['team-providers', 'team-mcp', 'team-scheduler', 'team-taps', 'team-container'])
   const memberTeamItems = canManageTeam ? TEAM_ITEMS : TEAM_ITEMS.filter(item => !adminOnlyTeamItems.has(item.id))
 
-  // In platform mode, hide items managed at org/team level or irrelevant for platform deployments
-  const platformHiddenItems = new Set(['skills', 'mcp', 'providers', 'open_code'])
-  const platformSystemItems = SYSTEM_ITEMS.filter(item => !platformHiddenItems.has(item.id))
-
-  const categories: MenuCategory[] = isPlatformMode
-    ? isAdmin
+  // Platform section (superadmin only) — merges former "System" items.
+  // Org admins/owners see Personal + Team + Organization (no Platform/System).
+  const categories: MenuCategory[] = isSuperadmin
+    ? [
+        { label: 'Personal', items: PERSONAL_ITEMS },
+        { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: TEAM_ITEMS },
+        { label: 'Organization', items: ORG_ITEMS },
+        { label: 'Platform', items: PLATFORM_ITEMS },
+      ]
+    : isAdmin
       ? [
           { label: 'Personal', items: PERSONAL_ITEMS },
           { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: TEAM_ITEMS },
           { label: 'Organization', items: ORG_ITEMS },
-          ...(isSuperadmin ? [{ label: 'Platform', items: PLATFORM_ITEMS }] : []),
-          { label: 'System', items: platformSystemItems },
         ]
       : [
           { label: 'Personal', items: PERSONAL_ITEMS },
           { label: activeTeamName ? `Team — ${activeTeamName}` : 'Team', items: memberTeamItems },
         ]
-    : [
-        { label: 'Personal', items: PERSONAL_ITEMS.filter(i => i.id !== 'knowledge') },
-        { label: 'Resources', items: RESOURCE_ITEMS },
-        { label: 'System', items: SYSTEM_ITEMS },
-      ]
 
   // --- Resolve active section ---
   const allItems = categories.flatMap(c => c.items)
@@ -1503,12 +1500,16 @@ export default function SettingsPage({
     resolvedSection = `platform-${subsection || 'orgs'}`
   }
 
-  const activeSection = allItems.some(i => i.id === resolvedSection) ? resolvedSection : 'chat'
+  const activeSection = allItems.some(i => i.id === resolvedSection) ? resolvedSection : (allItems[0]?.id || 'channels')
   const activeLabel = allItems.find(item => item.id === activeSection)?.label || ''
 
-  // Determine which data to load (for system-level settings sections)
-  const isSystemSection = !activeSection.startsWith('team-') && !activeSection.startsWith('org-') && !activeSection.startsWith('platform-')
-  const data = useSettingsData(isSystemSection ? activeSection : '')
+  // Determine which data to load (for system-level settings sections).
+  // Platform-prefixed system sections (e.g., 'platform-chat') map to their
+  // SettingsContent IDs (e.g., 'chat') for data loading and rendering.
+  const settingsContentSection = PLATFORM_SYSTEM_SECTIONS[activeSection] ||
+    (!activeSection.startsWith('team-') && !activeSection.startsWith('org-') && !activeSection.startsWith('platform-') ? activeSection : '')
+  const isSystemSection = settingsContentSection !== ''
+  const data = useSettingsData(settingsContentSection)
 
   // Navigate to a team tab with slug
   const navigateTeamTab = (tab: string, slug?: string) => {
@@ -1713,17 +1714,17 @@ export default function SettingsPage({
               </div>
             </Suspense>
           )}
-          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && activeSection !== 'platform-skills' && isSuperadmin && (
+          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && activeSection !== 'platform-skills' && !PLATFORM_SYSTEM_SECTIONS[activeSection] && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <PlatformAdminPanel theme={theme as 'dark' | 'light'} activeTab={activeSection.replace('platform-', '')} />
             </Suspense>
           )}
 
-          {/* System / preferences sections (delegated to SettingsContent) */}
+          {/* System / platform config sections (delegated to SettingsContent) */}
           {isSystemSection && (
-            <div className={activeSection === 'mcp' || activeSection === 'knowledge' || activeSection === 'skills' ? 'h-full flex flex-col' : 'p-6'}>
+            <div className={settingsContentSection === 'mcp' || settingsContentSection === 'knowledge' || settingsContentSection === 'skills' ? 'h-full flex flex-col' : 'p-6'}>
               <SettingsContent
-                activeSection={activeSection}
+                activeSection={settingsContentSection}
                 settings={data.settings}
                 mcpConfig={data.mcpConfig}
                 webCapableTools={data.webCapableTools}

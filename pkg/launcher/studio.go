@@ -122,11 +122,16 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			return nil, fmt.Errorf("failed to initialize chat agent: %w", err)
 		}
 
-		// Wire scheduler access via daemon HTTP API
-		daemonPort := appCfg.Daemon.GetPort()
-		tools.SetSchedulerAccess(&tools.SchedulerHTTPAccess{
-			BaseURL: fmt.Sprintf("http://localhost:%d", daemonPort),
-		})
+		// Wire scheduler access via daemon HTTP API (personal mode only).
+		// In platform mode, the RunJobFunc injected into the chat runner context
+		// handles test execution directly — the HTTP bridge cannot authenticate
+		// against the PlatformAuthMiddleware and would produce a 401.
+		if !isPlatform {
+			daemonPort := appCfg.Daemon.GetPort()
+			tools.SetSchedulerAccess(&tools.SchedulerHTTPAccess{
+				BaseURL: fmt.Sprintf("http://localhost:%d", daemonPort),
+			})
+		}
 
 		return &api.StudioChatComponents{
 			ChatAgent:         result.ChatAgent,

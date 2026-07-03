@@ -92,3 +92,21 @@ func button(label, href string) string {
   </tr>
 </table>`, href, label)
 }
+
+// devBanner renders an amber warning banner indicating this is a development
+// environment. Inserted before the footer in all outbound emails when the
+// platform-level DevEnvironment flag is enabled.
+func devBanner() string {
+	return `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 24px 0 0;">
+  <tr>
+    <td style="background-color: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px; padding: 14px 18px;">
+      <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #92400e; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">&#x26A0;&#xFE0F; <strong>Development Environment</strong> &mdash; This is a development instance. Features may be unstable and subject to change.</p>
+    </td>
+  </tr>
+</table>`
+}
+
+// devBannerText returns the plain-text version of the dev environment warning.
+func devBannerText() string {
+	return "\n---\n\u26A0\uFE0F DEVELOPMENT ENVIRONMENT: This is a development instance. Features may be unstable and subject to change.\n"
+}

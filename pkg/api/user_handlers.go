@@ -129,19 +129,22 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 	sendInvite := req.SendInvite == nil || *req.SendInvite
 	if sendInvite {
 		appURL := resolveAppURL(r)
+		devEnv := isDevEnvironment(ctx, pa.pgStore.PlatformSettings())
 		mailer.SendAsync(ctx, mailer.OrgInvite{
-			Recipient:   req.Email,
-			DisplayName: target.DisplayName,
-			OrgName:     org.Name,
-			AppURL:      appURL,
-			IsNewUser:   created,
+			Recipient:      req.Email,
+			DisplayName:    target.DisplayName,
+			OrgName:        org.Name,
+			AppURL:         appURL,
+			IsNewUser:      created,
+			DevEnvironment: devEnv,
 		})
 		// Send platform welcome/onboarding email for brand-new users.
 		if created {
 			mailer.SendAsync(ctx, mailer.Welcome{
-				Recipient:   req.Email,
-				DisplayName: target.DisplayName,
-				AppURL:      appURL,
+				Recipient:      req.Email,
+				DisplayName:    target.DisplayName,
+				AppURL:         appURL,
+				DevEnvironment: devEnv,
 			})
 		}
 	}

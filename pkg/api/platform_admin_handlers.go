@@ -423,9 +423,10 @@ func PlatformAdminCreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Send platform welcome email to the new user.
 	mailer.SendAsync(ctx, mailer.Welcome{
-		Recipient:   user.Email,
-		DisplayName: user.DisplayName,
-		AppURL:      resolveAppURL(r),
+		Recipient:      user.Email,
+		DisplayName:    user.DisplayName,
+		AppURL:         resolveAppURL(r),
+		DevEnvironment: isDevEnvironment(ctx, backend.PlatformSettings()),
 	})
 
 	respondJSON(w, http.StatusCreated, map[string]any{

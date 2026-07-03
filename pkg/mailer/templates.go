@@ -8,11 +8,12 @@ import "fmt"
 
 // OrgInvite is the welcome email sent when a user is added to an organization.
 type OrgInvite struct {
-	Recipient   string // email address
-	DisplayName string
-	OrgName     string
-	AppURL      string // e.g. "https://astonish.local.muxpie.com"
-	IsNewUser   bool   // true = account was just created (hint SSO)
+	Recipient      string // email address
+	DisplayName    string
+	OrgName        string
+	AppURL         string // e.g. "https://astonish.local.muxpie.com"
+	IsNewUser      bool   // true = account was just created (hint SSO)
+	DevEnvironment bool   // true = append dev environment warning banner
 }
 
 func (m OrgInvite) To() []string { return []string{m.Recipient} }
@@ -26,7 +27,7 @@ func (m OrgInvite) TextBody() string {
 	if m.IsNewUser {
 		hint = "Your account has been created. Please use your organization's Single Sign-On (SSO) to log in, or contact your administrator for credentials."
 	}
-	return fmt.Sprintf(`Hi %s,
+	text := fmt.Sprintf(`Hi %s,
 
 You've been added to the "%s" organization on Astonish.
 
@@ -35,6 +36,10 @@ You've been added to the "%s" organization on Astonish.
 Sign in here: %s
 
 — Astonish`, m.DisplayName, m.OrgName, hint, m.AppURL)
+	if m.DevEnvironment {
+		text += devBannerText()
+	}
+	return text
 }
 
 func (m OrgInvite) HTMLBody() string {
@@ -47,6 +52,9 @@ func (m OrgInvite) HTMLBody() string {
 		paragraph(fmt.Sprintf("You've been added to the <strong>%s</strong> organization on Astonish.", m.OrgName)) +
 		paragraph(hint) +
 		button("Sign in to Astonish", m.AppURL)
+	if m.DevEnvironment {
+		inner += devBanner()
+	}
 	return wrapHTML(inner)
 }
 
@@ -56,8 +64,9 @@ func (m OrgInvite) HTMLBody() string {
 
 // VerificationCode is sent when a user initiates email channel verification.
 type VerificationCode struct {
-	Recipient string // email address
-	Code      string // 6-character code
+	Recipient      string // email address
+	Code           string // 6-character code
+	DevEnvironment bool   // true = append dev environment warning banner
 }
 
 func (m VerificationCode) To() []string { return []string{m.Recipient} }
@@ -67,7 +76,7 @@ func (m VerificationCode) Subject() string {
 }
 
 func (m VerificationCode) TextBody() string {
-	return fmt.Sprintf(`Hi,
+	text := fmt.Sprintf(`Hi,
 
 Your email verification code is:
 
@@ -78,6 +87,10 @@ Enter this code in Settings → Channels to complete linking your email.
 This code expires in 5 minutes.
 
 — Astonish`, m.Code)
+	if m.DevEnvironment {
+		text += devBannerText()
+	}
+	return text
 }
 
 func (m VerificationCode) HTMLBody() string {
@@ -88,6 +101,9 @@ func (m VerificationCode) HTMLBody() string {
 </div>`, m.Code) +
 		paragraph("Enter this code in <strong>Settings → Channels</strong> to complete linking your email.") +
 		`<p style="color: #6b7280; font-size: 13px; margin: 0;">This code expires in 5 minutes.</p>`
+	if m.DevEnvironment {
+		inner += devBanner()
+	}
 	return wrapHTML(inner)
 }
 
@@ -97,11 +113,12 @@ func (m VerificationCode) HTMLBody() string {
 
 // TeamAdded is the notification email sent when a user is added to a team.
 type TeamAdded struct {
-	Recipient   string // email address
-	DisplayName string
-	TeamName    string
-	OrgName     string
-	AppURL      string // e.g. "https://astonish.local.muxpie.com"
+	Recipient      string // email address
+	DisplayName    string
+	TeamName       string
+	OrgName        string
+	AppURL         string // e.g. "https://astonish.local.muxpie.com"
+	DevEnvironment bool   // true = append dev environment warning banner
 }
 
 func (m TeamAdded) To() []string { return []string{m.Recipient} }
@@ -111,7 +128,7 @@ func (m TeamAdded) Subject() string {
 }
 
 func (m TeamAdded) TextBody() string {
-	return fmt.Sprintf(`Hi %s,
+	text := fmt.Sprintf(`Hi %s,
 
 You've been added to the "%s" team in the "%s" organization on Astonish.
 
@@ -120,6 +137,10 @@ You now have access to the team's shared agents, knowledge, and resources.
 Sign in here: %s
 
 — Astonish`, m.DisplayName, m.TeamName, m.OrgName, m.AppURL)
+	if m.DevEnvironment {
+		text += devBannerText()
+	}
+	return text
 }
 
 func (m TeamAdded) HTMLBody() string {
@@ -128,6 +149,9 @@ func (m TeamAdded) HTMLBody() string {
 		paragraph(fmt.Sprintf("You've been added to the <strong>%s</strong> team in the <strong>%s</strong> organization on Astonish.", m.TeamName, m.OrgName)) +
 		paragraph("You now have access to the team's shared agents, knowledge, and resources.") +
 		button("Sign in to Astonish", m.AppURL)
+	if m.DevEnvironment {
+		inner += devBanner()
+	}
 	return wrapHTML(inner)
 }
 
@@ -139,9 +163,10 @@ func (m TeamAdded) HTMLBody() string {
 // Sent exactly once per user — either immediately on creation (admin invite,
 // self-registration without verification) or after email verification succeeds.
 type Welcome struct {
-	Recipient   string // email address
-	DisplayName string
-	AppURL      string // e.g. "https://astonish.example.com"
+	Recipient      string // email address
+	DisplayName    string
+	AppURL         string // e.g. "https://astonish.example.com"
+	DevEnvironment bool   // true = append dev environment warning banner
 }
 
 func (m Welcome) To() []string { return []string{m.Recipient} }
@@ -151,7 +176,7 @@ func (m Welcome) Subject() string {
 }
 
 func (m Welcome) TextBody() string {
-	return fmt.Sprintf(`Hi %s,
+	text := fmt.Sprintf(`Hi %s,
 
 Welcome aboard! We built Astonish to be more than just another tool — it is your orchestration engine for bringing powerful, autonomous AI agents to life.
 
@@ -178,6 +203,10 @@ Get started: %s
 We can't wait to see what you build.
 
 — The Astonish Team`, m.DisplayName, m.AppURL)
+	if m.DevEnvironment {
+		text += devBannerText()
+	}
+	return text
 }
 
 func (m Welcome) HTMLBody() string {
@@ -197,6 +226,9 @@ func (m Welcome) HTMLBody() string {
 		paragraph("The best way to learn is to jump right in and build your first agent.") +
 		button("Get Started", m.AppURL) +
 		`<p style="color: #4b5563; font-size: 15px; line-height: 1.6; margin: 24px 0 0; text-align: center;">We can&#39;t wait to see what you build.</p>`
+	if m.DevEnvironment {
+		inner += devBanner()
+	}
 	return wrapHTMLWithFooter(inner, "The Astonish Team")
 }
 
@@ -219,10 +251,11 @@ func benefitRow(emoji, title, desc string) string {
 // RegistrationVerification is sent when a new user signs up via builtin auth
 // and must verify their email address before the account becomes active.
 type RegistrationVerification struct {
-	Recipient   string // email address
-	DisplayName string
-	Code        string // 6-digit code
-	ExpiryMin   int    // expiry in minutes
+	Recipient      string // email address
+	DisplayName    string
+	Code           string // 6-digit code
+	ExpiryMin      int    // expiry in minutes
+	DevEnvironment bool   // true = append dev environment warning banner
 }
 
 func (m RegistrationVerification) To() []string { return []string{m.Recipient} }
@@ -232,7 +265,7 @@ func (m RegistrationVerification) Subject() string {
 }
 
 func (m RegistrationVerification) TextBody() string {
-	return fmt.Sprintf(`Hi %s,
+	text := fmt.Sprintf(`Hi %s,
 
 Your email verification code is:
 
@@ -243,6 +276,10 @@ Enter this code to complete your registration.
 This code expires in %d minutes. If you did not create an account, please ignore this email.
 
 — Astonish`, m.DisplayName, m.Code, m.ExpiryMin)
+	if m.DevEnvironment {
+		text += devBannerText()
+	}
+	return text
 }
 
 func (m RegistrationVerification) HTMLBody() string {
@@ -254,5 +291,8 @@ func (m RegistrationVerification) HTMLBody() string {
 </div>`, m.Code) +
 		paragraph("Enter this code to complete your registration.") +
 		fmt.Sprintf(`<p style="color: #6b7280; font-size: 13px; margin: 0;">This code expires in %d minutes. If you did not create an account, please ignore this email.</p>`, m.ExpiryMin)
+	if m.DevEnvironment {
+		inner += devBanner()
+	}
 	return wrapHTML(inner)
 }

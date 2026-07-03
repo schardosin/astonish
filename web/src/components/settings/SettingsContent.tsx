@@ -158,6 +158,7 @@ export default function SettingsContent({
           saving={saving}
           onSave={handleSaveGeneral}
           onSectionChange={onSectionChange}
+          isPlatform={isPlatformMode}
         />
       )}
 

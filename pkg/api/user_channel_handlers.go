@@ -350,9 +350,14 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Send verification email
+		devEnv := false
+		if pb := getPlatformBackend(); pb != nil {
+			devEnv = isDevEnvironment(r.Context(), pb.PlatformSettings())
+		}
 		if err := mailer.Send(r.Context(), mailer.VerificationCode{
-			Recipient: emailAddr,
-			Code:      code,
+			Recipient:      emailAddr,
+			Code:           code,
+			DevEnvironment: devEnv,
 		}); err != nil {
 			respondError(w, http.StatusInternalServerError, "failed to send verification email: "+err.Error())
 			return

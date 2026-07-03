@@ -474,6 +474,7 @@ export async function deleteOIDCProvider(id: string): Promise<void> {
 export interface PlatformAuthSettings {
   allow_registration: boolean
   require_email_verification: boolean
+  dev_environment: boolean
 }
 
 export async function getPlatformAuthSettings(): Promise<PlatformAuthSettings> {

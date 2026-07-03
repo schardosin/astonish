@@ -228,9 +228,10 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// Email verification not required: account is active but has no org/team.
 	// Send platform welcome email.
 	mailer.SendAsync(ctx, mailer.Welcome{
-		Recipient:   user.Email,
-		DisplayName: user.DisplayName,
-		AppURL:      resolveAppURL(r),
+		Recipient:      user.Email,
+		DisplayName:    user.DisplayName,
+		AppURL:         resolveAppURL(r),
+		DevEnvironment: isDevEnvironment(ctx, pa.pgStore.PlatformSettings()),
 	})
 
 	respondJSON(w, http.StatusCreated, map[string]any{
@@ -1106,9 +1107,10 @@ func (pa *PlatformAuth) handleVerifyEmail(w http.ResponseWriter, r *http.Request
 
 	// Send platform welcome email now that the account is active.
 	mailer.SendAsync(ctx, mailer.Welcome{
-		Recipient:   user.Email,
-		DisplayName: user.DisplayName,
-		AppURL:      resolveAppURL(r),
+		Recipient:      user.Email,
+		DisplayName:    user.DisplayName,
+		AppURL:         resolveAppURL(r),
+		DevEnvironment: isDevEnvironment(ctx, pa.pgStore.PlatformSettings()),
 	})
 
 	respondJSON(w, http.StatusOK, map[string]any{
@@ -1184,10 +1186,11 @@ func (pa *PlatformAuth) sendRegistrationVerificationCode(ctx context.Context, us
 	}
 
 	mailer.SendAsync(ctx, mailer.RegistrationVerification{
-		Recipient:   user.Email,
-		DisplayName: user.DisplayName,
-		Code:        code,
-		ExpiryMin:   10,
+		Recipient:      user.Email,
+		DisplayName:    user.DisplayName,
+		Code:           code,
+		ExpiryMin:      10,
+		DevEnvironment: isDevEnvironment(ctx, pa.pgStore.PlatformSettings()),
 	})
 	return nil
 }

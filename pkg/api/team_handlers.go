@@ -461,11 +461,12 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		if targetUser != nil && targetUser.Email != "" {
 			appURL := resolveAppURL(r)
 			mailer.SendAsync(ctx, mailer.TeamAdded{
-				Recipient:   targetUser.Email,
-				DisplayName: targetUser.DisplayName,
-				TeamName:    team.Name,
-				OrgName:     org.Name,
-				AppURL:      appURL,
+				Recipient:      targetUser.Email,
+				DisplayName:    targetUser.DisplayName,
+				TeamName:       team.Name,
+				OrgName:        org.Name,
+				AppURL:         appURL,
+				DevEnvironment: isDevEnvironment(ctx, pa.pgStore.PlatformSettings()),
 			})
 		}
 	}

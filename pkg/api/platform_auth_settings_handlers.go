@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -12,12 +13,14 @@ import (
 type platformAuthSettingsResponse struct {
 	AllowRegistration        bool `json:"allow_registration"`
 	RequireEmailVerification bool `json:"require_email_verification"`
+	DevEnvironment           bool `json:"dev_environment"`
 }
 
 // platformAuthSettingsRequest is accepted by PUT /api/platform/admin/auth-settings.
 type platformAuthSettingsRequest struct {
 	AllowRegistration        *bool `json:"allow_registration"`
 	RequireEmailVerification *bool `json:"require_email_verification"`
+	DevEnvironment           *bool `json:"dev_environment"`
 }
 
 // PlatformAdminGetAuthSettingsHandler handles GET /api/platform/admin/auth-settings.
@@ -40,6 +43,7 @@ func PlatformAdminGetAuthSettingsHandler(w http.ResponseWriter, r *http.Request)
 	resp := platformAuthSettingsResponse{
 		AllowRegistration:        effectiveAllowRegistration(settings, pa),
 		RequireEmailVerification: effectiveRequireEmailVerification(settings, pa),
+		DevEnvironment:           effectiveDevEnvironment(settings),
 	}
 
 	respondJSON(w, http.StatusOK, resp)
@@ -81,6 +85,9 @@ func PlatformAdminSaveAuthSettingsHandler(w http.ResponseWriter, r *http.Request
 	if req.RequireEmailVerification != nil {
 		settings.Auth.RequireEmailVerification = req.RequireEmailVerification
 	}
+	if req.DevEnvironment != nil {
+		settings.Auth.DevEnvironment = req.DevEnvironment
+	}
 
 	// Persist.
 	if err := backend.PlatformSettings().Save(ctx, settings); err != nil {
@@ -93,6 +100,7 @@ func PlatformAdminSaveAuthSettingsHandler(w http.ResponseWriter, r *http.Request
 	resp := platformAuthSettingsResponse{
 		AllowRegistration:        effectiveAllowRegistration(settings, pa),
 		RequireEmailVerification: effectiveRequireEmailVerification(settings, pa),
+		DevEnvironment:           effectiveDevEnvironment(settings),
 	}
 	respondJSON(w, http.StatusOK, resp)
 }
@@ -119,4 +127,27 @@ func effectiveRequireEmailVerification(settings *store.PlatformSettings, pa *Pla
 		return pa.authCfg.IsEmailVerificationRequired()
 	}
 	return true
+}
+
+// effectiveDevEnvironment resolves the dev_environment value:
+// DB override (if non-nil) > false (default, production assumed).
+func effectiveDevEnvironment(settings *store.PlatformSettings) bool {
+	if settings != nil && settings.Auth != nil && settings.Auth.DevEnvironment != nil {
+		return *settings.Auth.DevEnvironment
+	}
+	return false
+}
+
+// isDevEnvironment loads platform settings and returns the effective
+// DevEnvironment flag. Returns false on any error (fail-safe to production).
+// Use this helper at email send sites to populate mailer struct fields.
+func isDevEnvironment(ctx context.Context, ps store.PlatformSettingsStore) bool {
+	if ps == nil {
+		return false
+	}
+	settings, err := ps.Get(ctx)
+	if err != nil {
+		return false
+	}
+	return effectiveDevEnvironment(settings)
 }

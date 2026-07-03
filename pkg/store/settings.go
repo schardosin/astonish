@@ -41,6 +41,11 @@ type PlatformAuthSettings struct {
 	// verify their email before their account becomes active.
 	// nil means "use YAML config default" (which itself defaults to true).
 	RequireEmailVerification *bool `json:"require_email_verification,omitempty"`
+
+	// DevEnvironment marks this instance as a development/staging environment.
+	// When true, outbound emails include a warning banner indicating instability.
+	// nil means false (production by default).
+	DevEnvironment *bool `json:"dev_environment,omitempty"`
 }
 
 // PlatformChannelSettings groups configuration for all supported channel adapters.

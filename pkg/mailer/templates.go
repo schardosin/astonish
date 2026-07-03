@@ -165,6 +165,8 @@ Here is a quick look at what you can do starting today:
 
 🎨 Generative Apps — Describe any dashboard, tool, or internal app in plain English and get a live, interactive React app instantly. Your apps have built-in persistent storage, embedded AI calls, and direct access to MCP tools and APIs with server-side credentials — no frontend setup, no deployment. Build for yourself, then share with your team when you're ready.
 
+📄 Instant Reports — Just ask for a "report" — whether it's a deep-dive analysis, competitive comparison, or architecture review — and get a polished, inline document complete with diagrams. Export to PDF or DOCX with one click.
+
 🔌 Limitless Connections — Use MCP Servers to securely plug your agents directly into your external tools and data sources.
 
 🧠 Shared Intelligence — Knowledge compounds automatically from every conversation. When you solve a tricky problem, the solution enters your memory and surfaces whenever anyone on your team hits the same issue. Personal insights stay private until you choose to share them — then they benefit everyone.
@@ -188,6 +190,7 @@ func (m Welcome) HTMLBody() string {
 		benefitRow("\U0001F4AC", "Interactive Chat Sandbox", "This is not your standard chatbot. Every conversation is backed by its own dedicated, fully isolated container. Your AI agents have the real-world capability to securely connect via SSH, spawn interactive PTY shell sessions, manipulate browsers, and execute code on the fly.") +
 		benefitRow("\u26A1", "Visual Automation", "Build and deploy complex &quot;Flows&quot; visually, without wrestling with the underlying logic.") +
 		benefitRow("\U0001F3A8", "Generative Apps", "Describe any dashboard, tool, or internal app in plain English and get a live, interactive React app instantly. Your apps have built-in persistent storage, embedded AI calls, and direct access to MCP tools and APIs with server-side credentials &mdash; no frontend setup, no deployment. Build for yourself, then share with your team when you&#39;re ready.") +
+		benefitRow("\U0001F4C4", "Instant Reports", "Just ask for a &quot;report&quot; &mdash; whether it&#39;s a deep-dive analysis, competitive comparison, or architecture review &mdash; and get a polished, inline document complete with diagrams. Export to PDF or DOCX with one click.") +
 		benefitRow("\U0001F50C", "Limitless Connections", "Use MCP Servers to securely plug your agents directly into your external tools and data sources.") +
 		benefitRow("\U0001F9E0", "Shared Intelligence", "Knowledge compounds automatically from every conversation. When you solve a tricky problem, the solution enters your memory and surfaces whenever anyone on your team hits the same issue. Personal insights stay private until you choose to share them &mdash; then they benefit everyone.") +
 		`</table>` +

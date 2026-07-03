@@ -146,49 +146,72 @@ type Welcome struct {
 
 func (m Welcome) To() []string { return []string{m.Recipient} }
 
-func (m Welcome) Subject() string { return "Welcome to Astonish" }
+func (m Welcome) Subject() string {
+	return "Welcome to Astonish: Your new AI orchestration command center \U0001F680"
+}
 
 func (m Welcome) TextBody() string {
 	return fmt.Sprintf(`Hi %s,
 
-Welcome to Astonish — your AI agent platform.
+Welcome aboard! We built Astonish to be more than just another tool — it is your orchestration engine for bringing powerful, autonomous AI agents to life.
 
-Here's what you can do:
+Whether you are looking to automate complex daily tasks, scale dynamic workflows, or empower your entire team to innovate faster, you now have everything you need in one place.
 
-- Chat: Converse with AI agents in natural language
-- Flows: Build visual automation workflows
-- Teams & Organizations: Collaborate and share resources
-- Skills: Reusable agent capabilities shared across your team
-- MCP Servers: Connect external tools and data sources
-- Knowledge: Personal and team knowledge bases
+Here is a quick look at what you can do starting today:
+
+💬 Converse & Collaborate — Chat seamlessly with AI agents in natural language to iterate on ideas in real-time.
+
+⚡ Visual Automation — Build and deploy complex Flows visually, without wrestling with the underlying logic.
+
+🔌 Limitless Connections — Use MCP Servers to securely plug your agents directly into your external tools and data sources.
+
+🧠 Shared Intelligence — Build personal Knowledge bases, and share reusable Skills and resources across your Teams & Organizations.
+
+The best way to learn is to jump right in and build your first agent.
 
 Get started: %s
 
-— Astonish`, m.DisplayName, m.AppURL)
+We can't wait to see what you build.
+
+— The Astonish Team`, m.DisplayName, m.AppURL)
 }
 
 func (m Welcome) HTMLBody() string {
-	inner := heading("Welcome to Astonish") +
+	inner := heading("Welcome to Astonish \U0001F680") +
 		paragraph(fmt.Sprintf("Hi %s,", m.DisplayName)) +
-		paragraph("Astonish is your AI agent platform. Here's what you can do:") +
-		`<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">` +
-		featureRow("Chat", "Converse with AI agents in natural language") +
-		featureRow("Flows", "Build visual automation workflows") +
-		featureRow("Teams &amp; Orgs", "Collaborate and share resources") +
-		featureRow("Skills", "Reusable agent capabilities shared across your team") +
-		featureRow("MCP Servers", "Connect external tools and data sources") +
-		featureRow("Knowledge", "Personal and team knowledge bases") +
+		paragraph("Welcome aboard! We built Astonish to be more than just another tool &mdash; it is your <strong>orchestration engine</strong> for bringing powerful, autonomous AI agents to life.") +
+		paragraph("Whether you are looking to automate complex daily tasks, scale dynamic workflows, or empower your entire team to innovate faster, you now have everything you need in one place.") +
+		paragraph("<strong>Here is a quick look at what you can do starting today:</strong>") +
+		`<table style="width: 100%; border-collapse: collapse; margin: 16px 0 24px;">` +
+		benefitRow("\U0001F4AC", "Converse &amp; Collaborate", "Chat seamlessly with AI agents in natural language to iterate on ideas in real-time.") +
+		benefitRow("\u26A1", "Visual Automation", "Build and deploy complex Flows visually, without wrestling with the underlying logic.") +
+		benefitRow("\U0001F50C", "Limitless Connections", "Use MCP Servers to securely plug your agents directly into your external tools and data sources.") +
+		benefitRow("\U0001F9E0", "Shared Intelligence", "Build personal Knowledge bases, and share reusable Skills and resources across your Teams &amp; Organizations.") +
 		`</table>` +
-		button("Get Started", m.AppURL)
-	return wrapHTML(inner)
+		paragraph("The best way to learn is to jump right in and build your first agent.") +
+		button("Get Started", m.AppURL) +
+		`<p style="color: #4b5563; font-size: 15px; line-height: 1.6; margin: 24px 0 0; text-align: center;">We can&#39;t wait to see what you build.</p>`
+	return wrapHTMLWithFooter(inner, "The Astonish Team")
 }
 
-// featureRow renders a single feature row in the welcome email table.
-func featureRow(name, desc string) string {
+// benefitRow renders a single benefit row with emoji, bold title, and description.
+func benefitRow(emoji, title, desc string) string {
 	return fmt.Sprintf(`<tr>
-  <td style="padding: 6px 12px 6px 0; vertical-align: top; font-weight: 600; color: #7c3aed; font-size: 14px; white-space: nowrap;">%s</td>
-  <td style="padding: 6px 0; color: #4b5563; font-size: 14px; line-height: 1.5;">%s</td>
-</tr>`, name, desc)
+  <td style="padding: 10px 12px 10px 0; vertical-align: top; font-size: 20px; width: 36px;">%s</td>
+  <td style="padding: 10px 0; color: #4b5563; font-size: 14px; line-height: 1.6;"><strong style="color: #1f2937;">%s</strong><br>%s</td>
+</tr>`, emoji, title, desc)
+}
+
+// wrapHTMLWithFooter is like wrapHTML but allows a custom footer sign-off.
+func wrapHTMLWithFooter(innerHTML, signoff string) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html>
+<body style="font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 520px; margin: 0 auto; padding: 32px 20px; color: #1f2937; background: #ffffff;">
+%s
+<hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;">
+<p style="color: #9ca3af; font-size: 12px; text-align: center;">&mdash; <strong>%s</strong></p>
+</body>
+</html>`, innerHTML, signoff)
 }
 
 // ---------------------------------------------------------------------------

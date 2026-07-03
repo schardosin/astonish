@@ -5,7 +5,7 @@ import SettingsPage from '../SettingsPage'
 
 // Mock all child settings components to avoid deep dependency trees
 vi.mock('../settings/GeneralSettings', () => ({ default: () => <div data-testid="general-settings">GeneralSettings</div> }))
-vi.mock('../settings/ProvidersSettings', () => ({ default: () => <div data-testid="providers-settings">ProvidersSettings</div> }))
+vi.mock('../settings/ProvidersSettings', () => ({ default: (props: any) => <div data-testid="providers-settings">ProvidersSettings</div> }))
 vi.mock('../settings/MCPServersSettings', () => ({ default: () => <div data-testid="mcp-settings">MCPServersSettings</div> }))
 vi.mock('../settings/TapsSettings', () => ({ default: () => <div data-testid="taps-settings">TapsSettings</div> }))
 vi.mock('../FlowStorePanel', () => ({ default: () => <div data-testid="flow-store">FlowStorePanel</div> }))
@@ -33,9 +33,14 @@ vi.mock('../settings/settingsApi', () => ({
   fetchWebCapableTools: vi.fn().mockResolvedValue({ webSearch: [], webExtract: [] }),
   fetchFullConfig: vi.fn().mockResolvedValue({}),
   saveSettings: vi.fn().mockResolvedValue({}),
+  fetchPlatformProviders: vi.fn().mockResolvedValue({ providers: {}, default_provider: '', default_model: '' }),
+  fetchOrgProviders: vi.fn().mockResolvedValue({ providers: {}, default_provider: '', default_model: '' }),
+  fetchTeamProviders: vi.fn().mockResolvedValue({ providers: {}, default_provider: '', default_model: '' }),
+  savePlatformProviders: vi.fn().mockResolvedValue({}),
+  saveOrgProviders: vi.fn().mockResolvedValue({}),
 }))
 
-// Mock global fetch for /api/standard-servers
+// Mock global fetch for /api/standard-servers and other API calls
 beforeEach(() => {
   globalThis.fetch = vi.fn().mockResolvedValue({
     ok: true,
@@ -44,10 +49,13 @@ beforeEach(() => {
 })
 
 describe('SettingsPage', () => {
+  // Default props simulate a superadmin user who can see all sections
   const defaultProps = {
-    activeSection: 'general',
+    activeSection: 'platform-general',
     onSectionChange: vi.fn(),
     theme: 'dark',
+    platformRole: 'superadmin',
+    userRole: 'owner',
   }
 
   it('renders loading state initially', async () => {
@@ -69,22 +77,26 @@ describe('SettingsPage', () => {
     render(<SettingsPage {...defaultProps} />)
     // Wait for content to load
     await screen.findByText('Settings')
-    // After loading, menu items should be present in the sidebar nav
+    // After loading, menu items should be present in the sidebar nav.
+    // "General" appears in multiple sections (Org General + Platform General + section heading).
     const allGeneral = await screen.findAllByText('General')
-    // There should be at least one "General" in the menu (span) and one as the section heading (h3)
     expect(allGeneral.length).toBeGreaterThanOrEqual(2)
-    // Verify the sidebar menu contains expected items
-    expect(screen.getByText('Providers')).toBeInTheDocument()
-    expect(screen.getByText('MCP Servers')).toBeInTheDocument()
+    // "Providers" appears in Team, Org, and Platform sections
+    const allProviders = screen.getAllByText('Providers')
+    expect(allProviders.length).toBeGreaterThanOrEqual(1)
+    // "MCP Servers" appears in Team, Org, and Platform sections
+    const allMCP = screen.getAllByText('MCP Servers')
+    expect(allMCP.length).toBeGreaterThanOrEqual(1)
   })
 
   it('calls onSectionChange when a menu item is clicked', async () => {
     const user = userEvent.setup()
     const onSectionChange = vi.fn()
     render(<SettingsPage {...defaultProps} onSectionChange={onSectionChange} />)
-    const providersButton = await screen.findByText('Providers')
-    await user.click(providersButton)
-    expect(onSectionChange).toHaveBeenCalledWith('providers')
+    // "Knowledge" is a Personal item visible to all users
+    const knowledgeButton = await screen.findByText('Knowledge')
+    await user.click(knowledgeButton)
+    expect(onSectionChange).toHaveBeenCalledWith('knowledge')
   })
 
   it('shows version info after loading', async () => {
@@ -105,15 +117,16 @@ describe('SettingsPage', () => {
     expect(update).toBeInTheDocument()
   })
 
-  it('renders GeneralSettings for general section', async () => {
-    render(<SettingsPage {...defaultProps} activeSection="general" />)
-    // After loading completes, GeneralSettings should render
+  it('renders GeneralSettings for platform-general section', async () => {
+    render(<SettingsPage {...defaultProps} activeSection="platform-general" />)
+    // platform-general maps through PLATFORM_SYSTEM_SECTIONS → 'general' → SettingsContent → GeneralSettings
     const el = await screen.findByTestId('general-settings')
     expect(el).toBeInTheDocument()
   })
 
-  it('renders ProvidersSettings for providers section', async () => {
-    render(<SettingsPage {...defaultProps} activeSection="providers" />)
+  it('renders ProvidersSettings for platform-providers section', async () => {
+    render(<SettingsPage {...defaultProps} activeSection="platform-providers" />)
+    // platform-providers renders PlatformProvidersTab which wraps ProvidersSettings
     const el = await screen.findByTestId('providers-settings')
     expect(el).toBeInTheDocument()
   })

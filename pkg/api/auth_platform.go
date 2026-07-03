@@ -225,7 +225,14 @@ func (pa *PlatformAuth) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Email verification not required: account is active but has no org/team
+	// Email verification not required: account is active but has no org/team.
+	// Send platform welcome email.
+	mailer.SendAsync(ctx, mailer.Welcome{
+		Recipient:   user.Email,
+		DisplayName: user.DisplayName,
+		AppURL:      resolveAppURL(r),
+	})
+
 	respondJSON(w, http.StatusCreated, map[string]any{
 		"requires_verification": false,
 		"no_team":               true,
@@ -1096,6 +1103,13 @@ func (pa *PlatformAuth) handleVerifyEmail(w http.ResponseWriter, r *http.Request
 	}
 
 	slog.Info("user email verified", "user", user.Email)
+
+	// Send platform welcome email now that the account is active.
+	mailer.SendAsync(ctx, mailer.Welcome{
+		Recipient:   user.Email,
+		DisplayName: user.DisplayName,
+		AppURL:      resolveAppURL(r),
+	})
 
 	respondJSON(w, http.StatusOK, map[string]any{
 		"verified": true,

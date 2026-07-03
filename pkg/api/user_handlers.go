@@ -128,14 +128,7 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 	// Send welcome email (default: true).
 	sendInvite := req.SendInvite == nil || *req.SendInvite
 	if sendInvite {
-		scheme := "https"
-		if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
-			scheme = "http"
-		}
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
-			scheme = "https"
-		}
-		appURL := scheme + "://" + r.Host
+		appURL := resolveAppURL(r)
 		mailer.SendAsync(ctx, mailer.OrgInvite{
 			Recipient:   req.Email,
 			DisplayName: target.DisplayName,
@@ -143,6 +136,14 @@ func (pa *PlatformAuth) handleInviteUser(w http.ResponseWriter, r *http.Request)
 			AppURL:      appURL,
 			IsNewUser:   created,
 		})
+		// Send platform welcome/onboarding email for brand-new users.
+		if created {
+			mailer.SendAsync(ctx, mailer.Welcome{
+				Recipient:   req.Email,
+				DisplayName: target.DisplayName,
+				AppURL:      appURL,
+			})
+		}
 	}
 
 	respondJSON(w, http.StatusOK, map[string]any{

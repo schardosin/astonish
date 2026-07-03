@@ -132,6 +132,66 @@ func (m TeamAdded) HTMLBody() string {
 }
 
 // ---------------------------------------------------------------------------
+// Welcome — onboarding email sent once when a new user account becomes active.
+// ---------------------------------------------------------------------------
+
+// Welcome is the onboarding email introducing a new user to Astonish's features.
+// Sent exactly once per user — either immediately on creation (admin invite,
+// self-registration without verification) or after email verification succeeds.
+type Welcome struct {
+	Recipient   string // email address
+	DisplayName string
+	AppURL      string // e.g. "https://astonish.example.com"
+}
+
+func (m Welcome) To() []string { return []string{m.Recipient} }
+
+func (m Welcome) Subject() string { return "Welcome to Astonish" }
+
+func (m Welcome) TextBody() string {
+	return fmt.Sprintf(`Hi %s,
+
+Welcome to Astonish — your AI agent platform.
+
+Here's what you can do:
+
+- Chat: Converse with AI agents in natural language
+- Flows: Build visual automation workflows
+- Teams & Organizations: Collaborate and share resources
+- Skills: Reusable agent capabilities shared across your team
+- MCP Servers: Connect external tools and data sources
+- Knowledge: Personal and team knowledge bases
+
+Get started: %s
+
+— Astonish`, m.DisplayName, m.AppURL)
+}
+
+func (m Welcome) HTMLBody() string {
+	inner := heading("Welcome to Astonish") +
+		paragraph(fmt.Sprintf("Hi %s,", m.DisplayName)) +
+		paragraph("Astonish is your AI agent platform. Here's what you can do:") +
+		`<table style="width: 100%; border-collapse: collapse; margin: 16px 0;">` +
+		featureRow("Chat", "Converse with AI agents in natural language") +
+		featureRow("Flows", "Build visual automation workflows") +
+		featureRow("Teams &amp; Orgs", "Collaborate and share resources") +
+		featureRow("Skills", "Reusable agent capabilities shared across your team") +
+		featureRow("MCP Servers", "Connect external tools and data sources") +
+		featureRow("Knowledge", "Personal and team knowledge bases") +
+		`</table>` +
+		button("Get Started", m.AppURL)
+	return wrapHTML(inner)
+}
+
+// featureRow renders a single feature row in the welcome email table.
+func featureRow(name, desc string) string {
+	return fmt.Sprintf(`<tr>
+  <td style="padding: 6px 12px 6px 0; vertical-align: top; font-weight: 600; color: #7c3aed; font-size: 14px; white-space: nowrap;">%s</td>
+  <td style="padding: 6px 0; color: #4b5563; font-size: 14px; line-height: 1.5;">%s</td>
+</tr>`, name, desc)
+}
+
+// ---------------------------------------------------------------------------
 // RegistrationVerification — sent when a new user signs up via builtin auth.
 // ---------------------------------------------------------------------------
 

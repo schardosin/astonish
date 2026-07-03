@@ -459,14 +459,7 @@ func (pa *PlatformAuth) handleAddTeamMember(w http.ResponseWriter, r *http.Reque
 		// Look up the target user's details for the email.
 		targetUser, _ := pa.pgStore.Users().GetByID(ctx, resolvedID)
 		if targetUser != nil && targetUser.Email != "" {
-			scheme := "https"
-			if r.TLS == nil && (strings.HasPrefix(r.Host, "localhost") || strings.HasPrefix(r.Host, "127.0.0.1")) {
-				scheme = "http"
-			}
-			if proto := r.Header.Get("X-Forwarded-Proto"); proto == "https" {
-				scheme = "https"
-			}
-			appURL := scheme + "://" + r.Host
+			appURL := resolveAppURL(r)
 			mailer.SendAsync(ctx, mailer.TeamAdded{
 				Recipient:   targetUser.Email,
 				DisplayName: targetUser.DisplayName,

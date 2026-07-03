@@ -204,11 +204,11 @@ func (m Welcome) HTMLBody() string {
 // Includes a subtle top separator line for visual structure.
 func benefitRow(emoji, title, desc string) string {
 	return fmt.Sprintf(`<tr>
-  <td colspan="2" style="padding: 0;"><div class="benefit-row-sep" style="border-top: 1px solid #f0f0f5; margin: 0;"></div></td>
+  <td colspan="2" style="padding: 0;"><div style="border-top: 1px solid #f0f0f5; margin: 0;"></div></td>
 </tr>
 <tr>
   <td style="padding: 16px 16px 16px 0; vertical-align: top; font-size: 24px; width: 44px; line-height: 1;">%s</td>
-  <td style="padding: 16px 0;"><strong class="benefit-title" style="color: #1f2937; font-size: 15px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</strong><br><span class="benefit-desc" style="color: #4b5563; font-size: 14px; line-height: 1.7; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</span></td>
+  <td style="padding: 16px 0;"><strong style="color: #1f2937; font-size: 15px; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</strong><br><span style="color: #4b5563; font-size: 14px; line-height: 1.7; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">%s</span></td>
 </tr>`, emoji, title, desc)
 }
 

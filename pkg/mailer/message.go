@@ -32,8 +32,8 @@ func wrapHTMLWithFooter(innerHTML, signoff string) string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Astonish</title>
 </head>
-<body style="margin: 0; padding: 0; background-color: #f3f4f6; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased;">
-  <table width="100%%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f3f4f6;">
+<body style="margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; -webkit-font-smoothing: antialiased;">
+  <table width="100%%" cellpadding="0" cellspacing="0" border="0">
     <tr>
       <td align="center" style="padding: 40px 20px;">
         <!--[if mso]><table width="580" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]-->

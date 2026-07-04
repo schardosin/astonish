@@ -30,6 +30,9 @@ type PendingLinkCode func(*sql.Selector)
 // PlatformMCPServer is the predicate function for platformmcpserver builders.
 type PlatformMCPServer func(*sql.Selector)
 
+// PlatformNetworkPolicy is the predicate function for platformnetworkpolicy builders.
+type PlatformNetworkPolicy func(*sql.Selector)
+
 // PlatformSecret is the predicate function for platformsecret builders.
 type PlatformSecret func(*sql.Selector)
 

@@ -114,7 +114,7 @@ Configure the container sandbox environment for agent tool execution:
 
 - Backend type (Incus for local, Kubernetes for cloud)
 - Resource limits (CPU, memory, processes)
-- Network policies
+- Network policies — multi-tier allow/deny rules (platform, org, team) controlling which endpoints the sandbox can reach. See [Network Policy](../security/network-policy.md).
 
 ## Cloud Deployment: Admin Panels
 

@@ -11,6 +11,7 @@ import {
   fetchTeamMembers, addTeamMember, removeTeamMember, setTeamMemberRole,
   type Team, type TeamMember,
 } from '../api/platform'
+import { teamFetch } from '../api/teamContext'
 
 declare const __UI_VERSION__: string
 
@@ -26,6 +27,7 @@ const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
 const TeamContainerTab = lazy(() => import('./TeamContainerTab'))
 const PlatformAdminPanel = lazy(() => import('./PlatformAdminPanel'))
 const KnowledgeBrowser = lazy(() => import('./KnowledgeBrowser'))
+const NetworkPolicySettings = lazy(() => import('./settings/NetworkPolicySettings'))
 
 // ---------------------------------------------------------------------------
 // Types
@@ -565,6 +567,141 @@ function PlatformMCPServersTab({ theme }: { theme: string }) {
       theme={theme}
       scope="platform"
     />
+  )
+}
+
+// ---------------------------------------------------------------------------
+// TeamNetworkPolicyTab — shows inherited (platform + org) + editable team rules
+// ---------------------------------------------------------------------------
+
+function TeamNetworkPolicyTab({ teamSlug }: { teamSlug: string }) {
+  const [orgRules, setOrgRules] = useState<any[]>([])
+  const [platformRules, setPlatformRules] = useState<any[]>([])
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const loadInherited = useCallback(async () => {
+    try {
+      const [orgRes, platformRes] = await Promise.all([
+        teamFetch('/api/network-policies?scope=org', undefined, teamSlug),
+        teamFetch('/api/network-policies?scope=platform'),
+      ])
+      if (orgRes.ok) {
+        const data = await orgRes.json()
+        setOrgRules(data.rules || [])
+      }
+      if (platformRes.ok) {
+        const data = await platformRes.json()
+        setPlatformRules(data.rules || [])
+      }
+    } catch {
+      // Inherited rules are optional
+    }
+  }, [teamSlug])
+
+  useEffect(() => { loadInherited() }, [loadInherited])
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Network Policy</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+          Control which hosts sandbox containers can access. Deny rules from higher tiers cannot be overridden.
+        </p>
+      </div>
+
+      {platformRules.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Platform (inherited)
+          </div>
+          <NetworkPolicySettings scope="platform" readOnly rules={platformRules} />
+        </div>
+      )}
+
+      {orgRules.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Organization (inherited)
+          </div>
+          <NetworkPolicySettings scope="org" readOnly rules={orgRules} />
+        </div>
+      )}
+
+      {(platformRules.length > 0 || orgRules.length > 0) && (
+        <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+          Team
+        </div>
+      )}
+      <NetworkPolicySettings key={refreshKey} scope="team" teamSlug={teamSlug} onRulesChange={() => setRefreshKey(k => k + 1)} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// OrgNetworkPolicyTab — shows inherited platform + editable org rules
+// ---------------------------------------------------------------------------
+
+function OrgNetworkPolicyTab() {
+  const [platformRules, setPlatformRules] = useState<any[]>([])
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  const loadInherited = useCallback(async () => {
+    try {
+      const res = await teamFetch('/api/network-policies?scope=platform')
+      if (res.ok) {
+        const data = await res.json()
+        setPlatformRules(data.rules || [])
+      }
+    } catch {
+      // Platform rules are optional
+    }
+  }, [])
+
+  useEffect(() => { loadInherited() }, [loadInherited])
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Network Policy</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+          Organization-level network rules. These apply to all teams and cannot be overridden by team-level allow rules.
+        </p>
+      </div>
+
+      {platformRules.length > 0 && (
+        <div>
+          <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+            Platform (inherited)
+          </div>
+          <NetworkPolicySettings scope="platform" readOnly rules={platformRules} />
+        </div>
+      )}
+
+      {platformRules.length > 0 && (
+        <div className="text-xs font-medium mb-2 uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+          Organization
+        </div>
+      )}
+      <NetworkPolicySettings key={refreshKey} scope="org" onRulesChange={() => setRefreshKey(k => k + 1)} />
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// PlatformNetworkPolicyTab — platform-wide rules (superadmin only)
+// ---------------------------------------------------------------------------
+
+function PlatformNetworkPolicyTab() {
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Network Policy</h3>
+        <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
+          Platform-wide network rules. Deny rules here cannot be overridden by any org or team. Allow rules apply to all sandboxes.
+        </p>
+      </div>
+      <NetworkPolicySettings scope="platform" />
+    </div>
   )
 }
 
@@ -1385,6 +1522,7 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
       <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
         {tabId === 'providers' && <TeamProvidersTab teamSlug={teamSlug} />}
         {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
+        {tabId === 'network' && <TeamNetworkPolicyTab teamSlug={teamSlug} />}
         {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={handleSaved} teamSlug={teamSlug} />}
         {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
         {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} canManage={canManageTeam} />}
@@ -1686,6 +1824,14 @@ export default function SettingsPage({
             </Suspense>
           )}
 
+          {activeSection === 'org-network' && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <div className="p-6">
+                <OrgNetworkPolicyTab />
+              </div>
+            </Suspense>
+          )}
+
           {activeSection === 'org-providers' && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <div className="p-6">
@@ -1707,6 +1853,13 @@ export default function SettingsPage({
               <PlatformMCPServersTab theme={theme as string} />
             </Suspense>
           )}
+          {activeSection === 'platform-network' && isSuperadmin && (
+            <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
+              <div className="p-6">
+                <PlatformNetworkPolicyTab />
+              </div>
+            </Suspense>
+          )}
           {activeSection === 'platform-skills' && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <div className="flex-1 overflow-hidden p-6 flex flex-col h-full">
@@ -1714,7 +1867,7 @@ export default function SettingsPage({
               </div>
             </Suspense>
           )}
-          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && activeSection !== 'platform-skills' && !PLATFORM_SYSTEM_SECTIONS[activeSection] && isSuperadmin && (
+          {activeSection.startsWith('platform-') && activeSection !== 'platform-providers' && activeSection !== 'platform-mcp' && activeSection !== 'platform-network' && activeSection !== 'platform-skills' && !PLATFORM_SYSTEM_SECTIONS[activeSection] && isSuperadmin && (
             <Suspense fallback={<div className="flex items-center justify-center h-full"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
               <PlatformAdminPanel theme={theme as 'dark' | 'light'} activeTab={activeSection.replace('platform-', '')} />
             </Suspense>

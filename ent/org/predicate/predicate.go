@@ -21,6 +21,9 @@ type OrgMCPServer func(*sql.Selector)
 // OrgMemory is the predicate function for orgmemory builders.
 type OrgMemory func(*sql.Selector)
 
+// OrgNetworkPolicy is the predicate function for orgnetworkpolicy builders.
+type OrgNetworkPolicy func(*sql.Selector)
+
 // OrgSkill is the predicate function for orgskill builders.
 type OrgSkill func(*sql.Selector)
 

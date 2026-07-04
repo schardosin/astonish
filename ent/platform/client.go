@@ -24,6 +24,7 @@ import (
 	"github.com/schardosin/astonish/ent/platform/orgmembership"
 	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
+	"github.com/schardosin/astonish/ent/platform/platformnetworkpolicy"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
 	"github.com/schardosin/astonish/ent/platform/platformskill"
@@ -56,6 +57,8 @@ type Client struct {
 	PendingLinkCode *PendingLinkCodeClient
 	// PlatformMCPServer is the client for interacting with the PlatformMCPServer builders.
 	PlatformMCPServer *PlatformMCPServerClient
+	// PlatformNetworkPolicy is the client for interacting with the PlatformNetworkPolicy builders.
+	PlatformNetworkPolicy *PlatformNetworkPolicyClient
 	// PlatformSecret is the client for interacting with the PlatformSecret builders.
 	PlatformSecret *PlatformSecretClient
 	// PlatformSetting is the client for interacting with the PlatformSetting builders.
@@ -93,6 +96,7 @@ func (c *Client) init() {
 	c.Organization = NewOrganizationClient(c.config)
 	c.PendingLinkCode = NewPendingLinkCodeClient(c.config)
 	c.PlatformMCPServer = NewPlatformMCPServerClient(c.config)
+	c.PlatformNetworkPolicy = NewPlatformNetworkPolicyClient(c.config)
 	c.PlatformSecret = NewPlatformSecretClient(c.config)
 	c.PlatformSetting = NewPlatformSettingClient(c.config)
 	c.PlatformSkill = NewPlatformSkillClient(c.config)
@@ -192,25 +196,26 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:               ctx,
-		config:            cfg,
-		DeviceSession:     NewDeviceSessionClient(cfg),
-		EmailThreadIndex:  NewEmailThreadIndexClient(cfg),
-		LoginSession:      NewLoginSessionClient(cfg),
-		OIDCProvider:      NewOIDCProviderClient(cfg),
-		OrgMembership:     NewOrgMembershipClient(cfg),
-		Organization:      NewOrganizationClient(cfg),
-		PendingLinkCode:   NewPendingLinkCodeClient(cfg),
-		PlatformMCPServer: NewPlatformMCPServerClient(cfg),
-		PlatformSecret:    NewPlatformSecretClient(cfg),
-		PlatformSetting:   NewPlatformSettingClient(cfg),
-		PlatformSkill:     NewPlatformSkillClient(cfg),
-		PlatformSkillFile: NewPlatformSkillFileClient(cfg),
-		SandboxLayer:      NewSandboxLayerClient(cfg),
-		SandboxTemplate:   NewSandboxTemplateClient(cfg),
-		ToolIndex:         NewToolIndexClient(cfg),
-		User:              NewUserClient(cfg),
-		UserChannel:       NewUserChannelClient(cfg),
+		ctx:                   ctx,
+		config:                cfg,
+		DeviceSession:         NewDeviceSessionClient(cfg),
+		EmailThreadIndex:      NewEmailThreadIndexClient(cfg),
+		LoginSession:          NewLoginSessionClient(cfg),
+		OIDCProvider:          NewOIDCProviderClient(cfg),
+		OrgMembership:         NewOrgMembershipClient(cfg),
+		Organization:          NewOrganizationClient(cfg),
+		PendingLinkCode:       NewPendingLinkCodeClient(cfg),
+		PlatformMCPServer:     NewPlatformMCPServerClient(cfg),
+		PlatformNetworkPolicy: NewPlatformNetworkPolicyClient(cfg),
+		PlatformSecret:        NewPlatformSecretClient(cfg),
+		PlatformSetting:       NewPlatformSettingClient(cfg),
+		PlatformSkill:         NewPlatformSkillClient(cfg),
+		PlatformSkillFile:     NewPlatformSkillFileClient(cfg),
+		SandboxLayer:          NewSandboxLayerClient(cfg),
+		SandboxTemplate:       NewSandboxTemplateClient(cfg),
+		ToolIndex:             NewToolIndexClient(cfg),
+		User:                  NewUserClient(cfg),
+		UserChannel:           NewUserChannelClient(cfg),
 	}, nil
 }
 
@@ -228,25 +233,26 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:               ctx,
-		config:            cfg,
-		DeviceSession:     NewDeviceSessionClient(cfg),
-		EmailThreadIndex:  NewEmailThreadIndexClient(cfg),
-		LoginSession:      NewLoginSessionClient(cfg),
-		OIDCProvider:      NewOIDCProviderClient(cfg),
-		OrgMembership:     NewOrgMembershipClient(cfg),
-		Organization:      NewOrganizationClient(cfg),
-		PendingLinkCode:   NewPendingLinkCodeClient(cfg),
-		PlatformMCPServer: NewPlatformMCPServerClient(cfg),
-		PlatformSecret:    NewPlatformSecretClient(cfg),
-		PlatformSetting:   NewPlatformSettingClient(cfg),
-		PlatformSkill:     NewPlatformSkillClient(cfg),
-		PlatformSkillFile: NewPlatformSkillFileClient(cfg),
-		SandboxLayer:      NewSandboxLayerClient(cfg),
-		SandboxTemplate:   NewSandboxTemplateClient(cfg),
-		ToolIndex:         NewToolIndexClient(cfg),
-		User:              NewUserClient(cfg),
-		UserChannel:       NewUserChannelClient(cfg),
+		ctx:                   ctx,
+		config:                cfg,
+		DeviceSession:         NewDeviceSessionClient(cfg),
+		EmailThreadIndex:      NewEmailThreadIndexClient(cfg),
+		LoginSession:          NewLoginSessionClient(cfg),
+		OIDCProvider:          NewOIDCProviderClient(cfg),
+		OrgMembership:         NewOrgMembershipClient(cfg),
+		Organization:          NewOrganizationClient(cfg),
+		PendingLinkCode:       NewPendingLinkCodeClient(cfg),
+		PlatformMCPServer:     NewPlatformMCPServerClient(cfg),
+		PlatformNetworkPolicy: NewPlatformNetworkPolicyClient(cfg),
+		PlatformSecret:        NewPlatformSecretClient(cfg),
+		PlatformSetting:       NewPlatformSettingClient(cfg),
+		PlatformSkill:         NewPlatformSkillClient(cfg),
+		PlatformSkillFile:     NewPlatformSkillFileClient(cfg),
+		SandboxLayer:          NewSandboxLayerClient(cfg),
+		SandboxTemplate:       NewSandboxTemplateClient(cfg),
+		ToolIndex:             NewToolIndexClient(cfg),
+		User:                  NewUserClient(cfg),
+		UserChannel:           NewUserChannelClient(cfg),
 	}, nil
 }
 
@@ -278,8 +284,9 @@ func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.DeviceSession, c.EmailThreadIndex, c.LoginSession, c.OIDCProvider,
 		c.OrgMembership, c.Organization, c.PendingLinkCode, c.PlatformMCPServer,
-		c.PlatformSecret, c.PlatformSetting, c.PlatformSkill, c.PlatformSkillFile,
-		c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User, c.UserChannel,
+		c.PlatformNetworkPolicy, c.PlatformSecret, c.PlatformSetting, c.PlatformSkill,
+		c.PlatformSkillFile, c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User,
+		c.UserChannel,
 	} {
 		n.Use(hooks...)
 	}
@@ -291,8 +298,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.DeviceSession, c.EmailThreadIndex, c.LoginSession, c.OIDCProvider,
 		c.OrgMembership, c.Organization, c.PendingLinkCode, c.PlatformMCPServer,
-		c.PlatformSecret, c.PlatformSetting, c.PlatformSkill, c.PlatformSkillFile,
-		c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User, c.UserChannel,
+		c.PlatformNetworkPolicy, c.PlatformSecret, c.PlatformSetting, c.PlatformSkill,
+		c.PlatformSkillFile, c.SandboxLayer, c.SandboxTemplate, c.ToolIndex, c.User,
+		c.UserChannel,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -317,6 +325,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.PendingLinkCode.mutate(ctx, m)
 	case *PlatformMCPServerMutation:
 		return c.PlatformMCPServer.mutate(ctx, m)
+	case *PlatformNetworkPolicyMutation:
+		return c.PlatformNetworkPolicy.mutate(ctx, m)
 	case *PlatformSecretMutation:
 		return c.PlatformSecret.mutate(ctx, m)
 	case *PlatformSettingMutation:
@@ -1496,6 +1506,139 @@ func (c *PlatformMCPServerClient) mutate(ctx context.Context, m *PlatformMCPServ
 		return (&PlatformMCPServerDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("platform: unknown PlatformMCPServer mutation op: %q", m.Op())
+	}
+}
+
+// PlatformNetworkPolicyClient is a client for the PlatformNetworkPolicy schema.
+type PlatformNetworkPolicyClient struct {
+	config
+}
+
+// NewPlatformNetworkPolicyClient returns a client for the PlatformNetworkPolicy from the given config.
+func NewPlatformNetworkPolicyClient(c config) *PlatformNetworkPolicyClient {
+	return &PlatformNetworkPolicyClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `platformnetworkpolicy.Hooks(f(g(h())))`.
+func (c *PlatformNetworkPolicyClient) Use(hooks ...Hook) {
+	c.hooks.PlatformNetworkPolicy = append(c.hooks.PlatformNetworkPolicy, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `platformnetworkpolicy.Intercept(f(g(h())))`.
+func (c *PlatformNetworkPolicyClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PlatformNetworkPolicy = append(c.inters.PlatformNetworkPolicy, interceptors...)
+}
+
+// Create returns a builder for creating a PlatformNetworkPolicy entity.
+func (c *PlatformNetworkPolicyClient) Create() *PlatformNetworkPolicyCreate {
+	mutation := newPlatformNetworkPolicyMutation(c.config, OpCreate)
+	return &PlatformNetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PlatformNetworkPolicy entities.
+func (c *PlatformNetworkPolicyClient) CreateBulk(builders ...*PlatformNetworkPolicyCreate) *PlatformNetworkPolicyCreateBulk {
+	return &PlatformNetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PlatformNetworkPolicyClient) MapCreateBulk(slice any, setFunc func(*PlatformNetworkPolicyCreate, int)) *PlatformNetworkPolicyCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PlatformNetworkPolicyCreateBulk{err: fmt.Errorf("calling to PlatformNetworkPolicyClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PlatformNetworkPolicyCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PlatformNetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PlatformNetworkPolicy.
+func (c *PlatformNetworkPolicyClient) Update() *PlatformNetworkPolicyUpdate {
+	mutation := newPlatformNetworkPolicyMutation(c.config, OpUpdate)
+	return &PlatformNetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PlatformNetworkPolicyClient) UpdateOne(_m *PlatformNetworkPolicy) *PlatformNetworkPolicyUpdateOne {
+	mutation := newPlatformNetworkPolicyMutation(c.config, OpUpdateOne, withPlatformNetworkPolicy(_m))
+	return &PlatformNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PlatformNetworkPolicyClient) UpdateOneID(id uuid.UUID) *PlatformNetworkPolicyUpdateOne {
+	mutation := newPlatformNetworkPolicyMutation(c.config, OpUpdateOne, withPlatformNetworkPolicyID(id))
+	return &PlatformNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PlatformNetworkPolicy.
+func (c *PlatformNetworkPolicyClient) Delete() *PlatformNetworkPolicyDelete {
+	mutation := newPlatformNetworkPolicyMutation(c.config, OpDelete)
+	return &PlatformNetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PlatformNetworkPolicyClient) DeleteOne(_m *PlatformNetworkPolicy) *PlatformNetworkPolicyDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PlatformNetworkPolicyClient) DeleteOneID(id uuid.UUID) *PlatformNetworkPolicyDeleteOne {
+	builder := c.Delete().Where(platformnetworkpolicy.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PlatformNetworkPolicyDeleteOne{builder}
+}
+
+// Query returns a query builder for PlatformNetworkPolicy.
+func (c *PlatformNetworkPolicyClient) Query() *PlatformNetworkPolicyQuery {
+	return &PlatformNetworkPolicyQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePlatformNetworkPolicy},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PlatformNetworkPolicy entity by its id.
+func (c *PlatformNetworkPolicyClient) Get(ctx context.Context, id uuid.UUID) (*PlatformNetworkPolicy, error) {
+	return c.Query().Where(platformnetworkpolicy.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PlatformNetworkPolicyClient) GetX(ctx context.Context, id uuid.UUID) *PlatformNetworkPolicy {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *PlatformNetworkPolicyClient) Hooks() []Hook {
+	return c.hooks.PlatformNetworkPolicy
+}
+
+// Interceptors returns the client interceptors.
+func (c *PlatformNetworkPolicyClient) Interceptors() []Interceptor {
+	return c.inters.PlatformNetworkPolicy
+}
+
+func (c *PlatformNetworkPolicyClient) mutate(ctx context.Context, m *PlatformNetworkPolicyMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PlatformNetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PlatformNetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PlatformNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PlatformNetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("platform: unknown PlatformNetworkPolicy mutation op: %q", m.Op())
 	}
 }
 
@@ -2876,14 +3019,14 @@ func (c *UserChannelClient) mutate(ctx context.Context, m *UserChannelMutation) 
 type (
 	hooks struct {
 		DeviceSession, EmailThreadIndex, LoginSession, OIDCProvider, OrgMembership,
-		Organization, PendingLinkCode, PlatformMCPServer, PlatformSecret,
-		PlatformSetting, PlatformSkill, PlatformSkillFile, SandboxLayer,
-		SandboxTemplate, ToolIndex, User, UserChannel []ent.Hook
+		Organization, PendingLinkCode, PlatformMCPServer, PlatformNetworkPolicy,
+		PlatformSecret, PlatformSetting, PlatformSkill, PlatformSkillFile,
+		SandboxLayer, SandboxTemplate, ToolIndex, User, UserChannel []ent.Hook
 	}
 	inters struct {
 		DeviceSession, EmailThreadIndex, LoginSession, OIDCProvider, OrgMembership,
-		Organization, PendingLinkCode, PlatformMCPServer, PlatformSecret,
-		PlatformSetting, PlatformSkill, PlatformSkillFile, SandboxLayer,
-		SandboxTemplate, ToolIndex, User, UserChannel []ent.Interceptor
+		Organization, PendingLinkCode, PlatformMCPServer, PlatformNetworkPolicy,
+		PlatformSecret, PlatformSetting, PlatformSkill, PlatformSkillFile,
+		SandboxLayer, SandboxTemplate, ToolIndex, User, UserChannel []ent.Interceptor
 	}
 )

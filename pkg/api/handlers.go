@@ -1126,6 +1126,12 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/mcp-platform/servers/{name}", ToggleMCPPlatformServerHandler).Methods("PATCH")
 	router.HandleFunc("/api/mcp-platform/servers/{name}/refresh", RefreshMCPPlatformServerHandler).Methods("POST")
 
+	// Network policy settings endpoints (multi-tier allow/deny rules)
+	router.HandleFunc("/api/network-policies", ListNetworkPoliciesHandler).Methods("GET")
+	router.HandleFunc("/api/network-policies", CreateNetworkPolicyHandler).Methods("POST")
+	router.HandleFunc("/api/network-policies/{id}", UpdateNetworkPolicyHandler).Methods("PUT")
+	router.HandleFunc("/api/network-policies/{id}", DeleteNetworkPolicyHandler).Methods("DELETE")
+
 	// Credentials endpoints (master-key routes before {name} to avoid mux conflict)
 	router.HandleFunc("/api/credentials", ListCredentialsHandler).Methods("GET")
 	router.HandleFunc("/api/credentials", SaveCredentialHandler).Methods("POST")
@@ -1219,6 +1225,13 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
 	router.HandleFunc("/api/studio/sessions/{id}/stream", StudioChatStreamHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}/status", StudioChatStatusHandler).Methods("GET")
+
+	// Network grant approval endpoints (dynamic network policy)
+	router.HandleFunc("/api/studio/sessions/{id}/network-grants/approve", NetworkGrantApproveHandler).Methods("POST")
+	router.HandleFunc("/api/studio/sessions/{id}/network-grants/approve-broader", NetworkGrantApproveBroaderHandler).Methods("POST")
+	router.HandleFunc("/api/studio/sessions/{id}/network-grants/deny", NetworkGrantDenyHandler).Methods("POST")
+	router.HandleFunc("/api/studio/sessions/{id}/network-denials", NetworkDenialCheckHandler).Methods("GET")
+
 	router.HandleFunc("/api/studio/artifacts", StudioArtifactDownloadHandler).Methods("GET")
 	router.HandleFunc("/api/studio/artifacts/content", StudioArtifactContentHandler).Methods("GET")
 	router.HandleFunc("/api/studio/artifacts/pdf", StudioArtifactPDFHandler).Methods("GET")

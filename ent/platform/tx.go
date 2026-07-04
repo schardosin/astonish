@@ -28,6 +28,8 @@ type Tx struct {
 	PendingLinkCode *PendingLinkCodeClient
 	// PlatformMCPServer is the client for interacting with the PlatformMCPServer builders.
 	PlatformMCPServer *PlatformMCPServerClient
+	// PlatformNetworkPolicy is the client for interacting with the PlatformNetworkPolicy builders.
+	PlatformNetworkPolicy *PlatformNetworkPolicyClient
 	// PlatformSecret is the client for interacting with the PlatformSecret builders.
 	PlatformSecret *PlatformSecretClient
 	// PlatformSetting is the client for interacting with the PlatformSetting builders.
@@ -185,6 +187,7 @@ func (tx *Tx) init() {
 	tx.Organization = NewOrganizationClient(tx.config)
 	tx.PendingLinkCode = NewPendingLinkCodeClient(tx.config)
 	tx.PlatformMCPServer = NewPlatformMCPServerClient(tx.config)
+	tx.PlatformNetworkPolicy = NewPlatformNetworkPolicyClient(tx.config)
 	tx.PlatformSecret = NewPlatformSecretClient(tx.config)
 	tx.PlatformSetting = NewPlatformSettingClient(tx.config)
 	tx.PlatformSkill = NewPlatformSkillClient(tx.config)

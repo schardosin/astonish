@@ -11,6 +11,7 @@ import (
 	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 	"github.com/schardosin/astonish/ent/org/orgmcpserver"
 	"github.com/schardosin/astonish/ent/org/orgmemory"
+	"github.com/schardosin/astonish/ent/org/orgnetworkpolicy"
 	"github.com/schardosin/astonish/ent/org/orgskill"
 	"github.com/schardosin/astonish/ent/org/orgskillfile"
 	"github.com/schardosin/astonish/ent/org/schema"
@@ -132,6 +133,30 @@ func init() {
 	orgmemoryDescID := orgmemoryFields[0].Descriptor()
 	// orgmemory.DefaultID holds the default value on creation for the id field.
 	orgmemory.DefaultID = orgmemoryDescID.Default.(func() uuid.UUID)
+	orgnetworkpolicyFields := schema.OrgNetworkPolicy{}.Fields()
+	_ = orgnetworkpolicyFields
+	// orgnetworkpolicyDescHost is the schema descriptor for host field.
+	orgnetworkpolicyDescHost := orgnetworkpolicyFields[1].Descriptor()
+	// orgnetworkpolicy.HostValidator is a validator for the "host" field. It is called by the builders before save.
+	orgnetworkpolicy.HostValidator = orgnetworkpolicyDescHost.Validators[0].(func(string) error)
+	// orgnetworkpolicyDescPort is the schema descriptor for port field.
+	orgnetworkpolicyDescPort := orgnetworkpolicyFields[2].Descriptor()
+	// orgnetworkpolicy.DefaultPort holds the default value on creation for the port field.
+	orgnetworkpolicy.DefaultPort = orgnetworkpolicyDescPort.Default.(uint32)
+	// orgnetworkpolicyDescCreatedAt is the schema descriptor for created_at field.
+	orgnetworkpolicyDescCreatedAt := orgnetworkpolicyFields[5].Descriptor()
+	// orgnetworkpolicy.DefaultCreatedAt holds the default value on creation for the created_at field.
+	orgnetworkpolicy.DefaultCreatedAt = orgnetworkpolicyDescCreatedAt.Default.(func() time.Time)
+	// orgnetworkpolicyDescUpdatedAt is the schema descriptor for updated_at field.
+	orgnetworkpolicyDescUpdatedAt := orgnetworkpolicyFields[6].Descriptor()
+	// orgnetworkpolicy.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	orgnetworkpolicy.DefaultUpdatedAt = orgnetworkpolicyDescUpdatedAt.Default.(func() time.Time)
+	// orgnetworkpolicy.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	orgnetworkpolicy.UpdateDefaultUpdatedAt = orgnetworkpolicyDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// orgnetworkpolicyDescID is the schema descriptor for id field.
+	orgnetworkpolicyDescID := orgnetworkpolicyFields[0].Descriptor()
+	// orgnetworkpolicy.DefaultID holds the default value on creation for the id field.
+	orgnetworkpolicy.DefaultID = orgnetworkpolicyDescID.Default.(func() uuid.UUID)
 	orgskillFields := schema.OrgSkill{}.Fields()
 	_ = orgskillFields
 	// orgskillDescName is the schema descriptor for name field.

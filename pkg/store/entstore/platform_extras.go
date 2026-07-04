@@ -144,16 +144,18 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 
 			// Create a request-scoped clone with tenant-specific stores
 			reqSvc := &store.Services{
-				Mode:               store.ModePlatform,
-				Platform:           baseSvc.Platform,
-				TenantRouter:       baseSvc.TenantRouter,
-				Audit:              orgStore.OrgAudit(),
-				Skills:             orgStore.OrgSkills(),
-				MCPServers:         orgStore.OrgMCPServers(),
-				PlatformMCPServers: s.PlatformMCPServers(),
-				PlatformSkills:     s.PlatformSkills(),
-				PlatformSettings:   s.PlatformSettings(),
-				OrgSettings:        s.OrgSettings(tc.OrgSlug),
+				Mode:                    store.ModePlatform,
+				Platform:                baseSvc.Platform,
+				TenantRouter:            baseSvc.TenantRouter,
+				Audit:                   orgStore.OrgAudit(),
+				Skills:                  orgStore.OrgSkills(),
+				MCPServers:              orgStore.OrgMCPServers(),
+				PlatformMCPServers:      s.PlatformMCPServers(),
+				PlatformSkills:          s.PlatformSkills(),
+				PlatformSettings:        s.PlatformSettings(),
+				OrgSettings:             s.OrgSettings(tc.OrgSlug),
+				NetworkPolicies:         orgStore.OrgNetworkPolicies(),
+				PlatformNetworkPolicies: s.PlatformNetworkPolicies(),
 			}
 
 			// Populate team-scoped stores if team is known
@@ -174,6 +176,7 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				reqSvc.DrillReports = teamStore.DrillReports()
 				reqSvc.TeamSkills = teamStore.Skills()
 				reqSvc.TeamMCPServers = teamStore.MCPServers()
+				reqSvc.TeamNetworkPolicies = teamStore.NetworkPolicies()
 				reqSvc.Settings = teamStore.Settings()
 				reqSvc.AppState = teamStore.AppState()
 				reqSvc.AppStateSQL = teamStore.AppStateSQL()

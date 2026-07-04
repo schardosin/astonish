@@ -1,7 +1,7 @@
 import {
   Settings, Key, Server, MessageSquare, Globe, Radio, Database,
   Brain, GitFork, Terminal, Wand2, Clock, Shield, Box,
-  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound, Layers
+  GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound, Layers, Network
 } from 'lucide-react'
 
 export interface SettingsMenuItem {
@@ -26,6 +26,7 @@ export const TEAM_ITEMS: SettingsMenuItem[] = [
   { id: 'team-providers', label: 'Providers', icon: Key },
   { id: 'team-skills', label: 'Skills', icon: Wand2 },
   { id: 'team-mcp', label: 'MCP Servers', icon: Server },
+  { id: 'team-network', label: 'Network Policy', icon: Network },
   { id: 'team-scheduler', label: 'Scheduler', icon: Clock },
   { id: 'team-taps', label: 'Repositories', icon: GitBranch },
   { id: 'team-flows', label: 'Flow Store', icon: Store },
@@ -40,6 +41,7 @@ export const ORG_ITEMS: SettingsMenuItem[] = [
   { id: 'org-providers', label: 'Providers', icon: Key },
   { id: 'org-skills', label: 'Skills', icon: Wand2 },
   { id: 'org-mcp', label: 'MCP Servers', icon: Server },
+  { id: 'org-network', label: 'Network Policy', icon: Network },
   { id: 'org-audit', label: 'Audit', icon: FileText },
 ]
 
@@ -51,6 +53,7 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-providers', label: 'Providers', icon: Key },
   { id: 'platform-skills', label: 'Skills', icon: Wand2 },
   { id: 'platform-mcp', label: 'MCP Servers', icon: Server },
+  { id: 'platform-network', label: 'Network Policy', icon: Network },
   { id: 'platform-channels', label: 'Channels', icon: Radio },
   { id: 'platform-auth', label: 'Authentication', icon: Crown },
   { id: 'platform-sandbox', label: 'Base Sandbox', icon: Box },

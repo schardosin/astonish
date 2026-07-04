@@ -3,12 +3,12 @@ import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, S
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
-import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream } from '../api/studioChat'
+import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream, fetchNetworkDenials } from '../api/studioChat'
 import type { ChatSession, AttachmentPayload } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, UserMessage, AttachmentInfo } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -29,6 +29,7 @@ import DistillPreviewCard from './chat/DistillPreviewCard'
 import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
+import NetworkDenialPrompt from './chat/NetworkDenialPrompt'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -683,6 +684,28 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'memory_saved':
             setHasSessionMemories(true)
+            break
+
+          case 'network_denial_hint':
+            // Backend detected a proxy denial and extracted host:port from output.
+            // Use inline denial data if available; fall back to API poll otherwise.
+            if (data.denials && (data.denials as unknown[]).length > 0) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'network_denial',
+                denials: data.denials as NetworkDenialMessage['denials'],
+                sandbox_name: (data.sandbox_name as string) || '',
+              }])
+            } else if (data.session_id) {
+              fetchNetworkDenials(String(data.session_id)).then(resp => {
+                if (resp.denials && resp.denials.length > 0) {
+                  setMessages((prev: ChatMsg[]) => [...prev, {
+                    type: 'network_denial',
+                    denials: resp.denials,
+                    sandbox_name: resp.sandbox_name,
+                  }])
+                }
+              }).catch(() => { /* non-fatal */ })
+            }
             break
 
           case 'artifact':
@@ -1430,6 +1453,26 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'memory_saved':
             // Mark that this session has memories (optimistic)
             setHasSessionMemories(true)
+            break
+
+          case 'network_denial_hint':
+            if (data.denials && (data.denials as unknown[]).length > 0) {
+              setMessages((prev: ChatMsg[]) => [...prev, {
+                type: 'network_denial',
+                denials: data.denials as NetworkDenialMessage['denials'],
+                sandbox_name: (data.sandbox_name as string) || '',
+              }])
+            } else if (data.session_id) {
+              fetchNetworkDenials(String(data.session_id)).then(resp => {
+                if (resp.denials && resp.denials.length > 0) {
+                  setMessages((prev: ChatMsg[]) => [...prev, {
+                    type: 'network_denial',
+                    denials: resp.denials,
+                    sandbox_name: resp.sandbox_name,
+                  }])
+                }
+              }).catch(() => { /* non-fatal */ })
+            }
             break
 
           case 'image':
@@ -2532,6 +2575,21 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       <span>&#10003;</span> Auto-approved: <code className="bg-green-500/20 px-1.5 py-0.5 rounded font-mono text-xs">{msg.toolName as string}</code>
                     </span>
                   </div>
+                )
+              }
+
+              if (msg.type === 'network_denial') {
+                const denialMsg = msg as NetworkDenialMessage
+                return (
+                  <NetworkDenialPrompt
+                    key={index}
+                    denials={denialMsg.denials}
+                    sandboxName={denialMsg.sandbox_name}
+                    sessionId={activeSessionId || ''}
+                    onApproved={(host) => {
+                      sendMessage(`I just approved network access to ${host}. Please retry the previous command that was blocked by the proxy.`)
+                    }}
+                  />
                 )
               }
 

@@ -482,6 +482,13 @@ func sandboxName(sessionID string) string {
 	return prefix + id
 }
 
+// SandboxName returns the deterministic sandbox (pod) name for a given
+// session ID. This is the canonical mapping used by the OpenShell backend
+// when creating sandboxes.
+func SandboxName(sessionID string) string {
+	return sandboxName(sessionID)
+}
+
 // toDNSLabel lower-cases the input and replaces any character that is
 // not [a-z0-9-] with '-'. Leading/trailing '-' are stripped. The result
 // is guaranteed to be a valid DNS-1123 label fragment.

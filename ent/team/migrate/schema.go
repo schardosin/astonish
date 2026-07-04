@@ -290,6 +290,29 @@ var (
 			},
 		},
 	}
+	// NetworkPoliciesColumns holds the columns for the "network_policies" table.
+	NetworkPoliciesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "host", Type: field.TypeString},
+		{Name: "port", Type: field.TypeUint32, Default: 443},
+		{Name: "action", Type: field.TypeEnum, Enums: []string{"allow", "deny"}, Default: "allow"},
+		{Name: "created_by", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// NetworkPoliciesTable holds the schema information for the "network_policies" table.
+	NetworkPoliciesTable = &schema.Table{
+		Name:       "network_policies",
+		Columns:    NetworkPoliciesColumns,
+		PrimaryKey: []*schema.Column{NetworkPoliciesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "networkpolicy_host_port",
+				Unique:  true,
+				Columns: []*schema.Column{NetworkPoliciesColumns[1], NetworkPoliciesColumns[2]},
+			},
+		},
+	}
 	// SandboxSessionsColumns holds the columns for the "sandbox_sessions" table.
 	SandboxSessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -556,6 +579,7 @@ var (
 		FlowsTable,
 		McpServersTable,
 		MemoriesTable,
+		NetworkPoliciesTable,
 		SandboxSessionsTable,
 		ScheduledJobsTable,
 		SessionsTable,
@@ -601,6 +625,9 @@ func init() {
 	}
 	MemoriesTable.Annotation = &entsql.Annotation{
 		Table: "memories",
+	}
+	NetworkPoliciesTable.Annotation = &entsql.Annotation{
+		Table: "network_policies",
 	}
 	SandboxSessionsTable.Annotation = &entsql.Annotation{
 		Table: "sandbox_sessions",

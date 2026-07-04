@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
 	"github.com/schardosin/astonish/ent/team/memory"
+	"github.com/schardosin/astonish/ent/team/networkpolicy"
 	"github.com/schardosin/astonish/ent/team/sandboxsession"
 	"github.com/schardosin/astonish/ent/team/scheduledjob"
 	"github.com/schardosin/astonish/ent/team/schema"
@@ -302,6 +303,30 @@ func init() {
 	memoryDescID := memoryFields[0].Descriptor()
 	// memory.DefaultID holds the default value on creation for the id field.
 	memory.DefaultID = memoryDescID.Default.(func() uuid.UUID)
+	networkpolicyFields := schema.NetworkPolicy{}.Fields()
+	_ = networkpolicyFields
+	// networkpolicyDescHost is the schema descriptor for host field.
+	networkpolicyDescHost := networkpolicyFields[1].Descriptor()
+	// networkpolicy.HostValidator is a validator for the "host" field. It is called by the builders before save.
+	networkpolicy.HostValidator = networkpolicyDescHost.Validators[0].(func(string) error)
+	// networkpolicyDescPort is the schema descriptor for port field.
+	networkpolicyDescPort := networkpolicyFields[2].Descriptor()
+	// networkpolicy.DefaultPort holds the default value on creation for the port field.
+	networkpolicy.DefaultPort = networkpolicyDescPort.Default.(uint32)
+	// networkpolicyDescCreatedAt is the schema descriptor for created_at field.
+	networkpolicyDescCreatedAt := networkpolicyFields[5].Descriptor()
+	// networkpolicy.DefaultCreatedAt holds the default value on creation for the created_at field.
+	networkpolicy.DefaultCreatedAt = networkpolicyDescCreatedAt.Default.(func() time.Time)
+	// networkpolicyDescUpdatedAt is the schema descriptor for updated_at field.
+	networkpolicyDescUpdatedAt := networkpolicyFields[6].Descriptor()
+	// networkpolicy.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	networkpolicy.DefaultUpdatedAt = networkpolicyDescUpdatedAt.Default.(func() time.Time)
+	// networkpolicy.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	networkpolicy.UpdateDefaultUpdatedAt = networkpolicyDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// networkpolicyDescID is the schema descriptor for id field.
+	networkpolicyDescID := networkpolicyFields[0].Descriptor()
+	// networkpolicy.DefaultID holds the default value on creation for the id field.
+	networkpolicy.DefaultID = networkpolicyDescID.Default.(func() uuid.UUID)
 	sandboxsessionFields := schema.SandboxSession{}.Fields()
 	_ = sandboxsessionFields
 	// sandboxsessionDescChatSessionID is the schema descriptor for chat_session_id field.

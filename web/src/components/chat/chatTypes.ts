@@ -247,6 +247,20 @@ export interface SourcesMessage {
   urls: string[]
 }
 
+export interface NetworkDenialMessage {
+  type: 'network_denial'
+  denials: Array<{
+    chunk_id?: string
+    host: string
+    port: number
+    binary?: string
+    rationale?: string
+    security_notes?: string
+    broader_pattern?: string
+  }>
+  sandbox_name: string
+}
+
 export type ChatMsg =
   | FleetMessageItem
   | UserMessage
@@ -273,6 +287,7 @@ export type ChatMsg =
   | ReportPreviewMessage
   | ReportMarkerMessage
   | SourcesMessage
+  | NetworkDenialMessage
 
 // ---- Fleet info / state ----
 

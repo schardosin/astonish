@@ -267,11 +267,20 @@ func (s *Store) PruneStaleSandboxSessions(ctx context.Context) (int, error) {
 		// chat_session_id = id, and there's never a matching chat session for them.
 		// They are intentionally pruned here — they represent build artifacts, not
 		// live sessions.
+		//
+		// Safety guards:
+		//   - Skip records younger than 10 minutes to avoid a race where the
+		//     sandbox_session is inserted before the chat sessions row is committed
+		//     (or when the chat session lives in a different org database).
+		//   - Skip records in active states (creating/running/resuming) — a live
+		//     sandbox should never be pruned from the registry.
 		res, err := db.ExecContext(ctx, `
 			DELETE FROM sandbox_sessions ss
 			WHERE NOT EXISTS (
 				SELECT 1 FROM sessions s WHERE s.id = ss.chat_session_id
 			)
+			AND ss.state NOT IN ('creating', 'running', 'resuming')
+			AND ss.created_at < NOW() - INTERVAL '10 minutes'
 		`)
 		db.Close()
 		if err != nil {

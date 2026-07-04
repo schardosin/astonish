@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // mockChannel is a minimal Channel implementation for testing.
@@ -286,5 +288,204 @@ func TestChannelInfo_SlackEnabledNotConnected(t *testing.T) {
 	}
 	if !resp.Slack.Enabled {
 		t.Error("expected slack.enabled=true")
+	}
+}
+
+// --- DB-fallback tests (API-mode pod scenario) ---
+
+// mockPlatformSettingsStoreForChannelInfo implements store.PlatformSettingsStore.
+type mockPlatformSettingsStoreForChannelInfo struct {
+	settings *store.PlatformSettings
+}
+
+func (m *mockPlatformSettingsStoreForChannelInfo) Get(_ context.Context) (*store.PlatformSettings, error) {
+	return m.settings, nil
+}
+
+func (m *mockPlatformSettingsStoreForChannelInfo) Save(_ context.Context, _ *store.PlatformSettings) error {
+	return nil
+}
+
+// mockPlatformBackendForChannelInfo satisfies store.PlatformBackend with only
+// PlatformSettings() returning useful data. All other methods are stubs.
+type mockPlatformBackendForChannelInfo struct {
+	settingsStore store.PlatformSettingsStore
+}
+
+func (m *mockPlatformBackendForChannelInfo) Organizations() store.OrganizationStore { return nil }
+func (m *mockPlatformBackendForChannelInfo) Users() store.UserStore                 { return nil }
+func (m *mockPlatformBackendForChannelInfo) LoginSessions() store.LoginSessionStore { return nil }
+func (m *mockPlatformBackendForChannelInfo) OIDCProviders() store.OIDCProviderStore { return nil }
+func (m *mockPlatformBackendForChannelInfo) UserChannels() store.UserChannelStore   { return nil }
+func (m *mockPlatformBackendForChannelInfo) Close() error                           { return nil }
+func (m *mockPlatformBackendForChannelInfo) ForOrg(_ string) (store.OrgDataStore, error) {
+	return nil, nil
+}
+func (m *mockPlatformBackendForChannelInfo) ProvisionOrg(_ context.Context, _, _ string) error {
+	return nil
+}
+func (m *mockPlatformBackendForChannelInfo) DecommissionOrg(_ context.Context, _ string) error {
+	return nil
+}
+func (m *mockPlatformBackendForChannelInfo) InstanceSuffix() string { return "" }
+func (m *mockPlatformBackendForChannelInfo) PlatformSettings() store.PlatformSettingsStore {
+	return m.settingsStore
+}
+func (m *mockPlatformBackendForChannelInfo) OrgSettings(_ string) store.OrgSettingsStore { return nil }
+func (m *mockPlatformBackendForChannelInfo) PlatformMCPServers() store.MCPServerStore    { return nil }
+func (m *mockPlatformBackendForChannelInfo) PlatformSkills() store.SkillStore            { return nil }
+func (m *mockPlatformBackendForChannelInfo) SetEmbedFunc(_ store.EmbedFunc)              {}
+func (m *mockPlatformBackendForChannelInfo) GetEmbedFunc() store.EmbedFunc               { return nil }
+func (m *mockPlatformBackendForChannelInfo) SandboxLayers() store.LayerStore             { return nil }
+func (m *mockPlatformBackendForChannelInfo) SandboxTemplates() store.SandboxTemplateStore {
+	return nil
+}
+func (m *mockPlatformBackendForChannelInfo) SecretGetter() func(string) string    { return nil }
+func (m *mockPlatformBackendForChannelInfo) MigrateAll(_ context.Context) error   { return nil }
+func (m *mockPlatformBackendForChannelInfo) CleanupExpired(_ context.Context) error { return nil }
+func (m *mockPlatformBackendForChannelInfo) PlatformDB() *sql.DB                  { return nil }
+func (m *mockPlatformBackendForChannelInfo) MigrateAllSchemas(_ context.Context) error {
+	return nil
+}
+func (m *mockPlatformBackendForChannelInfo) NewLinkCodeStore() store.LinkCodeStore { return nil }
+
+// TestChannelInfo_DBFallback_EmailEnabled tests the API-mode pod scenario:
+// channelConfigStatuses is nil (no channels running locally), but the platform
+// DB has email enabled. The endpoint should fall back to the DB and report
+// configured=true so the UI shows the "Link Email" button.
+func TestChannelInfo_DBFallback_EmailEnabled(t *testing.T) {
+	// Save and restore global state
+	origStatuses := getChannelConfigStatuses()
+	origMgr := GetChannelManager()
+	origBackend := platformBackendInstance
+	defer func() {
+		SetChannelConfigStatuses(origStatuses)
+		SetChannelManager(origMgr)
+		platformBackendInstance = origBackend
+	}()
+
+	// Simulate API-mode pod: no channel config statuses, no channel manager
+	SetChannelConfigStatuses(nil)
+	SetChannelManager(nil)
+
+	// But platform DB has email enabled
+	platformBackendInstance = &mockPlatformBackendForChannelInfo{
+		settingsStore: &mockPlatformSettingsStoreForChannelInfo{
+			settings: &store.PlatformSettings{
+				Channels: &store.PlatformChannelSettings{
+					Email: &store.PlatformEmailConfig{
+						Enabled: true,
+						Address: "agent@example.com",
+					},
+					Telegram: &store.PlatformTelegramConfig{
+						Enabled: true,
+					},
+					Slack: &store.PlatformSlackConfig{
+						Enabled: true,
+						Mode:    "socket",
+					},
+				},
+			},
+		},
+	}
+
+	resp := callChannelInfo(t)
+
+	// Email should be configured (from DB)
+	if !resp.Email.Configured {
+		t.Error("expected email.configured=true from DB fallback")
+	}
+	if !resp.Email.Enabled {
+		t.Error("expected email.enabled=true from DB fallback")
+	}
+	if resp.Email.Connected {
+		t.Error("expected email.connected=false (no channel manager)")
+	}
+	if resp.Email.Address != "agent@example.com" {
+		t.Errorf("expected email.address='agent@example.com', got %q", resp.Email.Address)
+	}
+
+	// Telegram should be configured (from DB)
+	if !resp.Telegram.Configured {
+		t.Error("expected telegram.configured=true from DB fallback")
+	}
+	if !resp.Telegram.Enabled {
+		t.Error("expected telegram.enabled=true from DB fallback")
+	}
+
+	// Slack should be configured (from DB)
+	if !resp.Slack.Configured {
+		t.Error("expected slack.configured=true from DB fallback")
+	}
+	if !resp.Slack.Enabled {
+		t.Error("expected slack.enabled=true from DB fallback")
+	}
+}
+
+// TestChannelInfo_DBFallback_NothingEnabled tests when the DB has channels
+// configured but none are enabled. Should report configured=false.
+func TestChannelInfo_DBFallback_NothingEnabled(t *testing.T) {
+	origStatuses := getChannelConfigStatuses()
+	origMgr := GetChannelManager()
+	origBackend := platformBackendInstance
+	defer func() {
+		SetChannelConfigStatuses(origStatuses)
+		SetChannelManager(origMgr)
+		platformBackendInstance = origBackend
+	}()
+
+	SetChannelConfigStatuses(nil)
+	SetChannelManager(nil)
+
+	platformBackendInstance = &mockPlatformBackendForChannelInfo{
+		settingsStore: &mockPlatformSettingsStoreForChannelInfo{
+			settings: &store.PlatformSettings{
+				Channels: &store.PlatformChannelSettings{
+					Email: &store.PlatformEmailConfig{
+						Enabled: false,
+						Address: "agent@example.com",
+					},
+				},
+			},
+		},
+	}
+
+	resp := callChannelInfo(t)
+
+	if resp.Email.Configured {
+		t.Error("expected email.configured=false when disabled in DB")
+	}
+	if resp.Email.Enabled {
+		t.Error("expected email.enabled=false when disabled in DB")
+	}
+}
+
+// TestChannelInfo_DBFallback_NoBackend tests the edge case where neither
+// channelConfigStatuses nor a platform backend are available (personal mode
+// with no channels). Should return configured=false for everything.
+func TestChannelInfo_DBFallback_NoBackend(t *testing.T) {
+	origStatuses := getChannelConfigStatuses()
+	origMgr := GetChannelManager()
+	origBackend := platformBackendInstance
+	defer func() {
+		SetChannelConfigStatuses(origStatuses)
+		SetChannelManager(origMgr)
+		platformBackendInstance = origBackend
+	}()
+
+	SetChannelConfigStatuses(nil)
+	SetChannelManager(nil)
+	platformBackendInstance = nil
+
+	resp := callChannelInfo(t)
+
+	if resp.Email.Configured {
+		t.Error("expected email.configured=false when no backend")
+	}
+	if resp.Telegram.Configured {
+		t.Error("expected telegram.configured=false when no backend")
+	}
+	if resp.Slack.Configured {
+		t.Error("expected slack.configured=false when no backend")
 	}
 }

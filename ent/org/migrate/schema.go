@@ -144,6 +144,29 @@ var (
 			},
 		},
 	}
+	// OrgNetworkPoliciesColumns holds the columns for the "org_network_policies" table.
+	OrgNetworkPoliciesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "host", Type: field.TypeString},
+		{Name: "port", Type: field.TypeUint32, Default: 443},
+		{Name: "action", Type: field.TypeEnum, Enums: []string{"allow", "deny"}, Default: "allow"},
+		{Name: "created_by", Type: field.TypeUUID},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// OrgNetworkPoliciesTable holds the schema information for the "org_network_policies" table.
+	OrgNetworkPoliciesTable = &schema.Table{
+		Name:       "org_network_policies",
+		Columns:    OrgNetworkPoliciesColumns,
+		PrimaryKey: []*schema.Column{OrgNetworkPoliciesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "orgnetworkpolicy_host_port",
+				Unique:  true,
+				Columns: []*schema.Column{OrgNetworkPoliciesColumns[1], OrgNetworkPoliciesColumns[2]},
+			},
+		},
+	}
 	// OrgSkillsColumns holds the columns for the "org_skills" table.
 	OrgSkillsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeUUID},
@@ -286,6 +309,7 @@ var (
 		OrgEncryptionKeysTable,
 		OrgMcpServersTable,
 		OrgMemoriesTable,
+		OrgNetworkPoliciesTable,
 		OrgSkillsTable,
 		OrgSkillFilesTable,
 		TeamsTable,
@@ -308,6 +332,9 @@ func init() {
 	}
 	OrgMemoriesTable.Annotation = &entsql.Annotation{
 		Table: "org_memories",
+	}
+	OrgNetworkPoliciesTable.Annotation = &entsql.Annotation{
+		Table: "org_network_policies",
 	}
 	OrgSkillsTable.Annotation = &entsql.Annotation{
 		Table: "org_skills",

@@ -23,6 +23,7 @@ import (
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
 	"github.com/schardosin/astonish/ent/team/memory"
+	"github.com/schardosin/astonish/ent/team/networkpolicy"
 	"github.com/schardosin/astonish/ent/team/sandboxsession"
 	"github.com/schardosin/astonish/ent/team/scheduledjob"
 	"github.com/schardosin/astonish/ent/team/session"
@@ -102,6 +103,7 @@ func checkColumn(t, c string) error {
 			flow.Table:              flow.ValidColumn,
 			mcpserver.Table:         mcpserver.ValidColumn,
 			memory.Table:            memory.ValidColumn,
+			networkpolicy.Table:     networkpolicy.ValidColumn,
 			sandboxsession.Table:    sandboxsession.ValidColumn,
 			scheduledjob.Table:      scheduledjob.ValidColumn,
 			session.Table:           session.ValidColumn,

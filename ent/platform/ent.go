@@ -20,6 +20,7 @@ import (
 	"github.com/schardosin/astonish/ent/platform/orgmembership"
 	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
+	"github.com/schardosin/astonish/ent/platform/platformnetworkpolicy"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
 	"github.com/schardosin/astonish/ent/platform/platformskill"
@@ -89,23 +90,24 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			devicesession.Table:     devicesession.ValidColumn,
-			emailthreadindex.Table:  emailthreadindex.ValidColumn,
-			loginsession.Table:      loginsession.ValidColumn,
-			oidcprovider.Table:      oidcprovider.ValidColumn,
-			orgmembership.Table:     orgmembership.ValidColumn,
-			organization.Table:      organization.ValidColumn,
-			pendinglinkcode.Table:   pendinglinkcode.ValidColumn,
-			platformmcpserver.Table: platformmcpserver.ValidColumn,
-			platformsecret.Table:    platformsecret.ValidColumn,
-			platformsetting.Table:   platformsetting.ValidColumn,
-			platformskill.Table:     platformskill.ValidColumn,
-			platformskillfile.Table: platformskillfile.ValidColumn,
-			sandboxlayer.Table:      sandboxlayer.ValidColumn,
-			sandboxtemplate.Table:   sandboxtemplate.ValidColumn,
-			toolindex.Table:         toolindex.ValidColumn,
-			user.Table:              user.ValidColumn,
-			userchannel.Table:       userchannel.ValidColumn,
+			devicesession.Table:         devicesession.ValidColumn,
+			emailthreadindex.Table:      emailthreadindex.ValidColumn,
+			loginsession.Table:          loginsession.ValidColumn,
+			oidcprovider.Table:          oidcprovider.ValidColumn,
+			orgmembership.Table:         orgmembership.ValidColumn,
+			organization.Table:          organization.ValidColumn,
+			pendinglinkcode.Table:       pendinglinkcode.ValidColumn,
+			platformmcpserver.Table:     platformmcpserver.ValidColumn,
+			platformnetworkpolicy.Table: platformnetworkpolicy.ValidColumn,
+			platformsecret.Table:        platformsecret.ValidColumn,
+			platformsetting.Table:       platformsetting.ValidColumn,
+			platformskill.Table:         platformskill.ValidColumn,
+			platformskillfile.Table:     platformskillfile.ValidColumn,
+			sandboxlayer.Table:          sandboxlayer.ValidColumn,
+			sandboxtemplate.Table:       sandboxtemplate.ValidColumn,
+			toolindex.Table:             toolindex.ValidColumn,
+			user.Table:                  user.ValidColumn,
+			userchannel.Table:           userchannel.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

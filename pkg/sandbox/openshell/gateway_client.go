@@ -38,8 +38,145 @@ type GatewayClient interface {
 	// An empty selector returns all sandboxes.
 	ListSandboxes(ctx context.Context, labelSelector string) ([]SandboxSummary, error)
 
+	// GetDraftPolicy returns pending (or filtered) draft policy proposals for a sandbox.
+	// The supervisor automatically generates proposals when it detects network denials.
+	// statusFilter can be "pending", "approved", "rejected", or "" for all.
+	GetDraftPolicy(ctx context.Context, sandboxName string, statusFilter string) (*DraftPolicyResponse, error)
+
+	// ApproveDraftChunk approves a single draft policy chunk, causing the gateway
+	// to merge the proposed endpoint into the sandbox's active network policy.
+	ApproveDraftChunk(ctx context.Context, sandboxName string, chunkID string) (*ApproveChunkResponse, error)
+
+	// RejectDraftChunk rejects a draft policy chunk with an optional reason.
+	RejectDraftChunk(ctx context.Context, sandboxName string, chunkID string, reason string) error
+
+	// UpdateConfig applies incremental policy merge operations to a running sandbox.
+	// Use this for broader-pattern approvals that don't correspond to a specific draft chunk.
+	UpdateConfig(ctx context.Context, sandboxName string, ops []PolicyMergeOp) (*UpdateConfigResponse, error)
+
+	// WatchSandbox opens a server-streaming connection that delivers sandbox events
+	// including draft policy updates (denial notifications). The caller must close
+	// the returned stream when done.
+	WatchSandbox(ctx context.Context, sandboxName string, opts WatchOpts) (SandboxEventStream, error)
+
 	// Close releases any resources held by the client (e.g., gRPC connection).
 	Close() error
+}
+
+// DraftPolicyResponse contains the draft policy chunks returned by GetDraftPolicy.
+type DraftPolicyResponse struct {
+	// Chunks are the draft policy proposals.
+	Chunks []PolicyChunkInfo
+	// DraftVersion is the current draft version counter.
+	DraftVersion uint64
+	// LastAnalyzedAtMs is when the last analysis cycle completed (ms since epoch).
+	LastAnalyzedAtMs int64
+}
+
+// PolicyChunkInfo is a single draft policy proposal from the supervisor.
+type PolicyChunkInfo struct {
+	// ID is the unique chunk identifier (used to approve/reject).
+	ID string
+	// Status is "pending", "approved", or "rejected".
+	Status string
+	// RuleName is the network_policies map key (e.g., "astonish-egress").
+	RuleName string
+	// Host is the proposed endpoint host pattern.
+	Host string
+	// Port is the proposed endpoint port.
+	Port uint32
+	// Binary is the binary path that triggered the denial.
+	Binary string
+	// Rationale is a human-readable explanation of the proposal.
+	Rationale string
+	// SecurityNotes contains any security concerns flagged by analysis.
+	SecurityNotes string
+	// HitCount is how many times this endpoint was denied.
+	HitCount int32
+	// CreatedAtMs is the chunk creation timestamp.
+	CreatedAtMs int64
+}
+
+// ApproveChunkResponse is returned after successfully approving a draft chunk.
+type ApproveChunkResponse struct {
+	// PolicyVersion is the new active policy version after the merge.
+	PolicyVersion uint32
+	// PolicyHash is the SHA-256 hash of the new policy.
+	PolicyHash string
+}
+
+// UpdateConfigResponse is returned after a successful UpdateConfig call.
+type UpdateConfigResponse struct {
+	// PolicyVersion is the new active policy version.
+	PolicyVersion uint32
+}
+
+// PolicyMergeOp describes a single incremental change to a sandbox's network policy.
+type PolicyMergeOp struct {
+	// Type is the operation type.
+	Type PolicyMergeOpType
+	// RuleName is the network policy rule name (e.g., "astonish-egress").
+	RuleName string
+	// Endpoint is used for AddEndpoint operations.
+	Endpoint *EndpointSpec
+	// Binary is used for AddEndpoint operations (path glob for allowed binaries).
+	Binary string
+}
+
+// PolicyMergeOpType enumerates the supported merge operations.
+type PolicyMergeOpType int
+
+const (
+	// PolicyMergeAddEndpoint adds an endpoint to an existing network rule.
+	PolicyMergeAddEndpoint PolicyMergeOpType = iota
+	// PolicyMergeRemoveEndpoint removes an endpoint from an existing network rule.
+	PolicyMergeRemoveEndpoint
+)
+
+// WatchOpts configures what events to receive on a WatchSandbox stream.
+type WatchOpts struct {
+	// FollowEvents subscribes to platform events (including denial notifications).
+	FollowEvents bool
+	// EventTail replays the last N events before live streaming.
+	EventTail uint32
+}
+
+// SandboxEventStream is a server-streaming connection delivering sandbox events.
+type SandboxEventStream interface {
+	// Recv blocks until the next event is available or the stream ends.
+	Recv() (*SandboxEvent, error)
+	// Close terminates the stream.
+	Close() error
+}
+
+// SandboxEvent is a single event from a WatchSandbox stream.
+type SandboxEvent struct {
+	// Type identifies the event payload.
+	Type SandboxEventType
+	// DraftPolicyUpdate is populated when Type == SandboxEventDraftUpdate.
+	DraftPolicyUpdate *DraftPolicyUpdateInfo
+}
+
+// SandboxEventType classifies sandbox stream events.
+type SandboxEventType int
+
+const (
+	// SandboxEventDraftUpdate indicates new draft policy proposals are available.
+	SandboxEventDraftUpdate SandboxEventType = iota
+	// SandboxEventOther covers status, log, and warning events (not used by denial detection).
+	SandboxEventOther
+)
+
+// DraftPolicyUpdateInfo carries details about a draft policy change notification.
+type DraftPolicyUpdateInfo struct {
+	// DraftVersion is the new draft version.
+	DraftVersion uint64
+	// NewChunks is the number of new chunks added.
+	NewChunks uint32
+	// TotalPending is the total number of pending chunks.
+	TotalPending uint32
+	// Summary is a human-readable description.
+	Summary string
 }
 
 // CreateSandboxRequest contains the parameters for creating a new sandbox.

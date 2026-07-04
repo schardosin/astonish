@@ -53,6 +53,8 @@ sandbox:
           port: 443
 ```
 
+For full details on managing network access rules — including multi-tier admin policies (platform/org/team), deny-wins-from-above merge semantics, and in-chat interactive approval — see [Network Policy](./network-policy.md).
+
 #### Authentication
 
 The OpenShell backend authenticates to the gateway via mTLS (client certificate + key + CA) or a static bearer token for development environments.

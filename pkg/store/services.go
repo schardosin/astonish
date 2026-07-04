@@ -97,6 +97,19 @@ type Services struct {
 	// Only superadmins can manage these. Nil in personal mode.
 	PlatformSkills SkillStore
 
+	// NetworkPolicies provides access to org-level network policy rules.
+	// In platform mode, these rules apply to all teams in the org.
+	NetworkPolicies NetworkPolicyStore
+
+	// TeamNetworkPolicies provides access to team-scoped network policy rules.
+	// Team rules can add allows but cannot override platform/org denies.
+	TeamNetworkPolicies NetworkPolicyStore
+
+	// PlatformNetworkPolicies provides access to platform-wide network policy rules.
+	// Platform denies cannot be overridden by any lower tier.
+	// Only superadmins can manage these. Nil in personal mode.
+	PlatformNetworkPolicies NetworkPolicyStore
+
 	// DrillReports provides access to drill test report persistence.
 	DrillReports DrillReportStore
 

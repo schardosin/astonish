@@ -397,6 +397,8 @@ sandbox:
           port: 443
 ```
 
+For dynamic per-team/org/platform network rules managed through the Studio UI (rather than static config), see [Network Policy](../security/network-policy.md).
+
 ### Landlock Filesystem Policy
 
 The sandbox filesystem is controlled by Linux Landlock LSM. Astonish

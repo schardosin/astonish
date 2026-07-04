@@ -520,3 +520,33 @@ func ProviderStoresFromContext(ctx context.Context) *ProviderStores {
 	ps, _ := ctx.Value(providerStoresKey).(*ProviderStores)
 	return ps
 }
+
+// --- Network policy stores (for multi-tier allow/deny rules) ---
+
+const networkPolicyStoresKey contextKey = "astonish_network_policy_stores"
+
+// NetworkPolicyStores holds references to the 3-tier network policy stores.
+// Used to resolve effective allow/deny rules for sandbox network access.
+//
+// Merge semantics: deny-wins-from-above. A platform deny cannot be overridden
+// by an org or team allow. Within the same tier, later saves override earlier.
+type NetworkPolicyStores struct {
+	Platform NetworkPolicyStore // platform-wide rules (nil in personal mode)
+	Org      NetworkPolicyStore // org-level rules (nil if not in platform mode)
+	Team     NetworkPolicyStore // team-level rules (nil if not in platform mode)
+}
+
+// WithNetworkPolicyStores returns a new context containing the NetworkPolicyStores.
+func WithNetworkPolicyStores(ctx context.Context, nps *NetworkPolicyStores) context.Context {
+	return context.WithValue(ctx, networkPolicyStoresKey, nps)
+}
+
+// NetworkPolicyStoresFromContext retrieves the NetworkPolicyStores from a context.
+// Returns nil if no stores are present (personal mode or tests).
+func NetworkPolicyStoresFromContext(ctx context.Context) *NetworkPolicyStores {
+	if ctx == nil {
+		return nil
+	}
+	nps, _ := ctx.Value(networkPolicyStoresKey).(*NetworkPolicyStores)
+	return nps
+}

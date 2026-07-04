@@ -79,6 +79,7 @@ func (m *authzOrgDataStore) ForUser(_ string) store.PersonalDataStore { return n
 func (m *authzOrgDataStore) OrgMemories() store.MemoryStore           { return nil }
 func (m *authzOrgDataStore) OrgSkills() store.SkillStore              { return nil }
 func (m *authzOrgDataStore) OrgMCPServers() store.MCPServerStore      { return nil }
+func (m *authzOrgDataStore) OrgNetworkPolicies() store.NetworkPolicyStore { return nil }
 func (m *authzOrgDataStore) OrgApps() store.AppStore                  { return nil }
 func (m *authzOrgDataStore) OrgAudit() store.AuditStore               { return nil }
 func (m *authzOrgDataStore) Teams() store.TeamManagementStore         { return m.teams }

@@ -69,6 +69,18 @@ func (f OrgMemoryFunc) Mutate(ctx context.Context, m org.Mutation) (org.Value, e
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *org.OrgMemoryMutation", m)
 }
 
+// The OrgNetworkPolicyFunc type is an adapter to allow the use of ordinary
+// function as OrgNetworkPolicy mutator.
+type OrgNetworkPolicyFunc func(context.Context, *org.OrgNetworkPolicyMutation) (org.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f OrgNetworkPolicyFunc) Mutate(ctx context.Context, m org.Mutation) (org.Value, error) {
+	if mv, ok := m.(*org.OrgNetworkPolicyMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *org.OrgNetworkPolicyMutation", m)
+}
+
 // The OrgSkillFunc type is an adapter to allow the use of ordinary
 // function as OrgSkill mutator.
 type OrgSkillFunc func(context.Context, *org.OrgSkillMutation) (org.Value, error)

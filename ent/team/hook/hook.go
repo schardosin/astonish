@@ -141,6 +141,18 @@ func (f MemoryFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, er
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.MemoryMutation", m)
 }
 
+// The NetworkPolicyFunc type is an adapter to allow the use of ordinary
+// function as NetworkPolicy mutator.
+type NetworkPolicyFunc func(context.Context, *team.NetworkPolicyMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f NetworkPolicyFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.NetworkPolicyMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.NetworkPolicyMutation", m)
+}
+
 // The SandboxSessionFunc type is an adapter to allow the use of ordinary
 // function as SandboxSession mutator.
 type SandboxSessionFunc func(context.Context, *team.SandboxSessionMutation) (team.Value, error)

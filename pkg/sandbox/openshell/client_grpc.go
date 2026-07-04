@@ -455,6 +455,172 @@ func (c *grpcGatewayClient) ListSandboxes(ctx context.Context, labelSelector str
 }
 
 // ---------------------------------------------------------------------------
+// Draft Policy & Network Approval
+// ---------------------------------------------------------------------------
+
+func (c *grpcGatewayClient) GetDraftPolicy(ctx context.Context, sandboxName string, statusFilter string) (*DraftPolicyResponse, error) {
+	resp, err := c.client.GetDraftPolicy(ctx, &pb.GetDraftPolicyRequest{
+		Name:         sandboxName,
+		StatusFilter: statusFilter,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway GetDraftPolicy: %w", err)
+	}
+
+	chunks := make([]PolicyChunkInfo, 0, len(resp.GetChunks()))
+	for _, ch := range resp.GetChunks() {
+		info := PolicyChunkInfo{
+			ID:            ch.GetId(),
+			Status:        ch.GetStatus(),
+			RuleName:      ch.GetRuleName(),
+			Binary:        ch.GetBinary(),
+			Rationale:     ch.GetRationale(),
+			SecurityNotes: ch.GetSecurityNotes(),
+			HitCount:      ch.GetHitCount(),
+			CreatedAtMs:   ch.GetCreatedAtMs(),
+		}
+		// Extract host/port from the proposed rule's first endpoint.
+		if rule := ch.GetProposedRule(); rule != nil {
+			if eps := rule.GetEndpoints(); len(eps) > 0 {
+				info.Host = eps[0].GetHost()
+				info.Port = eps[0].GetPort()
+			}
+		}
+		chunks = append(chunks, info)
+	}
+
+	return &DraftPolicyResponse{
+		Chunks:           chunks,
+		DraftVersion:     resp.GetDraftVersion(),
+		LastAnalyzedAtMs: resp.GetLastAnalyzedAtMs(),
+	}, nil
+}
+
+func (c *grpcGatewayClient) ApproveDraftChunk(ctx context.Context, sandboxName string, chunkID string) (*ApproveChunkResponse, error) {
+	resp, err := c.client.ApproveDraftChunk(ctx, &pb.ApproveDraftChunkRequest{
+		Name:    sandboxName,
+		ChunkId: chunkID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway ApproveDraftChunk: %w", err)
+	}
+	return &ApproveChunkResponse{
+		PolicyVersion: resp.GetPolicyVersion(),
+		PolicyHash:    resp.GetPolicyHash(),
+	}, nil
+}
+
+func (c *grpcGatewayClient) RejectDraftChunk(ctx context.Context, sandboxName string, chunkID string, reason string) error {
+	_, err := c.client.RejectDraftChunk(ctx, &pb.RejectDraftChunkRequest{
+		Name:    sandboxName,
+		ChunkId: chunkID,
+		Reason:  reason,
+	})
+	if err != nil {
+		return fmt.Errorf("gateway RejectDraftChunk: %w", err)
+	}
+	return nil
+}
+
+func (c *grpcGatewayClient) UpdateConfig(ctx context.Context, sandboxName string, ops []PolicyMergeOp) (*UpdateConfigResponse, error) {
+	pbOps := make([]*pb.PolicyMergeOperation, 0, len(ops))
+	for _, op := range ops {
+		switch op.Type {
+		case PolicyMergeAddEndpoint:
+			port := op.Endpoint.Port
+			if port == 0 {
+				port = 443
+			}
+			pbOps = append(pbOps, &pb.PolicyMergeOperation{
+				Operation: &pb.PolicyMergeOperation_AddRule{
+					AddRule: &pb.AddNetworkRule{
+						RuleName: op.RuleName,
+						Rule: &pb.NetworkPolicyRule{
+							Name: op.RuleName,
+							Endpoints: []*pb.NetworkEndpoint{
+								{Host: op.Endpoint.Host, Port: port},
+							},
+							Binaries: []*pb.NetworkBinary{
+								{Path: "/**"},
+							},
+						},
+					},
+				},
+			})
+		case PolicyMergeRemoveEndpoint:
+			port := op.Endpoint.Port
+			if port == 0 {
+				port = 443
+			}
+			pbOps = append(pbOps, &pb.PolicyMergeOperation{
+				Operation: &pb.PolicyMergeOperation_RemoveEndpoint{
+					RemoveEndpoint: &pb.RemoveNetworkEndpoint{
+						RuleName: op.RuleName,
+						Host:     op.Endpoint.Host,
+						Port:     port,
+					},
+				},
+			})
+		}
+	}
+
+	resp, err := c.client.UpdateConfig(ctx, &pb.UpdateConfigRequest{
+		Name:            sandboxName,
+		MergeOperations: pbOps,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway UpdateConfig: %w", err)
+	}
+
+	return &UpdateConfigResponse{PolicyVersion: resp.GetVersion()}, nil
+}
+
+func (c *grpcGatewayClient) WatchSandbox(ctx context.Context, sandboxName string, opts WatchOpts) (SandboxEventStream, error) {
+	stream, err := c.client.WatchSandbox(ctx, &pb.WatchSandboxRequest{
+		Id:           sandboxName,
+		FollowEvents: opts.FollowEvents,
+		EventTail:    opts.EventTail,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway WatchSandbox: %w", err)
+	}
+	return &grpcSandboxEventStream{stream: stream}, nil
+}
+
+// grpcSandboxEventStream implements SandboxEventStream over a gRPC server stream.
+type grpcSandboxEventStream struct {
+	stream pb.OpenShell_WatchSandboxClient
+}
+
+func (s *grpcSandboxEventStream) Recv() (*SandboxEvent, error) {
+	event, err := s.stream.Recv()
+	if err != nil {
+		return nil, err
+	}
+
+	switch payload := event.GetPayload().(type) {
+	case *pb.SandboxStreamEvent_DraftPolicyUpdate:
+		return &SandboxEvent{
+			Type: SandboxEventDraftUpdate,
+			DraftPolicyUpdate: &DraftPolicyUpdateInfo{
+				DraftVersion: payload.DraftPolicyUpdate.GetDraftVersion(),
+				NewChunks:    payload.DraftPolicyUpdate.GetNewChunks(),
+				TotalPending: payload.DraftPolicyUpdate.GetTotalPending(),
+				Summary:      payload.DraftPolicyUpdate.GetSummary(),
+			},
+		}, nil
+	default:
+		return &SandboxEvent{Type: SandboxEventOther}, nil
+	}
+}
+
+func (s *grpcSandboxEventStream) Close() error {
+	// Closing the context that created the stream will terminate it.
+	// For server streams, there's no explicit CloseSend — the context cancellation handles it.
+	return nil
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

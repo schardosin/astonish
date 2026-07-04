@@ -62,6 +62,26 @@ func (m *mockGateway) ListSandboxes(ctx context.Context, labelSelector string) (
 	return nil, nil
 }
 
+func (m *mockGateway) GetDraftPolicy(ctx context.Context, sandboxName string, statusFilter string) (*DraftPolicyResponse, error) {
+	return &DraftPolicyResponse{}, nil
+}
+
+func (m *mockGateway) ApproveDraftChunk(ctx context.Context, sandboxName string, chunkID string) (*ApproveChunkResponse, error) {
+	return &ApproveChunkResponse{}, nil
+}
+
+func (m *mockGateway) RejectDraftChunk(ctx context.Context, sandboxName string, chunkID string, reason string) error {
+	return nil
+}
+
+func (m *mockGateway) UpdateConfig(ctx context.Context, sandboxName string, ops []PolicyMergeOp) (*UpdateConfigResponse, error) {
+	return &UpdateConfigResponse{}, nil
+}
+
+func (m *mockGateway) WatchSandbox(ctx context.Context, sandboxName string, opts WatchOpts) (SandboxEventStream, error) {
+	return nil, errors.New("not implemented in mock")
+}
+
 func (m *mockGateway) Close() error {
 	return nil
 }

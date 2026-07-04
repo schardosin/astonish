@@ -23,6 +23,7 @@ import (
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
 	"github.com/schardosin/astonish/ent/team/memory"
+	"github.com/schardosin/astonish/ent/team/networkpolicy"
 	"github.com/schardosin/astonish/ent/team/predicate"
 	"github.com/schardosin/astonish/ent/team/sandboxsession"
 	"github.com/schardosin/astonish/ent/team/scheduledjob"
@@ -54,6 +55,7 @@ const (
 	TypeFlow              = "Flow"
 	TypeMcpServer         = "McpServer"
 	TypeMemory            = "Memory"
+	TypeNetworkPolicy     = "NetworkPolicy"
 	TypeSandboxSession    = "SandboxSession"
 	TypeScheduledJob      = "ScheduledJob"
 	TypeSession           = "Session"
@@ -7967,6 +7969,644 @@ func (m *MemoryMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *MemoryMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown Memory edge %s", name)
+}
+
+// NetworkPolicyMutation represents an operation that mutates the NetworkPolicy nodes in the graph.
+type NetworkPolicyMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	host          *string
+	port          *uint32
+	addport       *int32
+	action        *networkpolicy.Action
+	created_by    *uuid.UUID
+	created_at    *time.Time
+	updated_at    *time.Time
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*NetworkPolicy, error)
+	predicates    []predicate.NetworkPolicy
+}
+
+var _ ent.Mutation = (*NetworkPolicyMutation)(nil)
+
+// networkpolicyOption allows management of the mutation configuration using functional options.
+type networkpolicyOption func(*NetworkPolicyMutation)
+
+// newNetworkPolicyMutation creates new mutation for the NetworkPolicy entity.
+func newNetworkPolicyMutation(c config, op Op, opts ...networkpolicyOption) *NetworkPolicyMutation {
+	m := &NetworkPolicyMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeNetworkPolicy,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withNetworkPolicyID sets the ID field of the mutation.
+func withNetworkPolicyID(id uuid.UUID) networkpolicyOption {
+	return func(m *NetworkPolicyMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *NetworkPolicy
+		)
+		m.oldValue = func(ctx context.Context) (*NetworkPolicy, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().NetworkPolicy.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withNetworkPolicy sets the old NetworkPolicy of the mutation.
+func withNetworkPolicy(node *NetworkPolicy) networkpolicyOption {
+	return func(m *NetworkPolicyMutation) {
+		m.oldValue = func(context.Context) (*NetworkPolicy, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m NetworkPolicyMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m NetworkPolicyMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of NetworkPolicy entities.
+func (m *NetworkPolicyMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *NetworkPolicyMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *NetworkPolicyMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().NetworkPolicy.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetHost sets the "host" field.
+func (m *NetworkPolicyMutation) SetHost(s string) {
+	m.host = &s
+}
+
+// Host returns the value of the "host" field in the mutation.
+func (m *NetworkPolicyMutation) Host() (r string, exists bool) {
+	v := m.host
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldHost returns the old "host" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldHost(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldHost is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldHost requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldHost: %w", err)
+	}
+	return oldValue.Host, nil
+}
+
+// ResetHost resets all changes to the "host" field.
+func (m *NetworkPolicyMutation) ResetHost() {
+	m.host = nil
+}
+
+// SetPort sets the "port" field.
+func (m *NetworkPolicyMutation) SetPort(u uint32) {
+	m.port = &u
+	m.addport = nil
+}
+
+// Port returns the value of the "port" field in the mutation.
+func (m *NetworkPolicyMutation) Port() (r uint32, exists bool) {
+	v := m.port
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPort returns the old "port" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldPort(ctx context.Context) (v uint32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPort is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPort requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPort: %w", err)
+	}
+	return oldValue.Port, nil
+}
+
+// AddPort adds u to the "port" field.
+func (m *NetworkPolicyMutation) AddPort(u int32) {
+	if m.addport != nil {
+		*m.addport += u
+	} else {
+		m.addport = &u
+	}
+}
+
+// AddedPort returns the value that was added to the "port" field in this mutation.
+func (m *NetworkPolicyMutation) AddedPort() (r int32, exists bool) {
+	v := m.addport
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetPort resets all changes to the "port" field.
+func (m *NetworkPolicyMutation) ResetPort() {
+	m.port = nil
+	m.addport = nil
+}
+
+// SetAction sets the "action" field.
+func (m *NetworkPolicyMutation) SetAction(n networkpolicy.Action) {
+	m.action = &n
+}
+
+// Action returns the value of the "action" field in the mutation.
+func (m *NetworkPolicyMutation) Action() (r networkpolicy.Action, exists bool) {
+	v := m.action
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAction returns the old "action" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldAction(ctx context.Context) (v networkpolicy.Action, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAction is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAction requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAction: %w", err)
+	}
+	return oldValue.Action, nil
+}
+
+// ResetAction resets all changes to the "action" field.
+func (m *NetworkPolicyMutation) ResetAction() {
+	m.action = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *NetworkPolicyMutation) SetCreatedBy(u uuid.UUID) {
+	m.created_by = &u
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *NetworkPolicyMutation) CreatedBy() (r uuid.UUID, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldCreatedBy(ctx context.Context) (v uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *NetworkPolicyMutation) ResetCreatedBy() {
+	m.created_by = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *NetworkPolicyMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *NetworkPolicyMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *NetworkPolicyMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *NetworkPolicyMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *NetworkPolicyMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the NetworkPolicy entity.
+// If the NetworkPolicy object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *NetworkPolicyMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *NetworkPolicyMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the NetworkPolicyMutation builder.
+func (m *NetworkPolicyMutation) Where(ps ...predicate.NetworkPolicy) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the NetworkPolicyMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *NetworkPolicyMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.NetworkPolicy, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *NetworkPolicyMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *NetworkPolicyMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (NetworkPolicy).
+func (m *NetworkPolicyMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *NetworkPolicyMutation) Fields() []string {
+	fields := make([]string, 0, 6)
+	if m.host != nil {
+		fields = append(fields, networkpolicy.FieldHost)
+	}
+	if m.port != nil {
+		fields = append(fields, networkpolicy.FieldPort)
+	}
+	if m.action != nil {
+		fields = append(fields, networkpolicy.FieldAction)
+	}
+	if m.created_by != nil {
+		fields = append(fields, networkpolicy.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, networkpolicy.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, networkpolicy.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *NetworkPolicyMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case networkpolicy.FieldHost:
+		return m.Host()
+	case networkpolicy.FieldPort:
+		return m.Port()
+	case networkpolicy.FieldAction:
+		return m.Action()
+	case networkpolicy.FieldCreatedBy:
+		return m.CreatedBy()
+	case networkpolicy.FieldCreatedAt:
+		return m.CreatedAt()
+	case networkpolicy.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *NetworkPolicyMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case networkpolicy.FieldHost:
+		return m.OldHost(ctx)
+	case networkpolicy.FieldPort:
+		return m.OldPort(ctx)
+	case networkpolicy.FieldAction:
+		return m.OldAction(ctx)
+	case networkpolicy.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case networkpolicy.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case networkpolicy.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown NetworkPolicy field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *NetworkPolicyMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case networkpolicy.FieldHost:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetHost(v)
+		return nil
+	case networkpolicy.FieldPort:
+		v, ok := value.(uint32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPort(v)
+		return nil
+	case networkpolicy.FieldAction:
+		v, ok := value.(networkpolicy.Action)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAction(v)
+		return nil
+	case networkpolicy.FieldCreatedBy:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case networkpolicy.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case networkpolicy.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown NetworkPolicy field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *NetworkPolicyMutation) AddedFields() []string {
+	var fields []string
+	if m.addport != nil {
+		fields = append(fields, networkpolicy.FieldPort)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *NetworkPolicyMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case networkpolicy.FieldPort:
+		return m.AddedPort()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *NetworkPolicyMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case networkpolicy.FieldPort:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddPort(v)
+		return nil
+	}
+	return fmt.Errorf("unknown NetworkPolicy numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *NetworkPolicyMutation) ClearedFields() []string {
+	return nil
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *NetworkPolicyMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *NetworkPolicyMutation) ClearField(name string) error {
+	return fmt.Errorf("unknown NetworkPolicy nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *NetworkPolicyMutation) ResetField(name string) error {
+	switch name {
+	case networkpolicy.FieldHost:
+		m.ResetHost()
+		return nil
+	case networkpolicy.FieldPort:
+		m.ResetPort()
+		return nil
+	case networkpolicy.FieldAction:
+		m.ResetAction()
+		return nil
+	case networkpolicy.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case networkpolicy.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case networkpolicy.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown NetworkPolicy field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *NetworkPolicyMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *NetworkPolicyMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *NetworkPolicyMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *NetworkPolicyMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *NetworkPolicyMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *NetworkPolicyMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *NetworkPolicyMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown NetworkPolicy unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *NetworkPolicyMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown NetworkPolicy edge %s", name)
 }
 
 // SandboxSessionMutation represents an operation that mutates the SandboxSession nodes in the graph.

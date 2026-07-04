@@ -21,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 	"github.com/schardosin/astonish/ent/org/orgmcpserver"
 	"github.com/schardosin/astonish/ent/org/orgmemory"
+	"github.com/schardosin/astonish/ent/org/orgnetworkpolicy"
 	"github.com/schardosin/astonish/ent/org/orgskill"
 	"github.com/schardosin/astonish/ent/org/orgskillfile"
 	"github.com/schardosin/astonish/ent/org/team"
@@ -42,6 +43,8 @@ type Client struct {
 	OrgMCPServer *OrgMCPServerClient
 	// OrgMemory is the client for interacting with the OrgMemory builders.
 	OrgMemory *OrgMemoryClient
+	// OrgNetworkPolicy is the client for interacting with the OrgNetworkPolicy builders.
+	OrgNetworkPolicy *OrgNetworkPolicyClient
 	// OrgSkill is the client for interacting with the OrgSkill builders.
 	OrgSkill *OrgSkillClient
 	// OrgSkillFile is the client for interacting with the OrgSkillFile builders.
@@ -66,6 +69,7 @@ func (c *Client) init() {
 	c.OrgEncryptionKey = NewOrgEncryptionKeyClient(c.config)
 	c.OrgMCPServer = NewOrgMCPServerClient(c.config)
 	c.OrgMemory = NewOrgMemoryClient(c.config)
+	c.OrgNetworkPolicy = NewOrgNetworkPolicyClient(c.config)
 	c.OrgSkill = NewOrgSkillClient(c.config)
 	c.OrgSkillFile = NewOrgSkillFileClient(c.config)
 	c.Team = NewTeamClient(c.config)
@@ -167,6 +171,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		OrgEncryptionKey: NewOrgEncryptionKeyClient(cfg),
 		OrgMCPServer:     NewOrgMCPServerClient(cfg),
 		OrgMemory:        NewOrgMemoryClient(cfg),
+		OrgNetworkPolicy: NewOrgNetworkPolicyClient(cfg),
 		OrgSkill:         NewOrgSkillClient(cfg),
 		OrgSkillFile:     NewOrgSkillFileClient(cfg),
 		Team:             NewTeamClient(cfg),
@@ -195,6 +200,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		OrgEncryptionKey: NewOrgEncryptionKeyClient(cfg),
 		OrgMCPServer:     NewOrgMCPServerClient(cfg),
 		OrgMemory:        NewOrgMemoryClient(cfg),
+		OrgNetworkPolicy: NewOrgNetworkPolicyClient(cfg),
 		OrgSkill:         NewOrgSkillClient(cfg),
 		OrgSkillFile:     NewOrgSkillFileClient(cfg),
 		Team:             NewTeamClient(cfg),
@@ -229,7 +235,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.OrgApp, c.OrgAuditLog, c.OrgEncryptionKey, c.OrgMCPServer, c.OrgMemory,
-		c.OrgSkill, c.OrgSkillFile, c.Team, c.TeamMembership,
+		c.OrgNetworkPolicy, c.OrgSkill, c.OrgSkillFile, c.Team, c.TeamMembership,
 	} {
 		n.Use(hooks...)
 	}
@@ -240,7 +246,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.OrgApp, c.OrgAuditLog, c.OrgEncryptionKey, c.OrgMCPServer, c.OrgMemory,
-		c.OrgSkill, c.OrgSkillFile, c.Team, c.TeamMembership,
+		c.OrgNetworkPolicy, c.OrgSkill, c.OrgSkillFile, c.Team, c.TeamMembership,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -259,6 +265,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.OrgMCPServer.mutate(ctx, m)
 	case *OrgMemoryMutation:
 		return c.OrgMemory.mutate(ctx, m)
+	case *OrgNetworkPolicyMutation:
+		return c.OrgNetworkPolicy.mutate(ctx, m)
 	case *OrgSkillMutation:
 		return c.OrgSkill.mutate(ctx, m)
 	case *OrgSkillFileMutation:
@@ -937,6 +945,139 @@ func (c *OrgMemoryClient) mutate(ctx context.Context, m *OrgMemoryMutation) (Val
 	}
 }
 
+// OrgNetworkPolicyClient is a client for the OrgNetworkPolicy schema.
+type OrgNetworkPolicyClient struct {
+	config
+}
+
+// NewOrgNetworkPolicyClient returns a client for the OrgNetworkPolicy from the given config.
+func NewOrgNetworkPolicyClient(c config) *OrgNetworkPolicyClient {
+	return &OrgNetworkPolicyClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `orgnetworkpolicy.Hooks(f(g(h())))`.
+func (c *OrgNetworkPolicyClient) Use(hooks ...Hook) {
+	c.hooks.OrgNetworkPolicy = append(c.hooks.OrgNetworkPolicy, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `orgnetworkpolicy.Intercept(f(g(h())))`.
+func (c *OrgNetworkPolicyClient) Intercept(interceptors ...Interceptor) {
+	c.inters.OrgNetworkPolicy = append(c.inters.OrgNetworkPolicy, interceptors...)
+}
+
+// Create returns a builder for creating a OrgNetworkPolicy entity.
+func (c *OrgNetworkPolicyClient) Create() *OrgNetworkPolicyCreate {
+	mutation := newOrgNetworkPolicyMutation(c.config, OpCreate)
+	return &OrgNetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of OrgNetworkPolicy entities.
+func (c *OrgNetworkPolicyClient) CreateBulk(builders ...*OrgNetworkPolicyCreate) *OrgNetworkPolicyCreateBulk {
+	return &OrgNetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *OrgNetworkPolicyClient) MapCreateBulk(slice any, setFunc func(*OrgNetworkPolicyCreate, int)) *OrgNetworkPolicyCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &OrgNetworkPolicyCreateBulk{err: fmt.Errorf("calling to OrgNetworkPolicyClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*OrgNetworkPolicyCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &OrgNetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for OrgNetworkPolicy.
+func (c *OrgNetworkPolicyClient) Update() *OrgNetworkPolicyUpdate {
+	mutation := newOrgNetworkPolicyMutation(c.config, OpUpdate)
+	return &OrgNetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *OrgNetworkPolicyClient) UpdateOne(_m *OrgNetworkPolicy) *OrgNetworkPolicyUpdateOne {
+	mutation := newOrgNetworkPolicyMutation(c.config, OpUpdateOne, withOrgNetworkPolicy(_m))
+	return &OrgNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *OrgNetworkPolicyClient) UpdateOneID(id uuid.UUID) *OrgNetworkPolicyUpdateOne {
+	mutation := newOrgNetworkPolicyMutation(c.config, OpUpdateOne, withOrgNetworkPolicyID(id))
+	return &OrgNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for OrgNetworkPolicy.
+func (c *OrgNetworkPolicyClient) Delete() *OrgNetworkPolicyDelete {
+	mutation := newOrgNetworkPolicyMutation(c.config, OpDelete)
+	return &OrgNetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *OrgNetworkPolicyClient) DeleteOne(_m *OrgNetworkPolicy) *OrgNetworkPolicyDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *OrgNetworkPolicyClient) DeleteOneID(id uuid.UUID) *OrgNetworkPolicyDeleteOne {
+	builder := c.Delete().Where(orgnetworkpolicy.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &OrgNetworkPolicyDeleteOne{builder}
+}
+
+// Query returns a query builder for OrgNetworkPolicy.
+func (c *OrgNetworkPolicyClient) Query() *OrgNetworkPolicyQuery {
+	return &OrgNetworkPolicyQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeOrgNetworkPolicy},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a OrgNetworkPolicy entity by its id.
+func (c *OrgNetworkPolicyClient) Get(ctx context.Context, id uuid.UUID) (*OrgNetworkPolicy, error) {
+	return c.Query().Where(orgnetworkpolicy.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *OrgNetworkPolicyClient) GetX(ctx context.Context, id uuid.UUID) *OrgNetworkPolicy {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *OrgNetworkPolicyClient) Hooks() []Hook {
+	return c.hooks.OrgNetworkPolicy
+}
+
+// Interceptors returns the client interceptors.
+func (c *OrgNetworkPolicyClient) Interceptors() []Interceptor {
+	return c.inters.OrgNetworkPolicy
+}
+
+func (c *OrgNetworkPolicyClient) mutate(ctx context.Context, m *OrgNetworkPolicyMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&OrgNetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&OrgNetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&OrgNetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&OrgNetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("org: unknown OrgNetworkPolicy mutation op: %q", m.Op())
+	}
+}
+
 // OrgSkillClient is a client for the OrgSkill schema.
 type OrgSkillClient struct {
 	config
@@ -1536,11 +1677,12 @@ func (c *TeamMembershipClient) mutate(ctx context.Context, m *TeamMembershipMuta
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		OrgApp, OrgAuditLog, OrgEncryptionKey, OrgMCPServer, OrgMemory, OrgSkill,
-		OrgSkillFile, Team, TeamMembership []ent.Hook
+		OrgApp, OrgAuditLog, OrgEncryptionKey, OrgMCPServer, OrgMemory,
+		OrgNetworkPolicy, OrgSkill, OrgSkillFile, Team, TeamMembership []ent.Hook
 	}
 	inters struct {
-		OrgApp, OrgAuditLog, OrgEncryptionKey, OrgMCPServer, OrgMemory, OrgSkill,
-		OrgSkillFile, Team, TeamMembership []ent.Interceptor
+		OrgApp, OrgAuditLog, OrgEncryptionKey, OrgMCPServer, OrgMemory,
+		OrgNetworkPolicy, OrgSkill, OrgSkillFile, Team,
+		TeamMembership []ent.Interceptor
 	}
 )

@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 	"github.com/schardosin/astonish/ent/org/orgmcpserver"
 	"github.com/schardosin/astonish/ent/org/orgmemory"
+	"github.com/schardosin/astonish/ent/org/orgnetworkpolicy"
 	"github.com/schardosin/astonish/ent/org/orgskill"
 	"github.com/schardosin/astonish/ent/org/orgskillfile"
 	"github.com/schardosin/astonish/ent/org/team"
@@ -86,6 +87,7 @@ func checkColumn(t, c string) error {
 			orgencryptionkey.Table: orgencryptionkey.ValidColumn,
 			orgmcpserver.Table:     orgmcpserver.ValidColumn,
 			orgmemory.Table:        orgmemory.ValidColumn,
+			orgnetworkpolicy.Table: orgnetworkpolicy.ValidColumn,
 			orgskill.Table:         orgskill.ValidColumn,
 			orgskillfile.Table:     orgskillfile.ValidColumn,
 			team.Table:             team.ValidColumn,

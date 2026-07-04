@@ -556,7 +556,11 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 	emailEnabled := false
 	emailError := ""
 	emailAddress := ""
+	slackEnabled := false
+	slackError := ""
+
 	if cfgStatuses := getChannelConfigStatuses(); cfgStatuses != nil {
+		// Channels are running in this process — use in-memory status.
 		if tg, ok := cfgStatuses["telegram"]; ok {
 			tgEnabled = tg.Enabled
 			tgError = tg.Error
@@ -565,7 +569,31 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 			emailEnabled = em.Enabled
 			emailError = em.Error
 		}
+		if sl, ok := cfgStatuses["slack"]; ok {
+			slackEnabled = sl.Enabled
+			slackError = sl.Error
+		}
+	} else if backend := getPlatformBackend(); backend != nil {
+		// API-mode fallback: channels run on a separate worker pod, so
+		// channelConfigStatuses is nil in this process. Read the enabled
+		// state directly from the platform DB (same source the admin UI uses).
+		settings, _ := backend.PlatformSettings().Get(r.Context())
+		if settings != nil && settings.Channels != nil {
+			if settings.Channels.Telegram != nil && settings.Channels.Telegram.Enabled {
+				tgEnabled = true
+			}
+			if settings.Channels.Email != nil && settings.Channels.Email.Enabled {
+				emailEnabled = true
+				if settings.Channels.Email.Address != "" {
+					emailAddress = settings.Channels.Email.Address
+				}
+			}
+			if settings.Channels.Slack != nil && settings.Channels.Slack.Enabled {
+				slackEnabled = true
+			}
+		}
 	}
+
 	// If connected, it's definitely enabled
 	if tgConnected {
 		tgEnabled = true
@@ -607,14 +635,6 @@ func handleGetChannelInfo(w http.ResponseWriter, r *http.Request) {
 		slackConnected = slackBotUserID != ""
 	}
 
-	slackEnabled := false
-	slackError := ""
-	if cfgStatuses := getChannelConfigStatuses(); cfgStatuses != nil {
-		if sl, ok := cfgStatuses["slack"]; ok {
-			slackEnabled = sl.Enabled
-			slackError = sl.Error
-		}
-	}
 	if slackConnected {
 		slackEnabled = true
 	}

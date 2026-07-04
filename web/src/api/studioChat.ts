@@ -310,3 +310,58 @@ export function getArtifactPDFUrl(path: string, sessionId?: string): string {
   if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
   return url
 }
+
+// --- Network Denial APIs ---
+
+export interface NetworkDenial {
+  chunk_id?: string
+  host: string
+  port: number
+  binary?: string
+  rationale?: string
+  security_notes?: string
+  broader_pattern?: string
+}
+
+export interface NetworkDenialsResponse {
+  denials: NetworkDenial[]
+  sandbox_name: string
+  error?: string
+}
+
+/** Fetch pending network denials for a session's sandbox. */
+export async function fetchNetworkDenials(sessionId: string): Promise<NetworkDenialsResponse> {
+  const resp = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/network-denials`)
+  if (!resp.ok) throw new Error(`Failed to fetch network denials: ${resp.status}`)
+  return resp.json()
+}
+
+/** Approve a specific network denial (exact host:port). */
+export async function approveNetworkGrant(sessionId: string, chunkId: string, sandboxName: string): Promise<void> {
+  const resp = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/network-grants/approve`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chunk_id: chunkId, sandbox_name: sandboxName }),
+  })
+  if (!resp.ok) throw new Error(`Failed to approve network grant: ${resp.status}`)
+}
+
+/** Approve a broader pattern (e.g., **.cloud.sap:443). */
+export async function approveNetworkGrantBroader(sessionId: string, host: string, port: number, sandboxName: string): Promise<void> {
+  const resp = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/network-grants/approve-broader`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ host, port, sandbox_name: sandboxName }),
+  })
+  if (!resp.ok) throw new Error(`Failed to approve broader network grant: ${resp.status}`)
+}
+
+/** Deny a network access request. */
+export async function denyNetworkGrant(sessionId: string, chunkId: string, sandboxName: string, reason?: string): Promise<void> {
+  const resp = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/network-grants/deny`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ chunk_id: chunkId, sandbox_name: sandboxName, reason: reason || '' }),
+  })
+  if (!resp.ok) throw new Error(`Failed to deny network grant: ${resp.status}`)
+}

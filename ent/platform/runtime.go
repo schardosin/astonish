@@ -14,6 +14,7 @@ import (
 	"github.com/schardosin/astonish/ent/platform/orgmembership"
 	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
 	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
+	"github.com/schardosin/astonish/ent/platform/platformnetworkpolicy"
 	"github.com/schardosin/astonish/ent/platform/platformsecret"
 	"github.com/schardosin/astonish/ent/platform/platformsetting"
 	"github.com/schardosin/astonish/ent/platform/platformskill"
@@ -196,6 +197,30 @@ func init() {
 	platformmcpserverDescID := platformmcpserverFields[0].Descriptor()
 	// platformmcpserver.DefaultID holds the default value on creation for the id field.
 	platformmcpserver.DefaultID = platformmcpserverDescID.Default.(func() uuid.UUID)
+	platformnetworkpolicyFields := schema.PlatformNetworkPolicy{}.Fields()
+	_ = platformnetworkpolicyFields
+	// platformnetworkpolicyDescHost is the schema descriptor for host field.
+	platformnetworkpolicyDescHost := platformnetworkpolicyFields[1].Descriptor()
+	// platformnetworkpolicy.HostValidator is a validator for the "host" field. It is called by the builders before save.
+	platformnetworkpolicy.HostValidator = platformnetworkpolicyDescHost.Validators[0].(func(string) error)
+	// platformnetworkpolicyDescPort is the schema descriptor for port field.
+	platformnetworkpolicyDescPort := platformnetworkpolicyFields[2].Descriptor()
+	// platformnetworkpolicy.DefaultPort holds the default value on creation for the port field.
+	platformnetworkpolicy.DefaultPort = platformnetworkpolicyDescPort.Default.(uint32)
+	// platformnetworkpolicyDescCreatedAt is the schema descriptor for created_at field.
+	platformnetworkpolicyDescCreatedAt := platformnetworkpolicyFields[5].Descriptor()
+	// platformnetworkpolicy.DefaultCreatedAt holds the default value on creation for the created_at field.
+	platformnetworkpolicy.DefaultCreatedAt = platformnetworkpolicyDescCreatedAt.Default.(func() time.Time)
+	// platformnetworkpolicyDescUpdatedAt is the schema descriptor for updated_at field.
+	platformnetworkpolicyDescUpdatedAt := platformnetworkpolicyFields[6].Descriptor()
+	// platformnetworkpolicy.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	platformnetworkpolicy.DefaultUpdatedAt = platformnetworkpolicyDescUpdatedAt.Default.(func() time.Time)
+	// platformnetworkpolicy.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	platformnetworkpolicy.UpdateDefaultUpdatedAt = platformnetworkpolicyDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// platformnetworkpolicyDescID is the schema descriptor for id field.
+	platformnetworkpolicyDescID := platformnetworkpolicyFields[0].Descriptor()
+	// platformnetworkpolicy.DefaultID holds the default value on creation for the id field.
+	platformnetworkpolicy.DefaultID = platformnetworkpolicyDescID.Default.(func() uuid.UUID)
 	platformsecretFields := schema.PlatformSecret{}.Fields()
 	_ = platformsecretFields
 	// platformsecretDescValue is the schema descriptor for value field.

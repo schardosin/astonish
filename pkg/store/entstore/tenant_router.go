@@ -582,6 +582,10 @@ func (o *orgDataStore) OrgMCPServers() store.MCPServerStore {
 	return &orgMCPServerStore{client: o.client}
 }
 
+func (o *orgDataStore) OrgNetworkPolicies() store.NetworkPolicyStore {
+	return &orgNetworkPolicyStore{client: o.client}
+}
+
 func (o *orgDataStore) OrgApps() store.AppStore {
 	return &orgAppStore{client: o.client}
 }
@@ -1106,6 +1110,7 @@ func (t *teamDataStore) AppStateSQL() store.AppStateSQLStore {
 func (t *teamDataStore) Flows() store.FlowStore               { return &teamFlowStore{client: t.client} }
 func (t *teamDataStore) Skills() store.SkillStore             { return &teamSkillStore{client: t.client} }
 func (t *teamDataStore) MCPServers() store.MCPServerStore     { return &teamMCPServerStore{client: t.client} }
+func (t *teamDataStore) NetworkPolicies() store.NetworkPolicyStore { return &teamNetworkPolicyStore{client: t.client} }
 func (t *teamDataStore) ScheduledJobs() store.SchedulerStore  { return &teamSchedulerStore{client: t.client} }
 func (t *teamDataStore) FleetTemplates() store.FleetTemplateStore { return &teamFleetTemplateStore{client: t.client} }
 func (t *teamDataStore) FleetPlans() store.FleetPlanStore     { return &teamFleetPlanStore{client: t.client} }

@@ -22,6 +22,8 @@ type Tx struct {
 	OrgMCPServer *OrgMCPServerClient
 	// OrgMemory is the client for interacting with the OrgMemory builders.
 	OrgMemory *OrgMemoryClient
+	// OrgNetworkPolicy is the client for interacting with the OrgNetworkPolicy builders.
+	OrgNetworkPolicy *OrgNetworkPolicyClient
 	// OrgSkill is the client for interacting with the OrgSkill builders.
 	OrgSkill *OrgSkillClient
 	// OrgSkillFile is the client for interacting with the OrgSkillFile builders.
@@ -166,6 +168,7 @@ func (tx *Tx) init() {
 	tx.OrgEncryptionKey = NewOrgEncryptionKeyClient(tx.config)
 	tx.OrgMCPServer = NewOrgMCPServerClient(tx.config)
 	tx.OrgMemory = NewOrgMemoryClient(tx.config)
+	tx.OrgNetworkPolicy = NewOrgNetworkPolicyClient(tx.config)
 	tx.OrgSkill = NewOrgSkillClient(tx.config)
 	tx.OrgSkillFile = NewOrgSkillFileClient(tx.config)
 	tx.Team = NewTeamClient(tx.config)

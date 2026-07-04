@@ -246,6 +246,29 @@ var (
 			},
 		},
 	}
+	// PlatformNetworkPoliciesColumns holds the columns for the "platform_network_policies" table.
+	PlatformNetworkPoliciesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "host", Type: field.TypeString},
+		{Name: "port", Type: field.TypeUint32, Default: 443},
+		{Name: "action", Type: field.TypeEnum, Enums: []string{"allow", "deny"}, Default: "allow"},
+		{Name: "created_by", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// PlatformNetworkPoliciesTable holds the schema information for the "platform_network_policies" table.
+	PlatformNetworkPoliciesTable = &schema.Table{
+		Name:       "platform_network_policies",
+		Columns:    PlatformNetworkPoliciesColumns,
+		PrimaryKey: []*schema.Column{PlatformNetworkPoliciesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "platformnetworkpolicy_host_port",
+				Unique:  true,
+				Columns: []*schema.Column{PlatformNetworkPoliciesColumns[1], PlatformNetworkPoliciesColumns[2]},
+			},
+		},
+	}
 	// PlatformSecretsColumns holds the columns for the "platform_secrets" table.
 	PlatformSecretsColumns = []*schema.Column{
 		{Name: "key", Type: field.TypeString},
@@ -520,6 +543,7 @@ var (
 		OrganizationsTable,
 		PendingLinkCodesTable,
 		PlatformMcpServersTable,
+		PlatformNetworkPoliciesTable,
 		PlatformSecretsTable,
 		PlatformSettingsTable,
 		PlatformSkillsTable,
@@ -561,6 +585,9 @@ func init() {
 	}
 	PlatformMcpServersTable.Annotation = &entsql.Annotation{
 		Table: "platform_mcp_servers",
+	}
+	PlatformNetworkPoliciesTable.Annotation = &entsql.Annotation{
+		Table: "platform_network_policies",
 	}
 	PlatformSecretsTable.Annotation = &entsql.Annotation{
 		Table: "platform_secrets",

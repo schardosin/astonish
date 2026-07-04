@@ -39,6 +39,9 @@ type McpServer func(*sql.Selector)
 // Memory is the predicate function for memory builders.
 type Memory func(*sql.Selector)
 
+// NetworkPolicy is the predicate function for networkpolicy builders.
+type NetworkPolicy func(*sql.Selector)
+
 // SandboxSession is the predicate function for sandboxsession builders.
 type SandboxSession func(*sql.Selector)
 

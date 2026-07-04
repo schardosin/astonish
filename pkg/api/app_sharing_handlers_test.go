@@ -98,6 +98,7 @@ func (m *mockOrgDataStore) ForUser(userID string) store.PersonalDataStore {
 func (m *mockOrgDataStore) OrgMemories() store.MemoryStore { return m.memories }
 func (m *mockOrgDataStore) OrgSkills() store.SkillStore     { return nil }
 func (m *mockOrgDataStore) OrgMCPServers() store.MCPServerStore { return nil }
+func (m *mockOrgDataStore) OrgNetworkPolicies() store.NetworkPolicyStore { return nil }
 func (m *mockOrgDataStore) OrgApps() store.AppStore         { return m.orgApps }
 func (m *mockOrgDataStore) OrgAudit() store.AuditStore      { return nil }
 func (m *mockOrgDataStore) Teams() store.TeamManagementStore {
@@ -135,6 +136,7 @@ func (m *mockTeamDataStore) ScheduledJobs() store.SchedulerStore {
 }
 func (m *mockTeamDataStore) Skills() store.SkillStore                { return nil }
 func (m *mockTeamDataStore) MCPServers() store.MCPServerStore        { return nil }
+func (m *mockTeamDataStore) NetworkPolicies() store.NetworkPolicyStore { return nil }
 func (m *mockTeamDataStore) FleetTemplates() store.FleetTemplateStore { return nil }
 func (m *mockTeamDataStore) FleetPlans() store.FleetPlanStore         { return nil }
 func (m *mockTeamDataStore) DrillReports() store.DrillReportStore     { return nil }

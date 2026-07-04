@@ -99,6 +99,7 @@ type OrgDataStore interface {
 	OrgMemories() MemoryStore
 	OrgSkills() SkillStore
 	OrgMCPServers() MCPServerStore
+	OrgNetworkPolicies() NetworkPolicyStore
 	OrgApps() AppStore
 	OrgAudit() AuditStore
 	Teams() TeamManagementStore
@@ -122,6 +123,7 @@ type TeamDataStore interface {
 	Flows() FlowStore
 	Skills() SkillStore
 	MCPServers() MCPServerStore
+	NetworkPolicies() NetworkPolicyStore
 	ScheduledJobs() SchedulerStore
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore

@@ -18,6 +18,7 @@ import (
 	"github.com/schardosin/astonish/pkg/apps"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
+	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
@@ -961,6 +962,21 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// installed at scope=platform) cascade down into every org/team chat.
 	if svc := store.FromRequest(r); svc != nil && (svc.PlatformMCPServers != nil || svc.MCPServers != nil || svc.TeamMCPServers != nil) {
 		runner.InjectMCPServerStores(svc.PlatformMCPServers, svc.MCPServers, svc.TeamMCPServers)
+	}
+
+	// Inject tenant-scoped network policy stores into the runner context so that
+	// denial detection can auto-approve/deny based on configured rules rather
+	// than always prompting the user.
+	if svc := store.FromRequest(r); svc != nil && (svc.PlatformNetworkPolicies != nil || svc.NetworkPolicies != nil || svc.TeamNetworkPolicies != nil) {
+		runner.InjectNetworkPolicyStores(svc.PlatformNetworkPolicies, svc.NetworkPolicies, svc.TeamNetworkPolicies)
+	}
+
+	// Inject gateway config for auto-approve (policy-allowed endpoints bypass the dialog).
+	if appCfg := effectiveAppConfig(r); appCfg != nil && appCfg.Sandbox.OpenShell.GatewayAddr != "" {
+		runner.InjectGatewayConfig(openshell.GRPCClientConfig{
+			Addr: appCfg.Sandbox.OpenShell.GatewayAddr,
+			TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
+		})
 	}
 
 	// Inject tenant-scoped scheduler store into the runner context so that

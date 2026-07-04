@@ -34,6 +34,8 @@ type Tx struct {
 	McpServer *McpServerClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
+	// NetworkPolicy is the client for interacting with the NetworkPolicy builders.
+	NetworkPolicy *NetworkPolicyClient
 	// SandboxSession is the client for interacting with the SandboxSession builders.
 	SandboxSession *SandboxSessionClient
 	// ScheduledJob is the client for interacting with the ScheduledJob builders.
@@ -192,6 +194,7 @@ func (tx *Tx) init() {
 	tx.Flow = NewFlowClient(tx.config)
 	tx.McpServer = NewMcpServerClient(tx.config)
 	tx.Memory = NewMemoryClient(tx.config)
+	tx.NetworkPolicy = NewNetworkPolicyClient(tx.config)
 	tx.SandboxSession = NewSandboxSessionClient(tx.config)
 	tx.ScheduledJob = NewScheduledJobClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)

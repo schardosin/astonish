@@ -121,6 +121,7 @@ export default withMermaid(defineConfig({
             { text: 'Authentication', link: '/docs/security/authentication' },
             { text: 'Envelope Encryption', link: '/docs/security/envelope-encryption' },
             { text: 'Sandboxes', link: '/docs/security/sandboxes' },
+            { text: 'Network Policy', link: '/docs/security/network-policy' },
             { text: 'Audit Logging', link: '/docs/security/audit-logging' },
             { text: 'Credential Security', link: '/docs/security/credential-security' },
           ]

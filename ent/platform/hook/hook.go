@@ -105,6 +105,18 @@ func (f PlatformMCPServerFunc) Mutate(ctx context.Context, m platform.Mutation) 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *platform.PlatformMCPServerMutation", m)
 }
 
+// The PlatformNetworkPolicyFunc type is an adapter to allow the use of ordinary
+// function as PlatformNetworkPolicy mutator.
+type PlatformNetworkPolicyFunc func(context.Context, *platform.PlatformNetworkPolicyMutation) (platform.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PlatformNetworkPolicyFunc) Mutate(ctx context.Context, m platform.Mutation) (platform.Value, error) {
+	if mv, ok := m.(*platform.PlatformNetworkPolicyMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *platform.PlatformNetworkPolicyMutation", m)
+}
+
 // The PlatformSecretFunc type is an adapter to allow the use of ordinary
 // function as PlatformSecret mutator.
 type PlatformSecretFunc func(context.Context, *platform.PlatformSecretMutation) (platform.Value, error)

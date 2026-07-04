@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
@@ -62,6 +63,16 @@ type ChatRunner struct {
 	// Maximum time to wait for the title goroutine after the "done"
 	// event before closing subscribers regardless.
 	titleWaitTimeout time.Duration
+
+	// gatewayConfig holds the OpenShell gateway gRPC config for auto-approve.
+	// Nil when OpenShell is not configured (personal mode, no sandbox).
+	gatewayConfig *openshell.GRPCClientConfig
+
+	// networkPolicySeeded is set to true after the first successful call to
+	// preSeedNetworkPolicy. This ensures we only push allow-list rules once
+	// per run (on the first tool_result, when the sandbox is guaranteed to
+	// exist), avoiding repeated gRPC calls on every subsequent tool result.
+	networkPolicySeeded bool
 }
 
 // newChatRunner creates a new ChatRunner with a background context.
@@ -188,6 +199,25 @@ func (cr *ChatRunner) InjectMCPServerStores(platform, org, team store.MCPServerS
 		Org:      org,
 		Team:     team,
 	})
+}
+
+// InjectNetworkPolicyStores adds the three-tier network policy stores to the
+// runner's context so that the denial detection code can check the effective
+// policy (auto-approve/deny/prompt) without hitting the HTTP handler layer.
+// Must be called before Run().
+func (cr *ChatRunner) InjectNetworkPolicyStores(platform, org, team store.NetworkPolicyStore) {
+	cr.ctx = store.WithNetworkPolicyStores(cr.ctx, &store.NetworkPolicyStores{
+		Platform: platform,
+		Org:      org,
+		Team:     team,
+	})
+}
+
+// InjectGatewayConfig stores the OpenShell gateway gRPC config so that the
+// runner can auto-approve endpoints when the effective policy says "allow".
+// Must be called before Run().
+func (cr *ChatRunner) InjectGatewayConfig(cfg openshell.GRPCClientConfig) {
+	cr.gatewayConfig = &cfg
 }
 
 // InjectFleetStores adds tenant-scoped fleet template and plan stores to the
@@ -520,7 +550,9 @@ func (cr *ChatRunner) Run(
 	seenPartialText := false
 	var lastRunErr error
 	hasContent := false // true if any non-partial text or tool call was emitted
+	networkDenialPending := false // when true, suppress text events (approval UI handles UX)
 
+runLoop:
 	for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
 	}) {
@@ -546,6 +578,12 @@ func (cr *ChatRunner) Run(
 				// Skip reasoning/thought parts — they are preserved in session
 				// history for providers like DeepSeek but should not be displayed.
 				if part.Text != "" && !part.Thought {
+					// When a network denial was detected, suppress all
+					// subsequent text output — the approval UI handles
+					// communication with the user.
+					if networkDenialPending {
+						continue
+					}
 					if event.LLMResponse.Partial {
 						seenPartialText = true
 						cr.emitEvent("text", map[string]any{"text": part.Text})
@@ -579,6 +617,16 @@ func (cr *ChatRunner) Run(
 					if part.FunctionResponse.Name == "announce_plan" {
 						continue
 					}
+
+					// On the first tool_result, the sandbox is guaranteed to
+					// exist (the tool ran inside it). Push all allow-list
+					// endpoints from the effective network policy so that
+					// subsequent commands can reach approved hosts without a
+					// fail-then-retry cycle.
+					if !cr.networkPolicySeeded {
+						cr.networkPolicySeeded = true
+						cr.preSeedNetworkPolicy()
+					}
 					resp := part.FunctionResponse.Response
 					if chatAgent.Redactor != nil && resp != nil {
 						resp = chatAgent.Redactor.RedactMap(resp)
@@ -595,6 +643,37 @@ func (cr *ChatRunner) Run(
 							cr.emitEvent("memory_saved", map[string]any{
 								"session_id": cr.SessionID,
 							})
+						}
+					}
+
+					// Emit network_denial_hint when a shell command fails with
+					// indicators of a blocked network connection. The frontend
+					// renders a prompt directly from the event data — no extra
+					// polling needed. Also suppress all further text output so
+					// the agent's verbose "explain the block" message is hidden.
+					//
+					// Before prompting, check the effective network policy:
+					// - PolicyAllow → auto-approve via gateway (silent)
+					// - PolicyDeny → suppress entirely (no dialog)
+					// - PolicyUnknown → show approval dialog (current behavior)
+					if part.FunctionResponse.Name == "shell_command" && resp != nil {
+						if looksLikeNetworkDenial(resp) {
+							stdout, _ := resp["stdout"].(string)
+							denials := extractDenialsFromOutput(stdout)
+							if len(denials) > 0 {
+								denials = cr.filterDenialsByPolicy(denials)
+								if len(denials) > 0 {
+									networkDenialPending = true
+									cr.emitEvent("network_denial_hint", map[string]any{
+										"session_id": cr.SessionID,
+										"denials":    denials,
+									})
+									// Stop the run immediately — the user will
+									// approve via the dialog, then send a retry
+									// message which creates a fresh ChatRunner.
+									break runLoop
+								}
+							}
 						}
 					}
 				}

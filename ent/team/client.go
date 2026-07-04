@@ -27,6 +27,7 @@ import (
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
 	"github.com/schardosin/astonish/ent/team/memory"
+	"github.com/schardosin/astonish/ent/team/networkpolicy"
 	"github.com/schardosin/astonish/ent/team/sandboxsession"
 	"github.com/schardosin/astonish/ent/team/scheduledjob"
 	"github.com/schardosin/astonish/ent/team/session"
@@ -64,6 +65,8 @@ type Client struct {
 	McpServer *McpServerClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
+	// NetworkPolicy is the client for interacting with the NetworkPolicy builders.
+	NetworkPolicy *NetworkPolicyClient
 	// SandboxSession is the client for interacting with the SandboxSession builders.
 	SandboxSession *SandboxSessionClient
 	// ScheduledJob is the client for interacting with the ScheduledJob builders.
@@ -102,6 +105,7 @@ func (c *Client) init() {
 	c.Flow = NewFlowClient(c.config)
 	c.McpServer = NewMcpServerClient(c.config)
 	c.Memory = NewMemoryClient(c.config)
+	c.NetworkPolicy = NewNetworkPolicyClient(c.config)
 	c.SandboxSession = NewSandboxSessionClient(c.config)
 	c.ScheduledJob = NewScheduledJobClient(c.config)
 	c.Session = NewSessionClient(c.config)
@@ -213,6 +217,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Flow:              NewFlowClient(cfg),
 		McpServer:         NewMcpServerClient(cfg),
 		Memory:            NewMemoryClient(cfg),
+		NetworkPolicy:     NewNetworkPolicyClient(cfg),
 		SandboxSession:    NewSandboxSessionClient(cfg),
 		ScheduledJob:      NewScheduledJobClient(cfg),
 		Session:           NewSessionClient(cfg),
@@ -251,6 +256,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Flow:              NewFlowClient(cfg),
 		McpServer:         NewMcpServerClient(cfg),
 		Memory:            NewMemoryClient(cfg),
+		NetworkPolicy:     NewNetworkPolicyClient(cfg),
 		SandboxSession:    NewSandboxSessionClient(cfg),
 		ScheduledJob:      NewScheduledJobClient(cfg),
 		Session:           NewSessionClient(cfg),
@@ -290,8 +296,8 @@ func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.App, c.AppState, c.ChatSessionEvent, c.Credential, c.DrillReport,
 		c.FleetMonitorState, c.FleetPlan, c.FleetTemplate, c.Flow, c.McpServer,
-		c.Memory, c.SandboxSession, c.ScheduledJob, c.Session, c.SessionEvent,
-		c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
+		c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob, c.Session,
+		c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
 	} {
 		n.Use(hooks...)
 	}
@@ -303,8 +309,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.App, c.AppState, c.ChatSessionEvent, c.Credential, c.DrillReport,
 		c.FleetMonitorState, c.FleetPlan, c.FleetTemplate, c.Flow, c.McpServer,
-		c.Memory, c.SandboxSession, c.ScheduledJob, c.Session, c.SessionEvent,
-		c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
+		c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob, c.Session,
+		c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -335,6 +341,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.McpServer.mutate(ctx, m)
 	case *MemoryMutation:
 		return c.Memory.mutate(ctx, m)
+	case *NetworkPolicyMutation:
+		return c.NetworkPolicy.mutate(ctx, m)
 	case *SandboxSessionMutation:
 		return c.SandboxSession.mutate(ctx, m)
 	case *ScheduledJobMutation:
@@ -1835,6 +1843,139 @@ func (c *MemoryClient) mutate(ctx context.Context, m *MemoryMutation) (Value, er
 	}
 }
 
+// NetworkPolicyClient is a client for the NetworkPolicy schema.
+type NetworkPolicyClient struct {
+	config
+}
+
+// NewNetworkPolicyClient returns a client for the NetworkPolicy from the given config.
+func NewNetworkPolicyClient(c config) *NetworkPolicyClient {
+	return &NetworkPolicyClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `networkpolicy.Hooks(f(g(h())))`.
+func (c *NetworkPolicyClient) Use(hooks ...Hook) {
+	c.hooks.NetworkPolicy = append(c.hooks.NetworkPolicy, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `networkpolicy.Intercept(f(g(h())))`.
+func (c *NetworkPolicyClient) Intercept(interceptors ...Interceptor) {
+	c.inters.NetworkPolicy = append(c.inters.NetworkPolicy, interceptors...)
+}
+
+// Create returns a builder for creating a NetworkPolicy entity.
+func (c *NetworkPolicyClient) Create() *NetworkPolicyCreate {
+	mutation := newNetworkPolicyMutation(c.config, OpCreate)
+	return &NetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of NetworkPolicy entities.
+func (c *NetworkPolicyClient) CreateBulk(builders ...*NetworkPolicyCreate) *NetworkPolicyCreateBulk {
+	return &NetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *NetworkPolicyClient) MapCreateBulk(slice any, setFunc func(*NetworkPolicyCreate, int)) *NetworkPolicyCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &NetworkPolicyCreateBulk{err: fmt.Errorf("calling to NetworkPolicyClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*NetworkPolicyCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &NetworkPolicyCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for NetworkPolicy.
+func (c *NetworkPolicyClient) Update() *NetworkPolicyUpdate {
+	mutation := newNetworkPolicyMutation(c.config, OpUpdate)
+	return &NetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *NetworkPolicyClient) UpdateOne(_m *NetworkPolicy) *NetworkPolicyUpdateOne {
+	mutation := newNetworkPolicyMutation(c.config, OpUpdateOne, withNetworkPolicy(_m))
+	return &NetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *NetworkPolicyClient) UpdateOneID(id uuid.UUID) *NetworkPolicyUpdateOne {
+	mutation := newNetworkPolicyMutation(c.config, OpUpdateOne, withNetworkPolicyID(id))
+	return &NetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for NetworkPolicy.
+func (c *NetworkPolicyClient) Delete() *NetworkPolicyDelete {
+	mutation := newNetworkPolicyMutation(c.config, OpDelete)
+	return &NetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *NetworkPolicyClient) DeleteOne(_m *NetworkPolicy) *NetworkPolicyDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *NetworkPolicyClient) DeleteOneID(id uuid.UUID) *NetworkPolicyDeleteOne {
+	builder := c.Delete().Where(networkpolicy.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &NetworkPolicyDeleteOne{builder}
+}
+
+// Query returns a query builder for NetworkPolicy.
+func (c *NetworkPolicyClient) Query() *NetworkPolicyQuery {
+	return &NetworkPolicyQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeNetworkPolicy},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a NetworkPolicy entity by its id.
+func (c *NetworkPolicyClient) Get(ctx context.Context, id uuid.UUID) (*NetworkPolicy, error) {
+	return c.Query().Where(networkpolicy.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *NetworkPolicyClient) GetX(ctx context.Context, id uuid.UUID) *NetworkPolicy {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *NetworkPolicyClient) Hooks() []Hook {
+	return c.hooks.NetworkPolicy
+}
+
+// Interceptors returns the client interceptors.
+func (c *NetworkPolicyClient) Interceptors() []Interceptor {
+	return c.inters.NetworkPolicy
+}
+
+func (c *NetworkPolicyClient) mutate(ctx context.Context, m *NetworkPolicyMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&NetworkPolicyCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&NetworkPolicyUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&NetworkPolicyUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&NetworkPolicyDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown NetworkPolicy mutation op: %q", m.Op())
+	}
+}
+
 // SandboxSessionClient is a client for the SandboxSession schema.
 type SandboxSessionClient struct {
 	config
@@ -2983,14 +3124,14 @@ func (c *TeamAuditLogClient) mutate(ctx context.Context, m *TeamAuditLogMutation
 type (
 	hooks struct {
 		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMonitorState,
-		FleetPlan, FleetTemplate, Flow, McpServer, Memory, SandboxSession,
-		ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
+		FleetPlan, FleetTemplate, Flow, McpServer, Memory, NetworkPolicy,
+		SandboxSession, ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
 		TeamAuditLog []ent.Hook
 	}
 	inters struct {
 		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMonitorState,
-		FleetPlan, FleetTemplate, Flow, McpServer, Memory, SandboxSession,
-		ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
+		FleetPlan, FleetTemplate, Flow, McpServer, Memory, NetworkPolicy,
+		SandboxSession, ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
 		TeamAuditLog []ent.Interceptor
 	}
 )

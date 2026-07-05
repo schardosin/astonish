@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -83,7 +84,8 @@ func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName s
 	script := buildBrowserLaunchScript(cfg, width, height, kasmPort)
 
 	resp, err := gateway.ExecCommand(ctx, podName, ExecRequest{
-		Command: []string{"sh", "-c", script},
+		Command: []string{"sh"},
+		Stdin:   strings.NewReader(script),
 		TTY:     false,
 	})
 	if err != nil {

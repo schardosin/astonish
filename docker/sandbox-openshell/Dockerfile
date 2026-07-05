@@ -169,10 +169,12 @@ RUN /usr/local/bin/uv pip install --system --break-system-packages --python /usr
 # Fix ownership of browser home directory and ensure CloakBrowser + KasmVNC
 # are accessible to the sandbox user (supervisor demotes exec to user "sandbox").
 # The sandbox user needs to:
+#   - Traverse /home/browser (useradd creates it with 0750 — must be 0755)
 #   - Execute the CloakBrowser binary (under .cloakbrowser/)
 #   - Read KasmVNC config, certs, and xstartup (under .vnc/)
 #   - Start vncserver with HOME=/home/browser
 RUN chown -R browser:browser /home/browser \
+    && chmod 755 /home/browser \
     && chmod -R 755 /home/browser/.cloakbrowser \
     && chmod -R 755 /home/browser/.vnc \
     && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem

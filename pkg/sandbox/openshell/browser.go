@@ -164,23 +164,26 @@ su - browser -c 'DISPLAY=:%s xhost +local:' 2>"$_NULL" || true
 echo "STEP 2: Resolve CloakBrowser" >&2
 
 # --- 2. Resolve CloakBrowser binary ---
-# Use /usr/bin/python3 explicitly (matches Dockerfile install path).
-# The || true prevents set -e from aborting if python fails.
-BROWSER_BIN=$(/usr/bin/python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL") || true
+# CloakBrowser was installed at build time with HOME=/home/browser, so the
+# binary lives under /home/browser/.cloakbrowser/. At runtime the sandbox
+# user has HOME=/sandbox, which makes get_binary_path() return a wrong path.
+# Force HOME=/home/browser so it resolves the build-time install location.
+BROWSER_BIN=$(HOME=/home/browser /usr/bin/python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL") || true
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
-  echo "CloakBrowser binary not found (got: '$BROWSER_BIN')" >&2
-  # Try fallback: check common install locations
-  for candidate in /home/browser/.cloakbrowser/chrome /home/browser/.cloakbrowser/chromium; do
-    if [ -f "$candidate" ]; then
+  echo "CloakBrowser not at python path (got: '$BROWSER_BIN'), searching..." >&2
+  # Fallback: find the chrome binary under known install locations.
+  for base in /home/browser/.cloakbrowser /sandbox/.cloakbrowser /root/.cloakbrowser; do
+    candidate=$(find "$base" -name chrome -type f 2>"$_NULL" | head -1)
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
       BROWSER_BIN="$candidate"
-      echo "Using fallback: $BROWSER_BIN" >&2
+      echo "Found CloakBrowser at: $BROWSER_BIN" >&2
       break
     fi
   done
   if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
     echo "No CloakBrowser binary found anywhere" >&2
     ls -la /home/browser/.cloakbrowser/ >&2 2>"$_NULL" || true
-    /usr/bin/python3 -c 'import cloakbrowser; print(dir(cloakbrowser))' >&2 2>&1 || true
+    ls -la /sandbox/.cloakbrowser/ >&2 2>"$_NULL" || true
     exit 1
   fi
 fi

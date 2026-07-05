@@ -14,35 +14,17 @@
 #
 # Architecture: amd64 only.
 #
+# Go binary is cross-compiled on the host (no QEMU needed) and copied in.
+# This avoids Go 1.26 segfaults when running `go mod download` under QEMU
+# user-mode emulation on Apple Silicon Macs.
+#
 # Build (from repo root):
-#   docker build -f docker/sandbox-openshell/Dockerfile \
-#     -t schardosin/astonish-sandbox-openshell:latest .
+#   make push-sandbox-openshell-dev-fast
 #
 # Configure in OpenShell gateway values:
 #   server:
 #     sandboxImage: schardosin/astonish-sandbox-openshell:latest
 
-# ---------------------------------------------------------------------------
-# Stage 1 — Build the Astonish agent binary
-# ---------------------------------------------------------------------------
-FROM golang:1.26-alpine AS builder
-
-WORKDIR /src
-
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
-
-# Build the main astonish binary (agent/node for tool execution).
-RUN CGO_ENABLED=0 go build \
-      -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=sandbox-openshell" \
-      -o /tmp/astonish \
-      .
-
-# ---------------------------------------------------------------------------
-# Stage 2 — Final runtime image
-# ---------------------------------------------------------------------------
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 LABEL org.opencontainers.image.title="astonish-sandbox-openshell" \
@@ -50,12 +32,14 @@ LABEL org.opencontainers.image.title="astonish-sandbox-openshell" \
       org.opencontainers.image.source="https://github.com/schardosin/astonish" \
       org.opencontainers.image.licenses="Apache-2.0"
 
-# --- Astonish agent binary ---
-COPY --from=builder /tmp/astonish /usr/local/bin/astonish
-
 # All install steps run as root. The OpenShell supervisor demotes the agent
 # process to user "sandbox" at runtime via Landlock/seccomp.
 USER root
+
+# --- Astonish agent binary (cross-compiled on host, see Makefile build-linux) ---
+ARG TARGETARCH=amd64
+COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
+RUN chmod +x /usr/local/bin/astonish
 
 # ===========================================================================
 # System Packages (single layer)
@@ -175,8 +159,12 @@ RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browse
 # Install into system Python (3.12) so it's importable at runtime via:
 #   python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())"
 # Then download the stealth Chromium binary into /home/browser/.cloakbrowser/
+# NOTE: The installer tries to launch chrome to verify, which segfaults under QEMU
+# emulation (the binary is native amd64 but QEMU can't emulate it fully). We ignore
+# the exit code and verify the binary exists instead.
 RUN /usr/local/bin/uv pip install --system --break-system-packages --python /usr/bin/python3 cloakbrowser \
-    && HOME=/home/browser /usr/bin/python3 -m cloakbrowser install
+    && (HOME=/home/browser /usr/bin/python3 -m cloakbrowser install || true) \
+    && test -x /home/browser/.cloakbrowser/chromium-*/chrome
 
 # Fix ownership of browser home directory and ensure CloakBrowser + KasmVNC
 # are accessible to the sandbox user (supervisor demotes exec to user "sandbox").

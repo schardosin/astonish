@@ -622,7 +622,7 @@ docker-incus: build-linux
 	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
 
 # Build the OpenShell sandbox image (NVIDIA sandbox base + Astonish agent tools)
-docker-sandbox-openshell:
+docker-sandbox-openshell: build-linux
 	@echo "Building OpenShell sandbox image..."
 	docker build -f docker/sandbox-openshell/Dockerfile -t $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION) .
 	@echo "Image built: $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(VERSION)"
@@ -666,7 +666,7 @@ push-sandbox-base-dev: ensure-builder
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG)"
 
 # Build and push the OpenShell sandbox image (amd64 only — KasmVNC + CloakBrowser are amd64)
-push-sandbox-openshell-dev: ensure-builder
+push-sandbox-openshell-dev: ensure-builder build-linux
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/amd64)..."
 	docker buildx build --platform linux/amd64 \
 		-f docker/sandbox-openshell/Dockerfile \
@@ -712,7 +712,7 @@ push-incus-dev-fast: ensure-builder build-linux
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
 
 # Fast: build and push OpenShell sandbox image (amd64 only — KasmVNC + CloakBrowser are amd64)
-push-sandbox-openshell-dev-fast: ensure-builder
+push-sandbox-openshell-dev-fast: ensure-builder build-linux
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-openshell:$(DEV_TAG) (linux/amd64)..."
 	docker buildx build --platform linux/amd64 \
 		-f docker/sandbox-openshell/Dockerfile \

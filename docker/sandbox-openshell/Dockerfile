@@ -182,10 +182,6 @@ RUN chown -R browser:browser /home/browser \
     && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem \
     && touch /home/browser/.Xauthority && chmod 666 /home/browser/.Xauthority
 
-# Pre-create X11 unix socket directory — Xvnc refuses to mkdir when euid != 0.
-# Sticky bit (1777) matches standard /tmp/.X11-unix semantics.
-RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
-
 # ===========================================================================
 # Cleanup
 # ===========================================================================

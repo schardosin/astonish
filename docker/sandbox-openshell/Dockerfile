@@ -178,10 +178,16 @@ RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browse
 RUN /usr/local/bin/uv pip install --system --break-system-packages --python /usr/bin/python3 cloakbrowser \
     && HOME=/home/browser /usr/bin/python3 -m cloakbrowser install
 
-# Fix ownership of browser home directory and ensure the CloakBrowser binary
-# is accessible to the sandbox user (supervisor demotes exec to user "sandbox").
+# Fix ownership of browser home directory and ensure CloakBrowser + KasmVNC
+# are accessible to the sandbox user (supervisor demotes exec to user "sandbox").
+# The sandbox user needs to:
+#   - Execute the CloakBrowser binary (under .cloakbrowser/)
+#   - Read KasmVNC config, certs, and xstartup (under .vnc/)
+#   - Start vncserver with HOME=/home/browser
 RUN chown -R browser:browser /home/browser \
-    && chmod -R 755 /home/browser/.cloakbrowser
+    && chmod -R 755 /home/browser/.cloakbrowser \
+    && chmod -R 755 /home/browser/.vnc \
+    && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem
 
 # ===========================================================================
 # Cleanup

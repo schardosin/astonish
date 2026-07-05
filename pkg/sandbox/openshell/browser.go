@@ -57,21 +57,24 @@ type BrowserLaunchConfig struct {
 // StartBrowserInSandbox
 // ---------------------------------------------------------------------------
 
-// StartBrowserInSandbox launches CloakBrowser + Xvfb + socat inside an
+// StartBrowserInSandbox launches CloakBrowser + KasmVNC + socat inside an
 // OpenShell sandbox pod. The browser becomes reachable via CDP on port 9222
-// (tunneled through the socat bridge).
+// (tunneled through the socat bridge). KasmVNC provides visual handoff
+// via websocket on port 6901.
 //
 // This is the OpenShell equivalent of incus.StartChromiumInContainer.
 //
 // Important: all exec commands inside the sandbox run as user "sandbox"
-// (the OpenShell supervisor demotes from root). The script must NOT use
-// su/runuser/sudo. CloakBrowser binary must be world-readable (chmod 755).
+// (the OpenShell supervisor demotes from root). The script uses
+// HOME=/home/browser to access KasmVNC config and CloakBrowser binary
+// without needing su/runuser (which require root privileges).
 //
 // Prerequisites (baked into the sandbox image):
+//   - KasmVNC installed, "browser" user exists, ~/.vnc/ pre-configured
 //   - CloakBrowser installed via `python3 -m cloakbrowser install`
-//   - Xvfb installed (xvfb apt package)
 //   - socat installed
 //   - /home/browser/.cloakbrowser/ is chmod 755 (accessible by sandbox user)
+//   - /home/browser/.vnc/ is chmod 755 (accessible by sandbox user)
 func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName string, cfg BrowserLaunchConfig) error {
 	width := cfg.ViewportWidth
 	if width == 0 {
@@ -81,8 +84,12 @@ func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName s
 	if height == 0 {
 		height = 720
 	}
+	kasmPort := cfg.KasmVNCPort
+	if kasmPort == 0 {
+		kasmPort = defaultKasmVNCPort
+	}
 
-	script := buildBrowserLaunchScript(cfg, width, height)
+	script := buildBrowserLaunchScript(cfg, width, height, kasmPort)
 
 	resp, err := gateway.ExecCommand(ctx, podName, ExecRequest{
 		Command: []string{"sh"},
@@ -109,16 +116,15 @@ func portToHex(port int) string {
 	return fmt.Sprintf("%04X", port)
 }
 
-// buildBrowserLaunchScript generates the shell script that starts Xvfb,
+// buildBrowserLaunchScript generates the shell script that starts KasmVNC,
 // CloakBrowser, and the socat CDP bridge inside the sandbox.
 //
 // All commands run as the sandbox user (no privilege escalation available).
-// Uses Xvfb instead of KasmVNC as the display server because KasmVNC
-// requires user-specific config under /home/browser/.vnc/ which is not
-// accessible to the sandbox user. Xvfb has no such restriction.
+// KasmVNC config and CloakBrowser binary are accessed via HOME=/home/browser
+// override — both directories must be chmod 755 in the image.
 //
-// Dependencies: Xvfb, socat, python3, grep, /proc filesystem.
-func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height int) string {
+// Dependencies: KasmVNC (vncserver), socat, python3, grep, /proc filesystem.
+func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort int) string {
 	fingerprintFlags := ""
 	if cfg.FingerprintSeed != "" {
 		fingerprintFlags += fmt.Sprintf(" --fingerprint %s", cfg.FingerprintSeed)
@@ -147,16 +153,16 @@ proc_running() {
   return 1
 }
 
-echo "STEP 1: Xvfb display server" >&2
+echo "STEP 1: KasmVNC" >&2
 
-# --- 1. Start Xvfb (virtual framebuffer for headed browser) ---
-# Xvfb runs as the current user (sandbox) — no privilege escalation needed.
+# --- 1. Start KasmVNC (X display server + web VNC for visual handoff) ---
+# Run as sandbox user with HOME=/home/browser so vncserver finds its config.
 # Skip if already running (idempotent).
-if ! proc_running 'Xvfb.*:99'; then
-  Xvfb :99 -screen 0 %dx%dx24 -nolisten tcp &
+if ! proc_running 'Xvnc.*:%s'; then
+  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth 2>/dev/null || true
   sleep 1
 fi
-export DISPLAY=:99
+export DISPLAY=:%s
 
 echo "STEP 2: Resolve CloakBrowser" >&2
 
@@ -185,8 +191,8 @@ fi
 echo "STEP 3: Launch CloakBrowser (bin=$BROWSER_BIN)" >&2
 
 # --- 3. Launch CloakBrowser ---
-# Runs as user sandbox directly. Uses /tmp/chromium as user-data-dir
-# since /home/browser/.config may not be writable by the sandbox user.
+# Runs as sandbox user directly. Uses /tmp/chromium as user-data-dir
+# (writable by sandbox user; /home/browser/.config may not be).
 # Skip if already running (idempotent for reconnection after CDP timeout).
 if ! proc_running 'remote-debugging-port'; then
   BROWSER_LOG=/tmp/cloakbrowser.log
@@ -247,8 +253,11 @@ fi
 
 echo "DONE: browser ready" >&2
 `,
-		// Xvfb screen dimensions
-		width, height,
+		// KasmVNC proc_running pattern + start
+		kasmVNCDisplay,
+		kasmVNCDisplay, width, height, kasmPort,
+		// DISPLAY export
+		kasmVNCDisplay,
 		// CloakBrowser launch
 		cdpInternalPort, width, height,
 		fingerprintFlags, proxyFlag,

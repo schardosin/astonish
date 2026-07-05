@@ -418,6 +418,8 @@ openshell:
     # Default sandbox image — Astonish agent tooling.
     # Must match sandbox.openshell.image.repository:tag above.
     sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    # Always pull sandbox image so :dev tag updates are picked up immediately.
+    sandboxImagePullPolicy: "Always"
     auth:
       # When mesh.provider is set, the mesh AuthorizationPolicy handles identity.
       # Without a mesh, consider setting this to false and configuring gateway auth.

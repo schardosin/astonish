@@ -57,16 +57,21 @@ type BrowserLaunchConfig struct {
 // StartBrowserInSandbox
 // ---------------------------------------------------------------------------
 
-// StartBrowserInSandbox launches CloakBrowser + KasmVNC + socat inside an
+// StartBrowserInSandbox launches CloakBrowser + Xvfb + socat inside an
 // OpenShell sandbox pod. The browser becomes reachable via CDP on port 9222
 // (tunneled through the socat bridge).
 //
 // This is the OpenShell equivalent of incus.StartChromiumInContainer.
 //
+// Important: all exec commands inside the sandbox run as user "sandbox"
+// (the OpenShell supervisor demotes from root). The script must NOT use
+// su/runuser/sudo. CloakBrowser binary must be world-readable (chmod 755).
+//
 // Prerequisites (baked into the sandbox image):
-//   - KasmVNC installed, "browser" user exists, ~/.vnc/ pre-configured
 //   - CloakBrowser installed via `python3 -m cloakbrowser install`
+//   - Xvfb installed (xvfb apt package)
 //   - socat installed
+//   - /home/browser/.cloakbrowser/ is chmod 755 (accessible by sandbox user)
 func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName string, cfg BrowserLaunchConfig) error {
 	width := cfg.ViewportWidth
 	if width == 0 {
@@ -76,12 +81,8 @@ func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName s
 	if height == 0 {
 		height = 720
 	}
-	kasmPort := cfg.KasmVNCPort
-	if kasmPort == 0 {
-		kasmPort = defaultKasmVNCPort
-	}
 
-	script := buildBrowserLaunchScript(cfg, width, height, kasmPort)
+	script := buildBrowserLaunchScript(cfg, width, height)
 
 	resp, err := gateway.ExecCommand(ctx, podName, ExecRequest{
 		Command: []string{"sh"},
@@ -108,13 +109,16 @@ func portToHex(port int) string {
 	return fmt.Sprintf("%04X", port)
 }
 
-// buildBrowserLaunchScript generates the shell script that starts KasmVNC,
+// buildBrowserLaunchScript generates the shell script that starts Xvfb,
 // CloakBrowser, and the socat CDP bridge inside the sandbox.
 //
-// The script avoids commands that may not be available in minimal container
-// images: no pgrep (needs procps), no runuser (needs util-linux), no ss
-// (needs iproute2). Instead it uses /proc inspection, su, and /proc/net/tcp.
-func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort int) string {
+// All commands run as the sandbox user (no privilege escalation available).
+// Uses Xvfb instead of KasmVNC as the display server because KasmVNC
+// requires user-specific config under /home/browser/.vnc/ which is not
+// accessible to the sandbox user. Xvfb has no such restriction.
+//
+// Dependencies: Xvfb, socat, python3, grep, /proc filesystem.
+func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height int) string {
 	fingerprintFlags := ""
 	if cfg.FingerprintSeed != "" {
 		fingerprintFlags += fmt.Sprintf(" --fingerprint %s", cfg.FingerprintSeed)
@@ -129,12 +133,6 @@ func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort i
 	}
 
 	return fmt.Sprintf(`#!/bin/sh
-
-# /dev/null may be read-only or broken in some container runtimes.
-# Use a writable sink file instead.
-_NULL=/tmp/.devnull
-: > "$_NULL" 2>/tmp/.devnull_bootstrap || true
-
 set -e
 
 # Helper: check if a process matching a pattern is running.
@@ -142,38 +140,35 @@ set -e
 proc_running() {
   for p in /proc/[0-9]*/cmdline; do
     [ -f "$p" ] || continue
-    if tr '\0' ' ' < "$p" 2>"$_NULL" | grep -q "$1"; then
+    if tr '\0' ' ' < "$p" 2>/dev/null | grep -q "$1"; then
       return 0
     fi
   done
   return 1
 }
 
-echo "STEP 1: KasmVNC" >&2
+echo "STEP 1: Xvfb display server" >&2
 
-# --- 1. Start KasmVNC (X display server for headed browser) ---
+# --- 1. Start Xvfb (virtual framebuffer for headed browser) ---
+# Xvfb runs as the current user (sandbox) — no privilege escalation needed.
 # Skip if already running (idempotent).
-if ! proc_running 'Xvnc.*:%s'; then
-  su - browser -c "vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth" 2>"$_NULL" || true
+if ! proc_running 'Xvfb.*:99'; then
+  Xvfb :99 -screen 0 %dx%dx24 -nolisten tcp &
   sleep 1
 fi
-
-# Allow any local user to connect to the Xvnc display.
-su - browser -c 'DISPLAY=:%s xhost +local:' 2>"$_NULL" || true
+export DISPLAY=:99
 
 echo "STEP 2: Resolve CloakBrowser" >&2
 
 # --- 2. Resolve CloakBrowser binary ---
-# CloakBrowser was installed at build time with HOME=/home/browser, so the
-# binary lives under /home/browser/.cloakbrowser/. At runtime the sandbox
-# user has HOME=/sandbox, which makes get_binary_path() return a wrong path.
-# Force HOME=/home/browser so it resolves the build-time install location.
-BROWSER_BIN=$(HOME=/home/browser /usr/bin/python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL") || true
+# CloakBrowser was installed at build time with HOME=/home/browser.
+# Force HOME=/home/browser so get_binary_path() resolves correctly.
+BROWSER_BIN=$(HOME=/home/browser /usr/bin/python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>/dev/null) || true
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser not at python path (got: '$BROWSER_BIN'), searching..." >&2
   # Fallback: find the chrome binary under known install locations.
-  for base in /home/browser/.cloakbrowser /sandbox/.cloakbrowser /root/.cloakbrowser; do
-    candidate=$(find "$base" -name chrome -type f 2>"$_NULL" | head -1)
+  for base in /home/browser/.cloakbrowser /sandbox/.cloakbrowser; do
+    candidate=$(find "$base" -name chrome -type f 2>/dev/null | head -1)
     if [ -n "$candidate" ] && [ -f "$candidate" ]; then
       BROWSER_BIN="$candidate"
       echo "Found CloakBrowser at: $BROWSER_BIN" >&2
@@ -182,8 +177,7 @@ if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   done
   if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
     echo "No CloakBrowser binary found anywhere" >&2
-    ls -la /home/browser/.cloakbrowser/ >&2 2>"$_NULL" || true
-    ls -la /sandbox/.cloakbrowser/ >&2 2>"$_NULL" || true
+    ls -la /home/browser/.cloakbrowser/ >&2 2>/dev/null || true
     exit 1
   fi
 fi
@@ -191,17 +185,19 @@ fi
 echo "STEP 3: Launch CloakBrowser (bin=$BROWSER_BIN)" >&2
 
 # --- 3. Launch CloakBrowser ---
+# Runs as user sandbox directly. Uses /tmp/chromium as user-data-dir
+# since /home/browser/.config may not be writable by the sandbox user.
 # Skip if already running (idempotent for reconnection after CDP timeout).
 if ! proc_running 'remote-debugging-port'; then
   BROWSER_LOG=/tmp/cloakbrowser.log
-  su - browser -c "DISPLAY=:%s $BROWSER_BIN \
+  "$BROWSER_BIN" \
     --no-sandbox \
     --test-type \
     --disable-gpu \
     --disable-dev-shm-usage \
     --remote-debugging-port=%d \
     --window-size=%d,%d \
-    --user-data-dir=/home/browser/.config/chromium \
+    --user-data-dir=/tmp/chromium \
     --disable-background-timer-throttling \
     --disable-backgrounding-occluded-windows \
     --disable-renderer-backgrounding \
@@ -210,7 +206,7 @@ if ! proc_running 'remote-debugging-port'; then
     --no-default-browser-check \
     --noerrdialogs \
     --disable-features=TranslateUI%s%s \
-    about:blank >$BROWSER_LOG 2>&1 &"
+    about:blank >"$BROWSER_LOG" 2>&1 &
   sleep 2
 
   echo "STEP 3b: Verify browser running" >&2
@@ -218,7 +214,7 @@ if ! proc_running 'remote-debugging-port'; then
   # Verify browser started.
   if ! proc_running 'remote-debugging-port'; then
     echo "CloakBrowser died on startup. Log:" >&2
-    cat /tmp/cloakbrowser.log >&2 2>"$_NULL"
+    cat /tmp/cloakbrowser.log >&2 2>/dev/null
     exit 1
   fi
 fi
@@ -237,7 +233,7 @@ echo "STEP 5: Verify CDP port" >&2
 # Use /proc/net/tcp instead of ss (avoids iproute2 dependency).
 CDP_READY=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if grep -qi ':%s ' /proc/net/tcp 2>"$_NULL" || grep -qi ':%s ' /proc/net/tcp6 2>"$_NULL"; then
+  if grep -qi ':%s ' /proc/net/tcp 2>/dev/null || grep -qi ':%s ' /proc/net/tcp6 2>/dev/null; then
     CDP_READY=1
     break
   fi
@@ -245,20 +241,16 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
 done
 if [ "$CDP_READY" = "0" ]; then
   echo "CDP port %d not listening after 5s" >&2
-  cat /proc/net/tcp >&2 2>"$_NULL"
+  cat /proc/net/tcp >&2 2>/dev/null
   exit 1
 fi
 
 echo "DONE: browser ready" >&2
 `,
-		// KasmVNC proc_running pattern
-		kasmVNCDisplay,
-		// KasmVNC start
-		kasmVNCDisplay, width, height, kasmPort,
-		// xhost
-		kasmVNCDisplay,
+		// Xvfb screen dimensions
+		width, height,
 		// CloakBrowser launch
-		kasmVNCDisplay, cdpInternalPort, width, height,
+		cdpInternalPort, width, height,
 		fingerprintFlags, proxyFlag,
 		// socat proc_running + launch
 		cdpPort, cdpPort, cdpInternalPort,

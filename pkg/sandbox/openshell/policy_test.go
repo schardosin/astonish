@@ -48,9 +48,14 @@ func TestDefaultSandboxPolicy_IncludesDeviceNodes(t *testing.T) {
 	for _, p := range policy.Filesystem.ReadOnly {
 		roSet[p] = true
 	}
+	rwSet := make(map[string]bool)
+	for _, p := range policy.Filesystem.ReadWrite {
+		rwSet[p] = true
+	}
 
-	if !roSet["/dev/null"] {
-		t.Error("expected /dev/null in read-only paths")
+	// /dev/null must be read-write (shell redirections require write access).
+	if !rwSet["/dev/null"] {
+		t.Error("expected /dev/null in read-write paths")
 	}
 	if !roSet["/dev/urandom"] {
 		t.Error("expected /dev/urandom in read-only paths")

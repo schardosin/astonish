@@ -178,8 +178,10 @@ RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browse
 RUN /usr/local/bin/uv pip install --system --break-system-packages --python /usr/bin/python3 cloakbrowser \
     && HOME=/home/browser /usr/bin/python3 -m cloakbrowser install
 
-# Fix ownership of browser home directory
-RUN chown -R browser:browser /home/browser
+# Fix ownership of browser home directory and ensure the CloakBrowser binary
+# is accessible to the sandbox user (supervisor demotes exec to user "sandbox").
+RUN chown -R browser:browser /home/browser \
+    && chmod -R 755 /home/browser/.cloakbrowser
 
 # ===========================================================================
 # Cleanup

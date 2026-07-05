@@ -37,24 +37,26 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
 		},
 		Filesystem: &FilesystemSpec{
 			IncludeWorkdir: true,
-			ReadOnly: []string{
-				"/usr",
-				"/bin",
-				"/sbin",
-				"/lib",
-				"/lib64",
-				"/etc",
-				"/opt",
-				// Device nodes needed by standard library functions.
-				"/dev/null",
-				"/dev/urandom",
-			},
-			ReadWrite: []string{
-				"/sandbox",
-				"/tmp",
-				"/var/tmp",
-				"/home",
-				"/run",
+		ReadOnly: []string{
+			"/usr",
+			"/bin",
+			"/sbin",
+			"/lib",
+			"/lib64",
+			"/etc",
+			"/opt",
+			// Device nodes needed by standard library functions.
+			"/dev/urandom",
+		},
+		ReadWrite: []string{
+			"/sandbox",
+			"/tmp",
+			"/var/tmp",
+			"/home",
+			"/run",
+			// /dev/null must be read-write — shell redirections (>/dev/null)
+			// require write access, not just read.
+			"/dev/null",
 				// PTY device nodes — required for shell_command's interactive
 				// terminal support (password prompts, interactive CLIs).
 				// The supervisor pre-opens PathFds for these paths BEFORE

@@ -297,10 +297,11 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
             ReadOnly: []string{
                 "/usr", "/bin", "/sbin", "/lib", "/lib64",
                 "/etc", "/opt",
-                "/dev/null", "/dev/urandom",
+                "/dev/urandom",
             },
             ReadWrite: []string{
                 "/sandbox", "/tmp", "/var/tmp", "/home", "/run",
+                "/dev/null",           // Must be read-write for shell redirections
                 "/dev/pts",            // PTY devices directory (kernel 6.10+ ABI v5)
             },
         },
@@ -342,7 +343,7 @@ The supervisor pre-opens `PathFd`s for all paths in the filesystem policy
 | `/lib`, `/lib64` | Read-Only | Shared libraries |
 | `/etc` | Read-Only | System configuration (resolv.conf, etc.) |
 | `/opt` | Read-Only | Optional packages |
-| `/dev/null` | Read-Only | Null device |
+| `/dev/null` | Read-Write | Null device (must be writable for shell redirections) |
 | `/dev/urandom` | Read-Only | Random number generator |
 | `/root` | **Denied** | Not in policy — agent runs as user `sandbox` |
 | `/proc`, `/sys` | **Not in Landlock** | Handled by container + seccomp |

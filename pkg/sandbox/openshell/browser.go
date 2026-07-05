@@ -102,8 +102,18 @@ func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName s
 	return nil
 }
 
+// portToHex returns the uppercase hex representation of a port number,
+// matching the format used in /proc/net/tcp (4 hex digits, uppercase).
+func portToHex(port int) string {
+	return fmt.Sprintf("%04X", port)
+}
+
 // buildBrowserLaunchScript generates the shell script that starts KasmVNC,
 // CloakBrowser, and the socat CDP bridge inside the sandbox.
+//
+// The script avoids commands that may not be available in minimal container
+// images: no pgrep (needs procps), no runuser (needs util-linux), no ss
+// (needs iproute2). Instead it uses /proc inspection, su, and /proc/net/tcp.
 func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort int) string {
 	fingerprintFlags := ""
 	if cfg.FingerprintSeed != "" {
@@ -127,18 +137,30 @@ _NULL=/tmp/.devnull
 
 set -e
 
+# Helper: check if a process matching a pattern is running.
+# Uses /proc (always available) instead of pgrep (needs procps).
+proc_running() {
+  for p in /proc/[0-9]*/cmdline; do
+    [ -f "$p" ] || continue
+    if tr '\0' ' ' < "$p" 2>"$_NULL" | grep -q "$1"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 # --- 1. Start KasmVNC (X display server for headed browser) ---
 # Skip if already running (idempotent).
-if ! pgrep -u browser -f 'Xvnc.*:%s' >"$_NULL" 2>&1; then
-  runuser -l browser -c "vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth" 2>"$_NULL" || true
+if ! proc_running 'Xvnc.*:%s'; then
+  su - browser -c "vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth" 2>"$_NULL" || true
   sleep 1
 fi
 
 # Allow any local user to connect to the Xvnc display.
-runuser -l browser -c "DISPLAY=:%s xhost +local:" 2>"$_NULL" || true
+su - browser -c "DISPLAY=:%s xhost +local:" 2>"$_NULL" || true
 
 # --- 2. Resolve CloakBrowser binary ---
-BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())" 2>"$_NULL")
+BROWSER_BIN=$(su - browser -c "python3 -c \"from cloakbrowser.config import get_binary_path; print(get_binary_path())\"" 2>"$_NULL")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found" >&2
   exit 1
@@ -146,9 +168,9 @@ fi
 
 # --- 3. Launch CloakBrowser ---
 # Skip if already running (idempotent for reconnection after CDP timeout).
-if ! pgrep -u browser -f 'chrome.*--remote-debugging-port' >"$_NULL" 2>&1; then
+if ! proc_running 'remote-debugging-port'; then
   BROWSER_LOG=/tmp/cloakbrowser.log
-  runuser -l browser -c "DISPLAY=:%s $BROWSER_BIN \
+  su - browser -c "DISPLAY=:%s $BROWSER_BIN \
     --no-sandbox \
     --test-type \
     --disable-gpu \
@@ -168,7 +190,7 @@ if ! pgrep -u browser -f 'chrome.*--remote-debugging-port' >"$_NULL" 2>&1; then
   sleep 2
 
   # Verify browser started.
-  if ! pgrep -u browser -f 'chrome|chromium' >"$_NULL" 2>&1; then
+  if ! proc_running 'remote-debugging-port'; then
     echo "CloakBrowser died on startup. Log:" >&2
     cat /tmp/cloakbrowser.log >&2 2>"$_NULL"
     exit 1
@@ -177,14 +199,15 @@ fi
 
 # --- 4. Start socat CDP bridge ---
 # Skip if already running (idempotent).
-if ! pgrep -f 'socat.*TCP-LISTEN:%d' >"$_NULL" 2>&1; then
+if ! proc_running 'socat.*TCP-LISTEN:%d'; then
   socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &
 fi
 
 # --- 5. Verify CDP port is listening ---
+# Use /proc/net/tcp instead of ss (avoids iproute2 dependency).
 CDP_READY=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if ss -tln 2>"$_NULL" | grep -q ':%d '; then
+  if grep -qi ':%s ' /proc/net/tcp 2>"$_NULL" || grep -qi ':%s ' /proc/net/tcp6 2>"$_NULL"; then
     CDP_READY=1
     break
   fi
@@ -195,7 +218,7 @@ if [ "$CDP_READY" = "0" ]; then
   exit 1
 fi
 `,
-		// KasmVNC pgrep pattern
+		// KasmVNC proc_running pattern
 		kasmVNCDisplay,
 		// KasmVNC start
 		kasmVNCDisplay, width, height, kasmPort,
@@ -204,10 +227,12 @@ fi
 		// CloakBrowser launch
 		kasmVNCDisplay, cdpInternalPort, width, height,
 		fingerprintFlags, proxyFlag,
-		// socat pgrep + launch
+		// socat proc_running + launch
 		cdpPort, cdpPort, cdpInternalPort,
-		// Verify CDP
-		cdpPort, cdpPort,
+		// Verify CDP — port in hex for /proc/net/tcp
+		portToHex(cdpPort), portToHex(cdpPort),
+		// final error message
+		cdpPort,
 	)
 }
 

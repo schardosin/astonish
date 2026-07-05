@@ -153,7 +153,8 @@ RUN touch /home/browser/.vnc/.de-was-selected \
 
 # Pre-create KasmVNC user account (password overridden at handoff time)
 RUN printf "kasmvnc\nkasmvnc\n" | /usr/bin/kasmvncpasswd -u user -w /home/browser/.kasmpasswd \
-    && cp /home/browser/.kasmpasswd /root/.kasmpasswd
+    && cp /home/browser/.kasmpasswd /root/.kasmpasswd \
+    && chmod 644 /home/browser/.kasmpasswd
 
 # --- CloakBrowser ---
 # Install into system Python (3.12) so it's importable at runtime via:
@@ -178,7 +179,12 @@ RUN chown -R browser:browser /home/browser \
     && chmod 755 /home/browser \
     && chmod -R 755 /home/browser/.cloakbrowser \
     && chmod -R 777 /home/browser/.vnc \
-    && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem
+    && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem \
+    && touch /home/browser/.Xauthority && chmod 666 /home/browser/.Xauthority
+
+# Pre-create X11 unix socket directory — Xvnc refuses to mkdir when euid != 0.
+# Sticky bit (1777) matches standard /tmp/.X11-unix semantics.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
 # ===========================================================================
 # Cleanup

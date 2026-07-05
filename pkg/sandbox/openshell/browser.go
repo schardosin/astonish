@@ -157,7 +157,9 @@ echo "STEP 1: KasmVNC" >&2
 
 # --- 1. Start KasmVNC (X display server + web VNC for visual handoff) ---
 # Run as sandbox user with HOME=/home/browser so vncserver finds its config.
+# XAUTHORITY must point to a writable location (sandbox user can't write to /home/browser/).
 # Skip if already running (idempotent).
+export XAUTHORITY=/tmp/.Xauthority
 if ! proc_running 'Xvnc.*:%s'; then
   VNC_LOG=/tmp/kasmvnc_start.log
   HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth >"$VNC_LOG" 2>&1 || true

@@ -158,14 +158,12 @@ echo "STEP 1: KasmVNC" >&2
 # --- 1. Start KasmVNC (X display server + web VNC for visual handoff) ---
 # Run as sandbox user with HOME=/home/browser so vncserver finds its config.
 # XAUTHORITY must point to a writable location (sandbox user can't write to /home/browser/).
-# /tmp/.X11-unix must exist for X server socket (can't pre-create in Dockerfile — /tmp is tmpfs).
+# Use -nolisten local to skip /tmp/.X11-unix (requires root ownership). Xvnc listens on TCP only.
 # Skip if already running (idempotent).
 export XAUTHORITY=/tmp/.Xauthority
-mkdir -p /tmp/.X11-unix
-chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 if ! proc_running 'Xvnc.*:%s'; then
   VNC_LOG=/tmp/kasmvnc_start.log
-  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth >"$VNC_LOG" 2>&1 || true
+  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth -- -nolisten local >"$VNC_LOG" 2>&1 || true
   sleep 1
   if ! proc_running 'Xvnc.*:%s'; then
     echo "KasmVNC failed to start. Log:" >&2

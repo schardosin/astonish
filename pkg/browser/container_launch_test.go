@@ -13,7 +13,6 @@ import (
 
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/cdp"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // TestGetOrLaunch_ContainerPath_MissingResolveFunc verifies that GetOrLaunch
@@ -154,8 +153,8 @@ func TestResolveCDPURL_UsesTunnel(t *testing.T) {
 		if containerName != "astn-sess-test" {
 			return nil, fmt.Errorf("wrong container: %s", containerName)
 		}
-		if port != incus.DefaultCDPPort {
-			return nil, fmt.Errorf("wrong port: %d, want %d", port, incus.DefaultCDPPort)
+		if port != defaultCDPPort {
+			return nil, fmt.Errorf("wrong port: %d, want %d", port, defaultCDPPort)
 		}
 		// Connect to the local test server instead
 		return net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", srvPort))

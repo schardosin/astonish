@@ -180,6 +180,17 @@ func (b *OpenShellBackend) Health(ctx context.Context) (*sandbox.BackendHealth, 
 }
 
 // ---------------------------------------------------------------------------
+// Accessors — used by chat_factory to wire browser-in-sandbox callbacks
+// ---------------------------------------------------------------------------
+
+// Gateway returns the underlying GatewayClient for direct operations
+// (browser startup, CDP tunnel, network policy).
+func (b *OpenShellBackend) Gateway() GatewayClient { return b.gateway }
+
+// Sessions returns the session registry for session lookups and activity tracking.
+func (b *OpenShellBackend) Sessions() *sandbox.SessionRegistry { return b.sessions }
+
+// ---------------------------------------------------------------------------
 // Session lifecycle — implemented in session.go
 // ---------------------------------------------------------------------------
 

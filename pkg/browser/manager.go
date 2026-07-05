@@ -22,11 +22,15 @@ import (
 	"github.com/go-rod/rod/lib/launcher/flags"
 	"github.com/go-rod/rod/lib/proto"
 	"github.com/go-rod/stealth"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
 
 // defaultPlatform reported to websites via navigator.platform / CDP.
 const defaultPlatform = "Win32"
+
+// defaultCDPPort is the CDP DevTools port exposed by the socat bridge inside
+// sandbox containers. Chromium listens on localhost:9223; socat bridges
+// 0.0.0.0:9222 → 127.0.0.1:9223 making it reachable from outside.
+const defaultCDPPort = 9222
 
 // timestampToTime converts a CDP timestamp (seconds since epoch as float64)
 // to a Go time.Time.
@@ -603,7 +607,7 @@ func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
 		httpClient = &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-					return m.ContainerDialFunc(containerName, incus.DefaultCDPPort)
+					return m.ContainerDialFunc(containerName, defaultCDPPort)
 				},
 			},
 			Timeout: 5 * time.Second,
@@ -612,7 +616,7 @@ func (m *Manager) resolveCDPURL(containerName, ip string) (string, error) {
 		httpClient = &http.Client{Timeout: 5 * time.Second}
 	}
 
-	versionURL := fmt.Sprintf("http://%s:%d/json/version", ip, incus.DefaultCDPPort)
+	versionURL := fmt.Sprintf("http://%s:%d/json/version", ip, defaultCDPPort)
 
 	var lastErr error
 	for range 30 { // 30 × 500ms = 15s
@@ -767,7 +771,7 @@ func (m *Manager) connectContainerCDP() (*rod.Browser, error) {
 		Dialer: tunnelDialer{
 			dialFunc:      m.ContainerDialFunc,
 			containerName: containerName,
-			port:          incus.DefaultCDPPort,
+			port:          defaultCDPPort,
 		},
 	}
 

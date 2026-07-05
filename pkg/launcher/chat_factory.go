@@ -23,6 +23,7 @@ import (
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
@@ -514,7 +515,51 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if len(skillToolSlice) > 0 {
 				skillToolSlice = sandbox.WrapToolsWithPool(skillToolSlice, pool)
 			}
-			// Note: browserToolsSlice intentionally NOT wrapped — browser runs on host
+			// Note: browserToolsSlice NOT wrapped — browser tools call the
+			// Manager directly (which connects to the sandbox via CDP tunnel).
+
+			// Wire browser-in-sandbox for OpenShell. CloakBrowser + KasmVNC
+			// are pre-installed in the sandbox image; we just need to launch
+			// them and tunnel the CDP connection through the gateway exec API.
+			if kind == sandbox.BackendKindOpenShell {
+				if osb, ok := b.(*openshell.OpenShellBackend); ok && osb.Gateway() != nil {
+					browserMgr.SandboxEnabled = true
+					gw := osb.Gateway()
+					sessReg := osb.Sessions()
+
+					browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+						rec, err := sessReg.GetSession(sessionID)
+						if err != nil || rec == nil || rec.PodName == "" {
+							return "", "", fmt.Errorf("no running sandbox for session %q", sessionID)
+						}
+						// IP is unused — we tunnel via exec, so use a placeholder.
+						return rec.PodName, "127.0.0.1", nil
+					}
+
+					bcfg := browserMgr.Config()
+					browserMgr.ContainerStartBrowserFunc = func(podName string) error {
+						return openshell.StartBrowserInSandbox(context.Background(), gw, podName, openshell.BrowserLaunchConfig{
+							ViewportWidth:       bcfg.ViewportWidth,
+							ViewportHeight:      bcfg.ViewportHeight,
+							FingerprintSeed:     bcfg.FingerprintSeed,
+							FingerprintPlatform: bcfg.FingerprintPlatform,
+							Proxy:               bcfg.Proxy,
+							KasmVNCPort:         bcfg.KasmVNCPort,
+						})
+					}
+
+					browserMgr.ContainerDialFunc = func(podName string, port int) (net.Conn, error) {
+						return openshell.DialSandboxPort(context.Background(), gw, podName, port)
+					}
+
+					browserMgr.ActivityTouchFunc = func(sessionID string) {
+						sessReg.TouchActivity(sessionID)
+					}
+
+					slog.Info("browser-in-sandbox enabled for OpenShell",
+						"component", "chat-factory")
+				}
+			}
 
 			// Lazy MCP toolsets: wire the pool so stdio MCP servers start
 			// inside the session's sandbox (same as Incus path). SSE
@@ -529,8 +574,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 			// sandboxNodePool, sandboxIncusClient, sandboxTplRegistry,
 			// sandboxSessRegistry all remain nil — downstream nil-guards
-			// silently skip Incus-only features (template tools, browser-in-
-			// sandbox, sub-agent alias, idle watchdog, prune, shutdown).
+			// silently skip Incus-only features (template tools, sub-agent
+			// alias, idle watchdog, prune, shutdown).
 
 			cleanups = append(cleanups, func() {
 				pool.Cleanup()

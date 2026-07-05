@@ -159,8 +159,14 @@ echo "STEP 1: KasmVNC" >&2
 # Run as sandbox user with HOME=/home/browser so vncserver finds its config.
 # Skip if already running (idempotent).
 if ! proc_running 'Xvnc.*:%s'; then
-  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth 2>/dev/null || true
+  VNC_LOG=/tmp/kasmvnc_start.log
+  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth >"$VNC_LOG" 2>&1 || true
   sleep 1
+  if ! proc_running 'Xvnc.*:%s'; then
+    echo "KasmVNC failed to start. Log:" >&2
+    cat "$VNC_LOG" >&2 2>/dev/null
+    exit 1
+  fi
 fi
 export DISPLAY=:%s
 
@@ -253,9 +259,10 @@ fi
 
 echo "DONE: browser ready" >&2
 `,
-		// KasmVNC proc_running pattern + start
+		// KasmVNC proc_running pattern + start + verify
 		kasmVNCDisplay,
 		kasmVNCDisplay, width, height, kasmPort,
+		kasmVNCDisplay,
 		// DISPLAY export
 		kasmVNCDisplay,
 		// CloakBrowser launch

@@ -164,10 +164,25 @@ su - browser -c 'DISPLAY=:%s xhost +local:' 2>"$_NULL" || true
 echo "STEP 2: Resolve CloakBrowser" >&2
 
 # --- 2. Resolve CloakBrowser binary ---
-BROWSER_BIN=$(python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL")
+# Use /usr/bin/python3 explicitly (matches Dockerfile install path).
+# The || true prevents set -e from aborting if python fails.
+BROWSER_BIN=$(/usr/bin/python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL") || true
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found (got: '$BROWSER_BIN')" >&2
-  exit 1
+  # Try fallback: check common install locations
+  for candidate in /home/browser/.cloakbrowser/chrome /home/browser/.cloakbrowser/chromium; do
+    if [ -f "$candidate" ]; then
+      BROWSER_BIN="$candidate"
+      echo "Using fallback: $BROWSER_BIN" >&2
+      break
+    fi
+  done
+  if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
+    echo "No CloakBrowser binary found anywhere" >&2
+    ls -la /home/browser/.cloakbrowser/ >&2 2>"$_NULL" || true
+    /usr/bin/python3 -c 'import cloakbrowser; print(dir(cloakbrowser))' >&2 2>&1 || true
+    exit 1
+  fi
 fi
 
 echo "STEP 3: Launch CloakBrowser (bin=$BROWSER_BIN)" >&2

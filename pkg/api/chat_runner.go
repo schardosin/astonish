@@ -550,8 +550,6 @@ func (cr *ChatRunner) Run(
 	seenPartialText := false
 	var lastRunErr error
 	hasContent := false // true if any non-partial text or tool call was emitted
-	networkDenialPending := false // when true, suppress text events (approval UI handles UX)
-
 runLoop:
 	for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, userMsg, adkagent.RunConfig{
 		StreamingMode: adkagent.StreamingModeSSE,
@@ -578,12 +576,6 @@ runLoop:
 				// Skip reasoning/thought parts — they are preserved in session
 				// history for providers like DeepSeek but should not be displayed.
 				if part.Text != "" && !part.Thought {
-					// When a network denial was detected, suppress all
-					// subsequent text output — the approval UI handles
-					// communication with the user.
-					if networkDenialPending {
-						continue
-					}
 					if event.LLMResponse.Partial {
 						seenPartialText = true
 						cr.emitEvent("text", map[string]any{"text": part.Text})
@@ -663,7 +655,6 @@ runLoop:
 							if len(denials) > 0 {
 								denials = cr.filterDenialsByPolicy(denials)
 								if len(denials) > 0 {
-									networkDenialPending = true
 									cr.emitEvent("network_denial_hint", map[string]any{
 										"session_id": cr.SessionID,
 										"denials":    denials,

@@ -156,16 +156,29 @@ proc_running() {
 echo "STEP 1: KasmVNC" >&2
 
 # --- 1. Start KasmVNC (X display server + web VNC for visual handoff) ---
-# Run as sandbox user with HOME=/home/browser so vncserver finds its config.
-# XAUTHORITY must point to a writable location (sandbox user can't write to /home/browser/).
-# Use -nolisten local to skip /tmp/.X11-unix (requires root ownership). Xvnc listens on TCP only.
+# Call Xkasmvnc directly (bypass vncserver Perl wrapper which requires
+# root-owned /tmp/.X11-unix). Use -nolisten local to skip Unix sockets.
+# -SecurityTypes None + no auth = no .kasmpasswd needed at runtime.
 # Skip if already running (idempotent).
 export XAUTHORITY=/tmp/.Xauthority
-if ! proc_running 'Xvnc.*:%s'; then
+touch /tmp/.Xauthority
+if ! proc_running 'Xkasmvnc.*:%s'; then
   VNC_LOG=/tmp/kasmvnc_start.log
-  HOME=/home/browser vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth -- -nolisten local >"$VNC_LOG" 2>&1 || true
+  Xkasmvnc :%s \
+    -geometry %dx%d \
+    -depth 24 \
+    -rfbport 5900 \
+    -websocketPort %d \
+    -nolisten local \
+    -auth /tmp/.Xauthority \
+    -AlwaysShared \
+    -DisableBasicAuth \
+    -SecurityTypes None \
+    -interface 0.0.0.0 \
+    -Log *:stderr:30 \
+    >"$VNC_LOG" 2>&1 &
   sleep 1
-  if ! proc_running 'Xvnc.*:%s'; then
+  if ! proc_running 'Xkasmvnc.*:%s'; then
     echo "KasmVNC failed to start. Log:" >&2
     cat "$VNC_LOG" >&2 2>/dev/null
     exit 1

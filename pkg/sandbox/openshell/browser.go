@@ -149,6 +149,8 @@ proc_running() {
   return 1
 }
 
+echo "STEP 1: KasmVNC" >&2
+
 # --- 1. Start KasmVNC (X display server for headed browser) ---
 # Skip if already running (idempotent).
 if ! proc_running 'Xvnc.*:%s'; then
@@ -157,14 +159,18 @@ if ! proc_running 'Xvnc.*:%s'; then
 fi
 
 # Allow any local user to connect to the Xvnc display.
-su - browser -c "DISPLAY=:%s xhost +local:" 2>"$_NULL" || true
+su - browser -c 'DISPLAY=:%s xhost +local:' 2>"$_NULL" || true
+
+echo "STEP 2: Resolve CloakBrowser" >&2
 
 # --- 2. Resolve CloakBrowser binary ---
-BROWSER_BIN=$(su - browser -c "python3 -c \"from cloakbrowser.config import get_binary_path; print(get_binary_path())\"" 2>"$_NULL")
+BROWSER_BIN=$(python3 -c 'from cloakbrowser.config import get_binary_path; print(get_binary_path())' 2>"$_NULL")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
-  echo "CloakBrowser binary not found" >&2
+  echo "CloakBrowser binary not found (got: '$BROWSER_BIN')" >&2
   exit 1
 fi
+
+echo "STEP 3: Launch CloakBrowser (bin=$BROWSER_BIN)" >&2
 
 # --- 3. Launch CloakBrowser ---
 # Skip if already running (idempotent for reconnection after CDP timeout).
@@ -189,6 +195,8 @@ if ! proc_running 'remote-debugging-port'; then
     about:blank >$BROWSER_LOG 2>&1 &"
   sleep 2
 
+  echo "STEP 3b: Verify browser running" >&2
+
   # Verify browser started.
   if ! proc_running 'remote-debugging-port'; then
     echo "CloakBrowser died on startup. Log:" >&2
@@ -197,11 +205,15 @@ if ! proc_running 'remote-debugging-port'; then
   fi
 fi
 
+echo "STEP 4: socat CDP bridge" >&2
+
 # --- 4. Start socat CDP bridge ---
 # Skip if already running (idempotent).
 if ! proc_running 'socat.*TCP-LISTEN:%d'; then
   socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &
 fi
+
+echo "STEP 5: Verify CDP port" >&2
 
 # --- 5. Verify CDP port is listening ---
 # Use /proc/net/tcp instead of ss (avoids iproute2 dependency).
@@ -215,8 +227,11 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
 done
 if [ "$CDP_READY" = "0" ]; then
   echo "CDP port %d not listening after 5s" >&2
+  cat /proc/net/tcp >&2 2>"$_NULL"
   exit 1
 fi
+
+echo "DONE: browser ready" >&2
 `,
 		// KasmVNC proc_running pattern
 		kasmVNCDisplay,

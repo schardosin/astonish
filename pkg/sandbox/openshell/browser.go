@@ -119,6 +119,12 @@ func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort i
 	}
 
 	return fmt.Sprintf(`#!/bin/sh
+
+# Ensure /dev/null exists and is writable (some container runtimes mount it
+# read-only or with wrong permissions, breaking shell redirections).
+rm -f /dev/null
+mknod -m 666 /dev/null c 1 3 || true
+
 set -e
 
 # --- 1. Start KasmVNC (X display server for headed browser) ---

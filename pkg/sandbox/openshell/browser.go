@@ -120,25 +120,25 @@ func buildBrowserLaunchScript(cfg BrowserLaunchConfig, width, height, kasmPort i
 
 	return fmt.Sprintf(`#!/bin/sh
 
-# Ensure /dev/null exists and is writable (some container runtimes mount it
-# read-only or with wrong permissions, breaking shell redirections).
-rm -f /dev/null
-mknod -m 666 /dev/null c 1 3 || true
+# /dev/null may be read-only or broken in some container runtimes.
+# Use a writable sink file instead.
+_NULL=/tmp/.devnull
+: > "$_NULL" 2>/tmp/.devnull_bootstrap || true
 
 set -e
 
 # --- 1. Start KasmVNC (X display server for headed browser) ---
 # Skip if already running (idempotent).
-if ! pgrep -u browser -f 'Xvnc.*:%s' >/dev/null 2>&1; then
-  runuser -l browser -c "vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth" 2>/dev/null || true
+if ! pgrep -u browser -f 'Xvnc.*:%s' >"$_NULL" 2>&1; then
+  runuser -l browser -c "vncserver :%s -geometry %dx%d -depth 24 -websocketPort %d -DisableBasicAuth" 2>"$_NULL" || true
   sleep 1
 fi
 
 # Allow any local user to connect to the Xvnc display.
-runuser -l browser -c "DISPLAY=:%s xhost +local:" 2>/dev/null || true
+runuser -l browser -c "DISPLAY=:%s xhost +local:" 2>"$_NULL" || true
 
 # --- 2. Resolve CloakBrowser binary ---
-BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())" 2>/dev/null)
+BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())" 2>"$_NULL")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found" >&2
   exit 1
@@ -146,7 +146,7 @@ fi
 
 # --- 3. Launch CloakBrowser ---
 # Skip if already running (idempotent for reconnection after CDP timeout).
-if ! pgrep -u browser -f 'chrome.*--remote-debugging-port' >/dev/null 2>&1; then
+if ! pgrep -u browser -f 'chrome.*--remote-debugging-port' >"$_NULL" 2>&1; then
   BROWSER_LOG=/tmp/cloakbrowser.log
   runuser -l browser -c "DISPLAY=:%s $BROWSER_BIN \
     --no-sandbox \
@@ -168,23 +168,23 @@ if ! pgrep -u browser -f 'chrome.*--remote-debugging-port' >/dev/null 2>&1; then
   sleep 2
 
   # Verify browser started.
-  if ! pgrep -u browser -f 'chrome|chromium' >/dev/null 2>&1; then
+  if ! pgrep -u browser -f 'chrome|chromium' >"$_NULL" 2>&1; then
     echo "CloakBrowser died on startup. Log:" >&2
-    cat /tmp/cloakbrowser.log >&2 2>/dev/null
+    cat /tmp/cloakbrowser.log >&2 2>"$_NULL"
     exit 1
   fi
 fi
 
 # --- 4. Start socat CDP bridge ---
 # Skip if already running (idempotent).
-if ! pgrep -f 'socat.*TCP-LISTEN:%d' >/dev/null 2>&1; then
+if ! pgrep -f 'socat.*TCP-LISTEN:%d' >"$_NULL" 2>&1; then
   socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &
 fi
 
 # --- 5. Verify CDP port is listening ---
 CDP_READY=0
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if ss -tln 2>/dev/null | grep -q ':%d '; then
+  if ss -tln 2>"$_NULL" | grep -q ':%d '; then
     CDP_READY=1
     break
   fi

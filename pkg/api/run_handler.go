@@ -229,12 +229,12 @@ func wireSandboxBrowserCallbacks(mgr *browser.Manager, cfg browser.BrowserConfig
 		FingerprintSeed:     cfg.FingerprintSeed,
 		FingerprintPlatform: cfg.FingerprintPlatform,
 	}
-	mgr.ContainerStartBrowserFunc = func(containerName string) error {
+	mgr.ContainerStartBrowserFunc = func(containerName string) (io.Closer, error) {
 		client, err := sandbox.SetupSandboxRuntime()
 		if err != nil {
-			return fmt.Errorf("sandbox runtime not available: %w", err)
+			return nil, fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		return incus.StartChromiumInContainer(client, containerName, bCfg)
+		return nil, incus.StartChromiumInContainer(client, containerName, bCfg)
 	}
 
 	mgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {

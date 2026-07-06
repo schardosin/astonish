@@ -77,6 +77,8 @@ var networkPresets = map[string][]presetEndpoint{
 		{Host: "*.wikipedia.org", Port: 443},
 		{Host: "*.stackoverflow.com", Port: 443},
 		{Host: "stackoverflow.com", Port: 443},
+		{Host: "*.sap.com", Port: 443},
+		{Host: "sap.com", Port: 443},
 	},
 	"cdn": {
 		{Host: "*.cloudflare.com", Port: 443},

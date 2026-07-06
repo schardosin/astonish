@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -537,7 +538,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					}
 
 					bcfg := browserMgr.Config()
-					browserMgr.ContainerStartBrowserFunc = func(podName string) error {
+					browserMgr.ContainerStartBrowserFunc = func(podName string) (io.Closer, error) {
 						return openshell.StartBrowserInSandbox(context.Background(), gw, podName, openshell.BrowserLaunchConfig{
 							ViewportWidth:       bcfg.ViewportWidth,
 							ViewportHeight:      bcfg.ViewportHeight,
@@ -551,6 +552,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					browserMgr.ContainerDialFunc = func(podName string, port int) (net.Conn, error) {
 						return openshell.DialSandboxPort(context.Background(), gw, podName, port)
 					}
+
+					// Register the dial func for the VNC proxy handler so it
+					// can tunnel HTTP/WebSocket to KasmVNC inside the sandbox.
+					api.SetVNCContainerDialFunc(browserMgr.ContainerDialFunc)
 
 					browserMgr.ActivityTouchFunc = func(sessionID string) {
 						sessReg.TouchActivity(sessionID)
@@ -675,8 +680,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 						}
 						return containerName, ip, nil
 					}
-					browserMgr.ContainerStartBrowserFunc = func(containerName string) error {
-						return incus.StartChromiumInContainer(client, containerName, bCfg)
+					browserMgr.ContainerStartBrowserFunc = func(containerName string) (io.Closer, error) {
+						return nil, incus.StartChromiumInContainer(client, containerName, bCfg)
 					}
 
 					// ContainerDialFunc: tunnel TCP connections through the Incus exec API.

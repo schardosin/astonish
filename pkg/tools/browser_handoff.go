@@ -10,6 +10,9 @@ import (
 	"google.golang.org/adk/tool"
 )
 
+// DefaultKasmVNCPort is the port KasmVNC listens on for web connections.
+const defaultKasmVNCPort = 6901
+
 // --- browser_request_human (non-blocking: opens visual browser access for the user) ---
 
 // BrowserRequestHumanArgs is the input for browser_request_human.
@@ -135,13 +138,26 @@ func startCDPHandoff(mgr *browser.Manager, reason string, cdpURL, pageURL, pageT
 
 // startKasmVNCHandoff starts KasmVNC in the browser container for visual access.
 // Returns a proxy URL that the user can open in any web browser.
+//
+// Two backend paths:
+//   - OpenShell (ContainerDialFunc set): KasmVNC is already running inside the
+//     sandbox (started as part of the browser launch script). We only need to
+//     register the handoff token and return the proxy URL.
+//   - Incus (ContainerDialFunc nil): connect via Incus API, start KasmVNC if
+//     not already running, then register token and return proxy URL.
 func startKasmVNCHandoff(mgr *browser.Manager, reason string, pageURL, pageTitle string) (BrowserRequestHumanResult, error) {
 	containerName := mgr.ContainerName()
 	if containerName == "" {
 		return BrowserRequestHumanResult{}, fmt.Errorf("browser container not available")
 	}
 
-	// Connect to sandbox
+	// OpenShell path: KasmVNC is pre-started by the launch script.
+	// No need to call into Incus.
+	if mgr.ContainerDialFunc != nil {
+		return buildVNCHandoffResult(mgr, containerName, reason, pageURL, pageTitle)
+	}
+
+	// Incus path: start KasmVNC via Incus exec API.
 	platform := incus.DetectPlatform()
 	client, err := incus.Connect(platform)
 	if err != nil {
@@ -163,6 +179,12 @@ func startKasmVNCHandoff(mgr *browser.Manager, reason string, pageURL, pageTitle
 		return BrowserRequestHumanResult{}, fmt.Errorf("failed to start KasmVNC: %w", err)
 	}
 
+	return buildVNCHandoffResult(mgr, containerName, reason, pageURL, pageTitle)
+}
+
+// buildVNCHandoffResult registers a handoff token and constructs the proxy URL.
+// Shared between Incus and OpenShell paths.
+func buildVNCHandoffResult(mgr *browser.Manager, containerName, reason, pageURL, pageTitle string) (BrowserRequestHumanResult, error) {
 	// Register a handoff token that authorizes VNC proxy access for this
 	// container. The auth middleware validates this token — without it,
 	// the VNC proxy returns 401 even though KasmVNC itself has auth disabled.
@@ -171,6 +193,13 @@ func startKasmVNCHandoff(mgr *browser.Manager, reason string, pageURL, pageTitle
 	if err != nil {
 		return BrowserRequestHumanResult{}, fmt.Errorf("failed to generate handoff token: %w", err)
 	}
+
+	// Determine VNC port — use config if set, else default.
+	vncPort := mgr.Config().KasmVNCPort
+	if vncPort == 0 {
+		vncPort = defaultKasmVNCPort
+	}
+	_ = vncPort // Port is encoded in the proxy route, not the URL query.
 
 	// Build the proxy URL through the Studio API.
 	// The KasmVNC web client constructs its WebSocket URL from the browser's

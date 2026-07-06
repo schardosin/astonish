@@ -70,7 +70,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       xvfb \
       fonts-liberation fonts-noto-color-emoji \
       fonts-freefont-ttf fonts-wqy-zenhei fonts-ipafont-gothic \
-      xdg-utils libnss3 libatk-bridge2.0-0 \
+      xdg-utils libnss3 libnss3-tools libatk-bridge2.0-0 \
       libx11-xcb1 libxcomposite1 libxrandr2 \
       libgbm1 libasound2t64 \
       libcups2 libpango-1.0-0 libcairo2 \
@@ -120,8 +120,12 @@ RUN install -d -o browser -g browser -m 755 /home/browser/.vnc \
     && chown browser:browser /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem \
     && chmod 600 /home/browser/.vnc/snakeoil.key
 
-# KasmVNC config: SSL disabled (TLS terminated by exec tunnel), no prompts
-RUN printf '%s\n' \
+# KasmVNC config: SSL disabled (TLS terminated by exec tunnel), no prompts.
+# Written to BOTH system-level (/etc/kasmvnc/) and user-level (~browser/.vnc/).
+# The system-level config is the authoritative source — Xkasmvnc reads it
+# regardless of HOME. The user-level copy is belt-and-suspenders for when
+# the vncserver wrapper is used instead of calling Xkasmvnc directly.
+RUN mkdir -p /etc/kasmvnc && printf '%s\n' \
       'network:' \
       '  protocol: http' \
       '  interface: 0.0.0.0' \
@@ -139,7 +143,7 @@ RUN printf '%s\n' \
       '  level: 30' \
       'command_line:' \
       '  prompt: false' \
-      > /home/browser/.vnc/kasmvnc.yaml \
+      | tee /etc/kasmvnc/kasmvnc.yaml > /home/browser/.vnc/kasmvnc.yaml \
     && chown browser:browser /home/browser/.vnc/kasmvnc.yaml
 
 # Minimal xstartup — keeps X session alive for visual handoff
@@ -181,6 +185,24 @@ RUN chown -R browser:browser /home/browser \
     && chmod -R 777 /home/browser/.vnc \
     && chmod 644 /home/browser/.vnc/snakeoil.key /home/browser/.vnc/snakeoil.pem \
     && touch /home/browser/.Xauthority && chmod 666 /home/browser/.Xauthority
+
+# ===========================================================================
+# X11 socket directory — required by libxtrans (KasmVNC)
+# ===========================================================================
+# libxtrans checks that /tmp/.X11-unix exists, is owned by root, and has the
+# sticky bit set (1777). Since the Dockerfile runs as root, creating it here
+# satisfies the check at runtime when Xkasmvnc runs as the sandbox user.
+RUN mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
+# ===========================================================================
+# TLS CA bundle — writable for OpenShell proxy CA injection
+# ===========================================================================
+# The OpenShell supervisor runs a TLS-intercepting proxy and provides its CA
+# at /etc/openshell-tls/openshell-ca.pem (runtime mount). Chromium reads the
+# system CA bundle at /etc/ssl/certs/ca-certificates.crt. Making it writable
+# allows the browser launch script to append the proxy CA at runtime so Chrome
+# trusts the re-signed certificates.
+RUN chmod 666 /etc/ssl/certs/ca-certificates.crt
 
 # ===========================================================================
 # Cleanup

@@ -2,6 +2,7 @@ package launcher
 
 import (
 	"fmt"
+	"io"
 	"net"
 
 	"github.com/schardosin/astonish/pkg/browser"
@@ -75,12 +76,12 @@ func wireBrowserContainerCallbacks(mgr *browser.Manager) {
 		FingerprintSeed:     cfg.FingerprintSeed,
 		FingerprintPlatform: cfg.FingerprintPlatform,
 	}
-	mgr.ContainerStartBrowserFunc = func(containerName string) error {
+	mgr.ContainerStartBrowserFunc = func(containerName string) (io.Closer, error) {
 		client, err := sandbox.SetupSandboxRuntime()
 		if err != nil {
-			return fmt.Errorf("sandbox runtime not available: %w", err)
+			return nil, fmt.Errorf("sandbox runtime not available: %w", err)
 		}
-		return incus.StartChromiumInContainer(client, containerName, bCfg)
+		return nil, incus.StartChromiumInContainer(client, containerName, bCfg)
 	}
 
 	// ContainerDialFunc: tunnel TCP connections through the Incus exec API.

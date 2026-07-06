@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -61,8 +62,8 @@ func TestGetOrLaunch_ContainerPath_StartError(t *testing.T) {
 	m.ContainerResolveFunc = func(_ string) (string, string, error) {
 		return "astn-sess-test", "10.0.0.1", nil
 	}
-	m.ContainerStartBrowserFunc = func(_ string) error {
-		return fmt.Errorf("chromium failed to start")
+	m.ContainerStartBrowserFunc = func(_ string) (io.Closer, error) {
+		return nil, fmt.Errorf("chromium failed to start")
 	}
 
 	_, err := m.GetOrLaunch()
@@ -99,9 +100,9 @@ func TestGetOrLaunch_ContainerPath_CallSequence(t *testing.T) {
 		resolvedSession = sessionID
 		return "astn-sess-test123", "10.0.0.1", nil
 	}
-	m.ContainerStartBrowserFunc = func(containerName string) error {
+	m.ContainerStartBrowserFunc = func(containerName string) (io.Closer, error) {
 		startedContainer = containerName
-		return nil
+		return nil, nil
 	}
 	// ContainerDialFunc that fails immediately — we just want to verify
 	// the resolve+start callbacks were called, not actually connect CDP.
@@ -320,8 +321,8 @@ func TestGetOrLaunch_ReconnectsOnDeadConnection(t *testing.T) {
 		resolveCalled.Add(1)
 		return "new-container", "10.0.0.2", nil
 	}
-	m.ContainerStartBrowserFunc = func(_ string) error {
-		return nil
+	m.ContainerStartBrowserFunc = func(_ string) (io.Closer, error) {
+		return nil, nil
 	}
 	// ContainerDialFunc fails — we just want to verify the reconnection
 	// path is triggered, not that the full launch succeeds.

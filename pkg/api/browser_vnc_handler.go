@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"mime"
@@ -10,11 +11,97 @@ import (
 	"net/url"
 	"path/filepath"
 	"strconv"
+	"sync"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/browser"
 	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 )
+
+// vncDialerPort is the KasmVNC websocket port inside the container.
+const vncDialerPort = 6901
+
+// registeredVNCDialFunc is a package-level dial function registered by the
+// chat factory when it wires the browser Manager's ContainerDialFunc. This
+// allows the VNC proxy handler to tunnel connections through the same exec
+// tunnel (OpenShell gRPC or equivalent) that the browser tools use.
+//
+// Without this, the VNC proxy handler would only know about the global
+// GetBrowserManager() singleton, which may not have ContainerDialFunc set
+// (e.g., when wireSandboxBrowserCallbacks exits early because no local
+// Chrome is detected on the worker pod).
+var (
+	registeredVNCDialFunc func(containerName string, port int) (net.Conn, error)
+	registeredVNCDialMu   sync.RWMutex
+)
+
+// SetVNCContainerDialFunc registers a dial function for the VNC proxy handler
+// to use when tunneling connections to KasmVNC inside a sandbox container.
+// Called from the launcher's chat_factory after wiring ContainerDialFunc.
+func SetVNCContainerDialFunc(fn func(containerName string, port int) (net.Conn, error)) {
+	registeredVNCDialMu.Lock()
+	registeredVNCDialFunc = fn
+	registeredVNCDialMu.Unlock()
+}
+
+// getVNCDialFunc returns a dial function and HTTP transport for connecting to
+// KasmVNC inside the named container. Priority order:
+//  1. Registered VNC dial func (set by chat_factory for OpenShell/exec-tunnel)
+//  2. Global browser Manager's ContainerDialFunc (legacy/Incus with tunnel)
+//  3. Incus sandbox direct connection (fallback)
+func getVNCDialFunc(containerName string) (dialFn func() (net.Conn, error), httpTransport *http.Transport, err error) {
+	// Priority 1: Registered dial func from chat_factory (OpenShell path).
+	registeredVNCDialMu.RLock()
+	dialFunc := registeredVNCDialFunc
+	registeredVNCDialMu.RUnlock()
+
+	if dialFunc != nil {
+		dialFn = func() (net.Conn, error) {
+			return dialFunc(containerName, vncDialerPort)
+		}
+		httpTransport = &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return dialFunc(containerName, vncDialerPort)
+			},
+			MaxIdleConnsPerHost: 2,
+		}
+		return dialFn, httpTransport, nil
+	}
+
+	// Priority 2: Global browser Manager's ContainerDialFunc.
+	mgr := GetBrowserManager()
+	if mgr != nil && mgr.ContainerDialFunc != nil {
+		dialFn = func() (net.Conn, error) {
+			return mgr.ContainerDialFunc(containerName, vncDialerPort)
+		}
+		httpTransport = &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return mgr.ContainerDialFunc(containerName, vncDialerPort)
+			},
+			MaxIdleConnsPerHost: 2,
+		}
+		return dialFn, httpTransport, nil
+	}
+
+	// Priority 3: Incus fallback — connect via Incus exec API.
+	client, clientErr := sandboxConnect()
+	if clientErr != nil {
+		return nil, nil, fmt.Errorf("failed to connect to sandbox: %w", clientErr)
+	}
+
+	if _, ipErr := getCachedIP(client, containerName); ipErr != nil {
+		return nil, nil, fmt.Errorf("failed to resolve container IP: %w", ipErr)
+	}
+
+	dialer := &incus.ContainerDialer{Client: client}
+	port := incus.DefaultKasmVNCPort
+
+	dialFn = func() (net.Conn, error) {
+		return dialer.Dial(containerName, port)
+	}
+	httpTransport = dialer.HTTPTransport(containerName, port)
+	return dialFn, httpTransport, nil
+}
 
 // BrowserVNCProxyHandler proxies HTTP and WebSocket requests to the KasmVNC
 // web client running inside a browser container. This provides visual access
@@ -28,6 +115,10 @@ import (
 //
 // The KasmVNC web client serves static HTML/JS/CSS on HTTP and uses WebSocket
 // for the VNC stream. This handler transparently proxies both.
+//
+// Supports two backends:
+//   - OpenShell: tunnels via the Manager's ContainerDialFunc (gRPC exec tunnel)
+//   - Incus: tunnels via the Incus exec API (socat STDIO)
 func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	containerName := vars["container"]
@@ -38,20 +129,12 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Connect to sandbox to verify container connectivity
-	client, err := sandboxConnect()
+	// Resolve the dialer for this container (OpenShell exec tunnel or Incus).
+	dialFn, httpTransport, err := getVNCDialFunc(containerName)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, "failed to connect to sandbox: "+err.Error())
+		respondError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	if _, err := getCachedIP(client, containerName); err != nil {
-		respondError(w, http.StatusBadGateway, "failed to resolve container IP: "+err.Error())
-		return
-	}
-
-	port := incus.DefaultKasmVNCPort
-	dialer := &incus.ContainerDialer{Client: client}
 
 	// Strip headers that confuse KasmVNC's auth layer. KasmVNC inspects
 	// several headers for authentication decisions (SSO/auth-proxy pattern)
@@ -77,16 +160,14 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// WebSocket upgrade — use tunnel proxy for the VNC stream
 	if isWebSocketUpgrade(r) {
-		proxyWebSocket(w, r, func() (net.Conn, error) {
-			return dialer.Dial(containerName, port)
-		}, proxyPath)
+		proxyWebSocket(w, r, dialFn, proxyPath)
 		return
 	}
 
 	// Regular HTTP — reverse proxy to KasmVNC's web interface
 	target := &url.URL{
 		Scheme: "http",
-		Host:   "127.0.0.1:" + strconv.Itoa(port),
+		Host:   "127.0.0.1:" + strconv.Itoa(vncDialerPort),
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -97,7 +178,7 @@ func BrowserVNCProxyHandler(w http.ResponseWriter, r *http.Request) {
 			req.URL.RawQuery = r.URL.RawQuery
 			req.Host = target.Host
 		},
-		Transport: dialer.HTTPTransport(containerName, port),
+		Transport: httpTransport,
 		ModifyResponse: func(resp *http.Response) error {
 			// Strip headers that block iframe embedding. KasmVNC sets
 			// Cross-Origin-Embedder-Policy and Cross-Origin-Opener-Policy
@@ -151,6 +232,20 @@ func BrowserVNCInfoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if the Manager knows about this container (backend-agnostic).
+	mgr := GetBrowserManager()
+	if mgr != nil && mgr.ContainerDialFunc != nil && mgr.ContainerName() == containerName {
+		// OpenShell path: container exists and is managed by the Manager.
+		respondJSON(w, http.StatusOK, map[string]any{
+			"container": containerName,
+			"ip":        "tunnel", // Not a real IP — connections are tunneled.
+			"vnc_port":  vncDialerPort,
+			"proxy_url": fmt.Sprintf("/api/browser/vnc/%s/", containerName),
+		})
+		return
+	}
+
+	// Incus fallback.
 	client, err := sandboxConnect()
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to connect to sandbox: "+err.Error())

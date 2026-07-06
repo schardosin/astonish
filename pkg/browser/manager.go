@@ -212,6 +212,9 @@ type Manager struct {
 	containerName string
 	// containerIP is the container's bridge IPv4 address.
 	containerIP string
+	// browserProcess keeps the browser exec session alive. When non-nil, closing
+	// it terminates KasmVNC + Chrome + socat inside the container.
+	browserProcess io.Closer
 	// sessionID is the agent session this Manager is bound to.
 	sessionID string
 	// sessionAliases maps delegate sub-agent session IDs to their parent
@@ -227,7 +230,9 @@ type Manager struct {
 	// ContainerStartBrowserFunc starts Chromium + KasmVNC + socat inside the
 	// session container. Called after ContainerResolveFunc succeeds. The browser
 	// package doesn't import the sandbox package, so this callback bridges the gap.
-	ContainerStartBrowserFunc func(containerName string) error
+	// Returns an io.Closer that keeps the browser processes alive; the Manager
+	// stores it and closes it during cleanup/reset to allow the OS to reap them.
+	ContainerStartBrowserFunc func(containerName string) (io.Closer, error)
 
 	// ContainerDialFunc creates a tunneled net.Conn to a port inside the named
 	// container. This is wired by the launcher to sandbox.ContainerDialer.Dial,
@@ -335,6 +340,10 @@ func (m *Manager) EnsureSessionID(id string) {
 		_ = m.browser.Close()
 		m.browser = nil
 	}
+	if m.browserProcess != nil {
+		_ = m.browserProcess.Close()
+		m.browserProcess = nil
+	}
 	m.sessionID = resolved
 	m.containerName = ""
 	m.containerIP = ""
@@ -416,6 +425,10 @@ func (m *Manager) resetBrowserLocked() {
 		m.containerName = ""
 		m.containerIP = ""
 		m.config.RemoteCDPURL = ""
+		if m.browserProcess != nil {
+			_ = m.browserProcess.Close()
+			m.browserProcess = nil
+		}
 	}
 
 	m.pagesMu.Lock()
@@ -719,7 +732,8 @@ func (m *Manager) launchInContainerInner() (*rod.Browser, error) {
 
 	// Start Chromium + KasmVNC + socat inside the session container.
 	if m.ContainerStartBrowserFunc != nil {
-		if err := m.ContainerStartBrowserFunc(name); err != nil {
+		closer, err := m.ContainerStartBrowserFunc(name)
+		if err != nil {
 			// Clear stale state so the next GetOrLaunch() retries the full
 			// resolve → start → connect sequence instead of short-circuiting
 			// at the containerIP check above.
@@ -727,6 +741,7 @@ func (m *Manager) launchInContainerInner() (*rod.Browser, error) {
 			m.containerIP = ""
 			return nil, fmt.Errorf("failed to start browser in container %q: %w", name, err)
 		}
+		m.browserProcess = closer
 	}
 
 	// Resolve the CDP WebSocket URL from the container IP.
@@ -1315,6 +1330,12 @@ func (m *Manager) Cleanup() {
 		// guest process in the session container.
 		m.containerName = ""
 		m.containerIP = ""
+	}
+
+	// Close the browser process keep-alive stream (kills KasmVNC + Chrome + socat).
+	if m.browserProcess != nil {
+		_ = m.browserProcess.Close()
+		m.browserProcess = nil
 	}
 
 	m.activePg = nil

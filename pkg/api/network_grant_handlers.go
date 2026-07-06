@@ -14,9 +14,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
@@ -90,6 +93,11 @@ func NetworkGrantApproveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Wait for the sandbox proxy to actually load the new policy before
+	// returning to the frontend. This prevents the race where the agent
+	// retries the blocked request before the proxy has applied the update.
+	waitForPolicyLoad(r.Context(), gateway, req.SandboxName, resp.PolicyVersion)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"approved":       true,
@@ -149,6 +157,9 @@ func NetworkGrantApproveBroaderHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("failed to update config: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Wait for the sandbox proxy to actually load the new policy.
+	waitForPolicyLoad(r.Context(), gateway, req.SandboxName, resp.PolicyVersion)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -224,4 +235,58 @@ func gatewayClientForRequest(r *http.Request) (openshell.GatewayClient, func(), 
 
 	cleanup := func() { client.Close() }
 	return client, cleanup, nil
+}
+
+// waitForPolicyLoad polls the gateway until the sandbox proxy confirms it has
+// loaded the specified policy version (or a newer one). This prevents the race
+// condition where the agent retries a request before the proxy has applied the
+// newly-approved endpoint.
+//
+// The function polls every 100ms for up to maxWait. If the gateway doesn't
+// support GetPolicyStatus or the call fails, it falls back to a fixed sleep.
+// Best-effort: errors are logged but never propagated — the agent will retry
+// and hit the reactive detection path if the policy still isn't loaded.
+func waitForPolicyLoad(ctx context.Context, gateway openshell.GatewayClient, sandboxName string, targetVersion uint32) {
+	const (
+		pollInterval = 100 * time.Millisecond
+		maxWait      = 5 * time.Second
+		fallbackWait = 500 * time.Millisecond
+	)
+
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		status, err := gateway.GetPolicyStatus(ctx, sandboxName, targetVersion)
+		if err != nil {
+			// Gateway may not support this RPC (older versions). Fall back to
+			// a fixed delay and return.
+			slog.Debug("waitForPolicyLoad: GetPolicyStatus failed, using fallback delay",
+				"sandbox", sandboxName, "version", targetVersion, "error", err)
+			time.Sleep(fallbackWait)
+			return
+		}
+
+		// Policy is loaded if active version >= target, or status is "loaded".
+		if status.ActiveVersion >= targetVersion || status.Status == "loaded" {
+			slog.Debug("waitForPolicyLoad: policy loaded",
+				"sandbox", sandboxName, "version", targetVersion,
+				"activeVersion", status.ActiveVersion, "status", status.Status)
+			return
+		}
+
+		// Policy failed to load — no point waiting further.
+		if status.Status == "failed" {
+			slog.Warn("waitForPolicyLoad: policy failed to load",
+				"sandbox", sandboxName, "version", targetVersion, "status", status.Status)
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(pollInterval):
+		}
+	}
+
+	slog.Warn("waitForPolicyLoad: timed out waiting for policy",
+		"sandbox", sandboxName, "version", targetVersion, "maxWait", maxWait)
 }

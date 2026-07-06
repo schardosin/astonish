@@ -575,6 +575,35 @@ func (c *grpcGatewayClient) UpdateConfig(ctx context.Context, sandboxName string
 	return &UpdateConfigResponse{PolicyVersion: resp.GetVersion()}, nil
 }
 
+func (c *grpcGatewayClient) GetPolicyStatus(ctx context.Context, sandboxName string, version uint32) (*PolicyStatusResponse, error) {
+	resp, err := c.client.GetSandboxPolicyStatus(ctx, &pb.GetSandboxPolicyStatusRequest{
+		Name:    sandboxName,
+		Version: version,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gateway GetPolicyStatus: %w", err)
+	}
+
+	result := &PolicyStatusResponse{
+		ActiveVersion: resp.GetActiveVersion(),
+	}
+	if rev := resp.GetRevision(); rev != nil {
+		switch rev.GetStatus() {
+		case pb.PolicyStatus_POLICY_STATUS_LOADED:
+			result.Status = "loaded"
+		case pb.PolicyStatus_POLICY_STATUS_PENDING:
+			result.Status = "pending"
+		case pb.PolicyStatus_POLICY_STATUS_FAILED:
+			result.Status = "failed"
+		case pb.PolicyStatus_POLICY_STATUS_SUPERSEDED:
+			result.Status = "superseded"
+		default:
+			result.Status = "unknown"
+		}
+	}
+	return result, nil
+}
+
 func (c *grpcGatewayClient) WatchSandbox(ctx context.Context, sandboxName string, opts WatchOpts) (SandboxEventStream, error) {
 	stream, err := c.client.WatchSandbox(ctx, &pb.WatchSandboxRequest{
 		Id:           sandboxName,

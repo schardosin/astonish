@@ -54,6 +54,11 @@ type GatewayClient interface {
 	// Use this for broader-pattern approvals that don't correspond to a specific draft chunk.
 	UpdateConfig(ctx context.Context, sandboxName string, ops []PolicyMergeOp) (*UpdateConfigResponse, error)
 
+	// GetPolicyStatus queries the load status of a specific policy version.
+	// Used to confirm the sandbox proxy has actually loaded a new policy
+	// before allowing the agent to retry a previously-blocked request.
+	GetPolicyStatus(ctx context.Context, sandboxName string, version uint32) (*PolicyStatusResponse, error)
+
 	// WatchSandbox opens a server-streaming connection that delivers sandbox events
 	// including draft policy updates (denial notifications). The caller must close
 	// the returned stream when done.
@@ -109,6 +114,14 @@ type ApproveChunkResponse struct {
 type UpdateConfigResponse struct {
 	// PolicyVersion is the new active policy version.
 	PolicyVersion uint32
+}
+
+// PolicyStatusResponse is returned by GetPolicyStatus.
+type PolicyStatusResponse struct {
+	// ActiveVersion is the policy version currently loaded by the sandbox proxy.
+	ActiveVersion uint32
+	// Status is the load status of the queried version: "pending", "loaded", "failed", "superseded".
+	Status string
 }
 
 // PolicyMergeOp describes a single incremental change to a sandbox's network policy.

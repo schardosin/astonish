@@ -78,6 +78,10 @@ func (m *mockGateway) UpdateConfig(ctx context.Context, sandboxName string, ops 
 	return &UpdateConfigResponse{}, nil
 }
 
+func (m *mockGateway) GetPolicyStatus(ctx context.Context, sandboxName string, version uint32) (*PolicyStatusResponse, error) {
+	return &PolicyStatusResponse{ActiveVersion: version, Status: "loaded"}, nil
+}
+
 func (m *mockGateway) WatchSandbox(ctx context.Context, sandboxName string, opts WatchOpts) (SandboxEventStream, error) {
 	return nil, errors.New("not implemented in mock")
 }

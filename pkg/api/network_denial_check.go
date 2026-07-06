@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	nurl "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -287,6 +288,266 @@ var (
 	resolveFailPattern = regexp.MustCompile(`(?i)could not resolve host:\s*([a-zA-Z0-9._-]+)`)
 )
 
+// networkToolNames is the set of tools that make HTTP requests to external
+// endpoints and whose errors should be checked for proxy denial indicators.
+var networkToolNames = map[string]bool{
+	"browser_navigate": true,
+	"browser_tabs":     true,
+	"web_fetch":        true,
+	"http_request":     true,
+	"read_pdf":         true,
+}
+
+// isNetworkTool returns true if the tool name is one that makes external
+// network requests and should be checked for proxy denial errors.
+func isNetworkTool(name string) bool {
+	return networkToolNames[name]
+}
+
+// looksLikeNetworkToolDenial checks the error field of a non-shell tool's
+// response for indicators that the failure was caused by the L7 proxy blocking
+// the connection. These tools return errors in resp["error"] (set by the ADK
+// when a tool function returns a non-nil Go error).
+//
+// The Go HTTP client, when routed through the OpenShell MITM proxy, produces
+// errors containing strings like:
+//   - "proxyconnect tcp: dial tcp ... 403"
+//   - "connect tunnel failed, response 403"
+//   - "net::ERR_TUNNEL_CONNECTION_FAILED" (Chrome/CDP via rod)
+//   - "Proxy-Connection: keep-alive\r\n\r\nHTTP/1.1 403 Forbidden"
+func looksLikeNetworkToolDenial(resp map[string]any) bool {
+	errVal, ok := resp["error"]
+	if !ok || errVal == nil {
+		return false
+	}
+
+	var errStr string
+	switch v := errVal.(type) {
+	case string:
+		errStr = v
+	case error:
+		errStr = v.Error()
+	default:
+		return false
+	}
+
+	if errStr == "" {
+		return false
+	}
+
+	lower := strings.ToLower(errStr)
+
+	// Check strong proxy denial indicators (same as shell_command).
+	for _, indicator := range proxyDenialIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+
+	// Chrome-specific errors from browser tools via CDP/rod.
+	for _, indicator := range chromeNetworkDenialIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+
+	// Go HTTP client proxy rejection patterns. When the proxy returns a
+	// non-2xx status to the CONNECT request, Go's transport wraps it as:
+	//   Get "https://host/path": Forbidden
+	//   Get "https://host/path": Proxy Authentication Required
+	// These are unambiguous proxy denials when they appear in a tool's
+	// error field (the tool never got a response from the target server).
+	for _, indicator := range goHTTPProxyDenialIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+
+	// Weak indicators — always trigger for tool errors because a non-nil
+	// error return already implies failure (unlike shell_command where
+	// exit code 0 scripts may contain incidental error text).
+	for _, indicator := range networkErrorIndicators {
+		if strings.Contains(lower, indicator) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// chromeNetworkDenialIndicators are error strings specific to Chrome/CDP
+// when the browser cannot establish a connection through the proxy.
+var chromeNetworkDenialIndicators = []string{
+	"net::err_tunnel_connection_failed",
+	"net::err_proxy_connection_failed",
+	"net::err_connection_refused",
+	"net::err_connection_reset",
+	"net::err_connection_closed",
+	"net::err_name_not_resolved",
+	"net::err_proxy_auth_unsupported",
+}
+
+// goHTTPProxyDenialIndicators match Go's net/http transport error format when
+// a proxy returns a non-2xx status to the CONNECT request. Go wraps these as:
+//
+//	Get "https://host/path": Forbidden
+//	Get "https://host/path": Proxy Authentication Required
+//
+// The quoted-URL-then-colon-then-status pattern is unique to url.Error and
+// won't match legitimate server 403 responses (which come as successful HTTP
+// responses with a status code, not as Go errors).
+var goHTTPProxyDenialIndicators = []string{
+	"\": forbidden",
+	"\": proxy authentication required",
+	"\": service unavailable",
+	"\": bad gateway",
+}
+
+// extractDenialFromToolError extracts the denied host and port from a network
+// tool's error message and/or its response map. It tries multiple strategies:
+//  1. Parse the URL from the response map (tools store their target URL)
+//  2. Use the fallbackURL (from FunctionCall.Args) if provided
+//  3. Parse host:port patterns from the error string itself
+//  4. Fall back to the same extraction patterns used for shell_command stdout
+func extractDenialFromToolError(resp map[string]any, fallbackURL string) []map[string]any {
+	seen := make(map[string]bool)
+	var denials []map[string]any
+
+	// Strategy 1: Extract host from URL fields in the response.
+	// Tools like web_fetch, http_request, browser_navigate include the URL.
+	for _, key := range []string{"url", "URL", "final_url"} {
+		if urlStr, ok := resp[key].(string); ok && urlStr != "" {
+			if host, port := hostPortFromURL(urlStr); host != "" {
+				k := fmt.Sprintf("%s:%d", host, port)
+				if !seen[k] {
+					seen[k] = true
+					denials = append(denials, map[string]any{
+						"host":            host,
+						"port":            port,
+						"broader_pattern": openshell.SuggestBroaderPattern(host),
+					})
+				}
+			}
+		}
+	}
+
+	// Strategy 2: Use fallback URL from the original FunctionCall.Args["url"].
+	// This covers Chrome/CDP errors (net::ERR_TUNNEL_CONNECTION_FAILED) which
+	// don't include the target hostname in the error string.
+	if fallbackURL != "" {
+		if host, port := hostPortFromURL(fallbackURL); host != "" {
+			k := fmt.Sprintf("%s:%d", host, port)
+			if !seen[k] {
+				seen[k] = true
+				denials = append(denials, map[string]any{
+					"host":            host,
+					"port":            port,
+					"broader_pattern": openshell.SuggestBroaderPattern(host),
+				})
+			}
+		}
+	}
+
+	// Strategy 3: Parse host from the error string using existing patterns
+	// and additional patterns for Go HTTP client errors.
+	errStr := ""
+	if v, ok := resp["error"].(string); ok {
+		errStr = v
+	}
+	if errStr != "" {
+		// Go HTTP client errors often contain the target host:port, e.g.:
+		// "proxyconnect tcp: dial tcp api.example.com:443: ..."
+		// "Get \"https://api.example.com/path\": proxyconnect ..."
+		for _, match := range goHTTPHostPattern.FindAllStringSubmatch(errStr, -1) {
+			host := match[1]
+			port := 443
+			if match[2] != "" {
+				if p, err := strconv.Atoi(match[2]); err == nil {
+					port = p
+				}
+			}
+			k := fmt.Sprintf("%s:%d", host, port)
+			if !seen[k] {
+				seen[k] = true
+				denials = append(denials, map[string]any{
+					"host":            host,
+					"port":            port,
+					"broader_pattern": openshell.SuggestBroaderPattern(host),
+				})
+			}
+		}
+
+		// Also try extracting a URL from the error (Go wraps it in quotes).
+		for _, match := range urlInErrorPattern.FindAllStringSubmatch(errStr, -1) {
+			if host, port := hostPortFromURL(match[1]); host != "" {
+				k := fmt.Sprintf("%s:%d", host, port)
+				if !seen[k] {
+					seen[k] = true
+					denials = append(denials, map[string]any{
+						"host":            host,
+						"port":            port,
+						"broader_pattern": openshell.SuggestBroaderPattern(host),
+					})
+				}
+			}
+		}
+
+		// Fall back to the same patterns used for shell stdout.
+		for _, match := range connectHostPattern.FindAllStringSubmatch(errStr, -1) {
+			host := match[1]
+			port := 443
+			if match[2] != "" {
+				if p, err := strconv.Atoi(match[2]); err == nil {
+					port = p
+				}
+			}
+			k := fmt.Sprintf("%s:%d", host, port)
+			if !seen[k] {
+				seen[k] = true
+				denials = append(denials, map[string]any{
+					"host":            host,
+					"port":            port,
+					"broader_pattern": openshell.SuggestBroaderPattern(host),
+				})
+			}
+		}
+	}
+
+	return denials
+}
+
+var (
+	// Matches host:port in Go HTTP client dial errors, e.g.
+	// "dial tcp api.example.com:443: connect: connection refused"
+	goHTTPHostPattern = regexp.MustCompile(`dial tcp ([a-zA-Z0-9._-]+):(\d+)`)
+	// Matches a URL in quotes within an error message, e.g.
+	// `Get "https://api.example.com/path": proxyconnect ...`
+	urlInErrorPattern = regexp.MustCompile(`"(https?://[^"]+)"`)
+)
+
+// hostPortFromURL parses a URL string and returns (host, port).
+// Defaults port to 443 for https, 80 for http.
+func hostPortFromURL(rawURL string) (string, int) {
+	parsed, err := nurl.Parse(rawURL)
+	if err != nil {
+		return "", 0
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return "", 0
+	}
+	port := 443
+	if parsed.Scheme == "http" {
+		port = 80
+	}
+	if parsed.Port() != "" {
+		if p, err := strconv.Atoi(parsed.Port()); err == nil {
+			port = p
+		}
+	}
+	return host, port
+}
+
 // filterDenialsByPolicy checks each detected denial against the effective
 // network policy (loaded from the runner's context). Endpoints that are:
 //   - PolicyAllow: auto-approved via gateway in the background, removed from list
@@ -359,12 +620,15 @@ func (cr *ChatRunner) autoApproveEndpoint(host string, port uint32) {
 		},
 	}
 
-	_, err = gateway.UpdateConfig(cr.ctx, sandboxName, ops)
+	resp, err := gateway.UpdateConfig(cr.ctx, sandboxName, ops)
 	if err != nil {
 		slog.Warn("auto-approve: failed to update sandbox policy",
 			"host", host, "port", port, "sandbox", sandboxName, "error", err)
 		return
 	}
+
+	// Wait for the proxy to load the new policy before the agent retries.
+	waitForPolicyLoad(cr.ctx, gateway, sandboxName, resp.PolicyVersion)
 
 	slog.Info("auto-approved network access via policy",
 		"host", host, "port", port, "sandbox", sandboxName, "session", cr.SessionID)

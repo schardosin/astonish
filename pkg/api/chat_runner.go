@@ -73,6 +73,13 @@ type ChatRunner struct {
 	// per run (on the first tool_result, when the sandbox is guaranteed to
 	// exist), avoiding repeated gRPC calls on every subsequent tool result.
 	networkPolicySeeded bool
+
+	// pendingNetworkToolURLs tracks the URL argument from FunctionCalls to
+	// network-facing tools (browser_navigate, web_fetch, etc.). Keyed by
+	// FunctionCall.ID when available, with a fallback by tool name.
+	// Used to extract the denied host when Chrome returns a generic error
+	// like net::ERR_TUNNEL_CONNECTION_FAILED that doesn't include the URL.
+	pendingNetworkToolURLs map[string]string
 }
 
 // newChatRunner creates a new ChatRunner with a background context.
@@ -85,13 +92,14 @@ func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 	// can tag entries with the session that created them.
 	ctx = store.WithSessionID(ctx, sessionID)
 	return &ChatRunner{
-		SessionID:   sessionID,
-		UserID:      userID,
-		IsNew:       isNew,
-		ctx:         ctx,
-		cancel:      cancel,
-		subscribers: make(map[string]chan ChatEvent),
-		titleDone:   make(chan struct{}),
+		SessionID:              sessionID,
+		UserID:                 userID,
+		IsNew:                  isNew,
+		ctx:                    ctx,
+		cancel:                 cancel,
+		subscribers:            make(map[string]chan ChatEvent),
+		titleDone:              make(chan struct{}),
+		pendingNetworkToolURLs: make(map[string]string),
 	}
 }
 
@@ -602,6 +610,19 @@ runLoop:
 						"name": part.FunctionCall.Name,
 						"args": args,
 					})
+
+					// Track URL arguments from network tool calls so we can
+					// identify the denied host when the response contains a
+					// generic error (e.g. Chrome's net::ERR_TUNNEL_CONNECTION_FAILED).
+					if isNetworkTool(part.FunctionCall.Name) {
+						if urlArg, ok := part.FunctionCall.Args["url"].(string); ok && urlArg != "" {
+							// Key by call ID if available, fall back to tool name.
+							if part.FunctionCall.ID != "" {
+								cr.pendingNetworkToolURLs[part.FunctionCall.ID] = urlArg
+							}
+							cr.pendingNetworkToolURLs[part.FunctionCall.Name] = urlArg
+						}
+					}
 				}
 				if part.FunctionResponse != nil {
 					hasContent = true
@@ -662,6 +683,34 @@ runLoop:
 									// Stop the run immediately — the user will
 									// approve via the dialog, then send a retry
 									// message which creates a fresh ChatRunner.
+									break runLoop
+								}
+							}
+						}
+					}
+
+					// Same check for network-facing tools (browser, web_fetch,
+					// http_request, read_pdf). These tools return errors in
+					// resp["error"] when the proxy blocks their connection.
+					if isNetworkTool(part.FunctionResponse.Name) && resp != nil {
+						if looksLikeNetworkToolDenial(resp) {
+							// Look up the original URL from the FunctionCall args.
+							// Try by call ID first, fall back to tool name.
+							fallbackURL := ""
+							if part.FunctionResponse.ID != "" {
+								fallbackURL = cr.pendingNetworkToolURLs[part.FunctionResponse.ID]
+							}
+							if fallbackURL == "" {
+								fallbackURL = cr.pendingNetworkToolURLs[part.FunctionResponse.Name]
+							}
+							denials := extractDenialFromToolError(resp, fallbackURL)
+							if len(denials) > 0 {
+								denials = cr.filterDenialsByPolicy(denials)
+								if len(denials) > 0 {
+									cr.emitEvent("network_denial_hint", map[string]any{
+										"session_id": cr.SessionID,
+										"denials":    denials,
+									})
 									break runLoop
 								}
 							}

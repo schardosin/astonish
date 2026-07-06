@@ -272,15 +272,23 @@ func (s *Store) PruneStaleSandboxSessions(ctx context.Context) (int, error) {
 		//   - Skip records younger than 10 minutes to avoid a race where the
 		//     sandbox_session is inserted before the chat sessions row is committed
 		//     (or when the chat session lives in a different org database).
-		//   - Skip records in active states (creating/running/resuming) — a live
-		//     sandbox should never be pruned from the registry.
+		//   - For active states (creating/running/resuming), use a longer grace
+		//     period of 1 hour. This handles the case where a chat session is
+		//     deleted while the sandbox is still running (e.g., user clears chat
+		//     history, or daemon restart loses in-memory state). Without this,
+		//     running-state orphans are never pruned and pods accumulate forever.
 		res, err := db.ExecContext(ctx, `
 			DELETE FROM sandbox_sessions ss
 			WHERE NOT EXISTS (
 				SELECT 1 FROM sessions s WHERE s.id = ss.chat_session_id
 			)
-			AND ss.state NOT IN ('creating', 'running', 'resuming')
-			AND ss.created_at < NOW() - INTERVAL '10 minutes'
+			AND (
+				(ss.state NOT IN ('creating', 'running', 'resuming')
+				 AND ss.created_at < NOW() - INTERVAL '10 minutes')
+				OR
+				(ss.state IN ('creating', 'running', 'resuming')
+				 AND ss.created_at < NOW() - INTERVAL '1 hour')
+			)
 		`)
 		db.Close()
 		if err != nil {

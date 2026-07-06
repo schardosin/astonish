@@ -447,6 +447,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	var sandboxIncusClient *incus.IncusClient       // hoisted for save_sandbox_template tool (Incus only)
 	var sandboxTplRegistry *sandbox.TemplateRegistry // hoisted for save_sandbox_template tool (Incus only)
 	var sandboxSessRegistry *sandbox.SessionRegistry // hoisted for save_sandbox_template tool (Incus only)
+	var backendSandboxPool sandbox.ToolNodePool      // hoisted for sub-agent alias (K8s/OpenShell)
+	var backendSessRegistry *sandbox.SessionRegistry // hoisted for sub-agent alias (K8s/OpenShell)
 	if cfg.AppConfig != nil && sandbox.IsSandboxEnabled(&cfg.AppConfig.Sandbox) {
 		sandbox.SetSandboxConfig(&cfg.AppConfig.Sandbox)
 		kind := sandbox.BackendKind(cfg.AppConfig.Sandbox.BackendKind())
@@ -460,12 +462,10 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			//   - cleanup destroys pods on shutdown
 			//
 			// NOT wired on K8s (deferred to Phase G):
-			//   - browser-in-sandbox (host fallback continues to work)
 			//   - idle watchdog (BackendPool has no equivalent yet)
 			//   - prune-on-startup (no analogue for stale pods today)
 			//   - async template refresh
 			//   - save/use/list_sandbox_template tools (Incus image-clone)
-			//   - sub-agent alias for delegated tasks
 			//   - MCP stdio servers inside sandbox (host fallback OK)
 
 			// In platform mode, use PG-backed session registry for cross-replica
@@ -579,8 +579,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 
 			// sandboxNodePool, sandboxIncusClient, sandboxTplRegistry,
 			// sandboxSessRegistry all remain nil — downstream nil-guards
-			// silently skip Incus-only features (template tools, sub-agent
-			// alias, idle watchdog, prune, shutdown).
+			// silently skip Incus-only features (template tools, idle
+			// watchdog, prune, shutdown).
+
+			// Hoist pool and session registry for sub-agent aliasing
+			// (OnChildSession closure wired below, after subAgentMgr is built).
+			backendSandboxPool = pool
+			backendSessRegistry = sessRegistry
 
 			cleanups = append(cleanups, func() {
 				pool.Cleanup()
@@ -1472,6 +1477,22 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				// Register the child session in the sandbox session registry so
 				// Backend.ExecStreaming (used by MCP servers) can resolve it to
 				// the same container as the parent.
+				if sessReg != nil {
+					if entry := sessReg.Get(parentSessionID); entry != nil {
+						_ = sessReg.Put(childSessionID, entry.ContainerName, entry.TemplateName)
+					}
+				}
+			}
+		} else if backendSandboxPool != nil {
+			pool := backendSandboxPool
+			bmgr := browserMgr // capture for closure
+			sessReg := backendSessRegistry
+			subAgentMgr.OnChildSession = func(parentSessionID, childSessionID string) {
+				pool.Alias(childSessionID, parentSessionID)
+				bmgr.AliasSession(childSessionID, parentSessionID)
+				// Register the child session in the backend session registry
+				// so Backend.ExecStreaming (MCP servers) and other non-pool
+				// paths can resolve the child to the parent's pod/container.
 				if sessReg != nil {
 					if entry := sessReg.Get(parentSessionID); entry != nil {
 						_ = sessReg.Put(childSessionID, entry.ContainerName, entry.TemplateName)

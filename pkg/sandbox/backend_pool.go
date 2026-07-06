@@ -478,6 +478,29 @@ func (p *backendPool) Cleanup() {
 	wg.Wait()
 }
 
+// Alias maps a child session ID to the same backendNodeClient as the parent
+// session. This enables sub-agents (which get fresh session IDs via
+// delegate_task) to share the parent's sandbox pod instead of creating a new
+// one. Thread-safe.
+//
+// If the parent session has no client yet, Alias is a no-op — the child will
+// create its own sandbox via getOrCreate on the first tool call.
+func (p *backendPool) Alias(childSessionID, parentSessionID string) {
+	if childSessionID == "" || parentSessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return
+	}
+	parent, ok := p.clients[parentSessionID]
+	if !ok || parent == nil {
+		return
+	}
+	p.clients[childSessionID] = parent
+}
+
 // Compile-time assertions mirroring node_interfaces.go's block for
 // *LazyNodeClient. Keep these next to the concrete types so breakage
 // surfaces at the defining package, not the consumer.

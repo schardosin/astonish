@@ -110,6 +110,11 @@ type ToolNodePool interface {
 	// Cleanup destroys every client the pool has vended. After Cleanup
 	// the pool is unusable; further GetOrCreate calls return nil.
 	Cleanup()
+
+	// Alias maps a child session ID to the parent's existing client so
+	// sub-agents (delegate_task) share the same sandbox instead of each
+	// creating a new one. No-op if the parent has no client yet.
+	Alias(childSessionID, parentSessionID string)
 }
 
 // Compile-time assertions that the concrete Incus-bound types satisfy
@@ -177,3 +182,7 @@ func (a *nodePoolAdapter) GetOrCreateWithImage(sessionID, template string, _ []s
 func (a *nodePoolAdapter) Cleanup() { a.p.Cleanup() }
 
 func (a *nodePoolAdapter) GetBackend() Backend { return a.p.GetBackend() }
+
+func (a *nodePoolAdapter) Alias(childSessionID, parentSessionID string) {
+	a.p.Alias(childSessionID, parentSessionID)
+}

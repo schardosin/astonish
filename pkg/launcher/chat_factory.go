@@ -557,6 +557,14 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					// can tunnel HTTP/WebSocket to KasmVNC inside the sandbox.
 					api.SetVNCContainerDialFunc(browserMgr.ContainerDialFunc)
 
+					// Register callbacks for the PDF browser manager so PDF
+					// export uses the same sandbox Chrome (OpenShell path).
+					api.SetPDFBrowserCallbacks(
+						browserMgr.ContainerResolveFunc,
+						browserMgr.ContainerStartBrowserFunc,
+						browserMgr.ContainerDialFunc,
+					)
+
 					browserMgr.ActivityTouchFunc = func(sessionID string) {
 						sessReg.TouchActivity(sessionID)
 					}

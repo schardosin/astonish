@@ -76,6 +76,32 @@ var browserOnce sync.Once
 var pdfBrowserMgr *browser.Manager
 var pdfBrowserOnce sync.Once
 
+// Registered PDF browser callbacks (set by chat_factory for OpenShell/K8s path).
+// These mirror the pattern used by SetVNCContainerDialFunc: the launcher wires
+// them at startup, and the PDF handler picks them up on first use.
+var (
+	registeredPDFResolve      func(sessionID string) (string, string, error)
+	registeredPDFStartBrowser func(podName string) (io.Closer, error)
+	registeredPDFDial         func(podName string, port int) (net.Conn, error)
+	registeredPDFMu           sync.RWMutex
+)
+
+// SetPDFBrowserCallbacks registers container callbacks for the dedicated PDF
+// browser manager. Called by the launcher (chat_factory) after wiring the
+// OpenShell browser to ensure PDF export uses the same sandbox path.
+func SetPDFBrowserCallbacks(
+	resolve func(sessionID string) (string, string, error),
+	startBrowser func(podName string) (io.Closer, error),
+	dial func(podName string, port int) (net.Conn, error),
+) {
+	registeredPDFMu.Lock()
+	registeredPDFResolve = resolve
+	registeredPDFStartBrowser = startBrowser
+	registeredPDFDial = dial
+	registeredPDFMu.Unlock()
+	slog.Info("PDF browser: registered sandbox callbacks")
+}
+
 // GetBrowserManager returns the shared browser manager for all sessions.
 func GetBrowserManager() *browser.Manager {
 	browserOnce.Do(func() {
@@ -137,6 +163,7 @@ func GetPDFBrowserManager(sessionID string) *browser.Manager {
 		pdfBrowserMgr = browser.NewManager(cfg)
 
 		// Wire sandbox callbacks so Chrome runs inside the session container.
+		// This handles the Incus path (local LXC containers).
 		wireSandboxBrowserCallbacks(pdfBrowserMgr, cfg, appCfg, cfgErr)
 
 		// Override ContainerResolveFunc: the PDF manager must ensure the
@@ -176,8 +203,28 @@ func GetPDFBrowserManager(sessionID string) *browser.Manager {
 			}
 		}
 
-		slog.Info("PDF browser: initialized", "sandboxEnabled", pdfBrowserMgr.SandboxEnabled)
+		slog.Info("PDF browser: initialized (sync.Once)", "sandboxEnabled", pdfBrowserMgr.SandboxEnabled)
 	})
+
+	// If the sync.Once initialization didn't enable sandbox (no Incus runtime),
+	// check if OpenShell/K8s callbacks were registered by chat_factory. This
+	// handles the case where chat_factory wires callbacks after the first PDF
+	// request, or more commonly, where Incus isn't available but OpenShell is.
+	if !pdfBrowserMgr.SandboxEnabled {
+		registeredPDFMu.RLock()
+		resolve := registeredPDFResolve
+		startBrowser := registeredPDFStartBrowser
+		dial := registeredPDFDial
+		registeredPDFMu.RUnlock()
+
+		if resolve != nil && dial != nil {
+			pdfBrowserMgr.SandboxEnabled = true
+			pdfBrowserMgr.ContainerResolveFunc = resolve
+			pdfBrowserMgr.ContainerStartBrowserFunc = startBrowser
+			pdfBrowserMgr.ContainerDialFunc = dial
+			slog.Info("PDF browser: enabled sandbox via registered OpenShell callbacks")
+		}
+	}
 
 	// Set the session ID so the manager knows which container to use.
 	// Safe to call on every request — it's a no-op if the session hasn't changed.

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/schardosin/astonish/pkg/provider/llmerror"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
 	"github.com/schardosin/astonish/pkg/store"
 )
@@ -26,7 +27,8 @@ import (
 type SubAgentConfig struct {
 	MaxDepth      int           `yaml:"max_depth,omitempty" json:"max_depth,omitempty"`           // Max delegation nesting (default: 2)
 	MaxConcurrent int           `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty"` // Max parallel sub-agents (default: 5)
-	TaskTimeout   time.Duration `yaml:"task_timeout,omitempty" json:"task_timeout,omitempty"`     // Per-task timeout (default: 5m)
+	TaskTimeout   time.Duration `yaml:"task_timeout,omitempty" json:"task_timeout,omitempty"`     // Per-task timeout (default: 10m)
+	MaxRetries    int           `yaml:"max_retries,omitempty" json:"max_retries,omitempty"`       // Inner LLM retry attempts per task (default: 3)
 }
 
 // SubTaskProgressEvent represents a structured lifecycle event for sub-task
@@ -263,6 +265,9 @@ func NewSubAgentManager(cfg SubAgentConfig) *SubAgentManager {
 	if cfg.TaskTimeout <= 0 {
 		cfg.TaskTimeout = 10 * time.Minute
 	}
+	if cfg.MaxRetries <= 0 {
+		cfg.MaxRetries = 3
+	}
 
 	sem := make(chan struct{}, cfg.MaxConcurrent)
 	return &SubAgentManager{
@@ -391,6 +396,26 @@ func isRetryableFailure(r TaskResult) bool {
 // (had tool calls or produced partial output).
 func hasProgress(r TaskResult) bool {
 	return r.ToolCalls > 0 || len(r.Result) > 0
+}
+
+// isRawContextDeadlineExceeded checks if an error is a context deadline exceeded
+// that was NOT wrapped in an *llmerror.LLMError. This happens when the HTTP client
+// hits the provider's gateway timeout (e.g., SAP AI Core 5-minute limit) — the
+// error surfaces as a raw "Post ...: context deadline exceeded" without being
+// classified by the provider layer. We treat it as retryable because the task's
+// own context (taskCtx) is still valid — it's the per-request HTTP context that
+// expired, not the overall task deadline.
+func isRawContextDeadlineExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	// If llmerror already classified it, let the caller use IsRetryable instead
+	if llmerror.IsRetryable(err) {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "context deadline exceeded") ||
+		strings.Contains(errStr, "timeout awaiting response headers")
 }
 
 // buildRetryPrompt creates a continuation prompt that includes partial context
@@ -835,93 +860,146 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	// temporal context; see NewTimestampedUserContent for cache-stability rationale).
 	userMsg := NewTimestampedUserContent(task.Description)
 
-	// Execute the agent and collect results
+	// Execute the agent and collect results, with inner retry for transient
+	// LLM errors (429, 502, 503, 504, gateway timeout). This mirrors the main
+	// chat agent's retry loop in chat_agent_run.go — on a retryable error the
+	// runner is re-invoked on the SAME session so the LLM preserves full
+	// conversation history (unlike the outer task-level retry in RunTasks which
+	// creates a fresh session with a continuation prompt).
 	trace := NewExecutionTrace(task.Description)
 	var outputParts []string
 	var toolCallCount int
+	maxRetries := m.Config.MaxRetries
 
-	for event, runErr := range r.Run(taskCtx, userID, childSessionID, userMsg, adkagent.RunConfig{}) {
-		if runErr != nil {
-			trace.Finalize()
-			result = TaskResult{
-				Name:      task.Name,
-				Status:    "error",
-				Result:    strings.Join(outputParts, ""),
-				Error:     fmt.Sprintf("agent run error: %v", runErr),
-				Trace:     trace,
-				ToolCalls: toolCallCount,
-				Duration:  time.Since(start),
-			}
-			return result
-		}
-
-		if event == nil {
-			continue
-		}
-
-		// Forward event to callback for real-time progress streaming
-		if task.OnEvent != nil {
-			task.OnEvent(event)
-		}
-
-		// Collect text output (skip thought/reasoning parts — these are
-		// internal chain-of-thought and should not appear in the result).
-		if event.LLMResponse.Content != nil {
-			for _, part := range event.LLMResponse.Content.Parts {
-				if part.Text != "" && !part.Thought {
-					outputParts = append(outputParts, part.Text)
-					// Emit task_text progress event
-					if m.SubTaskProgress != nil {
-						m.SubTaskProgress(SubTaskProgressEvent{
-							Type:     "task_text",
-							TaskName: task.Name,
-							Text:     part.Text,
-						})
+	for attempt := range maxRetries {
+		retried := false
+		for event, runErr := range r.Run(taskCtx, userID, childSessionID, userMsg, adkagent.RunConfig{}) {
+			if runErr != nil {
+				// Check for retryable LLM errors (rate limit, server overload, timeout)
+				if llmerror.IsRetryable(runErr) && attempt < maxRetries-1 {
+					wait := retryBackoff(attempt, runErr)
+					slog.Info("sub-agent retrying transient LLM error",
+						"task", task.Name,
+						"attempt", attempt+1,
+						"max_retries", maxRetries,
+						"error", runErr,
+						"wait", wait,
+						"tool_calls_so_far", toolCallCount,
+					)
+					select {
+					case <-time.After(wait):
+					case <-taskCtx.Done():
+						// Context expired during backoff wait — fall through to timeout handling below
 					}
+					retried = true
+					break // break inner for-range → continue outer retry loop
 				}
-				// Record tool calls in trace
-				if part.FunctionCall != nil {
-					toolCallCount++
-					args := make(map[string]any)
-					if part.FunctionCall.Args != nil {
-						for k, v := range part.FunctionCall.Args {
-							args[k] = v
+
+				// Also treat raw "context deadline exceeded" from HTTP client as retryable
+				// (SAP AI Core gateway timeouts surface as non-wrapped context errors)
+				if isRawContextDeadlineExceeded(runErr) && attempt < maxRetries-1 {
+					wait := retryBackoff(attempt, runErr)
+					slog.Info("sub-agent retrying context deadline exceeded",
+						"task", task.Name,
+						"attempt", attempt+1,
+						"max_retries", maxRetries,
+						"error", runErr,
+						"wait", wait,
+						"tool_calls_so_far", toolCallCount,
+					)
+					select {
+					case <-time.After(wait):
+					case <-taskCtx.Done():
+					}
+					retried = true
+					break
+				}
+
+				// Non-retryable error or retries exhausted
+				trace.Finalize()
+				result = TaskResult{
+					Name:      task.Name,
+					Status:    "error",
+					Result:    strings.Join(outputParts, ""),
+					Error:     fmt.Sprintf("agent run error: %v", runErr),
+					Trace:     trace,
+					ToolCalls: toolCallCount,
+					Duration:  time.Since(start),
+				}
+				return result
+			}
+
+			if event == nil {
+				continue
+			}
+
+			// Forward event to callback for real-time progress streaming
+			if task.OnEvent != nil {
+				task.OnEvent(event)
+			}
+
+			// Collect text output (skip thought/reasoning parts — these are
+			// internal chain-of-thought and should not appear in the result).
+			if event.LLMResponse.Content != nil {
+				for _, part := range event.LLMResponse.Content.Parts {
+					if part.Text != "" && !part.Thought {
+						outputParts = append(outputParts, part.Text)
+						// Emit task_text progress event
+						if m.SubTaskProgress != nil {
+							m.SubTaskProgress(SubTaskProgressEvent{
+								Type:     "task_text",
+								TaskName: task.Name,
+								Text:     part.Text,
+							})
 						}
 					}
-					trace.RecordStep(part.FunctionCall.Name, args, nil, nil)
-					// Emit task_tool_call progress event
-					if m.SubTaskProgress != nil {
-						m.SubTaskProgress(SubTaskProgressEvent{
-							Type:     "task_tool_call",
-							TaskName: task.Name,
-							ToolName: part.FunctionCall.Name,
-							ToolArgs: args,
-						})
-					}
-				}
-				// Record tool results in trace
-				if part.FunctionResponse != nil {
-					// Update the last trace step with the result
-					trace.mu.Lock()
-					if len(trace.Steps) > 0 {
-						lastStep := &trace.Steps[len(trace.Steps)-1]
-						if lastStep.ToolName == part.FunctionResponse.Name {
-							lastStep.ToolResult = part.FunctionResponse.Response
-							lastStep.Success = true
+					// Record tool calls in trace
+					if part.FunctionCall != nil {
+						toolCallCount++
+						args := make(map[string]any)
+						if part.FunctionCall.Args != nil {
+							for k, v := range part.FunctionCall.Args {
+								args[k] = v
+							}
+						}
+						trace.RecordStep(part.FunctionCall.Name, args, nil, nil)
+						// Emit task_tool_call progress event
+						if m.SubTaskProgress != nil {
+							m.SubTaskProgress(SubTaskProgressEvent{
+								Type:     "task_tool_call",
+								TaskName: task.Name,
+								ToolName: part.FunctionCall.Name,
+								ToolArgs: args,
+							})
 						}
 					}
-					trace.mu.Unlock()
-					// Emit task_tool_result progress event
-					if m.SubTaskProgress != nil {
-						m.SubTaskProgress(SubTaskProgressEvent{
-							Type:       "task_tool_result",
-							TaskName:   task.Name,
-							ToolName:   part.FunctionResponse.Name,
-							ToolResult: part.FunctionResponse.Response,
-						})
+					// Record tool results in trace
+					if part.FunctionResponse != nil {
+						// Update the last trace step with the result
+						trace.mu.Lock()
+						if len(trace.Steps) > 0 {
+							lastStep := &trace.Steps[len(trace.Steps)-1]
+							if lastStep.ToolName == part.FunctionResponse.Name {
+								lastStep.ToolResult = part.FunctionResponse.Response
+								lastStep.Success = true
+							}
+						}
+						trace.mu.Unlock()
+						// Emit task_tool_result progress event
+						if m.SubTaskProgress != nil {
+							m.SubTaskProgress(SubTaskProgressEvent{
+								Type:       "task_tool_result",
+								TaskName:   task.Name,
+								ToolName:   part.FunctionResponse.Name,
+								ToolResult: part.FunctionResponse.Response,
+							})
+						}
 					}
 				}
 			}
+		}
+		if !retried {
+			break // completed successfully or hit non-retryable error (already returned)
 		}
 	}
 

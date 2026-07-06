@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ func TestNewSubAgentManager_Defaults(t *testing.T) {
 	}
 	if mgr.Config.TaskTimeout != 10*time.Minute {
 		t.Errorf("TaskTimeout = %v, want 10m", mgr.Config.TaskTimeout)
+	}
+	if mgr.Config.MaxRetries != 3 {
+		t.Errorf("MaxRetries = %d, want 3", mgr.Config.MaxRetries)
 	}
 }
 
@@ -550,5 +554,27 @@ func TestFlattenTraces_DelegateWithoutTraces(t *testing.T) {
 	// delegate_tasks with no traces is kept as-is
 	if len(trace.Steps) != 2 {
 		t.Errorf("Steps len = %d, want 2", len(trace.Steps))
+	}
+}
+
+func TestIsRawContextDeadlineExceeded(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"unrelated error", fmt.Errorf("something else"), false},
+		{"context deadline exceeded", fmt.Errorf("Post \"https://api.example.com/invoke\": context deadline exceeded"), true},
+		{"timeout awaiting response headers", fmt.Errorf("http2: timeout awaiting response headers"), true},
+		{"wrapped context deadline", fmt.Errorf("agent run: %w", fmt.Errorf("context deadline exceeded")), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRawContextDeadlineExceeded(tt.err)
+			if got != tt.want {
+				t.Errorf("isRawContextDeadlineExceeded(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

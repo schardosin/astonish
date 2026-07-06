@@ -285,23 +285,11 @@ func (a *AstonishAgent) handleToolNode(ctx context.Context, node *config.Node, s
 		// back into session history (they emit structured results, not raw args).
 	}
 
-	// Fail fast if credential placeholders remain unresolved.
+	// Unresolved credential placeholders are left as literal text — this
+	// handles documentation/code that describes the placeholder format.
 	if unresolved := credentials.UnresolvedCredentialNames(resolvedArgs); len(unresolved) > 0 {
-		errMsg := fmt.Sprintf("credential %q not found — if this is a scheduled/background job, ensure the credential exists at team scope (not just personal)", unresolved[0])
-		state.Set("_has_error", true)
-		state.Set("_last_error", errMsg)
-		state.Set("_error_node", node.Name)
-		yield(&session.Event{
-			Actions: session.EventActions{
-				StateDelta: map[string]any{
-					"_failure_info": map[string]any{
-						"title":  "Credential Not Found",
-						"reason": errMsg,
-					},
-				},
-			},
-		}, nil)
-		return false
+		slog.Debug("credential placeholders remain unresolved in flow tool (treating as literal text)",
+			"component", "credentials", "tool", toolName, "unresolved", unresolved)
 	}
 
 	// Resolve <<<SECRET_N>>> tokens (pending secrets from interactive capture).

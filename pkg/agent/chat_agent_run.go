@@ -410,10 +410,8 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				}
 
 				if resolver == nil {
-					// No credential store available — check if args have placeholders
-					if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
-						return nil, fmt.Errorf("credential %q not found — no credential store available", unresolved[0])
-					}
+					// No credential store available — unresolved placeholders are
+					// treated as literal text (e.g., documentation examples).
 					return nil, nil
 				}
 
@@ -426,9 +424,16 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 				credRestore := credentials.SubstituteAndRestore(args, resolver, shellFields...)
 
 				// After substitution, check if any placeholders remain unresolved.
+				// Unresolved placeholders are left as literal text. This handles
+				// the case where the LLM generates documentation or code that
+				// describes the placeholder format (e.g., "{{CREDENTIAL:name:field}}")
+				// without intending to use a real credential. If the LLM genuinely
+				// meant to use a credential (via resolve_credential), the placeholder
+				// will have been resolved above — only truly nonexistent credentials
+				// remain, and downstream auth failures will surface naturally.
 				if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
-					credRestore()
-					return nil, fmt.Errorf("credential %q not found — ensure the credential exists (for scheduled jobs, it must be at team scope)", unresolved[0])
+					slog.Debug("credential placeholders remain unresolved (treating as literal text)",
+						"component", "credentials", "tool", t.Name(), "unresolved", unresolved)
 				}
 
 				callID := ctx.FunctionCallID()

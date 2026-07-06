@@ -752,11 +752,8 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				}
 
 				if resolver == nil {
-					// No credential store available — check if args have placeholders
-					// that can't be resolved.
-					if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
-						return nil, fmt.Errorf("credential %q not found — no credential store available. If this is a scheduled job, ensure the credential exists at team scope", unresolved[0])
-					}
+					// No credential store available — unresolved placeholders are
+					// treated as literal text (e.g., documentation examples).
 					return nil, nil
 				}
 
@@ -768,14 +765,13 @@ func (a *AstonishAgent) executeLLMNodeAttempt(ctx agent.InvocationContext, node 
 				credRestore := credentials.SubstituteAndRestore(args, resolver, shellFields...)
 
 				// After substitution, check if any placeholders remain unresolved.
-				// This means the credential doesn't exist in the store — fail fast
-				// with a clear error rather than running the tool with literal
-				// placeholder text and getting a confusing auth failure.
+				// Unresolved placeholders are left as literal text — this handles
+				// the case where the LLM generates documentation or code that
+				// describes the placeholder format without intending to use a
+				// real credential. Downstream auth failures will surface naturally.
 				if unresolved := credentials.UnresolvedCredentialNames(args); len(unresolved) > 0 {
-					// Restore placeholders before returning the error so the
-					// session event doesn't contain partially-substituted values.
-					credRestore()
-					return nil, fmt.Errorf("credential %q not found — if this is a scheduled/background job, ensure the credential exists at team scope (not just personal)", unresolved[0])
+					slog.Debug("credential placeholders remain unresolved (treating as literal text)",
+						"component", "credentials", "tool", t.Name(), "unresolved", unresolved)
 				}
 
 				callID := ctx.FunctionCallID()

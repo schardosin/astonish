@@ -582,12 +582,15 @@ const { data } = useAppData('http:GET:https://api.example.com/metrics', {
 const { data } = useAppData('http:GET:https://api.example.com/data@my-api-key');
 ```
 
-**`useAppAction(actionId)`** — Trigger a mutation/action.
+**`useAppAction(actionId, options?)`** — Trigger a mutation/action.
 
 ```javascript
 // Returns an async function
 const runQuery = useAppAction('mcp:postgres-mcp/query');
 const result = await runQuery({ query: 'INSERT INTO ...' });
+
+// Optional timeout in ms (default 30000). Raise only for long-running MCP ops.
+const runBuild = useAppAction('mcp:server/build', { timeout: 300000 }); // 5 min
 ```
 
 **`useAppAI(options?)`** — Make a one-shot LLM call.
@@ -599,7 +602,7 @@ const summary = await askAI('Summarize this data', { context: tableData });
 // summary is a string
 ```
 
-The AI hook uses a 2-minute timeout (vs 30s for data/action hooks) since LLM calls can take longer. The backend handler (`POST /api/apps/ai`) uses the same LLM model configured for the main Astonish agent via `ChatManager`.
+The AI hook uses a 2-minute timeout (vs 30s for data hooks, and 30s by default for action hooks — configurable via `{ timeout }`) since LLM calls can take longer. The backend handler (`POST /api/apps/ai`) uses the same LLM model configured for the main Astonish agent via `ChatManager`.
 
 #### Polling and Streaming
 

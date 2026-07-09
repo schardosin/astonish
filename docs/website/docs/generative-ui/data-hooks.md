@@ -7,7 +7,7 @@ Data hooks connect Generative UI apps to live data sources, AI capabilities, and
 | Hook | Purpose | Returns |
 |------|---------|---------|
 | `useAppData(sourceId)` | Fetch data from APIs and MCP tools | `< data, loading, error, refetch >` |
-| `useAppAction(actionId)` | Trigger mutations/actions | `async (payload) => result` |
+| `useAppAction(actionId, options?)` | Trigger mutations/actions | `async (payload) => result` |
 | `useAppAI(options)` | Run LLM calls from the app | `async (prompt, callOptions?) => string` |
 | `useAppState()` | Per-app persistent SQLite database | `< exec(sql, params), query(sql, params) >` |
 
@@ -96,7 +96,9 @@ function UserProfile(< userId >) {
 
 ## useAppAction
 
-Triggers mutations or write operations. Returns an async function:
+Triggers mutations or write operations. Returns an async function.
+
+Optional second argument: `{ timeout }` in milliseconds (default `30000`). Raise it only for known long-running MCP actions; leave the default otherwise.
 
 ```jsx
 function CreateTicket() {
@@ -115,6 +117,12 @@ function CreateTicket() {
     </div>
   );
 }
+```
+
+For slow MCP operations (for example Docker builds), pass a longer timeout:
+
+```jsx
+const runBuild = useAppAction('mcp:server/build', { timeout: 300000 }); // 5 min
 ```
 
 ## useAppAI

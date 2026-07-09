@@ -324,9 +324,15 @@ export default function AIDeployments() {
 }
 ` + "```" + `
 
-### useAppAction(actionId)
+### useAppAction(actionId, options?)
 
 Returns an async function for triggering write operations (mutations). Uses the same sourceId convention.
+
+Optional second argument: ` + "`{ timeout }`" + ` in milliseconds (default ` + "`30000`" + `). Raise it only for known long-running MCP actions (for example Docker builds); leave the default otherwise.
+
+` + "```" + `jsx
+const runBuild = useAppAction('mcp:server/build', { timeout: 300000 }); // 5 min
+` + "```" + `
 
 **Example:**
 ` + "```" + `jsx

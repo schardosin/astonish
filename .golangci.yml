@@ -76,5 +76,4 @@ linters:
         # Context.Background in goroutines — intentional for fire-and-forget background work
         # (reindex, long-lived watchers, session loops) that must outlive request scope
         - G118  # Goroutine uses context.Background/TODO
-        # Secure cookie flag is set dynamically from TLS / X-Forwarded-Proto
-        - G124  # Cookie missing Secure attribute (static analysis false positive)
+

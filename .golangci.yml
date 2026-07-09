@@ -20,6 +20,10 @@ linters:
     # Security scanner
     - gosec
 
+  exclusions:
+    paths:
+      - web/node_modules
+
   settings:
     # Disable unreachable code check in govet (often false positives in complex flows)
     govet:
@@ -72,3 +76,5 @@ linters:
         # Context.Background in goroutines — intentional for fire-and-forget background work
         # (reindex, long-lived watchers, session loops) that must outlive request scope
         - G118  # Goroutine uses context.Background/TODO
+        # Secure cookie flag is set dynamically from TLS / X-Forwarded-Proto
+        - G124  # Cookie missing Secure attribute (static analysis false positive)

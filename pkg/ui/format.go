@@ -17,7 +17,7 @@ func FormatAsYamlLike(v interface{}, indent int) string {
 	}
 
 	// Handle pointers and interfaces
-	if val.Kind() == reflect.Ptr || val.Kind() == reflect.Interface {
+	if val.Kind() == reflect.Pointer || val.Kind() == reflect.Interface {
 		if val.IsNil() {
 			return "null"
 		}

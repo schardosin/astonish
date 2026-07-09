@@ -35,6 +35,29 @@ func GetLinkCodeStore() LinkCodeBackend {
 	return linkCodeStore
 }
 
+// linkCodeStoreProvider is implemented by entstore.Store for DB-backed codes.
+type linkCodeStoreProvider interface {
+	LinkCodes() store.LinkCodeStore
+}
+
+// ensureLinkCodeStore returns the active link code backend, lazily wiring it
+// from the platform DB when API pods have no local ChannelManager.
+func ensureLinkCodeStore() LinkCodeBackend {
+	if s := GetLinkCodeStore(); s != nil {
+		return s
+	}
+	backend := getPlatformBackend()
+	if backend == nil {
+		return nil
+	}
+	if p, ok := backend.(linkCodeStoreProvider); ok {
+		s := NewDBLinkCodeBackend(p.LinkCodes())
+		SetLinkCodeStore(s)
+		return s
+	}
+	return nil
+}
+
 // --- User Channel Management Endpoints ---
 //
 // These endpoints allow authenticated users to link and manage their
@@ -289,7 +312,7 @@ func handleGenerateLinkCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store := GetLinkCodeStore()
+	store := ensureLinkCodeStore()
 	if store == nil {
 		respondError(w, http.StatusNotImplemented, "link code service not available")
 		return
@@ -405,7 +428,7 @@ func handleVerifyEmailCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	linkStore := GetLinkCodeStore()
+	linkStore := ensureLinkCodeStore()
 	if linkStore == nil {
 		respondError(w, http.StatusNotImplemented, "link code service not available")
 		return

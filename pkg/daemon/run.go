@@ -795,18 +795,22 @@ func Run(cfg RunConfig) error {
 	}
 
 	// --- Link code store for code-based channel linking (platform mode) ---
-	// Allows users to link their Telegram/Slack by sending /link <code> to the bot.
-	// In platform mode, use DB-backed store for stateless horizontal scaling.
-	if backend != nil && channelMgr != nil {
+	// Allows users to link their Telegram/Slack/Email via Studio or /link commands.
+	// API pods (ASTONISH_MODE=api) don't run channel adapters but still serve
+	// /api/user/channels/link-code — initialize the DB-backed store whenever we
+	// have a platform backend, not only when a ChannelManager is running locally.
+	if backend != nil {
 		linkStore := api.NewDBLinkCodeBackend(backend.NewLinkCodeStore())
 		api.SetLinkCodeStore(linkStore)
 
-		// Set the link handler on the Telegram channel — bridges /link commands
-		// to the link code store and user_channels DB.
-		channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(backend, linkStore, channelMgr))
+		if channelMgr != nil {
+			// Set the link handler on the Telegram channel — bridges /link commands
+			// to the link code store and user_channels DB.
+			channelMgr.SetTelegramLinkHandler(buildTelegramLinkHandler(backend, linkStore, channelMgr))
 
-		// Set the link handler on the Slack channel.
-		channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(backend, linkStore, channelMgr))
+			// Set the link handler on the Slack channel.
+			channelMgr.SetSlackLinkHandler(buildSlackLinkHandler(backend, linkStore, channelMgr))
+		}
 	}
 
 	// reloadChannels re-reads config, stops existing channels, and starts new
@@ -928,9 +932,8 @@ func Run(cfg RunConfig) error {
 			channelMgr.SetPlatformResolver(resolver)
 		}
 
-		// Initialize link code store if not yet created (happens when channels
-		// were first enabled at runtime, not at daemon startup).
-		if backend != nil && channelMgr != nil && api.GetLinkCodeStore() == nil {
+		// Initialize link code store if not yet created.
+		if backend != nil && api.GetLinkCodeStore() == nil {
 			linkStore := api.NewDBLinkCodeBackend(backend.NewLinkCodeStore())
 			api.SetLinkCodeStore(linkStore)
 		}

@@ -290,8 +290,9 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
         </p>
       </div>
 
-      {/* Admin: Channel Infrastructure Status */}
-      {isAdmin && channelInfo && (
+      {/* Channel Infrastructure Status — visible to all users so they know which
+          channels are available for linking. Admin-only setup hints below. */}
+      {channelInfo && (
         <div className="rounded-lg border p-4 space-y-3" style={{ background: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
           <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Channel Infrastructure</h4>
           <div className="space-y-2">
@@ -396,9 +397,11 @@ export default function ConnectedChannelsSettings({ isAdmin = false }: { isAdmin
               </>
             )}
           </div>
-          <p className="text-xs pt-2 border-t" style={{ ...sectionBorderStyle, color: 'var(--text-muted)' }}>
-            To set up or reconfigure channels, use the CLI: <code className="px-1 py-0.5 rounded text-xs" style={{ background: 'var(--bg-tertiary)' }}>astonish channels setup [telegram|slack|email]</code>
-          </p>
+          {isAdmin && (
+            <p className="text-xs pt-2 border-t" style={{ ...sectionBorderStyle, color: 'var(--text-muted)' }}>
+              To set up or reconfigure channels, use the CLI: <code className="px-1 py-0.5 rounded text-xs" style={{ background: 'var(--bg-tertiary)' }}>astonish channels setup [telegram|slack|email]</code>
+            </p>
+          )}
         </div>
       )}
 

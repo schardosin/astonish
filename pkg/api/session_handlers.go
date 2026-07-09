@@ -1030,8 +1030,8 @@ func StudioArtifactPDFHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pdfData = result.data
-	case <-time.After(30 * time.Second):
-		slog.Error("PDF generation timed out after 30s", "path", cleanPath, "sessionID", sessionID)
+	case <-time.After(3 * time.Minute):
+		slog.Error("PDF generation timed out", "path", cleanPath, "sessionID", sessionID)
 		respondError(w, http.StatusGatewayTimeout, "PDF generation timed out")
 		return
 	}

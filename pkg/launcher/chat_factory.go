@@ -557,13 +557,52 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 					// can tunnel HTTP/WebSocket to KasmVNC inside the sandbox.
 					api.SetVNCContainerDialFunc(browserMgr.ContainerDialFunc)
 
-					// Register callbacks for the PDF browser manager so PDF
-					// export uses the same sandbox Chrome (OpenShell path).
-					api.SetPDFBrowserCallbacks(
-						browserMgr.ContainerResolveFunc,
-						browserMgr.ContainerStartBrowserFunc,
-						browserMgr.ContainerDialFunc,
-					)
+				// Register callbacks for the PDF browser manager so PDF
+				// export uses the same sandbox Chrome (OpenShell path).
+				// The PDF resolve func ensures a sandbox exists (re-creates
+				// it if pruned), mirroring the Incus EnsureSessionContainer
+				// behaviour. This is different from the browse resolve (which
+				// only does a lookup) because PDF export can be triggered long
+				// after the sandbox was pruned by the orphan reconciler.
+				pdfResolve := func(sessionID string) (string, string, error) {
+					// Fast path: session record exists.
+					rec, err := sessReg.GetSession(sessionID)
+					if err == nil && rec != nil && rec.PodName != "" {
+						return rec.PodName, "127.0.0.1", nil
+					}
+
+					// Session record missing (pruned). Re-create the sandbox.
+					slog.Info("PDF resolve: sandbox not found, creating",
+						"component", "chat-factory", "sessionID", sessionID)
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+
+					if _, err := osb.CreateSession(ctx, sandbox.SessionSpec{
+						SessionID:  sessionID,
+						TemplateID: sandbox.BaseTemplateID,
+					}); err != nil {
+						return "", "", fmt.Errorf("PDF resolve: create session: %w", err)
+					}
+					if err := osb.StartSession(ctx, sessionID); err != nil {
+						return "", "", fmt.Errorf("PDF resolve: start session: %w", err)
+					}
+					if err := osb.WaitForSessionReady(ctx, sessionID); err != nil {
+						return "", "", fmt.Errorf("PDF resolve: wait for ready: %w", err)
+					}
+
+					// Re-read to get the pod name (GatewayID).
+					rec, err = sessReg.GetSession(sessionID)
+					if err != nil || rec == nil || rec.PodName == "" {
+						return "", "", fmt.Errorf("PDF resolve: session still not found after create")
+					}
+					return rec.PodName, "127.0.0.1", nil
+				}
+
+				api.SetPDFBrowserCallbacks(
+					pdfResolve,
+					browserMgr.ContainerStartBrowserFunc,
+					browserMgr.ContainerDialFunc,
+				)
 
 					browserMgr.ActivityTouchFunc = func(sessionID string) {
 						sessReg.TouchActivity(sessionID)

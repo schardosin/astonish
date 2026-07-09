@@ -162,20 +162,26 @@ func storeCredToCred(c *store.Credential) *credentials.Credential {
 // --- save_credential tool ---
 
 type SaveCredentialArgs struct {
-	Name         string `json:"name" jsonschema:"Short identifier for this credential (e.g., 'my-api', 'proxmox', 'google-calendar')"`
-	Type         string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (HTTP Basic Auth), 'password' (plain username+password for SSH/FTP/SMTP/databases), 'oauth_client_credentials' (auto-refreshing OAuth2 server-to-server), 'oauth_authorization_code' (user-authorized OAuth2 with refresh token — Google, GitHub, etc.)"`
-	Header       string `json:"header,omitempty" jsonschema:"Header name for api_key type (e.g., 'X-API-Key', 'Authorization'). Required for api_key type."`
-	Value        string `json:"value,omitempty" jsonschema:"The API key value. Required for api_key type."`
-	Token        string `json:"token,omitempty" jsonschema:"The bearer token. Required for bearer type."`
-	Username     string `json:"username,omitempty" jsonschema:"Username for basic or password type. Required for both."`
-	Password     string `json:"password,omitempty" jsonschema:"Password for basic or password type. Required for both."`
-	AuthURL      string `json:"auth_url,omitempty" jsonschema:"OAuth token endpoint URL. Required for oauth_client_credentials type."`
-	ClientID     string `json:"client_id,omitempty" jsonschema:"OAuth client ID. Required for oauth_client_credentials and oauth_authorization_code types."`
-	ClientSecret string `json:"client_secret,omitempty" jsonschema:"OAuth client secret. Required for oauth_client_credentials and oauth_authorization_code types."`
-	Scope        string `json:"scope,omitempty" jsonschema:"OAuth scope (optional, for oauth_client_credentials and oauth_authorization_code types)."`
-	TokenURL     string `json:"token_url,omitempty" jsonschema:"Token endpoint URL for exchanging/refreshing tokens. Required for oauth_authorization_code type (e.g., https://oauth2.googleapis.com/token)."`
-	AccessToken  string `json:"access_token,omitempty" jsonschema:"Current access token. Required for oauth_authorization_code type."`
-	RefreshToken string `json:"refresh_token,omitempty" jsonschema:"Refresh token for obtaining new access tokens. Required for oauth_authorization_code type."`
+	Name                        string `json:"name" jsonschema:"Short identifier for this credential (e.g., 'my-api', 'proxmox', 'google-calendar')"`
+	Type                        string `json:"type" jsonschema:"Credential type: 'api_key' (custom header+value), 'bearer' (Authorization: Bearer token), 'basic' (HTTP Basic Auth), 'password' (plain username+password for SSH/FTP/SMTP/databases), 'oauth_client_credentials' (auto-refreshing OAuth2 server-to-server), 'oauth_authorization_code' (user-authorized OAuth2 with refresh token — Google, GitHub, etc.), 'openstack_keystone' (OpenStack Keystone v3 token auth — password or application credential)"`
+	Header                      string `json:"header,omitempty" jsonschema:"Header name for api_key type (e.g., 'X-API-Key', 'Authorization'). Required for api_key type."`
+	Value                       string `json:"value,omitempty" jsonschema:"The API key value. Required for api_key type."`
+	Token                       string `json:"token,omitempty" jsonschema:"The bearer token. Required for bearer type."`
+	Username                    string `json:"username,omitempty" jsonschema:"Username for basic, password, or openstack_keystone password auth. Required for basic/password; for Keystone password method."`
+	Password                    string `json:"password,omitempty" jsonschema:"Password for basic, password, or openstack_keystone password auth."`
+	AuthURL                     string `json:"auth_url,omitempty" jsonschema:"OAuth token endpoint URL (oauth_client_credentials) or Keystone tokens URL (openstack_keystone, e.g. https://identity.example.com/v3/auth/tokens)."`
+	ClientID                    string `json:"client_id,omitempty" jsonschema:"OAuth client ID. Required for oauth_client_credentials and oauth_authorization_code types."`
+	ClientSecret                string `json:"client_secret,omitempty" jsonschema:"OAuth client secret. Required for oauth_client_credentials and oauth_authorization_code types."`
+	Scope                       string `json:"scope,omitempty" jsonschema:"OAuth scope (optional, for oauth_client_credentials and oauth_authorization_code types)."`
+	TokenURL                    string `json:"token_url,omitempty" jsonschema:"Token endpoint URL for exchanging/refreshing tokens. Required for oauth_authorization_code type (e.g., https://oauth2.googleapis.com/token)."`
+	AccessToken                 string `json:"access_token,omitempty" jsonschema:"Current access token. Required for oauth_authorization_code type."`
+	RefreshToken                string `json:"refresh_token,omitempty" jsonschema:"Refresh token for obtaining new access tokens. Required for oauth_authorization_code type."`
+	UserDomain                  string `json:"user_domain,omitempty" jsonschema:"Keystone user domain name (openstack_keystone password auth). Defaults to 'Default'."`
+	ProjectID                   string `json:"project_id,omitempty" jsonschema:"Keystone project ID (openstack_keystone password auth). Provide project_id or project_name."`
+	ProjectName                 string `json:"project_name,omitempty" jsonschema:"Keystone project name (openstack_keystone password auth). Used with project_domain when project_id is empty."`
+	ProjectDomain               string `json:"project_domain,omitempty" jsonschema:"Keystone project domain name (openstack_keystone password auth). Defaults to 'Default'."`
+	ApplicationCredentialID     string `json:"application_credential_id,omitempty" jsonschema:"Keystone application credential ID (openstack_keystone). Prefer over password auth when available."`
+	ApplicationCredentialSecret string `json:"application_credential_secret,omitempty" jsonschema:"Keystone application credential secret (openstack_keystone)."`
 }
 
 type SaveCredentialResult struct {
@@ -282,9 +288,36 @@ func saveCredential(ctx tool.Context, args SaveCredentialArgs) (SaveCredentialRe
 			Scope:        args.Scope,
 		}
 
+	case store.CredOpenStackKeystone:
+		if args.AuthURL == "" {
+			return SaveCredentialResult{ToolResult: toolError("auth_url is required for openstack_keystone type (e.g., https://identity.example.com/v3/auth/tokens)")}, nil
+		}
+		hasAppCred := args.ApplicationCredentialID != "" && args.ApplicationCredentialSecret != ""
+		hasPassword := args.Username != "" && args.Password != ""
+		if !hasAppCred && !hasPassword {
+			return SaveCredentialResult{ToolResult: toolError("openstack_keystone requires either application_credential_id+application_credential_secret, or username+password")}, nil
+		}
+		if !hasAppCred {
+			if args.ProjectID == "" && args.ProjectName == "" {
+				return SaveCredentialResult{ToolResult: toolError("openstack_keystone password auth requires project_id or project_name")}, nil
+			}
+		}
+		storeCred = &store.Credential{
+			Type:                        store.CredOpenStackKeystone,
+			AuthURL:                     args.AuthURL,
+			Username:                    args.Username,
+			Password:                    args.Password,
+			UserDomain:                  args.UserDomain,
+			ProjectID:                   args.ProjectID,
+			ProjectName:                 args.ProjectName,
+			ProjectDomain:               args.ProjectDomain,
+			ApplicationCredentialID:     args.ApplicationCredentialID,
+			ApplicationCredentialSecret: args.ApplicationCredentialSecret,
+		}
+
 	default:
 		return SaveCredentialResult{
-			ToolResult: toolError("Unknown type %q. Use: api_key, bearer, basic, password, oauth_client_credentials, or oauth_authorization_code", args.Type),
+			ToolResult: toolError("Unknown type %q. Use: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code, or openstack_keystone", args.Type),
 		}, nil
 	}
 
@@ -547,6 +580,17 @@ func testCredential(ctx tool.Context, args TestCredentialArgs) (TestCredentialRe
 			ToolResult: ToolResult{Status: "ok", Message: fmt.Sprintf("OAuth credential %q: access token is valid (auto-refreshes when expired)", args.Name)},
 		}, nil
 
+	case store.CredOpenStackKeystone:
+		_, _, err := cs.Resolve(ctx, args.Name)
+		if err != nil {
+			return TestCredentialResult{
+				ToolResult: ToolResult{Status: "failed", Message: fmt.Sprintf("Keystone token acquisition failed: %v", err)},
+			}, nil
+		}
+		return TestCredentialResult{
+			ToolResult: ToolResult{Status: "ok", Message: fmt.Sprintf("Keystone credential %q: token acquired successfully", args.Name)},
+		}, nil
+
 	case store.CredPassword:
 		return TestCredentialResult{
 			ToolResult: ToolResult{Status: "ok", Message: fmt.Sprintf("Credential %q configured (%s, user: %s). Use resolve_credential to retrieve the username and password for SSH/FTP/database connections.", args.Name, cred.Type, cred.Username)},
@@ -624,6 +668,10 @@ func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCre
 		result.Token = credentials.FormatPlaceholder(args.Name, "token")
 		result.ClientID = cred.ClientID
 		result.Message = "Access token placeholder returned (auto-refreshed when used). Prefer using http_request with credential parameter — it handles the Bearer header automatically."
+	case store.CredOpenStackKeystone:
+		result.AuthURL = cred.AuthURL
+		result.Token = credentials.FormatPlaceholder(args.Name, "token")
+		result.Message = "Use http_request with credential parameter for Keystone — X-Auth-Token is injected automatically."
 	}
 
 	return result, nil
@@ -634,7 +682,7 @@ func resolveCredential(ctx tool.Context, args ResolveCredentialArgs) (ResolveCre
 func NewSaveCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "save_credential",
-		Description: `Save a credential to the encrypted store. Credentials saved here are PERSONAL (only you can see/use them). To share with the team, use the Settings UI 'Publish to Team'. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code. HTTP credentials work with http_request; password credentials with resolve_credential. After saving, ALWAYS use memory_save to document: credential name, what format/prefix is already in the stored value, the header name, and the target API base URL — but NEVER include the actual secret value in the memory note.`,
+		Description: `Save a credential to the encrypted store. Credentials saved here are PERSONAL (only you can see/use them). To share with the team, use the Settings UI 'Publish to Team'. Use IMMEDIATELY when the user provides any secret. Types: api_key, bearer, basic, password, oauth_client_credentials, oauth_authorization_code, openstack_keystone. HTTP credentials work with http_request; password credentials with resolve_credential. After saving, ALWAYS use memory_save to document: credential name, what format/prefix is already in the stored value, the header name, and the target API base URL — but NEVER include the actual secret value in the memory note.`,
 	}, saveCredential)
 }
 
@@ -655,7 +703,7 @@ func NewRemoveCredentialTool() (tool.Tool, error) {
 func NewTestCredentialTool() (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name:        "test_credential",
-		Description: "Test a stored credential. For OAuth: performs the token acquisition flow. For others: confirms configuration is valid.",
+		Description: "Test a stored credential. For OAuth and Keystone: performs the token acquisition flow. For others: confirms configuration is valid.",
 	}, testCredential)
 }
 

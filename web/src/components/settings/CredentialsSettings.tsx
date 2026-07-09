@@ -34,6 +34,12 @@ interface RevealedCredential {
   access_token?: string
   refresh_token?: string
   token_expiry?: string
+  user_domain?: string
+  project_id?: string
+  project_name?: string
+  project_domain?: string
+  application_credential_id?: string
+  application_credential_secret?: string
   [key: string]: unknown
 }
 
@@ -59,7 +65,38 @@ interface CredForm {
   token_url: string
   access_token: string
   refresh_token: string
+  keystone_method: string
+  user_domain: string
+  project_id: string
+  project_name: string
+  project_domain: string
+  application_credential_id: string
+  application_credential_secret: string
 }
+
+const emptyCredForm = (): CredForm => ({
+  name: '',
+  type: 'api_key',
+  header: 'Authorization',
+  value: '',
+  token: '',
+  username: '',
+  password: '',
+  auth_url: '',
+  client_id: '',
+  client_secret: '',
+  scope: '',
+  token_url: '',
+  access_token: '',
+  refresh_token: '',
+  keystone_method: 'application_credential',
+  user_domain: 'Default',
+  project_id: '',
+  project_name: '',
+  project_domain: 'Default',
+  application_credential_id: '',
+  application_credential_secret: ''
+})
 
 interface SecretForm {
   key: string
@@ -193,7 +230,8 @@ const TYPE_LABELS: Record<string, string> = {
   basic: 'Basic Auth',
   password: 'Password',
   oauth_client_credentials: 'OAuth Client Credentials',
-  oauth_authorization_code: 'OAuth Auth Code'
+  oauth_authorization_code: 'OAuth Auth Code',
+  openstack_keystone: 'OpenStack Keystone'
 }
 
 const TYPE_COLORS: Record<string, string> = {
@@ -202,7 +240,8 @@ const TYPE_COLORS: Record<string, string> = {
   basic: '#f59e0b',
   password: '#ef4444',
   oauth_client_credentials: '#10b981',
-  oauth_authorization_code: '#06b6d4'
+  oauth_authorization_code: '#06b6d4',
+  openstack_keystone: '#f97316'
 }
 
 const SCOPE_COLORS: Record<string, string> = {
@@ -297,7 +336,7 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
   // Add/edit modal
   const [showCredModal, setShowCredModal] = useState(false)
   const [editingCred, setEditingCred] = useState<string | null>(null)
-  const [credForm, setCredForm] = useState<CredForm>({ name: '', type: 'api_key', header: 'Authorization', value: '', token: '', username: '', password: '', auth_url: '', client_id: '', client_secret: '', scope: '', token_url: '', access_token: '', refresh_token: '' })
+  const [credForm, setCredForm] = useState<CredForm>(emptyCredForm())
   const [credFormSaving, setCredFormSaving] = useState(false)
   const [credFormError, setCredFormError] = useState('')
   const [addScope, setAddScope] = useState<string | undefined>(undefined)
@@ -455,7 +494,7 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
   const openAddCred = (scope?: string) => {
     setEditingCred(null)
     setAddScope(scope)
-    setCredForm({ name: '', type: 'api_key', header: 'Authorization', value: '', token: '', username: '', password: '', auth_url: '', client_id: '', client_secret: '', scope: '', token_url: '', access_token: '', refresh_token: '' })
+    setCredForm(emptyCredForm())
     setCredFormError('')
     setShowCredModal(true)
   }
@@ -467,7 +506,9 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
     if (!revealed) return
     setEditingCred(name)
     setAddScope(scope)
+    const hasAppCred = !!(revealed.application_credential_id)
     setCredForm({
+      ...emptyCredForm(),
       name,
       type: revealed.type || 'api_key',
       header: revealed.header || 'Authorization',
@@ -481,7 +522,14 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
       scope: revealed.oauth_scope || '',
       token_url: revealed.token_url || '',
       access_token: revealed.access_token || '',
-      refresh_token: revealed.refresh_token || ''
+      refresh_token: revealed.refresh_token || '',
+      keystone_method: hasAppCred ? 'application_credential' : 'password',
+      user_domain: revealed.user_domain || 'Default',
+      project_id: revealed.project_id || '',
+      project_name: revealed.project_name || '',
+      project_domain: revealed.project_domain || 'Default',
+      application_credential_id: revealed.application_credential_id || '',
+      application_credential_secret: revealed.application_credential_secret || ''
     })
     setCredFormError('')
     setShowCredModal(true)
@@ -491,22 +539,7 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
   const openBlindEditCred = (name: string, type: string, scope?: string) => {
     setEditingCred(name)
     setAddScope(scope)
-    setCredForm({
-      name,
-      type: type || 'api_key',
-      header: 'Authorization',
-      value: '',
-      token: '',
-      username: '',
-      password: '',
-      auth_url: '',
-      client_id: '',
-      client_secret: '',
-      scope: '',
-      token_url: '',
-      access_token: '',
-      refresh_token: ''
-    })
+    setCredForm({ ...emptyCredForm(), name, type: type || 'api_key' })
     setCredFormError('')
     setShowCredModal(true)
   }
@@ -523,6 +556,20 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
         case 'basic': case 'password': cred.username = credForm.username; cred.password = credForm.password; break
         case 'oauth_client_credentials': cred.auth_url = credForm.auth_url; cred.client_id = credForm.client_id; cred.client_secret = credForm.client_secret; cred.scope = credForm.scope; break
         case 'oauth_authorization_code': cred.token_url = credForm.token_url; cred.client_id = credForm.client_id; cred.client_secret = credForm.client_secret; cred.access_token = credForm.access_token; cred.refresh_token = credForm.refresh_token; cred.scope = credForm.scope; break
+        case 'openstack_keystone':
+          cred.auth_url = credForm.auth_url
+          if (credForm.keystone_method === 'application_credential') {
+            cred.application_credential_id = credForm.application_credential_id
+            cred.application_credential_secret = credForm.application_credential_secret
+          } else {
+            cred.username = credForm.username
+            cred.password = credForm.password
+            cred.user_domain = credForm.user_domain
+            cred.project_id = credForm.project_id
+            cred.project_name = credForm.project_name
+            cred.project_domain = credForm.project_domain
+          }
+          break
       }
       await saveCredentialApi(credForm.name, cred, addScope)
       setShowCredModal(false)
@@ -763,6 +810,26 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
                 <FieldRow label="Refresh Token" value={revealed.refresh_token} secret />
                 {revealed.token_expiry && <FieldRow label="Token Expiry" value={revealed.token_expiry} />}
                 {revealed.oauth_scope && <FieldRow label="Scope" value={revealed.oauth_scope} />}
+              </>
+            )}
+            {revealed.type === 'openstack_keystone' && (
+              <>
+                <FieldRow label="Auth URL" value={revealed.auth_url} />
+                {revealed.application_credential_id ? (
+                  <>
+                    <FieldRow label="App Credential ID" value={revealed.application_credential_id} />
+                    <FieldRow label="App Credential Secret" value={revealed.application_credential_secret} secret />
+                  </>
+                ) : (
+                  <>
+                    <FieldRow label="Username" value={revealed.username} />
+                    <FieldRow label="Password" value={revealed.password} secret />
+                    {revealed.user_domain && <FieldRow label="User Domain" value={revealed.user_domain} />}
+                    {revealed.project_id && <FieldRow label="Project ID" value={revealed.project_id} />}
+                    {revealed.project_name && <FieldRow label="Project Name" value={revealed.project_name} />}
+                    {revealed.project_domain && <FieldRow label="Project Domain" value={revealed.project_domain} />}
+                  </>
+                )}
               </>
             )}
           </div>
@@ -1047,6 +1114,7 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
                 <option value="password">Password (SSH/FTP/SMTP/database)</option>
                 <option value="oauth_client_credentials">OAuth Client Credentials</option>
                 <option value="oauth_authorization_code">OAuth Authorization Code</option>
+                <option value="openstack_keystone">OpenStack Keystone</option>
               </select>
             </div>
 
@@ -1127,6 +1195,65 @@ export default function CredentialsSettings({ isPlatform: isPlatformProp }: { is
                   <label className="block text-sm font-medium mb-2" style={labelStyle}>Scope <span className="font-normal" style={hintStyle}>(optional)</span></label>
                   <input type="text" value={credForm.scope} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, scope: e.target.value })} className={inputClass} style={inputStyle} />
                 </div>
+              </>
+            )}
+            {credForm.type === 'openstack_keystone' && (
+              <>
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={labelStyle}>Auth URL</label>
+                  <input type="url" value={credForm.auth_url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, auth_url: e.target.value })} placeholder="https://identity.example.com/v3/auth/tokens" className={inputClass + ' font-mono'} style={inputStyle} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={labelStyle}>Auth Method</label>
+                  <select
+                    value={credForm.keystone_method}
+                    onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setCredForm({ ...credForm, keystone_method: e.target.value })}
+                    className={inputClass}
+                    style={inputStyle}
+                  >
+                    <option value="application_credential">Application Credential</option>
+                    <option value="password">Password</option>
+                  </select>
+                </div>
+                {credForm.keystone_method === 'application_credential' ? (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Application Credential ID</label>
+                      <input type="text" value={credForm.application_credential_id} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, application_credential_id: e.target.value })} className={inputClass + ' font-mono'} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Application Credential Secret</label>
+                      <input type="password" value={credForm.application_credential_secret} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, application_credential_secret: e.target.value })} className={inputClass + ' font-mono'} style={inputStyle} />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Username</label>
+                      <input type="text" value={credForm.username} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, username: e.target.value })} className={inputClass} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Password</label>
+                      <input type="password" value={credForm.password} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, password: e.target.value })} className={inputClass + ' font-mono'} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>User Domain</label>
+                      <input type="text" value={credForm.user_domain} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, user_domain: e.target.value })} placeholder="Default" className={inputClass} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Project ID <span className="font-normal" style={hintStyle}>(or use project name below)</span></label>
+                      <input type="text" value={credForm.project_id} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, project_id: e.target.value })} className={inputClass + ' font-mono'} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Project Name</label>
+                      <input type="text" value={credForm.project_name} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, project_name: e.target.value })} className={inputClass} style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={labelStyle}>Project Domain</label>
+                      <input type="text" value={credForm.project_domain} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCredForm({ ...credForm, project_domain: e.target.value })} placeholder="Default" className={inputClass} style={inputStyle} />
+                    </div>
+                  </>
+                )}
               </>
             )}
 

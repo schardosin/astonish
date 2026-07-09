@@ -2,7 +2,7 @@
 
 ## Overview
 
-Astonish manages authentication credentials (API keys, bearer tokens, passwords, OAuth flows) with a core design principle: **the LLM provider must never see raw secret values**. Credentials are stored encrypted at rest, referenced by placeholder tokens in conversation history, and substituted with real values only at the moment of tool execution.
+Astonish manages authentication credentials (API keys, bearer tokens, passwords, OAuth flows, OpenStack Keystone) with a core design principle: **the LLM provider must never see raw secret values**. Credentials are stored encrypted at rest, referenced by placeholder tokens in conversation history, and substituted with real values only at the moment of tool execution.
 
 This architecture has three layers of defense:
 
@@ -105,6 +105,7 @@ Minimum signature length is 8 characters to avoid false positives with short val
 | `password` | SSH, FTP, DB, SMTP | `password` | `username` |
 | `oauth_client_credentials` | Machine-to-machine OAuth2 | `client_secret` | `client_id`, `auth_url`, `scope` |
 | `oauth_authorization_code` | User-consent OAuth2 (Google, GitHub) | `client_secret`, `access_token`, `refresh_token` | `client_id`, `token_url`, `scope` |
+| `openstack_keystone` | OpenStack Keystone v3 | `password` or `application_credential_secret` | `auth_url`, `username` / `application_credential_id`, project/domain fields |
 
 Non-secret fields are returned as plaintext because the LLM needs them for decision-making (e.g., knowing which header name to use, which auth URL to call).
 
@@ -117,6 +118,16 @@ For OAuth credentials, the store handles automatic token refresh:
 3. New access token (and potentially rotated refresh token) are persisted to disk.
 4. The token cache (`tokenCache`) prevents concurrent refresh requests for the same credential.
 5. Refreshed tokens are registered with the Redactor for ongoing redaction.
+
+### OpenStack Keystone Token Management
+
+`openstack_keystone` mirrors OAuth client_credentials for Keystone v3:
+
+1. Method is inferred from fields: `application_credential_id`+`application_credential_secret`, else `username`+`password` with project scope.
+2. `Resolve()` POSTs JSON to `auth_url`, reads the token from the `X-Subject-Token` response header, and parses `token.expires_at`.
+3. Tokens are cached in-memory (same cache as OAuth) with a 30-second expiry buffer.
+4. Injection uses `X-Auth-Token: <token>` (not Bearer).
+5. `InvalidateToken` on 401 forces a fresh fetch on the next resolve.
 
 ### Redaction Pipeline
 

@@ -212,6 +212,14 @@ func (r *Redactor) addSecretFieldsLocked(name string, cred *Credential) {
 		r.addVariantsLocked(name, "client_id", cred.ClientID)
 		r.addVariantsLocked(name, "access_token", cred.AccessToken)
 		r.addVariantsLocked(name, "refresh_token", cred.RefreshToken)
+	case CredOpenStackKeystone:
+		if keystoneUsesAppCred(cred) {
+			r.addVariantsLocked(name, "application_credential_id", cred.ApplicationCredentialID)
+			r.addVariantsLocked(name, "application_credential_secret", cred.ApplicationCredentialSecret)
+		} else {
+			r.addVariantsLocked(name, "password", cred.Password)
+			r.addVariantsLocked(name, "username", cred.Username)
+		}
 	}
 }
 

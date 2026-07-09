@@ -156,6 +156,7 @@ func handleCredentialAdd(name string) error {
 					huh.NewOption("Password (plain username + password for SSH/FTP/SMTP/etc.)", "password"),
 					huh.NewOption("OAuth Client Credentials (auto token refresh)", "oauth_client_credentials"),
 					huh.NewOption("OAuth Authorization Code (user-authorized, with refresh token)", "oauth_authorization_code"),
+					huh.NewOption("OpenStack Keystone (auto X-Auth-Token)", "openstack_keystone"),
 				).
 				Value(&credType),
 		),
@@ -179,6 +180,8 @@ func handleCredentialAdd(name string) error {
 		cred, err = collectOAuthCred()
 	case credentials.CredOAuthAuthCode:
 		cred, err = collectOAuthAuthCodeCred()
+	case credentials.CredOpenStackKeystone:
+		cred, err = collectKeystoneCred()
 	default:
 		return fmt.Errorf("unknown credential type: %s", credType)
 	}
@@ -253,6 +256,15 @@ func handleCredentialTest(name string) error {
 		}
 		tokenLen := len(headerValue) - len("Bearer ")
 		fmt.Printf("OK: access token valid (%d chars), header: %s (auto-refreshes when expired)\n", tokenLen, headerKey)
+
+	case credentials.CredOpenStackKeystone:
+		fmt.Printf("Testing Keystone credential %q...\n", name)
+		headerKey, headerValue, err := store.Resolve(name)
+		if err != nil {
+			fmt.Printf("FAILED: %v\n", err)
+			return nil
+		}
+		fmt.Printf("OK: acquired token (%d chars), header: %s\n", len(headerValue), headerKey)
 
 	case credentials.CredAPIKey:
 		fmt.Printf("Credential %q configured (api_key, header: %s)\n", name, cred.Header)
@@ -509,6 +521,113 @@ func collectOAuthAuthCodeCred() (*credentials.Credential, error) {
 	}, nil
 }
 
+func collectKeystoneCred() (*credentials.Credential, error) {
+	var method string
+	err := huh.NewForm(
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Keystone auth method").
+				Options(
+					huh.NewOption("Application credential (id + secret)", "application_credential"),
+					huh.NewOption("Password (username + password + project)", "password"),
+				).
+				Value(&method),
+		),
+	).Run()
+	if err != nil {
+		return nil, err
+	}
+
+	authURL := ""
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Auth URL").
+				Description("Keystone tokens endpoint, e.g. https://identity.example.com/v3/auth/tokens").
+				Value(&authURL),
+		),
+	).Run()
+	if err != nil {
+		return nil, err
+	}
+	if authURL == "" {
+		return nil, fmt.Errorf("auth URL is required")
+	}
+
+	cred := &credentials.Credential{
+		Type:    credentials.CredOpenStackKeystone,
+		AuthURL: authURL,
+	}
+
+	if method == "application_credential" {
+		appCredID, appCredSecret := "", ""
+		err = huh.NewForm(
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Application credential ID").
+					Value(&appCredID),
+				huh.NewInput().
+					Title("Application credential secret").
+					EchoMode(huh.EchoModePassword).
+					Value(&appCredSecret),
+			),
+		).Run()
+		if err != nil {
+			return nil, err
+		}
+		if appCredID == "" || appCredSecret == "" {
+			return nil, fmt.Errorf("application credential ID and secret are required")
+		}
+		cred.ApplicationCredentialID = appCredID
+		cred.ApplicationCredentialSecret = appCredSecret
+		return cred, nil
+	}
+
+	username, password, userDomain := "", "", "Default"
+	projectID, projectName, projectDomain := "", "", "Default"
+	err = huh.NewForm(
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Username").
+				Value(&username),
+			huh.NewInput().
+				Title("Password").
+				EchoMode(huh.EchoModePassword).
+				Value(&password),
+			huh.NewInput().
+				Title("User domain").
+				Description("Defaults to Default").
+				Value(&userDomain),
+			huh.NewInput().
+				Title("Project ID (leave empty to use project name)").
+				Value(&projectID),
+			huh.NewInput().
+				Title("Project name (required if project ID empty)").
+				Value(&projectName),
+			huh.NewInput().
+				Title("Project domain").
+				Description("Defaults to Default; used with project name").
+				Value(&projectDomain),
+		),
+	).Run()
+	if err != nil {
+		return nil, err
+	}
+	if username == "" || password == "" {
+		return nil, fmt.Errorf("username and password are required")
+	}
+	if projectID == "" && projectName == "" {
+		return nil, fmt.Errorf("project ID or project name is required")
+	}
+	cred.Username = username
+	cred.Password = password
+	cred.UserDomain = userDomain
+	cred.ProjectID = projectID
+	cred.ProjectName = projectName
+	cred.ProjectDomain = projectDomain
+	return cred, nil
+}
+
 // handleCredentialShow reveals a credential or flat secret value.
 func handleCredentialShow(name string) error {
 	store, err := openCredentialStore()
@@ -568,6 +687,27 @@ func handleCredentialShow(name string) error {
 			}
 			if cred.Scope != "" {
 				fmt.Printf("Scope:         %s\n", cred.Scope)
+			}
+		case credentials.CredOpenStackKeystone:
+			fmt.Printf("Auth URL:      %s\n", cred.AuthURL)
+			if cred.ApplicationCredentialID != "" {
+				fmt.Printf("App Cred ID:   %s\n", cred.ApplicationCredentialID)
+				printSecretField("App Cred Secret: ", cred.ApplicationCredentialSecret)
+			} else {
+				fmt.Printf("Username:      %s\n", cred.Username)
+				printSecretField("Password:     ", cred.Password)
+				if cred.UserDomain != "" {
+					fmt.Printf("User Domain:   %s\n", cred.UserDomain)
+				}
+				if cred.ProjectID != "" {
+					fmt.Printf("Project ID:    %s\n", cred.ProjectID)
+				}
+				if cred.ProjectName != "" {
+					fmt.Printf("Project Name:  %s\n", cred.ProjectName)
+				}
+				if cred.ProjectDomain != "" {
+					fmt.Printf("Project Domain: %s\n", cred.ProjectDomain)
+				}
 			}
 		default:
 			fmt.Printf("(unknown type, raw fields may be available via API)\n")

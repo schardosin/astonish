@@ -13,27 +13,34 @@ const (
 	CredAPIKey           CredentialType = "api_key"
 	CredBearer           CredentialType = "bearer"
 	CredBasic            CredentialType = "basic"
-	CredOAuthClientCreds CredentialType = "oauth_client_credentials"
-	CredPassword         CredentialType = "password"
-	CredOAuthAuthCode    CredentialType = "oauth_authorization_code"
+	CredOAuthClientCreds  CredentialType = "oauth_client_credentials"
+	CredPassword          CredentialType = "password"
+	CredOAuthAuthCode     CredentialType = "oauth_authorization_code"
+	CredOpenStackKeystone CredentialType = "openstack_keystone"
 )
 
 // Credential represents a stored credential entry.
 type Credential struct {
-	Type         CredentialType `json:"type"`
-	Header       string         `json:"header,omitempty"`
-	Value        string         `json:"value,omitempty"`
-	Token        string         `json:"token,omitempty"`
-	Username     string         `json:"username,omitempty"`
-	Password     string         `json:"password,omitempty"`
-	AuthURL      string         `json:"auth_url,omitempty"`
-	ClientID     string         `json:"client_id,omitempty"`
-	ClientSecret string         `json:"client_secret,omitempty"`
-	Scope        string         `json:"scope,omitempty"`
-	TokenURL     string         `json:"token_url,omitempty"`
-	AccessToken  string         `json:"access_token,omitempty"`
-	RefreshToken string         `json:"refresh_token,omitempty"`
-	TokenExpiry  string         `json:"token_expiry,omitempty"`
+	Type                        CredentialType `json:"type"`
+	Header                      string         `json:"header,omitempty"`
+	Value                       string         `json:"value,omitempty"`
+	Token                       string         `json:"token,omitempty"`
+	Username                    string         `json:"username,omitempty"`
+	Password                    string         `json:"password,omitempty"`
+	AuthURL                     string         `json:"auth_url,omitempty"`
+	ClientID                    string         `json:"client_id,omitempty"`
+	ClientSecret                string         `json:"client_secret,omitempty"`
+	Scope                       string         `json:"scope,omitempty"`
+	TokenURL                    string         `json:"token_url,omitempty"`
+	AccessToken                 string         `json:"access_token,omitempty"`
+	RefreshToken                string         `json:"refresh_token,omitempty"`
+	TokenExpiry                 string         `json:"token_expiry,omitempty"`
+	UserDomain                  string         `json:"user_domain,omitempty"`
+	ProjectID                   string         `json:"project_id,omitempty"`
+	ProjectName                 string         `json:"project_name,omitempty"`
+	ProjectDomain               string         `json:"project_domain,omitempty"`
+	ApplicationCredentialID     string         `json:"application_credential_id,omitempty"`
+	ApplicationCredentialSecret string         `json:"application_credential_secret,omitempty"`
 }
 
 // OAuthTokenFetcher fetches an OAuth access token for a credential.
@@ -89,6 +96,16 @@ func ResolveCredentialHeader(name string, cred *Credential, oauthFetcher OAuthTo
 			return "Authorization", "Bearer " + token, nil
 		}
 		return "", "", fmt.Errorf("credential %q: no access token available (OAuth authorization_code flow requires token refresh)", name)
+
+	case CredOpenStackKeystone:
+		if oauthFetcher == nil {
+			return "", "", fmt.Errorf("credential %q: openstack_keystone requires a token fetcher", name)
+		}
+		token, err := oauthFetcher(cred)
+		if err != nil {
+			return "", "", fmt.Errorf("credential %q Keystone: %w", name, err)
+		}
+		return "X-Auth-Token", token, nil
 
 	case CredPassword:
 		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)

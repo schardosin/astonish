@@ -246,6 +246,11 @@ func TestResolveCredentialHeader(t *testing.T) {
 			cred:      &store.Credential{Type: store.CredOAuthClientCreds, ClientID: "id", ClientSecret: "sec"},
 			expectErr: true,
 		},
+		{
+			name:      "Keystone without fetcher",
+			cred:      &store.Credential{Type: store.CredOpenStackKeystone, AuthURL: "https://identity.example.com/v3/auth/tokens"},
+			expectErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -300,6 +305,38 @@ func TestResolveCredentialHeader_OAuthFetcher(t *testing.T) {
 	}
 	if value != "Bearer fetched-token-xyz" {
 		t.Errorf("headerValue = %q, want 'Bearer fetched-token-xyz'", value)
+	}
+}
+
+func TestResolveCredentialHeader_KeystoneFetcher(t *testing.T) {
+	fetcherCalled := false
+	fetcher := func(cred *store.Credential) (string, error) {
+		fetcherCalled = true
+		if cred.AuthURL != "https://identity.example.com/v3/auth/tokens" {
+			t.Errorf("fetcher received wrong AuthURL: %q", cred.AuthURL)
+		}
+		return "gAAAA-keystone-token", nil
+	}
+
+	cred := &store.Credential{
+		Type:                        store.CredOpenStackKeystone,
+		AuthURL:                     "https://identity.example.com/v3/auth/tokens",
+		ApplicationCredentialID:     "app-id",
+		ApplicationCredentialSecret: "app-secret",
+	}
+
+	key, value, err := store.ResolveCredentialHeader("keystone-cred", cred, fetcher)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !fetcherCalled {
+		t.Error("Keystone fetcher was not called")
+	}
+	if key != "X-Auth-Token" {
+		t.Errorf("headerKey = %q, want X-Auth-Token", key)
+	}
+	if value != "gAAAA-keystone-token" {
+		t.Errorf("headerValue = %q, want 'gAAAA-keystone-token'", value)
 	}
 }
 

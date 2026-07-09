@@ -46,6 +46,11 @@ const (
 	// acquire new access tokens without user interaction.
 	// Resolve() auto-refreshes expired tokens and persists updated tokens to disk.
 	CredOAuthAuthCode CredentialType = "oauth_authorization_code"
+
+	// CredOpenStackKeystone performs OpenStack Keystone v3 token auth
+	// (password or application_credential) and produces X-Auth-Token: <token>.
+	// Resolve() auto-fetches and caches tokens until near expiry.
+	CredOpenStackKeystone CredentialType = "openstack_keystone"
 )
 
 // Credential holds authentication data for a single named credential.
@@ -74,6 +79,14 @@ type Credential struct {
 	AccessToken  string `json:"access_token,omitempty"`  // Current access token
 	RefreshToken string `json:"refresh_token,omitempty"` // Long-lived refresh token
 	TokenExpiry  string `json:"token_expiry,omitempty"`  // RFC3339 timestamp of access token expiry
+
+	// openstack_keystone fields (also uses AuthURL, Username, Password above)
+	UserDomain                  string `json:"user_domain,omitempty"`
+	ProjectID                   string `json:"project_id,omitempty"`
+	ProjectName                 string `json:"project_name,omitempty"`
+	ProjectDomain               string `json:"project_domain,omitempty"`
+	ApplicationCredentialID     string `json:"application_credential_id,omitempty"`
+	ApplicationCredentialSecret string `json:"application_credential_secret,omitempty"`
 }
 
 // storeData is the JSON structure inside the encrypted file.
@@ -329,6 +342,13 @@ func (s *Store) Resolve(name string) (headerKey, headerValue string, err error) 
 			return "", "", fmt.Errorf("credential %q OAuth: %w", name, err)
 		}
 		return "Authorization", "Bearer " + token, nil
+
+	case CredOpenStackKeystone:
+		token, err := s.tokens.GetOrRefreshKeystone(name, &credCopy, s.redactor)
+		if err != nil {
+			return "", "", fmt.Errorf("credential %q Keystone: %w", name, err)
+		}
+		return "X-Auth-Token", token, nil
 
 	case CredPassword:
 		return "", "", fmt.Errorf("credential %q is a password credential (for SSH/FTP/etc.), not an HTTP credential — use resolve_credential to access its fields", name)

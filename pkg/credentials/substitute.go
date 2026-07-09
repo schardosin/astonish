@@ -356,7 +356,7 @@ func resolveField(resolver CredentialResolver, name, field, fallback string) str
 			return cred.Password
 		}
 	case "token":
-		// For OAuth auth-code, get a fresh (possibly refreshed) token
+		// For OAuth auth-code and Keystone, get a fresh (possibly refreshed) token
 		if cred.Type == CredOAuthAuthCode {
 			_, headerValue, err := resolver.Resolve(name)
 			if err == nil {
@@ -365,6 +365,12 @@ func resolveField(resolver CredentialResolver, name, field, fallback string) str
 				if len(headerValue) > len(prefix) {
 					return headerValue[len(prefix):]
 				}
+			}
+		}
+		if cred.Type == CredOpenStackKeystone {
+			_, headerValue, err := resolver.Resolve(name)
+			if err == nil && headerValue != "" {
+				return headerValue
 			}
 		}
 		if cred.Token != "" {
@@ -397,6 +403,34 @@ func resolveField(resolver CredentialResolver, name, field, fallback string) str
 	case "refresh_token":
 		if cred.RefreshToken != "" {
 			return cred.RefreshToken
+		}
+	case "application_credential_id":
+		if cred.ApplicationCredentialID != "" {
+			return cred.ApplicationCredentialID
+		}
+	case "application_credential_secret":
+		if cred.ApplicationCredentialSecret != "" {
+			return cred.ApplicationCredentialSecret
+		}
+	case "user_domain":
+		if cred.UserDomain != "" {
+			return cred.UserDomain
+		}
+	case "project_id":
+		if cred.ProjectID != "" {
+			return cred.ProjectID
+		}
+	case "project_name":
+		if cred.ProjectName != "" {
+			return cred.ProjectName
+		}
+	case "project_domain":
+		if cred.ProjectDomain != "" {
+			return cred.ProjectDomain
+		}
+	case "auth_url":
+		if cred.AuthURL != "" {
+			return cred.AuthURL
 		}
 	}
 

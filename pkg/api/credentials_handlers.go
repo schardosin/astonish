@@ -36,22 +36,28 @@ type secretListItem struct {
 
 // credentialDetailResponse returns full credential fields (for reveal).
 type credentialDetailResponse struct {
-	Name         string               `json:"name"`
-	Type         store.CredentialType `json:"type"`
-	Scope        string               `json:"scope,omitempty"`
-	Header       string               `json:"header,omitempty"`
-	Value        string               `json:"value,omitempty"`
-	Token        string               `json:"token,omitempty"`
-	Username     string               `json:"username,omitempty"`
-	Password     string               `json:"password,omitempty"`
-	AuthURL      string               `json:"auth_url,omitempty"`
-	ClientID     string               `json:"client_id,omitempty"`
-	ClientSecret string               `json:"client_secret,omitempty"`
-	Scope_       string               `json:"oauth_scope,omitempty"` // renamed to avoid JSON clash with "scope"
-	TokenURL     string               `json:"token_url,omitempty"`
-	AccessToken  string               `json:"access_token,omitempty"`
-	RefreshToken string               `json:"refresh_token,omitempty"`
-	TokenExpiry  string               `json:"token_expiry,omitempty"`
+	Name                        string               `json:"name"`
+	Type                        store.CredentialType `json:"type"`
+	Scope                       string               `json:"scope,omitempty"`
+	Header                      string               `json:"header,omitempty"`
+	Value                       string               `json:"value,omitempty"`
+	Token                       string               `json:"token,omitempty"`
+	Username                    string               `json:"username,omitempty"`
+	Password                    string               `json:"password,omitempty"`
+	AuthURL                     string               `json:"auth_url,omitempty"`
+	ClientID                    string               `json:"client_id,omitempty"`
+	ClientSecret                string               `json:"client_secret,omitempty"`
+	Scope_                      string               `json:"oauth_scope,omitempty"` // renamed to avoid JSON clash with "scope"
+	TokenURL                    string               `json:"token_url,omitempty"`
+	AccessToken                 string               `json:"access_token,omitempty"`
+	RefreshToken                string               `json:"refresh_token,omitempty"`
+	TokenExpiry                 string               `json:"token_expiry,omitempty"`
+	UserDomain                  string               `json:"user_domain,omitempty"`
+	ProjectID                   string               `json:"project_id,omitempty"`
+	ProjectName                 string               `json:"project_name,omitempty"`
+	ProjectDomain               string               `json:"project_domain,omitempty"`
+	ApplicationCredentialID     string               `json:"application_credential_id,omitempty"`
+	ApplicationCredentialSecret string               `json:"application_credential_secret,omitempty"`
 }
 
 // credentialSaveRequest is the body for POST /api/credentials.
@@ -263,22 +269,28 @@ func GetCredentialHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := credentialDetailResponse{
-		Name:         name,
-		Type:         cred.Type,
-		Scope:        scope,
-		Header:       cred.Header,
-		Value:        cred.Value,
-		Token:        cred.Token,
-		Username:     cred.Username,
-		Password:     cred.Password,
-		AuthURL:      cred.AuthURL,
-		ClientID:     cred.ClientID,
-		ClientSecret: cred.ClientSecret,
-		Scope_:       cred.Scope,
-		TokenURL:     cred.TokenURL,
-		AccessToken:  cred.AccessToken,
-		RefreshToken: cred.RefreshToken,
-		TokenExpiry:  cred.TokenExpiry,
+		Name:                        name,
+		Type:                        cred.Type,
+		Scope:                       scope,
+		Header:                      cred.Header,
+		Value:                       cred.Value,
+		Token:                       cred.Token,
+		Username:                    cred.Username,
+		Password:                    cred.Password,
+		AuthURL:                     cred.AuthURL,
+		ClientID:                    cred.ClientID,
+		ClientSecret:                cred.ClientSecret,
+		Scope_:                      cred.Scope,
+		TokenURL:                    cred.TokenURL,
+		AccessToken:                 cred.AccessToken,
+		RefreshToken:                cred.RefreshToken,
+		TokenExpiry:                 cred.TokenExpiry,
+		UserDomain:                  cred.UserDomain,
+		ProjectID:                   cred.ProjectID,
+		ProjectName:                 cred.ProjectName,
+		ProjectDomain:               cred.ProjectDomain,
+		ApplicationCredentialID:     cred.ApplicationCredentialID,
+		ApplicationCredentialSecret: cred.ApplicationCredentialSecret,
 	}
 
 	respondJSON(w, http.StatusOK, resp)

@@ -70,6 +70,11 @@ If the user pastes raw credentials (passwords, tokens, keys) in plain text witho
 - ` + "`password`" + ` — Plain username + password for non-HTTP use (SSH, FTP, SMTP, databases)
 - ` + "`oauth_client_credentials`" + ` — Auto-refreshing OAuth2 client credentials flow (server-to-server)
 - ` + "`oauth_authorization_code`" + ` — User-authorized OAuth2 with refresh token (Google, GitHub, Spotify, etc.)
+- ` + "`openstack_keystone`" + ` — OpenStack Keystone v3 token auth (password or application credential); injects X-Auth-Token automatically
+
+**OpenStack Keystone:**
+1. Save with ` + "`save_credential`" + ` type=openstack_keystone, auth_url (e.g. https://identity.example.com/v3/auth/tokens), and either application_credential_id+application_credential_secret, or username+password with project_id or project_name
+2. Use ` + "`http_request`" + ` with credential parameter — X-Auth-Token is fetched, cached, and injected automatically
 
 **OAuth Authorization Code flow (for Google Calendar, GitHub, etc.):**
 1. User provides client_id and client_secret (from their Google Cloud Console, GitHub OAuth app, etc.)

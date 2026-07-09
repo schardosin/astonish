@@ -235,16 +235,18 @@ const sandboxHTMLBody = `
 
   // ── useAppAction hook ──────────────────────────────────────────────
   // Usage: const runQuery = useAppAction('mcp:server/tool'); const result = await runQuery({ query: '...' })
-  window.useAppAction = function useAppAction(actionId) {
+  // With timeout: const runQuery = useAppAction('mcp:server/tool', { timeout: 300000 }); // 5 min
+  window.useAppAction = function useAppAction(actionId, options) {
+    var actionTimeout = (options && options.timeout) || 30000;
     return React.useCallback(function(payload) {
       return __requestFromParent('action_request', {
         actionId: actionId,
         payload: payload || {}
-      }).then(function(resp) {
+      }, actionTimeout).then(function(resp) {
         if (resp.error) throw new Error(resp.error);
         return resp.data;
       });
-    }, [actionId]);
+    }, [actionId, actionTimeout]);
   };
 
   // ── useAppAI hook ──────────────────────────────────────────────────

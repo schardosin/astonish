@@ -85,3 +85,6 @@ pkg/store/sqlitestore/migrations/*/999_dev.sql
 deploy/helm/astonish/values-myenv.yaml
 astonish-boot
 webhook
+
+# OpenCode orchestrator state
+.omo/

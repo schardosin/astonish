@@ -48,6 +48,8 @@ type StudioChatRequest struct {
 	Debug            bool             `json:"debug,omitempty"`            // reserved for future debug streaming
 	SystemContext    string           `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
 	PinnedToolGroups []string         `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
+	Provider         string           `json:"provider,omitempty"`         // per-request provider override (pre-chat picker)
+	Model            string           `json:"model,omitempty"`            // per-request model override (pre-chat picker)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -1105,7 +1107,21 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		appCfg = provider.ApplyUserDefault(appCfg, userDefault)
-		appCfg = provider.ApplyProviderOverride(appCfg, "", "")
+
+		// Resolve per-session pin: request-body override for the first message,
+		// otherwise the stored pin (personal-first, team fallback — studio chat
+		// sessions live in the personal store).
+		pinProvider, pinModel := req.Provider, req.Model
+		if isNew && (pinProvider != "" || pinModel != "") {
+			if err := persistSessionPin(r, sessionID, pinProvider, pinModel); err != nil {
+				slog.Warn("failed to persist pre-chat session pin",
+					"session", sessionID, "provider", pinProvider, "model", pinModel, "error", err)
+			}
+		} else if pinProvider == "" && pinModel == "" && !isNew {
+			pinProvider, pinModel = readSessionPin(r, sessionID)
+		}
+		appCfg = provider.ApplyProviderOverride(appCfg, pinProvider, pinModel)
+
 		if appCfg.General.DefaultProvider != "" {
 			resolvedLLM, llmErr := cm.llmPool.Get(r.Context(), appCfg.General.DefaultProvider, appCfg.General.DefaultModel, appCfg)
 			if llmErr != nil {
@@ -1530,6 +1546,131 @@ func buildMergedSkillIndex(ctx context.Context, platformStore, orgStore, teamSto
 	return skills.BuildSkillIndex(deduped)
 }
 
+// readSessionPin returns the persisted provider/model pin for a session, or
+// empty strings when unpinned/unavailable. Personal-first, team fallback —
+// mirrors readAppPin. Studio chat sessions live in the personal store; fleet
+// sub-sessions live in the team store.
+func readSessionPin(r *http.Request, sessionID string) (pinnedProvider, pinnedModel string) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		return "", ""
+	}
+	pu := GetPlatformUser(r)
+	if pu == nil || pu.OrgSlug == "" {
+		return "", ""
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil || orgStore == nil {
+		return "", ""
+	}
+	if pu.ID != "" {
+		if personalStore := orgStore.ForUser(pu.ID); personalStore != nil {
+			if pin, perr := personalStore.SessionPin(r.Context(), sessionID); perr == nil && pin != nil {
+				return pin.Provider, pin.Model
+			}
+		}
+	}
+	if pu.TeamSlug != "" {
+		if teamStore := orgStore.ForTeam(pu.TeamSlug); teamStore != nil {
+			if pin, terr := teamStore.SessionPin(r.Context(), sessionID); terr == nil && pin != nil {
+				return pin.Provider, pin.Model
+			}
+		}
+	}
+	return "", ""
+}
+
+// persistSessionPin writes a provider/model pin to the store that owns the
+// session (personal-first via PersonalSessions meta, then team Sessions,
+// then probe SessionPin). Returns nil when persistence is skipped (no tenant
+// context). Returns an error when the session cannot be found or the write fails.
+func persistSessionPin(r *http.Request, sessionID, provider, model string) error {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		return nil
+	}
+	pu := GetPlatformUser(r)
+	if pu == nil || pu.OrgSlug == "" {
+		return nil
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil || orgStore == nil {
+		return fmt.Errorf("tenant not accessible")
+	}
+
+	scope := ""
+	if svc.PersonalSessions != nil {
+		if meta, mErr := svc.PersonalSessions.GetSessionMeta(r.Context(), sessionID); mErr == nil && meta != nil {
+			scope = "personal"
+		}
+	}
+	if scope == "" && svc.Sessions != nil {
+		if meta, mErr := svc.Sessions.GetSessionMeta(r.Context(), sessionID); mErr == nil && meta != nil {
+			scope = "team"
+		}
+	}
+	// Probe pin stores when session meta isn't wired (unit tests / edge cases).
+	if scope == "" && pu.ID != "" {
+		if personalStore := orgStore.ForUser(pu.ID); personalStore != nil {
+			if _, pErr := personalStore.SessionPin(r.Context(), sessionID); pErr == nil {
+				scope = "personal"
+			}
+		}
+	}
+	if scope == "" && pu.TeamSlug != "" {
+		if teamStore := orgStore.ForTeam(pu.TeamSlug); teamStore != nil {
+			if _, tErr := teamStore.SessionPin(r.Context(), sessionID); tErr == nil {
+				scope = "team"
+			}
+		}
+	}
+	// Brand-new studio chat sessions: PersonalSessions owns them even before
+	// meta probes succeed in some race windows — prefer personal when the
+	// user context is present and PersonalSessions is wired.
+	if scope == "" && svc.PersonalSessions != nil && pu.ID != "" && orgStore.ForUser(pu.ID) != nil {
+		scope = "personal"
+	}
+	if scope == "" && pu.TeamSlug != "" && orgStore.ForTeam(pu.TeamSlug) != nil {
+		scope = "team"
+	}
+
+	var setErr error
+	switch scope {
+	case "personal":
+		setErr = orgStore.ForUser(pu.ID).SetSessionPin(r.Context(), sessionID, provider, model)
+	case "team":
+		setErr = orgStore.ForTeam(pu.TeamSlug).SetSessionPin(r.Context(), sessionID, provider, model)
+	default:
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return setErr
+}
+
+// sessionProviderHasCredential reports whether a provider can be selected in
+// the model picker. Checks team credentials, personal credentials, and
+// embedded secrets in the resolved provider config (api_key etc.).
+func sessionProviderHasCredential(ctx context.Context, svc *store.Services, name string, pCfg config.ProviderConfig) bool {
+	if svc == nil {
+		return true
+	}
+	hasCredStore := svc.Credentials != nil || svc.PersonalCredentials != nil
+	if !hasCredStore {
+		return true
+	}
+	if svc.Credentials != nil && svc.Credentials.GetSecret(ctx, name) != "" {
+		return true
+	}
+	if svc.PersonalCredentials != nil && svc.PersonalCredentials.GetSecret(ctx, name) != "" {
+		return true
+	}
+	for _, key := range []string{"api_key", "apiKey", "token", "access_token"} {
+		if v := pCfg[key]; v != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // SessionModelStatusResponse is the payload for GET /api/studio/sessions/{id}/model-status.
 //
 // It reports the current per-session pin (if any), the effective provider/model
@@ -1568,19 +1709,7 @@ func GetSessionModelStatusHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	ctx := r.Context()
 
-	var pinnedProvider, pinnedModel string
-	if svc != nil && svc.TenantRouter != nil {
-		if pu := GetPlatformUser(r); pu != nil && pu.OrgSlug != "" && pu.TeamSlug != "" {
-			if orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug); err == nil && orgStore != nil {
-				if teamStore := orgStore.ForTeam(pu.TeamSlug); teamStore != nil {
-					if pin, err := teamStore.SessionPin(ctx, sessionID); err == nil && pin != nil {
-						pinnedProvider = pin.Provider
-						pinnedModel = pin.Model
-					}
-				}
-			}
-		}
-	}
+	pinnedProvider, pinnedModel := readSessionPin(r, sessionID)
 
 	// Resolve the effective cascade (Platform → Org → Team), then overlay the
 	// per-session pin. ApplyProviderOverride treats empty strings as no-op, so
@@ -1602,29 +1731,19 @@ func GetSessionModelStatusHandler(w http.ResponseWriter, r *http.Request) {
 	effectiveModel := resolved.General.DefaultModel
 
 	// Credential check: soft fallback. Unpinned = healthy (true). Pinned = true
-	// only when the team credential store has a secret for the pinned provider.
+	// only when a credential (team, personal, or embedded) exists for the pin.
 	credentialsAvailable := true
 	if pinnedProvider != "" {
-		credentialsAvailable = false
-		if svc != nil && svc.Credentials != nil {
-			if svc.Credentials.GetSecret(ctx, pinnedProvider) != "" {
-				credentialsAvailable = true
-			}
-		}
+		pCfg := resolved.Providers[pinnedProvider]
+		credentialsAvailable = sessionProviderHasCredential(ctx, svc, pinnedProvider, pCfg)
 	}
 
-	// Available providers = the resolved cfg.Providers map, filtered to those
-	// with a credential (or no team credential store, in which case the
-	// resolved list is the authoritative set). This mirrors GetEffectiveProvidersHandler
-	// (pkg/api/provider_settings_handlers.go) but returns names only, never
-	// masked secrets. Sorted lexicographically for stable JSON output.
+	// Available providers = all resolved cfg.Providers names (same set as
+	// GET /api/settings/providers/effective). Credential presence is reported
+	// separately via credentialsAvailable so the picker stays in sync with the
+	// pre-chat list. Sorted lexicographically for stable JSON.
 	names := make([]string, 0, len(resolved.Providers))
 	for name := range resolved.Providers {
-		if svc != nil && svc.Credentials != nil {
-			if svc.Credentials.GetSecret(ctx, name) == "" {
-				continue
-			}
-		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -1697,37 +1816,22 @@ func PatchSessionModelHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
 	ctx := r.Context()
 
-	// Persist the pin via TenantRouter → team store when platform context is
-	// present. Personal mode silently skips this — the hot-swap below is still
-	// applied so the CLI can flip models mid-session.
-	if svc != nil && svc.TenantRouter != nil {
-		pu := GetPlatformUser(r)
-		if pu != nil && pu.OrgSlug != "" && pu.TeamSlug != "" {
-			orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
-			if err != nil || orgStore == nil {
-				slog.Warn("[patch-model] TenantRouter.ForOrg failed",
-					"org", pu.OrgSlug, "error", err)
-				respondError(w, http.StatusForbidden, "tenant not accessible")
-				return
-			}
-			teamStore := orgStore.ForTeam(pu.TeamSlug)
-			if teamStore == nil {
-				respondError(w, http.StatusForbidden, "team not accessible")
-				return
-			}
-			if err := teamStore.SetSessionPin(ctx, sessionID, req.Provider, req.Model); err != nil {
-				// "not found" from the pin store means the session doesn't
-				// belong to this tenant — surface 404 (never leak details).
-				if strings.Contains(strings.ToLower(err.Error()), "not found") {
-					respondError(w, http.StatusNotFound, "session not found")
-					return
-				}
-				slog.Warn("[patch-model] SetSessionPin failed",
-					"session", sessionID, "org", pu.OrgSlug, "team", pu.TeamSlug, "error", err)
-				respondError(w, http.StatusInternalServerError, "failed to persist pin")
-				return
-			}
+	// Persist the pin on the store that owns the session (personal-first for
+	// studio chat, team for fleet). Personal mode (no tenant context) skips
+	// silently — the hot-swap below still runs.
+	if err := persistSessionPin(r, sessionID, req.Provider, req.Model); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			respondError(w, http.StatusNotFound, "session not found")
+			return
 		}
+		if strings.Contains(strings.ToLower(err.Error()), "tenant not accessible") {
+			respondError(w, http.StatusForbidden, "tenant not accessible")
+			return
+		}
+		slog.Warn("[patch-model] SetSessionPin failed",
+			"session", sessionID, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to persist pin")
+		return
 	}
 
 	// Attempt live hot-swap. DECISION-4 says Studio does true swap; a missing
@@ -1761,6 +1865,15 @@ func PatchSessionModelHandler(w http.ResponseWriter, r *http.Request) {
 	resolved = provider.ApplyProviderOverride(resolved, req.Provider, req.Model)
 	effectiveProvider := resolved.General.DefaultProvider
 	effectiveModel := resolved.General.DefaultModel
+
+	// Soft-fallback credential signal for the response (HotSwap may already
+	// have set credentialsAvailable=false; also check stores/config).
+	if credentialsAvailable && req.Provider != "" {
+		pCfg := resolved.Providers[req.Provider]
+		if !sessionProviderHasCredential(ctx, svc, req.Provider, pCfg) {
+			credentialsAvailable = false
+		}
+	}
 
 	// Emit SSE `model_changed` to the live runner (if any). Guarded: no
 	// runner ⇒ silently skip (not every session has an active stream).

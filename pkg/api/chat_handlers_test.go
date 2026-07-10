@@ -530,8 +530,9 @@ func TestSessionModelStatus_PinnedMissingCred(t *testing.T) {
 	if resp.CredentialsAvailable {
 		t.Error("credentialsAvailable = true, want false (openai has no credential)")
 	}
-	if len(resp.AvailableProviders) != 1 || resp.AvailableProviders[0] != "anthropic" {
-		t.Errorf("availableProviders = %v, want [anthropic]", resp.AvailableProviders)
+	if len(resp.AvailableProviders) != 2 ||
+		resp.AvailableProviders[0] != "anthropic" || resp.AvailableProviders[1] != "openai" {
+		t.Errorf("availableProviders = %v, want [anthropic openai] (full resolved set, same as pre-chat)", resp.AvailableProviders)
 	}
 }
 

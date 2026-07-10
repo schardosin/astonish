@@ -50,6 +50,9 @@ linters:
         - G101  # Hardcoded credentials (false positives on constants/env var maps)
         - G104  # Errors unhandled — most are best-effort Close/Remove calls; real cases fixed manually
         - G117  # Exported field matches secret pattern (unavoidable in config structs)
+        # Cookie Secure/HttpOnly/SameSite — false positives when Secure is set via helper
+        # (isSecureRequest) and on test request cookies that are not Set-Cookie responses
+        - G124
         # File permissions: 0644/0755 are standard for non-secret config and cache files
         - G301  # Directory permissions > 0750
         - G302  # File permissions > 0600

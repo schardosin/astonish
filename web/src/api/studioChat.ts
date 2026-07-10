@@ -68,6 +68,8 @@ export interface ConnectChatParams {
   systemContext?: string
   pinnedToolGroups?: string[]
   autoApprove?: boolean
+  provider?: string
+  model?: string
   onEvent: SSEEventCallback
   onError?: ErrorCallback
   onDone?: DoneCallback
@@ -118,7 +120,7 @@ export async function fetchSubtaskEvents(sessionId: string, taskName: string): P
   return data.events || []
 }
 
-export function connectChat({ sessionId, message, attachments, systemContext, pinnedToolGroups, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
+export function connectChat({ sessionId, message, attachments, systemContext, pinnedToolGroups, autoApprove, provider, model, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
@@ -127,6 +129,8 @@ export function connectChat({ sessionId, message, attachments, systemContext, pi
         sessionId: sessionId || '',
         message: message || '',
         autoApprove: !!autoApprove,
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
       }
       if (attachments && attachments.length > 0) {
         body.attachments = attachments
@@ -396,4 +400,12 @@ export async function patchSessionModel(sessionId: string, provider: string, mod
     throw new Error(`Failed to patch session model: ${response.statusText}`)
   }
   return response.json()
+}
+
+/** Fetch available provider names (session-less, uses effective config). */
+export async function fetchAvailableProviders(): Promise<string[]> {
+  const response = await teamFetch('/api/settings/providers/effective')
+  if (!response.ok) return []
+  const data = await response.json()
+  return Object.keys(data.providers || {}).sort()
 }

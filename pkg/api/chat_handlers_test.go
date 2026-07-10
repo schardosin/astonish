@@ -7,9 +7,11 @@ import (
 	"iter"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
@@ -732,5 +734,51 @@ func TestPatchSessionModel_NoTenantContextSkipsPersistence(t *testing.T) {
 	if resp.EffectiveProvider != "anthropic" || resp.EffectiveModel != "claude-opus-4" {
 		t.Errorf("effective = %s/%s, want anthropic/claude-opus-4",
 			resp.EffectiveProvider, resp.EffectiveModel)
+	}
+}
+
+// Given ChatManager.components holds a stale global provider/model, and the
+// session is pinned to a different provider,
+// When /status is handled,
+// Then the SSE body reports the session pin — not the singleton metadata.
+func TestSlashCommand_Status_ReflectsSessionPin(t *testing.T) {
+	t.Parallel()
+
+	svc := newModelStatusServices(
+		&store.SessionPin{Provider: "openai", Model: "gpt-5"},
+		map[string]store.ProviderConfig{
+			"openai":    {"type": "openai"},
+			"anthropic": {"type": "anthropic"},
+		},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := httptest.NewRequest("POST", "/api/studio/chat", nil)
+	ctx := store.WithServices(r.Context(), svc)
+	ctx = WithPlatformUser(ctx, pu)
+	r = r.WithContext(ctx)
+
+	cm := &ChatManager{
+		components: &StudioChatComponents{
+			// Deliberately wrong — the bug was reading these globals.
+			ProviderName: "stale-global-provider",
+			ModelName:    "stale-global-model",
+			ChatAgent:    &agent.ChatAgent{},
+		},
+	}
+
+	w := httptest.NewRecorder()
+	handleSlashCommand(r, w, nil, cm, nil, "/status", "u1", "sess-1")
+
+	body := w.Body.String()
+	if !strings.Contains(body, "openai") || !strings.Contains(body, "gpt-5") {
+		t.Fatalf("/status body missing session pin openai/gpt-5:\n%s", body)
+	}
+	if strings.Contains(body, "stale-global-provider") || strings.Contains(body, "stale-global-model") {
+		t.Fatalf("/status still reports ChatManager singleton model:\n%s", body)
+	}
+	if !strings.Contains(body, "Session pin: active") {
+		t.Fatalf("/status missing session-pin indicator:\n%s", body)
 	}
 }

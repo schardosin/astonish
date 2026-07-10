@@ -600,7 +600,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(msg, "/") {
 		// Use r.Context() for slash commands since they're lightweight
-		handleSlashCommand(r.Context(), w, flusher, cm, sessionService, msg, userID, req.SessionID)
+		handleSlashCommand(r, w, flusher, cm, sessionService, msg, userID, req.SessionID)
 		return
 	}
 
@@ -1264,7 +1264,11 @@ func streamRunnerEvents(w http.ResponseWriter, flusher http.Flusher, httpCtx con
 }
 
 // handleSlashCommand processes slash commands and sends results as SSE events.
-func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
+// The *http.Request is required so /status can resolve the per-session model
+// (personal pin → user default → team/org/platform cascade) instead of the
+// process-global ChatManager.ProviderName/ModelName.
+func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
+	ctx := r.Context()
 	comp := cm.components
 	chatAgent := comp.ChatAgent
 
@@ -1284,7 +1288,20 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		})
 
 	case cmd == "/status":
-		status := fmt.Sprintf("**Status**\n- Provider: `%s`\n- Model: `%s`\n", comp.ProviderName, comp.ModelName)
+		// Per-session effective model (same cascade as GET .../model-status).
+		// Never read cm.components.ProviderName/ModelName — those are process-global
+		// and can reflect another user's last HotSwapLLM.
+		effProvider, effModel, pinnedProvider, _, _ := resolveSessionEffectiveModel(r, sessionID)
+		if effProvider == "" {
+			effProvider = comp.ProviderName
+		}
+		if effModel == "" {
+			effModel = comp.ModelName
+		}
+		status := fmt.Sprintf("**Status**\n- Provider: `%s`\n- Model: `%s`\n", effProvider, effModel)
+		if pinnedProvider != "" {
+			status += "- Session pin: active\n"
+		}
 		if comp.Compactor != nil {
 			est, win := comp.Compactor.TokenUsage()
 			pct := float64(0)
@@ -1671,6 +1688,32 @@ func sessionProviderHasCredential(ctx context.Context, svc *store.Services, name
 	return false
 }
 
+// resolveSessionEffectiveModel returns the effective provider/model for a
+// studio chat session after the full cascade (platform → org → team →
+// user-default → session-pin). Empty sessionID skips the pin lookup.
+// Shared by GET .../model-status and the /status slash command so both
+// surfaces agree with the per-request InjectLLM path.
+func resolveSessionEffectiveModel(r *http.Request, sessionID string) (effectiveProvider, effectiveModel, pinnedProvider, pinnedModel string, providers map[string]config.ProviderConfig) {
+	svc := store.FromRequest(r)
+	ctx := r.Context()
+	if sessionID != "" {
+		pinnedProvider, pinnedModel = readSessionPin(r, sessionID)
+	}
+	var resolved = &config.AppConfig{}
+	if svc != nil {
+		resolved = provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+	}
+	var userDefault provider.UserDefaultSettings
+	if svc != nil && svc.PersonalSettings != nil {
+		if ps, psErr := svc.PersonalSettings.Get(ctx); psErr == nil {
+			userDefault = ps
+		}
+	}
+	resolved = provider.ApplyUserDefault(resolved, userDefault)
+	resolved = provider.ApplyProviderOverride(resolved, pinnedProvider, pinnedModel)
+	return resolved.General.DefaultProvider, resolved.General.DefaultModel, pinnedProvider, pinnedModel, resolved.Providers
+}
+
 // SessionModelStatusResponse is the payload for GET /api/studio/sessions/{id}/model-status.
 //
 // It reports the current per-session pin (if any), the effective provider/model
@@ -1707,43 +1750,23 @@ func GetSessionModelStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := store.FromRequest(r)
-	ctx := r.Context()
 
-	pinnedProvider, pinnedModel := readSessionPin(r, sessionID)
-
-	// Resolve the effective cascade (Platform → Org → Team), then overlay the
-	// per-session pin. ApplyProviderOverride treats empty strings as no-op, so
-	// an unpinned session returns the cascade default.
-	var resolved = &config.AppConfig{}
-	if svc != nil {
-		resolved = provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
-	}
-	var userDefault provider.UserDefaultSettings
-	if svc != nil && svc.PersonalSettings != nil {
-		if ps, psErr := svc.PersonalSettings.Get(ctx); psErr == nil {
-			userDefault = ps
-		}
-	}
-	resolved = provider.ApplyUserDefault(resolved, userDefault)
-	resolved = provider.ApplyProviderOverride(resolved, pinnedProvider, pinnedModel)
-
-	effectiveProvider := resolved.General.DefaultProvider
-	effectiveModel := resolved.General.DefaultModel
+	effectiveProvider, effectiveModel, pinnedProvider, pinnedModel, resolvedProviders := resolveSessionEffectiveModel(r, sessionID)
 
 	// Credential check: soft fallback. Unpinned = healthy (true). Pinned = true
 	// only when a credential (team, personal, or embedded) exists for the pin.
 	credentialsAvailable := true
 	if pinnedProvider != "" {
-		pCfg := resolved.Providers[pinnedProvider]
-		credentialsAvailable = sessionProviderHasCredential(ctx, svc, pinnedProvider, pCfg)
+		pCfg := resolvedProviders[pinnedProvider]
+		credentialsAvailable = sessionProviderHasCredential(r.Context(), svc, pinnedProvider, pCfg)
 	}
 
 	// Available providers = all resolved cfg.Providers names (same set as
 	// GET /api/settings/providers/effective). Credential presence is reported
 	// separately via credentialsAvailable so the picker stays in sync with the
 	// pre-chat list. Sorted lexicographically for stable JSON.
-	names := make([]string, 0, len(resolved.Providers))
-	for name := range resolved.Providers {
+	names := make([]string, 0, len(resolvedProviders))
+	for name := range resolvedProviders {
 		names = append(names, name)
 	}
 	sort.Strings(names)

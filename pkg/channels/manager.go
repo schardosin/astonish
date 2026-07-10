@@ -962,17 +962,13 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		}
 	}
 
-	// Resolve effective provider/model dynamically from the 3-tier DB cascade
-	// so that /status and other commands reflect the current configuration,
-	// not the stale startup-time values.
+	// Resolve effective provider/model dynamically (cascade + session pin)
+	// so that /status reflects the same model the next message will use.
 	effectiveProvider := m.providerName
 	effectiveModel := m.modelName
 	if m.llmPool != nil {
 		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
-			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
-			// TODO(todo-7,todo-10): plumb per-user default + per-session pin.
-			appCfg = provider.ApplyUserDefault(appCfg, nil)
-			appCfg = provider.ApplyProviderOverride(appCfg, "", "")
+			appCfg := resolveEffectiveWithSessionPin(ctx, ps, route.SessionKey, msg.ChannelID, msg.SenderID)
 			if appCfg.General.DefaultProvider != "" {
 				effectiveProvider = appCfg.General.DefaultProvider
 			}

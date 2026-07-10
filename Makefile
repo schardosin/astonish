@@ -98,14 +98,27 @@ build-ui:
 build-all: setup-hooks ent-generate build-ui build
 	@echo "Full build complete!"
 
-# Setup git hooks (runs automatically on first build)
+# Setup git hooks (runs automatically on first build). Uses core.hooksPath so
+# updates to .githooks/pre-commit apply without re-copying into .git/hooks.
 setup-hooks:
-	@if [ ! -f .git/hooks/pre-commit ]; then \
-		echo "Installing git hooks..."; \
-		cp .githooks/pre-commit .git/hooks/pre-commit; \
-		chmod +x .git/hooks/pre-commit; \
-		echo "✓ Git hooks installed"; \
-	fi
+	@chmod +x .githooks/pre-commit
+	@git config core.hooksPath .githooks
+	@echo "✓ Git hooks path set to .githooks (golangci-lint required on commit)"
+
+# Match CI: verify config schema, then lint (version from .golangci-version).
+lint:
+	@required=$$(tr -d '[:space:]' < .golangci-version | sed 's/^v//'); \
+	if ! command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint not found — install v$$required (see CONTRIBUTING.md)"; exit 1; \
+	fi; \
+	installed=$$(golangci-lint version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | head -1); \
+	req_mm=$$(echo "$$required" | cut -d. -f1,2); \
+	inst_mm=$$(echo "$$installed" | cut -d. -f1,2); \
+	if [ "$$inst_mm" != "$$req_mm" ]; then \
+		echo "golangci-lint v$$installed != required v$$required (CI)"; exit 1; \
+	fi; \
+	golangci-lint config verify; \
+	golangci-lint run --timeout=5m
 
 # Run the application
 run:

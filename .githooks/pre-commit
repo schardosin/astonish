@@ -1,6 +1,16 @@
 #!/bin/sh
-# Pre-commit hook: golangci-lint + Atlas migration integrity check.
-# Install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Pre-commit hook: golangci-lint (required) + Atlas migration integrity check.
+# Install: make setup-hooks  (sets core.hooksPath to .githooks)
+
+set -e
+
+# Expected golangci-lint version (must match CI — see .github/workflows/lint.yml).
+REQUIRED_GOLANGCI_VERSION_FILE=".golangci-version"
+if [ -f "$REQUIRED_GOLANGCI_VERSION_FILE" ]; then
+	REQUIRED_GOLANGCI_VERSION=$(tr -d '[:space:]' < "$REQUIRED_GOLANGCI_VERSION_FILE" | sed 's/^v//')
+else
+	REQUIRED_GOLANGCI_VERSION="2.12.2"
+fi
 
 # ============================================================================
 # 1. Atlas migration integrity check
@@ -11,89 +21,126 @@ STAGED_MIGRATION_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep 
 
 # If schema files changed but no migration files are staged, warn the developer
 if [ -n "$STAGED_SCHEMA_FILES" ] && [ -z "$STAGED_MIGRATION_FILES" ]; then
-    echo ""
-    echo "⚠️  Schema files changed but no migrations staged!"
-    echo "   Changed schemas:"
-    for F in $STAGED_SCHEMA_FILES; do
-        echo "     $F"
-    done
-    echo ""
-    echo "   Generate migrations with:"
-    echo "     make migrate-diff ENV=<scope>_<dialect> NAME=<description>"
-    echo ""
-    echo "   Environments: platform_pg, platform_lite, org_pg, org_lite,"
-    echo "                 team_pg, team_lite, personal_pg, personal_lite"
-    echo ""
-    echo "   Then stage the generated files and re-commit."
-    echo "   To skip this check: git commit --no-verify"
-    echo ""
-    exit 1
+	echo ""
+	echo "⚠️  Schema files changed but no migrations staged!"
+	echo "   Changed schemas:"
+	for F in $STAGED_SCHEMA_FILES; do
+		echo "     $F"
+	done
+	echo ""
+	echo "   Generate migrations with:"
+	echo "     make migrate-diff ENV=<scope>_<dialect> NAME=<description>"
+	echo ""
+	echo "   Environments: platform_pg, platform_lite, org_pg, org_lite,"
+	echo "                 team_pg, team_lite, personal_pg, personal_lite"
+	echo ""
+	echo "   Then stage the generated files and re-commit."
+	echo "   To skip this check: git commit --no-verify"
+	echo ""
+	exit 1
 fi
 
 # If migration files are staged, validate atlas.sum integrity
 if [ -n "$STAGED_MIGRATION_FILES" ]; then
-    if command -v atlas > /dev/null 2>&1; then
-        echo "Validating migration integrity..."
-        FAIL=0
-        for DIR in \
-            pkg/store/pgstore/migrations/platform \
-            pkg/store/pgstore/migrations/org \
-            pkg/store/pgstore/migrations/team \
-            pkg/store/pgstore/migrations/personal \
-            pkg/store/sqlitestore/migrations/platform \
-            pkg/store/sqlitestore/migrations/org \
-            pkg/store/sqlitestore/migrations/team \
-            pkg/store/sqlitestore/migrations/personal; do
-            # Only check dirs that have staged changes
-            if echo "$STAGED_MIGRATION_FILES" | grep -q "^$DIR/"; then
-                if [ -f "$DIR/atlas.sum" ]; then
-                    if ! atlas migrate validate --dir "file://$DIR" 2>/dev/null; then
-                        echo "❌ Invalid atlas.sum in $DIR"
-                        echo "   Run: atlas migrate hash --dir 'file://$DIR'"
-                        FAIL=1
-                    fi
-                fi
-            fi
-        done
-        if [ $FAIL -eq 1 ]; then
-            echo ""
-            echo "Fix atlas.sum files and re-stage before committing."
-            exit 1
-        fi
-        echo "✓ Migration integrity OK"
-    else
-        echo "⚠️  atlas CLI not found, skipping migration integrity check"
-    fi
+	if command -v atlas > /dev/null 2>&1; then
+		echo "Validating migration integrity..."
+		FAIL=0
+		for DIR in \
+			pkg/store/pgstore/migrations/platform \
+			pkg/store/pgstore/migrations/org \
+			pkg/store/pgstore/migrations/team \
+			pkg/store/pgstore/migrations/personal \
+			pkg/store/sqlitestore/migrations/platform \
+			pkg/store/sqlitestore/migrations/org \
+			pkg/store/sqlitestore/migrations/team \
+			pkg/store/sqlitestore/migrations/personal; do
+			# Only check dirs that have staged changes
+			if echo "$STAGED_MIGRATION_FILES" | grep -q "^$DIR/"; then
+				if [ -f "$DIR/atlas.sum" ]; then
+					if ! atlas migrate validate --dir "file://$DIR" 2>/dev/null; then
+						echo "❌ Invalid atlas.sum in $DIR"
+						echo "   Run: atlas migrate hash --dir 'file://$DIR'"
+						FAIL=1
+					fi
+				fi
+			fi
+		done
+		if [ $FAIL -eq 1 ]; then
+			echo ""
+			echo "Fix atlas.sum files and re-stage before committing."
+			exit 1
+		fi
+		echo "✓ Migration integrity OK"
+	else
+		echo "⚠️  atlas CLI not found, skipping migration integrity check"
+	fi
 fi
 
 # ============================================================================
-# 2. Go lint check
+# 2. Go lint check (required — same config/version as CI)
 # ============================================================================
 
 echo "Running golangci-lint..."
 
-# Check if golangci-lint is installed
 if ! command -v golangci-lint > /dev/null 2>&1; then
-    echo "⚠️  golangci-lint not found, skipping lint check"
-    echo "   Install with: brew install golangci-lint"
-    exit 0
+	echo ""
+	echo "❌ golangci-lint is required for commits (matches CI lint job)."
+	echo "   Install v${REQUIRED_GOLANGCI_VERSION}:"
+	echo "     brew install golangci-lint"
+	echo "     # or: https://golangci-lint.run/docs/welcome/install/"
+	echo "   Then confirm: golangci-lint version"
+	echo "   To skip this check: git commit --no-verify"
+	echo ""
+	exit 1
 fi
 
-# Run lint on staged Go files only for speed
-STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
-
-if [ -z "$STAGED_GO_FILES" ]; then
-    echo "✓ No Go files staged, skipping lint"
-    exit 0
+INSTALLED_VERSION=$(golangci-lint version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p' | head -1)
+if [ -z "$INSTALLED_VERSION" ]; then
+	echo "❌ Could not parse golangci-lint version output."
+	exit 1
 fi
 
-# Run golangci-lint
-if golangci-lint run --timeout=2m; then
-    echo "✓ Lint passed"
-    exit 0
-else
-    echo ""
-    echo "❌ Lint failed! Fix the issues above before committing."
-    echo "   To skip this check: git commit --no-verify"
-    exit 1
+# Compare major.minor (patch differences are usually schema-compatible).
+required_mm=$(echo "$REQUIRED_GOLANGCI_VERSION" | cut -d. -f1,2)
+installed_mm=$(echo "$INSTALLED_VERSION" | cut -d. -f1,2)
+if [ "$installed_mm" != "$required_mm" ]; then
+	echo ""
+	echo "❌ golangci-lint v${INSTALLED_VERSION} does not match required v${REQUIRED_GOLANGCI_VERSION} (CI)."
+	echo "   Gosec exclude IDs and config schema differ across minor versions."
+	echo "   Install the CI version, then retry:"
+	echo "     # Homebrew (may track latest — pin if needed):"
+	echo "     brew install golangci-lint"
+	echo "     # Official install script for an exact version:"
+	echo "     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b \$(go env GOPATH)/bin v${REQUIRED_GOLANGCI_VERSION}"
+	echo "   To skip this check: git commit --no-verify"
+	echo ""
+	exit 1
 fi
+
+# Fail fast on invalid .golangci.yml (same check CI runs before lint).
+if ! golangci-lint config verify; then
+	echo ""
+	echo "❌ golangci-lint config verify failed."
+	echo "   Fix .golangci.yml so it validates against this golangci-lint version."
+	echo "   CI uses v${REQUIRED_GOLANGCI_VERSION} — keep .golangci-version and lint.yml in sync."
+	exit 1
+fi
+
+# Always lint the full module when Go sources or lint config change, so local
+# matches CI (CI runs the whole tree). Skip only when neither is staged.
+STAGED_GO_OR_LINT=$(git diff --cached --name-only --diff-filter=ACM | grep -E '\.go$|^\.golangci\.yml$|^\.golangci-version$' || true)
+
+if [ -z "$STAGED_GO_OR_LINT" ]; then
+	echo "✓ No Go/lint-config files staged, skipping lint run"
+	exit 0
+fi
+
+if golangci-lint run --timeout=5m; then
+	echo "✓ Lint passed (golangci-lint v${INSTALLED_VERSION})"
+	exit 0
+fi
+
+echo ""
+echo "❌ Lint failed! Fix the issues above before committing."
+echo "   To skip this check: git commit --no-verify"
+exit 1

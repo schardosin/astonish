@@ -51,7 +51,9 @@ linters:
         - G104  # Errors unhandled — most are best-effort Close/Remove calls; real cases fixed manually
         - G117  # Exported field matches secret pattern (unavoidable in config structs)
         # Cookie Secure/HttpOnly/SameSite — false positives when Secure is set via helper
-        # (isSecureRequest) and on test request cookies that are not Set-Cookie responses
+        # (isSecureRequest) and on test request cookies that are not Set-Cookie responses.
+        # G124 exists in gosec bundled with golangci-lint >= 2.12; keep CI version in sync
+        # (.github/workflows/lint.yml) or config verify will reject this ID on older releases.
         - G124
         # File permissions: 0644/0755 are standard for non-secret config and cache files
         - G301  # Directory permissions > 0750

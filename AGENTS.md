@@ -51,6 +51,7 @@ go test -v ./pkg/tools -run TestFileTree  # Verbose
 
 # Lint
 golangci-lint run        # Full lint check (bug-finders only; see .golangci.yml)
+# Prefer: make lint      # config verify + run; version must match .golangci-version (CI)
 
 # Atlas migrations (schema/*.sql, pkg/store/*/migrations)
 make migrate-diff        # Generate a new migration by diffing ent schemas
@@ -90,7 +91,7 @@ npm test
 - **Errors**: return as last value, check immediately, wrap with `fmt.Errorf` when needed. Never suppress with `_`.
 - **Interfaces**: minimal, defined **near use** (e.g., `RunnableTool`, `ToolWithDeclaration` in `pkg/tools`, `Backend` in `pkg/sandbox`, `Channel` in `pkg/channels`).
 - **Testing**: `*_test.go` same package, table-driven tests, `os.MkdirTemp` with cleanup. Integration/e2e tests use build tags (`//go:build integration`, `//go:build e2e`).
-- **Linting**: pre-commit runs `golangci-lint`. Policy is in `.golangci.yml` and is **intentionally narrow**: only `govet`, `ineffassign`, `unused`, `staticcheck` (with ST*/S*/QF*/SA9003/SA1019 disabled), and `gosec` (with G101/G104/G117/G301/G302 excluded). Do **not** re-enable style linters without discussion — the project deliberately prioritizes bug-finders.
+- **Linting**: pre-commit runs `golangci-lint` (required; version must match `.golangci-version` / CI). Policy is in `.golangci.yml` and is **intentionally narrow**: only `govet`, `ineffassign`, `unused`, `staticcheck` (with ST*/S*/QF*/SA9003/SA1019 disabled), and `gosec` (with G101/G104/G117/G124/G301/G302 and related excludes). Do **not** re-enable style linters without discussion — the project deliberately prioritizes bug-finders. Always run `golangci-lint config verify` (or `make lint`) after editing excludes — unknown rule IDs break CI.
 - **Comments**: avoid unless the code is complex or non-obvious.
 - **Generated code**: never hand-edit `ent/*/*.go` except files under `ent/*/schema/`. See `ent/AGENTS.md`. The same applies to `pkg/sandbox/openshell/gen/openshellv1/*.pb.go` — regenerate from `proto/openshell/v1/*.proto`.
 

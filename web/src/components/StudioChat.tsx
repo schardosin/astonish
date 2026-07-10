@@ -325,6 +325,21 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     return paths
   }, [messages, isStreaming, sessionArtifacts])
 
+  // Latest plan message that actually has steps. The Todo button/panel are
+  // shown only when this is non-null. A plan may be persisted without steps
+  // (e.g. an announce_plan with empty/omitted steps), in which case there is
+  // nothing to show — and `steps` may even be undefined on loaded sessions.
+  const latestPlanWithSteps = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.type === 'plan') {
+        const plan = m as PlanMessage
+        return (plan.steps?.length ?? 0) > 0 ? plan : null
+      }
+    }
+    return null
+  }, [messages])
+
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false, skipModelFetch = false } = {}) => {
     setActiveSessionId(sessionId)
@@ -606,6 +621,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           }
           if (m.type === 'flow_output') {
             return { type: 'agent', content: m.content || '' } as AgentMessage
+          }
+          if (m.type === 'plan') {
+            return { type: 'plan', goal: m.goal || '', steps: m.steps ?? [] } as PlanMessage
           }
           return m as unknown as ChatMsg
         })
@@ -2296,7 +2314,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           {/* Right side — Todo, Files, Apps, Model, Usage */}
           <div className="flex items-center gap-1.5">
-          {/* Todo button — shows plan steps in side panel */}
+          {/* Todo button — shows plan steps in side panel (only when the latest plan has steps) */}
+          {latestPlanWithSteps && (
           <button
             onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) { setFilePanelOpen(false); setAppsPanelOpen(false) } }}
             className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
@@ -2309,20 +2328,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           >
             <ListChecks size={13} />
             <span>Todo</span>
-            {messages.some(m => m.type === 'plan') && (
-              <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
-                background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
-                color: 'var(--accent-color, #60a5fa)',
-              }}>
-                {(() => {
-                  const plans = messages.filter(m => m.type === 'plan') as PlanMessage[]
-                  const plan = plans[plans.length - 1]
-                  const done = plan.steps.filter(s => s.status === 'complete').length
-                  return `${done}/${plan.steps.length}`
-                })()}
-              </span>
-            )}
+            <span className="px-1 py-0 rounded text-[10px] font-medium" style={{
+              background: 'var(--accent-bg, rgba(59, 130, 246, 0.15))',
+              color: 'var(--accent-color, #60a5fa)',
+            }}>
+              {(() => {
+                const done = latestPlanWithSteps.steps.filter(s => s.status === 'complete').length
+                return `${done}/${latestPlanWithSteps.steps.length}`
+              })()}
+            </span>
           </button>
+          )}
 
           {/* Files button — shown when session has artifacts */}
           {sessionArtifacts.length > 0 && (

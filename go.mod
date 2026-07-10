@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.1
 
 require (
-	codeberg.org/readeck/go-readability/v2 v2.1.1
+	codeberg.org/readeck/go-readability/v2 v2.1.2
 	entgo.io/ent v0.14.6
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/charmbracelet/bubbles v1.0.0
@@ -68,7 +68,6 @@ require (
 	github.com/andybalholm/cascadia v1.3.4 // indirect
 	github.com/apex/log v1.9.0 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
-	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/awalterschulze/gographviz v2.0.3+incompatible // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
@@ -130,6 +129,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/hashicorp/hcl/v2 v2.18.1 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/itlightning/dateparse v0.2.1 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

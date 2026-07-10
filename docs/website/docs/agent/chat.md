@@ -20,7 +20,7 @@ The Studio chat interface at `http://localhost:9393` provides the full visual ex
 - Inline tool execution visualization with expandable cards
 - File diffs for write operations
 - Artifact previews (reports, generated files)
-- Model selector dropdown
+- Model selector in the toolbar (per-session pin; see [Studio Chat](../studio/chat.md))
 - Session history sidebar with search
 - Token usage tracking
 
@@ -32,13 +32,15 @@ The terminal chat interface provides the same agent capabilities:
 
 ```bash
 astonish chat                                      # New session
-astonish chat -p anthropic -m claude-sonnet-4-20250514  # Specific provider/model
+astonish chat -p anthropic -m claude-sonnet-4-20250514  # Pin provider/model on the new session
 astonish chat --resume <session-id>                # Resume a session
 astonish chat -r <session-id>                      # Short form
 astonish chat --auto-approve                       # Skip tool confirmations
 astonish chat --debug                              # Enable debug output
 astonish chat -w /path/to/project                  # Set working directory
 ```
+
+`-p` / `-m` on a new session persist as a session pin (same concept as the Studio Model control). See [Chat Commands](../cli/chat.md) for `--no-pin`, `--clear-model`, and `astonish chat model`.
 
 ::: warning Authentication Required
 The CLI requires authentication before use. Run `astonish login <server-url>` first. See [Remote CLI](../platform/remote-cli.md).
@@ -62,7 +64,7 @@ Slash commands are available in both Studio and CLI:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/status` | Show current provider, model, tools, and memory status |
+| `/status` | Show this session's provider, model (including pin), tools, and memory status |
 | `/new` | Start a fresh conversation (new session) |
 | `/compact` | Show context window usage and compaction status |
 | `/distill` | Distill the current session into a reusable flow |

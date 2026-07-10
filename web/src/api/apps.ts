@@ -62,7 +62,17 @@ export async function fetchApps(): Promise<{ apps: AppListItem[] }> {
 export async function fetchApp(name: string): Promise<VisualApp> {
   const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`)
   if (!res.ok) throw new Error(`Failed to load app: ${res.statusText}`)
-  return res.json()
+  const data = await res.json()
+  // GET /api/apps/{name} returns { app, pinnedProvider, pinnedModel, effective* }.
+  // Older flat responses are still accepted.
+  const app = (data.app ?? data) as VisualApp
+  return {
+    ...app,
+    pinnedProvider: data.pinnedProvider ?? app.pinnedProvider ?? '',
+    pinnedModel: data.pinnedModel ?? app.pinnedModel ?? '',
+    effectiveProvider: data.effectiveProvider ?? app.effectiveProvider ?? '',
+    effectiveModel: data.effectiveModel ?? app.effectiveModel ?? '',
+  }
 }
 
 export async function saveApp(

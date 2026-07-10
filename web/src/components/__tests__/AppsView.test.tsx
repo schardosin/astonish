@@ -4,15 +4,31 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import AppsView from '../AppsView';
 import * as appsApi from '../../api/apps';
+import * as studioChatApi from '../../api/studioChat';
 import '@testing-library/jest-dom';
 
-// Mock the API functions
 vi.mock('../../api/apps', () => ({
   fetchApps: vi.fn(),
   fetchApp: vi.fn(),
   deleteApp: vi.fn(),
   saveApp: vi.fn(),
   patchAppModel: vi.fn(),
+}));
+
+vi.mock('../../api/studioChat', () => ({
+  fetchAvailableProviders: vi.fn().mockResolvedValue(['openai', 'anthropic']),
+}));
+
+vi.mock('../ProviderModelSelector', () => ({
+  default: ({ isOpen, onClose, onSelect }: { isOpen: boolean; onClose: () => void; onSelect: (id: string) => void }) => {
+    if (!isOpen) return null;
+    return (
+      <div data-testid="model-selector-modal">
+        <button onClick={() => onSelect('gpt-4')}>Select gpt-4</button>
+        <button onClick={onClose}>Close modal</button>
+      </div>
+    );
+  },
 }));
 
 const mockApps: appsApi.AppListItem[] = [
@@ -23,90 +39,75 @@ const mockApps: appsApi.AppListItem[] = [
     version: 1,
     updatedAt: new Date().toISOString(),
     scope: 'personal',
-    pinnedProvider: 'openai',
-    pinnedModel: 'gpt-3.5-turbo',
-    effectiveProvider: 'openai',
-    effectiveModel: 'gpt-3.5-turbo',
   },
 ];
+
+const mockVisualApp: appsApi.VisualApp = {
+  name: 'Test App 1',
+  description: 'A test app',
+  code: 'export default function App() { return <div>Hi</div> }',
+  version: 1,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+  pinnedProvider: 'openai',
+  pinnedModel: 'gpt-3.5-turbo',
+  effectiveProvider: 'openai',
+  effectiveModel: 'gpt-3.5-turbo',
+};
 
 describe('AppsView', () => {
   beforeEach(() => {
     vi.mocked(appsApi.fetchApps).mockResolvedValue({ apps: mockApps });
+    vi.mocked(appsApi.fetchApp).mockResolvedValue({ ...mockVisualApp });
     vi.mocked(appsApi.patchAppModel).mockResolvedValue({
       pinnedProvider: 'openai',
       pinnedModel: 'gpt-4',
       effectiveProvider: 'openai',
       effectiveModel: 'gpt-4',
     });
+    vi.mocked(studioChatApi.fetchAvailableProviders).mockResolvedValue(['openai', 'anthropic']);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('should render the model picker and update the model on change', async () => {
+  it('does not show a model picker on the apps list cards', async () => {
     render(<AppsView theme="dark" />);
-
-    // Wait for apps to load
     await waitFor(() => expect(appsApi.fetchApps).toHaveBeenCalled());
+    expect(screen.queryByText(/Model:/)).not.toBeInTheDocument();
+    expect(screen.getByText('Test App 1')).toBeInTheDocument();
+  });
 
-    // Find the button to open the picker
-    const pickerButton = await screen.findByText('openai/gpt-3.5-turbo');
+  it('shows the chat-style model picker in the app detail header after the title', async () => {
+    render(<AppsView theme="dark" appName="test-app-1" />);
+    await waitFor(() => expect(appsApi.fetchApp).toHaveBeenCalledWith('test-app-1'));
+
+    expect(screen.getByRole('button', { name: /Back/i })).toBeInTheDocument();
+    expect(screen.getByText('Test App 1')).toBeInTheDocument();
+    const pickerButton = await screen.findByRole('button', { name: /Model: openai\/gpt-3\.5-turbo/ });
     expect(pickerButton).toBeInTheDocument();
 
-    // Open the picker
     fireEvent.click(pickerButton);
+    expect(screen.getByRole('combobox')).toBeInTheDocument();
+    expect(screen.getByText('Currently: openai/gpt-3.5-turbo')).toBeInTheDocument();
+  });
 
-    // Find input fields and change values
-    const providerInput = await screen.findByPlaceholderText('e.g. openai');
-    const modelInput = await screen.findByPlaceholderText('e.g. gpt-4-turbo');
-    const saveButton = await screen.findByText('Save');
+  it('saves a new app model pin from the detail header picker', async () => {
+    render(<AppsView theme="dark" appName="test-app-1" />);
+    await waitFor(() => expect(appsApi.fetchApp).toHaveBeenCalled());
 
-    expect(providerInput).toBeInTheDocument();
-    expect(modelInput).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: /Model: openai\/gpt-3\.5-turbo/ }));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'openai' } });
+    fireEvent.click(screen.getByTitle('Browse models'));
+    fireEvent.click(screen.getByText('Select gpt-4'));
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
 
-    fireEvent.change(providerInput, { target: { value: 'openai' } });
-    fireEvent.change(modelInput, { target: { value: 'gpt-4' } });
-
-    // Save the changes
-    fireEvent.click(saveButton);
-
-    // Check if patchAppModel was called
     await waitFor(() => {
       expect(appsApi.patchAppModel).toHaveBeenCalledWith('test-app-1', 'openai', 'gpt-4');
     });
-
-    // Check if the UI updated with the new model
     await waitFor(() => {
-         const newPickerButton = screen.getByText('openai/gpt-4');
-         expect(newPickerButton).toBeInTheDocument();
-    });
-  });
-
-  it('should show an error message if updating the model fails', async () => {
-    vi.mocked(appsApi.patchAppModel).mockRejectedValue(new Error('Failed to update'));
-    render(<AppsView theme="dark" />);
-
-    // Wait for apps to load
-    await waitFor(() => expect(appsApi.fetchApps).toHaveBeenCalled());
-
-    // Open the picker
-    const pickerButton = await screen.findByText('openai/gpt-3.5-turbo');
-    fireEvent.click(pickerButton);
-    
-    // Find input fields and change values
-    const providerInput = await screen.findByPlaceholderText('e.g. openai');
-    fireEvent.change(providerInput, { target: { value: 'anthropic' } });
-
-    // Save the changes
-    const saveButton = await screen.findByText('Save');
-    fireEvent.click(saveButton);
-
-    // Check for error message
-    await waitFor(() => {
-      const errorMessage = screen.getByText('Failed to update');
-      expect(errorMessage).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Model: openai\/gpt-4/ })).toBeInTheDocument();
     });
   });
 });

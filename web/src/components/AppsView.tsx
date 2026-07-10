@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AppWindow, Trash2, Code, ArrowLeft, Clock, Sparkles, Upload, GitFork } from 'lucide-react'
 import { fetchApps, fetchApp, deleteApp, saveApp } from '../api/apps'
-import type { AppListItem, VisualApp } from '../api/apps'
+import type { AppListItem, VisualApp, AppModelStatus } from '../api/apps'
+import { fetchAvailableProviders } from '../api/studioChat'
 import AppPreview from './chat/AppPreview'
 import CodeDrawer from './CodeDrawer'
 import AppModelPicker from './AppModelPicker'
@@ -56,6 +57,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
   const [codeContent, setCodeContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null)
+  const [availableProviders, setAvailableProviders] = useState<string[]>([])
 
   const loadApps = useCallback(async () => {
     try {
@@ -70,6 +72,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
 
   useEffect(() => {
     loadApps()
+    fetchAvailableProviders().then(setAvailableProviders).catch(() => setAvailableProviders([]))
   }, [loadApps])
 
   // Listen for apps-updated events (from chat save flow)
@@ -211,6 +214,25 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
                 v{selectedApp.version}
               </span>
             )}
+            <AppModelPicker
+              slug={appName || selectedApp.name}
+              availableProviders={availableProviders}
+              initialStatus={{
+                pinnedProvider: selectedApp.pinnedProvider || null,
+                pinnedModel: selectedApp.pinnedModel || null,
+                effectiveProvider: selectedApp.effectiveProvider || '',
+                effectiveModel: selectedApp.effectiveModel || '',
+              }}
+              onUpdate={(status: AppModelStatus) => {
+                setSelectedApp((prev) => prev ? {
+                  ...prev,
+                  pinnedProvider: status.pinnedProvider || '',
+                  pinnedModel: status.pinnedModel || '',
+                  effectiveProvider: status.effectiveProvider,
+                  effectiveModel: status.effectiveModel,
+                } : prev)
+              }}
+            />
           </div>
 
           {onImproveApp && (
@@ -362,23 +384,6 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
           <span>{formatDate(app.updatedAt)}</span>
         </div>
         <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-          <AppModelPicker
-            slug={app.slug}
-            initialStatus={{
-              pinnedProvider: app.pinnedProvider ?? null,
-              pinnedModel: app.pinnedModel ?? null,
-              effectiveProvider: app.effectiveProvider || '',
-              effectiveModel: app.effectiveModel || '',
-            }}
-            onUpdate={(newStatus) => {
-              setApps(currentApps => currentApps.map(currentApp => {
-                if (currentApp.slug === app.slug) {
-                  return { ...currentApp, ...newStatus };
-                }
-                return currentApp;
-              }));
-            }}
-          />
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
             {isPlatformMode && app.scope === 'personal' && onPublishApp && (
               <button

@@ -48,6 +48,15 @@ Agent:  [saved] App "Time Tracker" is now available in your Apps tab.
 
 Saved apps appear in the Studio sidebar under the Apps tab and retain their state across sessions.
 
+## Choosing a Model for an App
+
+Open an app from the Apps tab. In the detail header — after the title — use the **Model** control (same UI as Chat):
+
+- **default** — use the normal cascade (user default → team → org → platform)
+- **provider/model** — pin this app to a specific LLM for run and “Improve with AI” turns
+
+The pin is per app. It does not change your chat sessions or other apps. Reset clears the pin and returns to the cascade.
+
 ## What Works Well
 
 Generative UI excels at certain categories of applications:

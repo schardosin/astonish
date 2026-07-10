@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Node, Edge } from '@xyflow/react'
-import yaml from 'js-yaml'
+import * as yaml from 'js-yaml'
 import TopBar from './components/TopBar'
 import Sidebar from './components/Sidebar'
 import ChatPanel from './components/ChatPanel'
@@ -1032,8 +1032,7 @@ layout:
         indent: 2,
         lineWidth: -1, 
         noRefs: true, 
-        sortKeys: false,
-        styles: { '!!str': 'literal' }  // Force block scalars for multiline strings
+        sortKeys: false
       })
     } catch (e: any) {
       console.error('Failed to merge layout:', e)
@@ -1067,7 +1066,7 @@ layout:
           y: Math.round(position.y)
         }
         newYaml = yaml.dump(orderYamlKeys(parsedYaml!), { 
-          lineWidth: -1, noRefs: true, quotingType: '"', forceQuotes: false 
+          lineWidth: -1, noRefs: true, quoteStyle: 'double', forceQuotes: false 
         })
       }
       

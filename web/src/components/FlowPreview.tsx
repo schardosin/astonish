@@ -4,7 +4,7 @@ import { ReactFlow, ReactFlowProvider, Background, Controls } from '@xyflow/reac
 import type { Node, Edge } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { Maximize2, Minimize2 } from 'lucide-react'
-import yaml from 'js-yaml'
+import * as yaml from 'js-yaml'
 
 import StartNode from './nodes/StartNode'
 import EndNode from './nodes/EndNode'

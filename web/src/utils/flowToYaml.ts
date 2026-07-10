@@ -1,4 +1,4 @@
-import yaml from 'js-yaml'
+import * as yaml from 'js-yaml'
 
 // --- Types ---
 
@@ -156,9 +156,8 @@ export function addStandaloneNode(yamlContent: string, nodeType: string): string
     return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-      styles: { '!!str': 'literal' }
+      quoteStyle: 'double',
+      forceQuotes: false
     })
   } catch (e) {
     console.error('Error adding standalone node:', e)
@@ -210,9 +209,8 @@ export function addConnection(yamlContent: string, sourceId: string, targetId: s
     return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-      styles: { '!!str': 'literal' }
+      quoteStyle: 'double',
+      forceQuotes: false
     })
   } catch (e) {
     console.error('Error adding connection:', e)
@@ -249,9 +247,8 @@ export function removeConnection(yamlContent: string, sourceId: string, targetId
     return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-      styles: { '!!str': 'literal' }
+      quoteStyle: 'double',
+      forceQuotes: false
     })
   } catch (e) {
     console.error('Error removing connection:', e)
@@ -278,9 +275,8 @@ export function removeNode(yamlContent: string, nodeId: string): string {
     return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-      styles: { '!!str': 'literal' }
+      quoteStyle: 'double',
+      forceQuotes: false
     })
   } catch (e) {
     console.error('Error removing node:', e)
@@ -320,9 +316,8 @@ export function updateNode(yamlContent: string, nodeId: string, newNodeData: Yam
     return yaml.dump(orderYamlKeys(yamlData), { 
       lineWidth: -1,
       noRefs: true,
-      quotingType: '"',
-      forceQuotes: false,
-      styles: { '!!str': 'literal' }
+      quoteStyle: 'double',
+      forceQuotes: false
     })
   } catch (e) {
     console.error('Error updating node:', e)

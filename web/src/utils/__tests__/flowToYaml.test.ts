@@ -8,7 +8,7 @@ import {
   removeNode,
   updateNode,
 } from '../flowToYaml'
-import yaml from 'js-yaml'
+import * as yaml from 'js-yaml'
 
 describe('orderYamlKeys', () => {
   it('orders keys in canonical order', () => {

@@ -49,7 +49,7 @@ These commands are available within the Telegram chat:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/status` | Show provider, model, and session info |
+| `/status` | Show this session's provider, model (including pin), and session info |
 | `/new` | Start a new session |
 | `/distill` | Distill the last task into a reusable flow |
 | `/jobs` | Show scheduled jobs |

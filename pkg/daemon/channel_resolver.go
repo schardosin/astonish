@@ -118,6 +118,7 @@ func (r *channelPlatformResolver) ResolveChannelUserWithHint(
 	enrichedCtx = store.WithFleetTemplateStore(enrichedCtx, teamStore.FleetTemplates())
 	enrichedCtx = store.WithFleetPlanStore(enrichedCtx, teamStore.FleetPlans())
 	enrichedCtx = store.WithSessionService(enrichedCtx, teamStore.Sessions())
+	enrichedCtx = store.WithTeamDataStore(enrichedCtx, teamStore)
 
 	// Inject cross-session memory merge function for channel interactions.
 	if r.memorySaveOrMerge != nil {

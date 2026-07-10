@@ -39,7 +39,9 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.4
+          # Keep in sync with .golangci-version and local installs (see CONTRIBUTING.md).
+          # Schema for gosec excludes (e.g. G124) differs across minor versions.
+          version: v2.12.2
           args: --timeout=5m
 
       - name: Install govulncheck

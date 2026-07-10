@@ -2046,6 +2046,10 @@ func cascadePlatformProviders(ctx context.Context, backend store.PlatformBackend
 	// Delegate to the shared provider resolution function (Platform + Org only;
 	// team is nil since this is the daemon-wide fallback, not per-user).
 	resolved := provider.ResolveEffectiveConfig(ctx, backend.PlatformSettings(), orgSettings, nil)
+	// Daemon bootstrap has no user/session context; pass empty strings so the
+	// overlay chain is a no-op. Keeps every ResolveEffectiveConfig call site
+	// syntactically consistent with the per-request paths.
+	resolved = provider.ApplyProviderOverride(resolved, "", "")
 	appCfg.Providers = resolved.Providers
 	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
 	appCfg.General.DefaultModel = resolved.General.DefaultModel

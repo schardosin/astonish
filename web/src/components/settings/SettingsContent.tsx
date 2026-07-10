@@ -19,6 +19,7 @@ import OpenCodeSettings from './OpenCodeSettings'
 import SandboxSettings from './SandboxSettings'
 import GeneralSettings from './GeneralSettings'
 import ProvidersSettings from './ProvidersSettings'
+import UserDefaultModelSettings from './UserDefaultModelSettings'
 import MCPServersSettings from './MCPServersSettings'
 import TapsSettings from './TapsSettings'
 import { useState, lazy, Suspense } from 'react'
@@ -272,6 +273,8 @@ export default function SettingsContent({
       )}
 
       {activeSection === 'credentials' && <CredentialsSettings isPlatform={isPlatformMode} />}
+
+      {activeSection === 'user-default-model' && <UserDefaultModelSettings />}
     </>
   )
 }

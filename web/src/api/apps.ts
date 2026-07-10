@@ -15,6 +15,10 @@ export interface AppListItem {
   version: number
   updatedAt: string
   scope?: string // "personal" or "team" (platform mode only)
+  pinnedProvider?: string | null
+  pinnedModel?: string | null
+  effectiveProvider?: string | null
+  effectiveModel?: string | null
 }
 
 export interface VisualApp {
@@ -26,6 +30,18 @@ export interface VisualApp {
   createdAt: string
   updatedAt: string
   sessionId?: string
+  pinnedProvider?: string
+  pinnedModel?: string
+  effectiveProvider?: string
+  effectiveModel?: string
+}
+
+
+export interface AppModelStatus {
+  pinnedProvider: string | null
+  pinnedModel: string | null
+  effectiveProvider: string
+  effectiveModel: string
 }
 
 export interface DataSource {
@@ -46,7 +62,17 @@ export async function fetchApps(): Promise<{ apps: AppListItem[] }> {
 export async function fetchApp(name: string): Promise<VisualApp> {
   const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(name)}`)
   if (!res.ok) throw new Error(`Failed to load app: ${res.statusText}`)
-  return res.json()
+  const data = await res.json()
+  // GET /api/apps/{name} returns { app, pinnedProvider, pinnedModel, effective* }.
+  // Older flat responses are still accepted.
+  const app = (data.app ?? data) as VisualApp
+  return {
+    ...app,
+    pinnedProvider: data.pinnedProvider ?? app.pinnedProvider ?? '',
+    pinnedModel: data.pinnedModel ?? app.pinnedModel ?? '',
+    effectiveProvider: data.effectiveProvider ?? app.effectiveProvider ?? '',
+    effectiveModel: data.effectiveModel ?? app.effectiveModel ?? '',
+  }
 }
 
 export async function saveApp(
@@ -95,6 +121,24 @@ export async function forkAppToPersonal(slug: string): Promise<{ slug: string }>
   if (!res.ok) {
     const err = await res.json().catch(() => ({ message: res.statusText }))
     throw new Error(err.message || err.error || 'Failed to fork app')
+  }
+  return res.json()
+}
+
+/** Update the pinned model for an app. */
+export async function patchAppModel(
+  slug: string,
+  provider: string | null,
+  model: string | null,
+): Promise<AppModelStatus> {
+  const res = await teamFetch(`${API_BASE}/apps/${encodeURIComponent(slug)}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Failed to update app model')
   }
   return res.json()
 }
@@ -156,11 +200,12 @@ export async function fetchAppAI(
   system: string = '',
   context: unknown = null,
   requestId: string = '',
+  appName: string = '',
 ): Promise<AppAIResponse> {
   const res = await teamFetch(`${API_BASE}/apps/ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ prompt, system, context, requestId }),
+    body: JSON.stringify({ prompt, system, context, requestId, appName }),
   })
   if (!res.ok) {
     return { requestId, error: `HTTP ${res.status}: ${res.statusText}` }

@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import { AppWindow, Trash2, Code, ArrowLeft, Clock, Sparkles, Upload, GitFork } from 'lucide-react'
 import { fetchApps, fetchApp, deleteApp, saveApp } from '../api/apps'
-import type { AppListItem, VisualApp } from '../api/apps'
+import type { AppListItem, VisualApp, AppModelStatus } from '../api/apps'
+import { fetchAvailableProviders } from '../api/studioChat'
 import AppPreview from './chat/AppPreview'
 import CodeDrawer from './CodeDrawer'
+import AppModelPicker from './AppModelPicker'
 
 interface AppsViewProps {
   theme: string
@@ -55,6 +57,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
   const [codeContent, setCodeContent] = useState('')
   const [isSaving, setIsSaving] = useState(false)
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null)
+  const [availableProviders, setAvailableProviders] = useState<string[]>([])
 
   const loadApps = useCallback(async () => {
     try {
@@ -69,6 +72,7 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
 
   useEffect(() => {
     loadApps()
+    fetchAvailableProviders().then(setAvailableProviders).catch(() => setAvailableProviders([]))
   }, [loadApps])
 
   // Listen for apps-updated events (from chat save flow)
@@ -210,6 +214,25 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
                 v{selectedApp.version}
               </span>
             )}
+            <AppModelPicker
+              slug={appName || selectedApp.name}
+              availableProviders={availableProviders}
+              initialStatus={{
+                pinnedProvider: selectedApp.pinnedProvider || null,
+                pinnedModel: selectedApp.pinnedModel || null,
+                effectiveProvider: selectedApp.effectiveProvider || '',
+                effectiveModel: selectedApp.effectiveModel || '',
+              }}
+              onUpdate={(status: AppModelStatus) => {
+                setSelectedApp((prev) => prev ? {
+                  ...prev,
+                  pinnedProvider: status.pinnedProvider || '',
+                  pinnedModel: status.pinnedModel || '',
+                  effectiveProvider: status.effectiveProvider,
+                  effectiveModel: status.effectiveModel,
+                } : prev)
+              }}
+            />
           </div>
 
           {onImproveApp && (
@@ -313,14 +336,13 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
   const renderAppCard = (app: AppListItem) => (
     <div
       key={`${app.scope || 'local'}-${app.slug}`}
-      className="group rounded-xl overflow-hidden cursor-pointer transition-all hover:shadow-lg"
+      className="group rounded-xl overflow-hidden flex flex-col transition-all hover:shadow-lg"
       style={{
         border: '1px solid var(--border-color)',
         background: 'var(--bg-secondary)',
       }}
-      onClick={() => handleOpenApp(app.slug)}
     >
-      <div className="p-4">
+      <div className="p-4 flex-1 cursor-pointer" onClick={() => handleOpenApp(app.slug)}>
         <div className="flex items-start justify-between mb-2">
           <div className="flex items-center gap-2 min-w-0">
             <AppWindow size={16} style={{ color: '#10b981', flexShrink: 0 }} />
@@ -354,14 +376,15 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
             {app.description}
           </p>
         )}
+      </div>
 
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-            <Clock size={10} />
-            <span>{formatDate(app.updatedAt)}</span>
-          </div>
+      <div className="flex items-center justify-between mt-auto px-4 pb-3 pt-2" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div className="flex items-center gap-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
+          <Clock size={10} />
+          <span>{formatDate(app.updatedAt)}</span>
+        </div>
+        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
           <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            {/* Publish to team (personal apps only) */}
             {isPlatformMode && app.scope === 'personal' && onPublishApp && (
               <button
                 onClick={(e) => {
@@ -374,7 +397,6 @@ export default function AppsView({ theme, appName, isPlatformMode, onNavigate, o
                 <Upload size={12} className="text-blue-400" />
               </button>
             )}
-            {/* Fork to personal (team apps only) */}
             {isPlatformMode && app.scope === 'team' && onForkApp && (
               <button
                 onClick={(e) => {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/pdfgen"
 	"github.com/schardosin/astonish/pkg/provider"
@@ -639,11 +640,12 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 	}
 
 	// Per-message provider resolution: resolve the effective LLM from the
-	// 3-tier DB cascade (Platform → Org → Team). This ensures channels use
-	// the same provider as the Studio chat for the resolved team.
+	// 3-tier DB cascade (Platform → Org → Team) plus the per-session pin
+	// (DECISION-3: missing-cred → warn + cascade fallback, do NOT drop).
 	if m.llmPool != nil {
 		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
-			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+			appCfg := resolveEffectiveWithSessionPin(ctx, ps, route.SessionKey, msg.ChannelID, msg.SenderID)
+
 			if appCfg.General.DefaultProvider != "" {
 				m.logger.Printf("[channels] Dynamic provider resolution: provider=%q model=%q (channel=%s sender=%s)",
 					appCfg.General.DefaultProvider, appCfg.General.DefaultModel, msg.ChannelID, msg.SenderID)
@@ -960,14 +962,13 @@ func (m *ChannelManager) handleCommand(ctx context.Context, msg InboundMessage, 
 		}
 	}
 
-	// Resolve effective provider/model dynamically from the 3-tier DB cascade
-	// so that /status and other commands reflect the current configuration,
-	// not the stale startup-time values.
+	// Resolve effective provider/model dynamically (cascade + session pin)
+	// so that /status reflects the same model the next message will use.
 	effectiveProvider := m.providerName
 	effectiveModel := m.modelName
 	if m.llmPool != nil {
 		if ps := store.ProviderStoresFromContext(ctx); ps != nil {
-			appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+			appCfg := resolveEffectiveWithSessionPin(ctx, ps, route.SessionKey, msg.ChannelID, msg.SenderID)
 			if appCfg.General.DefaultProvider != "" {
 				effectiveProvider = appCfg.General.DefaultProvider
 			}
@@ -1085,6 +1086,42 @@ func (m *ChannelManager) handleFleetMessage(ctx context.Context, msg InboundMess
 
 	m.logger.Printf("[channels] Routed message to fleet session %s", fleetSessionID)
 	return nil
+}
+
+// resolveEffectiveWithSessionPin resolves the effective AppConfig for a
+// channel message: 3-tier cascade + user default + session pin (DECISION-3).
+// If the pinned provider has no credential on the current team, emits a
+// slog.Warn and returns the cascade-only config (message is NEVER dropped).
+func resolveEffectiveWithSessionPin(
+	ctx context.Context,
+	ps *store.ProviderStores,
+	sessionKey, channelID, senderID string,
+) *config.AppConfig {
+	appCfg := provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+	appCfg = provider.ApplyUserDefault(appCfg, nil)
+
+	var pinnedProvider, pinnedModel string
+	if tds := store.TeamDataStoreFromContext(ctx); tds != nil && sessionKey != "" {
+		if pin, pinErr := tds.SessionPin(ctx, sessionKey); pinErr == nil && pin != nil {
+			pinnedProvider = pin.Provider
+			pinnedModel = pin.Model
+		}
+	}
+	appCfg = provider.ApplyProviderOverride(appCfg, pinnedProvider, pinnedModel)
+
+	if pinnedProvider != "" {
+		if _, ok := appCfg.Providers[pinnedProvider]; !ok {
+			slog.Warn("[channels] pinned provider has no credential on this team; using cascade fallback",
+				"channel", channelID,
+				"sender", senderID,
+				"session", sessionKey,
+				"pinnedProvider", pinnedProvider,
+				"pinnedModel", pinnedModel)
+			appCfg = provider.ResolveEffectiveConfig(ctx, ps.Platform, ps.Org, ps.Team)
+			appCfg = provider.ApplyUserDefault(appCfg, nil)
+		}
+	}
+	return appCfg
 }
 
 // getOrCreateSession retrieves an existing session by key or creates a new one.

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
+	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
@@ -46,6 +48,8 @@ type StudioChatRequest struct {
 	Debug            bool             `json:"debug,omitempty"`            // reserved for future debug streaming
 	SystemContext    string           `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
 	PinnedToolGroups []string         `json:"pinnedToolGroups,omitempty"` // tool groups to always inject (wizard sessions)
+	Provider         string           `json:"provider,omitempty"`         // per-request provider override (pre-chat picker)
+	Model            string           `json:"model,omitempty"`            // per-request model override (pre-chat picker)
 }
 
 // StudioSessionResponse is a single session in list responses.
@@ -333,19 +337,21 @@ func (cm *ChatManager) ShutdownContainers() {
 // This is called when only the model/provider has changed, avoiding the full
 // teardown-and-rebuild cycle that causes the first-message delay.
 //
-// Returns true if hot-swap was performed, false if a full Reset is needed
-// (e.g., components not initialized or SwappableLLM not available).
-func (cm *ChatManager) HotSwapLLM(ctx context.Context, providerName, modelName string) bool {
+// Returns nil on successful swap. Returns an error if the swap cannot be
+// performed — the error message will contain "credential" when the target
+// provider has no credentials configured, so callers (e.g. PATCH /model)
+// can surface a 409 + credentialsAvailable=false banner.
+func (cm *ChatManager) HotSwapLLM(ctx context.Context, providerName, modelName string) error {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	if cm.components == nil {
 		slog.Warn("[hot-swap] FAILED: components is nil (chat agent not initialized yet)")
-		return false
+		return fmt.Errorf("hot-swap unavailable: chat agent not initialized")
 	}
 	if cm.components.SwappableLLM == nil {
 		slog.Warn("[hot-swap] FAILED: SwappableLLM is nil (factory didn't create it)")
-		return false
+		return fmt.Errorf("hot-swap unavailable: SwappableLLM not initialized")
 	}
 
 	// Load the effective app config for provider resolution.
@@ -356,12 +362,14 @@ func (cm *ChatManager) HotSwapLLM(ctx context.Context, providerName, modelName s
 	slog.Info("[hot-swap] creating new LLM provider",
 		"provider", providerName, "model", modelName, "isPlatform", isPlatform)
 
-	// Create the new LLM
+	// Create the new LLM. GetProvider fails when the resolved provider has no
+	// credential configured — surface that as an error containing "credential"
+	// so PATCH /model can respond with credentialsAvailable=false.
 	newLLM, err := provider.GetProvider(ctx, providerName, modelName, appCfg)
 	if err != nil {
 		slog.Warn("[hot-swap] FAILED: GetProvider error",
 			"provider", providerName, "model", modelName, "error", err)
-		return false
+		return fmt.Errorf("credential lookup failed for provider %q: %w", providerName, err)
 	}
 
 	// Swap the underlying LLM — all closures (compactor, reflector, etc.)
@@ -380,7 +388,7 @@ func (cm *ChatManager) HotSwapLLM(ctx context.Context, providerName, modelName s
 
 	slog.Info("[hot-swap] SUCCESS — LLM swapped without Reset()",
 		"provider", providerName, "model", modelName)
-	return true
+	return nil
 }
 
 // PreWarm initializes the chat agent in the background so the first request is fast.
@@ -592,7 +600,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasPrefix(msg, "/") {
 		// Use r.Context() for slash commands since they're lightweight
-		handleSlashCommand(r.Context(), w, flusher, cm, sessionService, msg, userID, req.SessionID)
+		handleSlashCommand(r, w, flusher, cm, sessionService, msg, userID, req.SessionID)
 		return
 	}
 
@@ -1092,6 +1100,28 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// model regardless of what other teams/admins have set.
 	if svc := store.FromRequest(r); svc != nil && cm.llmPool != nil {
 		appCfg := provider.ResolveEffectiveConfig(r.Context(), svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+		var userDefault provider.UserDefaultSettings
+		if svc.PersonalSettings != nil {
+			if ps, psErr := svc.PersonalSettings.Get(r.Context()); psErr == nil {
+				userDefault = ps
+			}
+		}
+		appCfg = provider.ApplyUserDefault(appCfg, userDefault)
+
+		// Resolve per-session pin: request-body override for the first message,
+		// otherwise the stored pin (personal-first, team fallback — studio chat
+		// sessions live in the personal store).
+		pinProvider, pinModel := req.Provider, req.Model
+		if isNew && (pinProvider != "" || pinModel != "") {
+			if err := persistSessionPin(r, sessionID, pinProvider, pinModel); err != nil {
+				slog.Warn("failed to persist pre-chat session pin",
+					"session", sessionID, "provider", pinProvider, "model", pinModel, "error", err)
+			}
+		} else if pinProvider == "" && pinModel == "" && !isNew {
+			pinProvider, pinModel = readSessionPin(r, sessionID)
+		}
+		appCfg = provider.ApplyProviderOverride(appCfg, pinProvider, pinModel)
+
 		if appCfg.General.DefaultProvider != "" {
 			resolvedLLM, llmErr := cm.llmPool.Get(r.Context(), appCfg.General.DefaultProvider, appCfg.General.DefaultModel, appCfg)
 			if llmErr != nil {
@@ -1234,7 +1264,11 @@ func streamRunnerEvents(w http.ResponseWriter, flusher http.Flusher, httpCtx con
 }
 
 // handleSlashCommand processes slash commands and sends results as SSE events.
-func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
+// The *http.Request is required so /status can resolve the per-session model
+// (personal pin → user default → team/org/platform cascade) instead of the
+// process-global ChatManager.ProviderName/ModelName.
+func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *ChatManager, sessionService session.Service, cmd, userID, sessionID string) {
+	ctx := r.Context()
 	comp := cm.components
 	chatAgent := comp.ChatAgent
 
@@ -1254,7 +1288,20 @@ func handleSlashCommand(ctx context.Context, w io.Writer, flusher http.Flusher, 
 		})
 
 	case cmd == "/status":
-		status := fmt.Sprintf("**Status**\n- Provider: `%s`\n- Model: `%s`\n", comp.ProviderName, comp.ModelName)
+		// Per-session effective model (same cascade as GET .../model-status).
+		// Never read cm.components.ProviderName/ModelName — those are process-global
+		// and can reflect another user's last HotSwapLLM.
+		effProvider, effModel, pinnedProvider, _, _ := resolveSessionEffectiveModel(r, sessionID)
+		if effProvider == "" {
+			effProvider = comp.ProviderName
+		}
+		if effModel == "" {
+			effModel = comp.ModelName
+		}
+		status := fmt.Sprintf("**Status**\n- Provider: `%s`\n- Model: `%s`\n", effProvider, effModel)
+		if pinnedProvider != "" {
+			status += "- Session pin: active\n"
+		}
 		if comp.Compactor != nil {
 			est, win := comp.Compactor.TokenUsage()
 			pct := float64(0)
@@ -1514,4 +1561,361 @@ func buildMergedSkillIndex(ctx context.Context, platformStore, orgStore, teamSto
 	}
 
 	return skills.BuildSkillIndex(deduped)
+}
+
+// readSessionPin returns the persisted provider/model pin for a session, or
+// empty strings when unpinned/unavailable. Personal-first, team fallback —
+// mirrors readAppPin. Studio chat sessions live in the personal store; fleet
+// sub-sessions live in the team store.
+func readSessionPin(r *http.Request, sessionID string) (pinnedProvider, pinnedModel string) {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		return "", ""
+	}
+	pu := GetPlatformUser(r)
+	if pu == nil || pu.OrgSlug == "" {
+		return "", ""
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil || orgStore == nil {
+		return "", ""
+	}
+	if pu.ID != "" {
+		if personalStore := orgStore.ForUser(pu.ID); personalStore != nil {
+			if pin, perr := personalStore.SessionPin(r.Context(), sessionID); perr == nil && pin != nil {
+				return pin.Provider, pin.Model
+			}
+		}
+	}
+	if pu.TeamSlug != "" {
+		if teamStore := orgStore.ForTeam(pu.TeamSlug); teamStore != nil {
+			if pin, terr := teamStore.SessionPin(r.Context(), sessionID); terr == nil && pin != nil {
+				return pin.Provider, pin.Model
+			}
+		}
+	}
+	return "", ""
+}
+
+// persistSessionPin writes a provider/model pin to the store that owns the
+// session (personal-first via PersonalSessions meta, then team Sessions,
+// then probe SessionPin). Returns nil when persistence is skipped (no tenant
+// context). Returns an error when the session cannot be found or the write fails.
+func persistSessionPin(r *http.Request, sessionID, provider, model string) error {
+	svc := store.FromRequest(r)
+	if svc == nil || svc.TenantRouter == nil {
+		return nil
+	}
+	pu := GetPlatformUser(r)
+	if pu == nil || pu.OrgSlug == "" {
+		return nil
+	}
+	orgStore, err := svc.TenantRouter.ForOrg(pu.OrgSlug)
+	if err != nil || orgStore == nil {
+		return fmt.Errorf("tenant not accessible")
+	}
+
+	scope := ""
+	if svc.PersonalSessions != nil {
+		if meta, mErr := svc.PersonalSessions.GetSessionMeta(r.Context(), sessionID); mErr == nil && meta != nil {
+			scope = "personal"
+		}
+	}
+	if scope == "" && svc.Sessions != nil {
+		if meta, mErr := svc.Sessions.GetSessionMeta(r.Context(), sessionID); mErr == nil && meta != nil {
+			scope = "team"
+		}
+	}
+	// Probe pin stores when session meta isn't wired (unit tests / edge cases).
+	if scope == "" && pu.ID != "" {
+		if personalStore := orgStore.ForUser(pu.ID); personalStore != nil {
+			if _, pErr := personalStore.SessionPin(r.Context(), sessionID); pErr == nil {
+				scope = "personal"
+			}
+		}
+	}
+	if scope == "" && pu.TeamSlug != "" {
+		if teamStore := orgStore.ForTeam(pu.TeamSlug); teamStore != nil {
+			if _, tErr := teamStore.SessionPin(r.Context(), sessionID); tErr == nil {
+				scope = "team"
+			}
+		}
+	}
+	// Brand-new studio chat sessions: PersonalSessions owns them even before
+	// meta probes succeed in some race windows — prefer personal when the
+	// user context is present and PersonalSessions is wired.
+	if scope == "" && svc.PersonalSessions != nil && pu.ID != "" && orgStore.ForUser(pu.ID) != nil {
+		scope = "personal"
+	}
+	if scope == "" && pu.TeamSlug != "" && orgStore.ForTeam(pu.TeamSlug) != nil {
+		scope = "team"
+	}
+
+	var setErr error
+	switch scope {
+	case "personal":
+		setErr = orgStore.ForUser(pu.ID).SetSessionPin(r.Context(), sessionID, provider, model)
+	case "team":
+		setErr = orgStore.ForTeam(pu.TeamSlug).SetSessionPin(r.Context(), sessionID, provider, model)
+	default:
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return setErr
+}
+
+// sessionProviderHasCredential reports whether a provider can be selected in
+// the model picker. Checks team credentials, personal credentials, and
+// embedded secrets in the resolved provider config (api_key etc.).
+func sessionProviderHasCredential(ctx context.Context, svc *store.Services, name string, pCfg config.ProviderConfig) bool {
+	if svc == nil {
+		return true
+	}
+	hasCredStore := svc.Credentials != nil || svc.PersonalCredentials != nil
+	if !hasCredStore {
+		return true
+	}
+	if svc.Credentials != nil && svc.Credentials.GetSecret(ctx, name) != "" {
+		return true
+	}
+	if svc.PersonalCredentials != nil && svc.PersonalCredentials.GetSecret(ctx, name) != "" {
+		return true
+	}
+	for _, key := range []string{"api_key", "apiKey", "token", "access_token"} {
+		if v := pCfg[key]; v != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveSessionEffectiveModel returns the effective provider/model for a
+// studio chat session after the full cascade (platform → org → team →
+// user-default → session-pin). Empty sessionID skips the pin lookup.
+// Shared by GET .../model-status and the /status slash command so both
+// surfaces agree with the per-request InjectLLM path.
+func resolveSessionEffectiveModel(r *http.Request, sessionID string) (effectiveProvider, effectiveModel, pinnedProvider, pinnedModel string, providers map[string]config.ProviderConfig) {
+	svc := store.FromRequest(r)
+	ctx := r.Context()
+	if sessionID != "" {
+		pinnedProvider, pinnedModel = readSessionPin(r, sessionID)
+	}
+	var resolved = &config.AppConfig{}
+	if svc != nil {
+		resolved = provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+	}
+	var userDefault provider.UserDefaultSettings
+	if svc != nil && svc.PersonalSettings != nil {
+		if ps, psErr := svc.PersonalSettings.Get(ctx); psErr == nil {
+			userDefault = ps
+		}
+	}
+	resolved = provider.ApplyUserDefault(resolved, userDefault)
+	resolved = provider.ApplyProviderOverride(resolved, pinnedProvider, pinnedModel)
+	return resolved.General.DefaultProvider, resolved.General.DefaultModel, pinnedProvider, pinnedModel, resolved.Providers
+}
+
+// SessionModelStatusResponse is the payload for GET /api/studio/sessions/{id}/model-status.
+//
+// It reports the current per-session pin (if any), the effective provider/model
+// after the full cascade (platform → org → team → user-default → app-pin →
+// session-pin) is applied, whether a credential exists for the pinned provider
+// (soft-fallback signal — see DECISION-3 in the per-chat-app-model-pin notepad),
+// and the list of providers that have credentials on the current team.
+type SessionModelStatusResponse struct {
+	PinnedProvider       string   `json:"pinnedProvider"`
+	PinnedModel          string   `json:"pinnedModel"`
+	EffectiveProvider    string   `json:"effectiveProvider"`
+	EffectiveModel       string   `json:"effectiveModel"`
+	CredentialsAvailable bool     `json:"credentialsAvailable"`
+	AvailableProviders   []string `json:"availableProviders"`
+}
+
+// GetSessionModelStatusHandler handles GET /api/studio/sessions/{id}/model-status.
+//
+// Returns the current session's pin state, the effective provider/model after the
+// overlay chain runs (see provider.ApplyProviderOverride), whether credentials
+// exist for the pinned provider (soft-fallback signal — no error when the pin
+// references a provider without a credential), and the list of provider names
+// visible to the current team (the resolved cfg.Providers map).
+//
+// Credential handling never exposes values — only the boolean
+// `credentialsAvailable` is returned. In personal mode (no TenantRouter, no
+// authenticated platform user) the pin fields are empty and the effective values
+// come from the resolved cascade only.
+func GetSessionModelStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+	if sessionID == "" {
+		respondError(w, http.StatusBadRequest, "session ID required")
+		return
+	}
+
+	svc := store.FromRequest(r)
+
+	effectiveProvider, effectiveModel, pinnedProvider, pinnedModel, resolvedProviders := resolveSessionEffectiveModel(r, sessionID)
+
+	// Credential check: soft fallback. Unpinned = healthy (true). Pinned = true
+	// only when a credential (team, personal, or embedded) exists for the pin.
+	credentialsAvailable := true
+	if pinnedProvider != "" {
+		pCfg := resolvedProviders[pinnedProvider]
+		credentialsAvailable = sessionProviderHasCredential(r.Context(), svc, pinnedProvider, pCfg)
+	}
+
+	// Available providers = all resolved cfg.Providers names (same set as
+	// GET /api/settings/providers/effective). Credential presence is reported
+	// separately via credentialsAvailable so the picker stays in sync with the
+	// pre-chat list. Sorted lexicographically for stable JSON.
+	names := make([]string, 0, len(resolvedProviders))
+	for name := range resolvedProviders {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	respondJSON(w, http.StatusOK, SessionModelStatusResponse{
+		PinnedProvider:       pinnedProvider,
+		PinnedModel:          pinnedModel,
+		EffectiveProvider:    effectiveProvider,
+		EffectiveModel:       effectiveModel,
+		CredentialsAvailable: credentialsAvailable,
+		AvailableProviders:   names,
+	})
+}
+
+// PatchSessionModelRequest is the payload for PATCH /api/studio/sessions/{id}/model.
+//
+// Empty strings clear the pin for that field (both empty ⇒ full clear, cascade
+// falls back to user-default → team → org → platform).
+type PatchSessionModelRequest struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+}
+
+// PatchSessionModelResponse mirrors SessionModelStatusResponse minus the
+// availableProviders list (the SPA already has that from GET).
+type PatchSessionModelResponse struct {
+	PinnedProvider       string `json:"pinnedProvider"`
+	PinnedModel          string `json:"pinnedModel"`
+	EffectiveProvider    string `json:"effectiveProvider"`
+	EffectiveModel       string `json:"effectiveModel"`
+	CredentialsAvailable bool   `json:"credentialsAvailable"`
+}
+
+// PatchSessionModelHandler handles PATCH /api/studio/sessions/{id}/model.
+//
+// Persists the per-session model pin (via TenantRouter → team store) and, in
+// Studio mode, hot-swaps the live LLM on the singleton ChatManager. When a
+// runner is currently streaming for this session, a `model_changed` SSE event
+// is emitted so the SPA can refresh its status badge without polling.
+//
+// Missing-credential handling (DECISION-3): if the target provider has no
+// credential, the pin still persists and HTTP 200 is returned with
+// `credentialsAvailable:false`. The hot-swap is skipped so the current LLM
+// keeps serving requests. Callers surface a soft banner rather than an error.
+//
+// Personal mode: when no TenantRouter/platform user is present, pin
+// persistence is skipped silently (personal SQLite has no team-scoped pin
+// store wired here); the hot-swap still runs so `astonish chat` can flip
+// models mid-session.
+//
+// Contract references:
+//   - .omo/notepads/per-chat-app-model-pin/decisions.md DECISION-3, DECISION-4
+//   - docs/architecture/chat-rendering-pipeline.md — `model_changed` event
+//   - pkg/api/AGENTS.md — tenant isolation, SSE event registration
+func PatchSessionModelHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+	if sessionID == "" || !validSessionID.MatchString(sessionID) {
+		respondError(w, http.StatusBadRequest, "invalid session ID")
+		return
+	}
+
+	var req PatchSessionModelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Normalize (defense-in-depth against accidental whitespace).
+	req.Provider = strings.TrimSpace(req.Provider)
+	req.Model = strings.TrimSpace(req.Model)
+
+	svc := store.FromRequest(r)
+	ctx := r.Context()
+
+	// Persist the pin on the store that owns the session (personal-first for
+	// studio chat, team for fleet). Personal mode (no tenant context) skips
+	// silently — the hot-swap below still runs.
+	if err := persistSessionPin(r, sessionID, req.Provider, req.Model); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			respondError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "tenant not accessible") {
+			respondError(w, http.StatusForbidden, "tenant not accessible")
+			return
+		}
+		slog.Warn("[patch-model] SetSessionPin failed",
+			"session", sessionID, "error", err)
+		respondError(w, http.StatusInternalServerError, "failed to persist pin")
+		return
+	}
+
+	// Attempt live hot-swap. DECISION-4 says Studio does true swap; a missing
+	// credential is a soft error (pin persisted, swap skipped, HTTP 200).
+	credentialsAvailable := true
+	if req.Provider != "" || req.Model != "" {
+		if err := GetChatManager().HotSwapLLM(ctx, req.Provider, req.Model); err != nil {
+			if strings.Contains(err.Error(), "credential") {
+				credentialsAvailable = false
+				slog.Info("[patch-model] pin persisted, swap skipped (no credential)",
+					"session", sessionID, "provider", req.Provider, "model", req.Model)
+			} else {
+				slog.Warn("[patch-model] hot-swap failed (non-fatal; next request re-inits)",
+					"session", sessionID, "error", err)
+			}
+		}
+	}
+
+	// Recompute the effective cascade to return the post-pin resolution.
+	var resolved = &config.AppConfig{}
+	if svc != nil {
+		resolved = provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+	}
+	var patchUserDefault provider.UserDefaultSettings
+	if svc != nil && svc.PersonalSettings != nil {
+		if ps, psErr := svc.PersonalSettings.Get(ctx); psErr == nil {
+			patchUserDefault = ps
+		}
+	}
+	resolved = provider.ApplyUserDefault(resolved, patchUserDefault)
+	resolved = provider.ApplyProviderOverride(resolved, req.Provider, req.Model)
+	effectiveProvider := resolved.General.DefaultProvider
+	effectiveModel := resolved.General.DefaultModel
+
+	// Soft-fallback credential signal for the response (HotSwap may already
+	// have set credentialsAvailable=false; also check stores/config).
+	if credentialsAvailable && req.Provider != "" {
+		pCfg := resolved.Providers[req.Provider]
+		if !sessionProviderHasCredential(ctx, svc, req.Provider, pCfg) {
+			credentialsAvailable = false
+		}
+	}
+
+	// Emit SSE `model_changed` to the live runner (if any). Guarded: no
+	// runner ⇒ silently skip (not every session has an active stream).
+	if runner := getChatRunnerRegistry().Get(sessionID); runner != nil {
+		runner.emitEvent("model_changed", map[string]any{
+			"sessionId":            sessionID,
+			"pinnedProvider":       req.Provider,
+			"pinnedModel":          req.Model,
+			"effectiveProvider":    effectiveProvider,
+			"effectiveModel":       effectiveModel,
+			"credentialsAvailable": credentialsAvailable,
+		})
+	}
+
+	respondJSON(w, http.StatusOK, PatchSessionModelResponse{
+		PinnedProvider:       req.Provider,
+		PinnedModel:          req.Model,
+		EffectiveProvider:    effectiveProvider,
+		EffectiveModel:       effectiveModel,
+		CredentialsAvailable: credentialsAvailable,
+	})
 }

@@ -215,6 +215,22 @@ Traces serve two purposes:
 
 Traces are stored in-memory per session (max 20 per session) and can be reconstructed from persisted session events across daemon restarts.
 
+### Provider Resolution Cascade
+
+Provider and model selection follows a 5-tier cascade (later tiers override earlier):
+
+1. **Platform** — global defaults from `PlatformSettings`
+2. **Org** — org-level overrides from `OrgSettings`
+3. **Team** — team-level overrides from `TeamSettings`
+4. **User Default** — personal preference via `ApplyUserDefault(cfg, personalSettings)` (`pkg/provider/resolve.go`)
+5. **Session/App Pin** — per-chat or per-app override via `ApplyProviderOverride(cfg, provider, model)` (`pkg/provider/resolve.go`)
+
+Empty strings at any tier mean "inherit from the tier below." The base cascade (tiers 1-3) is computed by `ResolveEffectiveConfig`. Tiers 4-5 are applied as chained overlays at each call site.
+
+Missing credentials for a pinned provider trigger a `slog.Warn` and fall back to the cascade result in-memory. The pin is never auto-cleared.
+
+CLI flags `-p`/`-m` pin by default onto new sessions. Use `--no-pin` to restore ephemeral behavior, or `--clear-model` on a resumed session to remove an existing pin.
+
 ## Key Files
 
 | File | Purpose |

@@ -59,6 +59,50 @@ func ResolveEffectiveConfig(
 	return appCfg
 }
 
+// UserDefaultSettings is the narrow contract ApplyUserDefault consumes:
+// per-user default provider/model accessors that return "" for "inherit".
+// Kept as an interface so pkg/provider does not import pkg/store.
+type UserDefaultSettings interface {
+	GetDefaultProvider() string
+	GetDefaultModel() string
+}
+
+// ApplyUserDefault overlays a user's personal default onto an already-resolved
+// AppConfig (Platform → Org → Team → UserDefault). Empty-string fields
+// inherit from the cascade below; non-empty fields override
+// cfg.General.DefaultProvider / DefaultModel. The additive cfg.Providers
+// map is never touched. Returns the same *AppConfig pointer received
+// (mutate-in-place). Nil us is a safe no-op. Idempotent.
+func ApplyUserDefault(cfg *config.AppConfig, us UserDefaultSettings) *config.AppConfig {
+	if us == nil {
+		return cfg
+	}
+	if p := us.GetDefaultProvider(); p != "" {
+		cfg.General.DefaultProvider = p
+	}
+	if m := us.GetDefaultModel(); m != "" {
+		cfg.General.DefaultModel = m
+	}
+	return cfg
+}
+
+// ApplyProviderOverride overlays a per-session/per-app pin onto an
+// already-resolved AppConfig — the innermost cascade layer
+// (Platform → Org → Team → UserDefault → ProviderOverride). Empty-string
+// fields inherit from the cascade below (this is the "unpin"/"clear"
+// contract); non-empty fields override cfg.General.DefaultProvider /
+// DefaultModel. The additive cfg.Providers map is never touched. Returns
+// the same *AppConfig pointer received (mutate-in-place). Idempotent.
+func ApplyProviderOverride(cfg *config.AppConfig, provider, model string) *config.AppConfig {
+	if provider != "" {
+		cfg.General.DefaultProvider = provider
+	}
+	if model != "" {
+		cfg.General.DefaultModel = model
+	}
+	return cfg
+}
+
 // applyProviderLayer merges a provider configuration layer into the app config.
 // Providers are additive by name; defaults override only if non-empty.
 func applyProviderLayer(appCfg *config.AppConfig, providers map[string]store.ProviderConfig, defaultProvider, defaultModel string) {

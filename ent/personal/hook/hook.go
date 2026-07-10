@@ -69,6 +69,18 @@ func (f MemoryFunc) Mutate(ctx context.Context, m personal.Mutation) (personal.V
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *personal.MemoryMutation", m)
 }
 
+// The PersonalSettingsFunc type is an adapter to allow the use of ordinary
+// function as PersonalSettings mutator.
+type PersonalSettingsFunc func(context.Context, *personal.PersonalSettingsMutation) (personal.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f PersonalSettingsFunc) Mutate(ctx context.Context, m personal.Mutation) (personal.Value, error) {
+	if mv, ok := m.(*personal.PersonalSettingsMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *personal.PersonalSettingsMutation", m)
+}
+
 // The SessionFunc type is an adapter to allow the use of ordinary
 // function as Session mutator.
 type SessionFunc func(context.Context, *personal.SessionMutation) (personal.Value, error)

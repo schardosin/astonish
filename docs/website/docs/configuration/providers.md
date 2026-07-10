@@ -25,35 +25,37 @@ Additional services (Azure OpenAI, AWS Bedrock, DeepSeek, Together AI, Fireworks
 
 ### Studio Settings (Recommended)
 
-The primary way to manage providers is through **Studio Settings → Providers**. This stores configurations in the database using the 3-tier cascade system.
+The primary way to manage providers is through **Studio Settings → Providers**. This stores configurations in the database using the admin cascade (Platform → Org → Team), plus personal defaults and per-session / per-app model pins.
 
-## 3-Tier Cascade Resolution
+## Cascade Resolution
 
-Astonish resolves provider configuration using a **3-tier inheritance system** where the closest level to the user takes priority:
+Astonish resolves provider **configuration** (API keys, endpoints, available providers) through the admin cascade, then applies personal and per-resource model overrides:
 
 ```
-Platform (base) → Organization (overrides platform) → Team (overrides everything)
+Platform (base) → Organization → Team → User default → Session / App pin
 ```
 
-| Tier | Set By | Scope | Priority |
-|------|--------|-------|----------|
+| Layer | Set By | Scope | Priority |
+|-------|--------|-------|----------|
 | **Platform** | Platform admin | All organizations and teams | Lowest (base defaults) |
 | **Organization** | Org admin | All teams within the org | Overrides platform |
-| **Team** | Team admin | Only that team's members | Highest (wins always) |
+| **Team** | Team admin | That team's members | Overrides org |
+| **User default** | User (Settings) | That user | Overrides team |
+| **Session / App pin** | User (Chat or App Model control, or CLI) | One session or one app | Highest |
 
 ### How Resolution Works
 
 When a user sends a message, Astonish resolves which provider and model to use by applying layers in order:
 
-1. **Start with Platform settings** — These are the base defaults available to everyone. If the platform admin configured Anthropic as the default provider with `claude-sonnet-4-20250514`, that's the starting point.
-
-2. **Apply Organization settings** — If the org admin has set different defaults (e.g., a different model or added extra providers), those override the platform values. Any field left empty at the org level inherits from platform.
-
-3. **Apply Team settings** — If the team admin has configured providers or a different default model, those take final priority. Again, only non-empty values override — anything not set at the team level inherits from the org (or platform).
+1. **Start with Platform settings** — Base defaults available to everyone.
+2. **Apply Organization settings** — Non-empty org values override platform.
+3. **Apply Team settings** — Non-empty team values override org.
+4. **Apply User default** — Personal default provider/model (when set).
+5. **Apply Session or App pin** — Per-chat or per-app override from the Studio Model control (or CLI `-p`/`-m`). Empty pin = no override.
 
 ### Inheritance Rules
 
-- **Default provider/model**: The closest non-empty value to the user wins. If the team sets a default model, it's used regardless of what org or platform say. If the team doesn't set one, the org value is checked, then platform.
+- **Default provider/model**: After the cascade above, the closest non-empty value wins. A session pin beats a user default; a user default beats team/org/platform.
 - **Provider configs are additive**: Providers defined at any level are merged together. A team can access providers configured at platform level without re-declaring them.
 - **Same-name providers override**: If a provider named `openai` exists at both platform and team level, the team's configuration (API key, base URL, etc.) takes precedence.
 
@@ -83,6 +85,7 @@ Result for "backend-eng" members:
 - **Platform admins** set organization-wide defaults and approved providers
 - **Org admins** can customize for their organization without affecting others
 - **Team admins** can fine-tune for their team's specific needs (faster models for dev, stronger models for code review, local models for air-gapped work)
+- **Users** can set a personal default and pin a model per chat or per app without changing team settings
 - **No duplication needed** — teams inherit everything from above and only override what they need
 
 API keys are stored securely — at the platform level they go into a separate encrypted secrets table, at the team level they're stored in the team's database record.
@@ -183,9 +186,27 @@ Fields:
 
 ## Default Provider and Model
 
-The default provider and model are configured through **Studio Settings → Providers**. These cascade through the same 3-tier system (Platform → Org → Team), with the closest tier taking priority.
+The default provider and model are configured through **Studio Settings → Providers**. These cascade through Platform → Org → Team, with the closest tier taking priority. Users can also set a personal default and pin a model per chat session or per app (see below).
 
-The active provider and model are displayed as a read-only chip in the Studio top bar. To change which model is used, update the default in Settings — the change applies to all subsequent messages.
+### Per-session and per-app overrides
+
+Beyond Settings defaults, Studio lets you pin a model for a single conversation or a single app:
+
+| Surface | Where | Behavior |
+|---------|-------|----------|
+| **Chat session** | Chat toolbar **Model** control | Pin before the first message or change mid-session. Persists for that session only. |
+| **App** | Apps → open an app → **Model** control next to the title | Pin which LLM that app uses when run or refined with AI. |
+| **CLI** | `astonish chat -p … -m …` | Pins onto a new session by default (see [Chat Commands](../cli/chat.md)). |
+
+Full resolution order for chat:
+
+```
+Session pin → User default → Team → Org → Platform
+```
+
+For apps, the app pin sits in the same place as the session pin (app pin → user default → team → org → platform).
+
+The chat toolbar and app header show `Model: default` when nothing is pinned, or `Model: provider/model` when a pin is active. They are not read-only chips — open them to browse providers and models.
 
 ## Environment Variable Fallback
 

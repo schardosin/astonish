@@ -9,6 +9,7 @@ vi.mock('../../api/studioChat', () => ({
   deleteSession: vi.fn().mockResolvedValue({}),
   connectChat: vi.fn().mockReturnValue(new AbortController()),
   stopChat: vi.fn().mockResolvedValue({}),
+  fetchAvailableProviders: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('../../api/fleetChat', () => ({

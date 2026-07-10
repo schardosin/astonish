@@ -62,6 +62,12 @@ type Services struct {
 	// Flows are created here by default and explicitly published to team when ready.
 	PersonalFlows FlowStore
 
+	// PersonalSettings provides access to per-user default configuration
+	// (default provider / default model). Personal scope only — there is no
+	// team/org equivalent (DECISION-1 in .omo/plans/per-chat-app-model-pin.md).
+	// Nil in personal mode when no user context has been established.
+	PersonalSettings PersonalSettingsStore
+
 	// Scheduler provides access to scheduled job persistence.
 	Scheduler SchedulerStore
 

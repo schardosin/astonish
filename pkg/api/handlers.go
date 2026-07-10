@@ -1036,6 +1036,9 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/settings/mcp", GetMCPSettingsHandler).Methods("GET")
 	router.HandleFunc("/api/settings/mcp", UpdateMCPSettingsHandler).Methods("PUT")
 
+	router.HandleFunc("/api/user-settings/default-model", GetUserDefaultModelHandler).Methods("GET")
+	router.HandleFunc("/api/user-settings/default-model", PatchUserDefaultModelHandler).Methods("PATCH")
+
 	// Provider settings endpoints (cascading: platform → org → team)
 	router.HandleFunc("/api/settings/platform/providers", GetPlatformProvidersHandler).Methods("GET")
 	router.HandleFunc("/api/settings/platform/providers", SavePlatformProvidersHandler).Methods("PUT")
@@ -1213,6 +1216,7 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/apps/{name}", GetAppHandler).Methods("GET")
 	router.HandleFunc("/api/apps/{name}", SaveAppHandler).Methods("PUT")
 	router.HandleFunc("/api/apps/{name}", DeleteAppHandler).Methods("DELETE")
+	router.HandleFunc("/api/apps/{name}/model", PatchAppModelHandler).Methods("PATCH")
 	router.HandleFunc("/api/apps/{name}/stream", AppStreamHandler).Methods("GET")
 
 	// Studio Chat endpoints
@@ -1225,6 +1229,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/studio/sessions/{id}/stop", StudioStopHandler).Methods("POST")
 	router.HandleFunc("/api/studio/sessions/{id}/stream", StudioChatStreamHandler).Methods("GET")
 	router.HandleFunc("/api/studio/sessions/{id}/status", StudioChatStatusHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}/model-status", GetSessionModelStatusHandler).Methods("GET")
+	router.HandleFunc("/api/studio/sessions/{id}/model", PatchSessionModelHandler).Methods("PATCH")
 
 	// Network grant approval endpoints (dynamic network policy)
 	router.HandleFunc("/api/studio/sessions/{id}/network-grants/approve", NetworkGrantApproveHandler).Methods("POST")

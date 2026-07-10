@@ -192,6 +192,7 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 					reqSvc.PersonalFlows = personalStore.Flows()
 					reqSvc.PersonalApps = personalStore.Apps()
 					reqSvc.PersonalCredentials = personalStore.Credentials()
+					reqSvc.PersonalSettings = personalStore.PersonalSettings()
 				}
 
 				// Build three-tier memory searcher

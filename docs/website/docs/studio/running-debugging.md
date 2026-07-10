@@ -71,5 +71,5 @@ astonish daemon run
 |---------|--------------|
 | Tool call hangs | External service timeout — check MCP server status |
 | Empty response | Context window exceeded — start a new session |
-| Wrong model | Check model selector matches your intent |
+| Wrong model | Check the Chat/App **Model** control (or Settings → Providers for team defaults) |
 | Flow node fails | Inspect node output in the chat panel for error details |

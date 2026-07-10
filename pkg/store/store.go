@@ -130,6 +130,11 @@ type TeamDataStore interface {
 	DrillReports() DrillReportStore
 	Settings() SettingsStore
 	Audit() AuditStore
+
+	SessionPin(ctx context.Context, sessionID string) (*SessionPin, error)
+	SetSessionPin(ctx context.Context, sessionID, provider, model string) error
+	AppPin(ctx context.Context, appSlug string) (*AppPin, error)
+	SetAppPin(ctx context.Context, appSlug, provider, model string) error
 }
 
 // PersonalDataStore accesses a user's private data.
@@ -140,6 +145,12 @@ type PersonalDataStore interface {
 	AppState() AppStateStore
 	Flows() FlowStore
 	Credentials() CredentialStore
+
+	PersonalSettings() PersonalSettingsStore
+	SessionPin(ctx context.Context, sessionID string) (*SessionPin, error)
+	SetSessionPin(ctx context.Context, sessionID, provider, model string) error
+	AppPin(ctx context.Context, appSlug string) (*AppPin, error)
+	SetAppPin(ctx context.Context, appSlug, provider, model string) error
 }
 
 // --------------------------------------------------------------------------

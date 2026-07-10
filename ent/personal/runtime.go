@@ -11,6 +11,7 @@ import (
 	"github.com/schardosin/astonish/ent/personal/credential"
 	"github.com/schardosin/astonish/ent/personal/flow"
 	"github.com/schardosin/astonish/ent/personal/memory"
+	"github.com/schardosin/astonish/ent/personal/personalsettings"
 	"github.com/schardosin/astonish/ent/personal/schema"
 	"github.com/schardosin/astonish/ent/personal/session"
 	"github.com/schardosin/astonish/ent/personal/sessionevent"
@@ -47,11 +48,11 @@ func init() {
 	// app.DefaultSessionID holds the default value on creation for the session_id field.
 	app.DefaultSessionID = appDescSessionID.Default.(string)
 	// appDescCreatedAt is the schema descriptor for created_at field.
-	appDescCreatedAt := appFields[7].Descriptor()
+	appDescCreatedAt := appFields[9].Descriptor()
 	// app.DefaultCreatedAt holds the default value on creation for the created_at field.
 	app.DefaultCreatedAt = appDescCreatedAt.Default.(func() time.Time)
 	// appDescUpdatedAt is the schema descriptor for updated_at field.
-	appDescUpdatedAt := appFields[8].Descriptor()
+	appDescUpdatedAt := appFields[10].Descriptor()
 	// app.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	app.DefaultUpdatedAt = appDescUpdatedAt.Default.(func() time.Time)
 	// app.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -138,6 +139,30 @@ func init() {
 	memoryDescID := memoryFields[0].Descriptor()
 	// memory.DefaultID holds the default value on creation for the id field.
 	memory.DefaultID = memoryDescID.Default.(func() uuid.UUID)
+	personalsettingsFields := schema.PersonalSettings{}.Fields()
+	_ = personalsettingsFields
+	// personalsettingsDescUserID is the schema descriptor for user_id field.
+	personalsettingsDescUserID := personalsettingsFields[0].Descriptor()
+	// personalsettings.DefaultUserID holds the default value on creation for the user_id field.
+	personalsettings.DefaultUserID = personalsettingsDescUserID.Default.(func() uuid.UUID)
+	// personalsettingsDescDefaultProvider is the schema descriptor for default_provider field.
+	personalsettingsDescDefaultProvider := personalsettingsFields[1].Descriptor()
+	// personalsettings.DefaultDefaultProvider holds the default value on creation for the default_provider field.
+	personalsettings.DefaultDefaultProvider = personalsettingsDescDefaultProvider.Default.(string)
+	// personalsettingsDescDefaultModel is the schema descriptor for default_model field.
+	personalsettingsDescDefaultModel := personalsettingsFields[2].Descriptor()
+	// personalsettings.DefaultDefaultModel holds the default value on creation for the default_model field.
+	personalsettings.DefaultDefaultModel = personalsettingsDescDefaultModel.Default.(string)
+	// personalsettingsDescCreatedAt is the schema descriptor for created_at field.
+	personalsettingsDescCreatedAt := personalsettingsFields[3].Descriptor()
+	// personalsettings.DefaultCreatedAt holds the default value on creation for the created_at field.
+	personalsettings.DefaultCreatedAt = personalsettingsDescCreatedAt.Default.(func() time.Time)
+	// personalsettingsDescUpdatedAt is the schema descriptor for updated_at field.
+	personalsettingsDescUpdatedAt := personalsettingsFields[4].Descriptor()
+	// personalsettings.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	personalsettings.DefaultUpdatedAt = personalsettingsDescUpdatedAt.Default.(func() time.Time)
+	// personalsettings.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	personalsettings.UpdateDefaultUpdatedAt = personalsettingsDescUpdatedAt.UpdateDefault.(func() time.Time)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescTitle is the schema descriptor for title field.
@@ -169,11 +194,11 @@ func init() {
 	// session.DefaultWorkspaceDir holds the default value on creation for the workspace_dir field.
 	session.DefaultWorkspaceDir = sessionDescWorkspaceDir.Default.(string)
 	// sessionDescCreatedAt is the schema descriptor for created_at field.
-	sessionDescCreatedAt := sessionFields[11].Descriptor()
+	sessionDescCreatedAt := sessionFields[13].Descriptor()
 	// session.DefaultCreatedAt holds the default value on creation for the created_at field.
 	session.DefaultCreatedAt = sessionDescCreatedAt.Default.(func() time.Time)
 	// sessionDescUpdatedAt is the schema descriptor for updated_at field.
-	sessionDescUpdatedAt := sessionFields[12].Descriptor()
+	sessionDescUpdatedAt := sessionFields[14].Descriptor()
 	// session.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	session.DefaultUpdatedAt = sessionDescUpdatedAt.Default.(func() time.Time)
 	// session.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

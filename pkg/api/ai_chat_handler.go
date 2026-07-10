@@ -72,6 +72,12 @@ func AIChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Load app config
 	appCfg := effectiveAppConfig(r)
+	// AIChatHandler is the flow-builder AI assistant — AIChatRequest carries
+	// no app name, so per-app pin overlay does not apply here. The overlay
+	// with empty strings is kept as a no-op to preserve the cascade shape
+	// for parity with app-runtime call sites (see readAppPin in
+	// app_handlers.go for the real lookup).
+	appCfg = provider.ApplyProviderOverride(appCfg, "", "")
 	injectProviderSecrets(appCfg)
 
 	// Get default provider and model

@@ -236,6 +236,16 @@ func EffectiveAppConfigFromContext(ctx context.Context, isPlatformMode bool) *co
 	// Platform mode: providers come exclusively from the database.
 	// Delegate to the shared provider resolution function.
 	resolved := provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+
+	// Layer 4: User default (personal settings override team/org/platform).
+	var userDefault provider.UserDefaultSettings
+	if svc.PersonalSettings != nil {
+		if ps, err := svc.PersonalSettings.Get(ctx); err == nil {
+			userDefault = ps
+		}
+	}
+	resolved = provider.ApplyUserDefault(resolved, userDefault)
+	resolved = provider.ApplyProviderOverride(resolved, "", "")
 	appCfg.Providers = resolved.Providers
 	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
 	appCfg.General.DefaultModel = resolved.General.DefaultModel
@@ -275,6 +285,16 @@ func effectiveAppConfig(r *http.Request) *config.AppConfig {
 	// Platform mode: providers come exclusively from the database.
 	// Delegate to the shared provider resolution function.
 	resolved := provider.ResolveEffectiveConfig(ctx, svc.PlatformSettings, svc.OrgSettings, svc.Settings)
+
+	// Layer 4: User default (personal settings override team/org/platform).
+	var userDefault provider.UserDefaultSettings
+	if svc.PersonalSettings != nil {
+		if ps, err := svc.PersonalSettings.Get(ctx); err == nil {
+			userDefault = ps
+		}
+	}
+	resolved = provider.ApplyUserDefault(resolved, userDefault)
+	resolved = provider.ApplyProviderOverride(resolved, "", "")
 	appCfg.Providers = resolved.Providers
 	appCfg.General.DefaultProvider = resolved.General.DefaultProvider
 	appCfg.General.DefaultModel = resolved.General.DefaultModel

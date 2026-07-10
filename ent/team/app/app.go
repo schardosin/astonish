@@ -28,6 +28,10 @@ const (
 	FieldSessionID = "session_id"
 	// FieldPublishedBy holds the string denoting the published_by field in the database.
 	FieldPublishedBy = "published_by"
+	// FieldProviderName holds the string denoting the provider_name field in the database.
+	FieldProviderName = "provider_name"
+	// FieldModelName holds the string denoting the model_name field in the database.
+	FieldModelName = "model_name"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -46,6 +50,8 @@ var Columns = []string{
 	FieldVersion,
 	FieldSessionID,
 	FieldPublishedBy,
+	FieldProviderName,
+	FieldModelName,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -124,6 +130,16 @@ func BySessionID(opts ...sql.OrderTermOption) OrderOption {
 // ByPublishedBy orders the results by the published_by field.
 func ByPublishedBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldPublishedBy, opts...).ToFunc()
+}
+
+// ByProviderName orders the results by the provider_name field.
+func ByProviderName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProviderName, opts...).ToFunc()
+}
+
+// ByModelName orders the results by the model_name field.
+func ByModelName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldModelName, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

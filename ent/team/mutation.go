@@ -80,6 +80,8 @@ type AppMutation struct {
 	addversion    *int
 	session_id    *string
 	published_by  *uuid.UUID
+	provider_name *string
+	model_name    *string
 	created_at    *time.Time
 	updated_at    *time.Time
 	clearedFields map[string]struct{}
@@ -477,6 +479,104 @@ func (m *AppMutation) ResetPublishedBy() {
 	delete(m.clearedFields, app.FieldPublishedBy)
 }
 
+// SetProviderName sets the "provider_name" field.
+func (m *AppMutation) SetProviderName(s string) {
+	m.provider_name = &s
+}
+
+// ProviderName returns the value of the "provider_name" field in the mutation.
+func (m *AppMutation) ProviderName() (r string, exists bool) {
+	v := m.provider_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderName returns the old "provider_name" field's value of the App entity.
+// If the App object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AppMutation) OldProviderName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderName: %w", err)
+	}
+	return oldValue.ProviderName, nil
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (m *AppMutation) ClearProviderName() {
+	m.provider_name = nil
+	m.clearedFields[app.FieldProviderName] = struct{}{}
+}
+
+// ProviderNameCleared returns if the "provider_name" field was cleared in this mutation.
+func (m *AppMutation) ProviderNameCleared() bool {
+	_, ok := m.clearedFields[app.FieldProviderName]
+	return ok
+}
+
+// ResetProviderName resets all changes to the "provider_name" field.
+func (m *AppMutation) ResetProviderName() {
+	m.provider_name = nil
+	delete(m.clearedFields, app.FieldProviderName)
+}
+
+// SetModelName sets the "model_name" field.
+func (m *AppMutation) SetModelName(s string) {
+	m.model_name = &s
+}
+
+// ModelName returns the value of the "model_name" field in the mutation.
+func (m *AppMutation) ModelName() (r string, exists bool) {
+	v := m.model_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModelName returns the old "model_name" field's value of the App entity.
+// If the App object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AppMutation) OldModelName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModelName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModelName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModelName: %w", err)
+	}
+	return oldValue.ModelName, nil
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (m *AppMutation) ClearModelName() {
+	m.model_name = nil
+	m.clearedFields[app.FieldModelName] = struct{}{}
+}
+
+// ModelNameCleared returns if the "model_name" field was cleared in this mutation.
+func (m *AppMutation) ModelNameCleared() bool {
+	_, ok := m.clearedFields[app.FieldModelName]
+	return ok
+}
+
+// ResetModelName resets all changes to the "model_name" field.
+func (m *AppMutation) ResetModelName() {
+	m.model_name = nil
+	delete(m.clearedFields, app.FieldModelName)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *AppMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -583,7 +683,7 @@ func (m *AppMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AppMutation) Fields() []string {
-	fields := make([]string, 0, 9)
+	fields := make([]string, 0, 11)
 	if m.slug != nil {
 		fields = append(fields, app.FieldSlug)
 	}
@@ -604,6 +704,12 @@ func (m *AppMutation) Fields() []string {
 	}
 	if m.published_by != nil {
 		fields = append(fields, app.FieldPublishedBy)
+	}
+	if m.provider_name != nil {
+		fields = append(fields, app.FieldProviderName)
+	}
+	if m.model_name != nil {
+		fields = append(fields, app.FieldModelName)
 	}
 	if m.created_at != nil {
 		fields = append(fields, app.FieldCreatedAt)
@@ -633,6 +739,10 @@ func (m *AppMutation) Field(name string) (ent.Value, bool) {
 		return m.SessionID()
 	case app.FieldPublishedBy:
 		return m.PublishedBy()
+	case app.FieldProviderName:
+		return m.ProviderName()
+	case app.FieldModelName:
+		return m.ModelName()
 	case app.FieldCreatedAt:
 		return m.CreatedAt()
 	case app.FieldUpdatedAt:
@@ -660,6 +770,10 @@ func (m *AppMutation) OldField(ctx context.Context, name string) (ent.Value, err
 		return m.OldSessionID(ctx)
 	case app.FieldPublishedBy:
 		return m.OldPublishedBy(ctx)
+	case app.FieldProviderName:
+		return m.OldProviderName(ctx)
+	case app.FieldModelName:
+		return m.OldModelName(ctx)
 	case app.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case app.FieldUpdatedAt:
@@ -721,6 +835,20 @@ func (m *AppMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetPublishedBy(v)
+		return nil
+	case app.FieldProviderName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderName(v)
+		return nil
+	case app.FieldModelName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModelName(v)
 		return nil
 	case app.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -784,6 +912,12 @@ func (m *AppMutation) ClearedFields() []string {
 	if m.FieldCleared(app.FieldPublishedBy) {
 		fields = append(fields, app.FieldPublishedBy)
 	}
+	if m.FieldCleared(app.FieldProviderName) {
+		fields = append(fields, app.FieldProviderName)
+	}
+	if m.FieldCleared(app.FieldModelName) {
+		fields = append(fields, app.FieldModelName)
+	}
 	return fields
 }
 
@@ -800,6 +934,12 @@ func (m *AppMutation) ClearField(name string) error {
 	switch name {
 	case app.FieldPublishedBy:
 		m.ClearPublishedBy()
+		return nil
+	case app.FieldProviderName:
+		m.ClearProviderName()
+		return nil
+	case app.FieldModelName:
+		m.ClearModelName()
 		return nil
 	}
 	return fmt.Errorf("unknown App nullable field %s", name)
@@ -829,6 +969,12 @@ func (m *AppMutation) ResetField(name string) error {
 		return nil
 	case app.FieldPublishedBy:
 		m.ResetPublishedBy()
+		return nil
+	case app.FieldProviderName:
+		m.ResetProviderName()
+		return nil
+	case app.FieldModelName:
+		m.ResetModelName()
 		return nil
 	case app.FieldCreatedAt:
 		m.ResetCreatedAt()
@@ -10923,6 +11069,8 @@ type SessionMutation struct {
 	addissue_number    *int
 	repo               *string
 	workspace_dir      *string
+	provider_name      *string
+	model_name         *string
 	metadata           *map[string]interface{}
 	last_seq           *int64
 	addlast_seq        *int64
@@ -11447,6 +11595,104 @@ func (m *SessionMutation) ResetWorkspaceDir() {
 	delete(m.clearedFields, session.FieldWorkspaceDir)
 }
 
+// SetProviderName sets the "provider_name" field.
+func (m *SessionMutation) SetProviderName(s string) {
+	m.provider_name = &s
+}
+
+// ProviderName returns the value of the "provider_name" field in the mutation.
+func (m *SessionMutation) ProviderName() (r string, exists bool) {
+	v := m.provider_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProviderName returns the old "provider_name" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldProviderName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProviderName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProviderName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProviderName: %w", err)
+	}
+	return oldValue.ProviderName, nil
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (m *SessionMutation) ClearProviderName() {
+	m.provider_name = nil
+	m.clearedFields[session.FieldProviderName] = struct{}{}
+}
+
+// ProviderNameCleared returns if the "provider_name" field was cleared in this mutation.
+func (m *SessionMutation) ProviderNameCleared() bool {
+	_, ok := m.clearedFields[session.FieldProviderName]
+	return ok
+}
+
+// ResetProviderName resets all changes to the "provider_name" field.
+func (m *SessionMutation) ResetProviderName() {
+	m.provider_name = nil
+	delete(m.clearedFields, session.FieldProviderName)
+}
+
+// SetModelName sets the "model_name" field.
+func (m *SessionMutation) SetModelName(s string) {
+	m.model_name = &s
+}
+
+// ModelName returns the value of the "model_name" field in the mutation.
+func (m *SessionMutation) ModelName() (r string, exists bool) {
+	v := m.model_name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModelName returns the old "model_name" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldModelName(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModelName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModelName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModelName: %w", err)
+	}
+	return oldValue.ModelName, nil
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (m *SessionMutation) ClearModelName() {
+	m.model_name = nil
+	m.clearedFields[session.FieldModelName] = struct{}{}
+}
+
+// ModelNameCleared returns if the "model_name" field was cleared in this mutation.
+func (m *SessionMutation) ModelNameCleared() bool {
+	_, ok := m.clearedFields[session.FieldModelName]
+	return ok
+}
+
+// ResetModelName resets all changes to the "model_name" field.
+func (m *SessionMutation) ResetModelName() {
+	m.model_name = nil
+	delete(m.clearedFields, session.FieldModelName)
+}
+
 // SetMetadata sets the "metadata" field.
 func (m *SessionMutation) SetMetadata(value map[string]interface{}) {
 	m.metadata = &value
@@ -11766,7 +12012,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 15)
 	if m.user_id != nil {
 		fields = append(fields, session.FieldUserID)
 	}
@@ -11793,6 +12039,12 @@ func (m *SessionMutation) Fields() []string {
 	}
 	if m.workspace_dir != nil {
 		fields = append(fields, session.FieldWorkspaceDir)
+	}
+	if m.provider_name != nil {
+		fields = append(fields, session.FieldProviderName)
+	}
+	if m.model_name != nil {
+		fields = append(fields, session.FieldModelName)
 	}
 	if m.metadata != nil {
 		fields = append(fields, session.FieldMetadata)
@@ -11832,6 +12084,10 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.Repo()
 	case session.FieldWorkspaceDir:
 		return m.WorkspaceDir()
+	case session.FieldProviderName:
+		return m.ProviderName()
+	case session.FieldModelName:
+		return m.ModelName()
 	case session.FieldMetadata:
 		return m.Metadata()
 	case session.FieldLastSeq:
@@ -11867,6 +12123,10 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldRepo(ctx)
 	case session.FieldWorkspaceDir:
 		return m.OldWorkspaceDir(ctx)
+	case session.FieldProviderName:
+		return m.OldProviderName(ctx)
+	case session.FieldModelName:
+		return m.OldModelName(ctx)
 	case session.FieldMetadata:
 		return m.OldMetadata(ctx)
 	case session.FieldLastSeq:
@@ -11946,6 +12206,20 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetWorkspaceDir(v)
+		return nil
+	case session.FieldProviderName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProviderName(v)
+		return nil
+	case session.FieldModelName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModelName(v)
 		return nil
 	case session.FieldMetadata:
 		v, ok := value.(map[string]interface{})
@@ -12053,6 +12327,12 @@ func (m *SessionMutation) ClearedFields() []string {
 	if m.FieldCleared(session.FieldWorkspaceDir) {
 		fields = append(fields, session.FieldWorkspaceDir)
 	}
+	if m.FieldCleared(session.FieldProviderName) {
+		fields = append(fields, session.FieldProviderName)
+	}
+	if m.FieldCleared(session.FieldModelName) {
+		fields = append(fields, session.FieldModelName)
+	}
 	if m.FieldCleared(session.FieldMetadata) {
 		fields = append(fields, session.FieldMetadata)
 	}
@@ -12078,6 +12358,12 @@ func (m *SessionMutation) ClearField(name string) error {
 		return nil
 	case session.FieldWorkspaceDir:
 		m.ClearWorkspaceDir()
+		return nil
+	case session.FieldProviderName:
+		m.ClearProviderName()
+		return nil
+	case session.FieldModelName:
+		m.ClearModelName()
 		return nil
 	case session.FieldMetadata:
 		m.ClearMetadata()
@@ -12116,6 +12402,12 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldWorkspaceDir:
 		m.ResetWorkspaceDir()
+		return nil
+	case session.FieldProviderName:
+		m.ResetProviderName()
+		return nil
+	case session.FieldModelName:
+		m.ResetModelName()
 		return nil
 	case session.FieldMetadata:
 		m.ResetMetadata()

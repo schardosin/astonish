@@ -51,6 +51,16 @@ export interface AttachmentPayload {
   data: string  // base64-encoded content (no data-url prefix)
 }
 
+
+export interface SessionModelStatus {
+  pinnedProvider: string
+  pinnedModel: string
+  effectiveProvider: string
+  effectiveModel: string
+  credentialsAvailable: boolean
+  availableProviders: string[]
+}
+
 export interface ConnectChatParams {
   sessionId?: string
   message?: string
@@ -58,6 +68,8 @@ export interface ConnectChatParams {
   systemContext?: string
   pinnedToolGroups?: string[]
   autoApprove?: boolean
+  provider?: string
+  model?: string
   onEvent: SSEEventCallback
   onError?: ErrorCallback
   onDone?: DoneCallback
@@ -108,7 +120,7 @@ export async function fetchSubtaskEvents(sessionId: string, taskName: string): P
   return data.events || []
 }
 
-export function connectChat({ sessionId, message, attachments, systemContext, pinnedToolGroups, autoApprove, onEvent, onError, onDone }: ConnectChatParams): AbortController {
+export function connectChat({ sessionId, message, attachments, systemContext, pinnedToolGroups, autoApprove, provider, model, onEvent, onError, onDone }: ConnectChatParams): AbortController {
   const controller = new AbortController()
 
   const run = async () => {
@@ -117,6 +129,8 @@ export function connectChat({ sessionId, message, attachments, systemContext, pi
         sessionId: sessionId || '',
         message: message || '',
         autoApprove: !!autoApprove,
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
       }
       if (attachments && attachments.length > 0) {
         body.attachments = attachments
@@ -364,4 +378,34 @@ export async function denyNetworkGrant(sessionId: string, chunkId: string, sandb
     body: JSON.stringify({ chunk_id: chunkId, sandbox_name: sandboxName, reason: reason || '' }),
   })
   if (!resp.ok) throw new Error(`Failed to deny network grant: ${resp.status}`)
+}
+
+/** Fetch the model status for a session. */
+export async function fetchSessionModelStatus(sessionId: string): Promise<SessionModelStatus> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/model-status`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch session model status: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** Update the pinned model for a session. */
+export async function patchSessionModel(sessionId: string, provider: string, model: string): Promise<SessionModelStatus> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to patch session model: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** Fetch available provider names (session-less, uses effective config). */
+export async function fetchAvailableProviders(): Promise<string[]> {
+  const response = await teamFetch('/api/settings/providers/effective')
+  if (!response.ok) return []
+  const data = await response.json()
+  return Object.keys(data.providers || {}).sort()
 }

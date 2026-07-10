@@ -21,6 +21,9 @@ type Flow func(*sql.Selector)
 // Memory is the predicate function for memory builders.
 type Memory func(*sql.Selector)
 
+// PersonalSettings is the predicate function for personalsettings builders.
+type PersonalSettings func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
 

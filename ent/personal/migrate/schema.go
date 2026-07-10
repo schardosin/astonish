@@ -18,6 +18,8 @@ var (
 		{Name: "code", Type: field.TypeString, Size: 2147483647, Default: ""},
 		{Name: "version", Type: field.TypeInt, Default: 1},
 		{Name: "session_id", Type: field.TypeString, Default: ""},
+		{Name: "provider_name", Type: field.TypeString, Nullable: true},
+		{Name: "model_name", Type: field.TypeString, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
 		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
 	}
@@ -140,6 +142,28 @@ var (
 			},
 		},
 	}
+	// PersonalSettingsColumns holds the columns for the "personal_settings" table.
+	PersonalSettingsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "user_id", Type: field.TypeUUID},
+		{Name: "default_provider", Type: field.TypeString, Default: ""},
+		{Name: "default_model", Type: field.TypeString, Default: ""},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// PersonalSettingsTable holds the schema information for the "personal_settings" table.
+	PersonalSettingsTable = &schema.Table{
+		Name:       "personal_settings",
+		Columns:    PersonalSettingsColumns,
+		PrimaryKey: []*schema.Column{PersonalSettingsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "personalsettings_user_id",
+				Unique:  true,
+				Columns: []*schema.Column{PersonalSettingsColumns[1]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -152,6 +176,8 @@ var (
 		{Name: "issue_number", Type: field.TypeInt, Default: 0},
 		{Name: "repo", Type: field.TypeString, Default: ""},
 		{Name: "workspace_dir", Type: field.TypeString, Default: ""},
+		{Name: "provider_name", Type: field.TypeString, Nullable: true},
+		{Name: "model_name", Type: field.TypeString, Nullable: true},
 		{Name: "metadata", Type: field.TypeJSON, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
 		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
@@ -165,7 +191,7 @@ var (
 			{
 				Name:    "session_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[12]},
+				Columns: []*schema.Column{SessionsColumns[14]},
 			},
 		},
 	}
@@ -204,6 +230,7 @@ var (
 		CredentialsTable,
 		FlowsTable,
 		MemoriesTable,
+		PersonalSettingsTable,
 		SessionsTable,
 		SessionEventsTable,
 	}
@@ -225,6 +252,9 @@ func init() {
 	}
 	MemoriesTable.Annotation = &entsql.Annotation{
 		Table: "memories",
+	}
+	PersonalSettingsTable.Annotation = &entsql.Annotation{
+		Table: "personal_settings",
 	}
 	SessionsTable.Annotation = &entsql.Annotation{
 		Table: "sessions",

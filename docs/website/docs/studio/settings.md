@@ -54,7 +54,7 @@ Configure AI model providers:
 | Base URL | Custom endpoint (for proxies or self-hosted models) |
 | Default model | Model to use when none is specified |
 
-Multiple providers can be active simultaneously. The model selector in Chat lets you switch between them.
+Multiple providers can be active simultaneously. Use the **Model** control in Chat (and in an open App's header) to pin a provider/model for that session or app. Team-wide defaults are still set here under Providers.
 
 ## MCP Servers
 

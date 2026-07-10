@@ -34,6 +34,8 @@ func (App) Fields() []ent.Field {
 			Default(1),
 		field.String("session_id").
 			Default(""),
+		field.String("provider_name").Optional().Nillable(),
+		field.String("model_name").Optional().Nillable(),
 		field.Time("created_at").
 			Default(time.Now).
 			Immutable().

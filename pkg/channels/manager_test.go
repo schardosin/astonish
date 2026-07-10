@@ -1,13 +1,17 @@
 package channels
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"log"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 func TestTruncate(t *testing.T) {
@@ -230,6 +234,119 @@ func TestSessionContext(t *testing.T) {
 		got := m.consumeSessionContext("sess3")
 		if got != "second" {
 			t.Errorf("consumeSessionContext after overwrite = %q, want %q", got, "second")
+		}
+	})
+}
+
+type stubTeamDataStore struct {
+	store.TeamDataStore
+	pin *store.SessionPin
+	err error
+}
+
+func (s *stubTeamDataStore) SessionPin(_ context.Context, _ string) (*store.SessionPin, error) {
+	return s.pin, s.err
+}
+
+type stubTeamSettings struct {
+	settings *store.TeamSettings
+}
+
+func (s *stubTeamSettings) Get(_ context.Context) (*store.TeamSettings, error) {
+	return s.settings, nil
+}
+
+func (s *stubTeamSettings) Save(_ context.Context, _ *store.TeamSettings) error {
+	return nil
+}
+
+func TestResolveEffectiveWithSessionPin(t *testing.T) {
+	teamSettings := &stubTeamSettings{
+		settings: &store.TeamSettings{
+			Providers: map[string]store.ProviderConfig{
+				"openai": {"api_key": "sk-team"},
+			},
+			DefaultProvider: "openai",
+			DefaultModel:    "gpt-4",
+		},
+	}
+	ps := &store.ProviderStores{
+		Platform: nil,
+		Org:      nil,
+		Team:     teamSettings,
+	}
+
+	t.Run("no pin: cascade wins", func(t *testing.T) {
+		tds := &stubTeamDataStore{pin: nil}
+		ctx := store.WithTeamDataStore(context.Background(), tds)
+
+		cfg := resolveEffectiveWithSessionPin(ctx, ps, "sess-1", "ch-1", "user-1")
+
+		if cfg.General.DefaultProvider != "openai" {
+			t.Errorf("DefaultProvider = %q, want openai", cfg.General.DefaultProvider)
+		}
+		if cfg.General.DefaultModel != "gpt-4" {
+			t.Errorf("DefaultModel = %q, want gpt-4", cfg.General.DefaultModel)
+		}
+	})
+
+	t.Run("valid pin: overrides cascade", func(t *testing.T) {
+		tds := &stubTeamDataStore{pin: &store.SessionPin{Provider: "openai", Model: "gpt-5"}}
+		ctx := store.WithTeamDataStore(context.Background(), tds)
+
+		cfg := resolveEffectiveWithSessionPin(ctx, ps, "sess-1", "ch-1", "user-1")
+
+		if cfg.General.DefaultProvider != "openai" {
+			t.Errorf("DefaultProvider = %q, want openai", cfg.General.DefaultProvider)
+		}
+		if cfg.General.DefaultModel != "gpt-5" {
+			t.Errorf("DefaultModel = %q, want gpt-5 (pin override)", cfg.General.DefaultModel)
+		}
+	})
+
+	t.Run("missing-cred pin: warn + cascade fallback", func(t *testing.T) {
+		tds := &stubTeamDataStore{pin: &store.SessionPin{Provider: "anthropic", Model: "claude-opus"}}
+		ctx := store.WithTeamDataStore(context.Background(), tds)
+
+		var buf bytes.Buffer
+		prev := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+		defer slog.SetDefault(prev)
+
+		cfg := resolveEffectiveWithSessionPin(ctx, ps, "sess-1", "ch-1", "user-1")
+
+		if cfg.General.DefaultProvider != "openai" {
+			t.Errorf("DefaultProvider = %q, want openai (fallback)", cfg.General.DefaultProvider)
+		}
+		if cfg.General.DefaultModel != "gpt-4" {
+			t.Errorf("DefaultModel = %q, want gpt-4 (fallback)", cfg.General.DefaultModel)
+		}
+		if !strings.Contains(buf.String(), "pinned provider has no credential") {
+			t.Errorf("expected warn about missing credential, got log: %q", buf.String())
+		}
+		if !strings.Contains(buf.String(), "pinnedProvider=anthropic") {
+			t.Errorf("expected pinnedProvider=anthropic in log, got: %q", buf.String())
+		}
+	})
+
+	t.Run("no tds in context: cascade only", func(t *testing.T) {
+		ctx := context.Background()
+
+		cfg := resolveEffectiveWithSessionPin(ctx, ps, "sess-1", "ch-1", "user-1")
+
+		if cfg.General.DefaultProvider != "openai" {
+			t.Errorf("DefaultProvider = %q, want openai", cfg.General.DefaultProvider)
+		}
+	})
+
+	t.Run("empty session key: skip pin lookup", func(t *testing.T) {
+		tds := &stubTeamDataStore{pin: &store.SessionPin{Provider: "should-not-apply", Model: "x"}}
+		ctx := store.WithTeamDataStore(context.Background(), tds)
+
+		cfg := resolveEffectiveWithSessionPin(ctx, ps, "", "ch-1", "user-1")
+
+		if cfg.General.DefaultProvider != "openai" {
+			t.Errorf("DefaultProvider = %q, want openai (empty key skips lookup)", cfg.General.DefaultProvider)
 		}
 	})
 }

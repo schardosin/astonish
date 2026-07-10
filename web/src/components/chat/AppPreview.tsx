@@ -169,7 +169,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
         requestId: string
       }
       try {
-        const resp = await fetchAppAI(prompt, system, context, requestId)
+        const resp = await fetchAppAI(prompt, system, context, requestId, appName)
         sendToIframe({
           type: 'ai_response',
           requestId: resp.requestId || requestId,

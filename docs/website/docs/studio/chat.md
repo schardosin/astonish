@@ -6,9 +6,24 @@ The Chat tab is Studio's primary interaction surface. It provides a rich convers
 
 Chat uses Server-Sent Events (SSE) to stream agent responses in real time. Tokens appear as they're generated — no waiting for the full response before seeing output.
 
-## Active Model Display
+## Model Selection
 
-The top bar shows the currently active provider and model as a read-only indicator. To change which model is used, go to **Settings → Providers** and update the default. The change applies to all subsequent messages.
+The chat toolbar includes a **Model** control on the left:
+
+- **Before the first message** — Choose a provider and model for the new session (or leave **default — cascade** to use Settings defaults). The choice is pinned when the session starts.
+- **During a session** — Open the same control to change or reset the pin. The pin applies to that session only; other users and sessions keep their own selection.
+
+The resolution order for each message is:
+
+```
+Session pin → User default → Team → Org → Platform
+```
+
+Empty pin fields fall through to the next layer. If a pinned provider has no credential, the session still runs on the cascade default and Studio shows a soft warning — the pin is not cleared automatically.
+
+`/status` reports the **effective model for this session** (including any pin), not a process-wide singleton.
+
+Team-wide defaults still live in **Settings → Providers**. Use the chat Model control for per-conversation overrides.
 
 ## Tool Call Visualization
 
@@ -27,7 +42,7 @@ Type `/` in the input to access available commands:
 | Command | Description |
 |---------|-------------|
 | `/help` | Show available commands |
-| `/status` | Show provider, model, and tools info |
+| `/status` | Show this session's provider, model (including pin), and tools info |
 | `/new` | Start a fresh conversation |
 | `/compact` | Show context window usage |
 | `/distill` | Distill the current session into a reusable flow |

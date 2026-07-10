@@ -3,8 +3,8 @@ import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, S
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
-import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream, fetchNetworkDenials } from '../api/studioChat'
-import type { ChatSession, AttachmentPayload } from '../api/studioChat'
+import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream, fetchNetworkDenials, fetchSessionModelStatus, patchSessionModel, fetchAvailableProviders } from '../api/studioChat'
+import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
@@ -30,6 +30,9 @@ import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
 import NetworkDenialPrompt from './chat/NetworkDenialPrompt'
+import ModelCredentialBanner from './chat/ModelCredentialBanner'
+import SessionModelPicker from './chat/SessionModelPicker'
+import PreChatModelPicker from './chat/PreChatModelPicker'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -195,6 +198,13 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [sessionFilter, setSessionFilter] = useState('')
 
+  // Model picker state
+  const [modelStatus, setModelStatus] = useState<SessionModelStatus | null>(null)
+  const [modelPickerOpenSignal, setModelPickerOpenSignal] = useState(0)
+  const [preChatProvider, setPreChatProvider] = useState('')
+  const [preChatModel, setPreChatModel] = useState('')
+  const [preChatProviders, setPreChatProviders] = useState<string[]>([])
+
   // Chat state
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
@@ -316,15 +326,22 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   }, [messages, isStreaming, sessionArtifacts])
 
   // Wrapper to keep URL in sync with active session
-  const changeSession = useCallback((sessionId: string | null, { userInitiated = false } = {}) => {
+  const changeSession = useCallback((sessionId: string | null, { userInitiated = false, skipModelFetch = false } = {}) => {
     setActiveSessionId(sessionId)
-    setActiveAppId(null) // clear active app refinement state on session switch
+    setActiveAppId(null)
     setAppsPanelOpen(false)
-    setHasSessionMemories(false) // reset memory state on session switch
+    setHasSessionMemories(false)
     if (userInitiated) {
-      setActiveWizardContext(null) // only clear wizard context on explicit user navigation
+      setActiveWizardContext(null)
     }
     if (onSessionChange) onSessionChange(sessionId)
+    if (sessionId) {
+      if (!skipModelFetch) {
+        fetchSessionModelStatus(sessionId).then(setModelStatus).catch(() => setModelStatus(null))
+      }
+    } else {
+      setModelStatus(null)
+    }
   }, [onSessionChange])
 
   const connectToFleetStream = useCallback((sessionId: string) => {
@@ -388,6 +405,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   // Load sessions on mount (and initial session if URL specifies one)
   // Also check for active fleet sessions that we should reconnect to.
+  // Load provider names once for pre-chat picker and as a fallback for the
+  // in-session picker when model-status returns an empty list.
+  useEffect(() => {
+    fetchAvailableProviders().then(setPreChatProviders).catch(() => setPreChatProviders([]))
+  }, [])
+
   useEffect(() => {
     loadSessions()
 
@@ -506,6 +529,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   }
 
   const loadSessionHistory = async (sessionId: string) => {
+    // Ensure the toolbar model picker has status whenever history is loaded
+    // (including hard refresh on /#/chat/:id, which never goes through changeSession).
+    fetchSessionModelStatus(sessionId).then(setModelStatus).catch(() => setModelStatus(null))
     try {
       setIsLoadingHistory(true)
       const data = await fetchSessionHistory(sessionId)
@@ -781,6 +807,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'retry':
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'retry', attempt: data.attempt, maxRetries: data.maxRetries, reason: data.reason }])
+            break
+
+          case 'model_changed':
+            setModelStatus(prev => prev ? {
+              ...prev,
+              effectiveProvider: (data.effectiveProvider as string) || (data.provider as string) || prev.effectiveProvider,
+              effectiveModel: (data.effectiveModel as string) || (data.model as string) || prev.effectiveModel,
+              pinnedProvider: (data.pinnedProvider as string) ?? (data.provider as string) ?? prev.pinnedProvider,
+              pinnedModel: (data.pinnedModel as string) ?? (data.model as string) ?? prev.pinnedModel,
+              credentialsAvailable: data.credentialsAvailable !== undefined ? !!data.credentialsAvailable : prev.credentialsAvailable,
+            } : prev)
             break
 
           case 'error':
@@ -1387,14 +1424,45 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       attachments: attachmentPayloads.length > 0 ? attachmentPayloads : undefined,
       systemContext: options.systemContext || activeWizardContext || undefined,
       pinnedToolGroups: options.pinnedToolGroups || activePinnedToolGroups || undefined,
+      provider: preChatProvider || undefined,
+      model: preChatModel || undefined,
       onEvent: (eventType, data) => {
         switch (eventType) {
           case 'session':
             if (data.sessionId) {
-              changeSession(data.sessionId as string)
-              // Refresh session list to include new session
+              const sid = data.sessionId as string
+              const shouldPin = !!(data.isNew && (preChatProvider || preChatModel))
+              const pinProvider = preChatProvider
+              const pinModel = preChatModel
+              // Skip the immediate model-status fetch when we're about to pin —
+              // otherwise it races and briefly shows the cascade default.
+              changeSession(sid, { skipModelFetch: shouldPin })
               if (data.isNew) {
                 setTimeout(() => loadSessions(), 500)
+              }
+              if (shouldPin) {
+                const providersSnapshot = preChatProviders
+                setPreChatProvider('')
+                setPreChatModel('')
+                // Show the selection immediately so the picker doesn't flash
+                // "(default — cascade)" while the pin round-trip completes.
+                setModelStatus((prev) => ({
+                  pinnedProvider: pinProvider,
+                  pinnedModel: pinModel,
+                  effectiveProvider: pinProvider || prev?.effectiveProvider || '',
+                  effectiveModel: pinModel || prev?.effectiveModel || '',
+                  credentialsAvailable: true,
+                  availableProviders: prev?.availableProviders?.length
+                    ? prev.availableProviders
+                    : providersSnapshot,
+                }))
+                // Backend persists the pin on create; PATCH keeps the live runner
+                // in sync. Re-fetch model-status for the authoritative pin + list.
+                patchSessionModel(sid, pinProvider, pinModel)
+                  .catch((err) => console.warn(err))
+                  .finally(() => {
+                    fetchSessionModelStatus(sid).then(setModelStatus).catch(() => setModelStatus(null))
+                  })
               }
             }
             break
@@ -1796,6 +1864,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }])
             break
 
+          case 'model_changed':
+            setModelStatus(prev => prev ? {
+              ...prev,
+              effectiveProvider: (data.effectiveProvider as string) || (data.provider as string) || prev.effectiveProvider,
+              effectiveModel: (data.effectiveModel as string) || (data.model as string) || prev.effectiveModel,
+              pinnedProvider: (data.pinnedProvider as string) ?? (data.provider as string) ?? prev.pinnedProvider,
+              pinnedModel: (data.pinnedModel as string) ?? (data.model as string) ?? prev.pinnedModel,
+              credentialsAvailable: data.credentialsAvailable !== undefined ? !!data.credentialsAvailable : prev.credentialsAvailable,
+            } : prev)
+            break
+
           case 'error':
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'error', content: (data.error as string) || (data.message as string) || 'Unknown error' }])
             break
@@ -1962,7 +2041,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     })
 
     abortRef.current = controller
-  }, [activeSessionId, activeWizardContext, activePinnedToolGroups, attachments, prepareAttachmentPayloads, clearAttachments])
+  }, [activeSessionId, activeWizardContext, activePinnedToolGroups, attachments, prepareAttachmentPayloads, clearAttachments, preChatProvider, preChatModel, preChatProviders, changeSession])
 
   // Process deferred fleet plan prompt (set by fleet_plan_redirect SSE event)
   useEffect(() => {
@@ -2185,7 +2264,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         isLoadingSessions={isLoadingSessions}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onSelectSession={handleSelectSession}
+        onSelectSession={(session) => handleSelectSession(session.id)}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         onStartFleet={() => { setFleetDialogMessage(''); setShowFleetDialog(true) }}
@@ -2196,9 +2275,27 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Toolbar bar — always visible */}
         <div
-          className="flex items-center justify-end gap-1.5 px-3 py-1.5 shrink-0"
+          className="flex items-center justify-between px-3 py-1.5 shrink-0"
           style={{ borderBottom: '1px solid var(--border-color)' }}
         >
+          {/* Left side — pre-chat model picker */}
+          <div className="flex items-center gap-1.5">
+            {!activeSessionId && (
+              <PreChatModelPicker availableProviders={preChatProviders} provider={preChatProvider} model={preChatModel} onChange={(p, m) => { setPreChatProvider(p); setPreChatModel(m) }} />
+            )}
+            {activeSessionId && modelStatus && modelStatus.effectiveProvider && (
+              <SessionModelPicker
+                sessionId={activeSessionId}
+                modelStatus={modelStatus}
+                availableProviders={preChatProviders}
+                openSignal={modelPickerOpenSignal}
+                onUpdate={setModelStatus}
+              />
+            )}
+          </div>
+
+          {/* Right side — Todo, Files, Apps, Model, Usage */}
+          <div className="flex items-center gap-1.5">
           {/* Todo button — shows plan steps in side panel */}
           <button
             onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) { setFilePanelOpen(false); setAppsPanelOpen(false) } }}
@@ -2283,7 +2380,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             isStreaming={isStreaming}
             sessionStartTime={sessionStartTime}
           />
+          </div>
         </div>
+        {modelStatus && modelStatus.pinnedProvider && modelStatus.credentialsAvailable === false && (
+          <ModelCredentialBanner
+            pinnedProvider={modelStatus.pinnedProvider}
+            pinnedModel={modelStatus.pinnedModel}
+            effectiveProvider={modelStatus.effectiveProvider}
+            effectiveModel={modelStatus.effectiveModel}
+            onPickAnother={() => setModelPickerOpenSignal((n) => n + 1)}
+          />
+        )}
         {/* Fleet session header */}
         {isFleetMode && fleetInfo && (
           <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(6, 182, 212, 0.05)' }}>
@@ -2941,6 +3048,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             onChange={handleFileSelect}
             className="hidden"
           />
+
+
 
           <form onSubmit={handleSubmit} className="flex items-end gap-3 p-4">
             {isStreaming && (

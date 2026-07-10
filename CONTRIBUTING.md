@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Astonish! This document provides 
 - **Go 1.25+** (toolchain 1.26+)
 - **Node.js 24+** with npm
 - **Make** (for build automation)
-- **golangci-lint** (for Go linting)
+- **golangci-lint v2.12.x** (must match CI — see `.golangci-version` / `.github/workflows/lint.yml`)
 
 ### Getting Started
 
@@ -18,12 +18,21 @@ Thank you for your interest in contributing to Astonish! This document provides 
 git clone https://github.com/schardosin/astonish.git
 cd astonish
 
-# Build everything (UI + Go binary)
+# Build everything (UI + Go binary) — also installs git hooks
 make build-all
 
 # Or build components separately:
-make build-ui   # React frontend only
+make setup-hooks # Point git at .githooks (golangci-lint required on commit)
+make build-ui    # React frontend only
 make build       # Go binary only
+```
+
+Install the same golangci-lint minor version as CI (`.golangci-version`):
+
+```bash
+brew install golangci-lint   # or pin via the official install script to v2.12.2
+golangci-lint version        # expect 2.12.x
+make lint                    # config verify + full lint (same as CI)
 ```
 
 ### Running Locally
@@ -74,12 +83,14 @@ go test -v ./pkg/tools -run TestFileTree
 # With race detector
 go test -race ./pkg/tools
 
-# Lint the Go code
-golangci-lint run
+# Lint the Go code (config verify + run; version must match .golangci-version)
+make lint
 
 # Lint the React frontend
 cd web && npm run lint
 ```
+
+Pre-commit runs the same golangci-lint checks when Go or lint-config files are staged. Commits fail if golangci-lint is missing or the wrong minor version is installed (use `git commit --no-verify` only when necessary).
 
 ### Testing Guidelines
 

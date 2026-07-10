@@ -90,6 +90,16 @@ func PublishedBy(v uuid.UUID) predicate.App {
 	return predicate.App(sql.FieldEQ(FieldPublishedBy, v))
 }
 
+// ProviderName applies equality check predicate on the "provider_name" field. It's identical to ProviderNameEQ.
+func ProviderName(v string) predicate.App {
+	return predicate.App(sql.FieldEQ(FieldProviderName, v))
+}
+
+// ModelName applies equality check predicate on the "model_name" field. It's identical to ModelNameEQ.
+func ModelName(v string) predicate.App {
+	return predicate.App(sql.FieldEQ(FieldModelName, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.App {
 	return predicate.App(sql.FieldEQ(FieldCreatedAt, v))
@@ -513,6 +523,156 @@ func PublishedByIsNil() predicate.App {
 // PublishedByNotNil applies the NotNil predicate on the "published_by" field.
 func PublishedByNotNil() predicate.App {
 	return predicate.App(sql.FieldNotNull(FieldPublishedBy))
+}
+
+// ProviderNameEQ applies the EQ predicate on the "provider_name" field.
+func ProviderNameEQ(v string) predicate.App {
+	return predicate.App(sql.FieldEQ(FieldProviderName, v))
+}
+
+// ProviderNameNEQ applies the NEQ predicate on the "provider_name" field.
+func ProviderNameNEQ(v string) predicate.App {
+	return predicate.App(sql.FieldNEQ(FieldProviderName, v))
+}
+
+// ProviderNameIn applies the In predicate on the "provider_name" field.
+func ProviderNameIn(vs ...string) predicate.App {
+	return predicate.App(sql.FieldIn(FieldProviderName, vs...))
+}
+
+// ProviderNameNotIn applies the NotIn predicate on the "provider_name" field.
+func ProviderNameNotIn(vs ...string) predicate.App {
+	return predicate.App(sql.FieldNotIn(FieldProviderName, vs...))
+}
+
+// ProviderNameGT applies the GT predicate on the "provider_name" field.
+func ProviderNameGT(v string) predicate.App {
+	return predicate.App(sql.FieldGT(FieldProviderName, v))
+}
+
+// ProviderNameGTE applies the GTE predicate on the "provider_name" field.
+func ProviderNameGTE(v string) predicate.App {
+	return predicate.App(sql.FieldGTE(FieldProviderName, v))
+}
+
+// ProviderNameLT applies the LT predicate on the "provider_name" field.
+func ProviderNameLT(v string) predicate.App {
+	return predicate.App(sql.FieldLT(FieldProviderName, v))
+}
+
+// ProviderNameLTE applies the LTE predicate on the "provider_name" field.
+func ProviderNameLTE(v string) predicate.App {
+	return predicate.App(sql.FieldLTE(FieldProviderName, v))
+}
+
+// ProviderNameContains applies the Contains predicate on the "provider_name" field.
+func ProviderNameContains(v string) predicate.App {
+	return predicate.App(sql.FieldContains(FieldProviderName, v))
+}
+
+// ProviderNameHasPrefix applies the HasPrefix predicate on the "provider_name" field.
+func ProviderNameHasPrefix(v string) predicate.App {
+	return predicate.App(sql.FieldHasPrefix(FieldProviderName, v))
+}
+
+// ProviderNameHasSuffix applies the HasSuffix predicate on the "provider_name" field.
+func ProviderNameHasSuffix(v string) predicate.App {
+	return predicate.App(sql.FieldHasSuffix(FieldProviderName, v))
+}
+
+// ProviderNameIsNil applies the IsNil predicate on the "provider_name" field.
+func ProviderNameIsNil() predicate.App {
+	return predicate.App(sql.FieldIsNull(FieldProviderName))
+}
+
+// ProviderNameNotNil applies the NotNil predicate on the "provider_name" field.
+func ProviderNameNotNil() predicate.App {
+	return predicate.App(sql.FieldNotNull(FieldProviderName))
+}
+
+// ProviderNameEqualFold applies the EqualFold predicate on the "provider_name" field.
+func ProviderNameEqualFold(v string) predicate.App {
+	return predicate.App(sql.FieldEqualFold(FieldProviderName, v))
+}
+
+// ProviderNameContainsFold applies the ContainsFold predicate on the "provider_name" field.
+func ProviderNameContainsFold(v string) predicate.App {
+	return predicate.App(sql.FieldContainsFold(FieldProviderName, v))
+}
+
+// ModelNameEQ applies the EQ predicate on the "model_name" field.
+func ModelNameEQ(v string) predicate.App {
+	return predicate.App(sql.FieldEQ(FieldModelName, v))
+}
+
+// ModelNameNEQ applies the NEQ predicate on the "model_name" field.
+func ModelNameNEQ(v string) predicate.App {
+	return predicate.App(sql.FieldNEQ(FieldModelName, v))
+}
+
+// ModelNameIn applies the In predicate on the "model_name" field.
+func ModelNameIn(vs ...string) predicate.App {
+	return predicate.App(sql.FieldIn(FieldModelName, vs...))
+}
+
+// ModelNameNotIn applies the NotIn predicate on the "model_name" field.
+func ModelNameNotIn(vs ...string) predicate.App {
+	return predicate.App(sql.FieldNotIn(FieldModelName, vs...))
+}
+
+// ModelNameGT applies the GT predicate on the "model_name" field.
+func ModelNameGT(v string) predicate.App {
+	return predicate.App(sql.FieldGT(FieldModelName, v))
+}
+
+// ModelNameGTE applies the GTE predicate on the "model_name" field.
+func ModelNameGTE(v string) predicate.App {
+	return predicate.App(sql.FieldGTE(FieldModelName, v))
+}
+
+// ModelNameLT applies the LT predicate on the "model_name" field.
+func ModelNameLT(v string) predicate.App {
+	return predicate.App(sql.FieldLT(FieldModelName, v))
+}
+
+// ModelNameLTE applies the LTE predicate on the "model_name" field.
+func ModelNameLTE(v string) predicate.App {
+	return predicate.App(sql.FieldLTE(FieldModelName, v))
+}
+
+// ModelNameContains applies the Contains predicate on the "model_name" field.
+func ModelNameContains(v string) predicate.App {
+	return predicate.App(sql.FieldContains(FieldModelName, v))
+}
+
+// ModelNameHasPrefix applies the HasPrefix predicate on the "model_name" field.
+func ModelNameHasPrefix(v string) predicate.App {
+	return predicate.App(sql.FieldHasPrefix(FieldModelName, v))
+}
+
+// ModelNameHasSuffix applies the HasSuffix predicate on the "model_name" field.
+func ModelNameHasSuffix(v string) predicate.App {
+	return predicate.App(sql.FieldHasSuffix(FieldModelName, v))
+}
+
+// ModelNameIsNil applies the IsNil predicate on the "model_name" field.
+func ModelNameIsNil() predicate.App {
+	return predicate.App(sql.FieldIsNull(FieldModelName))
+}
+
+// ModelNameNotNil applies the NotNil predicate on the "model_name" field.
+func ModelNameNotNil() predicate.App {
+	return predicate.App(sql.FieldNotNull(FieldModelName))
+}
+
+// ModelNameEqualFold applies the EqualFold predicate on the "model_name" field.
+func ModelNameEqualFold(v string) predicate.App {
+	return predicate.App(sql.FieldEqualFold(FieldModelName, v))
+}
+
+// ModelNameContainsFold applies the ContainsFold predicate on the "model_name" field.
+func ModelNameContainsFold(v string) predicate.App {
+	return predicate.App(sql.FieldContainsFold(FieldModelName, v))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

@@ -32,6 +32,10 @@ type App struct {
 	SessionID string `json:"session_id,omitempty"`
 	// PublishedBy holds the value of the "published_by" field.
 	PublishedBy *uuid.UUID `json:"published_by,omitempty"`
+	// ProviderName holds the value of the "provider_name" field.
+	ProviderName *string `json:"provider_name,omitempty"`
+	// ModelName holds the value of the "model_name" field.
+	ModelName *string `json:"model_name,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -48,7 +52,7 @@ func (*App) scanValues(columns []string) ([]any, error) {
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
 		case app.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case app.FieldSlug, app.FieldName, app.FieldDescription, app.FieldCode, app.FieldSessionID:
+		case app.FieldSlug, app.FieldName, app.FieldDescription, app.FieldCode, app.FieldSessionID, app.FieldProviderName, app.FieldModelName:
 			values[i] = new(sql.NullString)
 		case app.FieldCreatedAt, app.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -117,6 +121,20 @@ func (_m *App) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.PublishedBy = new(uuid.UUID)
 				*_m.PublishedBy = *value.S.(*uuid.UUID)
+			}
+		case app.FieldProviderName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field provider_name", values[i])
+			} else if value.Valid {
+				_m.ProviderName = new(string)
+				*_m.ProviderName = value.String
+			}
+		case app.FieldModelName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field model_name", values[i])
+			} else if value.Valid {
+				_m.ModelName = new(string)
+				*_m.ModelName = value.String
 			}
 		case app.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -187,6 +205,16 @@ func (_m *App) String() string {
 	if v := _m.PublishedBy; v != nil {
 		builder.WriteString("published_by=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ProviderName; v != nil {
+		builder.WriteString("provider_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ModelName; v != nil {
+		builder.WriteString("model_name=")
+		builder.WriteString(*v)
 	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")

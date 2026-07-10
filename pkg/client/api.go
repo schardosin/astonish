@@ -169,6 +169,29 @@ func (c *Client) ReconnectSession(sessionID string) (*SSEStream, error) {
 	return c.SSE("GET", fmt.Sprintf("/api/studio/sessions/%s/stream", sessionID), nil)
 }
 
+// PatchSessionModelResponse mirrors the server response for
+// PATCH /api/studio/sessions/{id}/model.
+type PatchSessionModelResponse struct {
+	PinnedProvider       string `json:"pinnedProvider"`
+	PinnedModel          string `json:"pinnedModel"`
+	EffectiveProvider    string `json:"effectiveProvider"`
+	EffectiveModel       string `json:"effectiveModel"`
+	CredentialsAvailable bool   `json:"credentialsAvailable"`
+}
+
+// PatchSessionModel sets or clears the per-session model pin on the remote
+// server. Empty strings for both provider and model clear the pin (cascade
+// falls back to user-default → team → org → platform).
+func (c *Client) PatchSessionModel(sessionID, provider, model string) (*PatchSessionModelResponse, error) {
+	body := map[string]string{"provider": provider, "model": model}
+	var resp PatchSessionModelResponse
+	path := fmt.Sprintf("/api/studio/sessions/%s/model", sessionID)
+	if err := c.DoJSON("PATCH", path, body, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // StopSession stops a running session.
 func (c *Client) StopSession(sessionID string) error {
 	resp, err := c.Do("POST", fmt.Sprintf("/api/studio/sessions/%s/stop", sessionID), nil)

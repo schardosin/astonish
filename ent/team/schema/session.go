@@ -43,6 +43,12 @@ func (Session) Fields() []ent.Field {
 		field.String("workspace_dir").
 			Optional().
 			Default(""),
+		field.String("provider_name").
+			Optional().
+			Nillable(),
+		field.String("model_name").
+			Optional().
+			Nillable(),
 		field.JSON("metadata", map[string]any{}).
 			Optional().
 			Default(map[string]any{}),

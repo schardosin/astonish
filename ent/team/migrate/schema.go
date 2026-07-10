@@ -19,6 +19,8 @@ var (
 		{Name: "version", Type: field.TypeInt, Default: 1},
 		{Name: "session_id", Type: field.TypeString, Default: ""},
 		{Name: "published_by", Type: field.TypeUUID, Nullable: true},
+		{Name: "provider_name", Type: field.TypeString, Nullable: true},
+		{Name: "model_name", Type: field.TypeString, Nullable: true},
 		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
 		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
 	}
@@ -407,6 +409,8 @@ var (
 		{Name: "issue_number", Type: field.TypeInt, Default: 0},
 		{Name: "repo", Type: field.TypeString, Default: ""},
 		{Name: "workspace_dir", Type: field.TypeString, Nullable: true, Default: ""},
+		{Name: "provider_name", Type: field.TypeString, Nullable: true},
+		{Name: "model_name", Type: field.TypeString, Nullable: true},
 		{Name: "metadata", Type: field.TypeJSON, Nullable: true},
 		{Name: "last_seq", Type: field.TypeInt64, Default: 0},
 		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
@@ -431,7 +435,7 @@ var (
 			{
 				Name:    "session_updated_at",
 				Unique:  false,
-				Columns: []*schema.Column{SessionsColumns[13]},
+				Columns: []*schema.Column{SessionsColumns[15]},
 			},
 		},
 	}

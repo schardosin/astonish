@@ -119,10 +119,11 @@ func (m *mockOrgDataStore) Close() error { return nil }
 type mockTeamDataStore struct {
 	apps     *mockAppStore
 	appState store.AppStateStore
+	appPins  map[string]*store.AppPin
 }
 
 func newMockTeamDataStore() *mockTeamDataStore {
-	return &mockTeamDataStore{apps: newMockAppStore()}
+	return &mockTeamDataStore{apps: newMockAppStore(), appPins: make(map[string]*store.AppPin)}
 }
 
 func (m *mockTeamDataStore) Sessions() store.SessionStore       { return nil }
@@ -144,14 +145,37 @@ func (m *mockTeamDataStore) Settings() store.SettingsStore             { return 
 func (m *mockTeamDataStore) Audit() store.AuditStore                  { return nil }
 func (m *mockTeamDataStore) AppStateSQL() store.AppStateSQLStore      { return nil }
 
+func (m *mockTeamDataStore) SessionPin(_ context.Context, _ string) (*store.SessionPin, error) {
+	return nil, nil
+}
+func (m *mockTeamDataStore) SetSessionPin(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockTeamDataStore) AppPin(_ context.Context, slug string) (*store.AppPin, error) {
+	if pin, ok := m.appPins[slug]; ok {
+		return pin, nil
+	}
+	return nil, nil
+}
+func (m *mockTeamDataStore) SetAppPin(_ context.Context, slug, provider, model string) error {
+	if _, ok := m.apps.apps[slug]; !ok {
+		return &appNotFoundError{slug: slug}
+	}
+	if provider == "" && model == "" {
+		delete(m.appPins, slug)
+		return nil
+	}
+	m.appPins[slug] = &store.AppPin{Provider: provider, Model: model}
+	return nil
+}
+
 // mockPersonalDataStore implements store.PersonalDataStore
 type mockPersonalDataStore struct {
 	apps     *mockAppStore
 	appState store.AppStateStore
+	appPins  map[string]*store.AppPin
 }
 
 func newMockPersonalDataStore() *mockPersonalDataStore {
-	return &mockPersonalDataStore{apps: newMockAppStore()}
+	return &mockPersonalDataStore{apps: newMockAppStore(), appPins: make(map[string]*store.AppPin)}
 }
 
 func (m *mockPersonalDataStore) Memories() store.MemoryStore       { return nil }
@@ -160,6 +184,29 @@ func (m *mockPersonalDataStore) Sessions() store.SessionStore      { return nil 
 func (m *mockPersonalDataStore) AppState() store.AppStateStore     { return m.appState }
 func (m *mockPersonalDataStore) Flows() store.FlowStore            { return nil }
 func (m *mockPersonalDataStore) Credentials() store.CredentialStore { return nil }
+
+func (m *mockPersonalDataStore) PersonalSettings() store.PersonalSettingsStore { return nil }
+func (m *mockPersonalDataStore) SessionPin(_ context.Context, _ string) (*store.SessionPin, error) {
+	return nil, nil
+}
+func (m *mockPersonalDataStore) SetSessionPin(_ context.Context, _, _, _ string) error { return nil }
+func (m *mockPersonalDataStore) AppPin(_ context.Context, slug string) (*store.AppPin, error) {
+	if pin, ok := m.appPins[slug]; ok {
+		return pin, nil
+	}
+	return nil, nil
+}
+func (m *mockPersonalDataStore) SetAppPin(_ context.Context, slug, provider, model string) error {
+	if _, ok := m.apps.apps[slug]; !ok {
+		return &appNotFoundError{slug: slug}
+	}
+	if provider == "" && model == "" {
+		delete(m.appPins, slug)
+		return nil
+	}
+	m.appPins[slug] = &store.AppPin{Provider: provider, Model: model}
+	return nil
+}
 
 // mockTenantRouter implements store.TenantRouter
 type mockTenantRouter struct {

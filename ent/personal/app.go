@@ -30,6 +30,10 @@ type App struct {
 	Version int `json:"version,omitempty"`
 	// SessionID holds the value of the "session_id" field.
 	SessionID string `json:"session_id,omitempty"`
+	// ProviderName holds the value of the "provider_name" field.
+	ProviderName *string `json:"provider_name,omitempty"`
+	// ModelName holds the value of the "model_name" field.
+	ModelName *string `json:"model_name,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -65,7 +69,7 @@ func (*App) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case app.FieldVersion:
 			values[i] = new(sql.NullInt64)
-		case app.FieldSlug, app.FieldName, app.FieldDescription, app.FieldCode, app.FieldSessionID:
+		case app.FieldSlug, app.FieldName, app.FieldDescription, app.FieldCode, app.FieldSessionID, app.FieldProviderName, app.FieldModelName:
 			values[i] = new(sql.NullString)
 		case app.FieldCreatedAt, app.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -127,6 +131,20 @@ func (_m *App) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field session_id", values[i])
 			} else if value.Valid {
 				_m.SessionID = value.String
+			}
+		case app.FieldProviderName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field provider_name", values[i])
+			} else if value.Valid {
+				_m.ProviderName = new(string)
+				*_m.ProviderName = value.String
+			}
+		case app.FieldModelName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field model_name", values[i])
+			} else if value.Valid {
+				_m.ModelName = new(string)
+				*_m.ModelName = value.String
 			}
 		case app.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -198,6 +216,16 @@ func (_m *App) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("session_id=")
 	builder.WriteString(_m.SessionID)
+	builder.WriteString(", ")
+	if v := _m.ProviderName; v != nil {
+		builder.WriteString("provider_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ModelName; v != nil {
+		builder.WriteString("model_name=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

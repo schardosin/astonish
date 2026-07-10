@@ -194,11 +194,10 @@ func (s *Store) openOrgDB(slug string) (*orgent.Client, *sql.DB, error) {
 		migrateOrgLegacySchema(context.Background(), db)
 
 		// Auto-migrate: create any missing tables (e.g. team_memberships added
-		// after the org was originally provisioned). Skip ModifyTable/ModifyColumn
-		// to tolerate SERIAL-vs-IDENTITY differences on tables created by legacy
-		// (pre-Ent) migrations — SERIAL works identically to IDENTITY at runtime.
+		// after the org was originally provisioned). Skip ModifyColumn to
+		// tolerate SERIAL-vs-IDENTITY differences on legacy tables.
 		if err := client.Schema.Create(context.Background(),
-			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+			entschema.WithSkipChanges(entschema.ModifyColumn),
 		); err != nil {
 			db.Close()
 			return nil, nil, fmt.Errorf("auto-migrate org pg db %s: %w", dbName, err)
@@ -867,9 +866,11 @@ func (o *orgDataStore) openTeamDB(teamSlug string) (*teamDataStore, error) {
 			slog.Warn("openTeamDB: could not ensure pgvector extension", "team", teamSlug, "error", err)
 		}
 
-		// Auto-migrate: create any missing tables/columns.
+		// Auto-migrate: create any missing tables/columns. Skip ModifyColumn
+		// to tolerate SERIAL-vs-IDENTITY differences on legacy tables; allow
+		// ModifyTable so Ent can ADD COLUMN to existing tables on deploy.
 		if err := client.Schema.Create(context.Background(),
-			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+			entschema.WithSkipChanges(entschema.ModifyColumn),
 		); err != nil {
 			db.Close()
 			client.Close()
@@ -983,7 +984,7 @@ func (o *orgDataStore) openPersonalDB(userID string) (*personalDataStore, error)
 
 		// Auto-migrate: create any missing tables/columns.
 		if err := client.Schema.Create(context.Background(),
-			entschema.WithSkipChanges(entschema.ModifyTable|entschema.ModifyColumn),
+			entschema.WithSkipChanges(entschema.ModifyColumn),
 		); err != nil {
 			db.Close()
 			client.Close()
@@ -1118,6 +1119,19 @@ func (t *teamDataStore) DrillReports() store.DrillReportStore { return &teamDril
 func (t *teamDataStore) Settings() store.SettingsStore        { return &teamSettingsStore{client: t.client} }
 func (t *teamDataStore) Audit() store.AuditStore              { return &teamAuditStore{client: t.client} }
 
+func (t *teamDataStore) SessionPin(ctx context.Context, sessionID string) (*store.SessionPin, error) {
+	return getSessionPinTeam(ctx, t.client, sessionID)
+}
+func (t *teamDataStore) SetSessionPin(ctx context.Context, sessionID, provider, model string) error {
+	return setSessionPinTeam(ctx, t.client, sessionID, provider, model)
+}
+func (t *teamDataStore) AppPin(ctx context.Context, appSlug string) (*store.AppPin, error) {
+	return getAppPinTeam(ctx, t.client, appSlug)
+}
+func (t *teamDataStore) SetAppPin(ctx context.Context, appSlug, provider, model string) error {
+	return setAppPinTeam(ctx, t.client, appSlug, provider, model)
+}
+
 // ===========================================================================
 // personalDataStore implements store.PersonalDataStore
 // ===========================================================================
@@ -1150,3 +1164,19 @@ func (p *personalDataStore) Sessions() store.SessionStore       { return &person
 func (p *personalDataStore) AppState() store.AppStateStore      { return &personalAppStateStore{client: p.client} }
 func (p *personalDataStore) Flows() store.FlowStore             { return &personalFlowStore{client: p.client} }
 func (p *personalDataStore) Credentials() store.CredentialStore { return &personalCredentialStore{client: p.client, credKey: p.credKey} }
+
+func (p *personalDataStore) PersonalSettings() store.PersonalSettingsStore {
+	return &personalSettingsStore{client: p.client, userID: p.userID}
+}
+func (p *personalDataStore) SessionPin(ctx context.Context, sessionID string) (*store.SessionPin, error) {
+	return getSessionPinPersonal(ctx, p.client, sessionID)
+}
+func (p *personalDataStore) SetSessionPin(ctx context.Context, sessionID, provider, model string) error {
+	return setSessionPinPersonal(ctx, p.client, sessionID, provider, model)
+}
+func (p *personalDataStore) AppPin(ctx context.Context, appSlug string) (*store.AppPin, error) {
+	return getAppPinPersonal(ctx, p.client, appSlug)
+}
+func (p *personalDataStore) SetAppPin(ctx context.Context, appSlug, provider, model string) error {
+	return setAppPinPersonal(ctx, p.client, appSlug, provider, model)
+}

@@ -32,6 +32,10 @@ const (
 	FieldRepo = "repo"
 	// FieldWorkspaceDir holds the string denoting the workspace_dir field in the database.
 	FieldWorkspaceDir = "workspace_dir"
+	// FieldProviderName holds the string denoting the provider_name field in the database.
+	FieldProviderName = "provider_name"
+	// FieldModelName holds the string denoting the model_name field in the database.
+	FieldModelName = "model_name"
 	// FieldMetadata holds the string denoting the metadata field in the database.
 	FieldMetadata = "metadata"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
@@ -63,6 +67,8 @@ var Columns = []string{
 	FieldIssueNumber,
 	FieldRepo,
 	FieldWorkspaceDir,
+	FieldProviderName,
+	FieldModelName,
 	FieldMetadata,
 	FieldCreatedAt,
 	FieldUpdatedAt,
@@ -154,6 +160,16 @@ func ByRepo(opts ...sql.OrderTermOption) OrderOption {
 // ByWorkspaceDir orders the results by the workspace_dir field.
 func ByWorkspaceDir(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldWorkspaceDir, opts...).ToFunc()
+}
+
+// ByProviderName orders the results by the provider_name field.
+func ByProviderName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProviderName, opts...).ToFunc()
+}
+
+// ByModelName orders the results by the model_name field.
+func ByModelName(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldModelName, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

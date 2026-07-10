@@ -60,11 +60,11 @@ func init() {
 	// app.DefaultSessionID holds the default value on creation for the session_id field.
 	app.DefaultSessionID = appDescSessionID.Default.(string)
 	// appDescCreatedAt is the schema descriptor for created_at field.
-	appDescCreatedAt := appFields[8].Descriptor()
+	appDescCreatedAt := appFields[10].Descriptor()
 	// app.DefaultCreatedAt holds the default value on creation for the created_at field.
 	app.DefaultCreatedAt = appDescCreatedAt.Default.(func() time.Time)
 	// appDescUpdatedAt is the schema descriptor for updated_at field.
-	appDescUpdatedAt := appFields[9].Descriptor()
+	appDescUpdatedAt := appFields[11].Descriptor()
 	// app.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	app.DefaultUpdatedAt = appDescUpdatedAt.Default.(func() time.Time)
 	// app.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -434,19 +434,19 @@ func init() {
 	// session.DefaultWorkspaceDir holds the default value on creation for the workspace_dir field.
 	session.DefaultWorkspaceDir = sessionDescWorkspaceDir.Default.(string)
 	// sessionDescMetadata is the schema descriptor for metadata field.
-	sessionDescMetadata := sessionFields[10].Descriptor()
+	sessionDescMetadata := sessionFields[12].Descriptor()
 	// session.DefaultMetadata holds the default value on creation for the metadata field.
 	session.DefaultMetadata = sessionDescMetadata.Default.(map[string]interface{})
 	// sessionDescLastSeq is the schema descriptor for last_seq field.
-	sessionDescLastSeq := sessionFields[11].Descriptor()
+	sessionDescLastSeq := sessionFields[13].Descriptor()
 	// session.DefaultLastSeq holds the default value on creation for the last_seq field.
 	session.DefaultLastSeq = sessionDescLastSeq.Default.(int64)
 	// sessionDescCreatedAt is the schema descriptor for created_at field.
-	sessionDescCreatedAt := sessionFields[12].Descriptor()
+	sessionDescCreatedAt := sessionFields[14].Descriptor()
 	// session.DefaultCreatedAt holds the default value on creation for the created_at field.
 	session.DefaultCreatedAt = sessionDescCreatedAt.Default.(func() time.Time)
 	// sessionDescUpdatedAt is the schema descriptor for updated_at field.
-	sessionDescUpdatedAt := sessionFields[13].Descriptor()
+	sessionDescUpdatedAt := sessionFields[15].Descriptor()
 	// session.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	session.DefaultUpdatedAt = sessionDescUpdatedAt.Default.(func() time.Time)
 	// session.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

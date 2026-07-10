@@ -237,6 +237,7 @@ const sandboxLayerChainKey contextKey = "astonish_sandbox_layer_chain"
 const sandboxImageKey contextKey = "astonish_sandbox_image"
 const sessionServiceKey contextKey = "astonish_session_service"
 const userIDKey contextKey = "astonish_user_id"
+const teamDataStoreKey contextKey = "astonish_team_data_store"
 
 // WithSandboxTemplate returns a new context containing the team's sandbox
 // template name. Used to propagate the team's custom container template into
@@ -339,6 +340,24 @@ func UserIDFromContext(ctx context.Context) string {
 // It represents "the platform acting autonomously" when no human user is
 // associated with the action. Universally recognizable as a system identity.
 const SystemUserID = "00000000-0000-0000-0000-000000000000"
+
+// WithTeamDataStore returns a new context containing a tenant-scoped
+// TeamDataStore. Used by the channel manager (and other non-HTTP entry
+// points) to resolve per-session/app pins without coupling to the full
+// tenant router. In personal mode this is nil.
+func WithTeamDataStore(ctx context.Context, tds TeamDataStore) context.Context {
+	return context.WithValue(ctx, teamDataStoreKey, tds)
+}
+
+// TeamDataStoreFromContext retrieves the TeamDataStore from a context.
+// Returns nil if none was injected (personal mode, tests, or unresolved user).
+func TeamDataStoreFromContext(ctx context.Context) TeamDataStore {
+	if ctx == nil {
+		return nil
+	}
+	tds, _ := ctx.Value(teamDataStoreKey).(TeamDataStore)
+	return tds
+}
 
 // --- Disabled Tools (per-team tool restrictions) ---
 

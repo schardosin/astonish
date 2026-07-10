@@ -111,6 +111,16 @@ func WorkspaceDir(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldWorkspaceDir, v))
 }
 
+// ProviderName applies equality check predicate on the "provider_name" field. It's identical to ProviderNameEQ.
+func ProviderName(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldProviderName, v))
+}
+
+// ModelName applies equality check predicate on the "model_name" field. It's identical to ModelNameEQ.
+func ModelName(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldModelName, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldCreatedAt, v))
@@ -649,6 +659,156 @@ func WorkspaceDirEqualFold(v string) predicate.Session {
 // WorkspaceDirContainsFold applies the ContainsFold predicate on the "workspace_dir" field.
 func WorkspaceDirContainsFold(v string) predicate.Session {
 	return predicate.Session(sql.FieldContainsFold(FieldWorkspaceDir, v))
+}
+
+// ProviderNameEQ applies the EQ predicate on the "provider_name" field.
+func ProviderNameEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldProviderName, v))
+}
+
+// ProviderNameNEQ applies the NEQ predicate on the "provider_name" field.
+func ProviderNameNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldProviderName, v))
+}
+
+// ProviderNameIn applies the In predicate on the "provider_name" field.
+func ProviderNameIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldProviderName, vs...))
+}
+
+// ProviderNameNotIn applies the NotIn predicate on the "provider_name" field.
+func ProviderNameNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldProviderName, vs...))
+}
+
+// ProviderNameGT applies the GT predicate on the "provider_name" field.
+func ProviderNameGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldProviderName, v))
+}
+
+// ProviderNameGTE applies the GTE predicate on the "provider_name" field.
+func ProviderNameGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldProviderName, v))
+}
+
+// ProviderNameLT applies the LT predicate on the "provider_name" field.
+func ProviderNameLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldProviderName, v))
+}
+
+// ProviderNameLTE applies the LTE predicate on the "provider_name" field.
+func ProviderNameLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldProviderName, v))
+}
+
+// ProviderNameContains applies the Contains predicate on the "provider_name" field.
+func ProviderNameContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldProviderName, v))
+}
+
+// ProviderNameHasPrefix applies the HasPrefix predicate on the "provider_name" field.
+func ProviderNameHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldProviderName, v))
+}
+
+// ProviderNameHasSuffix applies the HasSuffix predicate on the "provider_name" field.
+func ProviderNameHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldProviderName, v))
+}
+
+// ProviderNameIsNil applies the IsNil predicate on the "provider_name" field.
+func ProviderNameIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldProviderName))
+}
+
+// ProviderNameNotNil applies the NotNil predicate on the "provider_name" field.
+func ProviderNameNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldProviderName))
+}
+
+// ProviderNameEqualFold applies the EqualFold predicate on the "provider_name" field.
+func ProviderNameEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldProviderName, v))
+}
+
+// ProviderNameContainsFold applies the ContainsFold predicate on the "provider_name" field.
+func ProviderNameContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldProviderName, v))
+}
+
+// ModelNameEQ applies the EQ predicate on the "model_name" field.
+func ModelNameEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldModelName, v))
+}
+
+// ModelNameNEQ applies the NEQ predicate on the "model_name" field.
+func ModelNameNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldModelName, v))
+}
+
+// ModelNameIn applies the In predicate on the "model_name" field.
+func ModelNameIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldModelName, vs...))
+}
+
+// ModelNameNotIn applies the NotIn predicate on the "model_name" field.
+func ModelNameNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldModelName, vs...))
+}
+
+// ModelNameGT applies the GT predicate on the "model_name" field.
+func ModelNameGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldModelName, v))
+}
+
+// ModelNameGTE applies the GTE predicate on the "model_name" field.
+func ModelNameGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldModelName, v))
+}
+
+// ModelNameLT applies the LT predicate on the "model_name" field.
+func ModelNameLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldModelName, v))
+}
+
+// ModelNameLTE applies the LTE predicate on the "model_name" field.
+func ModelNameLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldModelName, v))
+}
+
+// ModelNameContains applies the Contains predicate on the "model_name" field.
+func ModelNameContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldModelName, v))
+}
+
+// ModelNameHasPrefix applies the HasPrefix predicate on the "model_name" field.
+func ModelNameHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldModelName, v))
+}
+
+// ModelNameHasSuffix applies the HasSuffix predicate on the "model_name" field.
+func ModelNameHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldModelName, v))
+}
+
+// ModelNameIsNil applies the IsNil predicate on the "model_name" field.
+func ModelNameIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldModelName))
+}
+
+// ModelNameNotNil applies the NotNil predicate on the "model_name" field.
+func ModelNameNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldModelName))
+}
+
+// ModelNameEqualFold applies the EqualFold predicate on the "model_name" field.
+func ModelNameEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldModelName, v))
+}
+
+// ModelNameContainsFold applies the ContainsFold predicate on the "model_name" field.
+func ModelNameContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldModelName, v))
 }
 
 // MetadataIsNil applies the IsNil predicate on the "metadata" field.

@@ -15,7 +15,7 @@ interface SessionSidebarProps {
   isLoadingSessions: boolean
   sidebarCollapsed: boolean
   onToggleSidebar: () => void
-  onSelectSession: (id: string) => void
+  onSelectSession: (session: SidebarSession) => void
   onNewSession: () => void
   onDeleteSession: (e: React.MouseEvent, id: string) => void
   onStartFleet: () => void
@@ -156,7 +156,7 @@ export default function SessionSidebar({
           sessions.map(session => (
             <button
               key={session.id}
-              onClick={() => onSelectSession(session.id)}
+              onClick={() => onSelectSession(session)}
               className={`w-full text-left px-4 py-3 transition-colors group ${
                 activeSessionId === session.id ? 'bg-purple-500/15' : 'hover:bg-purple-500/5'
               }`}

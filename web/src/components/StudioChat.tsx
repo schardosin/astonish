@@ -3,8 +3,8 @@ import { Send, Plus, Trash2, MessageSquare, ChevronRight, ChevronDown, Loader, S
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './chat/markdownComponents'
-import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream, fetchNetworkDenials } from '../api/studioChat'
-import type { ChatSession, AttachmentPayload } from '../api/studioChat'
+import { fetchSessions, fetchSessionHistory, deleteSession, connectChat, stopChat, fetchSessionStatus, connectChatStream, fetchNetworkDenials, fetchSessionModelStatus, patchSessionModel } from '../api/studioChat'
+import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/studioChat'
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
@@ -30,6 +30,7 @@ import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
 import NetworkDenialPrompt from './chat/NetworkDenialPrompt'
+import ModelCredentialBanner from './chat/ModelCredentialBanner'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -195,6 +196,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [sessionFilter, setSessionFilter] = useState('')
 
+  // Model picker state
+  const [modelStatus, setModelStatus] = useState<SessionModelStatus | null>(null)
+  const [showModelPicker, setShowModelPicker] = useState(false)
+
   // Chat state
   const [messages, setMessages] = useState<ChatMsg[]>([])
   const [input, setInput] = useState('')
@@ -318,13 +323,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Wrapper to keep URL in sync with active session
   const changeSession = useCallback((sessionId: string | null, { userInitiated = false } = {}) => {
     setActiveSessionId(sessionId)
-    setActiveAppId(null) // clear active app refinement state on session switch
+    setActiveAppId(null)
     setAppsPanelOpen(false)
-    setHasSessionMemories(false) // reset memory state on session switch
+    setHasSessionMemories(false)
     if (userInitiated) {
-      setActiveWizardContext(null) // only clear wizard context on explicit user navigation
+      setActiveWizardContext(null)
     }
     if (onSessionChange) onSessionChange(sessionId)
+    if (sessionId) {
+      fetchSessionModelStatus(sessionId).then(setModelStatus).catch(() => setModelStatus(null))
+    } else {
+      setModelStatus(null)
+    }
   }, [onSessionChange])
 
   const connectToFleetStream = useCallback((sessionId: string) => {
@@ -781,6 +791,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
           case 'retry':
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'retry', attempt: data.attempt, maxRetries: data.maxRetries, reason: data.reason }])
+            break
+
+          case 'model_changed':
+            setModelStatus(prev => prev ? { ...prev, effectiveProvider: data.provider as string, effectiveModel: data.model as string, pinnedProvider: data.provider as string, pinnedModel: data.model as string } : prev)
             break
 
           case 'error':
@@ -1796,6 +1810,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             }])
             break
 
+          case 'model_changed':
+            setModelStatus(prev => prev ? { ...prev, effectiveProvider: data.provider as string, effectiveModel: data.model as string, pinnedProvider: data.provider as string, pinnedModel: data.model as string } : prev)
+            break
+
           case 'error':
             setMessages((prev: ChatMsg[]) => [...prev, { type: 'error', content: (data.error as string) || (data.message as string) || 'Unknown error' }])
             break
@@ -2185,7 +2203,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         isLoadingSessions={isLoadingSessions}
         sidebarCollapsed={sidebarCollapsed}
         onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
-        onSelectSession={handleSelectSession}
+        onSelectSession={(session) => handleSelectSession(session.id)}
         onNewSession={handleNewSession}
         onDeleteSession={handleDeleteSession}
         onStartFleet={() => { setFleetDialogMessage(''); setShowFleetDialog(true) }}
@@ -2277,6 +2295,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             </button>
           )}
 
+          {modelStatus && modelStatus.effectiveProvider && (
+            <button
+              onClick={() => setShowModelPicker(!showModelPicker)}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors hover:bg-[var(--bg-secondary)]"
+              style={{ color: 'var(--text-muted)' }}
+              title={`Model: ${modelStatus.effectiveProvider}/${modelStatus.effectiveModel}${modelStatus.pinnedProvider ? ' (pinned)' : ''}`}
+            >
+              <Brain size={12} />
+              <span className="truncate max-w-[120px]">{modelStatus.effectiveModel || modelStatus.effectiveProvider}</span>
+            </button>
+          )}
+
           {/* Usage popover — shows token counts */}
           <UsagePopover
             usage={tokenUsage}
@@ -2284,6 +2314,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             sessionStartTime={sessionStartTime}
           />
         </div>
+        {modelStatus && modelStatus.pinnedProvider && modelStatus.credentialsAvailable === false && (
+          <ModelCredentialBanner
+            pinnedProvider={modelStatus.pinnedProvider}
+            pinnedModel={modelStatus.pinnedModel}
+            effectiveProvider={modelStatus.effectiveProvider}
+            effectiveModel={modelStatus.effectiveModel}
+            onPickAnother={() => setShowModelPicker(true)}
+          />
+        )}
         {/* Fleet session header */}
         {isFleetMode && fleetInfo && (
           <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(6, 182, 212, 0.05)' }}>

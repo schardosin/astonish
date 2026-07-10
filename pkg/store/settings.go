@@ -164,3 +164,67 @@ type SettingsStore interface {
 	// Save persists the team settings.
 	Save(ctx context.Context, settings *TeamSettings) error
 }
+
+// PersonalSettings represents per-user default configuration in personal scope.
+// It is the user-level layer of the cascading provider/model default chain
+// (platform → org → team → personal → app pin → session pin).
+//
+// Storage model: one row per user_id. In personal-mode SQLite where user_id
+// is often NULL, uuid.Nil (all-zeros) is used as a sentinel for the single
+// local user (see DECISION-1 in .omo/plans/per-chat-app-model-pin.md).
+type PersonalSettings struct {
+	// DefaultProvider is the user-preferred provider instance name.
+	// Empty string means "inherit from the enclosing scope" (team/org/platform).
+	DefaultProvider string `json:"default_provider,omitempty"`
+
+	// DefaultModel is the user-preferred model ID.
+	// Empty string means "inherit from the enclosing scope".
+	DefaultModel string `json:"default_model,omitempty"`
+}
+
+// GetDefaultProvider implements provider.UserDefaultSettings.
+func (ps *PersonalSettings) GetDefaultProvider() string {
+	if ps == nil {
+		return ""
+	}
+	return ps.DefaultProvider
+}
+
+// GetDefaultModel implements provider.UserDefaultSettings.
+func (ps *PersonalSettings) GetDefaultModel() string {
+	if ps == nil {
+		return ""
+	}
+	return ps.DefaultModel
+}
+
+// PersonalSettingsStore provides read/write access to per-user personal
+// settings. Personal scope only — never exposed at org or team scope.
+type PersonalSettingsStore interface {
+	// Get returns the current personal settings for the caller.
+	// Returns a zero-value *PersonalSettings (not nil, not an error) when no
+	// row exists yet — this keeps callers on the inheritance path without
+	// forcing them to distinguish "unset" from "empty string".
+	Get(ctx context.Context) (*PersonalSettings, error)
+
+	// Save persists the personal settings for the caller (upsert semantics).
+	Save(ctx context.Context, settings *PersonalSettings) error
+}
+
+// SessionPin holds a per-session provider/model override — the second-to-last
+// layer of the cascading provider/model default chain
+// (platform → org → team → personal → app pin → session pin).
+//
+// Empty Provider / Model = "not pinned, inherit from the enclosing cascade".
+// The router-side setter treats empty strings as "clear the pin" (NULL in DB).
+type SessionPin struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
+// AppPin holds a per-app provider/model override — sits above session-pin in
+// the cascading chain. Empty strings mean "not pinned, inherit".
+type AppPin struct {
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}

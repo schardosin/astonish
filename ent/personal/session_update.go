@@ -182,6 +182,46 @@ func (_u *SessionUpdate) SetNillableWorkspaceDir(v *string) *SessionUpdate {
 	return _u
 }
 
+// SetProviderName sets the "provider_name" field.
+func (_u *SessionUpdate) SetProviderName(v string) *SessionUpdate {
+	_u.mutation.SetProviderName(v)
+	return _u
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableProviderName(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetProviderName(*v)
+	}
+	return _u
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (_u *SessionUpdate) ClearProviderName() *SessionUpdate {
+	_u.mutation.ClearProviderName()
+	return _u
+}
+
+// SetModelName sets the "model_name" field.
+func (_u *SessionUpdate) SetModelName(v string) *SessionUpdate {
+	_u.mutation.SetModelName(v)
+	return _u
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableModelName(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetModelName(*v)
+	}
+	return _u
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (_u *SessionUpdate) ClearModelName() *SessionUpdate {
+	_u.mutation.ClearModelName()
+	return _u
+}
+
 // SetMetadata sets the "metadata" field.
 func (_u *SessionUpdate) SetMetadata(v map[string]interface{}) *SessionUpdate {
 	_u.mutation.SetMetadata(v)
@@ -324,6 +364,18 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.WorkspaceDir(); ok {
 		_spec.SetField(session.FieldWorkspaceDir, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderName(); ok {
+		_spec.SetField(session.FieldProviderName, field.TypeString, value)
+	}
+	if _u.mutation.ProviderNameCleared() {
+		_spec.ClearField(session.FieldProviderName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ModelName(); ok {
+		_spec.SetField(session.FieldModelName, field.TypeString, value)
+	}
+	if _u.mutation.ModelNameCleared() {
+		_spec.ClearField(session.FieldModelName, field.TypeString)
 	}
 	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(session.FieldMetadata, field.TypeJSON, value)
@@ -551,6 +603,46 @@ func (_u *SessionUpdateOne) SetNillableWorkspaceDir(v *string) *SessionUpdateOne
 	return _u
 }
 
+// SetProviderName sets the "provider_name" field.
+func (_u *SessionUpdateOne) SetProviderName(v string) *SessionUpdateOne {
+	_u.mutation.SetProviderName(v)
+	return _u
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableProviderName(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetProviderName(*v)
+	}
+	return _u
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (_u *SessionUpdateOne) ClearProviderName() *SessionUpdateOne {
+	_u.mutation.ClearProviderName()
+	return _u
+}
+
+// SetModelName sets the "model_name" field.
+func (_u *SessionUpdateOne) SetModelName(v string) *SessionUpdateOne {
+	_u.mutation.SetModelName(v)
+	return _u
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableModelName(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetModelName(*v)
+	}
+	return _u
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (_u *SessionUpdateOne) ClearModelName() *SessionUpdateOne {
+	_u.mutation.ClearModelName()
+	return _u
+}
+
 // SetMetadata sets the "metadata" field.
 func (_u *SessionUpdateOne) SetMetadata(v map[string]interface{}) *SessionUpdateOne {
 	_u.mutation.SetMetadata(v)
@@ -723,6 +815,18 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if value, ok := _u.mutation.WorkspaceDir(); ok {
 		_spec.SetField(session.FieldWorkspaceDir, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderName(); ok {
+		_spec.SetField(session.FieldProviderName, field.TypeString, value)
+	}
+	if _u.mutation.ProviderNameCleared() {
+		_spec.ClearField(session.FieldProviderName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ModelName(); ok {
+		_spec.SetField(session.FieldModelName, field.TypeString, value)
+	}
+	if _u.mutation.ModelNameCleared() {
+		_spec.ClearField(session.FieldModelName, field.TypeString)
 	}
 	if value, ok := _u.mutation.Metadata(); ok {
 		_spec.SetField(session.FieldMetadata, field.TypeJSON, value)

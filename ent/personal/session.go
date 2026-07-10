@@ -37,6 +37,10 @@ type Session struct {
 	Repo string `json:"repo,omitempty"`
 	// WorkspaceDir holds the value of the "workspace_dir" field.
 	WorkspaceDir string `json:"workspace_dir,omitempty"`
+	// ProviderName holds the value of the "provider_name" field.
+	ProviderName *string `json:"provider_name,omitempty"`
+	// ModelName holds the value of the "model_name" field.
+	ModelName *string `json:"model_name,omitempty"`
 	// Metadata holds the value of the "metadata" field.
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
@@ -78,7 +82,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case session.FieldMessageCount, session.FieldIssueNumber:
 			values[i] = new(sql.NullInt64)
-		case session.FieldID, session.FieldTitle, session.FieldParentID, session.FieldFleetKey, session.FieldFleetName, session.FieldRepo, session.FieldWorkspaceDir:
+		case session.FieldID, session.FieldTitle, session.FieldParentID, session.FieldFleetKey, session.FieldFleetName, session.FieldRepo, session.FieldWorkspaceDir, session.FieldProviderName, session.FieldModelName:
 			values[i] = new(sql.NullString)
 		case session.FieldCreatedAt, session.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -158,6 +162,20 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field workspace_dir", values[i])
 			} else if value.Valid {
 				_m.WorkspaceDir = value.String
+			}
+		case session.FieldProviderName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field provider_name", values[i])
+			} else if value.Valid {
+				_m.ProviderName = new(string)
+				*_m.ProviderName = value.String
+			}
+		case session.FieldModelName:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field model_name", values[i])
+			} else if value.Valid {
+				_m.ModelName = new(string)
+				*_m.ModelName = value.String
 			}
 		case session.FieldMetadata:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -250,6 +268,16 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("workspace_dir=")
 	builder.WriteString(_m.WorkspaceDir)
+	builder.WriteString(", ")
+	if v := _m.ProviderName; v != nil {
+		builder.WriteString("provider_name=")
+		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.ModelName; v != nil {
+		builder.WriteString("model_name=")
+		builder.WriteString(*v)
+	}
 	builder.WriteString(", ")
 	builder.WriteString("metadata=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Metadata))

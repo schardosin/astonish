@@ -51,6 +51,16 @@ export interface AttachmentPayload {
   data: string  // base64-encoded content (no data-url prefix)
 }
 
+
+export interface SessionModelStatus {
+  pinnedProvider: string
+  pinnedModel: string
+  effectiveProvider: string
+  effectiveModel: string
+  credentialsAvailable: boolean
+  availableProviders: string[]
+}
+
 export interface ConnectChatParams {
   sessionId?: string
   message?: string
@@ -364,4 +374,26 @@ export async function denyNetworkGrant(sessionId: string, chunkId: string, sandb
     body: JSON.stringify({ chunk_id: chunkId, sandbox_name: sandboxName, reason: reason || '' }),
   })
   if (!resp.ok) throw new Error(`Failed to deny network grant: ${resp.status}`)
+}
+
+/** Fetch the model status for a session. */
+export async function fetchSessionModelStatus(sessionId: string): Promise<SessionModelStatus> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/model-status`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch session model status: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** Update the pinned model for a session. */
+export async function patchSessionModel(sessionId: string, provider: string, model: string): Promise<SessionModelStatus> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/model`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, model }),
+  })
+  if (!response.ok) {
+    throw new Error(`Failed to patch session model: ${response.statusText}`)
+  }
+  return response.json()
 }

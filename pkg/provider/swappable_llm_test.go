@@ -88,3 +88,30 @@ func TestSwappableLLM_Inner(t *testing.T) {
 func TestSwappableLLM_ImplementsInterface(t *testing.T) {
 	var _ model.LLM = (*SwappableLLM)(nil)
 }
+
+func TestSwap_SubsequentCallUsesNewLLM(t *testing.T) {
+	// Given: a SwappableLLM wrapping model-a
+	s := NewSwappableLLM(&mockLLM{name: "model-a"})
+
+	// When: Swap replaces the inner LLM with model-b
+	s.Swap(&mockLLM{name: "model-b"})
+
+	// Then: the next GenerateContent call is served by model-b, not model-a
+	var text string
+	for resp, err := range s.GenerateContent(context.Background(), nil, false) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Content != nil {
+			for _, p := range resp.Content.Parts {
+				text += p.Text
+			}
+		}
+	}
+	if text != "from model-b" {
+		t.Errorf("after Swap, GenerateContent produced %q, want %q", text, "from model-b")
+	}
+	if s.Name() != "model-b" {
+		t.Errorf("after Swap, Name() = %q, want %q", s.Name(), "model-b")
+	}
+}

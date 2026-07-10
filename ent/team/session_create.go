@@ -150,6 +150,34 @@ func (_c *SessionCreate) SetNillableWorkspaceDir(v *string) *SessionCreate {
 	return _c
 }
 
+// SetProviderName sets the "provider_name" field.
+func (_c *SessionCreate) SetProviderName(v string) *SessionCreate {
+	_c.mutation.SetProviderName(v)
+	return _c
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableProviderName(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetProviderName(*v)
+	}
+	return _c
+}
+
+// SetModelName sets the "model_name" field.
+func (_c *SessionCreate) SetModelName(v string) *SessionCreate {
+	_c.mutation.SetModelName(v)
+	return _c
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableModelName(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetModelName(*v)
+	}
+	return _c
+}
+
 // SetMetadata sets the "metadata" field.
 func (_c *SessionCreate) SetMetadata(v map[string]interface{}) *SessionCreate {
 	_c.mutation.SetMetadata(v)
@@ -425,6 +453,14 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.WorkspaceDir(); ok {
 		_spec.SetField(session.FieldWorkspaceDir, field.TypeString, value)
 		_node.WorkspaceDir = value
+	}
+	if value, ok := _c.mutation.ProviderName(); ok {
+		_spec.SetField(session.FieldProviderName, field.TypeString, value)
+		_node.ProviderName = &value
+	}
+	if value, ok := _c.mutation.ModelName(); ok {
+		_spec.SetField(session.FieldModelName, field.TypeString, value)
+		_node.ModelName = &value
 	}
 	if value, ok := _c.mutation.Metadata(); ok {
 		_spec.SetField(session.FieldMetadata, field.TypeJSON, value)

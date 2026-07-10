@@ -141,6 +141,9 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 | `session_title` | `{title}` | Update sidebar session title |
 | `new_session` | `{sessionId}` | Switch to new session |
 | `system` | `{text}` | Show system info card |
+| `model_changed` | `{sessionId, pinnedProvider, pinnedModel, effectiveProvider, effectiveModel, credentialsAvailable}` | Refresh model status badge (no message added) |
+
+The `model_changed` event is emitted by `PatchSessionModelHandler` (`pkg/api/chat_handlers.go`) when a per-session model pin is updated while a runner is actively streaming. It is purely informational — no message is added to the chat log; the SPA re-renders the model badge only. When no runner is registered for the session (e.g. pin change between turns), the event is silently skipped and the SPA re-fetches via `GET /api/studio/sessions/{id}/model-status` on the next poll. See DECISION-3/DECISION-4 in `.omo/notepads/per-chat-app-model-pin/decisions.md` for the missing-credential soft-fallback contract that shapes the payload.
 
 ## Message Types and Component Mapping
 

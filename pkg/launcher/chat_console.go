@@ -39,6 +39,14 @@ type ChatConsoleConfig struct {
 	AutoApprove  bool
 	SessionID    string // Resume existing session (empty = new)
 	WorkspaceDir string
+	// OnSessionCreated is invoked exactly once after a NEW session is
+	// created (never on resume) with the freshly minted session ID. Used
+	// by the CLI to persist a model pin against the new session per the
+	// pin-by-default semantics of `astonish chat -p X -m Y`. If nil, no
+	// callback fires. If the callback returns an error, RunChatConsole
+	// logs it (debug mode) and continues — pin persistence must never
+	// block a chat session.
+	OnSessionCreated func(sessionID string) error
 }
 
 // RunChatConsole runs the agent in interactive chat mode.
@@ -136,6 +144,11 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			return fmt.Errorf("failed to create session: %w", createErr)
 		}
 		sess = resp.Session
+		if cfg.OnSessionCreated != nil {
+			if cbErr := cfg.OnSessionCreated(sess.ID()); cbErr != nil && cfg.DebugMode {
+				slog.Debug("OnSessionCreated callback failed", "sessionID", sess.ID(), "error", cbErr)
+			}
+		}
 	}
 
 	// --- 10. Welcome message ---

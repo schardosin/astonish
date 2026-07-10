@@ -121,6 +121,46 @@ func (_u *AppUpdate) SetNillableSessionID(v *string) *AppUpdate {
 	return _u
 }
 
+// SetProviderName sets the "provider_name" field.
+func (_u *AppUpdate) SetProviderName(v string) *AppUpdate {
+	_u.mutation.SetProviderName(v)
+	return _u
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_u *AppUpdate) SetNillableProviderName(v *string) *AppUpdate {
+	if v != nil {
+		_u.SetProviderName(*v)
+	}
+	return _u
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (_u *AppUpdate) ClearProviderName() *AppUpdate {
+	_u.mutation.ClearProviderName()
+	return _u
+}
+
+// SetModelName sets the "model_name" field.
+func (_u *AppUpdate) SetModelName(v string) *AppUpdate {
+	_u.mutation.SetModelName(v)
+	return _u
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_u *AppUpdate) SetNillableModelName(v *string) *AppUpdate {
+	if v != nil {
+		_u.SetModelName(*v)
+	}
+	return _u
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (_u *AppUpdate) ClearModelName() *AppUpdate {
+	_u.mutation.ClearModelName()
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *AppUpdate) SetUpdatedAt(v time.Time) *AppUpdate {
 	_u.mutation.SetUpdatedAt(v)
@@ -251,6 +291,18 @@ func (_u *AppUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.SessionID(); ok {
 		_spec.SetField(app.FieldSessionID, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderName(); ok {
+		_spec.SetField(app.FieldProviderName, field.TypeString, value)
+	}
+	if _u.mutation.ProviderNameCleared() {
+		_spec.ClearField(app.FieldProviderName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ModelName(); ok {
+		_spec.SetField(app.FieldModelName, field.TypeString, value)
+	}
+	if _u.mutation.ModelNameCleared() {
+		_spec.ClearField(app.FieldModelName, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(app.FieldUpdatedAt, field.TypeTime, value)
@@ -408,6 +460,46 @@ func (_u *AppUpdateOne) SetNillableSessionID(v *string) *AppUpdateOne {
 	if v != nil {
 		_u.SetSessionID(*v)
 	}
+	return _u
+}
+
+// SetProviderName sets the "provider_name" field.
+func (_u *AppUpdateOne) SetProviderName(v string) *AppUpdateOne {
+	_u.mutation.SetProviderName(v)
+	return _u
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_u *AppUpdateOne) SetNillableProviderName(v *string) *AppUpdateOne {
+	if v != nil {
+		_u.SetProviderName(*v)
+	}
+	return _u
+}
+
+// ClearProviderName clears the value of the "provider_name" field.
+func (_u *AppUpdateOne) ClearProviderName() *AppUpdateOne {
+	_u.mutation.ClearProviderName()
+	return _u
+}
+
+// SetModelName sets the "model_name" field.
+func (_u *AppUpdateOne) SetModelName(v string) *AppUpdateOne {
+	_u.mutation.SetModelName(v)
+	return _u
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_u *AppUpdateOne) SetNillableModelName(v *string) *AppUpdateOne {
+	if v != nil {
+		_u.SetModelName(*v)
+	}
+	return _u
+}
+
+// ClearModelName clears the value of the "model_name" field.
+func (_u *AppUpdateOne) ClearModelName() *AppUpdateOne {
+	_u.mutation.ClearModelName()
 	return _u
 }
 
@@ -571,6 +663,18 @@ func (_u *AppUpdateOne) sqlSave(ctx context.Context) (_node *App, err error) {
 	}
 	if value, ok := _u.mutation.SessionID(); ok {
 		_spec.SetField(app.FieldSessionID, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.ProviderName(); ok {
+		_spec.SetField(app.FieldProviderName, field.TypeString, value)
+	}
+	if _u.mutation.ProviderNameCleared() {
+		_spec.ClearField(app.FieldProviderName, field.TypeString)
+	}
+	if value, ok := _u.mutation.ModelName(); ok {
+		_spec.SetField(app.FieldModelName, field.TypeString, value)
+	}
+	if _u.mutation.ModelNameCleared() {
+		_spec.ClearField(app.FieldModelName, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(app.FieldUpdatedAt, field.TypeTime, value)

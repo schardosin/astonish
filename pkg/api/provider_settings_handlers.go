@@ -105,7 +105,10 @@ func SavePlatformProvidersHandler(w http.ResponseWriter, r *http.Request) {
 		cm.InvalidateLLMPool()
 		// Hot-swap the singleton LLM for non-platform/personal mode fallback.
 		if req.DefaultProvider != "" && req.DefaultModel != "" {
-			cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+			if err := cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel); err != nil {
+				slog.Warn("[settings] hot-swap on platform defaults change failed (falling back to next-request re-init)",
+					"provider", req.DefaultProvider, "model", req.DefaultModel, "error", err)
+			}
 		}
 	}
 
@@ -193,7 +196,10 @@ func SaveOrgProvidersHandler(w http.ResponseWriter, r *http.Request) {
 			"provider", req.DefaultProvider, "model", req.DefaultModel)
 		cm.InvalidateLLMPool()
 		if req.DefaultProvider != "" && req.DefaultModel != "" {
-			cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel)
+			if err := cm.HotSwapLLM(r.Context(), req.DefaultProvider, req.DefaultModel); err != nil {
+				slog.Warn("[settings] hot-swap on org defaults change failed (falling back to next-request re-init)",
+					"provider", req.DefaultProvider, "model", req.DefaultModel, "error", err)
+			}
 		}
 	}
 

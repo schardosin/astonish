@@ -17,6 +17,7 @@ import (
 	"github.com/schardosin/astonish/ent/personal/credential"
 	"github.com/schardosin/astonish/ent/personal/flow"
 	"github.com/schardosin/astonish/ent/personal/memory"
+	"github.com/schardosin/astonish/ent/personal/personalsettings"
 	"github.com/schardosin/astonish/ent/personal/session"
 	"github.com/schardosin/astonish/ent/personal/sessionevent"
 )
@@ -79,13 +80,14 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			app.Table:          app.ValidColumn,
-			appstate.Table:     appstate.ValidColumn,
-			credential.Table:   credential.ValidColumn,
-			flow.Table:         flow.ValidColumn,
-			memory.Table:       memory.ValidColumn,
-			session.Table:      session.ValidColumn,
-			sessionevent.Table: sessionevent.ValidColumn,
+			app.Table:              app.ValidColumn,
+			appstate.Table:         appstate.ValidColumn,
+			credential.Table:       credential.ValidColumn,
+			flow.Table:             flow.ValidColumn,
+			memory.Table:           memory.ValidColumn,
+			personalsettings.Table: personalsettings.ValidColumn,
+			session.Table:          session.ValidColumn,
+			sessionevent.Table:     sessionevent.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

@@ -91,6 +91,34 @@ func (_c *AppCreate) SetNillableSessionID(v *string) *AppCreate {
 	return _c
 }
 
+// SetProviderName sets the "provider_name" field.
+func (_c *AppCreate) SetProviderName(v string) *AppCreate {
+	_c.mutation.SetProviderName(v)
+	return _c
+}
+
+// SetNillableProviderName sets the "provider_name" field if the given value is not nil.
+func (_c *AppCreate) SetNillableProviderName(v *string) *AppCreate {
+	if v != nil {
+		_c.SetProviderName(*v)
+	}
+	return _c
+}
+
+// SetModelName sets the "model_name" field.
+func (_c *AppCreate) SetModelName(v string) *AppCreate {
+	_c.mutation.SetModelName(v)
+	return _c
+}
+
+// SetNillableModelName sets the "model_name" field if the given value is not nil.
+func (_c *AppCreate) SetNillableModelName(v *string) *AppCreate {
+	if v != nil {
+		_c.SetModelName(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *AppCreate) SetCreatedAt(v time.Time) *AppCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -313,6 +341,14 @@ func (_c *AppCreate) createSpec() (*App, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SessionID(); ok {
 		_spec.SetField(app.FieldSessionID, field.TypeString, value)
 		_node.SessionID = value
+	}
+	if value, ok := _c.mutation.ProviderName(); ok {
+		_spec.SetField(app.FieldProviderName, field.TypeString, value)
+		_node.ProviderName = &value
+	}
+	if value, ok := _c.mutation.ModelName(); ok {
+		_spec.SetField(app.FieldModelName, field.TypeString, value)
+		_node.ModelName = &value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(app.FieldCreatedAt, field.TypeTime, value)

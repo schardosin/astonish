@@ -14,9 +14,11 @@ Running `astonish chat` with no arguments starts a new interactive session using
 
 | Flag | Short | Description |
 |------|-------|-------------|
-| `--provider` | `-p` | AI provider to use |
-| `--model` | `-m` | Model name |
+| `--provider` | `-p` | AI provider to use (pins onto the new session by default) |
+| `--model` | `-m` | Model name (pins onto the new session by default) |
 | `--resume` | `-r` | Resume a session by ID (or latest if no ID given) |
+| `--no-pin` | | Do not persist `-p`/`-m` as a session pin (ephemeral override only) |
+| `--clear-model` | | Clear the model pin on the resumed session (requires `--resume`) |
 | `--workspace` | `-w` | Working directory (default: current directory) |
 | `--auto-approve` | | Auto-approve all tool executions |
 | `--debug` | | Enable debug mode |
@@ -27,8 +29,11 @@ Running `astonish chat` with no arguments starts a new interactive session using
 # Start a new chat with defaults
 astonish chat
 
-# Chat with a specific provider and model
+# Chat with a specific provider and model (pins onto the session)
 astonish chat -p openai -m gpt-4o
+
+# Same as above but ephemeral — model is NOT pinned
+astonish chat -p openai -m gpt-4o --no-pin
 
 # Resume the most recent session
 astonish chat -r
@@ -36,9 +41,42 @@ astonish chat -r
 # Resume a specific session
 astonish chat -r abc123
 
+# Resume with a one-time model override (does NOT rewrite the existing pin)
+astonish chat --resume abc123 -m claude-sonnet-4
+
+# Clear the model pin on a resumed session (falls back to cascade default)
+astonish chat --resume abc123 --clear-model
+
 # Auto-approve all tool calls
 astonish chat --auto-approve
 ```
+
+## Subcommands
+
+### `astonish chat model <provider>:<model>`
+
+Change or clear the model pin on the most recent session (or a specific session with `--session`).
+
+```bash
+# Pin the last session to openai/gpt-4o
+astonish chat model openai:gpt-4o
+
+# Clear the pin (restore cascade default)
+astonish chat model ""
+
+# Pin a specific session
+astonish chat model anthropic:claude-sonnet-4 --session abc123
+```
+
+The argument uses a first-colon split, so model names containing colons (e.g., `openai:gpt-4o:2024-08-06`) are handled correctly.
+
+## Model Pin Behavior
+
+When `-p` or `-m` is provided on a **new session** (no `--resume`), the choice is persisted as the session's model pin. On subsequent `--resume` calls without flags, the pinned model is used automatically.
+
+When `-p` or `-m` is provided on a **resumed session** (`--resume`), the override is ephemeral — it applies to this invocation only and does NOT rewrite the stored pin. Use `--clear-model` to explicitly remove a pin.
+
+If the pinned provider's credential is revoked or unavailable, the session still opens using the cascade default. A warning is printed to stderr; the pin is never auto-cleared.
 
 ## In-Session Commands
 

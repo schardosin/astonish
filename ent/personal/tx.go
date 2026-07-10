@@ -22,6 +22,8 @@ type Tx struct {
 	Flow *FlowClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
+	// PersonalSettings is the client for interacting with the PersonalSettings builders.
+	PersonalSettings *PersonalSettingsClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// SessionEvent is the client for interacting with the SessionEvent builders.
@@ -162,6 +164,7 @@ func (tx *Tx) init() {
 	tx.Credential = NewCredentialClient(tx.config)
 	tx.Flow = NewFlowClient(tx.config)
 	tx.Memory = NewMemoryClient(tx.config)
+	tx.PersonalSettings = NewPersonalSettingsClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.SessionEvent = NewSessionEventClient(tx.config)
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/schardosin/astonish/ent/personal/credential"
 	"github.com/schardosin/astonish/ent/personal/flow"
 	"github.com/schardosin/astonish/ent/personal/memory"
+	"github.com/schardosin/astonish/ent/personal/personalsettings"
 	"github.com/schardosin/astonish/ent/personal/session"
 	"github.com/schardosin/astonish/ent/personal/sessionevent"
 )
@@ -40,6 +41,8 @@ type Client struct {
 	Flow *FlowClient
 	// Memory is the client for interacting with the Memory builders.
 	Memory *MemoryClient
+	// PersonalSettings is the client for interacting with the PersonalSettings builders.
+	PersonalSettings *PersonalSettingsClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
 	// SessionEvent is the client for interacting with the SessionEvent builders.
@@ -60,6 +63,7 @@ func (c *Client) init() {
 	c.Credential = NewCredentialClient(c.config)
 	c.Flow = NewFlowClient(c.config)
 	c.Memory = NewMemoryClient(c.config)
+	c.PersonalSettings = NewPersonalSettingsClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.SessionEvent = NewSessionEventClient(c.config)
 }
@@ -152,15 +156,16 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:          ctx,
-		config:       cfg,
-		App:          NewAppClient(cfg),
-		AppState:     NewAppStateClient(cfg),
-		Credential:   NewCredentialClient(cfg),
-		Flow:         NewFlowClient(cfg),
-		Memory:       NewMemoryClient(cfg),
-		Session:      NewSessionClient(cfg),
-		SessionEvent: NewSessionEventClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		App:              NewAppClient(cfg),
+		AppState:         NewAppStateClient(cfg),
+		Credential:       NewCredentialClient(cfg),
+		Flow:             NewFlowClient(cfg),
+		Memory:           NewMemoryClient(cfg),
+		PersonalSettings: NewPersonalSettingsClient(cfg),
+		Session:          NewSessionClient(cfg),
+		SessionEvent:     NewSessionEventClient(cfg),
 	}, nil
 }
 
@@ -178,15 +183,16 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:          ctx,
-		config:       cfg,
-		App:          NewAppClient(cfg),
-		AppState:     NewAppStateClient(cfg),
-		Credential:   NewCredentialClient(cfg),
-		Flow:         NewFlowClient(cfg),
-		Memory:       NewMemoryClient(cfg),
-		Session:      NewSessionClient(cfg),
-		SessionEvent: NewSessionEventClient(cfg),
+		ctx:              ctx,
+		config:           cfg,
+		App:              NewAppClient(cfg),
+		AppState:         NewAppStateClient(cfg),
+		Credential:       NewCredentialClient(cfg),
+		Flow:             NewFlowClient(cfg),
+		Memory:           NewMemoryClient(cfg),
+		PersonalSettings: NewPersonalSettingsClient(cfg),
+		Session:          NewSessionClient(cfg),
+		SessionEvent:     NewSessionEventClient(cfg),
 	}, nil
 }
 
@@ -216,7 +222,8 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.App, c.AppState, c.Credential, c.Flow, c.Memory, c.Session, c.SessionEvent,
+		c.App, c.AppState, c.Credential, c.Flow, c.Memory, c.PersonalSettings,
+		c.Session, c.SessionEvent,
 	} {
 		n.Use(hooks...)
 	}
@@ -226,7 +233,8 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.App, c.AppState, c.Credential, c.Flow, c.Memory, c.Session, c.SessionEvent,
+		c.App, c.AppState, c.Credential, c.Flow, c.Memory, c.PersonalSettings,
+		c.Session, c.SessionEvent,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -245,6 +253,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Flow.mutate(ctx, m)
 	case *MemoryMutation:
 		return c.Memory.mutate(ctx, m)
+	case *PersonalSettingsMutation:
+		return c.PersonalSettings.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
 	case *SessionEventMutation:
@@ -951,6 +961,139 @@ func (c *MemoryClient) mutate(ctx context.Context, m *MemoryMutation) (Value, er
 	}
 }
 
+// PersonalSettingsClient is a client for the PersonalSettings schema.
+type PersonalSettingsClient struct {
+	config
+}
+
+// NewPersonalSettingsClient returns a client for the PersonalSettings from the given config.
+func NewPersonalSettingsClient(c config) *PersonalSettingsClient {
+	return &PersonalSettingsClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `personalsettings.Hooks(f(g(h())))`.
+func (c *PersonalSettingsClient) Use(hooks ...Hook) {
+	c.hooks.PersonalSettings = append(c.hooks.PersonalSettings, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `personalsettings.Intercept(f(g(h())))`.
+func (c *PersonalSettingsClient) Intercept(interceptors ...Interceptor) {
+	c.inters.PersonalSettings = append(c.inters.PersonalSettings, interceptors...)
+}
+
+// Create returns a builder for creating a PersonalSettings entity.
+func (c *PersonalSettingsClient) Create() *PersonalSettingsCreate {
+	mutation := newPersonalSettingsMutation(c.config, OpCreate)
+	return &PersonalSettingsCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of PersonalSettings entities.
+func (c *PersonalSettingsClient) CreateBulk(builders ...*PersonalSettingsCreate) *PersonalSettingsCreateBulk {
+	return &PersonalSettingsCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *PersonalSettingsClient) MapCreateBulk(slice any, setFunc func(*PersonalSettingsCreate, int)) *PersonalSettingsCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &PersonalSettingsCreateBulk{err: fmt.Errorf("calling to PersonalSettingsClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*PersonalSettingsCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &PersonalSettingsCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for PersonalSettings.
+func (c *PersonalSettingsClient) Update() *PersonalSettingsUpdate {
+	mutation := newPersonalSettingsMutation(c.config, OpUpdate)
+	return &PersonalSettingsUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *PersonalSettingsClient) UpdateOne(_m *PersonalSettings) *PersonalSettingsUpdateOne {
+	mutation := newPersonalSettingsMutation(c.config, OpUpdateOne, withPersonalSettings(_m))
+	return &PersonalSettingsUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *PersonalSettingsClient) UpdateOneID(id int) *PersonalSettingsUpdateOne {
+	mutation := newPersonalSettingsMutation(c.config, OpUpdateOne, withPersonalSettingsID(id))
+	return &PersonalSettingsUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for PersonalSettings.
+func (c *PersonalSettingsClient) Delete() *PersonalSettingsDelete {
+	mutation := newPersonalSettingsMutation(c.config, OpDelete)
+	return &PersonalSettingsDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *PersonalSettingsClient) DeleteOne(_m *PersonalSettings) *PersonalSettingsDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *PersonalSettingsClient) DeleteOneID(id int) *PersonalSettingsDeleteOne {
+	builder := c.Delete().Where(personalsettings.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &PersonalSettingsDeleteOne{builder}
+}
+
+// Query returns a query builder for PersonalSettings.
+func (c *PersonalSettingsClient) Query() *PersonalSettingsQuery {
+	return &PersonalSettingsQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypePersonalSettings},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a PersonalSettings entity by its id.
+func (c *PersonalSettingsClient) Get(ctx context.Context, id int) (*PersonalSettings, error) {
+	return c.Query().Where(personalsettings.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *PersonalSettingsClient) GetX(ctx context.Context, id int) *PersonalSettings {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *PersonalSettingsClient) Hooks() []Hook {
+	return c.hooks.PersonalSettings
+}
+
+// Interceptors returns the client interceptors.
+func (c *PersonalSettingsClient) Interceptors() []Interceptor {
+	return c.inters.PersonalSettings
+}
+
+func (c *PersonalSettingsClient) mutate(ctx context.Context, m *PersonalSettingsMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&PersonalSettingsCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&PersonalSettingsUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&PersonalSettingsUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&PersonalSettingsDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("personal: unknown PersonalSettings mutation op: %q", m.Op())
+	}
+}
+
 // SessionClient is a client for the Session schema.
 type SessionClient struct {
 	config
@@ -1252,9 +1395,11 @@ func (c *SessionEventClient) mutate(ctx context.Context, m *SessionEventMutation
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		App, AppState, Credential, Flow, Memory, Session, SessionEvent []ent.Hook
+		App, AppState, Credential, Flow, Memory, PersonalSettings, Session,
+		SessionEvent []ent.Hook
 	}
 	inters struct {
-		App, AppState, Credential, Flow, Memory, Session, SessionEvent []ent.Interceptor
+		App, AppState, Credential, Flow, Memory, PersonalSettings, Session,
+		SessionEvent []ent.Interceptor
 	}
 )

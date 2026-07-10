@@ -1,9 +1,16 @@
 package api
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/gorilla/mux"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -369,5 +376,360 @@ func TestStripAppFrontmatter(t *testing.T) {
 				t.Errorf("title = %q, want %q", title, tt.wantTitle)
 			}
 		})
+	}
+}
+
+// pinnedTeamDataStore overrides mockTeamDataStore.SessionPin to return a fixed pin.
+type pinnedTeamDataStore struct {
+	*mockTeamDataStore
+	pin *store.SessionPin
+}
+
+func (p *pinnedTeamDataStore) SessionPin(_ context.Context, _ string) (*store.SessionPin, error) {
+	return p.pin, nil
+}
+
+// pinnedOrgDataStore.ForTeam returns the test's pinnedTeamDataStore.
+type pinnedOrgDataStore struct {
+	*mockOrgDataStore
+	teamStore store.TeamDataStore
+}
+
+func (p *pinnedOrgDataStore) ForTeam(_ string) store.TeamDataStore {
+	return p.teamStore
+}
+
+// credSecretStore is a mockCredentialStore variant with configurable secrets.
+type credSecretStore struct {
+	mockCredentialStore
+	secrets map[string]string
+}
+
+func (c *credSecretStore) GetSecret(_ context.Context, key string) string {
+	return c.secrets[key]
+}
+
+// pinnedTenantRouter injects a specific OrgDataStore for any org slug.
+type pinnedTenantRouter struct {
+	override store.OrgDataStore
+}
+
+func (p *pinnedTenantRouter) ForOrg(_ string) (store.OrgDataStore, error) {
+	return p.override, nil
+}
+
+func (p *pinnedTenantRouter) ProvisionOrg(_ context.Context, _, _ string) error { return nil }
+func (p *pinnedTenantRouter) DecommissionOrg(_ context.Context, _ string) error { return nil }
+
+func buildModelStatusRequest(svc *store.Services, pu *PlatformUser, sessionID string) *http.Request {
+	r := httptest.NewRequest("GET", "/api/studio/sessions/"+sessionID+"/model-status", nil)
+	ctx := store.WithServices(r.Context(), svc)
+	if pu != nil {
+		ctx = WithPlatformUser(ctx, pu)
+	}
+	r = r.WithContext(ctx)
+	return mux.SetURLVars(r, map[string]string{"id": sessionID})
+}
+
+func newModelStatusServices(pin *store.SessionPin, teamProviders map[string]store.ProviderConfig, defaultProvider, defaultModel string, secrets map[string]string) *store.Services {
+	teamMock := newMockTeamDataStore()
+	pinned := &pinnedTeamDataStore{mockTeamDataStore: teamMock, pin: pin}
+	orgMock := newMockOrgDataStore()
+	orgWrap := &pinnedOrgDataStore{mockOrgDataStore: orgMock, teamStore: pinned}
+	return &store.Services{
+		Mode:         store.ModePlatform,
+		TenantRouter: &pinnedTenantRouter{override: orgWrap},
+		Settings: &mockTeamSettingsStore{settings: &store.TeamSettings{
+			DefaultProvider: defaultProvider,
+			DefaultModel:    defaultModel,
+			Providers:       teamProviders,
+		}},
+		Credentials: &credSecretStore{secrets: secrets},
+	}
+}
+
+// Given a session pinned to a provider with a credential,
+// When GET model-status is called,
+// Then response reports pin, effective=pin, credentialsAvailable=true,
+// availableProviders lists both providers sorted lexicographically.
+func TestSessionModelStatus_Pinned(t *testing.T) {
+	t.Parallel()
+
+	svc := newModelStatusServices(
+		&store.SessionPin{Provider: "openai", Model: "gpt-5"},
+		map[string]store.ProviderConfig{
+			"openai":    {"type": "openai"},
+			"anthropic": {"type": "anthropic"},
+		},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := buildModelStatusRequest(svc, pu, "sess-1")
+	w := httptest.NewRecorder()
+
+	GetSessionModelStatusHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp SessionModelStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.PinnedProvider != "openai" || resp.PinnedModel != "gpt-5" {
+		t.Errorf("pin = %s/%s, want openai/gpt-5", resp.PinnedProvider, resp.PinnedModel)
+	}
+	if resp.EffectiveProvider != "openai" || resp.EffectiveModel != "gpt-5" {
+		t.Errorf("effective = %s/%s, want openai/gpt-5", resp.EffectiveProvider, resp.EffectiveModel)
+	}
+	if !resp.CredentialsAvailable {
+		t.Error("credentialsAvailable = false, want true (pin has credential)")
+	}
+	if len(resp.AvailableProviders) != 2 ||
+		resp.AvailableProviders[0] != "anthropic" || resp.AvailableProviders[1] != "openai" {
+		t.Errorf("availableProviders = %v, want [anthropic openai]", resp.AvailableProviders)
+	}
+}
+
+// Given a session pinned to a provider with NO credential,
+// When GET model-status is called,
+// Then pin+effective still reflect the pin, credentialsAvailable=false —
+// soft fallback (DECISION-3), no error.
+func TestSessionModelStatus_PinnedMissingCred(t *testing.T) {
+	t.Parallel()
+
+	svc := newModelStatusServices(
+		&store.SessionPin{Provider: "openai", Model: "gpt-5"},
+		map[string]store.ProviderConfig{
+			"openai":    {"type": "openai"},
+			"anthropic": {"type": "anthropic"},
+		},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := buildModelStatusRequest(svc, pu, "sess-2")
+	w := httptest.NewRecorder()
+
+	GetSessionModelStatusHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (soft fallback, not error): %s", w.Code, w.Body.String())
+	}
+	var resp SessionModelStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.PinnedProvider != "openai" {
+		t.Errorf("pinnedProvider = %s, want openai", resp.PinnedProvider)
+	}
+	if resp.EffectiveProvider != "openai" {
+		t.Errorf("effectiveProvider = %s, want openai", resp.EffectiveProvider)
+	}
+	if resp.CredentialsAvailable {
+		t.Error("credentialsAvailable = true, want false (openai has no credential)")
+	}
+	if len(resp.AvailableProviders) != 1 || resp.AvailableProviders[0] != "anthropic" {
+		t.Errorf("availableProviders = %v, want [anthropic]", resp.AvailableProviders)
+	}
+}
+
+// Given a session with no pin,
+// When GET model-status is called,
+// Then pin fields are empty, effective=team default, credentialsAvailable=true.
+func TestSessionModelStatus_NoPins(t *testing.T) {
+	t.Parallel()
+
+	svc := newModelStatusServices(
+		nil,
+		map[string]store.ProviderConfig{"anthropic": {"type": "anthropic"}},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := buildModelStatusRequest(svc, pu, "sess-3")
+	w := httptest.NewRecorder()
+
+	GetSessionModelStatusHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp SessionModelStatusResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.PinnedProvider != "" || resp.PinnedModel != "" {
+		t.Errorf("pin = %s/%s, want empty", resp.PinnedProvider, resp.PinnedModel)
+	}
+	if resp.EffectiveProvider != "anthropic" || resp.EffectiveModel != "claude-sonnet-4.5" {
+		t.Errorf("effective = %s/%s, want anthropic/claude-sonnet-4.5",
+			resp.EffectiveProvider, resp.EffectiveModel)
+	}
+	if !resp.CredentialsAvailable {
+		t.Error("credentialsAvailable = false, want true (unpinned = healthy)")
+	}
+	if len(resp.AvailableProviders) != 1 || resp.AvailableProviders[0] != "anthropic" {
+		t.Errorf("availableProviders = %v, want [anthropic]", resp.AvailableProviders)
+	}
+}
+
+type recordingTeamDataStore struct {
+	*mockTeamDataStore
+	setCalls []struct{ SessionID, Provider, Model string }
+	setErr   error
+}
+
+func (r *recordingTeamDataStore) SetSessionPin(_ context.Context, sessionID, provider, model string) error {
+	if r.setErr != nil {
+		return r.setErr
+	}
+	r.setCalls = append(r.setCalls, struct{ SessionID, Provider, Model string }{sessionID, provider, model})
+	return nil
+}
+
+func buildPatchModelRequest(t *testing.T, svc *store.Services, pu *PlatformUser, sessionID, provider, modelName string) *http.Request {
+	t.Helper()
+	body, err := json.Marshal(PatchSessionModelRequest{Provider: provider, Model: modelName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequest("PATCH", "/api/studio/sessions/"+sessionID+"/model", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	ctx := store.WithServices(r.Context(), svc)
+	if pu != nil {
+		ctx = WithPlatformUser(ctx, pu)
+	}
+	r = r.WithContext(ctx)
+	return mux.SetURLVars(r, map[string]string{"id": sessionID})
+}
+
+func newPatchModelServices(recorder *recordingTeamDataStore, teamProviders map[string]store.ProviderConfig, defaultProvider, defaultModel string, secrets map[string]string) *store.Services {
+	orgMock := newMockOrgDataStore()
+	orgWrap := &pinnedOrgDataStore{mockOrgDataStore: orgMock, teamStore: recorder}
+	return &store.Services{
+		Mode:         store.ModePlatform,
+		TenantRouter: &pinnedTenantRouter{override: orgWrap},
+		Settings: &mockTeamSettingsStore{settings: &store.TeamSettings{
+			DefaultProvider: defaultProvider,
+			DefaultModel:    defaultModel,
+			Providers:       teamProviders,
+		}},
+		Credentials: &credSecretStore{secrets: secrets},
+	}
+}
+
+// Given a platform user PATCHes a session model with a valid provider+model,
+// When the handler runs,
+// Then the pin is persisted through TenantRouter → team store, the response
+// reports the pin as both pinned and effective. The hot-swap may fail because
+// the singleton ChatManager is not initialized in unit tests — that path is
+// non-fatal and does not affect persistence.
+func TestPatchSessionModel_HappyPath(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingTeamDataStore{mockTeamDataStore: newMockTeamDataStore()}
+	svc := newPatchModelServices(
+		recorder,
+		map[string]store.ProviderConfig{
+			"openai":    {"type": "openai"},
+			"anthropic": {"type": "anthropic"},
+		},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"openai": "sk-...", "anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := buildPatchModelRequest(t, svc, pu, "sess-1", "openai", "gpt-5")
+	w := httptest.NewRecorder()
+
+	PatchSessionModelHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var resp PatchSessionModelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.PinnedProvider != "openai" || resp.PinnedModel != "gpt-5" {
+		t.Errorf("pin = %s/%s, want openai/gpt-5", resp.PinnedProvider, resp.PinnedModel)
+	}
+	if resp.EffectiveProvider != "openai" || resp.EffectiveModel != "gpt-5" {
+		t.Errorf("effective = %s/%s, want openai/gpt-5", resp.EffectiveProvider, resp.EffectiveModel)
+	}
+	if len(recorder.setCalls) != 1 {
+		t.Fatalf("setCalls = %d, want 1", len(recorder.setCalls))
+	}
+	if recorder.setCalls[0].SessionID != "sess-1" ||
+		recorder.setCalls[0].Provider != "openai" ||
+		recorder.setCalls[0].Model != "gpt-5" {
+		t.Errorf("SetSessionPin recorded %+v, want sess-1/openai/gpt-5", recorder.setCalls[0])
+	}
+}
+
+// Given a PATCH targets a provider with no credential,
+// When the handler runs,
+// Then the pin still persists and the response is HTTP 200 (soft fallback
+// per DECISION-3 — never hard-fail).
+func TestPatchSessionModel_MissingCred(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingTeamDataStore{mockTeamDataStore: newMockTeamDataStore()}
+	svc := newPatchModelServices(
+		recorder,
+		map[string]store.ProviderConfig{
+			"openai":    {"type": "openai"},
+			"anthropic": {"type": "anthropic"},
+		},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"anthropic": "sk-ant-..."},
+	)
+	pu := &PlatformUser{ID: "u1", OrgSlug: "acme", TeamSlug: "eng"}
+	r := buildPatchModelRequest(t, svc, pu, "sess-2", "openai", "gpt-5")
+	w := httptest.NewRecorder()
+
+	PatchSessionModelHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200 (soft fallback): %s", w.Code, w.Body.String())
+	}
+	if len(recorder.setCalls) != 1 {
+		t.Errorf("pin not persisted when credential missing (setCalls=%d)", len(recorder.setCalls))
+	}
+}
+
+// Given a PATCH is received without a PlatformUser in context (personal mode),
+// When the handler runs,
+// Then no SetSessionPin call is made (persistence silently skipped) and the
+// effective values still come from the resolved cascade + override.
+func TestPatchSessionModel_NoTenantContextSkipsPersistence(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingTeamDataStore{mockTeamDataStore: newMockTeamDataStore()}
+	svc := newPatchModelServices(
+		recorder,
+		map[string]store.ProviderConfig{"anthropic": {"type": "anthropic"}},
+		"anthropic", "claude-sonnet-4.5",
+		map[string]string{"anthropic": "sk-ant-..."},
+	)
+	r := buildPatchModelRequest(t, svc, nil, "sess-3", "anthropic", "claude-opus-4")
+	w := httptest.NewRecorder()
+
+	PatchSessionModelHandler(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if len(recorder.setCalls) != 0 {
+		t.Errorf("SetSessionPin called without tenant context: %+v", recorder.setCalls)
+	}
+	var resp PatchSessionModelResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if resp.EffectiveProvider != "anthropic" || resp.EffectiveModel != "claude-opus-4" {
+		t.Errorf("effective = %s/%s, want anthropic/claude-opus-4",
+			resp.EffectiveProvider, resp.EffectiveModel)
 	}
 }

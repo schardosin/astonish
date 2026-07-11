@@ -22,10 +22,20 @@ type Tx struct {
 	Credential *CredentialClient
 	// DrillReport is the client for interacting with the DrillReport builders.
 	DrillReport *DrillReportClient
+	// FleetMailboxMessage is the client for interacting with the FleetMailboxMessage builders.
+	FleetMailboxMessage *FleetMailboxMessageClient
 	// FleetMonitorState is the client for interacting with the FleetMonitorState builders.
 	FleetMonitorState *FleetMonitorStateClient
 	// FleetPlan is the client for interacting with the FleetPlan builders.
 	FleetPlan *FleetPlanClient
+	// FleetRunState is the client for interacting with the FleetRunState builders.
+	FleetRunState *FleetRunStateClient
+	// FleetSetupDraft is the client for interacting with the FleetSetupDraft builders.
+	FleetSetupDraft *FleetSetupDraftClient
+	// FleetSetupProfile is the client for interacting with the FleetSetupProfile builders.
+	FleetSetupProfile *FleetSetupProfileClient
+	// FleetTask is the client for interacting with the FleetTask builders.
+	FleetTask *FleetTaskClient
 	// FleetTemplate is the client for interacting with the FleetTemplate builders.
 	FleetTemplate *FleetTemplateClient
 	// Flow is the client for interacting with the Flow builders.
@@ -188,8 +198,13 @@ func (tx *Tx) init() {
 	tx.ChatSessionEvent = NewChatSessionEventClient(tx.config)
 	tx.Credential = NewCredentialClient(tx.config)
 	tx.DrillReport = NewDrillReportClient(tx.config)
+	tx.FleetMailboxMessage = NewFleetMailboxMessageClient(tx.config)
 	tx.FleetMonitorState = NewFleetMonitorStateClient(tx.config)
 	tx.FleetPlan = NewFleetPlanClient(tx.config)
+	tx.FleetRunState = NewFleetRunStateClient(tx.config)
+	tx.FleetSetupDraft = NewFleetSetupDraftClient(tx.config)
+	tx.FleetSetupProfile = NewFleetSetupProfileClient(tx.config)
+	tx.FleetTask = NewFleetTaskClient(tx.config)
 	tx.FleetTemplate = NewFleetTemplateClient(tx.config)
 	tx.Flow = NewFlowClient(tx.config)
 	tx.McpServer = NewMcpServerClient(tx.config)

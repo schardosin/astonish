@@ -65,10 +65,36 @@ func LoadBundledConfigs() (map[string]*FleetConfig, error) {
 	return bundledConfigs, bundledConfigsErr
 }
 
+// IsBundledKey reports whether key is an Astonish-shipped (embedded) fleet template.
+// Bundled templates are immutable: they always win over any same-key DB row.
+func IsBundledKey(key string) bool {
+	bundled, err := LoadBundledConfigs()
+	if err != nil || bundled == nil {
+		return false
+	}
+	_, ok := bundled[key]
+	return ok
+}
+
+// BundledKeys returns the set of embedded fleet template keys.
+func BundledKeys() map[string]struct{} {
+	bundled, err := LoadBundledConfigs()
+	if err != nil || bundled == nil {
+		return map[string]struct{}{}
+	}
+	keys := make(map[string]struct{}, len(bundled))
+	for k := range bundled {
+		keys[k] = struct{}{}
+	}
+	return keys
+}
+
 // EnsureBundled copies bundled fleet YAML files to the target directory.
-// Bundled files are always overwritten to ensure users get the latest
-// defaults. Users who want custom fleet configs should create files with
-// different names (e.g., my-software-dev.yaml).
+//
+// Legacy: used only by personal-mode / file-based fleet bootstrapping.
+// Platform mode (Postgres or SQLite team DB) serves bundled templates from the
+// embedded FS and must never overwrite user data via this helper.
+// Bundled files are always overwritten when this is called.
 // Returns the number of fleets written.
 func EnsureBundled(dir string) (int, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {

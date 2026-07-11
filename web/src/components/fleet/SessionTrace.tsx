@@ -11,8 +11,9 @@ import { markdownComponents } from '../chat/markdownComponents'
 import {
   fetchFleetTrace, fetchFleetSessions, connectFleetStream,
   stopFleetSession, fetchFleetThreads, fetchFleetMessages,
+  listFleetSessionMailbox, listFleetSessionTasks,
 } from '../../api/fleetChat'
-import type { FleetTrace, FleetMessage } from '../../api/fleetChat'
+import type { FleetMailboxMessage, FleetTask, FleetTrace, FleetMessage } from '../../api/fleetChat'
 import { buildPath } from '../../hooks/useHashRouter'
 import type { TraceEvent, FleetThreadExt } from './fleetUtils'
 import { getAgentColor, extractAgentRole } from './fleetUtils'
@@ -37,6 +38,10 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
   const prevEventCountRef = useRef<number>(0)
   const abortRef = useRef<AbortController | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const [activeTraceTab, setActiveTraceTab] = useState<'trace' | 'mailbox' | 'tasks'>('trace')
+  const [tasks, setTasks] = useState<FleetTask[]>([])
+  const [mailbox, setMailbox] = useState<FleetMailboxMessage[]>([])
+  const [auxLoading, setAuxLoading] = useState(false)
 
   // Thread filtering state
   const [threads, setThreads] = useState<FleetThreadExt[]>([])
@@ -65,6 +70,32 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
       // threads endpoint may fail for very old sessions — just show empty
     }
   }, [sessionId])
+
+  const loadTasks = useCallback(async () => {
+    setAuxLoading(true)
+    try {
+      setTasks(await listFleetSessionTasks(sessionId))
+    } catch {
+      setTasks([])
+    } finally {
+      setAuxLoading(false)
+    }
+  }, [sessionId])
+
+  const loadMailbox = useCallback(async () => {
+    const recipients = [...new Set(threads.map(t => t.agent_key || t.thread_key).filter(Boolean))] as string[]
+    if (recipients.length === 0) {
+      setMailbox([])
+      return
+    }
+    setAuxLoading(true)
+    try {
+      const perRecipient = await Promise.all(recipients.map(recipient => listFleetSessionMailbox(sessionId, recipient).catch(() => [])))
+      setMailbox(perRecipient.flat())
+    } finally {
+      setAuxLoading(false)
+    }
+  }, [sessionId, threads])
 
   // Thread/agent trace state: when an agent tab is selected, we load
   // the trace filtered to that agent (shows tool calls + text).
@@ -168,6 +199,11 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
       loadThreadMessages(selectedThread)
     }
   }, [selectedThread, loadThreadMessages])
+
+  useEffect(() => {
+    if (activeTraceTab === 'tasks') loadTasks()
+    if (activeTraceTab === 'mailbox') loadMailbox()
+  }, [activeTraceTab, loadTasks, loadMailbox])
 
   // Auto-scroll when new trace events arrive (only if already near bottom)
   useEffect(() => {
@@ -288,7 +324,7 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
         </div>
         <div className="flex items-center gap-2">
           {(selectedThread === null || (selectedThread !== null && selectedThread !== '_system')) && (
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
+            activeTraceTab === 'trace' && <label className="flex items-center gap-1.5 text-xs cursor-pointer" style={{ color: 'var(--text-secondary)' }}>
               <input
                 type="checkbox"
                 checked={toolsOnly}
@@ -320,8 +356,25 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
         </div>
       </div>
 
+      <div className="flex items-center gap-1.5 px-6 py-2" style={{ borderBottom: '1px solid var(--border-color)' }}>
+        {(['trace', 'mailbox', 'tasks'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTraceTab(tab)}
+            className="px-3 py-1 text-xs font-medium rounded-full capitalize transition-colors"
+            style={activeTraceTab === tab
+              ? { background: 'rgba(6, 182, 212, 0.2)', color: '#22d3ee', border: '1px solid rgba(6, 182, 212, 0.4)' }
+              : { background: 'rgba(255,255,255,0.04)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+          >
+            {tab}
+            {tab === 'tasks' && tasks.length > 0 && <span className="ml-1 text-[10px] opacity-70">{tasks.length}</span>}
+            {tab === 'mailbox' && mailbox.length > 0 && <span className="ml-1 text-[10px] opacity-70">{mailbox.length}</span>}
+          </button>
+        ))}
+      </div>
+
       {/* Thread selector tabs */}
-      {hasThreads && (
+      {activeTraceTab === 'trace' && hasThreads && (
         <div className="flex items-center gap-1.5 px-6 py-2 overflow-x-auto" style={{ borderBottom: '1px solid var(--border-color)' }}>
           <button
             onClick={() => setSelectedThread(null)}
@@ -375,7 +428,27 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
 
       {/* Content area: raw trace, agent trace, or system messages */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-1" ref={scrollRef}>
-        {selectedThread !== null && selectedThread !== '_system' ? (
+        {activeTraceTab === 'tasks' ? (
+          auxLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader size={20} className="animate-spin text-cyan-400" />
+            </div>
+          ) : tasks.length === 0 ? (
+            <EmptyAux message="No task board entries" />
+          ) : (
+            tasks.map((task, i) => <TaskRow key={task.id || task.ID || i} task={task} />)
+          )
+        ) : activeTraceTab === 'mailbox' ? (
+          auxLoading ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader size={20} className="animate-spin text-cyan-400" />
+            </div>
+          ) : mailbox.length === 0 ? (
+            <EmptyAux message="No mailbox messages" />
+          ) : (
+            mailbox.map((msg, i) => <MailboxRow key={msg.id || msg.ID || i} msg={msg} />)
+          )
+        ) : selectedThread !== null && selectedThread !== '_system' ? (
           /* Agent trace view (with tool calls) */
           agentTraceLoading && !agentTrace ? (
             <div className="flex items-center justify-center py-12">
@@ -427,6 +500,56 @@ export default function SessionTrace({ sessionId, onRefresh, onNavigate }: Sessi
             <span>Session is active{selectedThread !== null ? ', thread updates every 5s...' : ', trace updates every 5s...'}</span>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function EmptyAux({ message }: { message: string }) {
+  return (
+    <div className="text-center py-12">
+      <FileText size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)' }} />
+      <p className="text-sm" style={{ color: 'var(--text-muted)' }}>{message}</p>
+    </div>
+  )
+}
+
+function TaskRow({ task }: { task: FleetTask }) {
+  const title = task.title || task.Title || task.id || task.ID || 'Task'
+  const status = task.status || task.Status || 'open'
+  const claimedBy = task.claimed_by || task.ClaimedBy
+  const capabilities = task.required_capabilities || task.RequiredCapabilities || []
+  const description = task.description || task.Description
+  return (
+    <div className="rounded-lg p-3 mb-2 text-xs" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)' }}>
+      <div className="flex items-center gap-2">
+        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>{title}</span>
+        <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: 'rgba(6, 182, 212, 0.12)', color: '#22d3ee' }}>{status}</span>
+        {claimedBy && <span style={{ color: getAgentColor(claimedBy).text }}>@{claimedBy}</span>}
+      </div>
+      {description && <p className="mt-1" style={{ color: 'var(--text-secondary)' }}>{description}</p>}
+      {capabilities.length > 0 && <p className="mt-1" style={{ color: 'var(--text-muted)' }}>Capabilities: {capabilities.join(', ')}</p>}
+    </div>
+  )
+}
+
+function MailboxRow({ msg }: { msg: FleetMailboxMessage }) {
+  const sender = msg.sender || msg.Sender || 'system'
+  const recipient = msg.recipient || msg.Recipient || 'unknown'
+  const body = msg.body || msg.Body || ''
+  const status = msg.delivery_status || msg.DeliveryStatus || 'delivered'
+  const time = msg.created_at || msg.CreatedAt
+  return (
+    <div className="rounded-lg p-3 mb-2 text-xs" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)' }}>
+      <div className="flex items-center gap-2 mb-1">
+        <span style={{ color: getAgentColor(sender).text }}>@{sender}</span>
+        <span style={{ color: 'var(--text-muted)' }}>to</span>
+        <span style={{ color: getAgentColor(recipient).text }}>@{recipient}</span>
+        <span className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: 'rgba(255,255,255,0.06)', color: 'var(--text-muted)' }}>{status}</span>
+        {time && <span className="ml-auto text-[10px]" style={{ color: 'var(--text-muted)' }}>{new Date(time).toLocaleTimeString()}</span>}
+      </div>
+      <div className="rounded p-2" style={{ background: 'rgba(0,0,0,0.18)', color: 'var(--text-secondary)' }}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{body}</ReactMarkdown>
       </div>
     </div>
   )

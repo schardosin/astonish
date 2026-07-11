@@ -1,55 +1,66 @@
-import { useState, useEffect } from 'react'
-import {
-  ChevronDown, ChevronRight, Loader, Users,
-  Radio, ArrowRight, FileText, Eye,
-  Wrench, Clock, AlertCircle, Code,
-} from 'lucide-react'
-import { fetchFleet } from '../../api/fleetChat'
-import type { FleetDefinition } from '../../api/fleetChat'
-import type { FleetPlanData, CommFlowNode, FleetAgentDef } from './fleetUtils'
-import { getAgentColor } from './fleetUtils'
+import { useEffect, useState } from 'react'
+import { AlertCircle, ArrowRight, Copy, ExternalLink, Loader, Radio, Settings2, Users } from 'lucide-react'
 
-// ─── Template Detail View ───
+import { cloneFleet, fetchFleet, saveFleet } from '../../api/fleetChat'
+import type { FleetDefinition, SetupProfileSummary } from '../../api/fleetChat'
+import type { CommFlowNode, FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
+import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig } from './fleetUtils'
+import { FleetAgentsEditor, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
+import FleetTemplateDialog from './FleetTemplateDialog'
+import SetupWizard from './SetupWizard'
 
 interface TemplateDetailProps {
   templateKey: string
   templates: FleetDefinition[]
-  onCreatePlan?: (key: string) => void
+  setupProfiles?: SetupProfileSummary[]
+  onNavigateToSetupProfile?: (profileKey: string) => void
+  onCreatePlan?: (key: string, draftId?: string) => void
+  onCloned?: (newKey: string) => void
+  onPlanCreated?: (planKey: string) => void
 }
 
 interface TemplateState {
   config: FleetPlanData | null
   key: string | null
+  source: 'bundled' | 'custom' | null
   error: string | null
 }
 
-export default function TemplateDetail({ templateKey, templates, onCreatePlan }: TemplateDetailProps) {
+export default function TemplateDetail({ templateKey, templates, setupProfiles = [], onNavigateToSetupProfile, onCreatePlan, onCloned, onPlanCreated }: TemplateDetailProps) {
   const template = templates.find(t => t.key === templateKey)
-  // State: { config, key, error } — only set from async callbacks
-  const [state, setState] = useState<TemplateState>({ config: null, key: null, error: null })
-  const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({})
+  const [state, setState] = useState<TemplateState>({ config: null, key: null, source: null, error: null })
+  const [tab, setTab] = useFleetDetailTab('template', templateKey)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [cloneOpen, setCloneOpen] = useState(false)
+  const [setupOpen, setSetupOpen] = useState(false)
+  const [cloning, setCloning] = useState(false)
+  const [cloneError, setCloneError] = useState<string | null>(null)
 
-  // Derive loading: fetching when key doesn't match loaded key
   const loading = Boolean(templateKey && templateKey !== state.key)
   const fullConfig = state.key === templateKey ? state.config : null
   const error = state.key === templateKey ? state.error : null
+  const source = (state.key === templateKey ? state.source : null) || template?.source || 'custom'
+  const isBundled = source === 'bundled'
 
-  // Fetch full template data when templateKey changes
   useEffect(() => {
     if (!templateKey) return
     let cancelled = false
     fetchFleet(templateKey)
       .then(data => {
         if (!cancelled) {
-          setState({ config: data.fleet as FleetPlanData, key: templateKey, error: null })
-          setExpandedAgents({})
+          setState({
+            config: data.fleet as FleetPlanData,
+            key: templateKey,
+            source: data.source || template?.source || 'custom',
+            error: null,
+          })
         }
       })
-      .catch((err: any) => {
-        if (!cancelled) setState({ config: null, key: templateKey, error: err.message })
+      .catch((err: Error) => {
+        if (!cancelled) setState({ config: null, key: templateKey, source: null, error: err.message })
       })
     return () => { cancelled = true }
-  }, [templateKey])
+  }, [templateKey, template?.source])
 
   if (!template) {
     return (
@@ -59,50 +70,135 @@ export default function TemplateDetail({ templateKey, templates, onCreatePlan }:
     )
   }
 
-  const handleCreateWithAI = () => {
-    if (onCreatePlan) {
-      onCreatePlan(templateKey)
+  const agents: [string, FleetAgentDef][] = fullConfig?.agents ? Object.entries(fullConfig.agents) : []
+  const settings = fullConfig?.settings || {}
+  const displayName = fullConfig?.name || template.name
+  const setupProfileKey = fullConfig?.setup_profile?.trim() || 'generic'
+  const setupProfile = setupProfiles.find(p => p.key === setupProfileKey)
+  const setupProfileLabel = setupProfile?.name || setupProfileKey
+
+  const handleCloneSubmit = async ({ key, name }: { key: string; name: string }) => {
+    setCloning(true)
+    setCloneError(null)
+    try {
+      const result = await cloneFleet(templateKey, key, name)
+      setCloneOpen(false)
+      onCloned?.(result.key)
+    } catch (err) {
+      setCloneError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCloning(false)
     }
   }
 
-  const toggleAgent = (key: string) => {
-    setExpandedAgents(prev => ({ ...prev, [key]: !prev[key] }))
+  const handleSaveSettings = async (nextSettings: FleetSettings, nextSetupProfileKey?: string) => {
+    if (!fullConfig || isBundled) return
+    setSaveError(null)
+    const nextConfig = updateFleetSettings(fullConfig, nextSettings, nextSetupProfileKey)
+    await saveFleet(templateKey, nextConfig as Record<string, unknown>)
+    setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
   }
 
-  const commFlow: CommFlowNode[] = fullConfig?.communication?.flow || []
-  const agents: [string, FleetAgentDef][] = fullConfig?.agents ? Object.entries(fullConfig.agents) : []
-  const settings = fullConfig?.settings || {} as FleetPlanData['settings'] & {}
+  const handleSaveAgent = async (agentKey: string, agent: FleetAgentDef) => {
+    if (!fullConfig || isBundled) return
+    setSaveError(null)
+    const nextConfig: FleetPlanData = {
+      ...fullConfig,
+      agents: { ...(fullConfig.agents || {}), [agentKey]: agent },
+    }
+    await saveFleet(templateKey, nextConfig as Record<string, unknown>)
+    setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
+  }
+
+  const handleAddAgent = async (agentKey: string, agent: FleetAgentDef) => {
+    if (!fullConfig || isBundled) return
+    setSaveError(null)
+    const nextConfig = addAgentToFleetConfig(fullConfig, agentKey, agent)
+    await saveFleet(templateKey, nextConfig as Record<string, unknown>)
+    setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
+  }
+
+  const handleDeleteAgent = async (agentKey: string) => {
+    if (!fullConfig || isBundled) return
+    setSaveError(null)
+    const nextConfig = removeAgentFromFleetConfig(fullConfig, agentKey)
+    await saveFleet(templateKey, nextConfig as Record<string, unknown>)
+    setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
+  }
 
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-4xl mx-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{template.name}</h1>
+            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{displayName}</h1>
             {(fullConfig?.description || template.description) && (
               <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{fullConfig?.description || template.description}</p>
             )}
-            <div className="flex items-center gap-3 mt-2">
-              <span className="text-xs px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
-                Template (read-only)
+            <div className="flex items-center gap-3 mt-2 flex-wrap">
+              <span
+                className="text-xs px-2 py-0.5 rounded"
+                style={{
+                  background: isBundled ? 'rgba(6, 182, 212, 0.15)' : 'var(--bg-tertiary)',
+                  color: isBundled ? '#22d3ee' : 'var(--text-muted)',
+                }}
+              >
+                {isBundled ? 'Astonish template' : 'Your template'}
+              </span>
+              <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+                key: {templateKey}
               </span>
               <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
                 {template.agent_count} agent{template.agent_count !== 1 ? 's' : ''}
               </span>
+              {!loading && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateToSetupProfile?.(setupProfileKey)}
+                  className="flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-colors hover:bg-cyan-500/10"
+                  style={{ background: 'rgba(6, 182, 212, 0.12)', color: '#67e8f9', border: '1px solid rgba(6, 182, 212, 0.25)' }}
+                  title={`Setup profile: ${setupProfileKey}`}
+                >
+                  <Settings2 size={10} />
+                  Setup: {setupProfileLabel}
+                  {onNavigateToSetupProfile && <ExternalLink size={10} className="opacity-70" />}
+                </button>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={handleCreateWithAI}
+              onClick={() => { setCloneError(null); setCloneOpen(true) }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+            >
+              <Copy size={12} />
+              {isBundled ? 'Clone to edit' : 'Clone'}
+            </button>
+            <button
+              onClick={() => setSetupOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
             >
-              <Users size={12} /> Create Plan with AI Guide
+              <Users size={12} /> Create Plan
+            </button>
+            <button
+              onClick={() => onCreatePlan?.(templateKey)}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+            >
+              AI Guide
             </button>
           </div>
         </div>
 
-        {/* Loading / Error states for full config */}
+        {isBundled && (
+          <div className="rounded-lg p-3 text-xs" style={{ background: 'rgba(6, 182, 212, 0.08)', border: '1px solid rgba(6, 182, 212, 0.25)', color: 'var(--text-secondary)' }}>
+            This template ships with Astonish and cannot be edited. Clone it to create a customizable copy stored in your team database.
+          </div>
+        )}
+
+        <FleetDetailTabs activeTab={tab} onChange={setTab} />
+
         {loading && (
           <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
             <Loader size={12} className="animate-spin" /> Loading template details...
@@ -113,178 +209,208 @@ export default function TemplateDetail({ templateKey, templates, onCreatePlan }:
             <AlertCircle size={12} /> Failed to load details: {error}
           </div>
         )}
+        {saveError && (
+          <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
+            <AlertCircle size={12} /> {saveError}
+          </div>
+        )}
 
-        {/* Communication Flow */}
-        {commFlow.length > 0 && (
-          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Communication Flow</h3>
-            <div className="flex items-center flex-wrap gap-2">
-              {commFlow.map((node, i) => {
-                const color = getAgentColor(node.role)
-                return (
-                  <div key={node.role} className="flex items-center gap-2">
-                    <div
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-                      style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
-                    >
-                      {node.entry_point && <Radio size={10} />}
-                      {node.role}
-                    </div>
-                    {i < commFlow.length - 1 && (
-                      <ArrowRight size={14} style={{ color: 'var(--text-muted)' }} />
-                    )}
-                  </div>
-                )
+        {tab === 'overview' && (
+          <>
+            <SetupProfileCard
+              profileKey={setupProfileKey}
+              profileName={setupProfileLabel}
+              profileDescription={setupProfile?.description}
+              stepCount={setupProfile?.step_count}
+              explicit={Boolean(fullConfig?.setup_profile?.trim())}
+              onOpen={() => onNavigateToSetupProfile?.(setupProfileKey)}
+            />
+            <CommunicationFlow flow={fullConfig?.communication?.flow || []} />
+            <div className="rounded-lg p-4" style={{ background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
+              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                Templates are base fleet configurations. Create a fleet plan from this template to add environment-specific channel and artifact settings.
+              </p>
+            </div>
+          </>
+        )}
+
+        {tab === 'settings' && fullConfig && (
+          <FleetSettingsEditor
+            settings={settings}
+            setupProfileKey={setupProfileKey}
+            setupProfiles={setupProfiles}
+            readOnly={isBundled}
+            onSave={isBundled ? undefined : (settings, setupProfileKey) => handleSaveSettings(settings, setupProfileKey).catch(err => {
+              setSaveError(err instanceof Error ? err.message : String(err))
+              throw err
+            })}
+          />
+        )}
+
+        {tab === 'agents' && (
+          fullConfig || !loading ? (
+            <FleetAgentsEditor
+              agents={agents}
+              fleetSettings={fullConfig?.settings}
+              readOnly={isBundled}
+              onSaveAgent={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
+                setSaveError(err instanceof Error ? err.message : String(err))
+                throw err
               })}
-            </div>
-            <div className="mt-3 space-y-1">
-              {commFlow.map(node => (
-                <div key={`talks-${node.role}`} className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                  <span style={{ color: getAgentColor(node.role).text }}>{node.role}</span>
-                  {' talks to: '}
-                  {node.talks_to?.join(', ') || 'none'}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Agents */}
-        {agents.length > 0 && (
-          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents ({agents.length})</h3>
-            <div className="space-y-3">
-              {agents.map(([key, agent]) => {
-                const color = getAgentColor(key)
-                const expanded = expandedAgents[key]
-                return (
-                  <div
-                    key={key}
-                    className="rounded-lg p-3"
-                    style={{ background: color.bg, border: `1px solid ${color.border}` }}
-                  >
-                    <div
-                      className="flex items-center justify-between cursor-pointer"
-                      onClick={() => toggleAgent(key)}
-                    >
-                      <div className="flex items-center gap-2">
-                        {expanded ? <ChevronDown size={12} style={{ color: color.text }} /> : <ChevronRight size={12} style={{ color: color.text }} />}
-                        <span className="text-sm font-medium" style={{ color: color.text }}>{key}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-                        <span>{agent.name}</span>
-                        <span>Mode: {agent.mode || 'agentic'}</span>
-                      </div>
-                    </div>
-                    {agent.description && (
-                      <p className="text-xs mt-1.5" style={{ color: 'var(--text-secondary)' }}>{agent.description}</p>
-                    )}
-                    {!expanded && (
-                      <>
-                        {agent.delegate && (
-                          <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                            Delegate: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{agent.delegate.tool}</code>
-                          </div>
-                        )}
-                        {agent.behaviors && (
-                          <div className="text-xs mt-1 line-clamp-2" style={{ color: 'var(--text-muted)' }}>
-                            {agent.behaviors.slice(0, 200)}{agent.behaviors.length > 200 ? '...' : ''}
-                          </div>
-                        )}
-                      </>
-                    )}
-                    {expanded && (
-                      <div className="mt-3 space-y-2">
-                        {agent.identity && (
-                          <div>
-                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Identity</div>
-                            <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                              {agent.identity.slice(0, 300)}{agent.identity.length > 300 ? '...' : ''}
-                            </p>
-                          </div>
-                        )}
-                        {agent.delegate && (
-                          <div>
-                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Delegate</div>
-                            <code className="text-xs px-1 py-0.5 rounded" style={{ background: 'rgba(0,0,0,0.3)', color: 'var(--text-secondary)' }}>
-                              {agent.delegate.tool}
-                            </code>
-                          </div>
-                        )}
-                        {agent.behaviors && (
-                          <div>
-                            <div className="text-[11px] font-medium mb-0.5" style={{ color: 'var(--text-muted)' }}>Behaviors</div>
-                            <p className="text-xs whitespace-pre-line" style={{ color: 'var(--text-secondary)' }}>{agent.behaviors}</p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
+              onAddAgent={isBundled ? undefined : (agentKey, agent) => handleAddAgent(agentKey, agent).catch(err => {
+                setSaveError(err instanceof Error ? err.message : String(err))
+                throw err
               })}
-            </div>
-          </div>
-        )}
-
-        {/* Fallback: show agent pills when full config hasn't loaded */}
-        {agents.length === 0 && !loading && (
-          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents</h3>
-            <div className="flex flex-wrap gap-2">
-              {(template.agent_names || []).map(name => {
-                const color = getAgentColor(name)
-                return (
-                  <div
-                    key={name}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-                    style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
-                  >
-                    {name}
-                  </div>
-                )
+              onDeleteAgent={isBundled ? undefined : (agentKey) => handleDeleteAgent(agentKey).catch(err => {
+                setSaveError(err instanceof Error ? err.message : String(err))
+                throw err
               })}
-            </div>
-          </div>
+            />
+          ) : (
+            <FallbackAgents names={template.agent_names || []} />
+          )
         )}
+      </div>
 
-        {/* Settings */}
-        {fullConfig && !!(settings.max_turns_per_agent || fullConfig.workspace_base_dir || fullConfig.project_context) && (
-          <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-            <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5" style={{ color: 'var(--text-primary)' }}>
-              <Wrench size={12} /> Settings
-            </h3>
-            <div className="space-y-1.5 text-xs" style={{ color: 'var(--text-secondary)' }}>
-              {settings.max_turns_per_agent && (
-                <div className="flex items-center gap-2">
-                  <Clock size={11} style={{ color: 'var(--text-muted)' }} />
-                  <span>Max turns per agent: <strong>{String(settings.max_turns_per_agent)}</strong></span>
-                </div>
-              )}
-              {fullConfig.workspace_base_dir && (
-                <div className="flex items-center gap-2">
-                  <Code size={11} style={{ color: 'var(--text-muted)' }} />
-                  <span>Workspace base: <code className="px-1 py-0.5 rounded text-[11px]" style={{ background: 'rgba(0,0,0,0.3)' }}>{fullConfig.workspace_base_dir}</code></span>
-                </div>
-              )}
-              {!!fullConfig.project_context && (
-                <div className="flex items-center gap-2">
-                  <FileText size={11} style={{ color: 'var(--text-muted)' }} />
-                  <span>Project context: <strong>enabled</strong></span>
-                </div>
-              )}
-            </div>
+      <FleetTemplateDialog
+        isOpen={cloneOpen}
+        mode="clone"
+        sourceName={displayName}
+        sourceKey={templateKey}
+        submitting={cloning}
+        error={cloneError}
+        onClose={() => { if (!cloning) { setCloneOpen(false); setCloneError(null) } }}
+        onSubmit={handleCloneSubmit}
+      />
+
+      {setupOpen && (
+        <SetupWizard
+          templateKey={templateKey}
+          templateName={displayName}
+          onClose={() => setSetupOpen(false)}
+          onComplete={(planKey) => {
+            setSetupOpen(false)
+            onPlanCreated?.(planKey)
+          }}
+          onOpenChatGuide={(key, draftId) => {
+            setSetupOpen(false)
+            onCreatePlan?.(key, draftId)
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+function SetupProfileCard({
+  profileKey,
+  profileName,
+  profileDescription,
+  stepCount,
+  explicit,
+  onOpen,
+}: {
+  profileKey: string
+  profileName: string
+  profileDescription?: string
+  stepCount?: number
+  explicit: boolean
+  onOpen?: () => void
+}) {
+  return (
+    <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <Settings2 size={14} className="text-cyan-400 shrink-0" />
+            <h3 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Setup Profile</h3>
           </div>
-        )}
-
-        {/* Info Note */}
-        <div className="rounded-lg p-4" style={{ background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
-          <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-            Templates are base fleet configurations. To use a template, create a fleet plan from it.
-            Fleet plans add environment-specific settings like communication channels and artifact destinations.
-            Use the "Create Plan with AI Guide" button to start an interactive session that helps you configure
-            a plan from this template using the <code className="px-1 py-0.5 rounded bg-cyan-500/10 text-cyan-300">/fleet-plan</code> command.
+          <p className="text-xs mb-2" style={{ color: 'var(--text-secondary)' }}>
+            Plan creation uses this profile for wizard steps, prompts, and validation.
+            {!explicit && ' This template has no explicit setup_profile; the default generic profile applies.'}
           </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm font-medium" style={{ color: '#22d3ee' }}>{profileName}</span>
+            <span className="text-xs font-mono px-1.5 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+              {profileKey}
+            </span>
+            {typeof stepCount === 'number' && (
+              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                {stepCount} step{stepCount !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          {profileDescription && (
+            <p className="text-xs mt-2" style={{ color: 'var(--text-muted)' }}>{profileDescription}</p>
+          )}
         </div>
+        {onOpen && (
+          <button
+            type="button"
+            onClick={onOpen}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg shrink-0 transition-colors hover:bg-cyan-500/10"
+            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}
+          >
+            View profile <ExternalLink size={12} className="text-cyan-400" />
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function CommunicationFlow({ flow }: { flow: CommFlowNode[] }) {
+  if (flow.length === 0) {
+    return (
+      <div className="rounded-lg p-4 text-sm" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-muted)' }}>
+        No communication flow configured.
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Communication Flow</h3>
+      <div className="flex items-center flex-wrap gap-2">
+        {flow.map((node, i) => {
+          const color = getAgentColor(node.role)
+          return (
+            <div key={node.role} className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}>
+                {node.entry_point && <Radio size={10} />}
+                {node.role}
+              </div>
+              {i < flow.length - 1 && <ArrowRight size={14} style={{ color: 'var(--text-muted)' }} />}
+            </div>
+          )
+        })}
+      </div>
+      <div className="mt-3 space-y-1">
+        {flow.map(node => (
+          <div key={`talks-${node.role}`} className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            <span style={{ color: getAgentColor(node.role).text }}>{node.role}</span>
+            {' talks to: '}
+            {node.talks_to?.join(', ') || 'none'}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function FallbackAgents({ names }: { names: string[] }) {
+  return (
+    <div className="rounded-lg p-4" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+      <h3 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>Agents</h3>
+      <div className="flex flex-wrap gap-2">
+        {names.map(name => {
+          const color = getAgentColor(name)
+          return (
+            <div key={name} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium" style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}>
+              {name}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

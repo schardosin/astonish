@@ -1116,6 +1116,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
 	}
 
+	fleetSetupTools, fstErr := tools.GetFleetSetupTools()
+	if fstErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet setup tools", "error", fstErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetSetupTools...)
+	}
+
 	if len(fleetToolsSlice) > 0 {
 		toolGroups["fleet"] = &agent.ToolGroup{
 			Name:        "fleet",

@@ -24,6 +24,9 @@ type FleetStores struct {
 	Scheduler      store.SchedulerStore
 	FleetTemplates store.FleetTemplateStore
 	FleetPlans     store.FleetPlanStore
+	RunStates      store.FleetRunStateStore
+	Mailbox        store.FleetMailboxStore
+	TaskBoard      store.FleetTaskBoardStore
 
 	// MemorySaveOrMerge is the cross-session memory merge function.
 	// When set, memory_save operations use LLM-based dedup/merge instead of raw inserts.
@@ -52,6 +55,9 @@ func FleetStoresFromTeam(team store.TeamDataStore, org store.OrgDataStore, platf
 		Scheduler:      team.ScheduledJobs(),
 		FleetTemplates: team.FleetTemplates(),
 		FleetPlans:     team.FleetPlans(),
+		RunStates:      team.FleetRunStates(),
+		Mailbox:        team.FleetMailbox(),
+		TaskBoard:      team.FleetTaskBoard(),
 		Skills: &store.SkillStores{
 			Platform: platformSkills,
 			Team:     team.Skills(),
@@ -87,6 +93,9 @@ func FleetStoresFromServices(svc *store.Services) *FleetStores {
 		Scheduler:      svc.Scheduler,
 		FleetTemplates: svc.FleetTemplates,
 		FleetPlans:     svc.FleetPlans,
+		RunStates:      svc.FleetRunStates,
+		Mailbox:        svc.FleetMailbox,
+		TaskBoard:      svc.FleetTaskBoard,
 	}
 
 	if svc.PlatformSkills != nil || svc.Skills != nil || svc.TeamSkills != nil {
@@ -145,6 +154,15 @@ func (fs *FleetStores) InjectIntoContext(ctx context.Context) context.Context {
 	}
 	if fs.FleetPlans != nil {
 		ctx = store.WithFleetPlanStore(ctx, fs.FleetPlans)
+	}
+	if fs.RunStates != nil {
+		ctx = store.WithFleetRunStateStore(ctx, fs.RunStates)
+	}
+	if fs.Mailbox != nil {
+		ctx = store.WithFleetMailboxStore(ctx, fs.Mailbox)
+	}
+	if fs.TaskBoard != nil {
+		ctx = store.WithFleetTaskBoardStore(ctx, fs.TaskBoard)
 	}
 	if fs.MemorySaveOrMerge != nil {
 		ctx = store.WithMemorySaveOrMerge(ctx, fs.MemorySaveOrMerge)

@@ -1,0 +1,181 @@
+key: generic
+name: Generic Fleet Setup
+description: Basic plan setup for any fleet template — channel, credentials, artifacts, and identity.
+domain: generic
+pinned_tool_groups:
+  - fleet
+  - credentials
+
+intro_prompt: |
+  You are helping the user create a fleet plan. Work through one setup step at a time.
+  Call update_setup_draft when a step is complete. Do not skip ahead.
+
+channel_types:
+  chat:
+    label: Chat
+    description: Manual start from Studio
+  github_issues:
+    label: GitHub Issues
+    description: Auto-triggered by new GitHub issues
+    requires_credentials:
+      - github
+    pinned_tool_groups:
+      - fleet
+      - credentials
+
+steps:
+  - id: identity
+    title: Plan identity
+    type: form
+    required: true
+    summary: Name and describe this plan
+    icon: tag
+    prompt: |
+      Collect plan key, name, and optional description. Keys should be lowercase with hyphens.
+    fields:
+      - id: key
+        label: Plan key
+        type: string
+        required: true
+        maps_to: plan.key
+      - id: name
+        label: Plan name
+        type: string
+        required: true
+        maps_to: plan.name
+      - id: description
+        label: Description
+        type: string
+        required: false
+        maps_to: plan.description
+
+  - id: channel
+    title: Communication channel
+    type: form
+    required: true
+    summary: How the fleet receives work
+    icon: radio
+    prompt: |
+      Ask which channel type: chat (manual start) or github_issues (auto-trigger from GitHub).
+      For github_issues, collect repository (owner/repo), optional filter labels, and poll schedule.
+      Only chat and github_issues are supported.
+    tools:
+      - validate_fleet_plan
+    fields:
+      - id: type
+        label: Channel type
+        type: enum
+        required: true
+        maps_to: plan.channel.type
+        default: chat
+        options:
+          - value: chat
+            label: Chat (manual start)
+          - value: github_issues
+            label: GitHub Issues
+      - id: repo
+        label: GitHub repository
+        type: repo
+        required: false
+        when: "channel.type == 'github_issues'"
+        maps_to: plan.channel.config.repo
+      - id: schedule
+        label: Poll schedule
+        type: cron
+        required: false
+        when: "channel.type == 'github_issues'"
+        maps_to: plan.channel.schedule
+        default: "*/5 * * * *"
+
+  - id: credentials
+    title: Credentials
+    type: credentials
+    required: false
+    summary: External service authentication
+    icon: key
+    when: "channel.type == 'github_issues'"
+    prompt: |
+      For github_issues plans, credentials are mandatory before any GitHub operations.
+      Call list_credentials first. If no github credential exists, ask for a PAT and save_credential.
+      Test the credential before proceeding.
+    tools:
+      - list_credentials
+      - save_credential
+      - test_credential
+    fields:
+      - id: github
+        label: GitHub credential
+        type: credential_ref
+        required: false
+        when: "channel.type == 'github_issues'"
+        maps_to: plan.credentials.github
+
+  - id: artifacts
+    title: Artifact destinations
+    type: form
+    required: false
+    summary: Where code and docs are stored
+    icon: folder
+    prompt: |
+      Optionally configure artifact destinations for code and documentation (local path or git repository).
+    fields:
+      - id: code_type
+        label: Code artifact type
+        type: enum
+        required: false
+        maps_to: plan.artifacts.code.type
+        options:
+          - value: local
+            label: Local path
+          - value: git_repo
+            label: Git repository
+      - id: code_repo
+        label: Code repository
+        type: repo
+        required: false
+        when: "artifacts.code_type == 'git_repo'"
+        maps_to: plan.artifacts.code.repo
+      - id: code_path
+        label: Code local path
+        type: string
+        required: false
+        when: "artifacts.code_type == 'local'"
+        maps_to: plan.artifacts.code.path
+
+  - id: agents
+    title: Agent customizations
+    type: agent_select
+    required: false
+    summary: Optional agent filtering and overrides
+    icon: users
+    prompt: |
+      Optionally limit which agents are included (include_agents) or add behavior_overrides per agent.
+      If the user wants to remove agents, use include_agents — do not use behavior_overrides as a substitute.
+    tools:
+      - update_setup_draft
+    fields:
+      - id: include_agents
+        label: Include agents
+        type: agent_multi_select
+        required: false
+        maps_to: plan.include_agents
+      - id: behavior_overrides
+        label: Behavior overrides
+        type: string
+        required: false
+        maps_to: plan.behavior_overrides
+
+  - id: review
+    title: Review and save
+    type: review
+    required: true
+    summary: Validate and save the plan
+    icon: check
+    prompt: |
+      Summarize collected configuration. Call validate_fleet_plan with channel, credentials, and artifacts.
+      Only call save_fleet_plan after validation passes. Include the same credentials in the save call.
+    tools:
+      - validate_fleet_plan
+      - save_fleet_plan
+      - update_setup_draft
+      - get_setup_profile

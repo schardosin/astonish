@@ -3,6 +3,7 @@ package fleet
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -153,6 +154,8 @@ func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey
 	sb.WriteString("- Do NOT produce deliverables if you lack critical information. Ask first.\n")
 	sb.WriteString("- The conversation thread gives you full context of what has happened so far.\n")
 
+	buildGenericOrchestrationPromptSection(&sb, agentCfg, fleetCfg)
+
 	// Delegate tool instructions
 	if agentCfg.Delegate != nil {
 		buildDelegatePromptSection(&sb, agentCfg.Delegate)
@@ -187,6 +190,69 @@ func BuildAgentPrompt(agentCfg FleetAgentConfig, fleetCfg *FleetConfig, agentKey
 	}
 
 	return sb.String()
+}
+
+func buildGenericOrchestrationPromptSection(sb *strings.Builder, agentCfg FleetAgentConfig, fleetCfg *FleetConfig) {
+	if len(agentCfg.Capabilities) > 0 {
+		caps := make([]string, 0, len(agentCfg.Capabilities))
+		for cap, enabled := range agentCfg.Capabilities {
+			if enabled {
+				caps = append(caps, cap)
+			}
+		}
+		sort.Strings(caps)
+		if len(caps) > 0 {
+			sb.WriteString("\n## Capabilities\n\n")
+			sb.WriteString("You are trusted to handle work requiring these capabilities:\n")
+			for _, cap := range caps {
+				sb.WriteString(fmt.Sprintf("- `%s`\n", cap))
+			}
+		}
+	}
+
+	if agentCfg.Execution != nil {
+		sb.WriteString("\n## Execution Constraints\n\n")
+		if agentCfg.Execution.MaxTurns > 0 {
+			sb.WriteString(fmt.Sprintf("- Stay within %d turns for this activation when possible.\n", agentCfg.Execution.MaxTurns))
+		}
+		if agentCfg.Execution.TimeoutMinutes > 0 {
+			sb.WriteString(fmt.Sprintf("- Complete this activation within %d minutes.\n", agentCfg.Execution.TimeoutMinutes))
+		}
+		if workspace := agentCfg.GetWorkspace(); workspace != "" {
+			switch workspace {
+			case "isolated":
+				sb.WriteString("- Your workspace is isolated for this agent. You may make local commits without stepping on other agents.\n")
+			case "none":
+				sb.WriteString("- You do not have a project workspace for this role. Avoid filesystem-dependent work.\n")
+			default:
+				sb.WriteString("- Your workspace is shared with the fleet session. Coordinate handoffs before changing shared artifacts.\n")
+			}
+		}
+		if agentCfg.IsParallelizable() {
+			sb.WriteString("- You may run in parallel with other parallelizable agents; keep handoffs explicit and self-contained.\n")
+		}
+	}
+
+	if agentCfg.Memory != nil {
+		sb.WriteString("\n## Memory Rules\n\n")
+		if len(agentCfg.Memory.Receives) > 0 {
+			receives := append([]string(nil), agentCfg.Memory.Receives...)
+			sort.Strings(receives)
+			sb.WriteString(fmt.Sprintf("- You receive handoffs from: @%s.\n", strings.Join(receives, ", @")))
+		}
+		if agentCfg.Memory.PrivateWork {
+			sb.WriteString("- Your intermediate work is private. Share only concise final handoff messages and deliverables.\n")
+		}
+	}
+
+	if fleetCfg != nil && fleetCfg.Settings.TaskBoard != nil && fleetCfg.Settings.TaskBoard.Enabled {
+		sb.WriteString("\n## Task Board\n\n")
+		sb.WriteString("This fleet has a durable task board enabled.\n")
+		sb.WriteString("- Use `fleet_task_post` to create a task with a title, description, and required capabilities.\n")
+		sb.WriteString("- Use `fleet_task_complete` when you finish a task you are responsible for.\n")
+		sb.WriteString("- Use `fleet_task_fail` with a clear reason if a task cannot be completed.\n")
+		sb.WriteString("Do not use the task board for normal conversation; use it for trackable work items.\n")
+	}
 }
 
 // buildDelegatePromptSection appends delegate tool instructions to a prompt builder.

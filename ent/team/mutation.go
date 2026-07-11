@@ -17,8 +17,13 @@ import (
 	"github.com/schardosin/astonish/ent/team/chatsessionevent"
 	"github.com/schardosin/astonish/ent/team/credential"
 	"github.com/schardosin/astonish/ent/team/drillreport"
+	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
 	"github.com/schardosin/astonish/ent/team/fleetmonitorstate"
 	"github.com/schardosin/astonish/ent/team/fleetplan"
+	"github.com/schardosin/astonish/ent/team/fleetrunstate"
+	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
+	"github.com/schardosin/astonish/ent/team/fleetsetupprofile"
+	"github.com/schardosin/astonish/ent/team/fleettask"
 	"github.com/schardosin/astonish/ent/team/fleettemplate"
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
@@ -44,26 +49,31 @@ const (
 	OpUpdateOne = ent.OpUpdateOne
 
 	// Node types.
-	TypeApp               = "App"
-	TypeAppState          = "AppState"
-	TypeChatSessionEvent  = "ChatSessionEvent"
-	TypeCredential        = "Credential"
-	TypeDrillReport       = "DrillReport"
-	TypeFleetMonitorState = "FleetMonitorState"
-	TypeFleetPlan         = "FleetPlan"
-	TypeFleetTemplate     = "FleetTemplate"
-	TypeFlow              = "Flow"
-	TypeMcpServer         = "McpServer"
-	TypeMemory            = "Memory"
-	TypeNetworkPolicy     = "NetworkPolicy"
-	TypeSandboxSession    = "SandboxSession"
-	TypeScheduledJob      = "ScheduledJob"
-	TypeSession           = "Session"
-	TypeSessionEvent      = "SessionEvent"
-	TypeSetting           = "Setting"
-	TypeSkill             = "Skill"
-	TypeSkillFile         = "SkillFile"
-	TypeTeamAuditLog      = "TeamAuditLog"
+	TypeApp                 = "App"
+	TypeAppState            = "AppState"
+	TypeChatSessionEvent    = "ChatSessionEvent"
+	TypeCredential          = "Credential"
+	TypeDrillReport         = "DrillReport"
+	TypeFleetMailboxMessage = "FleetMailboxMessage"
+	TypeFleetMonitorState   = "FleetMonitorState"
+	TypeFleetPlan           = "FleetPlan"
+	TypeFleetRunState       = "FleetRunState"
+	TypeFleetSetupDraft     = "FleetSetupDraft"
+	TypeFleetSetupProfile   = "FleetSetupProfile"
+	TypeFleetTask           = "FleetTask"
+	TypeFleetTemplate       = "FleetTemplate"
+	TypeFlow                = "Flow"
+	TypeMcpServer           = "McpServer"
+	TypeMemory              = "Memory"
+	TypeNetworkPolicy       = "NetworkPolicy"
+	TypeSandboxSession      = "SandboxSession"
+	TypeScheduledJob        = "ScheduledJob"
+	TypeSession             = "Session"
+	TypeSessionEvent        = "SessionEvent"
+	TypeSetting             = "Setting"
+	TypeSkill               = "Skill"
+	TypeSkillFile           = "SkillFile"
+	TypeTeamAuditLog        = "TeamAuditLog"
 )
 
 // AppMutation represents an operation that mutates the App nodes in the graph.
@@ -3755,6 +3765,939 @@ func (m *DrillReportMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown DrillReport edge %s", name)
 }
 
+// FleetMailboxMessageMutation represents an operation that mutates the FleetMailboxMessage nodes in the graph.
+type FleetMailboxMessageMutation struct {
+	config
+	op              Op
+	typ             string
+	id              *uuid.UUID
+	session_id      *string
+	recipient       *string
+	sender          *string
+	body            *string
+	mentions        *[]string
+	appendmentions  []string
+	metadata        *map[string]interface{}
+	delivery_status *string
+	delivered_at    *time.Time
+	read_at         *time.Time
+	created_at      *time.Time
+	clearedFields   map[string]struct{}
+	done            bool
+	oldValue        func(context.Context) (*FleetMailboxMessage, error)
+	predicates      []predicate.FleetMailboxMessage
+}
+
+var _ ent.Mutation = (*FleetMailboxMessageMutation)(nil)
+
+// fleetmailboxmessageOption allows management of the mutation configuration using functional options.
+type fleetmailboxmessageOption func(*FleetMailboxMessageMutation)
+
+// newFleetMailboxMessageMutation creates new mutation for the FleetMailboxMessage entity.
+func newFleetMailboxMessageMutation(c config, op Op, opts ...fleetmailboxmessageOption) *FleetMailboxMessageMutation {
+	m := &FleetMailboxMessageMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFleetMailboxMessage,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFleetMailboxMessageID sets the ID field of the mutation.
+func withFleetMailboxMessageID(id uuid.UUID) fleetmailboxmessageOption {
+	return func(m *FleetMailboxMessageMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FleetMailboxMessage
+		)
+		m.oldValue = func(ctx context.Context) (*FleetMailboxMessage, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FleetMailboxMessage.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFleetMailboxMessage sets the old FleetMailboxMessage of the mutation.
+func withFleetMailboxMessage(node *FleetMailboxMessage) fleetmailboxmessageOption {
+	return func(m *FleetMailboxMessageMutation) {
+		m.oldValue = func(context.Context) (*FleetMailboxMessage, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FleetMailboxMessageMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FleetMailboxMessageMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of FleetMailboxMessage entities.
+func (m *FleetMailboxMessageMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FleetMailboxMessageMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FleetMailboxMessageMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FleetMailboxMessage.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *FleetMailboxMessageMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *FleetMailboxMessageMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *FleetMailboxMessageMutation) ResetSessionID() {
+	m.session_id = nil
+}
+
+// SetRecipient sets the "recipient" field.
+func (m *FleetMailboxMessageMutation) SetRecipient(s string) {
+	m.recipient = &s
+}
+
+// Recipient returns the value of the "recipient" field in the mutation.
+func (m *FleetMailboxMessageMutation) Recipient() (r string, exists bool) {
+	v := m.recipient
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRecipient returns the old "recipient" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldRecipient(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRecipient is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRecipient requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRecipient: %w", err)
+	}
+	return oldValue.Recipient, nil
+}
+
+// ResetRecipient resets all changes to the "recipient" field.
+func (m *FleetMailboxMessageMutation) ResetRecipient() {
+	m.recipient = nil
+}
+
+// SetSender sets the "sender" field.
+func (m *FleetMailboxMessageMutation) SetSender(s string) {
+	m.sender = &s
+}
+
+// Sender returns the value of the "sender" field in the mutation.
+func (m *FleetMailboxMessageMutation) Sender() (r string, exists bool) {
+	v := m.sender
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSender returns the old "sender" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldSender(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSender is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSender requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSender: %w", err)
+	}
+	return oldValue.Sender, nil
+}
+
+// ResetSender resets all changes to the "sender" field.
+func (m *FleetMailboxMessageMutation) ResetSender() {
+	m.sender = nil
+}
+
+// SetBody sets the "body" field.
+func (m *FleetMailboxMessageMutation) SetBody(s string) {
+	m.body = &s
+}
+
+// Body returns the value of the "body" field in the mutation.
+func (m *FleetMailboxMessageMutation) Body() (r string, exists bool) {
+	v := m.body
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBody returns the old "body" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldBody(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBody is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBody requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBody: %w", err)
+	}
+	return oldValue.Body, nil
+}
+
+// ClearBody clears the value of the "body" field.
+func (m *FleetMailboxMessageMutation) ClearBody() {
+	m.body = nil
+	m.clearedFields[fleetmailboxmessage.FieldBody] = struct{}{}
+}
+
+// BodyCleared returns if the "body" field was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) BodyCleared() bool {
+	_, ok := m.clearedFields[fleetmailboxmessage.FieldBody]
+	return ok
+}
+
+// ResetBody resets all changes to the "body" field.
+func (m *FleetMailboxMessageMutation) ResetBody() {
+	m.body = nil
+	delete(m.clearedFields, fleetmailboxmessage.FieldBody)
+}
+
+// SetMentions sets the "mentions" field.
+func (m *FleetMailboxMessageMutation) SetMentions(s []string) {
+	m.mentions = &s
+	m.appendmentions = nil
+}
+
+// Mentions returns the value of the "mentions" field in the mutation.
+func (m *FleetMailboxMessageMutation) Mentions() (r []string, exists bool) {
+	v := m.mentions
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMentions returns the old "mentions" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldMentions(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMentions is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMentions requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMentions: %w", err)
+	}
+	return oldValue.Mentions, nil
+}
+
+// AppendMentions adds s to the "mentions" field.
+func (m *FleetMailboxMessageMutation) AppendMentions(s []string) {
+	m.appendmentions = append(m.appendmentions, s...)
+}
+
+// AppendedMentions returns the list of values that were appended to the "mentions" field in this mutation.
+func (m *FleetMailboxMessageMutation) AppendedMentions() ([]string, bool) {
+	if len(m.appendmentions) == 0 {
+		return nil, false
+	}
+	return m.appendmentions, true
+}
+
+// ClearMentions clears the value of the "mentions" field.
+func (m *FleetMailboxMessageMutation) ClearMentions() {
+	m.mentions = nil
+	m.appendmentions = nil
+	m.clearedFields[fleetmailboxmessage.FieldMentions] = struct{}{}
+}
+
+// MentionsCleared returns if the "mentions" field was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) MentionsCleared() bool {
+	_, ok := m.clearedFields[fleetmailboxmessage.FieldMentions]
+	return ok
+}
+
+// ResetMentions resets all changes to the "mentions" field.
+func (m *FleetMailboxMessageMutation) ResetMentions() {
+	m.mentions = nil
+	m.appendmentions = nil
+	delete(m.clearedFields, fleetmailboxmessage.FieldMentions)
+}
+
+// SetMetadata sets the "metadata" field.
+func (m *FleetMailboxMessageMutation) SetMetadata(value map[string]interface{}) {
+	m.metadata = &value
+}
+
+// Metadata returns the value of the "metadata" field in the mutation.
+func (m *FleetMailboxMessageMutation) Metadata() (r map[string]interface{}, exists bool) {
+	v := m.metadata
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMetadata returns the old "metadata" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldMetadata(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMetadata is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMetadata requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMetadata: %w", err)
+	}
+	return oldValue.Metadata, nil
+}
+
+// ClearMetadata clears the value of the "metadata" field.
+func (m *FleetMailboxMessageMutation) ClearMetadata() {
+	m.metadata = nil
+	m.clearedFields[fleetmailboxmessage.FieldMetadata] = struct{}{}
+}
+
+// MetadataCleared returns if the "metadata" field was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) MetadataCleared() bool {
+	_, ok := m.clearedFields[fleetmailboxmessage.FieldMetadata]
+	return ok
+}
+
+// ResetMetadata resets all changes to the "metadata" field.
+func (m *FleetMailboxMessageMutation) ResetMetadata() {
+	m.metadata = nil
+	delete(m.clearedFields, fleetmailboxmessage.FieldMetadata)
+}
+
+// SetDeliveryStatus sets the "delivery_status" field.
+func (m *FleetMailboxMessageMutation) SetDeliveryStatus(s string) {
+	m.delivery_status = &s
+}
+
+// DeliveryStatus returns the value of the "delivery_status" field in the mutation.
+func (m *FleetMailboxMessageMutation) DeliveryStatus() (r string, exists bool) {
+	v := m.delivery_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeliveryStatus returns the old "delivery_status" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldDeliveryStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeliveryStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeliveryStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeliveryStatus: %w", err)
+	}
+	return oldValue.DeliveryStatus, nil
+}
+
+// ResetDeliveryStatus resets all changes to the "delivery_status" field.
+func (m *FleetMailboxMessageMutation) ResetDeliveryStatus() {
+	m.delivery_status = nil
+}
+
+// SetDeliveredAt sets the "delivered_at" field.
+func (m *FleetMailboxMessageMutation) SetDeliveredAt(t time.Time) {
+	m.delivered_at = &t
+}
+
+// DeliveredAt returns the value of the "delivered_at" field in the mutation.
+func (m *FleetMailboxMessageMutation) DeliveredAt() (r time.Time, exists bool) {
+	v := m.delivered_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDeliveredAt returns the old "delivered_at" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldDeliveredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDeliveredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDeliveredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDeliveredAt: %w", err)
+	}
+	return oldValue.DeliveredAt, nil
+}
+
+// ClearDeliveredAt clears the value of the "delivered_at" field.
+func (m *FleetMailboxMessageMutation) ClearDeliveredAt() {
+	m.delivered_at = nil
+	m.clearedFields[fleetmailboxmessage.FieldDeliveredAt] = struct{}{}
+}
+
+// DeliveredAtCleared returns if the "delivered_at" field was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) DeliveredAtCleared() bool {
+	_, ok := m.clearedFields[fleetmailboxmessage.FieldDeliveredAt]
+	return ok
+}
+
+// ResetDeliveredAt resets all changes to the "delivered_at" field.
+func (m *FleetMailboxMessageMutation) ResetDeliveredAt() {
+	m.delivered_at = nil
+	delete(m.clearedFields, fleetmailboxmessage.FieldDeliveredAt)
+}
+
+// SetReadAt sets the "read_at" field.
+func (m *FleetMailboxMessageMutation) SetReadAt(t time.Time) {
+	m.read_at = &t
+}
+
+// ReadAt returns the value of the "read_at" field in the mutation.
+func (m *FleetMailboxMessageMutation) ReadAt() (r time.Time, exists bool) {
+	v := m.read_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldReadAt returns the old "read_at" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldReadAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldReadAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldReadAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldReadAt: %w", err)
+	}
+	return oldValue.ReadAt, nil
+}
+
+// ClearReadAt clears the value of the "read_at" field.
+func (m *FleetMailboxMessageMutation) ClearReadAt() {
+	m.read_at = nil
+	m.clearedFields[fleetmailboxmessage.FieldReadAt] = struct{}{}
+}
+
+// ReadAtCleared returns if the "read_at" field was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) ReadAtCleared() bool {
+	_, ok := m.clearedFields[fleetmailboxmessage.FieldReadAt]
+	return ok
+}
+
+// ResetReadAt resets all changes to the "read_at" field.
+func (m *FleetMailboxMessageMutation) ResetReadAt() {
+	m.read_at = nil
+	delete(m.clearedFields, fleetmailboxmessage.FieldReadAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FleetMailboxMessageMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FleetMailboxMessageMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FleetMailboxMessage entity.
+// If the FleetMailboxMessage object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetMailboxMessageMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FleetMailboxMessageMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// Where appends a list predicates to the FleetMailboxMessageMutation builder.
+func (m *FleetMailboxMessageMutation) Where(ps ...predicate.FleetMailboxMessage) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FleetMailboxMessageMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FleetMailboxMessageMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FleetMailboxMessage, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FleetMailboxMessageMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FleetMailboxMessageMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FleetMailboxMessage).
+func (m *FleetMailboxMessageMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FleetMailboxMessageMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.session_id != nil {
+		fields = append(fields, fleetmailboxmessage.FieldSessionID)
+	}
+	if m.recipient != nil {
+		fields = append(fields, fleetmailboxmessage.FieldRecipient)
+	}
+	if m.sender != nil {
+		fields = append(fields, fleetmailboxmessage.FieldSender)
+	}
+	if m.body != nil {
+		fields = append(fields, fleetmailboxmessage.FieldBody)
+	}
+	if m.mentions != nil {
+		fields = append(fields, fleetmailboxmessage.FieldMentions)
+	}
+	if m.metadata != nil {
+		fields = append(fields, fleetmailboxmessage.FieldMetadata)
+	}
+	if m.delivery_status != nil {
+		fields = append(fields, fleetmailboxmessage.FieldDeliveryStatus)
+	}
+	if m.delivered_at != nil {
+		fields = append(fields, fleetmailboxmessage.FieldDeliveredAt)
+	}
+	if m.read_at != nil {
+		fields = append(fields, fleetmailboxmessage.FieldReadAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, fleetmailboxmessage.FieldCreatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FleetMailboxMessageMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case fleetmailboxmessage.FieldSessionID:
+		return m.SessionID()
+	case fleetmailboxmessage.FieldRecipient:
+		return m.Recipient()
+	case fleetmailboxmessage.FieldSender:
+		return m.Sender()
+	case fleetmailboxmessage.FieldBody:
+		return m.Body()
+	case fleetmailboxmessage.FieldMentions:
+		return m.Mentions()
+	case fleetmailboxmessage.FieldMetadata:
+		return m.Metadata()
+	case fleetmailboxmessage.FieldDeliveryStatus:
+		return m.DeliveryStatus()
+	case fleetmailboxmessage.FieldDeliveredAt:
+		return m.DeliveredAt()
+	case fleetmailboxmessage.FieldReadAt:
+		return m.ReadAt()
+	case fleetmailboxmessage.FieldCreatedAt:
+		return m.CreatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FleetMailboxMessageMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case fleetmailboxmessage.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case fleetmailboxmessage.FieldRecipient:
+		return m.OldRecipient(ctx)
+	case fleetmailboxmessage.FieldSender:
+		return m.OldSender(ctx)
+	case fleetmailboxmessage.FieldBody:
+		return m.OldBody(ctx)
+	case fleetmailboxmessage.FieldMentions:
+		return m.OldMentions(ctx)
+	case fleetmailboxmessage.FieldMetadata:
+		return m.OldMetadata(ctx)
+	case fleetmailboxmessage.FieldDeliveryStatus:
+		return m.OldDeliveryStatus(ctx)
+	case fleetmailboxmessage.FieldDeliveredAt:
+		return m.OldDeliveredAt(ctx)
+	case fleetmailboxmessage.FieldReadAt:
+		return m.OldReadAt(ctx)
+	case fleetmailboxmessage.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FleetMailboxMessage field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetMailboxMessageMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case fleetmailboxmessage.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case fleetmailboxmessage.FieldRecipient:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRecipient(v)
+		return nil
+	case fleetmailboxmessage.FieldSender:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSender(v)
+		return nil
+	case fleetmailboxmessage.FieldBody:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBody(v)
+		return nil
+	case fleetmailboxmessage.FieldMentions:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMentions(v)
+		return nil
+	case fleetmailboxmessage.FieldMetadata:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMetadata(v)
+		return nil
+	case fleetmailboxmessage.FieldDeliveryStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeliveryStatus(v)
+		return nil
+	case fleetmailboxmessage.FieldDeliveredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDeliveredAt(v)
+		return nil
+	case fleetmailboxmessage.FieldReadAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetReadAt(v)
+		return nil
+	case fleetmailboxmessage.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FleetMailboxMessage field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FleetMailboxMessageMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FleetMailboxMessageMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetMailboxMessageMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown FleetMailboxMessage numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FleetMailboxMessageMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(fleetmailboxmessage.FieldBody) {
+		fields = append(fields, fleetmailboxmessage.FieldBody)
+	}
+	if m.FieldCleared(fleetmailboxmessage.FieldMentions) {
+		fields = append(fields, fleetmailboxmessage.FieldMentions)
+	}
+	if m.FieldCleared(fleetmailboxmessage.FieldMetadata) {
+		fields = append(fields, fleetmailboxmessage.FieldMetadata)
+	}
+	if m.FieldCleared(fleetmailboxmessage.FieldDeliveredAt) {
+		fields = append(fields, fleetmailboxmessage.FieldDeliveredAt)
+	}
+	if m.FieldCleared(fleetmailboxmessage.FieldReadAt) {
+		fields = append(fields, fleetmailboxmessage.FieldReadAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FleetMailboxMessageMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FleetMailboxMessageMutation) ClearField(name string) error {
+	switch name {
+	case fleetmailboxmessage.FieldBody:
+		m.ClearBody()
+		return nil
+	case fleetmailboxmessage.FieldMentions:
+		m.ClearMentions()
+		return nil
+	case fleetmailboxmessage.FieldMetadata:
+		m.ClearMetadata()
+		return nil
+	case fleetmailboxmessage.FieldDeliveredAt:
+		m.ClearDeliveredAt()
+		return nil
+	case fleetmailboxmessage.FieldReadAt:
+		m.ClearReadAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetMailboxMessage nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FleetMailboxMessageMutation) ResetField(name string) error {
+	switch name {
+	case fleetmailboxmessage.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case fleetmailboxmessage.FieldRecipient:
+		m.ResetRecipient()
+		return nil
+	case fleetmailboxmessage.FieldSender:
+		m.ResetSender()
+		return nil
+	case fleetmailboxmessage.FieldBody:
+		m.ResetBody()
+		return nil
+	case fleetmailboxmessage.FieldMentions:
+		m.ResetMentions()
+		return nil
+	case fleetmailboxmessage.FieldMetadata:
+		m.ResetMetadata()
+		return nil
+	case fleetmailboxmessage.FieldDeliveryStatus:
+		m.ResetDeliveryStatus()
+		return nil
+	case fleetmailboxmessage.FieldDeliveredAt:
+		m.ResetDeliveredAt()
+		return nil
+	case fleetmailboxmessage.FieldReadAt:
+		m.ResetReadAt()
+		return nil
+	case fleetmailboxmessage.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetMailboxMessage field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FleetMailboxMessageMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FleetMailboxMessageMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FleetMailboxMessageMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FleetMailboxMessageMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FleetMailboxMessageMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FleetMailboxMessageMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FleetMailboxMessageMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FleetMailboxMessage unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FleetMailboxMessageMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FleetMailboxMessage edge %s", name)
+}
+
 // FleetMonitorStateMutation represents an operation that mutates the FleetMonitorState nodes in the graph.
 type FleetMonitorStateMutation struct {
 	config
@@ -4890,6 +5833,3242 @@ func (m *FleetPlanMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *FleetPlanMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown FleetPlan edge %s", name)
+}
+
+// FleetRunStateMutation represents an operation that mutates the FleetRunState nodes in the graph.
+type FleetRunStateMutation struct {
+	config
+	op                  Op
+	typ                 string
+	id                  *uuid.UUID
+	session_id          *string
+	plan_key            *string
+	state               *string
+	active_agents       *[]string
+	appendactive_agents []string
+	waiting_agent       *string
+	ball                *string
+	progress            *map[string]interface{}
+	last_heartbeat_at   *time.Time
+	created_at          *time.Time
+	updated_at          *time.Time
+	clearedFields       map[string]struct{}
+	done                bool
+	oldValue            func(context.Context) (*FleetRunState, error)
+	predicates          []predicate.FleetRunState
+}
+
+var _ ent.Mutation = (*FleetRunStateMutation)(nil)
+
+// fleetrunstateOption allows management of the mutation configuration using functional options.
+type fleetrunstateOption func(*FleetRunStateMutation)
+
+// newFleetRunStateMutation creates new mutation for the FleetRunState entity.
+func newFleetRunStateMutation(c config, op Op, opts ...fleetrunstateOption) *FleetRunStateMutation {
+	m := &FleetRunStateMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFleetRunState,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFleetRunStateID sets the ID field of the mutation.
+func withFleetRunStateID(id uuid.UUID) fleetrunstateOption {
+	return func(m *FleetRunStateMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FleetRunState
+		)
+		m.oldValue = func(ctx context.Context) (*FleetRunState, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FleetRunState.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFleetRunState sets the old FleetRunState of the mutation.
+func withFleetRunState(node *FleetRunState) fleetrunstateOption {
+	return func(m *FleetRunStateMutation) {
+		m.oldValue = func(context.Context) (*FleetRunState, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FleetRunStateMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FleetRunStateMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of FleetRunState entities.
+func (m *FleetRunStateMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FleetRunStateMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FleetRunStateMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FleetRunState.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *FleetRunStateMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *FleetRunStateMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *FleetRunStateMutation) ResetSessionID() {
+	m.session_id = nil
+}
+
+// SetPlanKey sets the "plan_key" field.
+func (m *FleetRunStateMutation) SetPlanKey(s string) {
+	m.plan_key = &s
+}
+
+// PlanKey returns the value of the "plan_key" field in the mutation.
+func (m *FleetRunStateMutation) PlanKey() (r string, exists bool) {
+	v := m.plan_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlanKey returns the old "plan_key" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldPlanKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlanKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlanKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlanKey: %w", err)
+	}
+	return oldValue.PlanKey, nil
+}
+
+// ResetPlanKey resets all changes to the "plan_key" field.
+func (m *FleetRunStateMutation) ResetPlanKey() {
+	m.plan_key = nil
+}
+
+// SetState sets the "state" field.
+func (m *FleetRunStateMutation) SetState(s string) {
+	m.state = &s
+}
+
+// State returns the value of the "state" field in the mutation.
+func (m *FleetRunStateMutation) State() (r string, exists bool) {
+	v := m.state
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldState returns the old "state" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldState(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldState is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldState requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldState: %w", err)
+	}
+	return oldValue.State, nil
+}
+
+// ResetState resets all changes to the "state" field.
+func (m *FleetRunStateMutation) ResetState() {
+	m.state = nil
+}
+
+// SetActiveAgents sets the "active_agents" field.
+func (m *FleetRunStateMutation) SetActiveAgents(s []string) {
+	m.active_agents = &s
+	m.appendactive_agents = nil
+}
+
+// ActiveAgents returns the value of the "active_agents" field in the mutation.
+func (m *FleetRunStateMutation) ActiveAgents() (r []string, exists bool) {
+	v := m.active_agents
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldActiveAgents returns the old "active_agents" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldActiveAgents(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldActiveAgents is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldActiveAgents requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldActiveAgents: %w", err)
+	}
+	return oldValue.ActiveAgents, nil
+}
+
+// AppendActiveAgents adds s to the "active_agents" field.
+func (m *FleetRunStateMutation) AppendActiveAgents(s []string) {
+	m.appendactive_agents = append(m.appendactive_agents, s...)
+}
+
+// AppendedActiveAgents returns the list of values that were appended to the "active_agents" field in this mutation.
+func (m *FleetRunStateMutation) AppendedActiveAgents() ([]string, bool) {
+	if len(m.appendactive_agents) == 0 {
+		return nil, false
+	}
+	return m.appendactive_agents, true
+}
+
+// ResetActiveAgents resets all changes to the "active_agents" field.
+func (m *FleetRunStateMutation) ResetActiveAgents() {
+	m.active_agents = nil
+	m.appendactive_agents = nil
+}
+
+// SetWaitingAgent sets the "waiting_agent" field.
+func (m *FleetRunStateMutation) SetWaitingAgent(s string) {
+	m.waiting_agent = &s
+}
+
+// WaitingAgent returns the value of the "waiting_agent" field in the mutation.
+func (m *FleetRunStateMutation) WaitingAgent() (r string, exists bool) {
+	v := m.waiting_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWaitingAgent returns the old "waiting_agent" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldWaitingAgent(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWaitingAgent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWaitingAgent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWaitingAgent: %w", err)
+	}
+	return oldValue.WaitingAgent, nil
+}
+
+// ClearWaitingAgent clears the value of the "waiting_agent" field.
+func (m *FleetRunStateMutation) ClearWaitingAgent() {
+	m.waiting_agent = nil
+	m.clearedFields[fleetrunstate.FieldWaitingAgent] = struct{}{}
+}
+
+// WaitingAgentCleared returns if the "waiting_agent" field was cleared in this mutation.
+func (m *FleetRunStateMutation) WaitingAgentCleared() bool {
+	_, ok := m.clearedFields[fleetrunstate.FieldWaitingAgent]
+	return ok
+}
+
+// ResetWaitingAgent resets all changes to the "waiting_agent" field.
+func (m *FleetRunStateMutation) ResetWaitingAgent() {
+	m.waiting_agent = nil
+	delete(m.clearedFields, fleetrunstate.FieldWaitingAgent)
+}
+
+// SetBall sets the "ball" field.
+func (m *FleetRunStateMutation) SetBall(s string) {
+	m.ball = &s
+}
+
+// Ball returns the value of the "ball" field in the mutation.
+func (m *FleetRunStateMutation) Ball() (r string, exists bool) {
+	v := m.ball
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBall returns the old "ball" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldBall(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBall is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBall requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBall: %w", err)
+	}
+	return oldValue.Ball, nil
+}
+
+// ResetBall resets all changes to the "ball" field.
+func (m *FleetRunStateMutation) ResetBall() {
+	m.ball = nil
+}
+
+// SetProgress sets the "progress" field.
+func (m *FleetRunStateMutation) SetProgress(value map[string]interface{}) {
+	m.progress = &value
+}
+
+// Progress returns the value of the "progress" field in the mutation.
+func (m *FleetRunStateMutation) Progress() (r map[string]interface{}, exists bool) {
+	v := m.progress
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldProgress returns the old "progress" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldProgress(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldProgress is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldProgress requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldProgress: %w", err)
+	}
+	return oldValue.Progress, nil
+}
+
+// ResetProgress resets all changes to the "progress" field.
+func (m *FleetRunStateMutation) ResetProgress() {
+	m.progress = nil
+}
+
+// SetLastHeartbeatAt sets the "last_heartbeat_at" field.
+func (m *FleetRunStateMutation) SetLastHeartbeatAt(t time.Time) {
+	m.last_heartbeat_at = &t
+}
+
+// LastHeartbeatAt returns the value of the "last_heartbeat_at" field in the mutation.
+func (m *FleetRunStateMutation) LastHeartbeatAt() (r time.Time, exists bool) {
+	v := m.last_heartbeat_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastHeartbeatAt returns the old "last_heartbeat_at" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldLastHeartbeatAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastHeartbeatAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastHeartbeatAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastHeartbeatAt: %w", err)
+	}
+	return oldValue.LastHeartbeatAt, nil
+}
+
+// ResetLastHeartbeatAt resets all changes to the "last_heartbeat_at" field.
+func (m *FleetRunStateMutation) ResetLastHeartbeatAt() {
+	m.last_heartbeat_at = nil
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FleetRunStateMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FleetRunStateMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FleetRunStateMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *FleetRunStateMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *FleetRunStateMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the FleetRunState entity.
+// If the FleetRunState object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetRunStateMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *FleetRunStateMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the FleetRunStateMutation builder.
+func (m *FleetRunStateMutation) Where(ps ...predicate.FleetRunState) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FleetRunStateMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FleetRunStateMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FleetRunState, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FleetRunStateMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FleetRunStateMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FleetRunState).
+func (m *FleetRunStateMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FleetRunStateMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.session_id != nil {
+		fields = append(fields, fleetrunstate.FieldSessionID)
+	}
+	if m.plan_key != nil {
+		fields = append(fields, fleetrunstate.FieldPlanKey)
+	}
+	if m.state != nil {
+		fields = append(fields, fleetrunstate.FieldState)
+	}
+	if m.active_agents != nil {
+		fields = append(fields, fleetrunstate.FieldActiveAgents)
+	}
+	if m.waiting_agent != nil {
+		fields = append(fields, fleetrunstate.FieldWaitingAgent)
+	}
+	if m.ball != nil {
+		fields = append(fields, fleetrunstate.FieldBall)
+	}
+	if m.progress != nil {
+		fields = append(fields, fleetrunstate.FieldProgress)
+	}
+	if m.last_heartbeat_at != nil {
+		fields = append(fields, fleetrunstate.FieldLastHeartbeatAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, fleetrunstate.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, fleetrunstate.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FleetRunStateMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case fleetrunstate.FieldSessionID:
+		return m.SessionID()
+	case fleetrunstate.FieldPlanKey:
+		return m.PlanKey()
+	case fleetrunstate.FieldState:
+		return m.State()
+	case fleetrunstate.FieldActiveAgents:
+		return m.ActiveAgents()
+	case fleetrunstate.FieldWaitingAgent:
+		return m.WaitingAgent()
+	case fleetrunstate.FieldBall:
+		return m.Ball()
+	case fleetrunstate.FieldProgress:
+		return m.Progress()
+	case fleetrunstate.FieldLastHeartbeatAt:
+		return m.LastHeartbeatAt()
+	case fleetrunstate.FieldCreatedAt:
+		return m.CreatedAt()
+	case fleetrunstate.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FleetRunStateMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case fleetrunstate.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case fleetrunstate.FieldPlanKey:
+		return m.OldPlanKey(ctx)
+	case fleetrunstate.FieldState:
+		return m.OldState(ctx)
+	case fleetrunstate.FieldActiveAgents:
+		return m.OldActiveAgents(ctx)
+	case fleetrunstate.FieldWaitingAgent:
+		return m.OldWaitingAgent(ctx)
+	case fleetrunstate.FieldBall:
+		return m.OldBall(ctx)
+	case fleetrunstate.FieldProgress:
+		return m.OldProgress(ctx)
+	case fleetrunstate.FieldLastHeartbeatAt:
+		return m.OldLastHeartbeatAt(ctx)
+	case fleetrunstate.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case fleetrunstate.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FleetRunState field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetRunStateMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case fleetrunstate.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case fleetrunstate.FieldPlanKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlanKey(v)
+		return nil
+	case fleetrunstate.FieldState:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetState(v)
+		return nil
+	case fleetrunstate.FieldActiveAgents:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetActiveAgents(v)
+		return nil
+	case fleetrunstate.FieldWaitingAgent:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWaitingAgent(v)
+		return nil
+	case fleetrunstate.FieldBall:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBall(v)
+		return nil
+	case fleetrunstate.FieldProgress:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetProgress(v)
+		return nil
+	case fleetrunstate.FieldLastHeartbeatAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastHeartbeatAt(v)
+		return nil
+	case fleetrunstate.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case fleetrunstate.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FleetRunState field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FleetRunStateMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FleetRunStateMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetRunStateMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown FleetRunState numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FleetRunStateMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(fleetrunstate.FieldWaitingAgent) {
+		fields = append(fields, fleetrunstate.FieldWaitingAgent)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FleetRunStateMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FleetRunStateMutation) ClearField(name string) error {
+	switch name {
+	case fleetrunstate.FieldWaitingAgent:
+		m.ClearWaitingAgent()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetRunState nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FleetRunStateMutation) ResetField(name string) error {
+	switch name {
+	case fleetrunstate.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case fleetrunstate.FieldPlanKey:
+		m.ResetPlanKey()
+		return nil
+	case fleetrunstate.FieldState:
+		m.ResetState()
+		return nil
+	case fleetrunstate.FieldActiveAgents:
+		m.ResetActiveAgents()
+		return nil
+	case fleetrunstate.FieldWaitingAgent:
+		m.ResetWaitingAgent()
+		return nil
+	case fleetrunstate.FieldBall:
+		m.ResetBall()
+		return nil
+	case fleetrunstate.FieldProgress:
+		m.ResetProgress()
+		return nil
+	case fleetrunstate.FieldLastHeartbeatAt:
+		m.ResetLastHeartbeatAt()
+		return nil
+	case fleetrunstate.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case fleetrunstate.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetRunState field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FleetRunStateMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FleetRunStateMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FleetRunStateMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FleetRunStateMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FleetRunStateMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FleetRunStateMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FleetRunStateMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FleetRunState unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FleetRunStateMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FleetRunState edge %s", name)
+}
+
+// FleetSetupDraftMutation represents an operation that mutates the FleetSetupDraft nodes in the graph.
+type FleetSetupDraftMutation struct {
+	config
+	op                Op
+	typ               string
+	id                *uuid.UUID
+	template_key      *string
+	setup_profile_key *string
+	collected         *map[string]interface{}
+	current_step      *string
+	created_by        *uuid.UUID
+	created_at        *time.Time
+	updated_at        *time.Time
+	clearedFields     map[string]struct{}
+	done              bool
+	oldValue          func(context.Context) (*FleetSetupDraft, error)
+	predicates        []predicate.FleetSetupDraft
+}
+
+var _ ent.Mutation = (*FleetSetupDraftMutation)(nil)
+
+// fleetsetupdraftOption allows management of the mutation configuration using functional options.
+type fleetsetupdraftOption func(*FleetSetupDraftMutation)
+
+// newFleetSetupDraftMutation creates new mutation for the FleetSetupDraft entity.
+func newFleetSetupDraftMutation(c config, op Op, opts ...fleetsetupdraftOption) *FleetSetupDraftMutation {
+	m := &FleetSetupDraftMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFleetSetupDraft,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFleetSetupDraftID sets the ID field of the mutation.
+func withFleetSetupDraftID(id uuid.UUID) fleetsetupdraftOption {
+	return func(m *FleetSetupDraftMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FleetSetupDraft
+		)
+		m.oldValue = func(ctx context.Context) (*FleetSetupDraft, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FleetSetupDraft.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFleetSetupDraft sets the old FleetSetupDraft of the mutation.
+func withFleetSetupDraft(node *FleetSetupDraft) fleetsetupdraftOption {
+	return func(m *FleetSetupDraftMutation) {
+		m.oldValue = func(context.Context) (*FleetSetupDraft, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FleetSetupDraftMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FleetSetupDraftMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of FleetSetupDraft entities.
+func (m *FleetSetupDraftMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FleetSetupDraftMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FleetSetupDraftMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FleetSetupDraft.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetTemplateKey sets the "template_key" field.
+func (m *FleetSetupDraftMutation) SetTemplateKey(s string) {
+	m.template_key = &s
+}
+
+// TemplateKey returns the value of the "template_key" field in the mutation.
+func (m *FleetSetupDraftMutation) TemplateKey() (r string, exists bool) {
+	v := m.template_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTemplateKey returns the old "template_key" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldTemplateKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTemplateKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTemplateKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTemplateKey: %w", err)
+	}
+	return oldValue.TemplateKey, nil
+}
+
+// ResetTemplateKey resets all changes to the "template_key" field.
+func (m *FleetSetupDraftMutation) ResetTemplateKey() {
+	m.template_key = nil
+}
+
+// SetSetupProfileKey sets the "setup_profile_key" field.
+func (m *FleetSetupDraftMutation) SetSetupProfileKey(s string) {
+	m.setup_profile_key = &s
+}
+
+// SetupProfileKey returns the value of the "setup_profile_key" field in the mutation.
+func (m *FleetSetupDraftMutation) SetupProfileKey() (r string, exists bool) {
+	v := m.setup_profile_key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSetupProfileKey returns the old "setup_profile_key" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldSetupProfileKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSetupProfileKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSetupProfileKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSetupProfileKey: %w", err)
+	}
+	return oldValue.SetupProfileKey, nil
+}
+
+// ResetSetupProfileKey resets all changes to the "setup_profile_key" field.
+func (m *FleetSetupDraftMutation) ResetSetupProfileKey() {
+	m.setup_profile_key = nil
+}
+
+// SetCollected sets the "collected" field.
+func (m *FleetSetupDraftMutation) SetCollected(value map[string]interface{}) {
+	m.collected = &value
+}
+
+// Collected returns the value of the "collected" field in the mutation.
+func (m *FleetSetupDraftMutation) Collected() (r map[string]interface{}, exists bool) {
+	v := m.collected
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCollected returns the old "collected" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldCollected(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCollected is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCollected requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCollected: %w", err)
+	}
+	return oldValue.Collected, nil
+}
+
+// ResetCollected resets all changes to the "collected" field.
+func (m *FleetSetupDraftMutation) ResetCollected() {
+	m.collected = nil
+}
+
+// SetCurrentStep sets the "current_step" field.
+func (m *FleetSetupDraftMutation) SetCurrentStep(s string) {
+	m.current_step = &s
+}
+
+// CurrentStep returns the value of the "current_step" field in the mutation.
+func (m *FleetSetupDraftMutation) CurrentStep() (r string, exists bool) {
+	v := m.current_step
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCurrentStep returns the old "current_step" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldCurrentStep(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCurrentStep is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCurrentStep requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCurrentStep: %w", err)
+	}
+	return oldValue.CurrentStep, nil
+}
+
+// ClearCurrentStep clears the value of the "current_step" field.
+func (m *FleetSetupDraftMutation) ClearCurrentStep() {
+	m.current_step = nil
+	m.clearedFields[fleetsetupdraft.FieldCurrentStep] = struct{}{}
+}
+
+// CurrentStepCleared returns if the "current_step" field was cleared in this mutation.
+func (m *FleetSetupDraftMutation) CurrentStepCleared() bool {
+	_, ok := m.clearedFields[fleetsetupdraft.FieldCurrentStep]
+	return ok
+}
+
+// ResetCurrentStep resets all changes to the "current_step" field.
+func (m *FleetSetupDraftMutation) ResetCurrentStep() {
+	m.current_step = nil
+	delete(m.clearedFields, fleetsetupdraft.FieldCurrentStep)
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *FleetSetupDraftMutation) SetCreatedBy(u uuid.UUID) {
+	m.created_by = &u
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *FleetSetupDraftMutation) CreatedBy() (r uuid.UUID, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldCreatedBy(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *FleetSetupDraftMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.clearedFields[fleetsetupdraft.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *FleetSetupDraftMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[fleetsetupdraft.FieldCreatedBy]
+	return ok
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *FleetSetupDraftMutation) ResetCreatedBy() {
+	m.created_by = nil
+	delete(m.clearedFields, fleetsetupdraft.FieldCreatedBy)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FleetSetupDraftMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FleetSetupDraftMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FleetSetupDraftMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *FleetSetupDraftMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *FleetSetupDraftMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the FleetSetupDraft entity.
+// If the FleetSetupDraft object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupDraftMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *FleetSetupDraftMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the FleetSetupDraftMutation builder.
+func (m *FleetSetupDraftMutation) Where(ps ...predicate.FleetSetupDraft) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FleetSetupDraftMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FleetSetupDraftMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FleetSetupDraft, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FleetSetupDraftMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FleetSetupDraftMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FleetSetupDraft).
+func (m *FleetSetupDraftMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FleetSetupDraftMutation) Fields() []string {
+	fields := make([]string, 0, 7)
+	if m.template_key != nil {
+		fields = append(fields, fleetsetupdraft.FieldTemplateKey)
+	}
+	if m.setup_profile_key != nil {
+		fields = append(fields, fleetsetupdraft.FieldSetupProfileKey)
+	}
+	if m.collected != nil {
+		fields = append(fields, fleetsetupdraft.FieldCollected)
+	}
+	if m.current_step != nil {
+		fields = append(fields, fleetsetupdraft.FieldCurrentStep)
+	}
+	if m.created_by != nil {
+		fields = append(fields, fleetsetupdraft.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, fleetsetupdraft.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, fleetsetupdraft.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FleetSetupDraftMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case fleetsetupdraft.FieldTemplateKey:
+		return m.TemplateKey()
+	case fleetsetupdraft.FieldSetupProfileKey:
+		return m.SetupProfileKey()
+	case fleetsetupdraft.FieldCollected:
+		return m.Collected()
+	case fleetsetupdraft.FieldCurrentStep:
+		return m.CurrentStep()
+	case fleetsetupdraft.FieldCreatedBy:
+		return m.CreatedBy()
+	case fleetsetupdraft.FieldCreatedAt:
+		return m.CreatedAt()
+	case fleetsetupdraft.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FleetSetupDraftMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case fleetsetupdraft.FieldTemplateKey:
+		return m.OldTemplateKey(ctx)
+	case fleetsetupdraft.FieldSetupProfileKey:
+		return m.OldSetupProfileKey(ctx)
+	case fleetsetupdraft.FieldCollected:
+		return m.OldCollected(ctx)
+	case fleetsetupdraft.FieldCurrentStep:
+		return m.OldCurrentStep(ctx)
+	case fleetsetupdraft.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case fleetsetupdraft.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case fleetsetupdraft.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FleetSetupDraft field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetSetupDraftMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case fleetsetupdraft.FieldTemplateKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTemplateKey(v)
+		return nil
+	case fleetsetupdraft.FieldSetupProfileKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSetupProfileKey(v)
+		return nil
+	case fleetsetupdraft.FieldCollected:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCollected(v)
+		return nil
+	case fleetsetupdraft.FieldCurrentStep:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCurrentStep(v)
+		return nil
+	case fleetsetupdraft.FieldCreatedBy:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case fleetsetupdraft.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case fleetsetupdraft.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupDraft field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FleetSetupDraftMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FleetSetupDraftMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetSetupDraftMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown FleetSetupDraft numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FleetSetupDraftMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(fleetsetupdraft.FieldCurrentStep) {
+		fields = append(fields, fleetsetupdraft.FieldCurrentStep)
+	}
+	if m.FieldCleared(fleetsetupdraft.FieldCreatedBy) {
+		fields = append(fields, fleetsetupdraft.FieldCreatedBy)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FleetSetupDraftMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FleetSetupDraftMutation) ClearField(name string) error {
+	switch name {
+	case fleetsetupdraft.FieldCurrentStep:
+		m.ClearCurrentStep()
+		return nil
+	case fleetsetupdraft.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupDraft nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FleetSetupDraftMutation) ResetField(name string) error {
+	switch name {
+	case fleetsetupdraft.FieldTemplateKey:
+		m.ResetTemplateKey()
+		return nil
+	case fleetsetupdraft.FieldSetupProfileKey:
+		m.ResetSetupProfileKey()
+		return nil
+	case fleetsetupdraft.FieldCollected:
+		m.ResetCollected()
+		return nil
+	case fleetsetupdraft.FieldCurrentStep:
+		m.ResetCurrentStep()
+		return nil
+	case fleetsetupdraft.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case fleetsetupdraft.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case fleetsetupdraft.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupDraft field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FleetSetupDraftMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FleetSetupDraftMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FleetSetupDraftMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FleetSetupDraftMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FleetSetupDraftMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FleetSetupDraftMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FleetSetupDraftMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FleetSetupDraft unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FleetSetupDraftMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FleetSetupDraft edge %s", name)
+}
+
+// FleetSetupProfileMutation represents an operation that mutates the FleetSetupProfile nodes in the graph.
+type FleetSetupProfileMutation struct {
+	config
+	op            Op
+	typ           string
+	id            *uuid.UUID
+	key           *string
+	name          *string
+	definition    *map[string]interface{}
+	created_by    *uuid.UUID
+	created_at    *time.Time
+	updated_at    *time.Time
+	clearedFields map[string]struct{}
+	done          bool
+	oldValue      func(context.Context) (*FleetSetupProfile, error)
+	predicates    []predicate.FleetSetupProfile
+}
+
+var _ ent.Mutation = (*FleetSetupProfileMutation)(nil)
+
+// fleetsetupprofileOption allows management of the mutation configuration using functional options.
+type fleetsetupprofileOption func(*FleetSetupProfileMutation)
+
+// newFleetSetupProfileMutation creates new mutation for the FleetSetupProfile entity.
+func newFleetSetupProfileMutation(c config, op Op, opts ...fleetsetupprofileOption) *FleetSetupProfileMutation {
+	m := &FleetSetupProfileMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFleetSetupProfile,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFleetSetupProfileID sets the ID field of the mutation.
+func withFleetSetupProfileID(id uuid.UUID) fleetsetupprofileOption {
+	return func(m *FleetSetupProfileMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FleetSetupProfile
+		)
+		m.oldValue = func(ctx context.Context) (*FleetSetupProfile, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FleetSetupProfile.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFleetSetupProfile sets the old FleetSetupProfile of the mutation.
+func withFleetSetupProfile(node *FleetSetupProfile) fleetsetupprofileOption {
+	return func(m *FleetSetupProfileMutation) {
+		m.oldValue = func(context.Context) (*FleetSetupProfile, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FleetSetupProfileMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FleetSetupProfileMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of FleetSetupProfile entities.
+func (m *FleetSetupProfileMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FleetSetupProfileMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FleetSetupProfileMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FleetSetupProfile.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetKey sets the "key" field.
+func (m *FleetSetupProfileMutation) SetKey(s string) {
+	m.key = &s
+}
+
+// Key returns the value of the "key" field in the mutation.
+func (m *FleetSetupProfileMutation) Key() (r string, exists bool) {
+	v := m.key
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKey returns the old "key" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldKey(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKey is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKey requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKey: %w", err)
+	}
+	return oldValue.Key, nil
+}
+
+// ResetKey resets all changes to the "key" field.
+func (m *FleetSetupProfileMutation) ResetKey() {
+	m.key = nil
+}
+
+// SetName sets the "name" field.
+func (m *FleetSetupProfileMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *FleetSetupProfileMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *FleetSetupProfileMutation) ResetName() {
+	m.name = nil
+}
+
+// SetDefinition sets the "definition" field.
+func (m *FleetSetupProfileMutation) SetDefinition(value map[string]interface{}) {
+	m.definition = &value
+}
+
+// Definition returns the value of the "definition" field in the mutation.
+func (m *FleetSetupProfileMutation) Definition() (r map[string]interface{}, exists bool) {
+	v := m.definition
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDefinition returns the old "definition" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldDefinition(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDefinition is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDefinition requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDefinition: %w", err)
+	}
+	return oldValue.Definition, nil
+}
+
+// ResetDefinition resets all changes to the "definition" field.
+func (m *FleetSetupProfileMutation) ResetDefinition() {
+	m.definition = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *FleetSetupProfileMutation) SetCreatedBy(u uuid.UUID) {
+	m.created_by = &u
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *FleetSetupProfileMutation) CreatedBy() (r uuid.UUID, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldCreatedBy(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *FleetSetupProfileMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.clearedFields[fleetsetupprofile.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *FleetSetupProfileMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[fleetsetupprofile.FieldCreatedBy]
+	return ok
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *FleetSetupProfileMutation) ResetCreatedBy() {
+	m.created_by = nil
+	delete(m.clearedFields, fleetsetupprofile.FieldCreatedBy)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FleetSetupProfileMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FleetSetupProfileMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FleetSetupProfileMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *FleetSetupProfileMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *FleetSetupProfileMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the FleetSetupProfile entity.
+// If the FleetSetupProfile object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetSetupProfileMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *FleetSetupProfileMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the FleetSetupProfileMutation builder.
+func (m *FleetSetupProfileMutation) Where(ps ...predicate.FleetSetupProfile) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FleetSetupProfileMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FleetSetupProfileMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FleetSetupProfile, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FleetSetupProfileMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FleetSetupProfileMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FleetSetupProfile).
+func (m *FleetSetupProfileMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FleetSetupProfileMutation) Fields() []string {
+	fields := make([]string, 0, 6)
+	if m.key != nil {
+		fields = append(fields, fleetsetupprofile.FieldKey)
+	}
+	if m.name != nil {
+		fields = append(fields, fleetsetupprofile.FieldName)
+	}
+	if m.definition != nil {
+		fields = append(fields, fleetsetupprofile.FieldDefinition)
+	}
+	if m.created_by != nil {
+		fields = append(fields, fleetsetupprofile.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, fleetsetupprofile.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, fleetsetupprofile.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FleetSetupProfileMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case fleetsetupprofile.FieldKey:
+		return m.Key()
+	case fleetsetupprofile.FieldName:
+		return m.Name()
+	case fleetsetupprofile.FieldDefinition:
+		return m.Definition()
+	case fleetsetupprofile.FieldCreatedBy:
+		return m.CreatedBy()
+	case fleetsetupprofile.FieldCreatedAt:
+		return m.CreatedAt()
+	case fleetsetupprofile.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FleetSetupProfileMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case fleetsetupprofile.FieldKey:
+		return m.OldKey(ctx)
+	case fleetsetupprofile.FieldName:
+		return m.OldName(ctx)
+	case fleetsetupprofile.FieldDefinition:
+		return m.OldDefinition(ctx)
+	case fleetsetupprofile.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case fleetsetupprofile.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case fleetsetupprofile.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FleetSetupProfile field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetSetupProfileMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case fleetsetupprofile.FieldKey:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKey(v)
+		return nil
+	case fleetsetupprofile.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case fleetsetupprofile.FieldDefinition:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDefinition(v)
+		return nil
+	case fleetsetupprofile.FieldCreatedBy:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case fleetsetupprofile.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case fleetsetupprofile.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupProfile field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FleetSetupProfileMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FleetSetupProfileMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetSetupProfileMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown FleetSetupProfile numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FleetSetupProfileMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(fleetsetupprofile.FieldCreatedBy) {
+		fields = append(fields, fleetsetupprofile.FieldCreatedBy)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FleetSetupProfileMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FleetSetupProfileMutation) ClearField(name string) error {
+	switch name {
+	case fleetsetupprofile.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupProfile nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FleetSetupProfileMutation) ResetField(name string) error {
+	switch name {
+	case fleetsetupprofile.FieldKey:
+		m.ResetKey()
+		return nil
+	case fleetsetupprofile.FieldName:
+		m.ResetName()
+		return nil
+	case fleetsetupprofile.FieldDefinition:
+		m.ResetDefinition()
+		return nil
+	case fleetsetupprofile.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case fleetsetupprofile.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case fleetsetupprofile.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetSetupProfile field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FleetSetupProfileMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FleetSetupProfileMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FleetSetupProfileMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FleetSetupProfileMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FleetSetupProfileMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FleetSetupProfileMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FleetSetupProfileMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FleetSetupProfile unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FleetSetupProfileMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FleetSetupProfile edge %s", name)
+}
+
+// FleetTaskMutation represents an operation that mutates the FleetTask nodes in the graph.
+type FleetTaskMutation struct {
+	config
+	op                          Op
+	typ                         string
+	id                          *uuid.UUID
+	session_id                  *string
+	title                       *string
+	description                 *string
+	required_capabilities       *[]string
+	appendrequired_capabilities []string
+	claimed_by                  *string
+	status                      *string
+	result                      *map[string]interface{}
+	parent_task_id              *string
+	claimed_at                  *time.Time
+	completed_at                *time.Time
+	created_at                  *time.Time
+	updated_at                  *time.Time
+	clearedFields               map[string]struct{}
+	done                        bool
+	oldValue                    func(context.Context) (*FleetTask, error)
+	predicates                  []predicate.FleetTask
+}
+
+var _ ent.Mutation = (*FleetTaskMutation)(nil)
+
+// fleettaskOption allows management of the mutation configuration using functional options.
+type fleettaskOption func(*FleetTaskMutation)
+
+// newFleetTaskMutation creates new mutation for the FleetTask entity.
+func newFleetTaskMutation(c config, op Op, opts ...fleettaskOption) *FleetTaskMutation {
+	m := &FleetTaskMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeFleetTask,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withFleetTaskID sets the ID field of the mutation.
+func withFleetTaskID(id uuid.UUID) fleettaskOption {
+	return func(m *FleetTaskMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *FleetTask
+		)
+		m.oldValue = func(ctx context.Context) (*FleetTask, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().FleetTask.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withFleetTask sets the old FleetTask of the mutation.
+func withFleetTask(node *FleetTask) fleettaskOption {
+	return func(m *FleetTaskMutation) {
+		m.oldValue = func(context.Context) (*FleetTask, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m FleetTaskMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m FleetTaskMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("team: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of FleetTask entities.
+func (m *FleetTaskMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *FleetTaskMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *FleetTaskMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().FleetTask.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *FleetTaskMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *FleetTaskMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *FleetTaskMutation) ResetSessionID() {
+	m.session_id = nil
+}
+
+// SetTitle sets the "title" field.
+func (m *FleetTaskMutation) SetTitle(s string) {
+	m.title = &s
+}
+
+// Title returns the value of the "title" field in the mutation.
+func (m *FleetTaskMutation) Title() (r string, exists bool) {
+	v := m.title
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTitle returns the old "title" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldTitle(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTitle is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTitle requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTitle: %w", err)
+	}
+	return oldValue.Title, nil
+}
+
+// ResetTitle resets all changes to the "title" field.
+func (m *FleetTaskMutation) ResetTitle() {
+	m.title = nil
+}
+
+// SetDescription sets the "description" field.
+func (m *FleetTaskMutation) SetDescription(s string) {
+	m.description = &s
+}
+
+// Description returns the value of the "description" field in the mutation.
+func (m *FleetTaskMutation) Description() (r string, exists bool) {
+	v := m.description
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldDescription returns the old "description" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldDescription(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldDescription is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldDescription requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldDescription: %w", err)
+	}
+	return oldValue.Description, nil
+}
+
+// ClearDescription clears the value of the "description" field.
+func (m *FleetTaskMutation) ClearDescription() {
+	m.description = nil
+	m.clearedFields[fleettask.FieldDescription] = struct{}{}
+}
+
+// DescriptionCleared returns if the "description" field was cleared in this mutation.
+func (m *FleetTaskMutation) DescriptionCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldDescription]
+	return ok
+}
+
+// ResetDescription resets all changes to the "description" field.
+func (m *FleetTaskMutation) ResetDescription() {
+	m.description = nil
+	delete(m.clearedFields, fleettask.FieldDescription)
+}
+
+// SetRequiredCapabilities sets the "required_capabilities" field.
+func (m *FleetTaskMutation) SetRequiredCapabilities(s []string) {
+	m.required_capabilities = &s
+	m.appendrequired_capabilities = nil
+}
+
+// RequiredCapabilities returns the value of the "required_capabilities" field in the mutation.
+func (m *FleetTaskMutation) RequiredCapabilities() (r []string, exists bool) {
+	v := m.required_capabilities
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequiredCapabilities returns the old "required_capabilities" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldRequiredCapabilities(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequiredCapabilities is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequiredCapabilities requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequiredCapabilities: %w", err)
+	}
+	return oldValue.RequiredCapabilities, nil
+}
+
+// AppendRequiredCapabilities adds s to the "required_capabilities" field.
+func (m *FleetTaskMutation) AppendRequiredCapabilities(s []string) {
+	m.appendrequired_capabilities = append(m.appendrequired_capabilities, s...)
+}
+
+// AppendedRequiredCapabilities returns the list of values that were appended to the "required_capabilities" field in this mutation.
+func (m *FleetTaskMutation) AppendedRequiredCapabilities() ([]string, bool) {
+	if len(m.appendrequired_capabilities) == 0 {
+		return nil, false
+	}
+	return m.appendrequired_capabilities, true
+}
+
+// ResetRequiredCapabilities resets all changes to the "required_capabilities" field.
+func (m *FleetTaskMutation) ResetRequiredCapabilities() {
+	m.required_capabilities = nil
+	m.appendrequired_capabilities = nil
+}
+
+// SetClaimedBy sets the "claimed_by" field.
+func (m *FleetTaskMutation) SetClaimedBy(s string) {
+	m.claimed_by = &s
+}
+
+// ClaimedBy returns the value of the "claimed_by" field in the mutation.
+func (m *FleetTaskMutation) ClaimedBy() (r string, exists bool) {
+	v := m.claimed_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClaimedBy returns the old "claimed_by" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldClaimedBy(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClaimedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClaimedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClaimedBy: %w", err)
+	}
+	return oldValue.ClaimedBy, nil
+}
+
+// ClearClaimedBy clears the value of the "claimed_by" field.
+func (m *FleetTaskMutation) ClearClaimedBy() {
+	m.claimed_by = nil
+	m.clearedFields[fleettask.FieldClaimedBy] = struct{}{}
+}
+
+// ClaimedByCleared returns if the "claimed_by" field was cleared in this mutation.
+func (m *FleetTaskMutation) ClaimedByCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldClaimedBy]
+	return ok
+}
+
+// ResetClaimedBy resets all changes to the "claimed_by" field.
+func (m *FleetTaskMutation) ResetClaimedBy() {
+	m.claimed_by = nil
+	delete(m.clearedFields, fleettask.FieldClaimedBy)
+}
+
+// SetStatus sets the "status" field.
+func (m *FleetTaskMutation) SetStatus(s string) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *FleetTaskMutation) Status() (r string, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *FleetTaskMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetResult sets the "result" field.
+func (m *FleetTaskMutation) SetResult(value map[string]interface{}) {
+	m.result = &value
+}
+
+// Result returns the value of the "result" field in the mutation.
+func (m *FleetTaskMutation) Result() (r map[string]interface{}, exists bool) {
+	v := m.result
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResult returns the old "result" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldResult(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResult is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResult requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResult: %w", err)
+	}
+	return oldValue.Result, nil
+}
+
+// ClearResult clears the value of the "result" field.
+func (m *FleetTaskMutation) ClearResult() {
+	m.result = nil
+	m.clearedFields[fleettask.FieldResult] = struct{}{}
+}
+
+// ResultCleared returns if the "result" field was cleared in this mutation.
+func (m *FleetTaskMutation) ResultCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldResult]
+	return ok
+}
+
+// ResetResult resets all changes to the "result" field.
+func (m *FleetTaskMutation) ResetResult() {
+	m.result = nil
+	delete(m.clearedFields, fleettask.FieldResult)
+}
+
+// SetParentTaskID sets the "parent_task_id" field.
+func (m *FleetTaskMutation) SetParentTaskID(s string) {
+	m.parent_task_id = &s
+}
+
+// ParentTaskID returns the value of the "parent_task_id" field in the mutation.
+func (m *FleetTaskMutation) ParentTaskID() (r string, exists bool) {
+	v := m.parent_task_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldParentTaskID returns the old "parent_task_id" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldParentTaskID(ctx context.Context) (v *string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldParentTaskID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldParentTaskID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldParentTaskID: %w", err)
+	}
+	return oldValue.ParentTaskID, nil
+}
+
+// ClearParentTaskID clears the value of the "parent_task_id" field.
+func (m *FleetTaskMutation) ClearParentTaskID() {
+	m.parent_task_id = nil
+	m.clearedFields[fleettask.FieldParentTaskID] = struct{}{}
+}
+
+// ParentTaskIDCleared returns if the "parent_task_id" field was cleared in this mutation.
+func (m *FleetTaskMutation) ParentTaskIDCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldParentTaskID]
+	return ok
+}
+
+// ResetParentTaskID resets all changes to the "parent_task_id" field.
+func (m *FleetTaskMutation) ResetParentTaskID() {
+	m.parent_task_id = nil
+	delete(m.clearedFields, fleettask.FieldParentTaskID)
+}
+
+// SetClaimedAt sets the "claimed_at" field.
+func (m *FleetTaskMutation) SetClaimedAt(t time.Time) {
+	m.claimed_at = &t
+}
+
+// ClaimedAt returns the value of the "claimed_at" field in the mutation.
+func (m *FleetTaskMutation) ClaimedAt() (r time.Time, exists bool) {
+	v := m.claimed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClaimedAt returns the old "claimed_at" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldClaimedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClaimedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClaimedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClaimedAt: %w", err)
+	}
+	return oldValue.ClaimedAt, nil
+}
+
+// ClearClaimedAt clears the value of the "claimed_at" field.
+func (m *FleetTaskMutation) ClearClaimedAt() {
+	m.claimed_at = nil
+	m.clearedFields[fleettask.FieldClaimedAt] = struct{}{}
+}
+
+// ClaimedAtCleared returns if the "claimed_at" field was cleared in this mutation.
+func (m *FleetTaskMutation) ClaimedAtCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldClaimedAt]
+	return ok
+}
+
+// ResetClaimedAt resets all changes to the "claimed_at" field.
+func (m *FleetTaskMutation) ResetClaimedAt() {
+	m.claimed_at = nil
+	delete(m.clearedFields, fleettask.FieldClaimedAt)
+}
+
+// SetCompletedAt sets the "completed_at" field.
+func (m *FleetTaskMutation) SetCompletedAt(t time.Time) {
+	m.completed_at = &t
+}
+
+// CompletedAt returns the value of the "completed_at" field in the mutation.
+func (m *FleetTaskMutation) CompletedAt() (r time.Time, exists bool) {
+	v := m.completed_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCompletedAt returns the old "completed_at" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldCompletedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCompletedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCompletedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCompletedAt: %w", err)
+	}
+	return oldValue.CompletedAt, nil
+}
+
+// ClearCompletedAt clears the value of the "completed_at" field.
+func (m *FleetTaskMutation) ClearCompletedAt() {
+	m.completed_at = nil
+	m.clearedFields[fleettask.FieldCompletedAt] = struct{}{}
+}
+
+// CompletedAtCleared returns if the "completed_at" field was cleared in this mutation.
+func (m *FleetTaskMutation) CompletedAtCleared() bool {
+	_, ok := m.clearedFields[fleettask.FieldCompletedAt]
+	return ok
+}
+
+// ResetCompletedAt resets all changes to the "completed_at" field.
+func (m *FleetTaskMutation) ResetCompletedAt() {
+	m.completed_at = nil
+	delete(m.clearedFields, fleettask.FieldCompletedAt)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *FleetTaskMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *FleetTaskMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *FleetTaskMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *FleetTaskMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *FleetTaskMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the FleetTask entity.
+// If the FleetTask object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *FleetTaskMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *FleetTaskMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the FleetTaskMutation builder.
+func (m *FleetTaskMutation) Where(ps ...predicate.FleetTask) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the FleetTaskMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *FleetTaskMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.FleetTask, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *FleetTaskMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *FleetTaskMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (FleetTask).
+func (m *FleetTaskMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *FleetTaskMutation) Fields() []string {
+	fields := make([]string, 0, 12)
+	if m.session_id != nil {
+		fields = append(fields, fleettask.FieldSessionID)
+	}
+	if m.title != nil {
+		fields = append(fields, fleettask.FieldTitle)
+	}
+	if m.description != nil {
+		fields = append(fields, fleettask.FieldDescription)
+	}
+	if m.required_capabilities != nil {
+		fields = append(fields, fleettask.FieldRequiredCapabilities)
+	}
+	if m.claimed_by != nil {
+		fields = append(fields, fleettask.FieldClaimedBy)
+	}
+	if m.status != nil {
+		fields = append(fields, fleettask.FieldStatus)
+	}
+	if m.result != nil {
+		fields = append(fields, fleettask.FieldResult)
+	}
+	if m.parent_task_id != nil {
+		fields = append(fields, fleettask.FieldParentTaskID)
+	}
+	if m.claimed_at != nil {
+		fields = append(fields, fleettask.FieldClaimedAt)
+	}
+	if m.completed_at != nil {
+		fields = append(fields, fleettask.FieldCompletedAt)
+	}
+	if m.created_at != nil {
+		fields = append(fields, fleettask.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, fleettask.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *FleetTaskMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case fleettask.FieldSessionID:
+		return m.SessionID()
+	case fleettask.FieldTitle:
+		return m.Title()
+	case fleettask.FieldDescription:
+		return m.Description()
+	case fleettask.FieldRequiredCapabilities:
+		return m.RequiredCapabilities()
+	case fleettask.FieldClaimedBy:
+		return m.ClaimedBy()
+	case fleettask.FieldStatus:
+		return m.Status()
+	case fleettask.FieldResult:
+		return m.Result()
+	case fleettask.FieldParentTaskID:
+		return m.ParentTaskID()
+	case fleettask.FieldClaimedAt:
+		return m.ClaimedAt()
+	case fleettask.FieldCompletedAt:
+		return m.CompletedAt()
+	case fleettask.FieldCreatedAt:
+		return m.CreatedAt()
+	case fleettask.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *FleetTaskMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case fleettask.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case fleettask.FieldTitle:
+		return m.OldTitle(ctx)
+	case fleettask.FieldDescription:
+		return m.OldDescription(ctx)
+	case fleettask.FieldRequiredCapabilities:
+		return m.OldRequiredCapabilities(ctx)
+	case fleettask.FieldClaimedBy:
+		return m.OldClaimedBy(ctx)
+	case fleettask.FieldStatus:
+		return m.OldStatus(ctx)
+	case fleettask.FieldResult:
+		return m.OldResult(ctx)
+	case fleettask.FieldParentTaskID:
+		return m.OldParentTaskID(ctx)
+	case fleettask.FieldClaimedAt:
+		return m.OldClaimedAt(ctx)
+	case fleettask.FieldCompletedAt:
+		return m.OldCompletedAt(ctx)
+	case fleettask.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case fleettask.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown FleetTask field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetTaskMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case fleettask.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case fleettask.FieldTitle:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTitle(v)
+		return nil
+	case fleettask.FieldDescription:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetDescription(v)
+		return nil
+	case fleettask.FieldRequiredCapabilities:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequiredCapabilities(v)
+		return nil
+	case fleettask.FieldClaimedBy:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClaimedBy(v)
+		return nil
+	case fleettask.FieldStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case fleettask.FieldResult:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResult(v)
+		return nil
+	case fleettask.FieldParentTaskID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetParentTaskID(v)
+		return nil
+	case fleettask.FieldClaimedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClaimedAt(v)
+		return nil
+	case fleettask.FieldCompletedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCompletedAt(v)
+		return nil
+	case fleettask.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case fleettask.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown FleetTask field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *FleetTaskMutation) AddedFields() []string {
+	return nil
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *FleetTaskMutation) AddedField(name string) (ent.Value, bool) {
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *FleetTaskMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	}
+	return fmt.Errorf("unknown FleetTask numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *FleetTaskMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(fleettask.FieldDescription) {
+		fields = append(fields, fleettask.FieldDescription)
+	}
+	if m.FieldCleared(fleettask.FieldClaimedBy) {
+		fields = append(fields, fleettask.FieldClaimedBy)
+	}
+	if m.FieldCleared(fleettask.FieldResult) {
+		fields = append(fields, fleettask.FieldResult)
+	}
+	if m.FieldCleared(fleettask.FieldParentTaskID) {
+		fields = append(fields, fleettask.FieldParentTaskID)
+	}
+	if m.FieldCleared(fleettask.FieldClaimedAt) {
+		fields = append(fields, fleettask.FieldClaimedAt)
+	}
+	if m.FieldCleared(fleettask.FieldCompletedAt) {
+		fields = append(fields, fleettask.FieldCompletedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *FleetTaskMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *FleetTaskMutation) ClearField(name string) error {
+	switch name {
+	case fleettask.FieldDescription:
+		m.ClearDescription()
+		return nil
+	case fleettask.FieldClaimedBy:
+		m.ClearClaimedBy()
+		return nil
+	case fleettask.FieldResult:
+		m.ClearResult()
+		return nil
+	case fleettask.FieldParentTaskID:
+		m.ClearParentTaskID()
+		return nil
+	case fleettask.FieldClaimedAt:
+		m.ClearClaimedAt()
+		return nil
+	case fleettask.FieldCompletedAt:
+		m.ClearCompletedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetTask nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *FleetTaskMutation) ResetField(name string) error {
+	switch name {
+	case fleettask.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case fleettask.FieldTitle:
+		m.ResetTitle()
+		return nil
+	case fleettask.FieldDescription:
+		m.ResetDescription()
+		return nil
+	case fleettask.FieldRequiredCapabilities:
+		m.ResetRequiredCapabilities()
+		return nil
+	case fleettask.FieldClaimedBy:
+		m.ResetClaimedBy()
+		return nil
+	case fleettask.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case fleettask.FieldResult:
+		m.ResetResult()
+		return nil
+	case fleettask.FieldParentTaskID:
+		m.ResetParentTaskID()
+		return nil
+	case fleettask.FieldClaimedAt:
+		m.ResetClaimedAt()
+		return nil
+	case fleettask.FieldCompletedAt:
+		m.ResetCompletedAt()
+		return nil
+	case fleettask.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case fleettask.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown FleetTask field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *FleetTaskMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *FleetTaskMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *FleetTaskMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *FleetTaskMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *FleetTaskMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *FleetTaskMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *FleetTaskMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown FleetTask unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *FleetTaskMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown FleetTask edge %s", name)
 }
 
 // FleetTemplateMutation represents an operation that mutates the FleetTemplate nodes in the graph.

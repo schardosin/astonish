@@ -26,8 +26,8 @@ type AgentListItem struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Description  string `json:"description"`
-	Source       string `json:"source"`              // "system", "local", or "store"
-	Scope        string `json:"scope,omitempty"`     // "personal" or "team" (platform mode only)
+	Source       string `json:"source"`          // "system", "local", or "store"
+	Scope        string `json:"scope,omitempty"` // "personal" or "team" (platform mode only)
 	HasError     bool   `json:"hasError,omitempty"`
 	ErrorMessage string `json:"errorMessage,omitempty"`
 	IsReadOnly   bool   `json:"isReadOnly,omitempty"` // True for store flows
@@ -1247,12 +1247,14 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/fleets/{key}", GetFleetHandler).Methods("GET")
 	router.HandleFunc("/api/fleets/{key}", SaveFleetHandler).Methods("PUT")
 	router.HandleFunc("/api/fleets/{key}", DeleteFleetHandler).Methods("DELETE")
+	router.HandleFunc("/api/fleets/{key}/clone", CloneFleetHandler).Methods("POST")
 
 	// Fleet Plan endpoints
 	router.HandleFunc("/api/fleet-plans", ListFleetPlansHandler).Methods("GET")
 	router.HandleFunc("/api/fleet-plans/{key}", GetFleetPlanHandler).Methods("GET")
 	router.HandleFunc("/api/fleet-plans/{key}", SaveFleetPlanHandler).Methods("PUT")
 	router.HandleFunc("/api/fleet-plans/{key}", DeleteFleetPlanHandler).Methods("DELETE")
+	router.HandleFunc("/api/fleet-plans/{key}/agents/{agent_key}", PatchFleetPlanAgentHandler).Methods("PATCH")
 	router.HandleFunc("/api/fleet-plans/{key}/activate", ActivateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/deactivate", DeactivateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/status", FleetPlanStatusHandler).Methods("GET")
@@ -1260,6 +1262,21 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/fleet-plans/{key}/duplicate", DuplicateFleetPlanHandler).Methods("POST")
 	router.HandleFunc("/api/fleet-plans/{key}/yaml", GetFleetPlanYAMLHandler).Methods("GET")
 	router.HandleFunc("/api/fleet-plans/{key}/yaml", SaveFleetPlanYAMLHandler).Methods("PUT")
+
+	router.HandleFunc("/api/fleet-setup-profiles", ListFleetSetupProfilesHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}", GetFleetSetupProfileHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}", SaveFleetSetupProfileHandler).Methods("PUT")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}", DeleteFleetSetupProfileHandler).Methods("DELETE")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}/clone", CloneFleetSetupProfileHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}/yaml", GetFleetSetupProfileYAMLHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}/yaml", SaveFleetSetupProfileYAMLHandler).Methods("PUT")
+	router.HandleFunc("/api/fleet-setup-profiles/{key}/steps/{stepId}", GetFleetSetupProfileStepHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup/tool-catalog", GetFleetSetupToolCatalogHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup/drafts", CreateFleetSetupDraftHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-setup/drafts/{id}", GetFleetSetupDraftHandler).Methods("GET")
+	router.HandleFunc("/api/fleet-setup/drafts/{id}", PatchFleetSetupDraftHandler).Methods("PATCH")
+	router.HandleFunc("/api/fleet-setup/drafts/{id}/validate-step", ValidateFleetSetupStepHandler).Methods("POST")
+	router.HandleFunc("/api/fleet-setup/drafts/{id}/finalize", FinalizeFleetSetupDraftHandler).Methods("POST")
 
 	// Fleet Session endpoints (fleet v2: autonomous agent team)
 	router.HandleFunc("/api/studio/fleet/start", FleetStartHandler).Methods("POST")
@@ -1271,6 +1288,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/stream", FleetSessionStreamHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/trace", FleetSessionTraceHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/threads", FleetSessionThreadsHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/tasks", FleetSessionTasksHandler).Methods("GET")
+	router.HandleFunc("/api/studio/fleet/sessions/{id}/mailbox/{recipient}", FleetSessionMailboxHandler).Methods("GET")
 	router.HandleFunc("/api/studio/fleet/sessions/{id}/messages", FleetSessionMessagesHandler).Methods("GET")
 
 	// Drill endpoints

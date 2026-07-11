@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 const (
@@ -49,6 +53,43 @@ func BuildThreadContext(ctx context.Context, channel Channel, agentKey string) (
 	// Deduplicate recovery summaries — keep only the most recent one.
 	thread = deduplicateRecoverySummaries(thread)
 
+	return buildThreadWithBudget(thread), nil
+}
+
+// BuildMailboxThreadContext builds the conversation context for an agent from
+// its durable mailbox, using the same budget and summarization logic as
+// BuildThreadContext.
+func BuildMailboxThreadContext(ctx context.Context, mailbox store.FleetMailboxStore, sessionID, agentKey string) (string, error) {
+	if mailbox == nil {
+		return "", nil
+	}
+	rows, err := mailbox.Poll(ctx, sessionID, agentKey, time.Time{})
+	if err != nil {
+		return "", fmt.Errorf("polling mailbox: %w", err)
+	}
+	if len(rows) == 0 {
+		return "", nil
+	}
+	thread := make([]Message, 0, len(rows))
+	readIDs := make([]uuid.UUID, 0, len(rows))
+	for _, row := range rows {
+		thread = append(thread, Message{
+			ID:         row.ID.String(),
+			Sender:     row.Sender,
+			Text:       row.Body,
+			MemoryKeys: []string{row.Recipient},
+			Mentions:   append([]string(nil), row.Mentions...),
+			Timestamp:  row.CreatedAt,
+			Metadata:   row.Metadata,
+		})
+		if row.DeliveryStatus != "read" {
+			readIDs = append(readIDs, row.ID)
+		}
+	}
+	if len(readIDs) > 0 {
+		_ = mailbox.MarkRead(ctx, readIDs)
+	}
+	thread = deduplicateRecoverySummaries(thread)
 	return buildThreadWithBudget(thread), nil
 }
 

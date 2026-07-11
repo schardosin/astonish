@@ -9,6 +9,9 @@ type FleetTemplateSummary struct {
 	Description string   `json:"description,omitempty"`
 	AgentCount  int      `json:"agent_count"`
 	AgentNames  []string `json:"agent_names"`
+	// Source is "bundled" for Astonish-shipped templates or "custom" for DB-backed ones.
+	// Optional; set by ListFleets implementations that distinguish the two.
+	Source string `json:"source,omitempty"`
 }
 
 // FleetTemplateStore manages fleet template definitions.
@@ -78,4 +81,41 @@ type FleetPlanStore interface {
 	// SavePlanYAML persists a fleet plan from raw YAML content.
 	// The YAML is parsed, validated, and stored.
 	SavePlanYAML(ctx context.Context, key string, yamlContent string) error
+}
+
+// FleetSetupProfileSummary is a list entry for setup profiles.
+type FleetSetupProfileSummary struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	StepCount   int    `json:"step_count"`
+	Source      string `json:"source,omitempty"`
+}
+
+// FleetSetupProfileStore manages reusable fleet setup profile definitions.
+type FleetSetupProfileStore interface {
+	GetProfile(ctx context.Context, key string) (any, bool)
+	ListProfiles(ctx context.Context) []FleetSetupProfileSummary
+	Save(ctx context.Context, key string, profile any) error
+	Delete(ctx context.Context, key string) error
+}
+
+// FleetSetupDraft holds in-progress setup collected values.
+type FleetSetupDraft struct {
+	ID              string         `json:"id"`
+	TemplateKey     string         `json:"template_key"`
+	SetupProfileKey string         `json:"setup_profile_key"`
+	Collected       map[string]any `json:"collected"`
+	CurrentStep     string         `json:"current_step,omitempty"`
+	CreatedAt       string         `json:"created_at,omitempty"`
+	UpdatedAt       string         `json:"updated_at,omitempty"`
+}
+
+// FleetSetupDraftStore persists in-progress plan setup state.
+type FleetSetupDraftStore interface {
+	Create(ctx context.Context, draft *FleetSetupDraft) error
+	Get(ctx context.Context, id string) (*FleetSetupDraft, bool)
+	Update(ctx context.Context, draft *FleetSetupDraft) error
+	Delete(ctx context.Context, id string) error
 }

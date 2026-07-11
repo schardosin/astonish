@@ -186,6 +186,8 @@ func fleetToolDeclarations() []ToolDeclaration {
 	return []ToolDeclaration{
 		{Name: "save_fleet_plan", Description: "Save a fleet plan configuration for parallel agent execution", Category: "fleet"},
 		{Name: "validate_fleet_plan", Description: "Validate fleet plan connections and dependencies", Category: "fleet"},
+		{Name: "update_setup_draft", Description: "Update in-progress fleet setup draft collected values", Category: "fleet"},
+		{Name: "get_setup_profile", Description: "Load fleet setup profile definition and draft progress", Category: "fleet"},
 	}
 }
 

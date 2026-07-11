@@ -7,6 +7,8 @@ import { teamFetch } from './teamContext'
 const API_BASE = '/api/studio/fleet'
 const FLEET_API = '/api/fleets'
 const FLEET_PLANS_API = '/api/fleet-plans'
+const FLEET_SETUP_PROFILES_API = '/api/fleet-setup-profiles'
+const FLEET_SETUP_DRAFTS_API = '/api/fleet-setup/drafts'
 
 // --- Types ---
 
@@ -16,6 +18,7 @@ export interface FleetDefinition {
   description: string
   agent_count: number
   agent_names: string[]
+  source?: 'bundled' | 'custom'
 }
 
 export interface FleetPlanSummary {
@@ -61,7 +64,55 @@ export interface FleetAgent {
   key: string
   name: string
   role: string
+  capabilities?: Record<string, boolean>
+  execution?: Record<string, unknown>
+  memory?: Record<string, unknown>
+  task_policy?: Record<string, unknown>
   [key: string]: unknown
+}
+
+export interface FleetTask {
+  ID?: string
+  id?: string
+  SessionID?: string
+  session_id?: string
+  Title?: string
+  title?: string
+  Description?: string
+  description?: string
+  RequiredCapabilities?: string[]
+  required_capabilities?: string[]
+  ClaimedBy?: string
+  claimed_by?: string
+  Status?: string
+  status?: string
+  Result?: Record<string, unknown>
+  result?: Record<string, unknown>
+  CreatedAt?: string
+  created_at?: string
+  UpdatedAt?: string
+  updated_at?: string
+}
+
+export interface FleetMailboxMessage {
+  ID?: string
+  id?: string
+  SessionID?: string
+  session_id?: string
+  Recipient?: string
+  recipient?: string
+  Sender?: string
+  sender?: string
+  Body?: string
+  body?: string
+  Mentions?: string[]
+  mentions?: string[]
+  Metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>
+  DeliveryStatus?: string
+  delivery_status?: string
+  CreatedAt?: string
+  created_at?: string
 }
 
 export interface FleetPlanStatus {
@@ -130,10 +181,50 @@ export async function fetchFleets(): Promise<{ fleets: FleetDefinition[] }> {
   return response.json()
 }
 
-export async function fetchFleet(key: string): Promise<{ key: string; fleet: Record<string, unknown> }> {
+export async function fetchFleet(key: string): Promise<{ key: string; fleet: Record<string, unknown>; source?: 'bundled' | 'custom' }> {
   const response = await teamFetch(`${FLEET_API}/${encodeURIComponent(key)}`)
   if (!response.ok) {
     throw new Error(`Failed to fetch fleet: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function saveFleet(key: string, fleet: Record<string, unknown>): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_API}/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fleet),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Failed to save fleet: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function deleteFleet(key: string): Promise<void> {
+  const response = await teamFetch(`${FLEET_API}/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Failed to delete fleet: ${response.statusText}`)
+  }
+}
+
+export async function cloneFleet(
+  fromKey: string,
+  newKey: string,
+  name?: string,
+): Promise<{ status: string; key: string; source?: string }> {
+  const response = await teamFetch(`${FLEET_API}/${encodeURIComponent(fromKey)}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_key: newKey, name }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Failed to clone fleet: ${response.statusText}`)
   }
   return response.json()
 }
@@ -362,6 +453,22 @@ export async function fetchFleetMessages(sessionId: string, opts: FetchFleetMess
   return response.json()
 }
 
+export async function listFleetSessionTasks(sessionId: string): Promise<FleetTask[]> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/tasks`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet tasks: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+export async function listFleetSessionMailbox(sessionId: string, recipient: string): Promise<FleetMailboxMessage[]> {
+  const response = await teamFetch(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}/mailbox/${encodeURIComponent(recipient)}`)
+  if (!response.ok) {
+    throw new Error(`Failed to fetch fleet mailbox: ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function duplicateFleetPlan(planKey: string): Promise<{ status: string; key: string }> {
   const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/duplicate`, {
     method: 'POST',
@@ -415,11 +522,245 @@ export async function fetchFleetPlan(planKey: string): Promise<{ key: string; pl
   return response.json()
 }
 
+export async function saveFleetPlan(planKey: string, plan: Record<string, unknown>): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(plan),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function patchFleetPlanAgent(planKey: string, agentKey: string, patch: Partial<FleetAgent>): Promise<Record<string, unknown>> {
+  const response = await teamFetch(`${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/agents/${encodeURIComponent(agentKey)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `Failed to patch fleet plan agent: ${response.statusText}`)
+  }
+  return response.json()
+}
+
 export async function retryFleetIssue(planKey: string, issueNumber: number): Promise<{ status: string; session_id: string; issue: number }> {
   const response = await teamFetch(
     `${FLEET_PLANS_API}/${encodeURIComponent(planKey)}/retry/${issueNumber}`,
     { method: 'POST' }
   )
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+// --- Setup profiles ---
+
+export interface SetupFieldOption {
+  value: string
+  label: string
+}
+
+export interface SetupField {
+  id: string
+  label: string
+  type: string
+  required?: boolean
+  when?: string
+  options?: SetupFieldOption[]
+  maps_to: string
+  default?: unknown
+  hint?: string
+}
+
+export interface SetupStep {
+  id: string
+  title: string
+  type: string
+  icon?: string
+  summary?: string
+  required?: boolean
+  when?: string
+  fields?: SetupField[]
+  defaults?: Record<string, unknown>
+  provisioner?: string
+  prompt?: string
+  content?: string
+  guidance?: string
+  pinned_tool_groups?: string[]
+  tools?: string[]
+}
+
+export interface ChannelTypeDef {
+  label: string
+  description?: string
+  requires_credentials?: string[]
+  pinned_tool_groups?: string[]
+}
+
+export interface SetupProfile {
+  key: string
+  name: string
+  description?: string
+  domain?: string
+  intro_prompt?: string
+  pinned_tool_groups?: string[]
+  channel_types?: Record<string, ChannelTypeDef>
+  steps: SetupStep[]
+}
+
+export interface SetupProfileSummary {
+  key: string
+  name: string
+  description?: string
+  domain?: string
+  step_count: number
+  source?: string
+}
+
+export interface SetupDraft {
+  id: string
+  template_key: string
+  setup_profile_key: string
+  collected: Record<string, Record<string, unknown>>
+  current_step?: string
+}
+
+export async function fetchSetupProfiles(): Promise<{ profiles: SetupProfileSummary[] }> {
+  const response = await teamFetch(FLEET_SETUP_PROFILES_API)
+  if (!response.ok) throw new Error(`Failed to fetch setup profiles: ${response.statusText}`)
+  return response.json()
+}
+
+export async function fetchSetupToolCatalog(): Promise<{ tools: Array<{ name: string; group: string; label: string; description: string }> }> {
+  const response = await teamFetch('/api/fleet-setup/tool-catalog')
+  if (!response.ok) throw new Error(`Failed to fetch tool catalog: ${response.statusText}`)
+  return response.json()
+}
+
+export async function fetchSetupProfileStep(key: string, stepId: string): Promise<{ step: SetupStep; tools: string[]; pinned_tool_groups: string[] }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}/steps/${encodeURIComponent(stepId)}`)
+  if (!response.ok) throw new Error(`Failed to fetch setup step: ${response.statusText}`)
+  return response.json()
+}
+
+export async function fetchSetupProfile(key: string): Promise<{ key: string; profile: SetupProfile; source?: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}`)
+  if (!response.ok) throw new Error(`Failed to fetch setup profile: ${response.statusText}`)
+  return response.json()
+}
+
+export async function saveSetupProfile(key: string, profile: SetupProfile): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(profile),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function deleteSetupProfile(key: string): Promise<{ status: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function cloneSetupProfile(
+  sourceKey: string,
+  newKey: string,
+  name?: string,
+): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(sourceKey)}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_key: newKey, name }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function fetchSetupProfileYaml(key: string): Promise<string> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}/yaml`)
+  if (!response.ok) throw new Error(`Failed to fetch setup profile YAML: ${response.statusText}`)
+  return response.text()
+}
+
+export async function saveSetupProfileYaml(key: string, yamlContent: string): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_PROFILES_API}/${encodeURIComponent(key)}/yaml`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/yaml' },
+    body: yamlContent,
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function createSetupDraft(templateKey: string): Promise<{ draft: SetupDraft }> {
+  const response = await teamFetch(FLEET_SETUP_DRAFTS_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ template_key: templateKey }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function patchSetupDraft(id: string, body: { collected?: Record<string, unknown>; current_step?: string }): Promise<{ draft: SetupDraft }> {
+  const response = await teamFetch(`${FLEET_SETUP_DRAFTS_API}/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function validateSetupStep(id: string, stepId: string): Promise<{ status: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_DRAFTS_API}/${encodeURIComponent(id)}/validate-step`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ step_id: stepId }),
+  })
+  if (!response.ok) {
+    const text = await response.text()
+    throw new Error(text || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+export async function finalizeSetupDraft(id: string, validationPassed = false): Promise<{ status: string; key: string }> {
+  const response = await teamFetch(`${FLEET_SETUP_DRAFTS_API}/${encodeURIComponent(id)}/finalize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ validation_passed: validationPassed }),
+  })
   if (!response.ok) {
     const text = await response.text()
     throw new Error(text || `HTTP ${response.status}`)

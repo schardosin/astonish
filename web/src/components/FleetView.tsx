@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Rocket } from 'lucide-react'
 import {
-  fetchFleetPlans, fetchFleets, fetchFleetSessionsHistory,
+  fetchFleetPlans, fetchFleets, fetchFleetSessionsHistory, fetchSetupProfiles,
 } from '../api/fleetChat'
 import type {
-  FleetDefinition, FleetPlanSummary,
+  FleetDefinition, FleetPlanSummary, SetupProfileSummary,
 } from '../api/fleetChat'
 import { deleteSession } from '../api/studioChat'
 import { buildPath } from '../hooks/useHashRouter'
@@ -14,6 +14,7 @@ import FleetSidebar from './fleet/FleetSidebar'
 import PlanDetail from './fleet/PlanDetail'
 import SessionTrace from './fleet/SessionTrace'
 import TemplateDetail from './fleet/TemplateDetail'
+import SetupProfileDetail from './fleet/SetupProfileDetail'
 
 // ─── Empty State ───
 
@@ -39,12 +40,13 @@ interface FleetViewProps {
   theme: string
   path?: RouterPath | null
   onNavigate: (path: string) => void
-  onCreatePlan?: (key: string) => void
+  onCreatePlan?: (key: string, draftId?: string) => void
 }
 
 export default function FleetView({ theme, path, onNavigate, onCreatePlan }: FleetViewProps) {
   const [plans, setPlans] = useState<FleetPlanSummary[]>([])
   const [templates, setTemplates] = useState<FleetDefinition[]>([])
+  const [setupProfiles, setSetupProfiles] = useState<SetupProfileSummary[]>([])
   const [sessions, setSessions] = useState<FleetChatSession[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -63,13 +65,15 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }: Fle
   // Load data
   const loadData = useCallback(async () => {
     try {
-      const [planData, fleetData, sessionData] = await Promise.all([
+      const [planData, fleetData, profileData, sessionData] = await Promise.all([
         fetchFleetPlans().catch(() => ({ plans: [] as FleetPlanSummary[] })),
         fetchFleets().catch(() => ({ fleets: [] as FleetDefinition[] })),
+        fetchSetupProfiles().catch(() => ({ profiles: [] as SetupProfileSummary[] })),
         fetchFleetSessionsHistory().catch(() => [] as FleetChatSession[]),
       ])
       setPlans(planData.plans || [])
       setTemplates(fleetData.fleets || [])
+      setSetupProfiles(profileData.profiles || [])
       // Fleet sessions endpoint already returns only fleet sessions.
       const allSessions: FleetChatSession[] = Array.isArray(sessionData) ? sessionData as FleetChatSession[] : []
       setSessions(allSessions)
@@ -162,7 +166,34 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }: Fle
             key={selectedItem.key}
             templateKey={selectedItem.key}
             templates={templates}
+            setupProfiles={setupProfiles}
+            onNavigateToSetupProfile={(profileKey) => handleSelect({ type: 'setup-profile', key: profileKey })}
             onCreatePlan={onCreatePlan}
+            onPlanCreated={(planKey) => {
+              loadData()
+              handleSelect({ type: 'plan', key: planKey })
+            }}
+            onCloned={async (newKey) => {
+              await loadData()
+              handleSelect({ type: 'template', key: newKey })
+            }}
+          />
+        )
+      case 'setup-profile':
+        return (
+          <SetupProfileDetail
+            key={selectedItem.key}
+            profileKey={selectedItem.key}
+            theme={theme}
+            onCloned={async (newKey) => {
+              await loadData()
+              handleSelect({ type: 'setup-profile', key: newKey })
+            }}
+            onDeleted={async () => {
+              await loadData()
+              onNavigate('#' + buildPath('fleet'))
+            }}
+            onUpdated={loadData}
           />
         )
       default:
@@ -176,6 +207,7 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }: Fle
         plans={filteredPlans}
         sessions={filteredSessions}
         templates={filteredTemplates}
+        setupProfiles={setupProfiles}
         selectedItem={selectedItem}
         onSelect={handleSelect}
         onDeleteSession={handleDeleteSession}
@@ -183,6 +215,7 @@ export default function FleetView({ theme, path, onNavigate, onCreatePlan }: Fle
         searchQuery={searchQuery}
         isLoading={isLoading}
         theme={theme}
+        onRefresh={loadData}
       />
       <div className="flex-1 flex flex-col overflow-hidden">
         {renderContent()}

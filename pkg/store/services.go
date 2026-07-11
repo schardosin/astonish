@@ -77,6 +77,21 @@ type Services struct {
 	// FleetPlans provides access to fleet plan definitions.
 	FleetPlans FleetPlanStore
 
+	// FleetSetupProfiles provides reusable plan setup profile definitions.
+	FleetSetupProfiles FleetSetupProfileStore
+
+	// FleetSetupDrafts stores in-progress plan setup state.
+	FleetSetupDrafts FleetSetupDraftStore
+
+	// FleetRunStates persists fleet session runtime state for recovery.
+	FleetRunStates FleetRunStateStore
+
+	// FleetMailbox persists per-recipient fleet handoff messages.
+	FleetMailbox FleetMailboxStore
+
+	// FleetTaskBoard persists fleet session task-board entries.
+	FleetTaskBoard FleetTaskBoardStore
+
 	// Skills provides access to org-level skill definitions.
 	// In platform mode, these are skills shared across all teams in the org.
 	Skills SkillStore

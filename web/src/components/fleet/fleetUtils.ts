@@ -30,6 +30,7 @@ export interface FleetThreadExt extends FleetThread {
 export interface FleetPlanData {
   name?: string
   description?: string
+  setup_profile?: string
   created_from?: string
   channel?: {
     type?: string
@@ -42,7 +43,7 @@ export interface FleetPlanData {
     flow?: CommFlowNode[]
   }
   artifacts?: Record<string, FleetArtifactDef>
-  settings?: { max_turns_per_agent?: number; [k: string]: unknown }
+  settings?: FleetSettings
   workspace_base_dir?: string
   project_context?: unknown
 }
@@ -60,7 +61,39 @@ export interface FleetAgentDef {
   delegate?: { tool: string; [k: string]: unknown }
   behaviors?: string
   identity?: string
+  capabilities?: Record<string, boolean>
+  execution?: AgentExecutionConfig
+  memory?: AgentMemoryConfig
+  task_policy?: AgentTaskPolicy
   [k: string]: unknown
+}
+
+export interface FleetSettings {
+  max_turns_per_agent?: number
+  max_parallel_agents?: number
+  max_wall_clock_minutes?: number
+  routing_mode?: 'llm_mentions' | 'explicit_queue' | 'supervisor'
+  communication_mode?: 'shared_channel' | 'mailbox'
+  task_board?: { enabled: boolean; claim_policy?: 'first_come' | 'capability_match' | 'supervisor_assigned' }
+  memory_visibility?: 'scoped' | 'shared' | 'private_plus_handoffs'
+  [k: string]: unknown
+}
+
+export interface AgentExecutionConfig {
+  max_turns?: number
+  timeout_minutes?: number
+  parallelizable?: boolean
+  workspace?: 'shared' | 'isolated' | 'none'
+}
+
+export interface AgentMemoryConfig {
+  receives?: string[]
+  private_work?: boolean
+}
+
+export interface AgentTaskPolicy {
+  claims?: string[]
+  max_concurrent?: number
 }
 
 export interface FleetArtifactDef {
@@ -78,6 +111,9 @@ export interface SidebarItem {
   activated?: boolean
   badge?: string | null
   onDelete?: () => void
+  onClone?: () => void
+  onImportYaml?: () => void
+  onExportYaml?: () => void
 }
 
 export interface SelectedItem {
@@ -148,4 +184,71 @@ export function formatTimeAgo(dateStr: string): string {
   if (diffHours < 24) return `${diffHours}h ago`
   const diffDays = Math.floor(diffHours / 24)
   return `${diffDays}d ago`
+}
+
+/** Slugify a display name into a valid fleet agent key. */
+export function slugifyAgentKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9\s_-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+}
+
+/** Minimal valid agent for new template / add-agent flows. */
+export function createDefaultFleetAgent(name: string): FleetAgentDef {
+  return {
+    name,
+    identity: `You are ${name}.`,
+    behaviors: 'Follow the user instructions carefully and collaborate with other agents when needed.',
+    tools: true,
+  }
+}
+
+/** Insert an agent and keep the communication graph consistent. */
+export function addAgentToFleetConfig(
+  config: FleetPlanData,
+  agentKey: string,
+  agent: FleetAgentDef,
+): FleetPlanData {
+  const agents = { ...(config.agents || {}), [agentKey]: agent }
+  const flow = [...(config.communication?.flow || [])]
+  if (!flow.some(node => node.role === agentKey)) {
+    const isFirst = Object.keys(config.agents || {}).length === 0
+    flow.push({
+      role: agentKey,
+      talks_to: ['customer'],
+      entry_point: isFirst || flow.every(node => !node.entry_point),
+    })
+  }
+  return {
+    ...config,
+    agents,
+    communication: { ...(config.communication || {}), flow },
+  }
+}
+
+/** Remove an agent and scrub it from the communication graph. */
+export function removeAgentFromFleetConfig(config: FleetPlanData, agentKey: string): FleetPlanData {
+  const agents = { ...(config.agents || {}) }
+  delete agents[agentKey]
+
+  let flow = (config.communication?.flow || [])
+    .filter(node => node.role !== agentKey)
+    .map(node => ({
+      ...node,
+      talks_to: (node.talks_to || []).filter(target => target !== agentKey),
+    }))
+
+  if (flow.length > 0 && !flow.some(node => node.entry_point)) {
+    flow = flow.map((node, i) => (i === 0 ? { ...node, entry_point: true } : node))
+  }
+
+  return {
+    ...config,
+    agents,
+    communication: { ...(config.communication || {}), flow },
+  }
 }

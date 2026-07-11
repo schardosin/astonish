@@ -99,6 +99,64 @@ func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PatchFleetPlanAgentHandler handles PATCH /api/fleet-plans/{key}/agents/{agent_key}.
+func PatchFleetPlanAgentHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	key := vars["key"]
+	agentKey := vars["agent_key"]
+	if key == "" || agentKey == "" {
+		respondError(w, http.StatusBadRequest, "plan key and agent_key are required")
+		return
+	}
+
+	var planStore store.FleetPlanStore
+	if svc := store.FromRequest(r); svc != nil && svc.FleetPlans != nil {
+		planStore = svc.FleetPlans
+	}
+	if planStore == nil {
+		respondError(w, http.StatusServiceUnavailable, "Fleet plan store not available")
+		return
+	}
+
+	planAny, found := planStore.GetPlan(r.Context(), key)
+	if !found {
+		respondError(w, http.StatusNotFound, fmt.Sprintf("Fleet plan %q not found", key))
+		return
+	}
+	plan, ok := planAny.(*fleet.FleetPlan)
+	if !ok {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("Fleet plan %q has unexpected type", key))
+		return
+	}
+	agentCfg, ok := plan.Agents[agentKey]
+	if !ok {
+		respondError(w, http.StatusNotFound, fmt.Sprintf("Agent %q not found", agentKey))
+		return
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&agentCfg); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	plan.Agents[agentKey] = agentCfg
+	if err := plan.Validate(); err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := planStore.Save(r.Context(), plan); err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":    "ok",
+		"plan_key":  key,
+		"agent_key": agentKey,
+		"agent":     agentCfg,
+	})
+}
+
 // RetryFleetIssueHandler handles POST /api/fleet-plans/{key}/retry/{issueNumber}.
 // It resets the retry count for a failed issue and triggers immediate recovery
 // using the existing JSONL transcript, resuming the fleet session from where it

@@ -1046,117 +1046,125 @@ func Run(cfg RunConfig) error {
 		}
 
 		if fleetSchedBridge != nil {
-				fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
-					// Resolve tenant-scoped stores for the fleet session so sub-agents
-					// can access team drills, credentials, skills, etc. in platform mode.
-					var fleetStores *api.FleetStores
-					if backend != nil && fCfg.TeamSlug != "" {
-						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
-							teamStore := orgStore.ForTeam(fCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers(), backend.PlatformSkills())
-						}
+			fleetStarter := func(fCtx context.Context, fCfg fleet.HeadlessFleetConfig) (string, error) {
+				// Resolve tenant-scoped stores for the fleet session so sub-agents
+				// can access team drills, credentials, skills, etc. in platform mode.
+				var fleetStores *api.FleetStores
+				if backend != nil && fCfg.TeamSlug != "" {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam(fCfg.TeamSlug)
+						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers(), backend.PlatformSkills())
 					}
-					return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore, fleetStores)
 				}
-				// Wrap the plan registry getter to satisfy fleet.PlanAccess interface.
-				// In personal mode, returns the file-based PlanRegistry.
-				// In platform mode (when backend != nil), returns a DB-backed adapter.
-				planAccessFn := func() fleet.PlanAccess {
-					if backend != nil {
-						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
-							teamStore := orgStore.ForTeam("general")
-							return &dbPlanAccessAdapter{
-								store:        teamStore.FleetPlans(),
-								monitorStore: backend.NewMonitorStateStore(orgSlug, "general"),
-							}
-						}
-					}
-					reg := api.GetFleetPlanRegistry()
-					if reg == nil {
-						return nil
-					}
-					return reg
-				}
-				activator := fleet.NewPlanActivator(planAccessFn, fleetSchedBridge, fleetStarter)
-				// Set the team slug so headless fleet sessions know which team's
-				// stores to resolve. Matches the team used for plan storage above.
-				activator.TeamSlug = "general"
-
-				// Wire the poll function into the scheduler executor
-				if schedExec != nil {
-					schedExec.FleetPoll = activator.Poll
-				}
-
-				// Wire the recover function for session recovery after restart
-				activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
-					// Resolve tenant-scoped stores for the recovered fleet session.
-					var fleetStores *api.FleetStores
-					if backend != nil && rCfg.TeamSlug != "" {
-						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
-							teamStore := orgStore.ForTeam(rCfg.TeamSlug)
-							fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers(), backend.PlatformSkills())
-						}
-					}
-					return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore, fleetStores)
-				})
-
-				// Wire credential-based GitHub token resolver for fleet plans.
-				// When a plan has credentials: { github: "some-store-entry" }, this
-				// resolver extracts the token from the encrypted credential store so
-				// it can be injected as GH_TOKEN into gh CLI commands.
-				if backend != nil {
-					// Platform mode: resolve from team credential store.
-					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
-						orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
-						orgStore, orgErr := backend.ForOrg(orgSlug)
-						if orgErr != nil {
-							slog.Warn("failed to get org store for fleet credentials", "plan", plan.Key, "error", orgErr)
-							return ""
-						}
-						teamStore := orgStore.ForTeam("general")
-						cs := teamStore.Credentials()
-						resolved, err := fleet.ResolveCredentialsPlatform(context.Background(), plan, cs)
-						if err != nil {
-							slog.Warn("failed to resolve fleet credentials (platform)", "plan", plan.Key, "error", err)
-						}
-						return fleet.GitHubToken(resolved)
-					})
-				} else if credStore != nil {
-					// Personal mode: resolve from file-based credential store.
-					activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
-						resolved, err := fleet.ResolveCredentials(plan, credStore)
-						if err != nil {
-							slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
-						}
-						return fleet.GitHubToken(resolved)
-					})
-				}
-
-				// Make activator available to API handlers
-				api.SetPlanActivator(activator)
-
-				// Wire auto-activation into save_fleet_plan tool so non-chat
-				// plans start polling immediately after the wizard saves them.
-				tools.SetPlanActivatorFunc(activator.Activate)
-
-				// Wire the session registry so CheckForWork can detect active sessions
-				activator.SetSessionRegistry(api.GetFleetSessionRegistry())
-
-				// Wire OpenCode binary finder for project context generation.
-				// Fleet templates can define a project_context section that runs
-				// OpenCode /init to generate AGENTS.md before agents start.
-				fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
-
-				// Restore previously activated plans (re-create monitors)
-				if err := activator.RestoreActivated(); err != nil {
-					logger.Printf("Warning: Failed to restore activated plans: %v", err)
-				}
-
-				logger.Printf("Fleet plan activator initialized")
+				return api.StartHeadlessFleetSession(fCtx, fCfg, fleetSessionStore, fleetStores)
 			}
+			// Wrap the plan registry getter to satisfy fleet.PlanAccess interface.
+			// In personal mode, returns the file-based PlanRegistry.
+			// In platform mode (when backend != nil), returns a DB-backed adapter.
+			planAccessFn := func() fleet.PlanAccess {
+				if backend != nil {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam("general")
+						return &dbPlanAccessAdapter{
+							store:        teamStore.FleetPlans(),
+							monitorStore: backend.NewMonitorStateStore(orgSlug, "general"),
+						}
+					}
+				}
+				reg := api.GetFleetPlanRegistry()
+				if reg == nil {
+					return nil
+				}
+				return reg
+			}
+			activator := fleet.NewPlanActivator(planAccessFn, fleetSchedBridge, fleetStarter)
+			// Set the team slug so headless fleet sessions know which team's
+			// stores to resolve. Matches the team used for plan storage above.
+			activator.TeamSlug = "general"
+			if backend != nil {
+				orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+				if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+					if teamStore := orgStore.ForTeam("general"); teamStore != nil {
+						activator.SetRunStateStore(teamStore.FleetRunStates())
+					}
+				}
+			}
+
+			// Wire the poll function into the scheduler executor
+			if schedExec != nil {
+				schedExec.FleetPoll = activator.Poll
+			}
+
+			// Wire the recover function for session recovery after restart
+			activator.SetRecoverFunc(func(rCtx context.Context, rCfg fleet.RecoverFleetConfig) error {
+				// Resolve tenant-scoped stores for the recovered fleet session.
+				var fleetStores *api.FleetStores
+				if backend != nil && rCfg.TeamSlug != "" {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					if orgStore, orgErr := backend.ForOrg(orgSlug); orgErr == nil {
+						teamStore := orgStore.ForTeam(rCfg.TeamSlug)
+						fleetStores = api.FleetStoresFromTeam(teamStore, orgStore, backend.PlatformMCPServers(), backend.PlatformSkills())
+					}
+				}
+				return api.RecoverFleetSession(rCtx, rCfg, fleetSessionStore, fleetStores)
+			})
+
+			// Wire credential-based GitHub token resolver for fleet plans.
+			// When a plan has credentials: { github: "some-store-entry" }, this
+			// resolver extracts the token from the encrypted credential store so
+			// it can be injected as GH_TOKEN into gh CLI commands.
+			if backend != nil {
+				// Platform mode: resolve from team credential store.
+				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+					orgSlug := appCfg.Storage.Auth.GetDefaultOrgSlug()
+					orgStore, orgErr := backend.ForOrg(orgSlug)
+					if orgErr != nil {
+						slog.Warn("failed to get org store for fleet credentials", "plan", plan.Key, "error", orgErr)
+						return ""
+					}
+					teamStore := orgStore.ForTeam("general")
+					cs := teamStore.Credentials()
+					resolved, err := fleet.ResolveCredentialsPlatform(context.Background(), plan, cs)
+					if err != nil {
+						slog.Warn("failed to resolve fleet credentials (platform)", "plan", plan.Key, "error", err)
+					}
+					return fleet.GitHubToken(resolved)
+				})
+			} else if credStore != nil {
+				// Personal mode: resolve from file-based credential store.
+				activator.SetGHTokenResolver(func(plan *fleet.FleetPlan) string {
+					resolved, err := fleet.ResolveCredentials(plan, credStore)
+					if err != nil {
+						slog.Warn("failed to resolve fleet credentials", "plan", plan.Key, "error", err)
+					}
+					return fleet.GitHubToken(resolved)
+				})
+			}
+
+			// Make activator available to API handlers
+			api.SetPlanActivator(activator)
+
+			// Wire auto-activation into save_fleet_plan tool so non-chat
+			// plans start polling immediately after the wizard saves them.
+			tools.SetPlanActivatorFunc(activator.Activate)
+
+			// Wire the session registry so CheckForWork can detect active sessions
+			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
+
+			// Wire OpenCode binary finder for project context generation.
+			// Fleet templates can define a project_context section that runs
+			// OpenCode /init to generate AGENTS.md before agents start.
+			fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
+
+			// Restore previously activated plans (re-create monitors)
+			if err := activator.RestoreActivated(); err != nil {
+				logger.Printf("Warning: Failed to restore activated plans: %v", err)
+			}
+
+			logger.Printf("Fleet plan activator initialized")
+		}
 	}
 
 	// --- Wire fleet commands into channels ---
@@ -1807,12 +1815,7 @@ func (a *fleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTempl
 	if !ok {
 		return channels.FleetTemplateWithWizard{}, false
 	}
-	var wizardPrompt string
-	var pinnedGroups []string
-	if cfg.PlanWizard != nil {
-		wizardPrompt = cfg.PlanWizard.SystemPrompt
-		pinnedGroups = cfg.PlanWizard.PinnedToolGroups
-	}
+	wizardPrompt, pinnedGroups := fleet.WizardContextForTemplate(cfg, key)
 	return channels.FleetTemplateWithWizard{
 		Name:               cfg.Name,
 		WizardSystemPrompt: wizardPrompt,
@@ -1914,12 +1917,7 @@ func (a *dbFleetTemplateRegistryAdapter) GetFleet(key string) (channels.FleetTem
 	if !ok {
 		return channels.FleetTemplateWithWizard{}, false
 	}
-	var wizardPrompt string
-	var pinnedGroups []string
-	if cfg.PlanWizard != nil {
-		wizardPrompt = cfg.PlanWizard.SystemPrompt
-		pinnedGroups = cfg.PlanWizard.PinnedToolGroups
-	}
+	wizardPrompt, pinnedGroups := fleet.WizardContextForTemplate(cfg, key)
 	return channels.FleetTemplateWithWizard{
 		Name:               cfg.Name,
 		WizardSystemPrompt: wizardPrompt,

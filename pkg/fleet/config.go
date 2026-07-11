@@ -17,7 +17,8 @@ import (
 type FleetConfig struct {
 	Name             string                      `yaml:"name" json:"name"`
 	Description      string                      `yaml:"description,omitempty" json:"description,omitempty"`
-	PlanWizard       *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"`
+	SetupProfileKey  string                      `yaml:"setup_profile,omitempty" json:"setup_profile,omitempty"`
+	PlanWizard       *PlanWizardConfig           `yaml:"plan_wizard,omitempty" json:"plan_wizard,omitempty"` // deprecated: use setup_profile
 	Communication    *CommunicationConfig        `yaml:"communication,omitempty" json:"communication,omitempty"`
 	Agents           map[string]FleetAgentConfig `yaml:"agents" json:"agents"`
 	Settings         FleetSettings               `yaml:"settings,omitempty" json:"settings,omitempty"`
@@ -69,6 +70,59 @@ type FleetAgentConfig struct {
 	Tools       ToolsConfig     `yaml:"tools,omitempty" json:"tools,omitempty"`
 	Delegate    *DelegateConfig `yaml:"delegate,omitempty" json:"delegate,omitempty"`
 	Behaviors   string          `yaml:"behaviors" json:"behaviors"`
+
+	// Capabilities are free-form capability declarations (domain-neutral).
+	// The runtime never rejects an unknown capability; CapabilityRegistry is advisory only.
+	Capabilities map[string]bool `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+
+	// Execution holds per-agent execution knobs (timeout, parallelizable, workspace).
+	Execution *AgentExecutionConfig `yaml:"execution,omitempty" json:"execution,omitempty"`
+
+	// Memory holds per-agent memory policy (overrides FleetSettings.MemoryVisibility).
+	Memory *AgentMemoryConfig `yaml:"memory,omitempty" json:"memory,omitempty"`
+
+	// TaskPolicy holds task-board claim policy for this agent.
+	TaskPolicy *AgentTaskPolicy `yaml:"task_policy,omitempty" json:"task_policy,omitempty"`
+}
+
+// AgentExecutionConfig holds per-agent execution knobs.
+type AgentExecutionConfig struct {
+	MaxTurns       int    `yaml:"max_turns,omitempty" json:"max_turns,omitempty"`             // overrides FleetSettings.MaxTurnsPerAgent
+	TimeoutMinutes int    `yaml:"timeout_minutes,omitempty" json:"timeout_minutes,omitempty"` // overrides the 60-min hardcode in activateAgent
+	Parallelizable bool   `yaml:"parallelizable,omitempty" json:"parallelizable,omitempty"`   // MUST be true for concurrent scheduling
+	Workspace      string `yaml:"workspace,omitempty" json:"workspace,omitempty"`             // "shared" | "isolated" | "none"
+}
+
+// AgentMemoryConfig holds per-agent memory policy.
+type AgentMemoryConfig struct {
+	Receives    []string `yaml:"receives,omitempty" json:"receives,omitempty"`         // agent keys whose outputs THIS agent sees
+	PrivateWork bool     `yaml:"private_work,omitempty" json:"private_work,omitempty"` // true = private turns never enter shared memory
+}
+
+// AgentTaskPolicy holds task-board claim policy for this agent.
+type AgentTaskPolicy struct {
+	Claims        []string `yaml:"claims,omitempty" json:"claims,omitempty"`                 // capability names this agent will claim
+	MaxConcurrent int      `yaml:"max_concurrent,omitempty" json:"max_concurrent,omitempty"` // 0 = 1 (single-slot)
+}
+
+// CapabilityRegistry is an advisory list of domain-neutral capability names surfaced
+// in the editor UI. The runtime never rejects an unknown capability — templates may
+// declare domain-specific tags (e.g. code.write, genetics.analysis) beyond this list.
+var CapabilityRegistry = []string{
+	// Discovery & reasoning
+	"research", "analysis", "synthesis",
+	// Planning & orchestration
+	"planning", "coordination", "supervisor",
+	// Content lifecycle
+	"writing", "review", "editing", "publishing",
+	// Creation & delivery
+	"design", "implementation", "prototyping",
+	// Quality
+	"validation", "quality-assurance",
+	// Data
+	"data-collection", "data-processing",
+	// Interaction
+	"customer-facing",
 }
 
 // GetMode returns the agent execution mode, defaulting to "agentic".
@@ -77,6 +131,19 @@ func (a *FleetAgentConfig) GetMode() string {
 		return "agentic"
 	}
 	return a.Mode
+}
+
+// IsParallelizable returns true if this agent may run concurrently with another.
+func (a *FleetAgentConfig) IsParallelizable() bool {
+	return a.Execution != nil && a.Execution.Parallelizable
+}
+
+// GetWorkspace returns the workspace mode, defaulting to "shared".
+func (a *FleetAgentConfig) GetWorkspace() string {
+	if a.Execution == nil || a.Execution.Workspace == "" {
+		return "shared"
+	}
+	return a.Execution.Workspace
 }
 
 // ToolsConfig handles the polymorphic tools field which can be either
@@ -211,6 +278,31 @@ func (p *ProjectContextConfig) GetMaxSizeBytes() int {
 // FleetSettings holds fleet-level configuration.
 type FleetSettings struct {
 	MaxTurnsPerAgent int `yaml:"max_turns_per_agent,omitempty" json:"max_turns_per_agent,omitempty"` // Max LLM turns when an agent is activated (0 = use system default)
+
+	// MaxParallelAgents bounds concurrent agent activation.
+	// 0 or 1 = serial (today's behavior); >=2 enables the parallel dispatcher.
+	MaxParallelAgents int `yaml:"max_parallel_agents,omitempty" json:"max_parallel_agents,omitempty"`
+
+	// MaxWallClockMinutes is a global session budget. 0 = unlimited.
+	MaxWallClockMinutes int `yaml:"max_wall_clock_minutes,omitempty" json:"max_wall_clock_minutes,omitempty"`
+
+	// RoutingMode: "llm_mentions" (default) | "explicit_queue" | "supervisor"
+	RoutingMode string `yaml:"routing_mode,omitempty" json:"routing_mode,omitempty"`
+
+	// CommunicationMode: "shared_channel" (default) | "mailbox"
+	CommunicationMode string `yaml:"communication_mode,omitempty" json:"communication_mode,omitempty"`
+
+	// TaskBoard enables the durable task board (optional).
+	TaskBoard *TaskBoardConfig `yaml:"task_board,omitempty" json:"task_board,omitempty"`
+
+	// MemoryVisibility: "scoped" (default) | "shared" | "private_plus_handoffs"
+	MemoryVisibility string `yaml:"memory_visibility,omitempty" json:"memory_visibility,omitempty"`
+}
+
+// TaskBoardConfig configures the optional durable task board.
+type TaskBoardConfig struct {
+	Enabled     bool   `yaml:"enabled" json:"enabled"`
+	ClaimPolicy string `yaml:"claim_policy,omitempty" json:"claim_policy,omitempty"` // "first_come" | "capability_match" | "supervisor_assigned"
 }
 
 // GetMaxTurnsPerAgent returns the configured max or a default of 20.
@@ -219,6 +311,38 @@ func (s *FleetSettings) GetMaxTurnsPerAgent() int {
 		return 20
 	}
 	return s.MaxTurnsPerAgent
+}
+
+// GetMaxParallelAgents returns the parallel agent bound; 0 or negative → 1 (serial).
+func (s *FleetSettings) GetMaxParallelAgents() int {
+	if s.MaxParallelAgents <= 0 {
+		return 1
+	}
+	return s.MaxParallelAgents
+}
+
+// GetRoutingMode returns the routing mode, defaulting to "llm_mentions".
+func (s *FleetSettings) GetRoutingMode() string {
+	if s.RoutingMode == "" {
+		return "llm_mentions"
+	}
+	return s.RoutingMode
+}
+
+// GetCommunicationMode returns the communication mode, defaulting to "shared_channel".
+func (s *FleetSettings) GetCommunicationMode() string {
+	if s.CommunicationMode == "" {
+		return "shared_channel"
+	}
+	return s.CommunicationMode
+}
+
+// GetMemoryVisibility returns the memory visibility policy, defaulting to "scoped".
+func (s *FleetSettings) GetMemoryVisibility() string {
+	if s.MemoryVisibility == "" {
+		return "scoped"
+	}
+	return s.MemoryVisibility
 }
 
 // --- Communication graph helpers ---
@@ -337,6 +461,17 @@ func (f *FleetConfig) Validate() error {
 		if agent.Mode != "" && agent.Mode != "simple" && agent.Mode != "agentic" {
 			return fmt.Errorf("fleet %q agent %q: mode must be 'simple' or 'agentic', got %q", f.Name, key, agent.Mode)
 		}
+		if agent.Execution != nil {
+			ws := agent.Execution.Workspace
+			if ws != "" && ws != "shared" && ws != "isolated" && ws != "none" {
+				return fmt.Errorf("fleet %q agent %q: execution.workspace must be 'shared', 'isolated', or 'none', got %q", f.Name, key, ws)
+			}
+		}
+	}
+
+	// Validate settings enums and orchestration constraints
+	if err := f.validateSettings(); err != nil {
+		return err
 	}
 
 	// Validate communication graph
@@ -369,6 +504,166 @@ func (f *FleetConfig) Validate() error {
 		}
 	}
 
+	return nil
+}
+
+func (f *FleetConfig) validateSettings() error {
+	s := f.Settings
+
+	switch s.CommunicationMode {
+	case "", "shared_channel", "mailbox":
+	default:
+		return fmt.Errorf("fleet %q: communication_mode must be 'shared_channel' or 'mailbox', got %q", f.Name, s.CommunicationMode)
+	}
+
+	switch s.MemoryVisibility {
+	case "", "scoped", "shared", "private_plus_handoffs":
+	default:
+		return fmt.Errorf("fleet %q: memory_visibility must be 'scoped', 'shared', or 'private_plus_handoffs', got %q", f.Name, s.MemoryVisibility)
+	}
+
+	switch s.RoutingMode {
+	case "", "llm_mentions", "explicit_queue", "supervisor":
+	default:
+		return fmt.Errorf("fleet %q: routing_mode must be 'llm_mentions', 'explicit_queue', or 'supervisor', got %q", f.Name, s.RoutingMode)
+	}
+
+	if s.MaxParallelAgents > 1 {
+		parallelCount := 0
+		for _, agent := range f.Agents {
+			if agent.IsParallelizable() {
+				parallelCount++
+			}
+		}
+		if parallelCount < 2 {
+			return fmt.Errorf("fleet %q: max_parallel_agents > 1 requires at least two agents with execution.parallelizable=true", f.Name)
+		}
+		if err := f.validateParallelizableSiblingsSharePredecessor(); err != nil {
+			return err
+		}
+	}
+
+	if s.GetRoutingMode() == "supervisor" {
+		supervisors := 0
+		var supervisorKey string
+		for key, agent := range f.Agents {
+			if agent.Capabilities != nil && agent.Capabilities["supervisor"] {
+				supervisors++
+				supervisorKey = key
+			}
+		}
+		if supervisors != 1 {
+			return fmt.Errorf("fleet %q: routing_mode 'supervisor' requires exactly one agent with capabilities.supervisor=true, found %d", f.Name, supervisors)
+		}
+		if err := f.validateSupervisorReachability(supervisorKey); err != nil {
+			return err
+		}
+	}
+
+	if s.TaskBoard != nil && s.TaskBoard.Enabled {
+		hasClaims := false
+		for _, agent := range f.Agents {
+			if agent.TaskPolicy != nil && len(agent.TaskPolicy.Claims) > 0 {
+				hasClaims = true
+				break
+			}
+		}
+		if !hasClaims {
+			return fmt.Errorf("fleet %q: task_board.enabled requires at least one agent with task_policy.claims", f.Name)
+		}
+		switch s.TaskBoard.ClaimPolicy {
+		case "", "first_come", "capability_match", "supervisor_assigned":
+		default:
+			return fmt.Errorf("fleet %q: task_board.claim_policy must be 'first_come', 'capability_match', or 'supervisor_assigned', got %q", f.Name, s.TaskBoard.ClaimPolicy)
+		}
+	}
+
+	return nil
+}
+
+// validateSupervisorReachability checks that the supervisor can reach every other
+// agent either directly or via one hop in the communication graph.
+func (f *FleetConfig) validateSupervisorReachability(supervisorKey string) error {
+	if f.Communication == nil || len(f.Communication.Flow) == 0 {
+		return nil
+	}
+	direct := make(map[string]bool)
+	for _, t := range f.GetTalksTo(supervisorKey) {
+		if t != "customer" {
+			direct[t] = true
+		}
+	}
+	for key := range f.Agents {
+		if key == supervisorKey {
+			continue
+		}
+		if direct[key] {
+			continue
+		}
+		// One-hop: supervisor → intermediary → key
+		reachable := false
+		for mid := range direct {
+			if f.CanTalkTo(mid, key) {
+				reachable = true
+				break
+			}
+		}
+		if !reachable {
+			return fmt.Errorf("fleet %q: supervisor %q cannot reach agent %q (directly or via one hop)", f.Name, supervisorKey, key)
+		}
+	}
+	return nil
+}
+
+// validateParallelizableSiblingsSharePredecessor checks that every pair of
+// parallelizable agents shares at least one common predecessor in the
+// communication graph (someone who can talk to both). This ensures the
+// dispatcher has a coherent fan-out point.
+func (f *FleetConfig) validateParallelizableSiblingsSharePredecessor() error {
+	if f.Communication == nil {
+		return nil
+	}
+	var parallelKeys []string
+	for key, agent := range f.Agents {
+		if agent.IsParallelizable() {
+			parallelKeys = append(parallelKeys, key)
+		}
+	}
+	if len(parallelKeys) < 2 {
+		return nil
+	}
+
+	// Build reverse edges: agent → set of agents that can talk to it
+	predecessors := make(map[string]map[string]bool)
+	for _, node := range f.Communication.Flow {
+		for _, target := range node.TalksTo {
+			if target == "customer" {
+				continue
+			}
+			if predecessors[target] == nil {
+				predecessors[target] = make(map[string]bool)
+			}
+			if node.Role != "customer" {
+				predecessors[target][node.Role] = true
+			}
+		}
+	}
+
+	for i := 0; i < len(parallelKeys); i++ {
+		for j := i + 1; j < len(parallelKeys); j++ {
+			a, b := parallelKeys[i], parallelKeys[j]
+			shared := false
+			for pred := range predecessors[a] {
+				if predecessors[b][pred] {
+					shared = true
+					break
+				}
+			}
+			if !shared {
+				return fmt.Errorf("fleet %q: parallelizable agents %q and %q must share a common predecessor in the communication graph", f.Name, a, b)
+			}
+		}
+	}
 	return nil
 }
 

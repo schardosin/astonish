@@ -127,6 +127,11 @@ type TeamDataStore interface {
 	ScheduledJobs() SchedulerStore
 	FleetTemplates() FleetTemplateStore
 	FleetPlans() FleetPlanStore
+	FleetSetupProfiles() FleetSetupProfileStore
+	FleetSetupDrafts() FleetSetupDraftStore
+	FleetRunStates() FleetRunStateStore
+	FleetMailbox() FleetMailboxStore
+	FleetTaskBoard() FleetTaskBoardStore
 	DrillReports() DrillReportStore
 	Settings() SettingsStore
 	Audit() AuditStore
@@ -419,13 +424,13 @@ type AuditStore interface {
 
 // AuditFilter specifies criteria for querying audit entries.
 type AuditFilter struct {
-	UserID    string
-	Action    string
-	Resource  string
-	Since     time.Time
-	Until     time.Time
-	Limit     int
-	Offset    int
+	UserID   string
+	Action   string
+	Resource string
+	Since    time.Time
+	Until    time.Time
+	Limit    int
+	Offset   int
 }
 
 // --------------------------------------------------------------------------

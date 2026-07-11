@@ -937,6 +937,9 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Wire up state change callback for this viewer
 	prevStateCallback := fs.OnStateChange
+	prevAgentStartedCallback := fs.OnAgentStarted
+	prevAgentFinishedCallback := fs.OnAgentFinished
+	prevMailboxDeliveredCallback := fs.OnMailboxDelivered
 	fs.OnStateChange = func(state fleet.SessionState, activeAgent string) {
 		safeSendSSE("fleet_state", map[string]interface{}{
 			"state":        string(state),
@@ -946,8 +949,43 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 			prevStateCallback(state, activeAgent)
 		}
 	}
+	fs.OnAgentStarted = func(agentKey string, laneIndex int) {
+		safeSendSSE("fleet_agent_started", map[string]interface{}{
+			"session_id": sessionID,
+			"agent":      agentKey,
+			"lane_index": laneIndex,
+		})
+		if prevAgentStartedCallback != nil {
+			prevAgentStartedCallback(agentKey, laneIndex)
+		}
+	}
+	fs.OnAgentFinished = func(agentKey string, laneIndex int, duration time.Duration) {
+		safeSendSSE("fleet_agent_finished", map[string]interface{}{
+			"session_id":   sessionID,
+			"agent":        agentKey,
+			"lane_index":   laneIndex,
+			"duration_ms":  duration.Milliseconds(),
+			"duration_str": duration.String(),
+		})
+		if prevAgentFinishedCallback != nil {
+			prevAgentFinishedCallback(agentKey, laneIndex, duration)
+		}
+	}
+	fs.OnMailboxDelivered = func(recipient string, sender string) {
+		safeSendSSE("fleet_mailbox_delivered", map[string]interface{}{
+			"session_id": sessionID,
+			"recipient":  recipient,
+			"sender":     sender,
+		})
+		if prevMailboxDeliveredCallback != nil {
+			prevMailboxDeliveredCallback(recipient, sender)
+		}
+	}
 	defer func() {
 		fs.OnStateChange = prevStateCallback
+		fs.OnAgentStarted = prevAgentStartedCallback
+		fs.OnAgentFinished = prevAgentFinishedCallback
+		fs.OnMailboxDelivered = prevMailboxDeliveredCallback
 	}()
 
 	// Also update the persistent meta with message count on each new message
@@ -1081,6 +1119,57 @@ func FleetSessionThreadsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"threads": threads,
 	})
+}
+
+// FleetSessionTasksHandler handles GET /api/studio/fleet/sessions/{id}/tasks.
+func FleetSessionTasksHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID := mux.Vars(r)["id"]
+	if sessionID == "" {
+		respondError(w, http.StatusBadRequest, "session id is required")
+		return
+	}
+	svc := store.FromRequest(r)
+	if svc == nil || svc.FleetTaskBoard == nil {
+		respondError(w, http.StatusServiceUnavailable, "Fleet task board store not available")
+		return
+	}
+	statuses := r.URL.Query()["status"]
+	tasks, err := svc.FleetTaskBoard.List(r.Context(), sessionID, statuses...)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tasks)
+}
+
+// FleetSessionMailboxHandler handles GET /api/studio/fleet/sessions/{id}/mailbox/{recipient}.
+func FleetSessionMailboxHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["id"]
+	recipient := vars["recipient"]
+	if sessionID == "" || recipient == "" {
+		respondError(w, http.StatusBadRequest, "session id and recipient are required")
+		return
+	}
+	svc := store.FromRequest(r)
+	if svc == nil || svc.FleetMailbox == nil {
+		respondError(w, http.StatusServiceUnavailable, "Fleet mailbox store not available")
+		return
+	}
+	all, err := svc.FleetMailbox.ListForSession(r.Context(), sessionID)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	messages := make([]store.FleetMailboxMessage, 0, len(all))
+	for _, msg := range all {
+		if msg.Recipient == recipient {
+			messages = append(messages, msg)
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(messages)
 }
 
 // FleetSessionMessagesHandler handles GET /api/studio/fleet/sessions/{id}/messages.

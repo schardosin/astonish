@@ -22,7 +22,8 @@ type FleetPlan struct {
 	Name        string `yaml:"name" json:"name"`
 	Key         string `yaml:"key" json:"key"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
-	CreatedFrom string `yaml:"created_from,omitempty" json:"created_from,omitempty"` // base fleet key (informational)
+	CreatedFrom      string `yaml:"created_from,omitempty" json:"created_from,omitempty"`           // base fleet key (informational)
+	SetupProfileKey  string `yaml:"setup_profile,omitempty" json:"setup_profile,omitempty"`         // setup profile used at creation
 
 	// Full fleet config snapshot (agents, communication, settings).
 	// Note: uses yaml:"-" because MarshalYAML/UnmarshalYAML handle serialization
@@ -91,7 +92,8 @@ type fleetPlanYAML struct {
 	Name        string `yaml:"name"`
 	Key         string `yaml:"key"`
 	Description string `yaml:"description,omitempty"`
-	CreatedFrom string `yaml:"created_from,omitempty"`
+	CreatedFrom     string `yaml:"created_from,omitempty"`
+	SetupProfileKey string `yaml:"setup_profile,omitempty"`
 
 	// FleetConfig fields (excluding Name and Description which are already above)
 	Communication        *CommunicationConfig        `yaml:"communication,omitempty"`
@@ -122,6 +124,7 @@ func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 		Key:                   p.Key,
 		Description:           p.Description,
 		CreatedFrom:           p.CreatedFrom,
+		SetupProfileKey:       p.SetupProfileKey,
 		Communication:         p.FleetConfig.Communication,
 		Agents:                p.FleetConfig.Agents,
 		Settings:              p.FleetConfig.Settings,
@@ -153,6 +156,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 	p.Key = raw.Key
 	p.Description = raw.Description
 	p.CreatedFrom = raw.CreatedFrom
+	p.SetupProfileKey = raw.SetupProfileKey
 	p.FleetConfig = FleetConfig{
 		Name:             raw.Name, // Use the plan name as the fleet name
 		Description:      raw.Description,
@@ -193,7 +197,7 @@ type PlanChannelConfig struct {
 // PlanArtifactConfig defines where a category of artifacts should be stored.
 // Each fleet plan can have multiple named artifact destinations (e.g., "code", "docs", "helm").
 type PlanArtifactConfig struct {
-	// Type is the storage type: "local", "git_repo"
+	// Type is the storage type: "local", "git_repo", "s3", "http_upload"
 	Type string `yaml:"type" json:"type"`
 	// Path is the local filesystem path (for type "local")
 	Path string `yaml:"path,omitempty" json:"path,omitempty"`
@@ -205,6 +209,28 @@ type PlanArtifactConfig struct {
 	SubPath string `yaml:"sub_path,omitempty" json:"sub_path,omitempty"`
 	// AutoPR creates a pull request when the artifact is ready
 	AutoPR bool `yaml:"auto_pr,omitempty" json:"auto_pr,omitempty"`
+
+	// S3 destination (type "s3"); upload implementation is a follow-up.
+	S3 *S3ArtifactConfig `yaml:"s3,omitempty" json:"s3,omitempty"`
+
+	// HTTPUpload destination (type "http_upload"); upload implementation is a follow-up.
+	HTTPUpload *HTTPUploadArtifactConfig `yaml:"http_upload,omitempty" json:"http_upload,omitempty"`
+}
+
+// S3ArtifactConfig configures an S3 artifact destination.
+type S3ArtifactConfig struct {
+	Bucket        string `yaml:"bucket" json:"bucket"`
+	Prefix        string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	CredentialRef string `yaml:"credential_ref" json:"credential_ref"` // logical name in Credentials map
+	Region        string `yaml:"region,omitempty" json:"region,omitempty"`
+}
+
+// HTTPUploadArtifactConfig configures an HTTP upload artifact destination.
+type HTTPUploadArtifactConfig struct {
+	URL           string            `yaml:"url" json:"url"`
+	Method        string            `yaml:"method,omitempty" json:"method,omitempty"` // default "POST"
+	Headers       map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	CredentialRef string            `yaml:"credential_ref,omitempty" json:"credential_ref,omitempty"`
 }
 
 // ProjectSourceConfig describes where the project code lives so each session

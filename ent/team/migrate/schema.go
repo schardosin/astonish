@@ -149,6 +149,38 @@ var (
 			},
 		},
 	}
+	// FleetMailboxMessagesColumns holds the columns for the "fleet_mailbox_messages" table.
+	FleetMailboxMessagesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "session_id", Type: field.TypeString},
+		{Name: "recipient", Type: field.TypeString},
+		{Name: "sender", Type: field.TypeString},
+		{Name: "body", Type: field.TypeString, Nullable: true, Size: 2147483647, Default: ""},
+		{Name: "mentions", Type: field.TypeJSON, Nullable: true},
+		{Name: "metadata", Type: field.TypeJSON, Nullable: true},
+		{Name: "delivery_status", Type: field.TypeString, Default: "pending"},
+		{Name: "delivered_at", Type: field.TypeTime, Nullable: true},
+		{Name: "read_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// FleetMailboxMessagesTable holds the schema information for the "fleet_mailbox_messages" table.
+	FleetMailboxMessagesTable = &schema.Table{
+		Name:       "fleet_mailbox_messages",
+		Columns:    FleetMailboxMessagesColumns,
+		PrimaryKey: []*schema.Column{FleetMailboxMessagesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fleetmailboxmessage_session_id_recipient_delivery_status",
+				Unique:  false,
+				Columns: []*schema.Column{FleetMailboxMessagesColumns[1], FleetMailboxMessagesColumns[2], FleetMailboxMessagesColumns[7]},
+			},
+			{
+				Name:    "fleetmailboxmessage_session_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{FleetMailboxMessagesColumns[1], FleetMailboxMessagesColumns[10]},
+			},
+		},
+	}
 	// FleetMonitorStateColumns holds the columns for the "fleet_monitor_state" table.
 	FleetMonitorStateColumns = []*schema.Column{
 		{Name: "plan_key", Type: field.TypeString},
@@ -183,6 +215,119 @@ var (
 				Name:    "fleetplan_key",
 				Unique:  true,
 				Columns: []*schema.Column{FleetPlansColumns[1]},
+			},
+		},
+	}
+	// FleetRunStatesColumns holds the columns for the "fleet_run_states" table.
+	FleetRunStatesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "session_id", Type: field.TypeString},
+		{Name: "plan_key", Type: field.TypeString},
+		{Name: "state", Type: field.TypeString},
+		{Name: "active_agents", Type: field.TypeJSON},
+		{Name: "waiting_agent", Type: field.TypeString, Nullable: true},
+		{Name: "ball", Type: field.TypeString, Default: "agents"},
+		{Name: "progress", Type: field.TypeJSON},
+		{Name: "last_heartbeat_at", Type: field.TypeTime},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// FleetRunStatesTable holds the schema information for the "fleet_run_states" table.
+	FleetRunStatesTable = &schema.Table{
+		Name:       "fleet_run_states",
+		Columns:    FleetRunStatesColumns,
+		PrimaryKey: []*schema.Column{FleetRunStatesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fleetrunstate_session_id",
+				Unique:  true,
+				Columns: []*schema.Column{FleetRunStatesColumns[1]},
+			},
+			{
+				Name:    "fleetrunstate_plan_key_state",
+				Unique:  false,
+				Columns: []*schema.Column{FleetRunStatesColumns[2], FleetRunStatesColumns[3]},
+			},
+		},
+	}
+	// FleetSetupDraftsColumns holds the columns for the "fleet_setup_drafts" table.
+	FleetSetupDraftsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "template_key", Type: field.TypeString},
+		{Name: "setup_profile_key", Type: field.TypeString},
+		{Name: "collected", Type: field.TypeJSON},
+		{Name: "current_step", Type: field.TypeString, Nullable: true},
+		{Name: "created_by", Type: field.TypeUUID, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// FleetSetupDraftsTable holds the schema information for the "fleet_setup_drafts" table.
+	FleetSetupDraftsTable = &schema.Table{
+		Name:       "fleet_setup_drafts",
+		Columns:    FleetSetupDraftsColumns,
+		PrimaryKey: []*schema.Column{FleetSetupDraftsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fleetsetupdraft_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{FleetSetupDraftsColumns[6]},
+			},
+		},
+	}
+	// FleetSetupProfilesColumns holds the columns for the "fleet_setup_profiles" table.
+	FleetSetupProfilesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "key", Type: field.TypeString},
+		{Name: "name", Type: field.TypeString},
+		{Name: "definition", Type: field.TypeJSON},
+		{Name: "created_by", Type: field.TypeUUID, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// FleetSetupProfilesTable holds the schema information for the "fleet_setup_profiles" table.
+	FleetSetupProfilesTable = &schema.Table{
+		Name:       "fleet_setup_profiles",
+		Columns:    FleetSetupProfilesColumns,
+		PrimaryKey: []*schema.Column{FleetSetupProfilesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fleetsetupprofile_key",
+				Unique:  true,
+				Columns: []*schema.Column{FleetSetupProfilesColumns[1]},
+			},
+		},
+	}
+	// FleetTasksColumns holds the columns for the "fleet_tasks" table.
+	FleetTasksColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "session_id", Type: field.TypeString},
+		{Name: "title", Type: field.TypeString},
+		{Name: "description", Type: field.TypeString, Nullable: true, Size: 2147483647, Default: ""},
+		{Name: "required_capabilities", Type: field.TypeJSON},
+		{Name: "claimed_by", Type: field.TypeString, Nullable: true},
+		{Name: "status", Type: field.TypeString, Default: "open"},
+		{Name: "result", Type: field.TypeJSON, Nullable: true},
+		{Name: "parent_task_id", Type: field.TypeString, Nullable: true},
+		{Name: "claimed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "completed_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// FleetTasksTable holds the schema information for the "fleet_tasks" table.
+	FleetTasksTable = &schema.Table{
+		Name:       "fleet_tasks",
+		Columns:    FleetTasksColumns,
+		PrimaryKey: []*schema.Column{FleetTasksColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "fleettask_session_id_status",
+				Unique:  false,
+				Columns: []*schema.Column{FleetTasksColumns[1], FleetTasksColumns[6]},
+			},
+			{
+				Name:    "fleettask_claimed_by",
+				Unique:  false,
+				Columns: []*schema.Column{FleetTasksColumns[5]},
 			},
 		},
 	}
@@ -577,8 +722,13 @@ var (
 		ChatSessionEventsTable,
 		CredentialsTable,
 		DrillReportsTable,
+		FleetMailboxMessagesTable,
 		FleetMonitorStateTable,
 		FleetPlansTable,
+		FleetRunStatesTable,
+		FleetSetupDraftsTable,
+		FleetSetupProfilesTable,
+		FleetTasksTable,
 		FleetTemplatesTable,
 		FlowsTable,
 		McpServersTable,
@@ -612,11 +762,26 @@ func init() {
 	DrillReportsTable.Annotation = &entsql.Annotation{
 		Table: "drill_reports",
 	}
+	FleetMailboxMessagesTable.Annotation = &entsql.Annotation{
+		Table: "fleet_mailbox_messages",
+	}
 	FleetMonitorStateTable.Annotation = &entsql.Annotation{
 		Table: "fleet_monitor_state",
 	}
 	FleetPlansTable.Annotation = &entsql.Annotation{
 		Table: "fleet_plans",
+	}
+	FleetRunStatesTable.Annotation = &entsql.Annotation{
+		Table: "fleet_run_states",
+	}
+	FleetSetupDraftsTable.Annotation = &entsql.Annotation{
+		Table: "fleet_setup_drafts",
+	}
+	FleetSetupProfilesTable.Annotation = &entsql.Annotation{
+		Table: "fleet_setup_profiles",
+	}
+	FleetTasksTable.Annotation = &entsql.Annotation{
+		Table: "fleet_tasks",
 	}
 	FleetTemplatesTable.Annotation = &entsql.Annotation{
 		Table: "fleet_templates",

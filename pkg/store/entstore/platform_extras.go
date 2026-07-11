@@ -89,7 +89,7 @@ func NewPlatformServices(ctx context.Context, cfg Config) (*store.Services, *Sto
 		migrateTables := []*schema.Table{
 			platformmigrate.PlatformSkillsTable,
 			platformmigrate.PlatformSkillFilesTable,
-			platformmigrate.SandboxLayersTable,      // required by SandboxTemplatesTable FK
+			platformmigrate.SandboxLayersTable, // required by SandboxTemplatesTable FK
 			platformmigrate.SandboxTemplatesTable,
 		}
 		if err := platformmigrate.Create(ctx, s.platformClient.Schema, migrateTables); err != nil {
@@ -173,6 +173,11 @@ func TenantMiddleware(s *Store) func(http.Handler) http.Handler {
 				reqSvc.Scheduler = teamStore.ScheduledJobs()
 				reqSvc.FleetTemplates = teamStore.FleetTemplates()
 				reqSvc.FleetPlans = teamStore.FleetPlans()
+				reqSvc.FleetSetupProfiles = teamStore.FleetSetupProfiles()
+				reqSvc.FleetSetupDrafts = teamStore.FleetSetupDrafts()
+				reqSvc.FleetRunStates = teamStore.FleetRunStates()
+				reqSvc.FleetMailbox = teamStore.FleetMailbox()
+				reqSvc.FleetTaskBoard = teamStore.FleetTaskBoard()
 				reqSvc.DrillReports = teamStore.DrillReports()
 				reqSvc.TeamSkills = teamStore.Skills()
 				reqSvc.TeamMCPServers = teamStore.MCPServers()

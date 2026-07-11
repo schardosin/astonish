@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/schardosin/astonish/pkg/store"
 )
 
 // PlanAccess abstracts read/write access to fleet plans for the PlanActivator.
@@ -95,6 +97,7 @@ type PlanActivator struct {
 	fleetStart      FleetStartFunc
 	fleetRecover    FleetRecoverFunc
 	ghTokenResolver GHTokenResolverFunc
+	runStates       store.FleetRunStateStore
 
 	// TeamSlug is the team this activator manages plans for.
 	// Set by the daemon at initialization; used to stamp HeadlessFleetConfig
@@ -133,6 +136,11 @@ func (a *PlanActivator) registry() PlanAccess {
 // function depends on API-layer components that initialize later.
 func (a *PlanActivator) SetRecoverFunc(fn FleetRecoverFunc) {
 	a.fleetRecover = fn
+}
+
+// SetRunStateStore sets the durable run-state store used for restart recovery.
+func (a *PlanActivator) SetRunStateStore(store store.FleetRunStateStore) {
+	a.runStates = store
 }
 
 // SetGHTokenResolver sets the function used to resolve GitHub tokens for fleet plans.
@@ -387,10 +395,11 @@ func (a *PlanActivator) RestoreActivated() error {
 		restored++
 		slog.Info("restored activated plan", "component", "plan-activator", "plan", summary.Key, "job_id", plan.Activation.SchedulerJobID)
 
-		// NOTE: No explicit recovery of interrupted sessions here.
-		// The first poll cycle (triggered by the scheduler within seconds)
-		// runs CheckForWork which handles both new issues AND recovery of
-		// interrupted sessions (issues with a sessionID but no active session).
+		if recovered, err := RecoverActiveSessions(context.Background(), plan, a.TeamSlug, a.runStates, a.fleetRecover); err != nil {
+			slog.Warn("failed to recover active fleet sessions", "component", "plan-activator", "plan", summary.Key, "error", err)
+		} else if recovered > 0 {
+			slog.Info("recovered active fleet sessions", "component", "plan-activator", "plan", summary.Key, "count", recovered)
+		}
 	}
 
 	if restored > 0 {

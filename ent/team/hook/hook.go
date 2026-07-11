@@ -69,6 +69,18 @@ func (f DrillReportFunc) Mutate(ctx context.Context, m team.Mutation) (team.Valu
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.DrillReportMutation", m)
 }
 
+// The FleetMailboxMessageFunc type is an adapter to allow the use of ordinary
+// function as FleetMailboxMessage mutator.
+type FleetMailboxMessageFunc func(context.Context, *team.FleetMailboxMessageMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FleetMailboxMessageFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.FleetMailboxMessageMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetMailboxMessageMutation", m)
+}
+
 // The FleetMonitorStateFunc type is an adapter to allow the use of ordinary
 // function as FleetMonitorState mutator.
 type FleetMonitorStateFunc func(context.Context, *team.FleetMonitorStateMutation) (team.Value, error)
@@ -91,6 +103,54 @@ func (f FleetPlanFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value,
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetPlanMutation", m)
+}
+
+// The FleetRunStateFunc type is an adapter to allow the use of ordinary
+// function as FleetRunState mutator.
+type FleetRunStateFunc func(context.Context, *team.FleetRunStateMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FleetRunStateFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.FleetRunStateMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetRunStateMutation", m)
+}
+
+// The FleetSetupDraftFunc type is an adapter to allow the use of ordinary
+// function as FleetSetupDraft mutator.
+type FleetSetupDraftFunc func(context.Context, *team.FleetSetupDraftMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FleetSetupDraftFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.FleetSetupDraftMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetSetupDraftMutation", m)
+}
+
+// The FleetSetupProfileFunc type is an adapter to allow the use of ordinary
+// function as FleetSetupProfile mutator.
+type FleetSetupProfileFunc func(context.Context, *team.FleetSetupProfileMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FleetSetupProfileFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.FleetSetupProfileMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetSetupProfileMutation", m)
+}
+
+// The FleetTaskFunc type is an adapter to allow the use of ordinary
+// function as FleetTask mutator.
+type FleetTaskFunc func(context.Context, *team.FleetTaskMutation) (team.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f FleetTaskFunc) Mutate(ctx context.Context, m team.Mutation) (team.Value, error) {
+	if mv, ok := m.(*team.FleetTaskMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *team.FleetTaskMutation", m)
 }
 
 // The FleetTemplateFunc type is an adapter to allow the use of ordinary

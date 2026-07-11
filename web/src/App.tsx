@@ -1609,8 +1609,11 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
-              onCreatePlan={(templateKey: string) => {
-                setPendingChatMessage({ message: `/fleet-plan ${templateKey}` })
+              onCreatePlan={(templateKey: string, draftId?: string) => {
+                const msg = draftId
+                  ? `/fleet-plan ${templateKey} --draft=${draftId}`
+                  : `/fleet-plan ${templateKey}`
+                setPendingChatMessage({ message: msg })
                 navigate(buildPath('chat'))
               }}
             />

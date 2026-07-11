@@ -96,6 +96,7 @@ export interface FleetExecutionMessage {
   currentPhase: string | null
   currentAgent: string | null
   status: string
+  maxParallelAgents?: number
 }
 
 export interface BrowserHandoffMessage {
@@ -138,6 +139,12 @@ export interface FleetEvent {
   type: string
   phase?: string
   agent?: string
+  lane_index?: number
+  task_id?: string
+  title?: string
+  status?: string
+  claimed_by?: string
+  required_capabilities?: string[]
   detail?: string
   text?: string
   message?: string

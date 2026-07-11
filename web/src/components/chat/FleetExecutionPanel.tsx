@@ -40,18 +40,20 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     events: FleetEvent[]
     status: string
     startTimestamp?: number
+    laneIndex?: number
   }
 
   const phases = useMemo(() => {
     const phaseMap: Record<string, Phase> = {}
     const phaseOrder: string[] = []
-    for (const evt of data.events) {
+    for (const evt of data.events.filter(evt => !evt.type.startsWith('fleet_task_'))) {
       if (evt.type === 'fleet_start' || evt.type === 'fleet_complete') continue
       const key = evt.phase || '_orchestrator'
       if (!phaseMap[key]) {
-        phaseMap[key] = { name: key, agent: evt.agent || '', events: [], status: 'pending' }
+        phaseMap[key] = { name: key, agent: evt.agent || '', events: [], status: 'pending', laneIndex: typeof evt.lane_index === 'number' ? evt.lane_index : undefined }
         phaseOrder.push(key)
       }
+      if (typeof evt.lane_index === 'number') phaseMap[key].laneIndex = evt.lane_index
       phaseMap[key].events.push(evt)
       if (evt.type === 'phase_start' || evt.type === 'conversation_start') {
         phaseMap[key].status = 'running'
@@ -64,6 +66,13 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     return phaseOrder.map(k => phaseMap[k])
   }, [data.events])
 
+  const taskEvents = useMemo(() => data.events.filter(evt => evt.type.startsWith('fleet_task_')), [data.events])
+  const hasLaneEvents = data.events.some(evt => typeof evt.lane_index === 'number' && evt.lane_index >= 0)
+  const configuredParallelism = data.maxParallelAgents || 1
+  const useMultiColumn = hasLaneEvents && configuredParallelism > 1
+  const laneCount = Math.max(configuredParallelism, ...data.events.map(evt => typeof evt.lane_index === 'number' ? evt.lane_index + 1 : 0), 1)
+  const coordinatorPhases = phases.filter(phase => phase.name === '_orchestrator' || phase.laneIndex === undefined || phase.laneIndex < 0)
+  const lanePhases = Array.from({ length: laneCount }, (_, laneIndex) => phases.filter(phase => phase.laneIndex === laneIndex))
   const agentPhaseCount = phases.filter(p => p.name !== '_orchestrator').length
   const allDone = data.status !== 'running'
 
@@ -271,6 +280,118 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
       )
     }
     return null
+  }
+
+  const renderTaskStrip = () => {
+    if (taskEvents.length === 0) return null
+    return (
+      <div className="px-4 pb-3" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div className="pt-3">
+          <div className="text-xs font-semibold mb-2" style={{ color: 'var(--text-primary)' }}>Tasks</div>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {taskEvents.map((evt, idx) => {
+              const isDone = evt.type === 'fleet_task_completed'
+              const isClaimed = evt.type === 'fleet_task_claimed'
+              return (
+                <div
+                  key={`task-${idx}`}
+                  className="min-w-[180px] rounded-lg p-2 text-xs"
+                  style={{
+                    background: isDone ? 'rgba(34,197,94,0.08)' : isClaimed ? 'rgba(6,182,212,0.08)' : 'rgba(255,255,255,0.04)',
+                    border: `1px solid ${isDone ? 'rgba(34,197,94,0.25)' : isClaimed ? 'rgba(6,182,212,0.25)' : 'var(--border-color)'}`,
+                  }}
+                >
+                  <div className="font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                    {evt.title || evt.detail || evt.task_id || 'Task'}
+                  </div>
+                  <div className="mt-1" style={{ color: 'var(--text-muted)' }}>
+                    {evt.type.replace('fleet_task_', '')}
+                    {evt.claimed_by ? ` by @${evt.claimed_by}` : ''}
+                  </div>
+                  {evt.required_capabilities && evt.required_capabilities.length > 0 && (
+                    <div className="mt-1 truncate" style={{ color: 'var(--text-muted)' }}>
+                      {evt.required_capabilities.join(', ')}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const renderLanePhase = (phase: Phase, phaseIdx: number) => {
+    const isExpanded = expandedPhases[phase.name] === true || (phase.status === 'running' && expandedPhases[phase.name] !== false)
+    return (
+      <div key={phase.name} className="rounded-lg p-2" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)' }}>
+        <button
+          onClick={() => togglePhase(phase.name)}
+          className="w-full flex items-center gap-2 text-left cursor-pointer"
+        >
+          {statusDot(phase.status)}
+          <span style={{ color: 'var(--text-muted)' }}>{phaseIcon(phase)}</span>
+          <span className="text-xs font-medium flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
+            {phase.name}
+            {phase.agent && <span className="font-normal ml-1.5" style={{ color: 'var(--text-muted)' }}>({phase.agent})</span>}
+          </span>
+          {phase.startTimestamp && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatTime(phase.startTimestamp)}</span>}
+          <ChevronDown size={12} className={isExpanded ? '' : 'rotate-[-90deg]'} style={{ color: 'var(--text-muted)' }} />
+        </button>
+        {isExpanded && (
+          <div className="mt-2">
+            {phase.events.map((evt, evtIdx) => renderPhaseEvent(evt, phaseIdx, evtIdx))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  if (useMultiColumn) {
+    return (
+      <div
+        className="rounded-lg overflow-hidden text-sm transition-opacity duration-300"
+        style={{
+          border: '1px solid var(--border-color)',
+          background: 'var(--bg-secondary)',
+          opacity: allDone ? 0.85 : 1,
+        }}
+      >
+        <div className="flex items-center gap-2.5 px-4 py-2.5">
+          {data.status === 'running' && <Loader size={15} className="animate-spin shrink-0" style={{ color: 'var(--accent)' }} />}
+          {data.status === 'complete' && <Check size={15} className="text-green-400 shrink-0" />}
+          <Users size={15} className="shrink-0" style={{ color: 'var(--text-muted)' }} />
+          <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>Fleet Execution</span>
+          <span className="text-xs ml-auto" style={{ color: 'var(--text-muted)' }}>
+            {laneCount} lane{laneCount !== 1 ? 's' : ''} · {agentPhaseCount} phase{agentPhaseCount !== 1 ? 's' : ''}
+          </span>
+        </div>
+        <div className="px-4 py-3 overflow-x-auto" style={{ borderTop: '1px solid var(--border-color)' }}>
+          <div className="grid gap-3" style={{ gridTemplateColumns: `minmax(180px, 0.8fr) repeat(${laneCount}, minmax(220px, 1fr))` }}>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Coordinator</div>
+              <div className="space-y-2">
+                {coordinatorPhases.length === 0
+                  ? <div className="text-xs rounded-lg p-3" style={{ color: 'var(--text-muted)', border: '1px dashed var(--border-color)' }}>No coordinator events</div>
+                  : coordinatorPhases.map((phase, idx) => renderLanePhase(phase, idx))}
+              </div>
+            </div>
+            {lanePhases.map((lane, laneIndex) => (
+              <div key={laneIndex}>
+                <div className="text-[11px] font-semibold uppercase tracking-wide mb-2" style={{ color: 'var(--text-muted)' }}>Lane {laneIndex + 1}</div>
+                <div className="space-y-2">
+                  {lane.length === 0
+                    ? <div className="text-xs rounded-lg p-3" style={{ color: 'var(--text-muted)', border: '1px dashed var(--border-color)' }}>Idle</div>
+                    : lane.map((phase, idx) => renderLanePhase(phase, laneIndex * 100 + idx))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+        {renderTaskStrip()}
+      </div>
+    )
   }
 
   return (

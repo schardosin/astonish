@@ -24,7 +24,6 @@ import (
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -561,35 +560,43 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// /fleet-plan: start a fleet plan creation conversation
 	if msg == "/fleet-plan" || strings.HasPrefix(msg, "/fleet-plan ") {
-		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		rawHint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		draftID := ""
+		hint := rawHint
+		if idx := strings.Index(rawHint, " --draft="); idx >= 0 {
+			hint = strings.TrimSpace(rawHint[:idx])
+			draftID = strings.TrimSpace(rawHint[idx+len(" --draft="):])
+		}
+		if draftID == "" {
+			draftID = strings.TrimSpace(r.URL.Query().Get("draft_id"))
+		}
 		eventData := map[string]interface{}{
 			"hint": hint,
 		}
-		// If the hint is a fleet template key, look up the wizard config
-		if hint != "" {
-			// Try store from request first (platform mode), then global registry
-			var wizardFound bool
-			if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-				if cfgAny, ok := svc.FleetTemplates.GetFleet(r.Context(), hint); ok {
-					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
-						eventData["wizard_description"] = cfg.PlanWizard.Description
-						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
-						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
-							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
-						}
-						wizardFound = true
-					}
-				}
+		if hint != "" && draftID == "" {
+			if newDraftID, err := ensureSetupDraft(r, hint, ""); err == nil {
+				draftID = newDraftID
 			}
-			if !wizardFound {
-				if reg := GetFleetRegistry(); reg != nil {
-					if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
-						eventData["wizard_description"] = cfg.PlanWizard.Description
-						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
-						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
-							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
-						}
-					}
+		}
+		if draftID != "" {
+			eventData["setup_draft_id"] = draftID
+		}
+		if hint != "" {
+			profileKey, desc, prompt, pinned, currentStepID, currentStepTitle, err := ResolveSetupWizardContext(r, hint, draftID)
+			if err == nil && prompt != "" {
+				if desc != "" {
+					eventData["wizard_description"] = desc
+				}
+				eventData["wizard_system_prompt"] = prompt
+				if profileKey != "" {
+					eventData["setup_profile_key"] = profileKey
+				}
+				if len(pinned) > 0 {
+					eventData["pinned_tool_groups"] = pinned
+				}
+				if currentStepID != "" {
+					eventData["current_setup_step"] = currentStepID
+					eventData["current_setup_step_title"] = currentStepTitle
 				}
 			}
 		}

@@ -288,6 +288,23 @@ jobs:
           npm ci
           npm run build
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Cross-compile Linux binaries
+        env:
+          VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
+        run: |
+          touch web/embed.go
+          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+
+          echo "Building linux/amd64..."
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
+
+          ls -la astonish-linux-*
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 

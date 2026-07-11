@@ -76,6 +76,7 @@ type backendNodeClient struct {
 	layerChain []string // pre-resolved chain (K8s); nil → derive from templateID
 	image      string // per-template container image (OpenShell); empty → backend default
 	limits     ResourceLimits
+	sessionEnv map[string]string
 
 	mu         sync.Mutex
 	bound      bool          // BindSession has run
@@ -87,13 +88,14 @@ type backendNodeClient struct {
 // newBackendNodeClient constructs a client. The session is NOT created until
 // BindSession is called; the client is inert until then so the caller may
 // defer provisioning until it knows the LLM actually needs a tool.
-func newBackendNodeClient(b Backend, templateID string, layerChain []string, image string, limits ResourceLimits) *backendNodeClient {
+func newBackendNodeClient(b Backend, templateID string, layerChain []string, image string, limits ResourceLimits, sessionEnv map[string]string) *backendNodeClient {
 	return &backendNodeClient{
 		backend:    b,
 		templateID: templateID,
 		layerChain: layerChain,
 		image:      image,
 		limits:     limits,
+		sessionEnv: sessionEnv,
 	}
 }
 
@@ -162,6 +164,7 @@ func (c *backendNodeClient) provision(sessionID string) {
 		LayerChain: c.layerChain,
 		Image:      c.image,
 		Limits:     c.limits,
+		Env:        c.sessionEnv,
 	}
 	if _, err := c.backend.CreateSession(ctx, spec); err != nil {
 		c.mu.Lock()
@@ -446,7 +449,7 @@ func (p *backendPool) getOrCreate(sessionID, template string, chain []string, im
 		}
 		return c
 	}
-	c := newBackendNodeClient(p.backend, template, chain, image, p.limits)
+	c := newBackendNodeClient(p.backend, template, chain, image, p.limits, nil)
 	p.clients[sessionID] = c
 	return c
 }
@@ -507,4 +510,55 @@ func (p *backendPool) Alias(childSessionID, parentSessionID string) {
 var (
 	_ ToolNodeClient = (*backendNodeClient)(nil)
 	_ ToolNodePool   = (*backendPool)(nil)
+	_ ToolNodePool   = (*singleClientPool)(nil)
 )
+
+// NewPinnedBackendClient creates a backend node client with optional session env
+// for fleet sessions that pin to a single sandbox session ID.
+func NewPinnedBackendClient(b Backend, templateID string, sessionEnv map[string]string, limits ResourceLimits) ToolNodeClient {
+	return newBackendNodeClient(b, templateID, nil, "", limits, sessionEnv)
+}
+
+// singleClientPool implements ToolNodePool with one pre-bound client (fleet sessions).
+type singleClientPool struct {
+	client  ToolNodeClient
+	backend Backend
+	closed  bool
+}
+
+// NewSingleClientPool returns a ToolNodePool that always vends the same client.
+func NewSingleClientPool(client ToolNodeClient, backend Backend) ToolNodePool {
+	return &singleClientPool{client: client, backend: backend}
+}
+
+func (p *singleClientPool) GetOrCreate(_ string) ToolNodeClient {
+	if p == nil || p.closed {
+		return nil
+	}
+	return p.client
+}
+
+func (p *singleClientPool) GetOrCreateWithTemplate(_ string, _ string) ToolNodeClient {
+	return p.GetOrCreate("")
+}
+
+func (p *singleClientPool) GetOrCreateWithChain(_ string, _ string, _ []string) ToolNodeClient {
+	return p.GetOrCreate("")
+}
+
+func (p *singleClientPool) GetOrCreateWithImage(_ string, _ string, _ []string, _ string) ToolNodeClient {
+	return p.GetOrCreate("")
+}
+
+func (p *singleClientPool) GetBackend() Backend {
+	if p == nil {
+		return nil
+	}
+	return p.backend
+}
+
+func (p *singleClientPool) Cleanup() {
+	p.closed = true
+}
+
+func (p *singleClientPool) Alias(_, _ string) {}

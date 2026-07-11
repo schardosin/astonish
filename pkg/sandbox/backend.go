@@ -305,6 +305,9 @@ type SessionSpec struct {
 	Image        string            `json:"image,omitempty"`
 	Limits       ResourceLimits    `json:"limits"`
 	Labels       map[string]string `json:"labels,omitempty"`
+	// Env is injected into the sandbox container at create time (OpenShell/K8s).
+	// Incus fleet sessions inject via LazyNodeClient.Env instead.
+	Env          map[string]string `json:"env,omitempty"`
 }
 
 // SessionFilter narrows ListSessions queries. Zero-value fields are ignored.

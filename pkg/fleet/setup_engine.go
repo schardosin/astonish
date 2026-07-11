@@ -17,6 +17,7 @@ type SetupPlanBuild struct {
 	ChannelSchedule       string
 	Artifacts             map[string]PlanArtifactConfig
 	Credentials           map[string]string
+	CredentialInjection   *CredentialInjection
 	ProjectSource         *ProjectSourceConfig
 	Template              string
 	ContainerWorkspaceDir string
@@ -329,6 +330,12 @@ func applyMapsTo(build *SetupPlanBuild, mapsTo string, val any) error {
 		if len(parts) >= 3 {
 			build.Credentials[parts[2]] = fmt.Sprintf("%v", val)
 		}
+	case "credential_injection":
+		inj, err := ParseCredentialInjection(val)
+		if err != nil {
+			return err
+		}
+		build.CredentialInjection = inj
 	case "project_source":
 		if build.ProjectSource == nil {
 			build.ProjectSource = &ProjectSourceConfig{}

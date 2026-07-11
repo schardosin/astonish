@@ -39,6 +39,10 @@ type FleetPlan struct {
 	// Agents see the logical names in their prompt but never the actual secrets.
 	Credentials map[string]string `yaml:"credentials,omitempty" json:"credentials,omitempty"`
 
+	// CredentialInjection declares env var and file injection for fleet sessions.
+	// When nil, defaults apply (e.g. github → GH_TOKEN).
+	CredentialInjection *CredentialInjection `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"`
+
 	// Environment configuration
 	Channel   PlanChannelConfig             `yaml:"channel" json:"channel"`
 	Artifacts map[string]PlanArtifactConfig `yaml:"artifacts,omitempty" json:"artifacts,omitempty"`
@@ -104,6 +108,7 @@ type fleetPlanYAML struct {
 
 	// FleetPlan-specific fields
 	Credentials           map[string]string             `yaml:"credentials,omitempty"`
+	CredentialInjection   *CredentialInjection          `yaml:"credential_injection,omitempty"`
 	Channel               PlanChannelConfig             `yaml:"channel"`
 	Artifacts             map[string]PlanArtifactConfig `yaml:"artifacts,omitempty"`
 	ProjectSource         *ProjectSourceConfig          `yaml:"project_source,omitempty"`
@@ -131,6 +136,7 @@ func (p *FleetPlan) MarshalYAML() (interface{}, error) {
 		ProjectContext:        p.FleetConfig.ProjectContext,
 		TemplateWorkspaceDir:  p.FleetConfig.WorkspaceBaseDir,
 		Credentials:           p.Credentials,
+		CredentialInjection:   p.CredentialInjection,
 		Channel:               p.Channel,
 		Artifacts:             p.Artifacts,
 		ProjectSource:         p.ProjectSource,
@@ -167,6 +173,7 @@ func (p *FleetPlan) UnmarshalYAML(value *yaml.Node) error {
 		WorkspaceBaseDir: raw.TemplateWorkspaceDir,
 	}
 	p.Credentials = raw.Credentials
+	p.CredentialInjection = raw.CredentialInjection
 	p.Channel = raw.Channel
 	p.Artifacts = raw.Artifacts
 	p.ProjectSource = raw.ProjectSource

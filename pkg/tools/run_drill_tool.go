@@ -41,7 +41,8 @@ type RunDrillResult struct {
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
 	nodePool    *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
-	lazyClient  *sandbox.LazyNodeClient // Fleet sessions (nil for chat sessions)
+	lazyClient  *sandbox.LazyNodeClient // Fleet Incus sessions
+	toolClient  sandbox.ToolNodeClient  // Fleet backend-agnostic sessions
 	sessionID   string                  // Fleet session ID (empty for chat sessions)
 	llmProvider adrill.LLMProvider      // Optional LLM for semantic assertions
 }
@@ -63,6 +64,17 @@ func NewRunDrillTool(nodePool *sandbox.NodeClientPool, llmProvider adrill.LLMPro
 func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
 		lazyClient:  lazyClient,
+		sessionID:   sessionID,
+		llmProvider: llmProvider,
+	}
+	return newRunDrillToolFromDeps(deps)
+}
+
+// NewRunDrillToolWithToolClient creates run_drill for fleet sessions using a
+// backend-agnostic ToolNodeClient (OpenShell/K8s fleet path).
+func NewRunDrillToolWithToolClient(client sandbox.ToolNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+	deps := &runDrillDeps{
+		toolClient:  client,
 		sessionID:   sessionID,
 		llmProvider: llmProvider,
 	}
@@ -377,30 +389,31 @@ type closableExecutor interface {
 
 // buildTestExecutor creates the appropriate executor for the run_drill tool.
 func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
-	// Resolve the LazyNodeClient based on context
-	var lazyClient *sandbox.LazyNodeClient
+	var toolClient sandbox.ToolNodeClient
 	var sessionID string
+	var ipClient *sandbox.LazyNodeClient
 
-	if deps.lazyClient != nil {
-		// Fleet mode: use the pre-injected client
-		lazyClient = deps.lazyClient
+	if deps.toolClient != nil {
+		toolClient = deps.toolClient
 		sessionID = deps.sessionID
+	} else if deps.lazyClient != nil {
+		toolClient = deps.lazyClient
+		sessionID = deps.sessionID
+		ipClient = deps.lazyClient
 	} else if deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" {
-		// Chat mode: resolve from pool
-		lazyClient = deps.nodePool.GetOrCreate(ctx.SessionID())
+		toolClient = deps.nodePool.GetOrCreate(ctx.SessionID())
 		sessionID = ctx.SessionID()
 	}
 
-	// Browser executor (always host-side)
-	hasSandbox := lazyClient != nil
+	hasSandbox := toolClient != nil
 	browserExec := newTestBrowserExecutor(hasSandbox)
 
-	if lazyClient != nil {
-		// Sandbox mode: container tools → LazyNodeClient, browser → host, rest → local
+	if toolClient != nil {
 		return &testCompositeExecutor{
 			sandbox: &testSandboxExecutor{
-				lazyClient: lazyClient,
-				sessionID:  sessionID,
+				client:    toolClient,
+				sessionID: sessionID,
+				ipClient:  ipClient,
 			},
 			browser: browserExec,
 			local:   &testLocalExecutor{},
@@ -445,24 +458,21 @@ func (c *testCompositeExecutor) containerIP() (string, error) {
 	if c.sandbox == nil {
 		return "", fmt.Errorf("no sandbox active")
 	}
-	return c.sandbox.lazyClient.GetContainerIP(c.sandbox.sessionID)
+	if c.sandbox.ipClient != nil {
+		return c.sandbox.ipClient.GetContainerIP(c.sandbox.sessionID)
+	}
+	return "", fmt.Errorf("container IP not available for this sandbox backend")
 }
 
-// testLocalExecutor dispatches to tools.ExecuteTool for local execution.
-type testLocalExecutor struct{}
-
-func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
-	return ExecuteTool(ctx, name, args)
-}
-
-// testSandboxExecutor proxies container tool calls through a LazyNodeClient.
+// testSandboxExecutor proxies container tool calls through a ToolNodeClient.
 type testSandboxExecutor struct {
-	lazyClient *sandbox.LazyNodeClient
-	sessionID  string
+	client    sandbox.ToolNodeClient
+	sessionID string
+	ipClient  *sandbox.LazyNodeClient // optional, Incus only
 }
 
 func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	raw, err := e.lazyClient.Call(e.sessionID, name, args)
+	raw, err := e.client.Call(e.sessionID, name, args)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox call %s: %w", name, err)
 	}
@@ -472,6 +482,13 @@ func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[s
 		return nil, fmt.Errorf("unmarshal sandbox result for %s: %w", name, err)
 	}
 	return result, nil
+}
+
+// testLocalExecutor dispatches to tools.ExecuteTool for local execution.
+type testLocalExecutor struct{}
+
+func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
+	return ExecuteTool(ctx, name, args)
 }
 
 // testBrowserExecutor lazily initializes a browser.Manager and dispatches

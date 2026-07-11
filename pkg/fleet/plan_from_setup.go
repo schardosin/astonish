@@ -73,6 +73,7 @@ func BuildFleetPlanFromSetup(baseCfg *FleetConfig, build *SetupPlanBuild, opts P
 		SetupProfileKey:       build.SetupProfileKey,
 		FleetConfig:           snapshotCfg,
 		Credentials:           build.Credentials,
+		CredentialInjection:   NormalizeCredentialInjection(build.Credentials, build.CredentialInjection),
 		Channel: PlanChannelConfig{
 			Type:     channelType,
 			Config:   build.ChannelConfig,

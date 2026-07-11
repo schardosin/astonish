@@ -111,7 +111,6 @@ steps:
   title: Credentials
   type: credentials
   required: false
-  when: channel.type == 'github_issues'
   fields:
   - id: github
     label: GitHub credential
@@ -119,24 +118,42 @@ steps:
     required: false
     when: channel.type == 'github_issues'
     maps_to: plan.credentials.github
+  - id: trading
+    label: App/providers credential
+    type: credential_ref
+    required: false
+    maps_to: plan.credentials.trading
+  - id: credential_injection
+    label: Credential injection spec
+    type: string
+    required: false
+    maps_to: plan.credential_injection
   prompt: "**For github_issues plans: this step is MANDATORY. Do NOT skip it.**\nGitHub credentials must be in place BEFORE\
     \ any repository operations (cloning,\nAPI calls) in Step 3. Without credentials, clone and validation will fail.\n\n\
-    **For chat plans:** Ask if the plan needs credentials for external services.\nIf the user says no, skip to Step 3.\n\n\
+    **For chat plans:** Ask if the plan needs credentials for external services\n(API keys, provider tokens, config files).\
+    \ If yes, collect them here. If no secrets\nare needed, skip to Step 3.\n\n**How credentials work in Fleet (IMPORTANT):**\n\
+    1. Store secrets in the encrypted credential store with `save_credential`.\n2. Map logical names in `plan.credentials`\
+    \ (e.g., github → github-work-pat,\n   trading → juicytrade-providers).\n3. Declare `credential_injection` so Fleet injects\
+    \ env vars and/or files into\n   the sandbox at session start — secrets are NEVER baked into templates.\n\n\
     **Sub-steps:**\n\n**2a. Check for existing credentials.**\nCall `list_credentials` to see what's already in the credential\
-    \ store.\nIf a \"github\" credential already exists, tell the user:\n\"I found an existing GitHub credential in the store.\
-    \ I'll use that for\nthis plan. Want to use a different one instead?\"\n\n**2b. Collect credential if needed.**\nIf no\
-    \ GitHub credential exists (or the user wants a new one):\n- Explain: \"I need a GitHub Personal Access Token (PAT) to\
-    \ authenticate\n  with GitHub for cloning the repo and posting issue comments. The token\n  needs `repo` scope (full control\
-    \ of private repositories).\"\n- Ask the user for their token value.\n- Use `save_credential` to store it with a descriptive\
-    \ name\n  (e.g., \"github-work-pat\") and the logical name \"github\".\n\n**2c. Validate the credential works.**\nRun\
-    \ a quick check to confirm the credential is valid:\nshell_command(command: \"GH_TOKEN=<token_value> gh auth status\"\
-    )\n\nIf validation fails, tell the user and ask them to provide a corrected token.\nDo NOT proceed to Step 3 until a valid\
-    \ credential is confirmed.\n\nFor other integrations (SSH, external APIs, etc.): ask if any are needed\nand collect the\
-    \ logical name and store entry name for each."
+    \ store.\n\n**2b. Collect and save credentials.**\nFor each required integration:\n- Ask the user for the secret value.\n\
+    - Use `save_credential` to store it (bearer for tokens; api_key with field\n  `value` for YAML/JSON config file contents).\n\
+    - Record the mapping: logical name → store entry name.\n\nFor GitHub (github_issues or private repos):\n- PAT with `repo`\
+    \ scope; logical name `github`.\n- Validate: `test_credential` or `GH_TOKEN=... gh auth status`.\n\nFor config-file apps\
+    \ (e.g., trading providers YAML):\n- Save full file content as api_key type, logical name e.g. `trading`.\n- Declare file\
+    \ injection in `credential_injection` (see 2c).\n\n**2c. Wire credential_injection.**\nCall `update_setup_draft` with\
+    \ a `credential_injection` object describing how\nsecrets reach the container at session start:\n\n```yaml\ncredential_injection:\n\
+    \  env:\n    - credential: github\n      var: GH_TOKEN\n      field: token\n  files:\n    - credential: trading\n\
+    \      path: /root/<app>/config/credentials.yaml\n      field: value\n      format: yaml\n      mode: \"0600\"\n```\n\n\
+    GitHub-only plans: if you omit `credential_injection`, Fleet defaults to\nGH_TOKEN from the `github` credential.\n\n\
+    **2d. Persist mappings in the draft.**\nUse `update_setup_draft` step_id=credentials with:\n- github: <store-name> (when\
+    \ applicable)\n- any other logical names as additional fields\n- credential_injection: { env: [...], files: [...] }\n\n\
+    Do NOT write secrets into sandbox config files during provisioning — only\ninto the credential store + injection spec."
   tools:
   - list_credentials
   - save_credential
   - test_credential
+  - update_setup_draft
 - id: project_source
   title: Project source
   type: form
@@ -273,8 +290,8 @@ steps:
     \ database\n      seeding, license keys, or third-party service connections.\n   2. **Is there a setup wizard or onboarding\
     \ flow in the UI?**\n      If so, I can open it in the browser and walk through it with you.\n   3. **Are there environment\
     \ variables or config files I should set up?**\n   4. **Anything else that needs to happen before the app is production-ready?**\n\
-    \n   The template will be saved AFTER this step, so any configuration done now\n   will be baked into the template and\
-    \ available to all fleet agents.\"\n\n   **WAIT for the user's response.** Do NOT proceed until they confirm.\n\n4. **If\
+    \n   The template will NOT contain secrets. Save credentials with `save_credential`\n   and declare `credential_injection` on the fleet plan — secrets are injected\n   at fleet session start (env vars and file paths), not baked into the image.\"\
+    \n\n   **WAIT for the user's response.** Do NOT proceed until they confirm.\n\n4. **If\
     \ the user says configuration is needed:**\n\n   **For UI-based configuration (setup wizard, onboarding, config pages):**\n\
     \   - Get the container's bridge IP:\n     `shell_command(command: \"hostname -I | awk '{print $1}'\")`\n   - Open the\
     \ UI in the browser:\n     `browser_navigate(url: \"http://<container-ip>:<port>\")`\n   - Use `browser_snapshot` to see\
@@ -282,9 +299,7 @@ steps:
     \ proceed\n     - If you need information (API keys, credentials, etc.), ask the user:\n       \"The page is asking for\
     \ <field>. What should I enter here?\"\n   - Use `browser_take_screenshot` at key steps to show progress\n   - After completing\
     \ the wizard, verify the configuration took effect\n     (re-check the health endpoint, look for status changes, etc.)\n\
-    \n   **For API key / environment variable configuration:**\n   - Ask the user for the real values (NEVER use placeholders)\n\
-    \   - Write them to the appropriate config file or set them in the environment\n   - Verify the service picks up the new\
-    \ configuration\n\n   **For database seeding / initial data:**\n   - Run the seed commands the user provides\n   - Verify\
+    \n   **For API key / environment variable / credentials file configuration:**\n   - Ask the user for values and save with `save_credential` (api_key for YAML/JSON blobs,\n     bearer for tokens)\n   - Map logical names in `plan.credentials` and add `credential_injection` (env + files)\n   - Do NOT write secrets into container config files that will be saved in the template\n   - Verify services using runtime-injected credentials during drill runs\n\n   **For database seeding / initial data:**\n   - Run the seed commands the user provides\n   - Verify\
     \ the data is accessible through the service\n\n   After ALL configuration is complete, re-verify each service:\n   ```\n\
     \   shell_command(command: \"curl -s http://localhost:8080/health\")\n   ```\n   Confirm with the user: \"Configuration\
     \ is complete. All services are\n   responding correctly. Ready to proceed?\"\n\n5. **Stop all services.** Use `process_kill`\
@@ -339,12 +354,13 @@ steps:
     \ fix the drill YAML (not the project — the\n      project was already verified in 3h-v). Adjust assertions, commands,\
     \ or\n     timing, then re-run until all pass.\n\n6. **Stop services.** Use process_kill to stop any background processes\n\
     \   started in sub-step 1. The template must be saved in a quiescent state.\n\n**Do NOT proceed to Step 3j until the drill\
-    \ suite passes.**\n\n**3j. Save the sandbox template.**\n\nOnce the build passes and everything is verified, freeze the\
-    \ container:\n```\nsave_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary, e.g., 'Go\
+    \ suite passes.**\n\n**3j. Save the sandbox template (code + deps only — no secrets).**\n\nOnce the build passes and drills are designed, freeze the baseline environment.\n\
+    On **Incus**, save a sandbox template. On **OpenShell**, save an image/build spec\n    without secrets — credentials are injected at fleet session start via\n    `credential_injection`.\n```\n\
+    save_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary, e.g., 'Go\
     \ 1.24 + Node 22 + project deps'>\")\n```\nUse the repository name (e.g., \"billing-api\" from \"acme/billing-api\") as\n\
     the template name. This keeps naming consistent and predictable.\n\nThe returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
-    `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox template with the project repo and\
-    \ all dependencies\npre-installed. Fleet sessions will start from this template — no setup\ntime needed.\"\n\n**Do NOT\
+    `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
+    `credential_injection` from the encrypted store.\"\n\n**Do NOT\
     \ proceed to step 4 until the template is saved.**"
   tools:
   - save_sandbox_template
@@ -454,13 +470,15 @@ steps:
   required: true
   guidance: Validate configuration and save the fleet plan.
   prompt: "Once all information is collected:\n1. Call **validate_fleet_plan** with channel_type, channel_config, artifacts\n\
-    \   (BOTH code and docs), and credentials. Show the results to the user.\n2. If validation passes, call **save_fleet_plan**\
+    \   (BOTH code and docs), credentials, and credential_injection. Show the results\n   to the user.\n2. If validation passes, call **save_fleet_plan**\
     \ with ALL collected configuration:\n   - key, name, description\n   - base_fleet_key: \"software-dev\"\n   - channel_type,\
-    \ channel_config, channel_schedule\n   - artifacts: BOTH \"code\" and \"docs\" entries\n   - credentials\n   - project_source:\
+    \ channel_config, channel_schedule\n   - artifacts: BOTH \"code\" and \"docs\" entries\n   - credentials\n   - credential_injection\
+    \ (env + files — required for config-file secrets; optional\n     for GitHub-only plans which default to GH_TOKEN)\n   - project_source:\
     \ { type: \"git_repo\", repo: \"<owner/repo>\" }\n   - template: \"<repo-name>\" (the template_name returned by save_sandbox_template\
     \ in step 3j)\n   - container_workspace_dir: \"/root/<repo-name>\" (the project path inside the container)\n   - validation_passed:\
     \ true\n   - include_agents (only if the user requested specific agents)\n3. If validation fails, show what went wrong\
-    \ and help fix it before retrying.\n\nCRITICAL: The credentials map MUST be included in both the validate and save calls.\n\
+    \ and help fix it before retrying.\n\nCRITICAL: The credentials map AND credential_injection MUST be included in both\
+    \ the validate and save calls when the plan uses external secrets.\n\
     If the user provided credentials during the conversation, always pass them through.\n\nCRITICAL: The artifacts map MUST\
     \ include BOTH \"code\" and \"docs\" entries.\nDo NOT save a plan with only a \"code\" artifact.\n\nAfter the plan is\
     \ saved successfully, tell the user what to do next.\n\nThe `save_fleet_plan` tool automatically activates non-chat plans,\

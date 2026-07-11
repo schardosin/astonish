@@ -174,7 +174,11 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for the recovered session (fails if sandbox is enabled but unavailable)
-	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil, ""); err != nil {
+	var credStore store.CredentialStore
+	if fleetStores != nil {
+		credStore = fleetStores.Credentials
+	}
+	if err := wireFleetSandbox(fleetSession, plan, credStore, nil, ""); err != nil {
 		return fmt.Errorf("cannot recover fleet session: %w", err)
 	}
 
@@ -299,7 +303,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
 	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
 	// and other platform-mode resources during execution.
-	runCtx = fleetStores.InjectIntoContext(runCtx)
+	runCtx = fleetStores.InjectIntoContextForPlan(runCtx, plan)
 
 	go func() {
 		defer func() {

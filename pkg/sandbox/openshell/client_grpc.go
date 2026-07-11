@@ -649,6 +649,65 @@ func (s *grpcSandboxEventStream) Close() error {
 	return nil
 }
 
+func (c *grpcGatewayClient) CreateProvider(ctx context.Context, name, providerType string, credentials map[string]string) error {
+	if name == "" {
+		return fmt.Errorf("gateway CreateProvider: name is required")
+	}
+	if credentials == nil {
+		credentials = map[string]string{}
+	}
+	_, err := c.client.CreateProvider(ctx, &pb.CreateProviderRequest{
+		Provider: &pb.Provider{
+			Metadata:    &pb.ObjectMeta{Name: name},
+			Type:        providerType,
+			Credentials: credentials,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("gateway CreateProvider: %w", err)
+	}
+	return nil
+}
+
+func (c *grpcGatewayClient) DeleteProvider(ctx context.Context, name string) error {
+	if name == "" {
+		return nil
+	}
+	_, err := c.client.DeleteProvider(ctx, &pb.DeleteProviderRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("gateway DeleteProvider: %w", err)
+	}
+	return nil
+}
+
+func (c *grpcGatewayClient) AttachSandboxProvider(ctx context.Context, sandboxName, providerName string) error {
+	if sandboxName == "" || providerName == "" {
+		return fmt.Errorf("gateway AttachSandboxProvider: sandbox and provider names are required")
+	}
+	_, err := c.client.AttachSandboxProvider(ctx, &pb.AttachSandboxProviderRequest{
+		SandboxName:  sandboxName,
+		ProviderName: providerName,
+	})
+	if err != nil {
+		return fmt.Errorf("gateway AttachSandboxProvider: %w", err)
+	}
+	return nil
+}
+
+func (c *grpcGatewayClient) DetachSandboxProvider(ctx context.Context, sandboxName, providerName string) error {
+	if sandboxName == "" || providerName == "" {
+		return nil
+	}
+	_, err := c.client.DetachSandboxProvider(ctx, &pb.DetachSandboxProviderRequest{
+		SandboxName:  sandboxName,
+		ProviderName: providerName,
+	})
+	if err != nil {
+		return fmt.Errorf("gateway DetachSandboxProvider: %w", err)
+	}
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

@@ -93,15 +93,34 @@ steps:
     required: false
     summary: External service authentication
     icon: key
-    when: "channel.type == 'github_issues'"
     prompt: |
-      For github_issues plans, credentials are mandatory before any GitHub operations.
-      Call list_credentials first. If no github credential exists, ask for a PAT and save_credential.
-      Test the credential before proceeding.
+      Collect credentials needed by this fleet plan. Secrets are stored in the encrypted
+      credential store via save_credential — never in sandbox templates.
+
+      For each integration:
+      1. save_credential to store the secret (bearer for tokens; api_key/value for YAML/JSON blobs)
+      2. Map logical name → store entry in plan.credentials (via update_setup_draft)
+      3. Declare credential_injection (env vars and/or file paths) for runtime injection
+
+      GitHub (github_issues): mandatory — logical name `github`, validate with test_credential.
+      Config-file apps: save file content as api_key, inject via credential_injection.files.
+
+      Example injection:
+      credential_injection:
+        env:
+          - credential: github
+            var: GH_TOKEN
+            field: token
+        files:
+          - credential: trading
+            path: /root/app/config/credentials.yaml
+            field: value
+            format: yaml
     tools:
       - list_credentials
       - save_credential
       - test_credential
+      - update_setup_draft
     fields:
       - id: github
         label: GitHub credential
@@ -109,6 +128,11 @@ steps:
         required: false
         when: "channel.type == 'github_issues'"
         maps_to: plan.credentials.github
+      - id: credential_injection
+        label: Credential injection spec
+        type: string
+        required: false
+        maps_to: plan.credential_injection
 
   - id: artifacts
     title: Artifact destinations
@@ -172,8 +196,9 @@ steps:
     summary: Validate and save the plan
     icon: check
     prompt: |
-      Summarize collected configuration. Call validate_fleet_plan with channel, credentials, and artifacts.
-      Only call save_fleet_plan after validation passes. Include the same credentials in the save call.
+      Summarize collected configuration. Call validate_fleet_plan with channel, credentials,
+      credential_injection, and artifacts. Only call save_fleet_plan after validation passes.
+      Include the same credentials and credential_injection in the save call.
     tools:
       - validate_fleet_plan
       - save_fleet_plan

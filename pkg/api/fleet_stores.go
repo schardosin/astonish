@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 
+	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -121,6 +122,12 @@ func FleetStoresFromServices(svc *store.Services) *FleetStores {
 // this FleetStores. Returns the enriched context. Safe to call on a nil receiver
 // (returns the original context unchanged — personal mode no-op).
 func (fs *FleetStores) InjectIntoContext(ctx context.Context) context.Context {
+	return fs.InjectIntoContextForPlan(ctx, nil)
+}
+
+// InjectIntoContextForPlan enriches ctx with fleet stores. When plan is non-nil,
+// the credential store is wrapped with a plan-bound allowlist (fleet sessions only).
+func (fs *FleetStores) InjectIntoContextForPlan(ctx context.Context, plan *fleet.FleetPlan) context.Context {
 	if fs == nil {
 		return ctx
 	}
@@ -132,7 +139,13 @@ func (fs *FleetStores) InjectIntoContext(ctx context.Context) context.Context {
 		ctx = store.WithDrillReportStore(ctx, fs.DrillReports)
 	}
 	if fs.Credentials != nil {
-		ctx = store.WithCredentialStore(ctx, fs.Credentials)
+		credStore := fs.Credentials
+		if plan != nil && len(plan.Credentials) > 0 {
+			if bound := fleet.NewPlanBoundCredentialStore(fs.Credentials, plan); bound != nil {
+				credStore = bound
+			}
+		}
+		ctx = store.WithCredentialStore(ctx, credStore)
 	}
 	if fs.Skills != nil {
 		ctx = store.WithSkillStores(ctx, fs.Skills)

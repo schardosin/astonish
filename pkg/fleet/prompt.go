@@ -409,8 +409,21 @@ func buildEnvironmentPromptSection(sb *strings.Builder, plan *FleetPlan, taskSlu
 			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\nCredential secrets are injected into the environment automatically. ")
-		sb.WriteString("Do NOT attempt to read or log credential values.\n")
+		sb.WriteString("\nCredential secrets are injected into the sandbox automatically at session start")
+		inj := plan.EffectiveCredentialInjection()
+		if len(inj.Env) > 0 || len(inj.Files) > 0 {
+			sb.WriteString(" (")
+			var parts []string
+			for _, e := range inj.Env {
+				parts = append(parts, fmt.Sprintf("env %s", e.Var))
+			}
+			for _, f := range inj.Files {
+				parts = append(parts, fmt.Sprintf("file %s", f.Path))
+			}
+			sb.WriteString(strings.Join(parts, ", "))
+			sb.WriteString(")")
+		}
+		sb.WriteString(". Do NOT attempt to read or log credential values.\n")
 		sb.WriteString("\n**Credential Recovery (if authentication fails):**\n")
 		sb.WriteString("If a tool (git, gh, etc.) reports authentication failure or missing credentials, ")
 		sb.WriteString("use the `{{CREDENTIAL:name:field}}` placeholder syntax in `shell_command` to inject secrets at execution time. ")

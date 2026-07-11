@@ -68,6 +68,48 @@ func TestSetupEngine_BuildPlanArgs_SoftwareDevelopment(t *testing.T) {
 	}
 }
 
+func TestSetupEngine_BuildPlanArgs_CredentialInjection(t *testing.T) {
+	profile, ok := GetBundledSetupProfile("software-development")
+	if !ok {
+		t.Fatal("software-development profile not found")
+	}
+	engine := NewSetupEngine(nil)
+	collected := SetupCollected{
+		"channel":        {"type": "chat"},
+		"project_source": {"type": "git_repo", "repo": "acme/app"},
+		"provisioning":   {"template": "app", "container_workspace_dir": "/root/app"},
+		"artifacts":      {"code_repo": "acme/app", "docs_repo": "acme/app"},
+		"identity":       {"key": "app", "name": "App", "description": "test"},
+		"credentials": {
+			"github":  "github-pat",
+			"trading": "juicytrade-providers",
+			"credential_injection": map[string]any{
+				"files": []any{
+					map[string]any{
+						"credential": "trading",
+						"path":       "/root/app/config/credentials.yaml",
+						"field":      "value",
+						"format":     "yaml",
+					},
+				},
+			},
+		},
+	}
+	build, err := engine.BuildPlanArgs(profile, "software-dev", collected)
+	if err != nil {
+		t.Fatalf("BuildPlanArgs: %v", err)
+	}
+	if build.Credentials["trading"] != "juicytrade-providers" {
+		t.Fatalf("credentials = %+v", build.Credentials)
+	}
+	if build.CredentialInjection == nil || len(build.CredentialInjection.Files) != 1 {
+		t.Fatalf("credential_injection = %+v", build.CredentialInjection)
+	}
+	if build.CredentialInjection.Files[0].Path != "/root/app/config/credentials.yaml" {
+		t.Fatalf("file path = %q", build.CredentialInjection.Files[0].Path)
+	}
+}
+
 func TestSetupEngine_ValidateStep_RequiredChannelRepo(t *testing.T) {
 	profile, ok := GetBundledSetupProfile("software-development")
 	if !ok {

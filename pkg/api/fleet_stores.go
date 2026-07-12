@@ -134,6 +134,7 @@ func (fs *FleetStores) InjectIntoContextForPlan(ctx context.Context, plan *fleet
 
 	if fs.Flows != nil {
 		ctx = store.WithFlowStore(ctx, fs.Flows)
+		ctx = store.WithTeamFlowStore(ctx, fs.Flows)
 	}
 	if fs.DrillReports != nil {
 		ctx = store.WithDrillReportStore(ctx, fs.DrillReports)

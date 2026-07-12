@@ -143,11 +143,17 @@ func (cr *ChatRunner) InjectMemorySaveOrMerge(fn store.MemorySaveOrMergeFunc) {
 }
 
 // InjectFlowStore adds a tenant-scoped flow store to the runner's context
-// so that drill tools (save_drill, delete_drill, list_drills, read_drill,
-// edit_drill) and the run_drill tool can read/write flows from the database
-// rather than the local filesystem in platform mode. Must be called before Run().
+// so that flow tools (run_flow, search_flows) can read/write flows from the
+// database rather than the local filesystem in platform mode. Must be called before Run().
 func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
 	cr.ctx = store.WithFlowStore(cr.ctx, fs)
+}
+
+// InjectTeamFlowStore adds the team-scoped flow store to the runner's context.
+// Drill tools use this exclusively (drills are team-only artifacts).
+// Must be called before Run().
+func (cr *ChatRunner) InjectTeamFlowStore(fs store.FlowStore) {
+	cr.ctx = store.WithTeamFlowStore(cr.ctx, fs)
 }
 
 // InjectSkillStores adds tenant-scoped skill stores to the runner's context

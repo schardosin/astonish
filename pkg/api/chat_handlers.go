@@ -947,10 +947,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject composite flow store (personal-first, team-fallback) into the runner
-	// context so that drill tools, run_flow, search_flows, etc. resolve personal
-	// flows first and save to personal. Users promote to team explicitly.
+	// context so that run_flow, search_flows, etc. resolve personal flows first
+	// and save to personal. Users promote to team explicitly.
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		runner.InjectFlowStore(store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+	}
+
+	// Inject team-only flow store for drill tools (drills are team-scoped artifacts).
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		runner.InjectTeamFlowStore(svc.Flows)
 	}
 
 	// Inject tenant-scoped drill report store into the runner context so that

@@ -110,29 +110,23 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	suiteName = strings.TrimSuffix(suiteName, ".yaml")
 	suiteName = strings.TrimSuffix(suiteName, ".yml")
 
-	// Discover the suite — platform mode (DB) or personal mode (filesystem)
+	// Discover the suite from the team-scoped flow store (drills are team-only).
 	var suite *adrill.LoadedSuite
-	if fs := getEffectiveFlowStore(ctx); fs != nil {
-		// Platform mode: load from team-scoped flow store
-		var loadErr error
-		suite, loadErr = loadSuiteFromStore(fs, ctx, suiteName)
-		if loadErr != nil {
-			return RunDrillResult{
-				Status:  "error",
-				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, loadErr),
-			}, nil
-		}
-	} else {
-		// Personal mode: discover from filesystem
-		dirs := adrill.DefaultDrillDirs()
-		var findErr error
-		suite, findErr = adrill.FindSuite(dirs, suiteName)
-		if findErr != nil {
-			return RunDrillResult{
-				Status:  "error",
-				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, findErr),
-			}, nil
-		}
+	fs := getDrillFlowStore(ctx)
+	if fs == nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: "Drill management requires platform mode (team-scoped store not available)",
+		}, nil
+	}
+
+	var loadErr error
+	suite, loadErr = loadSuiteFromStore(fs, ctx, suiteName)
+	if loadErr != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, loadErr),
+		}, nil
 	}
 
 	// Validate the suite

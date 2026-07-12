@@ -2,8 +2,7 @@ package tools
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
+	"context"
 	"strings"
 	"testing"
 
@@ -29,11 +28,11 @@ func TestExecuteRunDrill_EmptySuiteName(t *testing.T) {
 }
 
 func TestExecuteRunDrill_SuiteNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{SuiteName: "nonexistent-suite"})
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{SuiteName: "nonexistent-suite"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,12 +45,12 @@ func TestExecuteRunDrill_SuiteNotFound(t *testing.T) {
 }
 
 func TestExecuteRunDrill_StripYAMLExtension(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	deps := &runDrillDeps{}
 	// This should strip .yaml and then fail with "not found" (not "empty suite name")
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{SuiteName: "someapp.yaml"})
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{SuiteName: "someapp.yaml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,20 +63,17 @@ func TestExecuteRunDrill_StripYAMLExtension(t *testing.T) {
 }
 
 func TestExecuteRunDrill_TestNameNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	// Create a valid suite with one test
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: testapp\ndescription: s\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	os.WriteFile(filepath.Join(flowsDir, "existing-drill.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "existing-drill", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "testapp",
 		TestName:  "nonexistent-drill",
 	})
@@ -93,19 +89,16 @@ func TestExecuteRunDrill_TestNameNotFound(t *testing.T) {
 }
 
 func TestExecuteRunDrill_TagFilterNoMatch(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: testapp\ndescription: s\ndrill_config:\n  tags: [smoke]\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	os.WriteFile(filepath.Join(flowsDir, "smoke-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "smoke-test", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "testapp",
 		Tag:       "regression",
 	})
@@ -121,19 +114,16 @@ func TestExecuteRunDrill_TagFilterNoMatch(t *testing.T) {
 }
 
 func TestExecuteRunDrill_RunsLocally(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: Echo App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "echoapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "echoapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: echoapp\ndescription: echo test\nnodes:\n  - name: echo-step\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo hello-drill-test\"\n    assert:\n      type: contains\n      expected: \"hello-drill-test\""
-	os.WriteFile(filepath.Join(flowsDir, "echo-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "echo-test", drillYAML)
 
 	deps := &runDrillDeps{} // no sandbox
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "echoapp",
 	})
 	if err != nil {
@@ -148,22 +138,19 @@ func TestExecuteRunDrill_RunsLocally(t *testing.T) {
 }
 
 func TestExecuteRunDrill_SingleTestFilter(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "multiapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "multiapp", suiteYAML)
 
 	drill1 := "type: drill\nsuite: multiapp\ndescription: test1\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo aaa\"\n    assert:\n      type: contains\n      expected: aaa"
 	drill2 := "type: drill\nsuite: multiapp\ndescription: test2\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo bbb\"\n    assert:\n      type: contains\n      expected: bbb"
-	os.WriteFile(filepath.Join(flowsDir, "drill-one.yaml"), []byte(drill1), 0o644)
-	os.WriteFile(filepath.Join(flowsDir, "drill-two.yaml"), []byte(drill2), 0o644)
+	fs.SaveFlow(context.Background(), "drill-one", drill1)
+	fs.SaveFlow(context.Background(), "drill-two", drill2)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "multiapp",
 		TestName:  "drill-one",
 	})
@@ -180,19 +167,16 @@ func TestExecuteRunDrill_SingleTestFilter(t *testing.T) {
 }
 
 func TestExecuteRunDrill_AssertionFail(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: Fail App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "failapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "failapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: failapp\ndescription: failing test\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo actual-output\"\n    assert:\n      type: contains\n      expected: \"expected-but-missing\""
-	os.WriteFile(filepath.Join(flowsDir, "fail-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "fail-test", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "failapp",
 	})
 	if err != nil {

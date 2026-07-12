@@ -12,6 +12,7 @@ const credStoreKey contextKey = "astonish_credential_store"
 const memoryStoreKey contextKey = "astonish_memory_store"
 const memorySearcherKey contextKey = "astonish_memory_searcher"
 const flowStoreKey contextKey = "astonish_flow_store"
+const teamFlowStoreKey contextKey = "astonish_team_flow_store"
 const drillReportStoreKey contextKey = "astonish_drill_report_store"
 const sessionIDKey contextKey = "astonish_session_id"
 
@@ -100,6 +101,22 @@ func WithFlowStore(ctx context.Context, fs FlowStore) context.Context {
 // Returns nil if no FlowStore is present (personal mode or tests).
 func FlowStoreFromContext(ctx context.Context) FlowStore {
 	fs, _ := ctx.Value(flowStoreKey).(FlowStore)
+	return fs
+}
+
+// WithTeamFlowStore returns a new context containing the team-scoped FlowStore.
+// Used by drill tools which are always team-scoped (drills are team-level
+// artifacts, never personal). This is separate from the general FlowStore
+// (which may be a composite personal+team store for regular flow tools).
+func WithTeamFlowStore(ctx context.Context, fs FlowStore) context.Context {
+	return context.WithValue(ctx, teamFlowStoreKey, fs)
+}
+
+// TeamFlowStoreFromContext retrieves the team-scoped FlowStore from a context.
+// Returns nil if not in platform mode. Drill tools use this to ensure they
+// always read/write from the team schema.
+func TeamFlowStoreFromContext(ctx context.Context) FlowStore {
+	fs, _ := ctx.Value(teamFlowStoreKey).(FlowStore)
 	return fs
 }
 

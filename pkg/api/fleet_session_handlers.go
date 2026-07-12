@@ -267,6 +267,8 @@ func StartFleetSessionFromPlan(planKey, initialMessage, userID, teamSlug string,
 			}
 			if err := channel.PostMessage(context.Background(), msg); err != nil {
 				slog.Error("failed to post initial message", "component", "fleet", "error", err)
+			} else {
+				fleetSession.DeliverToMailbox(sessionCtx, msg, []string{entryPoint})
 			}
 		}
 
@@ -457,6 +459,9 @@ func FleetStartHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
 			slog.Error("failed to post initial message", "component", "fleet", "error", err)
+		} else {
+			mailCtx := directFleetStores.InjectIntoContextForPlan(context.Background(), fleetSession.Plan)
+			fleetSession.DeliverToMailbox(mailCtx, initialMsg, []string{entryPoint})
 		}
 	}
 
@@ -976,11 +981,26 @@ func FleetSessionStreamHandler(w http.ResponseWriter, r *http.Request) {
 			prevMailboxDeliveredCallback(recipient, sender)
 		}
 	}
+	prevTaskEventCallback := fs.OnTaskEvent
+	fs.OnTaskEvent = func(event string, task store.FleetTask) {
+		safeSendSSE(event, map[string]interface{}{
+			"session_id":            sessionID,
+			"task_id":               task.ID.String(),
+			"title":                 task.Title,
+			"status":                task.Status,
+			"claimed_by":            task.ClaimedBy,
+			"required_capabilities": task.RequiredCapabilities,
+		})
+		if prevTaskEventCallback != nil {
+			prevTaskEventCallback(event, task)
+		}
+	}
 	defer func() {
 		fs.OnStateChange = prevStateCallback
 		fs.OnAgentStarted = prevAgentStartedCallback
 		fs.OnAgentFinished = prevAgentFinishedCallback
 		fs.OnMailboxDelivered = prevMailboxDeliveredCallback
+		fs.OnTaskEvent = prevTaskEventCallback
 	}()
 
 	// Also update the persistent meta with message count on each new message

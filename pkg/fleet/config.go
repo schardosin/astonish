@@ -289,19 +289,15 @@ type FleetSettings struct {
 	// RoutingMode: "llm_mentions" (default) | "explicit_queue" | "supervisor"
 	RoutingMode string `yaml:"routing_mode,omitempty" json:"routing_mode,omitempty"`
 
-	// CommunicationMode: "shared_channel" (default) | "mailbox"
-	CommunicationMode string `yaml:"communication_mode,omitempty" json:"communication_mode,omitempty"`
-
-	// TaskBoard enables the durable task board (optional).
+	// TaskBoard configures the durable task board (always on).
 	TaskBoard *TaskBoardConfig `yaml:"task_board,omitempty" json:"task_board,omitempty"`
 
 	// MemoryVisibility: "scoped" (default) | "shared" | "private_plus_handoffs"
 	MemoryVisibility string `yaml:"memory_visibility,omitempty" json:"memory_visibility,omitempty"`
 }
 
-// TaskBoardConfig configures the optional durable task board.
+// TaskBoardConfig configures the durable task board claim policy.
 type TaskBoardConfig struct {
-	Enabled     bool   `yaml:"enabled" json:"enabled"`
 	ClaimPolicy string `yaml:"claim_policy,omitempty" json:"claim_policy,omitempty"` // "first_come" | "capability_match" | "supervisor_assigned"
 }
 
@@ -329,12 +325,12 @@ func (s *FleetSettings) GetRoutingMode() string {
 	return s.RoutingMode
 }
 
-// GetCommunicationMode returns the communication mode, defaulting to "shared_channel".
-func (s *FleetSettings) GetCommunicationMode() string {
-	if s.CommunicationMode == "" {
-		return "shared_channel"
+// GetClaimPolicy returns the task board claim policy, defaulting to "capability_match".
+func (s *FleetSettings) GetClaimPolicy() string {
+	if s.TaskBoard == nil || s.TaskBoard.ClaimPolicy == "" {
+		return "capability_match"
 	}
-	return s.CommunicationMode
+	return s.TaskBoard.ClaimPolicy
 }
 
 // GetMemoryVisibility returns the memory visibility policy, defaulting to "scoped".
@@ -510,12 +506,6 @@ func (f *FleetConfig) Validate() error {
 func (f *FleetConfig) validateSettings() error {
 	s := f.Settings
 
-	switch s.CommunicationMode {
-	case "", "shared_channel", "mailbox":
-	default:
-		return fmt.Errorf("fleet %q: communication_mode must be 'shared_channel' or 'mailbox', got %q", f.Name, s.CommunicationMode)
-	}
-
 	switch s.MemoryVisibility {
 	case "", "scoped", "shared", "private_plus_handoffs":
 	default:
@@ -560,22 +550,24 @@ func (f *FleetConfig) validateSettings() error {
 		}
 	}
 
-	if s.TaskBoard != nil && s.TaskBoard.Enabled {
-		hasClaims := false
-		for _, agent := range f.Agents {
-			if agent.TaskPolicy != nil && len(agent.TaskPolicy.Claims) > 0 {
-				hasClaims = true
-				break
-			}
+	hasClaims := false
+	for _, agent := range f.Agents {
+		if agent.TaskPolicy != nil && len(agent.TaskPolicy.Claims) > 0 {
+			hasClaims = true
+			break
 		}
-		if !hasClaims {
-			return fmt.Errorf("fleet %q: task_board.enabled requires at least one agent with task_policy.claims", f.Name)
+	}
+	if !hasClaims {
+		return fmt.Errorf("fleet %q: at least one agent must declare task_policy.claims (task board is always on)", f.Name)
+	}
+	switch s.GetClaimPolicy() {
+	case "first_come", "capability_match", "supervisor_assigned":
+	default:
+		policy := ""
+		if s.TaskBoard != nil {
+			policy = s.TaskBoard.ClaimPolicy
 		}
-		switch s.TaskBoard.ClaimPolicy {
-		case "", "first_come", "capability_match", "supervisor_assigned":
-		default:
-			return fmt.Errorf("fleet %q: task_board.claim_policy must be 'first_come', 'capability_match', or 'supervisor_assigned', got %q", f.Name, s.TaskBoard.ClaimPolicy)
-		}
+		return fmt.Errorf("fleet %q: task_board.claim_policy must be 'first_come', 'capability_match', or 'supervisor_assigned', got %q", f.Name, policy)
 	}
 
 	return nil

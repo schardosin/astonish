@@ -217,7 +217,24 @@ const fleetPlanStoreKey contextKey = "astonish_fleet_plan_store"
 const fleetRunStateStoreKey contextKey = "astonish_fleet_run_state_store"
 const fleetMailboxStoreKey contextKey = "astonish_fleet_mailbox_store"
 const fleetTaskBoardStoreKey contextKey = "astonish_fleet_task_board_store"
-const fleetTaskBoardEnabledKey contextKey = "astonish_fleet_task_board_enabled"
+const fleetTaskEventHandlerKey contextKey = "astonish_fleet_task_event_handler"
+
+// FleetTaskEventHandler notifies listeners when a task board entry changes.
+type FleetTaskEventHandler func(event string, task FleetTask)
+
+// WithFleetTaskEventHandler attaches a task-board event callback to ctx.
+func WithFleetTaskEventHandler(ctx context.Context, h FleetTaskEventHandler) context.Context {
+	return context.WithValue(ctx, fleetTaskEventHandlerKey, h)
+}
+
+// FleetTaskEventHandlerFromContext returns the task event handler, if any.
+func FleetTaskEventHandlerFromContext(ctx context.Context) FleetTaskEventHandler {
+	if ctx == nil {
+		return nil
+	}
+	h, _ := ctx.Value(fleetTaskEventHandlerKey).(FleetTaskEventHandler)
+	return h
+}
 
 // WithFleetTemplateStore returns a new context containing a tenant-scoped FleetTemplateStore.
 // Used to propagate the PG fleet template store into the ADK runner context so that
@@ -293,21 +310,6 @@ func FleetTaskBoardStoreFromContext(ctx context.Context) FleetTaskBoardStore {
 	}
 	fs, _ := ctx.Value(fleetTaskBoardStoreKey).(FleetTaskBoardStore)
 	return fs
-}
-
-// WithFleetTaskBoardEnabled marks whether fleet task-board tools are enabled
-// for the current session.
-func WithFleetTaskBoardEnabled(ctx context.Context, enabled bool) context.Context {
-	return context.WithValue(ctx, fleetTaskBoardEnabledKey, enabled)
-}
-
-// FleetTaskBoardEnabledFromContext reports whether task-board tools may run.
-func FleetTaskBoardEnabledFromContext(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	enabled, _ := ctx.Value(fleetTaskBoardEnabledKey).(bool)
-	return enabled
 }
 
 const sandboxTemplateKey contextKey = "astonish_sandbox_template"

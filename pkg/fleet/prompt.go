@@ -245,9 +245,13 @@ func buildGenericOrchestrationPromptSection(sb *strings.Builder, agentCfg FleetA
 		}
 	}
 
-	if fleetCfg != nil && fleetCfg.Settings.TaskBoard != nil && fleetCfg.Settings.TaskBoard.Enabled {
+	if fleetCfg != nil {
+		sb.WriteString("\n## Mailbox\n\n")
+		sb.WriteString("You receive work through your durable mailbox (messages addressed to you).\n")
+		sb.WriteString("Do not expect a full shared transcript of every agent turn.\n")
+
 		sb.WriteString("\n## Task Board\n\n")
-		sb.WriteString("This fleet has a durable task board enabled.\n")
+		sb.WriteString("This fleet uses a durable task board for trackable work items.\n")
 		sb.WriteString("- Use `fleet_task_post` to create a task with a title, description, and required capabilities.\n")
 		sb.WriteString("- Use `fleet_task_complete` when you finish a task you are responsible for.\n")
 		sb.WriteString("- Use `fleet_task_fail` with a clear reason if a task cannot be completed.\n")

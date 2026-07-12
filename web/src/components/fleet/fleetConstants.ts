@@ -46,8 +46,6 @@ export const FLEET_WORKSPACE_MODES = ['shared', 'isolated', 'none'] as const
 
 export const FLEET_ROUTING_MODES = ['llm_mentions', 'explicit_queue', 'supervisor'] as const
 
-export const FLEET_COMMUNICATION_MODES = ['shared_channel', 'mailbox'] as const
-
 export const FLEET_MEMORY_VISIBILITY = ['scoped', 'shared', 'private_plus_handoffs'] as const
 
 export const FLEET_TASK_CLAIM_POLICIES = ['first_come', 'capability_match', 'supervisor_assigned'] as const

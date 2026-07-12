@@ -174,15 +174,18 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	// For GitHub channels, this stays in-memory only (the issue body IS the
 	// initial message; we do not re-post it as a comment).
 	if cfg.InitialMsg != "" {
+		entryPoint := fleetCfg.GetEntryPoint()
 		initialMsg := fleet.Message{
-			Sender:    "customer",
-			Text:      cfg.InitialMsg,
-			Timestamp: time.Now(),
+			Sender:     "customer",
+			Text:       cfg.InitialMsg,
+			MemoryKeys: []string{entryPoint},
+			Timestamp:  time.Now(),
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
 			slog.Error("failed to post initial message", "component", "fleet-headless", "error", err)
 			return "", err
 		}
+		fleetSession.DeliverToMailbox(runCtx, initialMsg, []string{entryPoint})
 		if fleetSession.OnMessagePosted != nil {
 			fleetSession.OnMessagePosted(initialMsg)
 		}

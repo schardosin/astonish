@@ -10,7 +10,6 @@ import {
   FLEET_AGENT_MODES,
   FLEET_CAPABILITY_GROUPS,
   FLEET_CAPABILITY_REGISTRY,
-  FLEET_COMMUNICATION_MODES,
   FLEET_MEMORY_VISIBILITY,
   FLEET_ROUTING_MODES,
   FLEET_TASK_CLAIM_POLICIES,
@@ -162,13 +161,6 @@ export function FleetSettingsEditor({ settings, setupProfileKey, setupProfiles, 
           disabled={disabled}
         />
         <SelectField
-          label="Communication mode"
-          value={draft.communication_mode || 'shared_channel'}
-          options={[...FLEET_COMMUNICATION_MODES]}
-          onChange={v => update('communication_mode', v as FleetSettings['communication_mode'])}
-          disabled={disabled}
-        />
-        <SelectField
           label="Memory visibility"
           value={draft.memory_visibility || 'scoped'}
           options={[...FLEET_MEMORY_VISIBILITY]}
@@ -177,21 +169,14 @@ export function FleetSettingsEditor({ settings, setupProfileKey, setupProfiles, 
         />
       </div>
       <div className="rounded-lg p-3 space-y-3" style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-color)' }}>
-        <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-          <input
-            type="checkbox"
-            checked={draft.task_board?.enabled || false}
-            disabled={disabled}
-            onChange={e => update('task_board', { ...(draft.task_board || { claim_policy: 'first_come' }), enabled: e.target.checked })}
-            className="accent-cyan-500"
-          />
-          Enable task board
-        </label>
+        <p className="text-xs font-medium" style={{ color: 'var(--text-secondary)' }}>
+          Task board (always on) — durable work items claimed by capability match
+        </p>
         <SelectField
           label="Task claim policy"
-          value={draft.task_board?.claim_policy || 'first_come'}
+          value={draft.task_board?.claim_policy || 'capability_match'}
           options={[...FLEET_TASK_CLAIM_POLICIES]}
-          onChange={v => update('task_board', { ...(draft.task_board || { enabled: false }), claim_policy: v as NonNullable<FleetSettings['task_board']>['claim_policy'] })}
+          onChange={v => update('task_board', { ...(draft.task_board || {}), claim_policy: v as NonNullable<FleetSettings['task_board']>['claim_policy'] })}
           disabled={disabled}
         />
       </div>
@@ -654,7 +639,6 @@ function AgentDrawer({
 
   const enabledCaps = enabledCapabilityKeys(draft.capabilities)
   const taskClaims = draft.task_policy?.claims || []
-  const taskBoardEnabled = Boolean(fleetSettings?.task_board?.enabled)
   const optionalDefaultOpen = agentHasOptionalFields(agent)
 
   const setCapabilities = (keys: string[]) => {
@@ -775,22 +759,20 @@ function AgentDrawer({
               selected={enabledCaps}
               onChange={setCapabilities}
               disabled={readOnly}
-              hint="Optional tags for prompts and task-board matching. Leave empty unless you need them."
+              hint="Tags for prompts and task-board matching."
             />
 
-            {taskBoardEnabled && (
-              <div className="space-y-3">
-                <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Task board</p>
-                <CapabilityPicker
-                  label="Task claims"
-                  selected={taskClaims}
-                  onChange={setTaskClaims}
-                  disabled={readOnly}
-                  hint="Capabilities this agent will claim from the task board."
-                />
-                <NumberField label="Task max concurrent" value={draft.task_policy?.max_concurrent} onChange={v => update('task_policy', { ...(draft.task_policy || {}), max_concurrent: v })} disabled={readOnly} />
-              </div>
-            )}
+            <div className="space-y-3">
+              <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Task board</p>
+              <CapabilityPicker
+                label="Task claims"
+                selected={taskClaims}
+                onChange={setTaskClaims}
+                disabled={readOnly}
+                hint="Capabilities this agent will claim from the task board."
+              />
+              <NumberField label="Task max concurrent" value={draft.task_policy?.max_concurrent} onChange={v => update('task_policy', { ...(draft.task_policy || {}), max_concurrent: v })} disabled={readOnly} />
+            </div>
           </OptionalCollapsibleSection>
 
           {error && <p className="text-xs text-red-400">{error}</p>}

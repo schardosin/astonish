@@ -8,7 +8,7 @@ Multi-agent orchestration: fleets are reusable templates that describe a graph o
 - Durable runtime (`recovery.go` + team stores): `FleetRunState`, mailbox, task board via `pkg/store` interfaces.
 - Plan activation and registry (`plan_activator.go`, `plan_registry.go`): `PlanActivator`, `PlanRegistry`, `PlanSummary`, `SchedulerJob`.
 - Channel bridges (`channel.go`, `channel_github.go`, `github_reporter.go`): outbound reporting into channel adapters.
-- `Message` — the internal envelope passed between fleet agents (shared-channel mode). Mailbox mode layers durable per-recipient messages alongside `Channel` without changing the interface.
+- `Message` — the internal envelope posted to Channel for SSE/transcript; durable per-recipient mailbox is the agent-facing source of truth for handoffs.
 - `monitor_state.go` — GitHub poll cursor only; not session run-state. Do not conflate with `FleetRunState`.
 - Bundled templates (`bundled/*.yaml`, `IsBundledKey`) — Astonish-shipped, immutable; custom templates live in the team DB under non-bundled keys.
 - Setup profiles (`setup_profile.go`, `setup_engine.go`, `setup_prompt.go`, `setup_tool_catalog.go`, `setup_step_presets.go`, `bundled/setup-profiles/`) — reusable plan-creation steps decoupled from templates. Templates reference profiles via `setup_profile:`; do not embed new `plan_wizard` blocks.
@@ -18,7 +18,7 @@ Multi-agent orchestration: fleets are reusable templates that describe a graph o
 - A **fleet** is a static description (YAML/schema) of agents + their allowed delegations. A **fleet session** is a live run of a fleet.
 - Plans are activated (`PlanActivator`) either by user action or by `SchedulerJob` (see `pkg/scheduler/AGENTS.md` — the scheduler triggers activation on a cron tick).
 - The GitHub channel adapter (`channel_github.go`, `github_reporter.go`) posts progress/results to GitHub issues; do not couple fleet logic to any specific channel — keep the channel-agnostic path through `pkg/channels`.
-- **Serial regression floor:** when `MaxParallelAgents ≤ 1`, `CommunicationMode == shared_channel`, and task board disabled, behavior matches the historical serial loop.
+- **Serial regression floor:** when `MaxParallelAgents ≤ 1`, runtime uses serial activation with durable mailbox + always-on task board (no shared_channel mode).
 - **Parallel dispatch:** when `MaxParallelAgents ≥ 2` and agents are `execution.parallelizable`, the dispatcher may activate a fan-out batch concurrently (e.g. `@qa` + `@e2e`).
 - **Bundled templates are immutable.** Embedded keys always win on GET/LIST. PUT/DELETE of a bundled key must fail (`store.ErrBundledTemplateImmutable` / HTTP 409). Customize via clone to a new key stored in the team DB. Same-key DB orphan rows are left in place but ignored (no boot-time migration).
 - **`CapabilityRegistry` is advisory and domain-neutral.** The editor surfaces generic capability hints; templates may declare any free-form capability name (e.g. `code.write`, `genetics.analysis`). Only `supervisor` has special meaning when `routing_mode: supervisor`.

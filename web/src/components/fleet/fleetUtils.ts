@@ -73,8 +73,7 @@ export interface FleetSettings {
   max_parallel_agents?: number
   max_wall_clock_minutes?: number
   routing_mode?: 'llm_mentions' | 'explicit_queue' | 'supervisor'
-  communication_mode?: 'shared_channel' | 'mailbox'
-  task_board?: { enabled: boolean; claim_policy?: 'first_come' | 'capability_match' | 'supervisor_assigned' }
+  task_board?: { claim_policy?: 'first_come' | 'capability_match' | 'supervisor_assigned' }
   memory_visibility?: 'scoped' | 'shared' | 'private_plus_handoffs'
   [k: string]: unknown
 }

@@ -33,6 +33,8 @@ agents:
       timeout_minutes: 30
     memory:
       private_work: false
+    task_policy:
+      claims: [planning, requirements, supervisor]
     identity: |
       You are a Product Owner with deep expertise in requirements engineering.
       You refine raw requests into complete, actionable specifications with
@@ -48,10 +50,21 @@ agents:
       - web_fetch
       - grep_search
       - file_tree
+      - fleet_task_post
+      - fleet_task_complete
+      - fleet_task_fail
     behaviors: |
       You are the team leader and the primary interface between the team and the
       customer (the human). You coordinate all work by delegating to the right
       team member based on the type of request.
+
+      **Task board (required for trackable work):**
+      Before handing work to another agent, create a durable task with
+      `fleet_task_post` using `required_capabilities` that match the next role
+      (e.g. design.architecture for @architect, design.ux for @ux, code.write
+      for @dev, code.test/code.review for @qa, code.test/ops.observe for @e2e).
+      Then @mention that agent so they receive the mailbox handoff.
+      Do NOT use the task board for greetings or pure conversation.
 
       **Your primary job is to understand and document what the customer wants.**
       When a customer sends a request — even a short, vague, or two-line
@@ -249,6 +262,8 @@ agents:
       timeout_minutes: 45
     memory:
       private_work: true
+    task_policy:
+      claims: [design.architecture]
     identity: |
       You are a Software Architect with deep expertise in system design.
       You design technical solutions with component diagrams (mermaid),
@@ -262,6 +277,8 @@ agents:
       - write_file
       - grep_search
       - file_tree
+      - fleet_task_complete
+      - fleet_task_fail
     delegate:
       tool: opencode
       env: [BIFROST_API_KEY]
@@ -272,6 +289,9 @@ agents:
         implementing source code. Implementation is the developer's job.
     behaviors: |
       You design technical solutions based on approved requirements.
+
+      When you finish or cannot complete your claimed task, call
+      `fleet_task_complete` or `fleet_task_fail` with a clear result/reason.
 
       **Communication rules:**
       - You report to @po. All your output goes back to the PO for review.
@@ -365,6 +385,8 @@ agents:
       parallelizable: false
       workspace: shared
       timeout_minutes: 30
+    task_policy:
+      claims: [design.ux]
     identity: |
       You are a UX Designer with deep expertise in user experience and interface
       design. You evaluate UI changes for usability, visual hierarchy, layout
@@ -378,6 +400,8 @@ agents:
       - write_file
       - grep_search
       - file_tree
+      - fleet_task_complete
+      - fleet_task_fail
     delegate:
       tool: opencode
       env: [BIFROST_API_KEY]
@@ -389,6 +413,9 @@ agents:
     behaviors: |
       You evaluate UI changes and produce design guidance that ensures new
       elements integrate well with the existing interface.
+
+      When you finish or cannot complete your claimed task, call
+      `fleet_task_complete` or `fleet_task_fail` with a clear result/reason.
 
       **Communication rules:**
       - You report to @po. All your output goes back to the PO for review.
@@ -488,6 +515,8 @@ agents:
       parallelizable: false
       workspace: shared
       timeout_minutes: 60
+    task_policy:
+      claims: [code.write, code.test]
     identity: |
       You are a Senior Developer with deep expertise in software engineering.
       You write clean, well-tested, production-quality code that follows
@@ -501,6 +530,8 @@ agents:
       - write_file
       - grep_search
       - file_tree
+      - fleet_task_complete
+      - fleet_task_fail
     delegate:
       tool: opencode
       env: [BIFROST_API_KEY]
@@ -511,6 +542,9 @@ agents:
         approach including writing code, running tests, and fixing issues.
     behaviors: |
       You implement solutions based on requirements and technical design.
+
+      When you finish or cannot complete your claimed task, call
+      `fleet_task_complete` or `fleet_task_fail` with a clear result/reason.
 
       **Communication rules:**
       - You report to @po. All your output goes back to the PO for review.
@@ -622,6 +656,8 @@ agents:
       parallelizable: true
       workspace: shared
       timeout_minutes: 45
+    task_policy:
+      claims: [code.test, code.review]
     identity: |
       You are a QA Engineer with deep expertise in software quality.
       You validate implementations against requirements. You write
@@ -634,6 +670,8 @@ agents:
       - write_file
       - grep_search
       - file_tree
+      - fleet_task_complete
+      - fleet_task_fail
     delegate:
       tool: opencode
       env: [BIFROST_API_KEY]
@@ -644,6 +682,9 @@ agents:
         it a clear, concise goal and let it plan its own approach.
     behaviors: |
       You test implementations against requirements and acceptance criteria.
+
+      When you finish or cannot complete your claimed task, call
+      `fleet_task_complete` or `fleet_task_fail` with a clear result/reason.
 
       **Communication rules:**
       - You report to @po. All your output goes back to the PO for review.
@@ -730,6 +771,8 @@ agents:
       parallelizable: true
       workspace: shared
       timeout_minutes: 60
+    task_policy:
+      claims: [code.test, ops.observe]
     identity: |
       You are an E2E Test Engineer specializing in deterministic end-to-end
       tests using Astonish drill suites. You test from the end user's
@@ -762,6 +805,8 @@ agents:
       - browser_hover
       - browser_press_key
       - browser_select_option
+      - fleet_task_complete
+      - fleet_task_fail
       - browser_fill_form
       - browser_snapshot
       - browser_take_screenshot
@@ -781,6 +826,9 @@ agents:
       test sequences that execute without AI at runtime — every step is a tool
       call with a deterministic assertion. This makes them fast, free (zero LLM
       cost), and perfectly reproducible.
+
+      When you finish or cannot complete your claimed task, call
+      `fleet_task_complete` or `fleet_task_fail` with a clear result/reason.
 
       **Communication rules:**
       - You report to @po. All your output goes back to the PO for review.
@@ -1125,10 +1173,9 @@ settings:
   max_parallel_agents: 2
   max_wall_clock_minutes: 180
   routing_mode: llm_mentions
-  communication_mode: shared_channel
   memory_visibility: scoped
   task_board:
-    enabled: false
+    claim_policy: capability_match
 
 project_context:
   generator: opencode_init

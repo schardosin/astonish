@@ -29,6 +29,8 @@ agents:
   po:
     name: Product Owner
     identity: You are a product owner.
+    task_policy:
+      claims: [planning]
     tools:
       - read_file
       - write_file
@@ -37,12 +39,16 @@ agents:
   dev:
     name: Developer
     identity: You are a developer.
+    task_policy:
+      claims: [code.write]
     tools: true
     behaviors: |
       When receiving a task, implement it.
   qa:
     name: QA Engineer
     identity: You are a QA engineer.
+    task_policy:
+      claims: [code.test]
     tools: true
     behaviors: |
       When receiving code, test it.
@@ -61,6 +67,8 @@ agents:
   dev:
     name: Developer
     identity: You are a developer.
+    task_policy:
+      claims: [code.write]
     delegate:
       tool: opencode
       params:
@@ -320,7 +328,7 @@ func TestFleetValidate_CommunicationCustomerAllowed(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"po": {Name: "Product Owner", Identity: "You are a product owner.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"po": baseAgent("Product Owner"),
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -519,12 +527,7 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 	fleet := &FleetConfig{
 		Name: "saved-fleet",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {
-				Name:      "Developer",
-				Identity:  "You are a developer.",
-				Tools:     ToolsConfig{All: true},
-				Behaviors: "implement stuff",
-			},
+			"dev": baseAgent("Developer"),
 		},
 	}
 
@@ -2577,8 +2580,8 @@ func TestFleetSettings_NewDefaults(t *testing.T) {
 	if s.GetRoutingMode() != "llm_mentions" {
 		t.Errorf("expected default routing_mode llm_mentions, got %q", s.GetRoutingMode())
 	}
-	if s.GetCommunicationMode() != "shared_channel" {
-		t.Errorf("expected default communication_mode shared_channel, got %q", s.GetCommunicationMode())
+	if s.GetClaimPolicy() != "capability_match" {
+		t.Errorf("expected default claim_policy capability_match, got %q", s.GetClaimPolicy())
 	}
 	if s.GetMemoryVisibility() != "scoped" {
 		t.Errorf("expected default memory_visibility scoped, got %q", s.GetMemoryVisibility())
@@ -2606,6 +2609,7 @@ func TestFleetAgentConfig_ExecutionHelpers(t *testing.T) {
 func baseAgent(name string) FleetAgentConfig {
 	return FleetAgentConfig{
 		Name: name, Identity: "id", Behaviors: "behave", Tools: ToolsConfig{All: true},
+		TaskPolicy: &AgentTaskPolicy{Claims: []string{"generic"}},
 	}
 }
 
@@ -2726,11 +2730,12 @@ func TestFleetValidate_TaskBoardRequiresClaims(t *testing.T) {
 	t.Parallel()
 	f := &FleetConfig{
 		Name: "t",
-		Agents: map[string]FleetAgentConfig{"a": baseAgent("A")},
-		Settings: FleetSettings{TaskBoard: &TaskBoardConfig{Enabled: true}},
+		Agents: map[string]FleetAgentConfig{
+			"a": {Name: "A", Identity: "id", Behaviors: "behave", Tools: ToolsConfig{All: true}},
+		},
 	}
 	if err := f.Validate(); err == nil {
-		t.Fatal("expected error when task board enabled without claims")
+		t.Fatal("expected error when no agent has task_policy.claims")
 	}
 	a := baseAgent("A")
 	a.TaskPolicy = &AgentTaskPolicy{Claims: []string{"code.test"}}
@@ -2746,7 +2751,6 @@ func TestFleetValidate_InvalidEnums(t *testing.T) {
 		name string
 		mut  func(*FleetConfig)
 	}{
-		{"comm", func(f *FleetConfig) { f.Settings.CommunicationMode = "telepathy" }},
 		{"memory", func(f *FleetConfig) { f.Settings.MemoryVisibility = "telepathy" }},
 		{"routing", func(f *FleetConfig) { f.Settings.RoutingMode = "telepathy" }},
 		{"workspace", func(f *FleetConfig) {
@@ -2755,10 +2759,7 @@ func TestFleetValidate_InvalidEnums(t *testing.T) {
 			f.Agents["a"] = a
 		}},
 		{"claim_policy", func(f *FleetConfig) {
-			a := baseAgent("A")
-			a.TaskPolicy = &AgentTaskPolicy{Claims: []string{"x"}}
-			f.Agents["a"] = a
-			f.Settings.TaskBoard = &TaskBoardConfig{Enabled: true, ClaimPolicy: "random"}
+			f.Settings.TaskBoard = &TaskBoardConfig{ClaimPolicy: "random"}
 		}},
 	}
 	for _, tc := range cases {
@@ -2794,9 +2795,8 @@ func TestFleetConfig_NewFieldsRoundTrip(t *testing.T) {
 			MaxParallelAgents:   2,
 			MaxWallClockMinutes: 60,
 			RoutingMode:         "llm_mentions",
-			CommunicationMode:   "mailbox",
 			MemoryVisibility:    "private_plus_handoffs",
-			TaskBoard:           &TaskBoardConfig{Enabled: true, ClaimPolicy: "capability_match"},
+			TaskBoard:           &TaskBoardConfig{ClaimPolicy: "capability_match"},
 		},
 	}
 	data, err := yaml.Marshal(f)
@@ -2808,10 +2808,10 @@ func TestFleetConfig_NewFieldsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := parsed.Validate(); err != nil {
-		t.Fatalf("validate after round-trip: %v", err)
+		t.Fatalf("validate: %v", err)
 	}
-	if parsed.Settings.MaxParallelAgents != 2 || parsed.Settings.CommunicationMode != "mailbox" {
-		t.Errorf("settings round-trip failed: %+v", parsed.Settings)
+	if parsed.Settings.MaxParallelAgents != 2 || parsed.Settings.GetClaimPolicy() != "capability_match" {
+		t.Fatalf("settings round-trip: %+v", parsed.Settings)
 	}
 	pa := parsed.Agents["a"]
 	if !pa.Capabilities["code.write"] || !pa.IsParallelizable() || pa.GetWorkspace() != "isolated" {

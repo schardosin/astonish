@@ -1,6 +1,9 @@
 # Fleet — Generic Orchestration Extensions (Backend + Editor UI + Software-Dev Migration)
 
 **Status:** IMPLEMENTED (M1–M12) — worker session completed schema, durable stores, parallel dispatcher, API/SSE, editor UI, and software-dev upgrade.
+
+**Current product mode (post cutover):** Durable **mailbox** is the sole agent-context substrate. The **task board is always on** (`claim_policy` defaults to `capability_match`). `CommunicationMode` / `shared_channel` and `TaskBoard.Enabled` have been removed. Channel remains for SSE, transcript, and external posts only.
+
 **Author:** Prometheus (planning).
 **Base commit:** current `HEAD` on the working branch.
 **Scope:** `pkg/fleet/**`, `pkg/api/fleet_*.go`, `pkg/tools/fleet_plan_*.go`, `ent/team/schema/*.go`, `pkg/store/**` (interfaces) + `pkg/store/entstore/**` (impls), `pkg/daemon/run.go` (wiring), `web/src/components/**` (Fleet views + editor) + `web/src/api/fleetChat.ts`, `pkg/fleet/bundled/software-dev.yaml`, tests under `tests/e2e/fleet_*`.
@@ -712,13 +715,12 @@ Non-breaking edits (existing plans keep parsing; only new fields are added):
 ```yaml
 settings:
   max_turns_per_agent: 20
-  max_parallel_agents: 2           # NEW — enables QA + E2E in parallel after Dev commits
+  max_parallel_agents: 2           # enables QA + E2E in parallel after Dev commits
   max_wall_clock_minutes: 180
-  routing_mode: llm_mentions       # unchanged behavior for PO handoffs
-  communication_mode: shared_channel
+  routing_mode: llm_mentions
   memory_visibility: scoped
   task_board:
-    enabled: false                 # software-dev keeps LLM-mentions routing; task board is opt-in per plan
+    claim_policy: capability_match # task board always on; PO posts with required_capabilities
 
 agents:
   po:
@@ -848,7 +850,7 @@ Each milestone must:
 3. **Inline Report Rendering Contract** (root `AGENTS.md`): new SSE events do not overlap `report_marker`; `` ```astonish-report `` semantics are frozen. New events fire on the fleet stream (`fleet_*` prefix), not the chat stream.
 4. **`pkg/fleet/AGENTS.md` "When editing" rules**: schema changes are followed by validation + `pkg/daemon/run.go` update; no channel-specific code lands in `pkg/fleet`; `PlanActivator` changes coordinate with `pkg/scheduler`.
 5. **Ent regeneration discipline** (`ent/AGENTS.md`): schema-only hand-edits, `go generate ./ent/team/...` (or `cd ent/team && go run generate.go`), single commit. **No Atlas migration files** — auto-migrate via `client.Schema.Create`.
-6. **Serial-path regression floor**: when `MaxParallelAgents ≤ 1` and `CommunicationMode == "shared_channel"` and `TaskBoard.Enabled == false`, runtime behavior is byte-identical to today. This is asserted by a dedicated regression test at M6.
+6. **Serial-path regression floor**: when `MaxParallelAgents ≤ 1`, activation is serial; mailbox + task board remain always on.
 7. **`Channel` interface stability**: the mailbox layers *alongside* `Channel`, not through it. `Channel.WaitForMessage` / `PostMessage` / `GetAgentMemory` signatures do not change.
 8. **`FleetRecoverFunc` signature stability**: the existing `func(ctx, RecoverFleetConfig) error` is unchanged. New recovery logic lives in a sibling `RecoverActiveSessions` helper that *invokes* the recover fn per snapshot.
 9. **SSE same-commit contract** (`web/src/AGENTS.md`): every new fleet SSE event lands with its frontend handler in the same PR (M8 bundles both).

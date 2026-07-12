@@ -83,6 +83,9 @@ type FleetSession struct {
 	// OnMailboxDelivered is called after a mailbox-mode handoff is persisted.
 	OnMailboxDelivered func(recipient string, sender string)
 
+	// OnTaskEvent is called when a task board entry is posted, claimed, completed, or failed.
+	OnTaskEvent func(event string, task store.FleetTask)
+
 	// OnMessagePosted is called after every message is posted to the channel
 	// (human, agent, or system). Used for transcript persistence.
 	OnMessagePosted func(msg Message)
@@ -287,8 +290,11 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 	}
 	cancel := fs.cancel
 	ctx = store.WithSessionID(ctx, fs.ID)
-	taskBoardEnabled := fs.FleetConfig != nil && fs.FleetConfig.Settings.TaskBoard != nil && fs.FleetConfig.Settings.TaskBoard.Enabled
-	ctx = store.WithFleetTaskBoardEnabled(ctx, taskBoardEnabled)
+	ctx = store.WithFleetTaskEventHandler(ctx, func(event string, task store.FleetTask) {
+		if fs.OnTaskEvent != nil {
+			fs.OnTaskEvent(event, task)
+		}
+	})
 	if fs.FleetConfig != nil && fs.FleetConfig.Settings.MaxWallClockMinutes > 0 {
 		var wallCancel context.CancelFunc
 		ctx, wallCancel = context.WithTimeout(ctx, time.Duration(fs.FleetConfig.Settings.MaxWallClockMinutes)*time.Minute)
@@ -449,6 +455,8 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 				return nil
 			}
 			pendingTargets = append(next, pendingTargets...)
+			pendingTargets = append(pendingTargets, fs.claimAndEnqueueTasks(ctx)...)
+			pendingTargets = dedupeTargets(pendingTargets)
 			continue
 		}
 
@@ -528,6 +536,8 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			return nil
 		}
 		pendingTargets = append(next, pendingTargets...)
+		pendingTargets = append(pendingTargets, fs.claimAndEnqueueTasks(ctx)...)
+		pendingTargets = dedupeTargets(pendingTargets)
 	}
 }
 
@@ -710,7 +720,7 @@ func (fs *FleetSession) notifyBallChange(ball string) {
 }
 
 func (fs *FleetSession) deliverMailbox(ctx context.Context, msg Message, recipients []string) {
-	if fs.FleetConfig == nil || fs.FleetConfig.Settings.GetCommunicationMode() != "mailbox" {
+	if len(recipients) == 0 {
 		return
 	}
 	mailbox := store.FleetMailboxStoreFromContext(ctx)
@@ -741,6 +751,76 @@ func (fs *FleetSession) deliverMailbox(ctx context.Context, msg Message, recipie
 			fs.OnMailboxDelivered(recipient, msg.Sender)
 		}
 	}
+}
+
+// DeliverToMailbox exposes mailbox delivery for API bootstrap (initial customer messages).
+func (fs *FleetSession) DeliverToMailbox(ctx context.Context, msg Message, recipients []string) {
+	fs.deliverMailbox(ctx, msg, recipients)
+}
+
+// claimAndEnqueueTasks claims open task-board items for eligible agents and
+// returns agent keys that should be activated.
+func (fs *FleetSession) claimAndEnqueueTasks(ctx context.Context) []string {
+	if fs.FleetConfig == nil {
+		return nil
+	}
+	board := store.FleetTaskBoardStoreFromContext(ctx)
+	if board == nil {
+		return nil
+	}
+	policy := fs.FleetConfig.Settings.GetClaimPolicy()
+	var claimed []string
+	for agentKey, agentCfg := range fs.FleetConfig.Agents {
+		if agentCfg.TaskPolicy == nil || len(agentCfg.TaskPolicy.Claims) == 0 {
+			continue
+		}
+		caps := agentCapabilitiesForClaim(agentCfg)
+		task, err := board.Claim(ctx, fs.ID, agentKey, caps, policy)
+		if err != nil {
+			slog.Warn("task board claim failed", "component", "fleet", "session_id", fs.ID, "agent", agentKey, "error", err)
+			continue
+		}
+		if task == nil {
+			continue
+		}
+		claimed = append(claimed, agentKey)
+		if fs.OnTaskEvent != nil {
+			fs.OnTaskEvent("fleet_task_claimed", *task)
+		}
+		slog.Info("task claimed", "component", "fleet", "session_id", fs.ID, "agent", agentKey, "task_id", task.ID.String(), "title", task.Title)
+	}
+	return claimed
+}
+
+func agentCapabilitiesForClaim(agentCfg FleetAgentConfig) map[string]bool {
+	caps := map[string]bool{}
+	for k, v := range agentCfg.Capabilities {
+		if v {
+			caps[k] = true
+		}
+	}
+	if agentCfg.TaskPolicy != nil {
+		for _, claim := range agentCfg.TaskPolicy.Claims {
+			caps[claim] = true
+		}
+	}
+	return caps
+}
+
+func dedupeTargets(targets []string) []string {
+	if len(targets) <= 1 {
+		return targets
+	}
+	seen := make(map[string]bool, len(targets))
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
 }
 
 func (fs *FleetSession) persistRunStateSnapshot() {
@@ -829,19 +909,18 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// Build system prompt with communication graph awareness
 	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.WorkspaceDir, fs.Plan)
 
-	// Build thread context from the agent's personal memory
-	var threadContext string
-	var err error
-	if fs.FleetConfig.Settings.GetCommunicationMode() == "mailbox" {
-		threadContext, err = BuildMailboxThreadContext(ctx, store.FleetMailboxStoreFromContext(ctx), fs.ID, agentKey)
-		if err == nil && strings.TrimSpace(threadContext) == "" {
-			threadContext, err = BuildThreadContext(ctx, fs.Channel, agentKey)
-		}
-	} else {
-		threadContext, err = BuildThreadContext(ctx, fs.Channel, agentKey)
-	}
+	// Build thread context from the agent's durable mailbox.
+	threadContext, err := BuildMailboxThreadContext(ctx, store.FleetMailboxStoreFromContext(ctx), fs.ID, agentKey)
 	if err != nil {
 		return Message{}, fmt.Errorf("building agent memory context: %w", err)
+	}
+	// Bootstrap fallback: if mailbox is empty (e.g. first turn before deliver),
+	// seed from channel memory once so the agent is not blind.
+	if strings.TrimSpace(threadContext) == "" {
+		threadContext, err = BuildThreadContext(ctx, fs.Channel, agentKey)
+		if err != nil {
+			return Message{}, fmt.Errorf("building agent memory context: %w", err)
+		}
 	}
 
 	// Build tool filter

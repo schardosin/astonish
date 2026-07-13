@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 )
 
@@ -81,9 +82,10 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 	// Resolve base_url from suite config (apply placeholder substitution).
 	// Shell and browser both run in the sandbox when sandboxed, so localhost
-	// in base_url / browser URLs is left as-is (same as chat in-container browser).
+	// in base_url is kept for authors but normalized to 127.0.0.1 for Chromium
+	// (avoids ::1 / IPv4-only listener mismatches).
 	if sc != nil && sc.BaseURL != "" {
-		sr.baseURL = substituteVarsInString(sc.BaseURL, sr.vars)
+		sr.baseURL = browser.NormalizeLoopbackURL(substituteVarsInString(sc.BaseURL, sr.vars))
 	}
 
 	// Dispatch to multi-service or legacy single-service lifecycle
@@ -533,6 +535,15 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 	if sr.baseURL != "" && toolName == "browser_navigate" {
 		if urlStr, ok := toolArgs["url"].(string); ok && strings.HasPrefix(urlStr, "/") {
 			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + urlStr
+		}
+	}
+	// Prefer 127.0.0.1 over localhost/::1 for browser URLs (IPv6-first Chromium
+	// vs IPv4-only listeners). BrowserNavigate also normalizes; do it here so
+	// relative+base_url joins and {{CONTAINER_IP}}=localhost cases are covered
+	// before the tool runs.
+	if strings.HasPrefix(toolName, "browser_") {
+		if urlStr, ok := toolArgs["url"].(string); ok && urlStr != "" {
+			toolArgs["url"] = browser.NormalizeLoopbackURL(urlStr)
 		}
 	}
 

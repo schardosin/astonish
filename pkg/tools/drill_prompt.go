@@ -896,8 +896,9 @@ template automatically before setup (unless force=true).
 ## Browser Access to Container Services (sandbox mode)
 
 When sandbox is enabled, services and browser tools both run INSIDE the
-session container. Use localhost / 127.0.0.1 in browser_navigate the same
-way you use them in shell_command curls:
+session container. Use localhost in browser_navigate the same way you use
+them in shell_command curls (the runner rewrites localhost/::1 to 127.0.0.1
+for Chromium so IPv4-only listeners still work):
 
     - name: open-ui
       type: tool
@@ -905,8 +906,8 @@ way you use them in shell_command curls:
         tool: browser_navigate
         url: "http://localhost:3001/automation/create"
 
-{{CONTAINER_IP}} remains supported for older drills:
-  browser_navigate with url "http://{{CONTAINER_IP}}:3001/dashboard"
+Do NOT hard-code container bridge IPs in drill YAML — they change per session.
+{{CONTAINER_IP}} remains supported for older drills if needed.
 
 For the base_url field in suite YAML:
   base_url: "http://localhost:3001"

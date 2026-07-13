@@ -1224,9 +1224,10 @@ func TestBrowserNavigateKeepsLocalhostInSandbox(t *testing.T) {
 			navURL = fmt.Sprintf("%v", c.args["url"])
 		}
 	}
-	want := "http://localhost:3001/automation/create"
+	// Do not rewrite to bridge IP; normalize localhost → 127.0.0.1 for Chromium.
+	want := "http://127.0.0.1:3001/automation/create"
 	if navURL != want {
-		t.Errorf("browser_navigate url = %q, want %q (in-container browser keeps localhost)", navURL, want)
+		t.Errorf("browser_navigate url = %q, want %q", navURL, want)
 	}
 }
 
@@ -1267,8 +1268,8 @@ func TestBrowserNavigateLocalhostUnchangedWithoutSandboxIP(t *testing.T) {
 	}
 	for _, c := range executor.calls {
 		if c.name == "browser_navigate" {
-			if got := fmt.Sprintf("%v", c.args["url"]); got != "http://localhost:3001/" {
-				t.Errorf("url = %q, want localhost unchanged in local mode", got)
+			if got := fmt.Sprintf("%v", c.args["url"]); got != "http://127.0.0.1:3001/" {
+				t.Errorf("url = %q, want normalized 127.0.0.1 loopback", got)
 			}
 		}
 	}

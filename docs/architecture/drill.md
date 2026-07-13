@@ -170,7 +170,7 @@ The drill runner uses a composite executor that routes different tool categories
 
 This handles the common case where a drill starts services in a container and tests them via an in-container browser.
 
-Authors can write `http://localhost:<port>` in both `shell_command` curls and `browser_navigate` URLs. Both run in the sandbox container when sandboxed. `{{CONTAINER_IP}}` placeholders remain supported for drills that still use them.
+Authors can write `http://localhost:<port>` in both `shell_command` curls and `browser_navigate` URLs. Shell keeps localhost as written. Browser navigation normalizes `localhost` / `::1` to `127.0.0.1` so Chromium does not fail against IPv4-only listeners (common with Vite `--host 0.0.0.0`). `{{CONTAINER_IP}}` placeholders remain supported; prefer localhost over hard-coded bridge IPs.
 
 ### Parameterized Tests
 

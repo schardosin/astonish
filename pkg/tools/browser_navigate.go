@@ -29,6 +29,10 @@ func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(
 			return BrowserNavigateResult{}, fmt.Errorf("url is required")
 		}
 
+		// Chromium often resolves localhost → ::1 first; IPv4-only listeners
+		// (common for Vite --host 0.0.0.0) then refuse. Prefer 127.0.0.1.
+		args.URL = browser.NormalizeLoopbackURL(args.URL)
+
 		if err := guard.Check(args.URL); err != nil {
 			return BrowserNavigateResult{}, err
 		}

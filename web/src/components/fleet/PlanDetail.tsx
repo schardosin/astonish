@@ -260,6 +260,7 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
                 onRetryStatus={loadPlan}
               />
               <FailedSessions status={planStatus} retryingIssue={retryingIssue} onRetry={handleRetryIssue} onNavigate={onNavigate} />
+              <RetryingSessions status={planStatus} />
               <CommunicationFlow flow={commFlow} />
               <Artifacts artifacts={artifacts} />
               <ChannelConfig config={plan.channel?.config} />
@@ -365,6 +366,16 @@ function ActivationPanel({ plan, status, statusError, isActivating, onToggle, on
           <InfoBlock label="Schedule" value={plan.channel?.schedule || 'Default'} />
           {status.last_poll_error && <div className="col-span-3 text-red-400">Error: {status.last_poll_error}</div>}
         </div>
+        {status.last_start_error && (
+          <div className="mt-3 rounded-lg p-3" style={{ background: 'rgba(239, 68, 68, 0.08)', border: '1px solid rgba(239, 68, 68, 0.25)' }}>
+            <div className="flex items-center gap-2 mb-1">
+              <AlertCircle size={14} className="text-red-400 flex-shrink-0" />
+              <span className="text-xs font-semibold text-red-400">Session Start Error</span>
+              {status.last_start_error_at && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatTimeAgo(status.last_start_error_at)}</span>}
+            </div>
+            <p className="text-xs ml-5" style={{ color: 'var(--text-muted)' }}>{status.last_start_error}</p>
+          </div>
+        )}
       </div>
     )
   }
@@ -415,6 +426,28 @@ function FailedSessions({ status, retryingIssue, onRetry, onNavigate }: { status
               <RotateCcw size={12} className={retryingIssue === issue.issue_number ? 'animate-spin' : ''} />
               {retryingIssue === issue.issue_number ? 'Retrying...' : 'Continue'}
             </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function RetryingSessions({ status }: { status: FleetPlanStatusExt | null }) {
+  const issues = status?.issues_retrying || []
+  if (issues.length === 0) return null
+  return (
+    <div className="rounded-lg p-4" style={{ background: 'rgba(234, 179, 8, 0.06)', border: '1px solid rgba(234, 179, 8, 0.2)' }}>
+      <h3 className="text-sm font-semibold text-amber-400 mb-3 flex items-center gap-2"><AlertCircle size={16} /> Retrying ({issues.length})</h3>
+      <div className="space-y-2">
+        {issues.map(issue => (
+          <div key={issue.issue_number} className="rounded-lg p-3" style={{ background: 'rgba(0,0,0,0.15)', border: '1px solid rgba(234,179,8,0.15)' }}>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Issue #{issue.issue_number}</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-600/20 text-amber-400">retry {issue.retry_count}/3</span>
+              {issue.last_failed_at && <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatTimeAgo(issue.last_failed_at)}</span>}
+            </div>
+            <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{issue.error || 'Unknown error'}</p>
           </div>
         ))}
       </div>

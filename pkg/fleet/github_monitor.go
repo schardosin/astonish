@@ -478,6 +478,28 @@ func (m *GitHubMonitor) GetIssuesNeedingAttention() []IssueNeedingAttention {
 	return result
 }
 
+// GetIssuesRetrying returns issues that have failed at least once but haven't
+// yet exceeded maxRetryCount. These are still being auto-retried but the user
+// should be informed immediately that something is wrong.
+func (m *GitHubMonitor) GetIssuesRetrying() []IssueNeedingAttention {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var result []IssueNeedingAttention
+	for num, s := range m.state.SeenIssues {
+		if s.RetryCount > 0 && s.RetryCount < maxRetryCount {
+			result = append(result, IssueNeedingAttention{
+				IssueNumber:  num,
+				SessionID:    s.SessionID,
+				Error:        s.LastError,
+				RetryCount:   s.RetryCount,
+				LastFailedAt: s.LastFailedAt,
+			})
+		}
+	}
+	return result
+}
+
 // GetIssueState returns the stored state for a tracked issue, or nil if not tracked.
 func (m *GitHubMonitor) GetIssueState(issueNumber int) *SeenIssueState {
 	m.mu.Lock()

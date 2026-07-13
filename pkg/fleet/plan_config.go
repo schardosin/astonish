@@ -296,8 +296,13 @@ type PlanActivationState struct {
 	LastPollStatus string `yaml:"last_poll_status,omitempty" json:"last_poll_status,omitempty"`
 	// LastPollError is the error message from the last failed poll.
 	LastPollError string `yaml:"last_poll_error,omitempty" json:"last_poll_error,omitempty"`
-	// SessionsStarted is the total number of fleet sessions triggered by this plan.
+	// SessionsStarted is the total number of fleet sessions successfully started by this plan.
 	SessionsStarted int `yaml:"sessions_started,omitempty" json:"sessions_started,omitempty"`
+	// LastStartError is the error from the most recent failed session start attempt.
+	// Cleared on the next successful session start.
+	LastStartError string `yaml:"last_start_error,omitempty" json:"last_start_error,omitempty"`
+	// LastStartErrorAt is when LastStartError was recorded.
+	LastStartErrorAt time.Time `yaml:"last_start_error_at,omitempty" json:"last_start_error_at,omitempty"`
 }
 
 // IsActivated returns true if the plan is actively monitoring its channel.

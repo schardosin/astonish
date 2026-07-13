@@ -84,6 +84,9 @@ func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// can display them with a "Retry" button for manual intervention.
 	issuesNeedingAttention := planActivatorVar.GetIssuesNeedingAttention(key)
 
+	// Include issues that are still being retried so the UI can warn immediately.
+	issuesRetrying := planActivatorVar.GetIssuesRetrying(key)
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"activated":                status.Activated,
@@ -93,7 +96,10 @@ func FleetPlanStatusHandler(w http.ResponseWriter, r *http.Request) {
 		"last_poll_status":         status.LastPollStatus,
 		"last_poll_error":          status.LastPollError,
 		"sessions_started":         status.SessionsStarted,
+		"last_start_error":         status.LastStartError,
+		"last_start_error_at":      status.LastStartErrorAt,
 		"issues_needing_attention": issuesNeedingAttention,
+		"issues_retrying":          issuesRetrying,
 		// Legacy field for backward compatibility with existing UI code
 		"failed_issues": issuesNeedingAttention,
 	})

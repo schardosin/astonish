@@ -273,13 +273,15 @@ func (a *PlanActivator) Deactivate(_ context.Context, planKey string) error {
 
 // PlanActivationStatus holds the current status of a plan's activation.
 type PlanActivationStatus struct {
-	Activated       bool      `json:"activated"`
-	SchedulerJobID  string    `json:"scheduler_job_id,omitempty"`
-	ActivatedAt     time.Time `json:"activated_at,omitempty"`
-	LastPollAt      time.Time `json:"last_poll_at,omitempty"`
-	LastPollStatus  string    `json:"last_poll_status,omitempty"`
-	LastPollError   string    `json:"last_poll_error,omitempty"`
-	SessionsStarted int       `json:"sessions_started,omitempty"`
+	Activated        bool      `json:"activated"`
+	SchedulerJobID   string    `json:"scheduler_job_id,omitempty"`
+	ActivatedAt      time.Time `json:"activated_at,omitempty"`
+	LastPollAt       time.Time `json:"last_poll_at,omitempty"`
+	LastPollStatus   string    `json:"last_poll_status,omitempty"`
+	LastPollError    string    `json:"last_poll_error,omitempty"`
+	SessionsStarted  int       `json:"sessions_started,omitempty"`
+	LastStartError   string    `json:"last_start_error,omitempty"`
+	LastStartErrorAt time.Time `json:"last_start_error_at,omitempty"`
 }
 
 // Status returns the activation status of a fleet plan.
@@ -290,13 +292,15 @@ func (a *PlanActivator) Status(planKey string) (*PlanActivationStatus, error) {
 	}
 
 	return &PlanActivationStatus{
-		Activated:       plan.Activation.Activated,
-		SchedulerJobID:  plan.Activation.SchedulerJobID,
-		ActivatedAt:     plan.Activation.ActivatedAt,
-		LastPollAt:      plan.Activation.LastPollAt,
-		LastPollStatus:  plan.Activation.LastPollStatus,
-		LastPollError:   plan.Activation.LastPollError,
-		SessionsStarted: plan.Activation.SessionsStarted,
+		Activated:        plan.Activation.Activated,
+		SchedulerJobID:   plan.Activation.SchedulerJobID,
+		ActivatedAt:      plan.Activation.ActivatedAt,
+		LastPollAt:       plan.Activation.LastPollAt,
+		LastPollStatus:   plan.Activation.LastPollStatus,
+		LastPollError:    plan.Activation.LastPollError,
+		SessionsStarted:  plan.Activation.SessionsStarted,
+		LastStartError:   plan.Activation.LastStartError,
+		LastStartErrorAt: plan.Activation.LastStartErrorAt,
 	}, nil
 }
 
@@ -456,8 +460,9 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 
 	err := monitor.CheckForWork(isSessionActive, func(item WorkItem) {
 		if item.IsNewIssue {
-			a.startNewSession(ctx, monitor, plan, repo, item)
-			newStarts++
+			if a.startNewSession(ctx, monitor, plan, repo, item) {
+				newStarts++
+			}
 		} else if item.SessionID != "" {
 			// Customer replied on a known issue with an existing session — recover it.
 			a.recoverSession(ctx, monitor, plan, repo, item)
@@ -466,8 +471,9 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 			// Customer replied on a known issue with no prior session
 			// (e.g., pre-existing issue marked seen at activation time).
 			// Start a fresh session.
-			a.startNewSession(ctx, monitor, plan, repo, item)
-			newStarts++
+			if a.startNewSession(ctx, monitor, plan, repo, item) {
+				newStarts++
+			}
 		}
 	})
 
@@ -505,16 +511,16 @@ func (a *PlanActivator) pollGitHubIssues(ctx context.Context, planKey string, pl
 }
 
 // startNewSession starts a fresh headless fleet session for a new GitHub issue.
-func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMonitor, plan *FleetPlan, repo string, item WorkItem) {
+func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMonitor, plan *FleetPlan, repo string, item WorkItem) bool {
 	if a.fleetStart == nil {
-		return
+		return false
 	}
 
 	// Fetch the full issue to get the body for FormatIssueContext.
 	issues, err := monitor.fetchOpenLabeledIssues()
 	if err != nil {
 		slog.Error("failed to fetch issue details", "component", "plan-activator", "issue", item.IssueNumber, "error", err)
-		return
+		return false
 	}
 
 	var issue *GitHubIssue
@@ -526,7 +532,7 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 	}
 	if issue == nil {
 		slog.Warn("issue not found in fetched issues", "component", "plan-activator", "issue", item.IssueNumber)
-		return
+		return false
 	}
 
 	initialMsg := FormatIssueContext(*issue, repo)
@@ -557,11 +563,19 @@ func (a *PlanActivator) startNewSession(ctx context.Context, monitor *GitHubMoni
 	if startErr != nil {
 		slog.Error("failed to start fleet session", "component", "plan-activator", "issue", issueNum, "error", startErr)
 		monitor.IncrementRetryCount(issueNum, fmt.Sprintf("start failed: %v", startErr))
-		return
+		// Record on the plan so the UI can surface it immediately.
+		plan.Activation.LastStartError = startErr.Error()
+		plan.Activation.LastStartErrorAt = time.Now()
+		return false
 	}
+
+	// Clear any prior start error on success.
+	plan.Activation.LastStartError = ""
+	plan.Activation.LastStartErrorAt = time.Time{}
 
 	monitor.MarkSeen(issueNum, sessionID, issue.Title)
 	slog.Info("started fleet session", "component", "plan-activator", "session_id", sessionID, "issue", issueNum, "title", issue.Title)
+	return true
 }
 
 // recoverSession recovers an interrupted fleet session (daemon restart or customer reply).
@@ -630,6 +644,18 @@ func (a *PlanActivator) GetIssuesNeedingAttention(planKey string) []IssueNeeding
 		return nil
 	}
 	return mon.GetIssuesNeedingAttention()
+}
+
+// GetIssuesRetrying returns issues that are failing but still being auto-retried.
+func (a *PlanActivator) GetIssuesRetrying(planKey string) []IssueNeedingAttention {
+	a.monitorsMu.RLock()
+	mon := a.monitors[planKey]
+	a.monitorsMu.RUnlock()
+
+	if mon == nil {
+		return nil
+	}
+	return mon.GetIssuesRetrying()
 }
 
 // RetryFailedIssue resets the retry count for an issue so it will be picked up

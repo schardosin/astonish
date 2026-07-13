@@ -19,6 +19,13 @@ export interface FleetPlanStatusExt extends FleetPlanStatus {
     failed_at?: string
     error?: string
   }>
+  issues_retrying?: Array<{
+    issue_number: number
+    session_id?: string
+    error?: string
+    retry_count?: number
+    last_failed_at?: string
+  }>
 }
 
 /** FleetThread extended – backend may return agent_key alongside thread_key. */

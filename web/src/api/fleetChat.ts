@@ -122,6 +122,8 @@ export interface FleetPlanStatus {
   last_poll_at: string
   last_poll_status: string
   sessions_started: number
+  last_start_error?: string
+  last_start_error_at?: string
 }
 
 export interface FleetTrace {

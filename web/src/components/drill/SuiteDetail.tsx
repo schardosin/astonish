@@ -143,7 +143,11 @@ export default function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDri
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => onRunSuite(suiteKey, (suite?.suite_config as Record<string, any>)?.template)}
+              onClick={() => {
+                const cfg = suite?.suite_config as Record<string, unknown> | undefined
+                const template = suite?.template || (typeof cfg?.template === 'string' ? cfg.template : undefined)
+                onRunSuite(suiteKey, template)
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors hover:opacity-90"
               style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}
             >

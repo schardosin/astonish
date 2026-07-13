@@ -276,6 +276,47 @@ func TestTemplateDisplay_Named(t *testing.T) {
 	}
 }
 
+func TestTemplateDisplay_AtPrefix(t *testing.T) {
+	if got := templateDisplay("@juicytrade"); got != "juicytrade" {
+		t.Errorf("templateDisplay(\"@juicytrade\") = %q, want juicytrade", got)
+	}
+	if got := templateDisplay("@base"); got != "@base" {
+		t.Errorf("templateDisplay(\"@base\") = %q, want @base", got)
+	}
+}
+
+func TestNormalizeSandboxTemplateName(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"base", ""},
+		{"@base", ""},
+		{" juicytrade ", "juicytrade"},
+		{"@juicytrade", "juicytrade"},
+	}
+	for _, tc := range cases {
+		if got := normalizeSandboxTemplateName(tc.in); got != tc.want {
+			t.Errorf("normalizeSandboxTemplateName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureDrillSandboxTemplate_NoopWithoutPool(t *testing.T) {
+	deps := &runDrillDeps{}
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEnsureDrillSandboxTemplate_ForceSkips(t *testing.T) {
+	deps := &runDrillDeps{}
+	// force=true must not attempt ReplaceSession even with a required template.
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // enrichReportWithFailureContext tests
 // ---------------------------------------------------------------------------

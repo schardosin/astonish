@@ -26,7 +26,7 @@ type RunDrillArgs struct {
 	TestName  string `json:"test_name,omitempty" jsonschema:"Run a single drill by name instead of the full suite. The drill must belong to the specified suite."`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
-	Force     bool   `json:"force,omitempty" jsonschema:"Run on the current container even if its template doesn't match the suite's required template. Use after the user declines a template switch."`
+	Force     bool   `json:"force,omitempty" jsonschema:"Skip auto-switching to the suite's sandbox template and run on the current container instead. Only use when the user explicitly wants to stay on the current sandbox."`
 }
 
 // RunDrillResult is the result of the run_drill tool.
@@ -40,21 +40,25 @@ type RunDrillResult struct {
 // For chat sessions, nodePool is set and lazyClient is resolved at runtime.
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
-	nodePool    *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
-	lazyClient  *sandbox.LazyNodeClient // Fleet Incus sessions
-	toolClient  sandbox.ToolNodeClient  // Fleet backend-agnostic sessions
-	sessionID   string                  // Fleet session ID (empty for chat sessions)
-	llmProvider adrill.LLMProvider      // Optional LLM for semantic assertions
+	nodePool         *sandbox.NodeClientPool    // Chat/Studio sessions (nil when no sandbox)
+	templateRegistry *sandbox.TemplateRegistry  // Optional; used to inject bootstrap_files after auto-switch
+	lazyClient       *sandbox.LazyNodeClient    // Fleet Incus sessions
+	toolClient       sandbox.ToolNodeClient     // Fleet backend-agnostic sessions
+	sessionID        string                     // Fleet session ID (empty for chat sessions)
+	llmProvider      adrill.LLMProvider         // Optional LLM for semantic assertions
 }
 
 // NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
+// tplRegistry is optional — when set, auto-switching to the suite template also
+// injects that template's bootstrap_files.
 // llmProvider is optional — when set, semantic assertions (assert.type: "semantic")
 // will use it to evaluate whether tool output satisfies the expected condition.
-func NewRunDrillTool(nodePool *sandbox.NodeClientPool, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+func NewRunDrillTool(nodePool *sandbox.NodeClientPool, tplRegistry *sandbox.TemplateRegistry, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
-		nodePool:    nodePool,
-		llmProvider: llmProvider,
+		nodePool:         nodePool,
+		templateRegistry: tplRegistry,
+		llmProvider:      llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
 }
@@ -92,6 +96,9 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 		Description: "Run a deterministic drill suite (or a single drill with test_name). " +
 			"Automatically handles setup, ready_check, and teardown from the suite config — " +
 			"do NOT manually start services before calling this tool. " +
+			"When the suite declares a sandbox template and the current session is on a different " +
+			"template (typically @base), run_drill switches to the suite template first, then runs. " +
+			"Pass force=true only if the user explicitly wants to stay on the current container. " +
 			"Shell and file tool steps are routed into the sandbox container; browser tool steps run on the host. " +
 			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
@@ -137,28 +144,23 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
-	// Template mismatch check (chat mode with sandbox only).
+	// Template auto-switch (chat mode with sandbox only).
 	// Fleet sessions skip this — the container is already provisioned for the fleet.
 	// No-sandbox sessions skip this — template is irrelevant for local execution.
+	// By default, switch to the suite's template before running so drills never
+	// start against @base when the suite requires a project template.
 	suiteTemplate := ""
 	if suite.Config != nil && suite.Config.SuiteConfig != nil {
 		suiteTemplate = suite.Config.SuiteConfig.Template
 	}
-	if deps.lazyClient == nil && deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" && suiteTemplate != "" {
-		lazyClient := deps.nodePool.GetOrCreate(ctx.SessionID())
-		if lazyClient != nil {
-			currentTemplate := lazyClient.Template()
-			if currentTemplate != suiteTemplate && !args.Force {
-				return RunDrillResult{
-					Status: "template_mismatch",
-					Summary: fmt.Sprintf(
-						"Suite %q requires template %s but the current sandbox is %s. "+
-							"Ask the user whether to switch templates (use use_sandbox_template tool) or "+
-							"re-run with force=true to run on the current container anyway.",
-						suiteName, templateDisplay(suiteTemplate), templateDisplay(currentTemplate)),
-				}, nil
-			}
-		}
+	if suiteTemplate == "" && suite.Config != nil {
+		suiteTemplate = suite.Config.Template
+	}
+	if err := ensureDrillSandboxTemplate(ctx, deps, suiteName, suiteTemplate, args.Force); err != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: err.Error(),
+		}, nil
 	}
 
 	// Filter tests by tag if requested
@@ -854,8 +856,71 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 // templateDisplay returns a user-friendly display name for a sandbox template.
 // Empty string (the default base container) is rendered as "@base".
 func templateDisplay(t string) string {
-	if t == "" {
+	n := normalizeSandboxTemplateName(t)
+	if n == "" {
 		return "@base"
 	}
+	return n
+}
+
+// normalizeSandboxTemplateName canonicalizes template names for comparison.
+// Strips a leading "@" and treats "" / "base" as the default @base sandbox.
+func normalizeSandboxTemplateName(t string) string {
+	t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "@"))
+	if t == "" || t == "base" {
+		return ""
+	}
 	return t
+}
+
+// ensureDrillSandboxTemplate switches the chat sandbox to the suite's required
+// template before execution. Fleet / no-sandbox sessions are no-ops. force=true
+// skips the switch so the suite can run on the current container.
+func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName, suiteTemplate string, force bool) error {
+	required := normalizeSandboxTemplateName(suiteTemplate)
+	if required == "" || force {
+		return nil
+	}
+	// Fleet sessions already have a provisioned container.
+	if deps.lazyClient != nil || deps.toolClient != nil || deps.nodePool == nil {
+		return nil
+	}
+	if ctx == nil || ctx.SessionID() == "" {
+		return nil
+	}
+
+	sessionID := ctx.SessionID()
+	lazyClient := deps.nodePool.GetOrCreate(sessionID)
+	if lazyClient == nil {
+		return nil
+	}
+
+	current := normalizeSandboxTemplateName(lazyClient.Template())
+	if current == required {
+		return nil
+	}
+
+	slog.Info("run_drill switching sandbox template",
+		"component", "run-drill",
+		"suite", suiteName,
+		"from", templateDisplay(current),
+		"to", templateDisplay(required),
+	)
+	if err := deps.nodePool.ReplaceSession(sessionID, required); err != nil {
+		return fmt.Errorf(
+			"suite %q requires template %s (current sandbox is %s) but switching failed: %v",
+			suiteName, templateDisplay(required), templateDisplay(current), err,
+		)
+	}
+
+	// Eagerly create the new container so setup commands have a ready sandbox,
+	// then inject template bootstrap_files (same path as use_sandbox_template).
+	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
+		if _, err := client.GetContainerIP(sessionID); err != nil {
+			slog.Warn("run_drill template switch: container IP not ready yet",
+				"component", "run-drill", "suite", suiteName, "template", required, "error", err)
+		}
+		sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, required)
+	}
+	return nil
 }

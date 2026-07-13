@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/store"
@@ -28,6 +29,7 @@ type DrillSuiteDetail struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
 	File        string          `json:"file"`
+	Template    string          `json:"template,omitempty"`
 	SuiteConfig any             `json:"suite_config,omitempty"`
 	Drills      []DrillListItem `json:"drills"`
 	LastReport  any             `json:"last_report,omitempty"` // json.RawMessage from report store
@@ -224,10 +226,23 @@ func GetDrillSuiteHandler(w http.ResponseWriter, r *http.Request) {
 		drills = append(drills, item)
 	}
 
+	suiteConfig := parsed.SuiteConfig
+	if suiteConfig == nil {
+		suiteConfig = map[string]any{}
+	}
+	template := strings.TrimSpace(parsed.Template)
+	if t, ok := suiteConfig["template"].(string); ok && strings.TrimSpace(t) != "" {
+		template = strings.TrimSpace(t)
+	}
+	if template != "" {
+		suiteConfig["template"] = template
+	}
+
 	detail := DrillSuiteDetail{
 		Name:        suiteName,
 		Description: parsed.Description,
-		SuiteConfig: parsed.SuiteConfig,
+		Template:    template,
+		SuiteConfig: suiteConfig,
 		Drills:      drills,
 	}
 

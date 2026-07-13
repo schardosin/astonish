@@ -24,6 +24,7 @@ export interface DrillSuiteDetail {
   name: string
   description: string
   file: string
+  template?: string
   suite_config: Record<string, unknown>
   drills: DrillDetail[]
   last_report: DrillReport | null

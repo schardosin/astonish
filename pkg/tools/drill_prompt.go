@@ -825,6 +825,9 @@ Report the saved file paths.
 After saving, ask: "Would you like me to run the tests now?"
 
 If yes, call the run_drill tool with suite_name set to the suite name.
+If the suite YAML declares a sandbox template and you are still on @base,
+run_drill switches to that template automatically before setup — you do not
+need a separate use_sandbox_template call (though calling it first is fine).
 run_drill automatically handles setup, ready_check, and teardown from the
 suite config — do NOT manually start services before calling it.
 This tool runs the tests on the host and automatically routes shell/file
@@ -889,8 +892,9 @@ To run a test suite, use the run_drill tool (NOT shell_command with
 - Returns the full test report with pass/fail status
 
 This means tests run in the SAME environment as your current session — the
-same container with the same code and dependencies. No new container is
-created for test execution.
+same container with the same code and dependencies. When the suite declares a
+template and the session is still on @base, run_drill switches to that
+template automatically before setup (unless force=true).
 
 ## Browser Access to Container Services (sandbox mode)
 

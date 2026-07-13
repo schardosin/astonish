@@ -1627,7 +1627,9 @@ layout:
               onNavigate={(hashPath: string) => navigate(hashPath)}
               onRunSuite={(suiteName: string, template?: unknown) => {
                 if (template) {
-                  setPendingChatMessage({ message: `Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"` })
+                  setPendingChatMessage({
+                    message: `Switch the sandbox to template "${template}" with use_sandbox_template, then run the drill suite "${suiteName}" with run_drill. Do not run on @base first.`,
+                  })
                 } else {
                   setPendingChatMessage({ message: `Run the drill suite "${suiteName}"` })
                 }

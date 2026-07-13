@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -132,7 +131,7 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	}
 
 	// Inject template bootstrap files (mount only — never auto-exec).
-	injectBootstrapAfterTemplateSwitch(deps, sessionID, name)
+	sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, name)
 
 	msg := fmt.Sprintf("Sandbox container switched to template %q. All file and shell tools now "+
 		"operate inside a container with the template's pre-installed dependencies and project code.", name)
@@ -149,25 +148,3 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	}, nil
 }
 
-func injectBootstrapAfterTemplateSwitch(deps *useSandboxTemplateDeps, sessionID, templateName string) {
-	files := sandbox.LookupBootstrapFiles(context.Background(), deps.templateRegistry, nil, templateName)
-	if len(files) == 0 {
-		return
-	}
-	client := deps.nodePool.GetIncusClient()
-	containerName := deps.nodePool.GetContainerName(sessionID)
-	if client == nil || containerName == "" {
-		slog.Warn("cannot inject bootstrap_files: no incus client/container", "component", "sandbox-template", "template", templateName)
-		return
-	}
-	err := sandbox.MaterializeBootstrapFilesIncus(context.Background(), func(command []string, env map[string]string) ([]byte, []byte, int, error) {
-		out, execErr := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
-		if execErr != nil {
-			return nil, nil, -1, execErr
-		}
-		return []byte(out), nil, 0, nil
-	}, files)
-	if err != nil {
-		slog.Warn("failed to inject template bootstrap_files", "component", "sandbox-template", "template", templateName, "error", err)
-	}
-}

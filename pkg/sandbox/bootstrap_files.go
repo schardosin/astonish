@@ -86,6 +86,35 @@ func bootstrapFileMode(f store.BootstrapFile) os.FileMode {
 	return mode
 }
 
+// InjectBootstrapFilesAfterSwitch materializes template bootstrap_files into the
+// session container after ReplaceSession. Mount only — never auto-executes.
+// No-ops when registry/pool/container is unavailable or the template has no files.
+func InjectBootstrapFilesAfterSwitch(pool *NodeClientPool, registry *TemplateRegistry, sessionID, templateName string) {
+	if pool == nil || sessionID == "" || templateName == "" {
+		return
+	}
+	files := LookupBootstrapFiles(context.Background(), registry, nil, templateName)
+	if len(files) == 0 {
+		return
+	}
+	client := pool.GetIncusClient()
+	containerName := pool.GetContainerName(sessionID)
+	if client == nil || containerName == "" {
+		slog.Warn("cannot inject bootstrap_files: no incus client/container", "component", "sandbox-bootstrap", "template", templateName)
+		return
+	}
+	err := MaterializeBootstrapFilesIncus(context.Background(), func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+		out, execErr := ExecSimpleWithEnv(client, containerName, command, env)
+		if execErr != nil {
+			return nil, nil, -1, execErr
+		}
+		return []byte(out), nil, 0, nil
+	}, files)
+	if err != nil {
+		slog.Warn("failed to inject template bootstrap_files", "component", "sandbox-bootstrap", "template", templateName, "error", err)
+	}
+}
+
 // LookupBootstrapFiles resolves bootstrap files for a template slug.
 // Prefers the Incus JSON template registry, then the platform SandboxTemplateStore.
 func LookupBootstrapFiles(ctx context.Context, registry *TemplateRegistry, tplStore store.SandboxTemplateStore, templateSlug string) []store.BootstrapFile {

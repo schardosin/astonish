@@ -1199,7 +1199,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		drillToolsSlice = append(drillToolsSlice, drillTools...)
 	}
 
-	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, adrill.NewLLMProviderFromModel(llm))
+	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, sandboxTplRegistry, adrill.NewLLMProviderFromModel(llm))
 	if runDrillErr != nil {
 		if cfg.DebugMode {
 			slog.Warn("failed to create run_drill tool", "error", runDrillErr)

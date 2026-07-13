@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
+	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplateCreate is the builder for creating a SandboxTemplate entity.
@@ -220,6 +221,12 @@ func (_c *SandboxTemplateCreate) SetNillableBuildStartedAt(v *time.Time) *Sandbo
 	if v != nil {
 		_c.SetBuildStartedAt(*v)
 	}
+	return _c
+}
+
+// SetBootstrapFiles sets the "bootstrap_files" field.
+func (_c *SandboxTemplateCreate) SetBootstrapFiles(v []schema.BootstrapFileSchema) *SandboxTemplateCreate {
+	_c.mutation.SetBootstrapFiles(v)
 	return _c
 }
 
@@ -617,6 +624,10 @@ func (_c *SandboxTemplateCreate) createSpec() (*SandboxTemplate, *sqlgraph.Creat
 	if value, ok := _c.mutation.BuildStartedAt(); ok {
 		_spec.SetField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime, value)
 		_node.BuildStartedAt = &value
+	}
+	if value, ok := _c.mutation.BootstrapFiles(); ok {
+		_spec.SetField(sandboxtemplate.FieldBootstrapFiles, field.TypeJSON, value)
+		_node.BootstrapFiles = value
 	}
 	if value, ok := _c.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

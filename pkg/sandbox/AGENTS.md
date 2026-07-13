@@ -69,6 +69,7 @@ If you change the entrypoint, update the generator in `cmd/astonish-sandbox-entr
   - K8s: `NetworkPolicy` per org/team labels; OpenShell adds L7 inspection driven by `SandboxPolicy.network_policies`.
   - Incus: per-org bridge networks + profiles.
 - **Filesystem**: per-session overlay; template snapshots are content-addressed (Incus) or image-tagged (K8s/OpenShell).
+- **Bootstrap files**: template `bootstrap_files` (e.g. `.astonish/start-services.sh`) are injected at session start and never auto-executed — drills/fleet/chat call them after credentials.
 - **Identity**: `IssueSandboxToken` binds the in-pod supervisor's identity to the sandbox UUID via a gateway-issued JWT.
 - **Ops**: `tplStore.AcquireTemplateBuildLock` prevents concurrent Kaniko builds for the same template.
 

@@ -11,14 +11,22 @@ import (
 
 // TemplateMeta holds metadata about a container template.
 type TemplateMeta struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	SnapshotAt  time.Time `json:"snapshot_at,omitempty"`
-	FleetPlans  []string  `json:"fleet_plans,omitempty"`
-	BasedOn     string    `json:"based_on,omitempty"`
-	BinaryHash  string    `json:"binary_hash,omitempty"` // SHA256 of the astonish binary baked into the template
-	Nesting     bool      `json:"nesting,omitempty"`     // true if containers need security.nesting=true (e.g., Docker installed)
+	Name           string              `json:"name"`
+	Description    string              `json:"description,omitempty"`
+	CreatedAt      time.Time           `json:"created_at"`
+	SnapshotAt     time.Time           `json:"snapshot_at,omitempty"`
+	FleetPlans     []string            `json:"fleet_plans,omitempty"`
+	BasedOn        string              `json:"based_on,omitempty"`
+	BinaryHash     string              `json:"binary_hash,omitempty"` // SHA256 of the astonish binary baked into the template
+	Nesting        bool                `json:"nesting,omitempty"`     // true if containers need security.nesting=true (e.g., Docker installed)
+	BootstrapFiles []BootstrapFileMeta `json:"bootstrap_files,omitempty"`
+}
+
+// BootstrapFileMeta mirrors store.BootstrapFile for the JSON template registry.
+type BootstrapFileMeta struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    string `json:"mode,omitempty"`
 }
 
 // TemplateRegistry manages template metadata with JSON file persistence.

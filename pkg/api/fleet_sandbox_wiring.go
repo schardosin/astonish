@@ -157,6 +157,9 @@ func wireFleetSandboxIncus(
 		lazyNode.Cleanup()
 		return fmt.Errorf("fleet credential file injection failed: %w", err)
 	}
+	if err := materializeFleetBootstrapIncus(template, tplRegistry, lazyNode); err != nil {
+		slog.Warn("fleet bootstrap file injection failed", "component", "fleet-sandbox", "template", template, "error", err)
+	}
 
 	fleetBackend, _ := sandbox.NewBackend(sandbox.BackendFactoryConfig{
 		Kind:       sandbox.BackendKindIncus,
@@ -217,6 +220,9 @@ func wireFleetSandboxBackend(
 			cleanup()
 		}
 		return fmt.Errorf("fleet credential file injection failed: %w", err)
+	}
+	if err := materializeFleetBootstrapBackend(ctx, fleetBackend, fleetSession.ID, template, nil); err != nil {
+		slog.Warn("fleet bootstrap file injection failed", "component", "fleet-sandbox", "template", template, "error", err)
 	}
 
 	var providerBinding *fleet.OpenShellProviderBinding
@@ -353,6 +359,41 @@ func materializeFleetFilesIncus(plan *fleet.FleetPlan, credStore store.Credentia
 		}
 		return []byte(out), nil, exitCode, nil
 	}, plan, resolved, credStore)
+}
+
+func materializeFleetBootstrapIncus(template string, tplRegistry *sandbox.TemplateRegistry, lazyNode *sandbox.LazyNodeClient) error {
+	var tplStore store.SandboxTemplateStore
+	if backend := getPlatformBackend(); backend != nil {
+		tplStore = backend.SandboxTemplates()
+	}
+	files := sandbox.LookupBootstrapFiles(context.Background(), tplRegistry, tplStore, template)
+	if len(files) == 0 {
+		return nil
+	}
+	client := lazyNode.GetIncusClient()
+	containerName := lazyNode.GetContainerName()
+	if client == nil || containerName == "" {
+		return nil
+	}
+	return sandbox.MaterializeBootstrapFilesIncus(context.Background(), func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+		out, err := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+		if err != nil {
+			return nil, nil, -1, err
+		}
+		return []byte(out), nil, 0, nil
+	}, files)
+}
+
+func materializeFleetBootstrapBackend(ctx context.Context, fleetBackend sandbox.Backend, sessionID, template string, tplRegistry *sandbox.TemplateRegistry) error {
+	var tplStore store.SandboxTemplateStore
+	if backend := getPlatformBackend(); backend != nil {
+		tplStore = backend.SandboxTemplates()
+	}
+	files := sandbox.LookupBootstrapFiles(ctx, tplRegistry, tplStore, template)
+	if len(files) == 0 {
+		return nil
+	}
+	return sandbox.MaterializeBootstrapFiles(ctx, fleetBackend, sessionID, files)
 }
 
 func truncateID(s string, n int) string {

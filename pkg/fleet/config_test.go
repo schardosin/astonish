@@ -2901,4 +2901,15 @@ func TestSoftwareDevYAML_RoundTrip(t *testing.T) {
 	if parsed.Settings.GetMaxTurnsPerAgent() != orig.Settings.GetMaxTurnsPerAgent() {
 		t.Errorf("settings max_turns round-trip mismatch")
 	}
+	if orig.Settings.GetMaxParallelAgents() != 1 {
+		t.Errorf("software-dev expected max_parallel_agents 1, got %d", orig.Settings.GetMaxParallelAgents())
+	}
+	qa := orig.Agents["qa"]
+	e2e := orig.Agents["e2e"]
+	if qa.IsParallelizable() || e2e.IsParallelizable() {
+		t.Error("software-dev qa/e2e must not be parallelizable")
+	}
+	if orig.ProjectContext == nil || orig.ProjectContext.Generator != "load_file" {
+		t.Errorf("software-dev project_context.generator want load_file, got %#v", orig.ProjectContext)
+	}
 }

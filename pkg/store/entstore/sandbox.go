@@ -12,6 +12,7 @@ import (
 	platforment "github.com/schardosin/astonish/ent/platform"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
+	"github.com/schardosin/astonish/ent/platform/schema"
 	"github.com/schardosin/astonish/pkg/store"
 )
 
@@ -231,6 +232,9 @@ func (ts *sandboxTemplateStore) Create(ctx context.Context, tpl *store.SandboxTe
 	if tpl.DockerfileBody != nil {
 		create.SetDockerfileBody(*tpl.DockerfileBody)
 	}
+	if len(tpl.BootstrapFiles) > 0 {
+		create.SetBootstrapFiles(storeBootstrapToSchema(tpl.BootstrapFiles))
+	}
 	if tpl.BuildStatus != "" {
 		create.SetBuildStatus(tpl.BuildStatus)
 	}
@@ -358,6 +362,9 @@ func (ts *sandboxTemplateStore) Update(ctx context.Context, tpl *store.SandboxTe
 		update.SetDockerfileBody(*tpl.DockerfileBody)
 	} else {
 		update.ClearDockerfileBody()
+	}
+	if tpl.BootstrapFiles != nil {
+		update.SetBootstrapFiles(storeBootstrapToSchema(tpl.BootstrapFiles))
 	}
 	update.SetBuildStatus(tpl.BuildStatus)
 	update.SetBuildJobName(tpl.BuildJobName)
@@ -743,6 +750,7 @@ func entTemplateToStore(e *platforment.SandboxTemplate) *store.SandboxTemplate {
 		SandboxImage:   e.SandboxImage,
 		Packages:       e.Packages,
 		DockerfileBody: e.DockerfileBody,
+		BootstrapFiles: schemaBootstrapToStore(e.BootstrapFiles),
 		BuildStatus:    e.BuildStatus,
 		BuildJobName:   e.BuildJobName,
 		BuildError:     e.BuildError,
@@ -763,6 +771,36 @@ func entTemplateToStore(e *platforment.SandboxTemplate) *store.SandboxTemplate {
 	}
 
 	return tpl
+}
+
+func storeBootstrapToSchema(files []store.BootstrapFile) []schema.BootstrapFileSchema {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]schema.BootstrapFileSchema, 0, len(files))
+	for _, f := range files {
+		out = append(out, schema.BootstrapFileSchema{
+			Path:    f.Path,
+			Content: f.Content,
+			Mode:    f.Mode,
+		})
+	}
+	return out
+}
+
+func schemaBootstrapToStore(files []schema.BootstrapFileSchema) []store.BootstrapFile {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]store.BootstrapFile, 0, len(files))
+	for _, f := range files {
+		out = append(out, store.BootstrapFile{
+			Path:    f.Path,
+			Content: f.Content,
+			Mode:    f.Mode,
+		})
+	}
+	return out
 }
 
 // nilIfEmpty returns nil if s is empty, otherwise returns a pointer to s.

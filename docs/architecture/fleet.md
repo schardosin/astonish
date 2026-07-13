@@ -117,13 +117,13 @@ Behaviors: Specific instructions for this agent type
     +
 Communication Rules: Who to @mention, routing constraints
     +
-Delegate Instructions: How to use OpenCode for coding tasks
+Delegate Instructions: Optional — only when an agent declares a `delegate` tool (custom plans)
     +
 Progress Tracker: Current milestones, completed items
     +
 Environment: Workspace path, git branch, available tools
     +
-Project Context: AGENTS.md content (if available)
+Project Context: AGENTS.md content (loaded via project_context.load_file when present)
 ```
 
 ### Thread Context Building

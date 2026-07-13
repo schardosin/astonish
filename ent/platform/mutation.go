@@ -28,6 +28,7 @@ import (
 	"github.com/schardosin/astonish/ent/platform/predicate"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
+	"github.com/schardosin/astonish/ent/platform/schema"
 	"github.com/schardosin/astonish/ent/platform/toolindex"
 	"github.com/schardosin/astonish/ent/platform/user"
 	"github.com/schardosin/astonish/ent/platform/userchannel"
@@ -9920,43 +9921,45 @@ func (m *SandboxLayerMutation) ResetEdge(name string) error {
 // SandboxTemplateMutation represents an operation that mutates the SandboxTemplate nodes in the graph.
 type SandboxTemplateMutation struct {
 	config
-	op               Op
-	typ              string
-	id               *uuid.UUID
-	slug             *string
-	scope            *sandboxtemplate.Scope
-	owner_id         *string
-	purpose          *string
-	name             *string
-	description      *string
-	sandbox_image    *string
-	packages         *[]string
-	appendpackages   []string
-	dockerfile_body  *string
-	build_status     *string
-	build_job_name   *string
-	build_error      *string
-	last_built_image *string
-	build_started_at *time.Time
-	base_config      *map[string]interface{}
-	configured_by    *uuid.UUID
-	configured_at    *time.Time
-	version          *int
-	addversion       *int
-	created_by       *uuid.UUID
-	created_at       *time.Time
-	updated_at       *time.Time
-	clearedFields    map[string]struct{}
-	parent           *uuid.UUID
-	clearedparent    bool
-	children         map[uuid.UUID]struct{}
-	removedchildren  map[uuid.UUID]struct{}
-	clearedchildren  bool
-	layer            *string
-	clearedlayer     bool
-	done             bool
-	oldValue         func(context.Context) (*SandboxTemplate, error)
-	predicates       []predicate.SandboxTemplate
+	op                    Op
+	typ                   string
+	id                    *uuid.UUID
+	slug                  *string
+	scope                 *sandboxtemplate.Scope
+	owner_id              *string
+	purpose               *string
+	name                  *string
+	description           *string
+	sandbox_image         *string
+	packages              *[]string
+	appendpackages        []string
+	dockerfile_body       *string
+	build_status          *string
+	build_job_name        *string
+	build_error           *string
+	last_built_image      *string
+	build_started_at      *time.Time
+	bootstrap_files       *[]schema.BootstrapFileSchema
+	appendbootstrap_files []schema.BootstrapFileSchema
+	base_config           *map[string]interface{}
+	configured_by         *uuid.UUID
+	configured_at         *time.Time
+	version               *int
+	addversion            *int
+	created_by            *uuid.UUID
+	created_at            *time.Time
+	updated_at            *time.Time
+	clearedFields         map[string]struct{}
+	parent                *uuid.UUID
+	clearedparent         bool
+	children              map[uuid.UUID]struct{}
+	removedchildren       map[uuid.UUID]struct{}
+	clearedchildren       bool
+	layer                 *string
+	clearedlayer          bool
+	done                  bool
+	oldValue              func(context.Context) (*SandboxTemplate, error)
+	predicates            []predicate.SandboxTemplate
 }
 
 var _ ent.Mutation = (*SandboxTemplateMutation)(nil)
@@ -10733,6 +10736,71 @@ func (m *SandboxTemplateMutation) ResetBuildStartedAt() {
 	delete(m.clearedFields, sandboxtemplate.FieldBuildStartedAt)
 }
 
+// SetBootstrapFiles sets the "bootstrap_files" field.
+func (m *SandboxTemplateMutation) SetBootstrapFiles(sfs []schema.BootstrapFileSchema) {
+	m.bootstrap_files = &sfs
+	m.appendbootstrap_files = nil
+}
+
+// BootstrapFiles returns the value of the "bootstrap_files" field in the mutation.
+func (m *SandboxTemplateMutation) BootstrapFiles() (r []schema.BootstrapFileSchema, exists bool) {
+	v := m.bootstrap_files
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldBootstrapFiles returns the old "bootstrap_files" field's value of the SandboxTemplate entity.
+// If the SandboxTemplate object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SandboxTemplateMutation) OldBootstrapFiles(ctx context.Context) (v []schema.BootstrapFileSchema, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldBootstrapFiles is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldBootstrapFiles requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldBootstrapFiles: %w", err)
+	}
+	return oldValue.BootstrapFiles, nil
+}
+
+// AppendBootstrapFiles adds sfs to the "bootstrap_files" field.
+func (m *SandboxTemplateMutation) AppendBootstrapFiles(sfs []schema.BootstrapFileSchema) {
+	m.appendbootstrap_files = append(m.appendbootstrap_files, sfs...)
+}
+
+// AppendedBootstrapFiles returns the list of values that were appended to the "bootstrap_files" field in this mutation.
+func (m *SandboxTemplateMutation) AppendedBootstrapFiles() ([]schema.BootstrapFileSchema, bool) {
+	if len(m.appendbootstrap_files) == 0 {
+		return nil, false
+	}
+	return m.appendbootstrap_files, true
+}
+
+// ClearBootstrapFiles clears the value of the "bootstrap_files" field.
+func (m *SandboxTemplateMutation) ClearBootstrapFiles() {
+	m.bootstrap_files = nil
+	m.appendbootstrap_files = nil
+	m.clearedFields[sandboxtemplate.FieldBootstrapFiles] = struct{}{}
+}
+
+// BootstrapFilesCleared returns if the "bootstrap_files" field was cleared in this mutation.
+func (m *SandboxTemplateMutation) BootstrapFilesCleared() bool {
+	_, ok := m.clearedFields[sandboxtemplate.FieldBootstrapFiles]
+	return ok
+}
+
+// ResetBootstrapFiles resets all changes to the "bootstrap_files" field.
+func (m *SandboxTemplateMutation) ResetBootstrapFiles() {
+	m.bootstrap_files = nil
+	m.appendbootstrap_files = nil
+	delete(m.clearedFields, sandboxtemplate.FieldBootstrapFiles)
+}
+
 // SetBaseConfig sets the "base_config" field.
 func (m *SandboxTemplateMutation) SetBaseConfig(value map[string]interface{}) {
 	m.base_config = &value
@@ -11225,7 +11293,7 @@ func (m *SandboxTemplateMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SandboxTemplateMutation) Fields() []string {
-	fields := make([]string, 0, 23)
+	fields := make([]string, 0, 24)
 	if m.slug != nil {
 		fields = append(fields, sandboxtemplate.FieldSlug)
 	}
@@ -11273,6 +11341,9 @@ func (m *SandboxTemplateMutation) Fields() []string {
 	}
 	if m.build_started_at != nil {
 		fields = append(fields, sandboxtemplate.FieldBuildStartedAt)
+	}
+	if m.bootstrap_files != nil {
+		fields = append(fields, sandboxtemplate.FieldBootstrapFiles)
 	}
 	if m.base_config != nil {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
@@ -11335,6 +11406,8 @@ func (m *SandboxTemplateMutation) Field(name string) (ent.Value, bool) {
 		return m.LastBuiltImage()
 	case sandboxtemplate.FieldBuildStartedAt:
 		return m.BuildStartedAt()
+	case sandboxtemplate.FieldBootstrapFiles:
+		return m.BootstrapFiles()
 	case sandboxtemplate.FieldBaseConfig:
 		return m.BaseConfig()
 	case sandboxtemplate.FieldConfiguredBy:
@@ -11390,6 +11463,8 @@ func (m *SandboxTemplateMutation) OldField(ctx context.Context, name string) (en
 		return m.OldLastBuiltImage(ctx)
 	case sandboxtemplate.FieldBuildStartedAt:
 		return m.OldBuildStartedAt(ctx)
+	case sandboxtemplate.FieldBootstrapFiles:
+		return m.OldBootstrapFiles(ctx)
 	case sandboxtemplate.FieldBaseConfig:
 		return m.OldBaseConfig(ctx)
 	case sandboxtemplate.FieldConfiguredBy:
@@ -11525,6 +11600,13 @@ func (m *SandboxTemplateMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetBuildStartedAt(v)
 		return nil
+	case sandboxtemplate.FieldBootstrapFiles:
+		v, ok := value.([]schema.BootstrapFileSchema)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetBootstrapFiles(v)
+		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		v, ok := value.(map[string]interface{})
 		if !ok {
@@ -11637,6 +11719,9 @@ func (m *SandboxTemplateMutation) ClearedFields() []string {
 	if m.FieldCleared(sandboxtemplate.FieldBuildStartedAt) {
 		fields = append(fields, sandboxtemplate.FieldBuildStartedAt)
 	}
+	if m.FieldCleared(sandboxtemplate.FieldBootstrapFiles) {
+		fields = append(fields, sandboxtemplate.FieldBootstrapFiles)
+	}
 	if m.FieldCleared(sandboxtemplate.FieldBaseConfig) {
 		fields = append(fields, sandboxtemplate.FieldBaseConfig)
 	}
@@ -11680,6 +11765,9 @@ func (m *SandboxTemplateMutation) ClearField(name string) error {
 		return nil
 	case sandboxtemplate.FieldBuildStartedAt:
 		m.ClearBuildStartedAt()
+		return nil
+	case sandboxtemplate.FieldBootstrapFiles:
+		m.ClearBootstrapFiles()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ClearBaseConfig()
@@ -11748,6 +11836,9 @@ func (m *SandboxTemplateMutation) ResetField(name string) error {
 		return nil
 	case sandboxtemplate.FieldBuildStartedAt:
 		m.ResetBuildStartedAt()
+		return nil
+	case sandboxtemplate.FieldBootstrapFiles:
+		m.ResetBootstrapFiles()
 		return nil
 	case sandboxtemplate.FieldBaseConfig:
 		m.ResetBaseConfig()

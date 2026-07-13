@@ -40,7 +40,7 @@ Fleet today is domain-agnostic in spirit but constrained in practice:
 **Owner decisions locked in the prior interview:**
 
 1. **Backend scope:** Full — schema + durable state + bounded parallel activation + durable task board + durable mailbox (replaces in-memory `Message` envelope for cross-agent handoffs).
-2. **Software-dev fleet:** Migrate + upgrade — parallelize `@qa` and `@e2e` downstream of `@dev`; isolate `@architect` workspace; declare capabilities/execution/memory explicitly.
+2. **Software-dev fleet:** Sequential Dev → QA → (PO) → E2E with direct-coding agents, mailbox + task board, and `project_context.load_file` (no OpenCode in the bundled flow). Parallel dispatcher remains available for custom templates.
 3. **Frontend:** Full editor UI — refactor `TemplateDetail`, `PlanDetail`, `SessionTrace`, `FleetExecutionPanel` (per-agent lanes when parallelism > 1) **and** add a form-based in-Studio editor for templates and per-agent config.
 4. **Domain neutrality:** Free-form `map[string]bool` capabilities plus an optional registry hint (no hardcoded enum).
 5. **High-accuracy review:** Skipped — ship the plan as soon as approved.
@@ -708,34 +708,33 @@ Worker will produce a Figma-parity mock at M9 start and confirm the visual direc
 
 ---
 
-## 6. `pkg/fleet/bundled/software-dev.yaml` — Migrate + Upgrade
+## 6. `pkg/fleet/bundled/software-dev.yaml` — Current contract
 
-Non-breaking edits (existing plans keep parsing; only new fields are added):
+Bundled software-dev is **sequential** (Dev → QA → PO review → E2E). Agents code with native tools (no OpenCode delegate). Project context is **load_file** (AGENTS.md produced during setup with core tools).
 
 ```yaml
 settings:
-  max_turns_per_agent: 20
-  max_parallel_agents: 2           # enables QA + E2E in parallel after Dev commits
+  max_turns_per_agent: 30
+  max_parallel_agents: 1           # serial activation for software-dev
   max_wall_clock_minutes: 180
   routing_mode: llm_mentions
   memory_visibility: scoped
   task_board:
-    claim_policy: capability_match # task board always on; PO posts with required_capabilities
+    claim_policy: capability_match
+
+project_context:
+  generator: load_file
+  output_file: AGENTS.md
+  max_size_kb: 10
 
 agents:
   po:
-    # ...existing name / identity / mode / tools / behaviors unchanged
     capabilities: { planning: true, requirements: true, supervisor: true }
     execution: { parallelizable: false, workspace: shared, timeout_minutes: 30 }
-    memory: { private_work: false }
 
   architect:
     capabilities: { "design.architecture": true }
-    execution:
-      parallelizable: false
-      workspace: isolated          # NEW — architect gets its own worktree so it can't step on dev's edits
-      timeout_minutes: 45
-    memory: { private_work: true } # design exploration stays private; only the final architecture doc handoffs
+    execution: { parallelizable: false, workspace: shared, timeout_minutes: 45 }
 
   ux:
     capabilities: { "design.ux": true }
@@ -743,24 +742,19 @@ agents:
 
   dev:
     capabilities: { "code.write": true, "code.test": true }
-    execution: { parallelizable: false, workspace: shared, timeout_minutes: 60 }
+    execution: { parallelizable: false, workspace: shared, timeout_minutes: 90 }
+    # talks_to: [po, qa] — hands off directly to QA after implementation
 
   qa:
     capabilities: { "code.test": true, "code.review": true }
-    execution:
-      parallelizable: true         # NEW — QA runs concurrently with E2E after dev commits
-      workspace: shared
-      timeout_minutes: 45
+    execution: { parallelizable: false, workspace: shared, timeout_minutes: 45 }
 
   e2e:
     capabilities: { "code.test": true, "ops.observe": true }
-    execution:
-      parallelizable: true         # NEW — E2E runs concurrently with QA
-      workspace: shared
-      timeout_minutes: 60
+    execution: { parallelizable: false, workspace: shared, timeout_minutes: 60 }
 ```
 
-The `communication.flow` block is **unchanged** — PO still fans out to all agents. What changes is that when PO sends to both QA and E2E in the same turn (via two `@mentions`), the dispatcher activates them concurrently.
+Flow: Dev `@mention`s QA; QA reports to PO; PO sends E2E only after QA approval. PO must not `@qa` and `@e2e` in the same message. Parallel dispatcher remains available for **custom** templates with `max_parallel_agents ≥ 2`.
 
 ---
 

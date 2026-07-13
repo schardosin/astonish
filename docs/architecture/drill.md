@@ -27,6 +27,22 @@ Real applications often require multiple services (database, backend, frontend).
 
 Services are started in declaration order and stopped in reverse order. Each service can have its own ready check and environment variables.
 
+### Canonical start script (template bootstrap)
+
+For multi-service apps, prefer a single spawn-and-return script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed. Drill suite `setup` (and fleet/chat agents) call it explicitly after credentials are available:
+
+```yaml
+suite_config:
+  template: "@myapp"
+  setup:
+    - "bash /root/myapp/.astonish/start-services.sh"
+  ready_check:
+    type: http
+    url: "http://localhost:3000/"
+  teardown:
+    - "bash /root/myapp/.astonish/stop-services.sh || true"
+```
+
 ### Why Visual Regression Testing
 
 Drill includes pixel-level visual comparison:

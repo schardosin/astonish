@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
+	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplate is the model entity for the SandboxTemplate schema.
@@ -52,6 +53,8 @@ type SandboxTemplate struct {
 	LastBuiltImage string `json:"last_built_image,omitempty"`
 	// BuildStartedAt holds the value of the "build_started_at" field.
 	BuildStartedAt *time.Time `json:"build_started_at,omitempty"`
+	// BootstrapFiles holds the value of the "bootstrap_files" field.
+	BootstrapFiles []schema.BootstrapFileSchema `json:"bootstrap_files,omitempty"`
 	// BaseConfig holds the value of the "base_config" field.
 	BaseConfig map[string]interface{} `json:"base_config,omitempty"`
 	// ConfiguredBy holds the value of the "configured_by" field.
@@ -123,7 +126,7 @@ func (*SandboxTemplate) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case sandboxtemplate.FieldParentTemplateID, sandboxtemplate.FieldConfiguredBy, sandboxtemplate.FieldCreatedBy:
 			values[i] = &sql.NullScanner{S: new(uuid.UUID)}
-		case sandboxtemplate.FieldPackages, sandboxtemplate.FieldBaseConfig:
+		case sandboxtemplate.FieldPackages, sandboxtemplate.FieldBootstrapFiles, sandboxtemplate.FieldBaseConfig:
 			values[i] = new([]byte)
 		case sandboxtemplate.FieldVersion:
 			values[i] = new(sql.NullInt64)
@@ -256,6 +259,14 @@ func (_m *SandboxTemplate) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.BuildStartedAt = new(time.Time)
 				*_m.BuildStartedAt = value.Time
+			}
+		case sandboxtemplate.FieldBootstrapFiles:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field bootstrap_files", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.BootstrapFiles); err != nil {
+					return fmt.Errorf("unmarshal field bootstrap_files: %w", err)
+				}
 			}
 		case sandboxtemplate.FieldBaseConfig:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -412,6 +423,9 @@ func (_m *SandboxTemplate) String() string {
 		builder.WriteString("build_started_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("bootstrap_files=")
+	builder.WriteString(fmt.Sprintf("%v", _m.BootstrapFiles))
 	builder.WriteString(", ")
 	builder.WriteString("base_config=")
 	builder.WriteString(fmt.Sprintf("%v", _m.BaseConfig))

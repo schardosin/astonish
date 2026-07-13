@@ -1154,8 +1154,9 @@ func Run(cfg RunConfig) error {
 			activator.SetSessionRegistry(api.GetFleetSessionRegistry())
 
 			// Wire OpenCode binary finder for project context generation.
-			// Fleet templates can define a project_context section that runs
-			// OpenCode /init to generate AGENTS.md before agents start.
+			// Custom/legacy plans may still use project_context.generator:
+			// opencode_init. Bundled software-dev uses load_file (AGENTS.md
+			// written during setup with core tools).
 			fleet.OpenCodeBinaryFinder = tools.FindOpenCodeBinary
 
 			// Restore previously activated plans (re-create monitors)

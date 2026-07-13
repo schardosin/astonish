@@ -219,16 +219,16 @@ Ask the user: "I started <service> but I'm not sure how to verify it's
 working. What endpoint or port should I check?"
 
 **1h-iv. Record what you learned for this service (this becomes the suite YAML):**
-- The exact build command → becomes a setup command in Step 3
-- The exact run/start command → becomes a setup command (or service setup) in Step 3.
-  When writing this into suite YAML, append & to background it (the test runner
-  auto-detects trailing & and handles it correctly).
+- Prefer writing/updating <workspace>/.astonish/start-services.sh (spawn-and-return) and
+  stop-services.sh once the recipe works — suite setup should call those scripts.
+- The exact build command → optional prior setup step in Step 3
+- The exact run/start command → fold into start-services.sh; suite setup runs the script
 - How to verify the service is ready (endpoint, port, output) → becomes ready_check in Step 3
-- The exact stop/teardown command → becomes teardown in Step 3
+- The exact stop/teardown command → fold into stop-services.sh / suite teardown
 
 Do NOT save this information to memory (memory_save) or SELF.md. It belongs
-in the suite YAML that you will generate in Step 3. Keep it in your working
-context as you continue through the remaining steps.
+in the suite YAML (and template bootstrap_files) that you will generate in Step 3.
+Keep it in your working context as you continue through the remaining steps.
 
 Stop any background processes after verification using process_kill with the
 session_id (you will start them again during test execution via the suite YAML).
@@ -336,8 +336,7 @@ application, and how to verify it is ready.
       base_url: "http://{{CONTAINER_IP}}:3000"  # OPTIONAL — for browser tests in sandbox mode.
                                                  # Without sandbox, use "http://localhost:3000".
       setup:
-        - "<build command>"              # e.g., "cd /root/myapp && go build -o myapp ."
-        - "<start command> &"            # e.g., "cd /root/myapp && ./myapp &"
+        - "bash /root/myapp/.astonish/start-services.sh"  # spawn-and-return script from template
       ready_check:                       # OPTIONAL — only for servers/daemons
         type: http                       # "http", "port", or "output_contains"
         url: "http://localhost:8080/health"  # For http type
@@ -346,7 +345,7 @@ application, and how to verify it is ready.
         timeout: 30
         interval: 2
       teardown:
-        - "pkill -f myapp || true"       # Always clean up processes
+        - "bash /root/myapp/.astonish/stop-services.sh || true"
       environment:
         MY_ENV_VAR: "test-value"         # Optional shared env vars
 
@@ -484,13 +483,15 @@ localhost reaches the service. Only browser_navigate needs the container bridge 
 
 Guidelines:
 - Setup commands run IN ORDER before any tests.
-- For single-service suites, use & to background long-running processes in
-  setup commands. The test runner automatically detects trailing & and uses
-  the background mode internally, so the process stays alive (unlike when
-  you use & directly with shell_command during the wizard — see Rule 10).
-- For multi-service suites, each service setup command is a single string.
-  Use & to background it if it is a long-running daemon.
-- Always include teardown to kill background processes.
+- Prefer bash <workspace>/.astonish/start-services.sh when that template
+  bootstrap script exists (spawn-and-return). Otherwise, for single-service
+  suites, use & to background long-running processes in setup commands. The
+  test runner automatically detects trailing & and uses the background mode
+  internally, so the process stays alive (unlike when you use & directly with
+  shell_command during the wizard — see Rule 10).
+- For multi-service suites, prefer one start script in top-level setup, or
+  per-service setup strings with & for daemons.
+- Always include teardown (prefer stop-services.sh when present).
 - Use "|| true" in teardown so cleanup never fails the suite.
 - Ready check should match what you verified in Step 1h.
 - Template field stores the sandbox template name from Step 1i (if applicable).

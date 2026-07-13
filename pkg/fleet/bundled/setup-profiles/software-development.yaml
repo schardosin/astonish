@@ -232,12 +232,14 @@ steps:
     First, check if AGENTS.md already exists in the project:\n```\nshell_command(command: \"test -f /root/<repo-name>/AGENTS.md\
     \ && echo EXISTS || echo MISSING\")\n```\n\n**If EXISTS:** Read it directly — no need to regenerate:\n```\nread_file(path:\
     \ \"/root/<repo-name>/AGENTS.md\")\n```\nPresent a brief summary to the user:\n\"Found an existing AGENTS.md. Here's what\
-    \ it says:\n[summarize key points: stack, structure, build commands].\"\n\n**If MISSING:** Generate it using the `opencode`\
-    \ tool:\n```\nopencode(task: \"Analyze this codebase and generate or update the AGENTS.md file with project structure,\
-    \ build/test/lint commands, code conventions, and key architectural patterns. Keep it concise and focused on what an AI\
-    \ coding agent needs to know.\", dir: \"/root/<repo-name>\")\n```\n\nAfter generation, read and present the result:\n\
-    ```\nread_file(path: \"/root/<repo-name>/AGENTS.md\")\n```\n\nPresent a brief summary. For example:\n\"I analyzed the\
-    \ project and found it's a Vue.js + Go application with\nsource code in trade-app/ and a Go backend in cmd/.\"\n\n**3e-scope.\
+    \ it says:\n[summarize key points: stack, structure, build commands].\"\n\n**If MISSING:** Generate AGENTS.md yourself using core tools (do NOT use OpenCode\
+    \ or any delegate tool):\n1. Survey structure with `file_tree` (shallow) and `find_files` / `shell_command`\
+    \ for markers (`go.mod`, `package.json`, `Makefile`, `Cargo.toml`, CI configs).\n2. Use `read_file` and `grep_search`\
+    \ on README, Makefile/scripts, and CI to extract build/test/lint/run commands and conventions.\n3. Write a concise AGENTS.md\
+    \ (keep under ~10KB) with `write_file` covering: stack, layout, build/test/lint/run commands,\
+    \ key conventions, and architectural patterns an AI coding agent needs. Include `Start stack: bash <workspace>/.astonish/start-services.sh`.\n4. Read it back and present a brief summary.\
+    \ For example:\n\"I analyzed the project and found it's a Vue.js + Go application with\nsource code in trade-app/ and\
+    \ a Go backend in cmd/.\"\n\n**3e-scope.\
     \ Identify services and confirm scope with the user.**\n\nIf the project contains MULTIPLE services (e.g., backend + frontend,\n\
     API + microservices, monorepo with subprojects):\n\n1. List the services you found and their roles (from AGENTS.md, README,\n\
     \   docker-compose.yml, or directory structure).\n2. Present them to the user and explicitly ask:\n\n   \"I found these\
@@ -302,7 +304,16 @@ steps:
     \n   **For API key / environment variable / credentials file configuration:**\n   - Ask the user for values and save with `save_credential` (api_key for YAML/JSON blobs,\n     bearer for tokens)\n   - Map logical names in `plan.credentials` and add `credential_injection` (env + files)\n   - Do NOT write secrets into container config files that will be saved in the template\n   - Verify services using runtime-injected credentials during drill runs\n\n   **For database seeding / initial data:**\n   - Run the seed commands the user provides\n   - Verify\
     \ the data is accessible through the service\n\n   After ALL configuration is complete, re-verify each service:\n   ```\n\
     \   shell_command(command: \"curl -s http://localhost:8080/health\")\n   ```\n   Confirm with the user: \"Configuration\
-    \ is complete. All services are\n   responding correctly. Ready to proceed?\"\n\n5. **Stop all services.** Use `process_kill`\
+    \ is complete. All services are\n   responding correctly. Ready to proceed?\"\n\n5. **Persist the working start recipe as scripts (REQUIRED).**\
+    \ From the EXACT commands that successfully started the services above, write:\
+    \ - `<workspace>/.astonish/start-services.sh` — spawn all in-scope services, log under\
+    \   `.astonish/`, and **return** (do not block forever).\
+    \ - `<workspace>/.astonish/stop-services.sh` — best-effort stop.\
+    \ Use `write_file` with absolute paths. These become the single launch path for drills,\
+    \ fleet agents, and chat. Do NOT paraphrase — copy the working recipe.\
+    \n\
+    \n\
+6. **Stop all services.** Use `process_kill`\
     \ to stop any background\n   processes started in sub-step 1. The container must be quiescent\n   before entering the\
     \ drill suite creation step (Step 3i will start\n   services again for drill assertion design).\n\n**Do NOT proceed to\
     \ Step 3i until the user confirms everything is configured.**\n\n**3i. Create a baseline drill suite for E2E regression\
@@ -312,14 +323,16 @@ steps:
     hit an endpoint (or run a CLI operation), and assert the response. A drill\nthat just runs `go build` or `npm run build`\
     \ adds zero value beyond 3h.\n\nUse the repository name (the same name you will use for the template in 3j)\nas the suite\
     \ name. This keeps naming consistent: template, plan key, and\ndrill suite all share the same name.\n\n**Sub-steps:**\n\
-    \n1. **Start the service(s)** in the container using the exact commands\n   from Step 3h-v. Use shell_command with background=true\
-    \ for servers.\n   Verify they are accessible (same method as 3h-v).\n   You need the service running so you can observe\
-    \ real responses for\n   designing drill assertions in sub-step 3.\n\n2. **Design the suite YAML.** The suite's `setup:`\
+    \n1. **Start the service(s)** using the canonical script from 3h-v:\
+    \   `shell_command(command: "bash <workspace>/.astonish/start-services.sh")`\
+    \   (the script spawns services and returns). Verify with the same ready checks\
+    \   as 3h-v. Do NOT reinvent start one-liners.\n\n2. **Design the suite YAML.** The suite's `setup:`\
     \ and `ready_check:` handle\n   building and starting services BEFORE any drill runs. Use the exact\n   commands from\
-    \ Steps 3h and 3h-v:\n   - `setup:` — the build command(s) AND start command(s). Append `&` to\n     background long-running\
-    \ processes (the drill runner auto-detects this).\n   - `ready_check:` — the verification method (type: http, port, or\n\
-    \     output_contains) with the same endpoint/port you tested.\n   - `teardown:` — the stop command(s) to cleanly shut\
-    \ down services.\n   - `template:` — the template name (same as what you will save in 3j).\n   - For multi-service projects,\
+    \ Steps 3h and 3h-v:\n   - `setup:` — call the canonical start script, e.g.\
+    \     `bash <workspace>/.astonish/start-services.sh`\
+    \     (optional prior build step if needed). Do NOT reinvent one-liner start\
+    \     commands — use the script proven in 3h-v.\n- `ready_check:` — the verification method (type: http, port, or\n\
+    \     output_contains) with the same endpoint/port you tested.\n   - `teardown:` — `bash <workspace>/.astonish/stop-services.sh || true`\n- `template:` — the template name (same as what you will save in 3j).\n   - For multi-service projects,\
     \ use the `services:` format instead.\n\n   The suite handles building and starting. The drills (sub-step 3) test\n  \
     \ the RUNNING service.\n\n3. **Design 2-3 smoke drill YAMLs that test runtime behavior.**\n\n   Before writing any drill\
     \ YAML, use `shell_command` to manually run\n   each operation you plan to test against the live service started in\n\
@@ -356,9 +369,15 @@ steps:
     \   started in sub-step 1. The template must be saved in a quiescent state.\n\n**Do NOT proceed to Step 3j until the drill\
     \ suite passes.**\n\n**3j. Save the sandbox template (code + deps only — no secrets).**\n\nOnce the build passes and drills are designed, freeze the baseline environment.\n\
     On **Incus**, save a sandbox template. On **OpenShell**, save an image/build spec\n    without secrets — credentials are injected at fleet session start via\n    `credential_injection`.\n```\n\
-    save_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary, e.g., 'Go\
-    \ 1.24 + Node 22 + project deps'>\")\n```\nUse the repository name (e.g., \"billing-api\" from \"acme/billing-api\") as\n\
-    the template name. This keeps naming consistent and predictable.\n\nThe returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
+    save_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary>\",\
+    \ bootstrap_files: [\
+    \   {path: \"/root/<repo-name>/.astonish/start-services.sh\", content: \"<file contents>\", mode: \"0755\"},\
+    \   {path: \"/root/<repo-name>/.astonish/stop-services.sh\", content: \"<file contents>\", mode: \"0755\"}\
+    \ ])\n```\nUse the repository name (e.g., \"billing-api\" from \"acme/billing-api\") as\n\
+    the template name. This keeps naming consistent and predictable.\n\nALWAYS pass `bootstrap_files` with the start/stop scripts written in 3h-v so every\
+    \ future container from this template gets them injected (not auto-run).\
+    \n\
+    \The returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
     `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
     `credential_injection` from the encrypted store.\"\n\n**Do NOT\
     \ proceed to step 4 until the template is saved.**"
@@ -367,6 +386,11 @@ steps:
   - list_sandbox_templates
   - run_drill
   - shell_command
+  - read_file
+  - write_file
+  - file_tree
+  - find_files
+  - grep_search
   pinned_tool_groups:
   - sandbox_templates
   - drill

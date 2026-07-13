@@ -142,6 +142,8 @@ agents:
       - All agents report back to you. You review their output and decide next steps.
       - Use @customer to ask the customer questions or present deliverables for approval
       - @dev hands off directly to @qa after implementation. You review AFTER QA completes.
+      - Run the pipeline sequentially: never @mention @qa and @e2e in the same message.
+        Send @e2e only after QA has approved.
 
       **Triage every request into one of two routes.**
 
@@ -302,17 +304,15 @@ agents:
       folder (e.g., <workspace>/docs/<task>/architecture.md).
 
       **Codebase exploration:**
-      Use your tools directly to understand the existing codebase:
-      - `file_tree` to understand the project structure
-      - `grep_search` to find relevant patterns, interfaces, and implementations
-      - `find_files` to locate specific file types or naming conventions
+      Prefer the Project Context / AGENTS.md already in your system prompt —
+      do NOT start with a full-repo `file_tree`. Scope `grep_search` and
+      `find_files` to packages/paths from that index and the requirements doc.
+      Deepen with `read_file` only on hit files; batch related reads.
+      Use tools as needed:
+      - `grep_search` for relevant patterns, interfaces, and implementations
+      - `find_files` for specific file types or naming conventions
       - `read_file` to study key modules, interfaces, and data models
-      - `shell_command` to run git log, check dependencies, examine build configs
-
-      Explore broadly first (file_tree, grep for key patterns), then drill into
-      specific files. Batch multiple grep_search and read_file calls when you
-      need to understand several related modules — don't read one file at a time
-      when you could read three in parallel.
+      - `shell_command` for git log, dependencies, or build configs when needed
 
       **When you receive requirements from the PO:**
       1. Read the requirements document carefully using read_file.
@@ -326,12 +326,10 @@ agents:
       design in a single large write. Complex systems have many components
       and a single large write will miss important details. Instead:
 
-      **Step 1: Explore the codebase.**
-      Before designing anything, understand what already exists:
-      - Use `file_tree` to see the project structure
-      - Use `grep_search` to find relevant interfaces, patterns, data models
-      - Use `read_file` on key files to understand existing architecture
-      - Use `shell_command` with `git log --oneline -20` to see recent history
+      **Step 1: Explore the relevant codebase (scoped).**
+      Before designing anything, understand what already exists in the areas
+      touched by the requirements — use AGENTS.md paths, then targeted grep/read.
+      Avoid whole-repo walks.
 
       **Step 2: Outline.**
       After reading the requirements and understanding the codebase, plan the
@@ -424,15 +422,15 @@ agents:
       folder (e.g., <workspace>/docs/<task>/ux-design.md).
 
       **Codebase exploration:**
-      Use your tools directly to understand the existing UI:
-      - `file_tree` to see component structure
-      - `grep_search` to find UI patterns, styling conventions, component usage
-      - `find_files` to locate stylesheets, component files, layout modules
+      Prefer the Project Context / AGENTS.md already in your system prompt —
+      do NOT start with a full-repo `file_tree`. Scope `grep_search` and
+      `find_files` to UI packages/paths from that index and the requirements.
+      Deepen with `read_file` only on hit files; batch related reads.
+      Use tools as needed:
+      - `grep_search` for UI patterns, styling conventions, component usage
+      - `find_files` for stylesheets, component files, layout modules
       - `read_file` to study specific components that will be affected
       - `shell_command` to check package.json for UI framework/library versions
-
-      Explore broadly first, then drill into the specific UI areas affected by
-      the change. Batch multiple read_file calls when analyzing related components.
 
       **When you receive a request from the PO:**
       1. Read the requirements and any existing technical design documents.
@@ -441,12 +439,11 @@ agents:
 
       **Design process (follow this pattern):**
 
-      **Step 1: Analyze the existing UI.**
-      Use your tools to examine the current interface:
-      - `file_tree` on the UI source directory to see component structure
+      **Step 1: Analyze the existing UI (scoped).**
+      Use AGENTS.md and the requirements to locate the affected UI areas, then:
       - `grep_search` for styling patterns (CSS classes, theme variables, spacing)
       - `read_file` on components that will be affected by the changes
-      - `find_files` for related components (e.g., "*.tsx" in the relevant directory)
+      - `find_files` for related components in the relevant directory only
 
       **Step 2: Evaluate the impact.**
       Based on the requirements and the existing UI analysis, determine:
@@ -669,7 +666,7 @@ agents:
       code.test: true
       code.review: true
     execution:
-      parallelizable: true
+      parallelizable: false
       workspace: shared
       timeout_minutes: 45
     task_policy:
@@ -794,7 +791,7 @@ agents:
       code.test: true
       ops.observe: true
     execution:
-      parallelizable: true
+      parallelizable: false
       workspace: shared
       timeout_minutes: 60
     task_policy:
@@ -870,6 +867,11 @@ agents:
       browser_snapshot, browser_click, etc.) and http_request/curl to explore
       the RUNNING application — this is how you understand what the app
       actually does and what to assert in your drills.
+
+      **Starting the stack:** If `<workspace>/.astonish/start-services.sh` exists
+      (injected from the sandbox template), use it to start services after
+      credentials are available. Prefer that script over ad-hoc background
+      one-liners. Suites should call the same script in `setup:`.
 
       ## UI-First Testing (CRITICAL RULE)
 
@@ -1247,7 +1249,7 @@ agents:
 
 settings:
   max_turns_per_agent: 30
-  max_parallel_agents: 2
+  max_parallel_agents: 1
   max_wall_clock_minutes: 180
   routing_mode: llm_mentions
   memory_visibility: scoped
@@ -1255,6 +1257,6 @@ settings:
     claim_policy: capability_match
 
 project_context:
-  generator: opencode_init
+  generator: load_file
   output_file: AGENTS.md
   max_size_kb: 10

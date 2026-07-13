@@ -16,6 +16,7 @@ import (
 	"github.com/schardosin/astonish/ent/platform/predicate"
 	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
 	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
+	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplateUpdate is the builder for updating SandboxTemplate entities.
@@ -286,6 +287,24 @@ func (_u *SandboxTemplateUpdate) SetNillableBuildStartedAt(v *time.Time) *Sandbo
 // ClearBuildStartedAt clears the value of the "build_started_at" field.
 func (_u *SandboxTemplateUpdate) ClearBuildStartedAt() *SandboxTemplateUpdate {
 	_u.mutation.ClearBuildStartedAt()
+	return _u
+}
+
+// SetBootstrapFiles sets the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdate) SetBootstrapFiles(v []schema.BootstrapFileSchema) *SandboxTemplateUpdate {
+	_u.mutation.SetBootstrapFiles(v)
+	return _u
+}
+
+// AppendBootstrapFiles appends value to the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdate) AppendBootstrapFiles(v []schema.BootstrapFileSchema) *SandboxTemplateUpdate {
+	_u.mutation.AppendBootstrapFiles(v)
+	return _u
+}
+
+// ClearBootstrapFiles clears the value of the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdate) ClearBootstrapFiles() *SandboxTemplateUpdate {
+	_u.mutation.ClearBootstrapFiles()
 	return _u
 }
 
@@ -605,6 +624,17 @@ func (_u *SandboxTemplateUpdate) sqlSave(ctx context.Context) (_node int, err er
 	}
 	if _u.mutation.BuildStartedAtCleared() {
 		_spec.ClearField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BootstrapFiles(); ok {
+		_spec.SetField(sandboxtemplate.FieldBootstrapFiles, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBootstrapFiles(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, sandboxtemplate.FieldBootstrapFiles, value)
+		})
+	}
+	if _u.mutation.BootstrapFilesCleared() {
+		_spec.ClearField(sandboxtemplate.FieldBootstrapFiles, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)
@@ -1020,6 +1050,24 @@ func (_u *SandboxTemplateUpdateOne) ClearBuildStartedAt() *SandboxTemplateUpdate
 	return _u
 }
 
+// SetBootstrapFiles sets the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdateOne) SetBootstrapFiles(v []schema.BootstrapFileSchema) *SandboxTemplateUpdateOne {
+	_u.mutation.SetBootstrapFiles(v)
+	return _u
+}
+
+// AppendBootstrapFiles appends value to the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdateOne) AppendBootstrapFiles(v []schema.BootstrapFileSchema) *SandboxTemplateUpdateOne {
+	_u.mutation.AppendBootstrapFiles(v)
+	return _u
+}
+
+// ClearBootstrapFiles clears the value of the "bootstrap_files" field.
+func (_u *SandboxTemplateUpdateOne) ClearBootstrapFiles() *SandboxTemplateUpdateOne {
+	_u.mutation.ClearBootstrapFiles()
+	return _u
+}
+
 // SetBaseConfig sets the "base_config" field.
 func (_u *SandboxTemplateUpdateOne) SetBaseConfig(v map[string]interface{}) *SandboxTemplateUpdateOne {
 	_u.mutation.SetBaseConfig(v)
@@ -1366,6 +1414,17 @@ func (_u *SandboxTemplateUpdateOne) sqlSave(ctx context.Context) (_node *Sandbox
 	}
 	if _u.mutation.BuildStartedAtCleared() {
 		_spec.ClearField(sandboxtemplate.FieldBuildStartedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.BootstrapFiles(); ok {
+		_spec.SetField(sandboxtemplate.FieldBootstrapFiles, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedBootstrapFiles(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, sandboxtemplate.FieldBootstrapFiles, value)
+		})
+	}
+	if _u.mutation.BootstrapFilesCleared() {
+		_spec.ClearField(sandboxtemplate.FieldBootstrapFiles, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.BaseConfig(); ok {
 		_spec.SetField(sandboxtemplate.FieldBaseConfig, field.TypeJSON, value)

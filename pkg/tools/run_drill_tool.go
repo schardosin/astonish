@@ -39,24 +39,28 @@ type RunDrillResult struct {
 // For chat sessions, nodePool is set and lazyClient is resolved at runtime.
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
-	nodePool         *sandbox.NodeClientPool    // Chat/Studio sessions (nil when no sandbox)
-	templateRegistry *sandbox.TemplateRegistry  // Optional; used to inject bootstrap_files after auto-switch
-	lazyClient       *sandbox.LazyNodeClient    // Fleet Incus sessions
-	toolClient       sandbox.ToolNodeClient     // Fleet backend-agnostic sessions
-	sessionID        string                     // Fleet session ID (empty for chat sessions)
-	llmProvider      adrill.LLMProvider         // Optional LLM for semantic assertions
+	nodePool         *sandbox.NodeClientPool   // Chat/Studio sessions (nil when no sandbox)
+	templateRegistry *sandbox.TemplateRegistry // Optional; used to inject bootstrap_files after auto-switch
+	browserMgr       *browser.Manager          // Shared in-container browser (chat/fleet); never host Chrome
+	lazyClient       *sandbox.LazyNodeClient   // Fleet Incus sessions
+	toolClient       sandbox.ToolNodeClient    // Fleet backend-agnostic sessions
+	sessionID        string                    // Fleet session ID (empty for chat sessions)
+	llmProvider      adrill.LLMProvider        // Optional LLM for semantic assertions
 }
 
 // NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
 // tplRegistry is optional — when set, auto-switching to the suite template also
 // injects that template's bootstrap_files.
+// browserMgr should be the chat-wired Manager (SandboxEnabled + container callbacks).
+// Browser steps refuse to launch host Chromium when browserMgr is nil or unwired.
 // llmProvider is optional — when set, semantic assertions (assert.type: "semantic")
 // will use it to evaluate whether tool output satisfies the expected condition.
-func NewRunDrillTool(nodePool *sandbox.NodeClientPool, tplRegistry *sandbox.TemplateRegistry, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+func NewRunDrillTool(nodePool *sandbox.NodeClientPool, tplRegistry *sandbox.TemplateRegistry, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
 		nodePool:         nodePool,
 		templateRegistry: tplRegistry,
+		browserMgr:       browserMgr,
 		llmProvider:      llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
@@ -64,10 +68,12 @@ func NewRunDrillTool(nodePool *sandbox.NodeClientPool, tplRegistry *sandbox.Temp
 
 // NewRunDrillToolWithClient creates the run_drill tool for fleet sessions
 // with a dedicated LazyNodeClient that routes into the fleet's container.
-func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+// browserMgr must be wired for in-container Chromium (same session as lazyClient).
+func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
 		lazyClient:  lazyClient,
 		sessionID:   sessionID,
+		browserMgr:  browserMgr,
 		llmProvider: llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
@@ -75,10 +81,12 @@ func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID str
 
 // NewRunDrillToolWithToolClient creates run_drill for fleet sessions using a
 // backend-agnostic ToolNodeClient (OpenShell/K8s fleet path).
-func NewRunDrillToolWithToolClient(client sandbox.ToolNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+// browserMgr must be wired for in-container Chromium when browser steps are used.
+func NewRunDrillToolWithToolClient(client sandbox.ToolNodeClient, sessionID string, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
 		toolClient:  client,
 		sessionID:   sessionID,
+		browserMgr:  browserMgr,
 		llmProvider: llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
@@ -98,7 +106,8 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 			"When the suite declares a sandbox template and the current session is on a different " +
 			"template (typically @base), run_drill switches to the suite template first, then runs. " +
 			"Pass force=true only if the user explicitly wants to stay on the current container. " +
-			"Shell and file tool steps are routed into the sandbox container; browser tool steps run on the host. " +
+			"Shell, file, and browser tool steps all run inside the sandbox container " +
+			"(browser via Chromium+KasmVNC in the session — same as chat). Use localhost in URLs. " +
 			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
 }
@@ -355,7 +364,7 @@ func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
 	}
 
 	hasSandbox := toolClient != nil
-	browserExec := newTestBrowserExecutor(hasSandbox)
+	browserExec := newTestBrowserExecutor(deps.browserMgr, sessionID, hasSandbox)
 
 	if toolClient != nil {
 		return &testCompositeExecutor{
@@ -369,7 +378,7 @@ func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
 		}
 	}
 
-	// No sandbox: everything local or browser
+	// No sandbox: shell/file run locally; browser still requires in-container mgr.
 	return &testCompositeExecutor{
 		browser: browserExec,
 		local:   &testLocalExecutor{},
@@ -440,49 +449,54 @@ func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[s
 	return ExecuteTool(ctx, name, args)
 }
 
-// testBrowserExecutor lazily initializes a browser.Manager and dispatches
-// browser tool calls using the closure-based factory pattern from pkg/tools.
+// testBrowserExecutor dispatches browser tool calls through a Manager that is
+// already wired for in-container Chromium (same path as Studio chat). It never
+// launches host Chrome.
 type testBrowserExecutor struct {
 	mu             sync.Mutex
 	mgr            *browser.Manager
 	guard          *browser.NavigationGuard
 	refs           *browser.RefMap
-	blockPrivateIP bool // true = block private IPs (non-sandbox), false = allow (sandbox)
+	sessionID      string
+	initialized    bool
 }
 
-func newTestBrowserExecutor(sandbox bool) *testBrowserExecutor {
+func newTestBrowserExecutor(mgr *browser.Manager, sessionID string, _ bool) *testBrowserExecutor {
 	return &testBrowserExecutor{
-		blockPrivateIP: !sandbox,
+		mgr:       mgr,
+		sessionID: sessionID,
 	}
 }
 
-func (b *testBrowserExecutor) ensureInit() {
+func (b *testBrowserExecutor) ensureInit() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.mgr != nil {
-		return
+	if b.initialized {
+		if b.mgr != nil && b.sessionID != "" {
+			b.mgr.EnsureSessionID(b.sessionID)
+		}
+		return nil
 	}
-	cfg := browser.DefaultConfig()
-	cfg.Headless = true  // test runner always headless
-	cfg.UserDataDir = "" // temp dir avoids SingletonLock conflict with Studio browser
-	b.mgr = browser.NewManager(cfg)
-	b.guard = browser.DefaultNavigationGuard()
-	if !b.blockPrivateIP {
-		b.guard.BlockPrivateNetworks = false
+	if b.mgr == nil || !b.mgr.SandboxEnabled {
+		return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled")
 	}
+	b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
 	b.refs = browser.NewRefMap()
+	if b.sessionID != "" {
+		b.mgr.EnsureSessionID(b.sessionID)
+	}
+	b.initialized = true
+	return nil
 }
 
 func (b *testBrowserExecutor) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.mgr != nil {
-		b.mgr.Cleanup()
-	}
+	// Manager is owned by chat/fleet/CLI wiring — do not Cleanup here.
 }
 
 func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	b.ensureInit()
+	if err := b.ensureInit(); err != nil {
+		return nil, err
+	}
 
 	argsJSON, err := json.Marshal(args)
 	if err != nil {

@@ -1177,6 +1177,151 @@ func TestSubstituteVarsInString(t *testing.T) {
 	}
 }
 
+func TestBrowserNavigateKeepsLocalhostInSandbox(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok", "title": "Juicy Trade"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "10.135.224.241"})
+
+	suite := &LoadedSuite{
+		Name: "juicytrade",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "ui-toggle",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "juicytrade",
+			Nodes: []config.Node{
+				{
+					Name: "open-form",
+					Args: map[string]interface{}{
+						"tool": "browser_navigate",
+						"url":  "http://localhost:3001/automation/create",
+					},
+					Assert: &config.AssertConfig{Type: "contains", Expected: "Juicy Trade"},
+				},
+			},
+		},
+	}
+
+	report, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test})
+	if err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	if report.Status != "passed" {
+		t.Fatalf("Status = %q, want passed. Summary: %s", report.Status, report.Summary)
+	}
+
+	var navURL string
+	for _, c := range executor.calls {
+		if c.name == "browser_navigate" {
+			navURL = fmt.Sprintf("%v", c.args["url"])
+		}
+	}
+	want := "http://localhost:3001/automation/create"
+	if navURL != want {
+		t.Errorf("browser_navigate url = %q, want %q (in-container browser keeps localhost)", navURL, want)
+	}
+}
+
+func TestBrowserNavigateLocalhostUnchangedWithoutSandboxIP(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "localhost"})
+
+	suite := &LoadedSuite{
+		Name: "localapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "nav",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "localapp",
+			Nodes: []config.Node{
+				{
+					Name: "open",
+					Args: map[string]interface{}{
+						"tool": "browser_navigate",
+						"url":  "http://localhost:3001/",
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test}); err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	for _, c := range executor.calls {
+		if c.name == "browser_navigate" {
+			if got := fmt.Sprintf("%v", c.args["url"]); got != "http://localhost:3001/" {
+				t.Errorf("url = %q, want localhost unchanged in local mode", got)
+			}
+		}
+	}
+}
+
+func TestShellCommandLocalhostNotRewritten(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok", "exit_code": 0}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "10.135.224.241"})
+
+	suite := &LoadedSuite{
+		Name: "juicytrade",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "curl-local",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "juicytrade",
+			Nodes: []config.Node{
+				{
+					Name: "curl",
+					Args: map[string]interface{}{
+						"tool":    "shell_command",
+						"command": "curl -s http://localhost:8008/api/providers/instances",
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test}); err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	for _, c := range executor.calls {
+		if c.name == "shell_command" {
+			cmd := fmt.Sprintf("%v", c.args["command"])
+			if !strings.Contains(cmd, "http://localhost:8008") {
+				t.Errorf("shell_command should keep localhost (runs in container), got %q", cmd)
+			}
+			if strings.Contains(cmd, "10.135.224.241") {
+				t.Errorf("shell_command must not rewrite to bridge IP, got %q", cmd)
+			}
+		}
+	}
+}
+
 func TestSubstituteVarsInArgs(t *testing.T) {
 	t.Parallel()
 	vars := map[string]string{"CONTAINER_IP": "10.99.0.5"}

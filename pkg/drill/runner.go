@@ -79,7 +79,9 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 	// TODO: apply sc.Environment to container in Phase 2
 
-	// Resolve base_url from suite config (apply placeholder substitution)
+	// Resolve base_url from suite config (apply placeholder substitution).
+	// Shell and browser both run in the sandbox when sandboxed, so localhost
+	// in base_url / browser URLs is left as-is (same as chat in-container browser).
 	if sc != nil && sc.BaseURL != "" {
 		sr.baseURL = substituteVarsInString(sc.BaseURL, sr.vars)
 	}
@@ -529,8 +531,8 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 	// Apply base_url resolution for browser_navigate with relative URLs
 	if sr.baseURL != "" && toolName == "browser_navigate" {
-		if url, ok := toolArgs["url"].(string); ok && strings.HasPrefix(url, "/") {
-			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + url
+		if urlStr, ok := toolArgs["url"].(string); ok && strings.HasPrefix(urlStr, "/") {
+			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + urlStr
 		}
 	}
 

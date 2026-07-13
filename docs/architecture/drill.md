@@ -165,10 +165,12 @@ nodes:
 The drill runner uses a composite executor that routes different tool categories to different backends:
 
 - **Container tools** (shell_command, file ops): Routed to the sandbox container via NDJSON.
-- **Browser tools**: Routed to the host browser (with container IP for URL resolution).
+- **Browser tools**: Routed to Chromium + KasmVNC inside the same session container (same path as Studio chat). Use `localhost` in URLs just like shell curls.
 - **Local tools**: Direct in-process execution for tools that don't need sandbox or browser.
 
-This handles the common case where a drill starts services in a container but tests them via a browser on the host.
+This handles the common case where a drill starts services in a container and tests them via an in-container browser.
+
+Authors can write `http://localhost:<port>` in both `shell_command` curls and `browser_navigate` URLs. Both run in the sandbox container when sandboxed. `{{CONTAINER_IP}}` placeholders remain supported for drills that still use them.
 
 ### Parameterized Tests
 
@@ -212,7 +214,7 @@ The drill runner collects:
 ## Interactions
 
 - **Sandbox**: Drill services run inside containers. The composite executor routes container tools through the sandbox node protocol.
-- **Browser**: Browser-based drills use the host browser pointed at the container's IP address.
+- **Browser**: Browser-based drills use Chromium + KasmVNC inside the same sandbox session as shell tools (same path as Studio chat). Use localhost URLs.
 - **Flows**: Drills are a specialized flow type (`type: drill`/`drill_suite`) stored in the flow directory.
 - **Fleet**: The E2E agent in a fleet can run drills as part of its validation workflow.
 - **API/Studio**: Drill view in Studio provides suite management, execution, and result viewing.

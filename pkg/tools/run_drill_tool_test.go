@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/schardosin/astonish/pkg/browser"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 )
 
@@ -375,5 +376,66 @@ func TestEnrichReportWithFailureContext(t *testing.T) {
 	}
 }
 
-// adrill is imported for report struct types
-var _ adrill.SuiteReport
+func TestTestBrowserExecutor_RequiresSandboxedManager(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil manager", func(t *testing.T) {
+		t.Parallel()
+		exec := newTestBrowserExecutor(nil, "sess-1", true)
+		_, err := exec.Execute(context.Background(), "browser_navigate", map[string]interface{}{
+			"url": "http://localhost:3000/",
+		})
+		if err == nil {
+			t.Fatal("expected error when browser manager is nil")
+		}
+		if !strings.Contains(err.Error(), "in-container") {
+			t.Errorf("error = %v, want mention of in-container browser", err)
+		}
+	})
+
+	t.Run("host manager not sandboxed", func(t *testing.T) {
+		t.Parallel()
+		mgr := browser.NewManager(browser.DefaultConfig())
+		exec := newTestBrowserExecutor(mgr, "sess-1", true)
+		_, err := exec.Execute(context.Background(), "browser_navigate", map[string]interface{}{
+			"url": "http://localhost:3000/",
+		})
+		if err == nil {
+			t.Fatal("expected error when SandboxEnabled is false")
+		}
+		if !strings.Contains(err.Error(), "in-container") {
+			t.Errorf("error = %v, want mention of in-container browser", err)
+		}
+	})
+
+	t.Run("sandboxed manager accepts init", func(t *testing.T) {
+		t.Parallel()
+		mgr := browser.NewManager(browser.DefaultConfig())
+		mgr.SandboxEnabled = true
+		mgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+			return "astn-sess-" + sessionID, "10.0.0.1", nil
+		}
+		exec := newTestBrowserExecutor(mgr, "sess-abc", true)
+		if err := exec.ensureInit(); err != nil {
+			t.Fatalf("ensureInit: %v", err)
+		}
+		if !exec.initialized {
+			t.Fatal("expected executor to be initialized")
+		}
+	})
+}
+
+func TestBuildTestExecutor_UsesSharedBrowserManager(t *testing.T) {
+	t.Parallel()
+	mgr := browser.NewManager(browser.DefaultConfig())
+	mgr.SandboxEnabled = true
+	deps := &runDrillDeps{browserMgr: mgr, sessionID: "fleet-1"}
+	exec := buildTestExecutor(nil, deps)
+	comp, ok := exec.(*testCompositeExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", exec)
+	}
+	if comp.browser == nil || comp.browser.mgr != mgr {
+		t.Fatal("buildTestExecutor should reuse deps.browserMgr, not create a host Manager")
+	}
+}

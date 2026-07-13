@@ -15,9 +15,9 @@ func GetBrowserTools(mgr *browser.Manager) ([]tool.Tool, error) {
 }
 
 // GetBrowserToolsForSandbox creates browser tools with private network
-// blocking disabled. When sandbox is enabled, services run inside containers
-// on private bridge IPs (e.g., 10.99.0.x) and the browser (on the host)
-// must be able to navigate to them.
+// blocking disabled. When sandbox is enabled, Chromium runs inside the
+// session container (same network namespace as services), so localhost and
+// private addresses are reachable.
 func GetBrowserToolsForSandbox(mgr *browser.Manager) ([]tool.Tool, error) {
 	guard := &browser.NavigationGuard{BlockPrivateNetworks: false}
 	return getBrowserToolsWithGuard(mgr, guard)
@@ -29,8 +29,9 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	// --- Navigation ---
 
 	navigateTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_navigate",
-		Description: "Navigate the browser to a URL. The browser is managed by Astonish — it launches automatically, no installation needed in the container. In sandbox mode, use the container bridge IP (not localhost) to reach services.",
+		Name: "browser_navigate",
+		Description: "Navigate the browser to a URL. When sandbox is enabled, Chromium runs inside " +
+			"the session container (same as shell tools) — use localhost to reach services in that container.",
 	}, safeBrowserFunc(BrowserNavigate(mgr, guard)))
 	if err != nil {
 		return nil, err

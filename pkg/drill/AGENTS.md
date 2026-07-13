@@ -13,6 +13,7 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 - **LLM-based assertions** call the injected `LLMProvider`. Keep them opt-in per step; the default should be strict/programmatic assertion.
 - The **triage agent** is invoked on failure to produce a human-readable diagnosis. It is a helper, not a substitute for the failing test signal.
 - Artifacts (logs, screenshots, outputs) go through `ArtifactManager` — do not write files directly from step handlers.
+- **Browser vs shell networking**: shell and browser tools both run in the sandbox when sandboxed (localhost = container). Prefer `http://localhost:<port>` in both; `{{CONTAINER_IP}}` remains supported for older drills.
 
 ## When editing
 1. Adding a new assertion type? Extend the runner's assertion registry rather than special-casing it in step handlers.

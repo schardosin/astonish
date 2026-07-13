@@ -153,5 +153,5 @@ Browser tools are organized into functional groups:
 - **Agent Engine**: Browser tools run on the host (not sandboxed). Screenshots are extracted from tool results via image side-channels.
 - **Channels**: Screenshots are delivered as photos (Telegram) or attachments (email).
 - **Credentials**: Browser credential tools (`browser_set_credentials`) handle HTTP auth. Account store references the credential store.
-- **Drills**: Browser tools are used in end-to-end drill tests. The drill runner routes browser calls to the host browser.
+- **Drills**: Browser tools run inside the sandbox session container (same Chromium + KasmVNC path as Studio chat).
 - **Skills**: The web registration skill teaches the agent how to use browser tools for form filling and account creation.

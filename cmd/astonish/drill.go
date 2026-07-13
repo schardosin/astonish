@@ -81,52 +81,84 @@ var browserToolNames = map[string]bool{
 	"browser_request_human": true,
 }
 
-// browserToolExecutor lazily initializes a browser.Manager and dispatches browser tool calls
-// using the same closure-based factory pattern as GetBrowserTools.
+// browserToolExecutor dispatches browser tool calls through a Manager.
+// When sandboxed, mgr must already be wired (SandboxEnabled); host Chrome is never launched as a fallback.
 type browserToolExecutor struct {
 	mu             sync.Mutex
 	mgr            *browser.Manager
 	guard          *browser.NavigationGuard
 	refs           *browser.RefMap
 	headless       bool
-	allowPrivateIP bool // when true, browser can reach private IPs (sandbox container bridge)
+	requireSandbox bool // when true, refuse to create an unwired host Manager
+	sessionID      string
+	initialized    bool
 }
 
 func newBrowserToolExecutor(headless bool) *browserToolExecutor {
 	return &browserToolExecutor{headless: headless}
 }
 
-// ensureInit lazily creates the browser manager, guard, and ref map.
-func (b *browserToolExecutor) ensureInit() {
+// newSandboxedBrowserToolExecutor uses a pre-wired in-container Manager.
+func newSandboxedBrowserToolExecutor(mgr *browser.Manager, sessionID string) *browserToolExecutor {
+	return &browserToolExecutor{
+		mgr:            mgr,
+		requireSandbox: true,
+		sessionID:      sessionID,
+		headless:       true,
+	}
+}
+
+// ensureInit lazily creates the browser manager for local (non-sandbox) runs,
+// or binds the session on a pre-wired sandboxed manager.
+func (b *browserToolExecutor) ensureInit() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if b.initialized {
+		if b.mgr != nil && b.sessionID != "" {
+			b.mgr.EnsureSessionID(b.sessionID)
+		}
+		return nil
+	}
 	if b.mgr != nil {
-		return
+		if b.requireSandbox && !b.mgr.SandboxEnabled {
+			return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled")
+		}
+		b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
+		b.refs = browser.NewRefMap()
+		if b.sessionID != "" {
+			b.mgr.EnsureSessionID(b.sessionID)
+		}
+		b.initialized = true
+		return nil
+	}
+	if b.requireSandbox {
+		return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled")
 	}
 	cfg := browser.DefaultConfig()
 	cfg.Headless = b.headless
 	cfg.UserDataDir = "" // temp dir avoids SingletonLock conflict with other browser instances
 	b.mgr = browser.NewManager(cfg)
-	if b.allowPrivateIP {
-		b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
-	} else {
-		b.guard = browser.DefaultNavigationGuard()
-	}
+	b.guard = browser.DefaultNavigationGuard()
 	b.refs = browser.NewRefMap()
+	b.initialized = true
+	return nil
 }
 
-// Close shuts down the browser if it was started.
+// Close shuts down the browser if it was started for a local (non-sandbox) run.
+// Sandboxed managers are owned by the sandbox wiring and are not cleaned up here.
 func (b *browserToolExecutor) Close() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.mgr != nil {
+	if b.mgr != nil && !b.requireSandbox {
 		b.mgr.Cleanup()
 	}
 }
 
 // Execute dispatches a browser tool call by name.
 func (b *browserToolExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	b.ensureInit()
+	if err := b.ensureInit(); err != nil {
+		return nil, err
+	}
 
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
@@ -544,13 +576,27 @@ func handleDrillRunCommand(args []string) error {
 		}
 	}
 
-	// Browser executor: allow private IPs when sandbox is active (browser needs
-	// to reach the container's bridge IP like 10.99.0.x)
-	browserExec := newBrowserToolExecutor(true) // headless for CI
-	if useSandbox {
-		browserExec.allowPrivateIP = true
+	// Browser executor: sandboxed runs use in-container Chromium (same path as chat).
+	// Local (non-sandbox) runs may use host Chrome.
+	var browserExec *browserToolExecutor
+	var browserMgr *browser.Manager
+	if useSandbox && lazyNode != nil {
+		browserMgr = browser.NewManager(browser.DefaultConfig())
+		client := lazyNode.GetIncusClient()
+		if client == nil || !sandbox.WireIncusBrowserManager(browserMgr, client, nil) {
+			lazyNode.Cleanup()
+			return fmt.Errorf("sandbox drill browser: could not wire in-container Chromium (host Chrome is disabled for sandboxed drills)")
+		}
+		browserExec = newSandboxedBrowserToolExecutor(browserMgr, testSessionID)
+	} else {
+		browserExec = newBrowserToolExecutor(true) // headless for CI
 	}
-	defer browserExec.Close()
+	defer func() {
+		browserExec.Close()
+		if browserMgr != nil {
+			browserMgr.Cleanup()
+		}
+	}()
 
 	executor := &compositeToolExecutor{
 		internal: &internalToolExecutor{},

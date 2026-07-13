@@ -6,13 +6,14 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
-	"github.com/schardosin/astonish/pkg/agent"
 	"google.golang.org/adk/tool"
 )
 
@@ -145,15 +146,20 @@ func wireFleetSandboxIncus(
 		return fmt.Errorf("sandbox is enabled but sub-agent manager is not available")
 	}
 
-	wrappedTools := wrapFleetTools(subAgentMgr, lazyNode, nil, fleetSession.ID)
+	browserMgr := browser.NewManager(browser.DefaultConfig())
+	sandbox.WireIncusBrowserManager(browserMgr, sandboxClient, sessRegistry.TouchActivity)
+
+	wrappedTools := wrapFleetTools(subAgentMgr, lazyNode, nil, fleetSession.ID, browserMgr)
 
 	// Eager container start + credential file materialization
 	lazyNode.BindSession(fleetSession.ID)
 	if _, err := lazyNode.EnsureContainerReady(fleetSession.ID); err != nil {
+		browserMgr.Cleanup()
 		lazyNode.Cleanup()
 		return fmt.Errorf("fleet sandbox container not ready: %w", err)
 	}
 	if err := materializeFleetFilesIncus(plan, credStore, resolved, lazyNode); err != nil {
+		browserMgr.Cleanup()
 		lazyNode.Cleanup()
 		return fmt.Errorf("fleet credential file injection failed: %w", err)
 	}
@@ -176,6 +182,7 @@ func wireFleetSandboxIncus(
 
 	prevCleanup := fleetSession.OnCleanup
 	fleetSession.OnCleanup = func() {
+		browserMgr.Cleanup()
 		if prevCleanup != nil {
 			prevCleanup()
 		}
@@ -248,8 +255,17 @@ func wireFleetSandboxBackend(
 		return fmt.Errorf("sub-agent manager not available")
 	}
 
+	browserMgr := browser.NewManager(browser.DefaultConfig())
+	if osBackend, ok := fleetBackend.(*openshell.OpenShellBackend); ok {
+		if gw := osBackend.Gateway(); gw != nil {
+			if sessReg := osBackend.Sessions(); sessReg != nil {
+				openshell.WireBrowserManager(browserMgr, gw, sessReg, sessReg.TouchActivity)
+			}
+		}
+	}
+
 	toolPool := sandbox.NewSingleClientPool(pinnedClient, fleetBackend)
-	wrappedTools := wrapFleetTools(subAgentMgr, nil, toolPool, fleetSession.ID)
+	wrappedTools := wrapFleetTools(subAgentMgr, nil, toolPool, fleetSession.ID, browserMgr)
 	sandboxToolsets := createFleetMCPToolsets(fleetBackend, nil, toolPool, mcpStores)
 
 	fleetSession.SandboxTools = wrappedTools
@@ -258,6 +274,7 @@ func wireFleetSandboxBackend(
 
 	prevCleanup := fleetSession.OnCleanup
 	fleetSession.OnCleanup = func() {
+		browserMgr.Cleanup()
 		if providerBinding != nil {
 			providerBinding.DetachAll(context.Background())
 		}
@@ -275,7 +292,7 @@ func wireFleetSandboxBackend(
 	return nil
 }
 
-func wrapFleetTools(subAgentMgr *agent.SubAgentManager, lazyNode *sandbox.LazyNodeClient, toolPool sandbox.ToolNodePool, fleetSessionID string) []tool.Tool {
+func wrapFleetTools(subAgentMgr *agent.SubAgentManager, lazyNode *sandbox.LazyNodeClient, toolPool sandbox.ToolNodePool, fleetSessionID string, browserMgr *browser.Manager) []tool.Tool {
 	var baseTools []tool.Tool
 	for _, t := range subAgentMgr.AllTools() {
 		if agent.IsExcludedChildTool(t.Name()) {
@@ -309,13 +326,13 @@ func wrapFleetTools(subAgentMgr *agent.SubAgentManager, lazyNode *sandbox.LazyNo
 	}
 
 	if lazyNode != nil {
-		runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSessionID, nil)
+		runDrillTool, runDrillErr := tools.NewRunDrillToolWithClient(lazyNode, fleetSessionID, browserMgr, nil)
 		if runDrillErr == nil {
 			wrappedTools = replaceOrAppendTool(wrappedTools, runDrillTool)
 		}
 	} else if toolPool != nil {
 		client := toolPool.GetOrCreate(fleetSessionID)
-		runDrillTool, runDrillErr := tools.NewRunDrillToolWithToolClient(client, fleetSessionID, nil)
+		runDrillTool, runDrillErr := tools.NewRunDrillToolWithToolClient(client, fleetSessionID, browserMgr, nil)
 		if runDrillErr == nil {
 			wrappedTools = replaceOrAppendTool(wrappedTools, runDrillTool)
 		}

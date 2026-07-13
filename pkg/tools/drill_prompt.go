@@ -98,9 +98,7 @@ I'll use the existing environment — no need to set up a new container."
     Once a template is selected, call use_sandbox_template with the chosen
     template name. This switches the sandbox container to one cloned from that
     template, so all file and shell tools will see the project code and
-    pre-installed dependencies. The tool response includes the container's
-    bridge IP (in the container_ip field) — save this IP for later use in
-    browser_navigate calls. Wait for the tool to confirm success, then
+    pre-installed dependencies. Wait for the tool to confirm success, then
     jump to Step 1e (analyze the project) — even though the template has
     everything installed, you still need to understand the project structure,
     identify services, and verify builds/runs before designing tests.
@@ -333,8 +331,7 @@ application, and how to verify it is ready.
     type: drill_suite
     suite_config:
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
-      base_url: "http://{{CONTAINER_IP}}:3000"  # OPTIONAL — for browser tests in sandbox mode.
-                                                 # Without sandbox, use "http://localhost:3000".
+      base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
       setup:
         - "bash /root/myapp/.astonish/start-services.sh"  # spawn-and-return script from template
       ready_check:                       # OPTIONAL — only for servers/daemons
@@ -360,7 +357,7 @@ Each service has its own setup command, optional ready check, and teardown.
     type: drill_suite
     suite_config:
       template: "@fullstack"
-      base_url: "http://{{CONTAINER_IP}}:3000"  # Resolved at runtime in sandbox mode
+      base_url: "http://localhost:3000"  # Shell and browser share the sandbox network
       environment:
         NODE_ENV: test
       services:
@@ -409,18 +406,18 @@ Each service has its own setup command, optional ready check, and teardown.
   Do NOT generate a placeholder ready_check with port: 0 or empty values —
   that will cause the test runner to fail.
 
-IMPORTANT: Ready check URLs should use localhost (e.g., http://localhost:8080/health),
-NOT the container bridge IP. The test runner executes ready checks through the
-same tool executor as setup commands, so they run inside the container where
-localhost reaches the service. Only browser_navigate needs the container bridge IP
-(because the browser runs on the host).
+IMPORTANT: Ready check URLs should use localhost (e.g., http://localhost:8080/health).
+The test runner executes ready checks through the same tool executor as setup
+commands, so they run inside the container where localhost reaches the service.
+Browser steps also run inside the container (Chromium+KasmVNC), so use localhost
+in browser_navigate URLs the same way.
 
 ### When to include base_url:
 
 - Include base_url when the suite includes browser-based tests that interact
   with a web UI. This documents the entry point for browser_navigate steps.
-- In sandbox mode: Use base_url: "http://{{CONTAINER_IP}}:<port>" so the
-  test runner resolves the actual container IP at runtime.
+- Prefer base_url: "http://localhost:<port>" (shell and browser share the
+  sandbox network namespace). {{CONTAINER_IP}} remains supported if needed.
 - Without sandbox: Use base_url: "http://localhost:<port>".
 - Browser test steps can use relative paths (e.g., url: "/dashboard")
   and the runner prepends the resolved base_url automatically.
@@ -455,7 +452,7 @@ localhost reaches the service. Only browser_navigate needs the container bridge 
     type: drill_suite
     suite_config:
       template: "myapp-fullstack"
-      base_url: "http://{{CONTAINER_IP}}:3000"  # Resolved at runtime
+      base_url: "http://localhost:3000"  # Same localhost for shell and browser
       environment:
         NODE_ENV: test
       services:
@@ -582,8 +579,7 @@ Browser tools are available in the deterministic test runner.
 If the suite has base_url set, you can use relative paths in browser_navigate
 and the runner will prepend the resolved base_url automatically:
 
-    # Suite has: base_url: "http://{{CONTAINER_IP}}:3000"  (sandbox)
-    #        or: base_url: "http://localhost:3000"           (no sandbox)
+    # Suite has: base_url: "http://localhost:3000"
 
     - name: navigate_to_app
       type: tool
@@ -619,13 +615,14 @@ and the runner will prepend the resolved base_url automatically:
       args:
         tool: browser_take_screenshot
 
-You can also use full URLs with the {{CONTAINER_IP}} placeholder directly:
+Prefer localhost full URLs (shell and browser share the sandbox).
+{{CONTAINER_IP}} remains supported for older drills:
 
     - name: navigate_to_app
       type: tool
       args:
         tool: browser_navigate
-        url: "http://{{CONTAINER_IP}}:3000"   # Resolved at runtime
+        url: "http://localhost:3000"
 
 Browser tools available for test steps:
 - browser_navigate — Navigate to a URL
@@ -830,15 +827,15 @@ run_drill switches to that template automatically before setup — you do not
 need a separate use_sandbox_template call (though calling it first is fine).
 run_drill automatically handles setup, ready_check, and teardown from the
 suite config — do NOT manually start services before calling it.
-This tool runs the tests on the host and automatically routes shell/file
-tool steps into the current sandbox container (if sandbox is active).
-Browser tool steps run on the host where Chrome is available.
+This tool runs the tests and automatically routes shell/file/browser tool
+steps into the current sandbox container (if sandbox is active). Browser
+steps use Chromium+KasmVNC in the session — same as chat. Use localhost in URLs.
 
 The test runner automatically resolves {{CONTAINER_IP}} placeholders in
 all tool args and in base_url before executing steps. In sandbox mode, it
 discovers the container's bridge IP at startup; without sandbox, it uses
-localhost. Browser test steps with relative URLs (starting with /) get
-the resolved base_url prepended.
+localhost. Prefer localhost for both shell and browser steps. Browser test
+steps with relative URLs (starting with /) get the resolved base_url prepended.
 
 Show the results and explain any failures.
 
@@ -878,13 +875,13 @@ commands). Use browser_* tools when testing web UIs that require interaction
 To run a test suite, use the run_drill tool (NOT shell_command with
 "astonish drill run"). The run_drill tool:
 
-- Runs on the HOST (where test suite YAML files and Chrome are available)
-- Automatically routes shell_command and file tool steps into the current
-  sandbox container (if sandbox is active)
+- Automatically routes shell_command, file, and browser tool steps into the
+  current sandbox container (if sandbox is active). Browser uses the same
+  in-container Chromium+KasmVNC path as Studio chat.
 - Ready checks (http/port) are also routed through the executor, so they
   run inside the container — use localhost in ready_check URLs
-- Browser tool steps execute on the host and can reach container services
-  via the container's bridge IP
+- Browser tool steps also run inside the container — use localhost the same
+  way you would in shell_command curls
 - Resolves {{CONTAINER_IP}} placeholders in all tool args and in base_url
   before executing steps (discovers the container IP automatically)
 - Browser steps with relative URLs (starting with /) get the resolved
@@ -898,35 +895,26 @@ template automatically before setup (unless force=true).
 
 ## Browser Access to Container Services (sandbox mode)
 
-When sandbox is enabled, services run INSIDE the container but browser tools
-run on the HOST. You cannot use localhost or 127.0.0.1 in browser_navigate
-to reach container services — those addresses refer to the host, not the
-container.
+When sandbox is enabled, services and browser tools both run INSIDE the
+session container. Use localhost / 127.0.0.1 in browser_navigate the same
+way you use them in shell_command curls:
 
-How to get the container IP:
-- The use_sandbox_template tool returns the container's bridge IP in its
-  container_ip field (e.g., "10.99.0.5"). Save this IP when you first
-  switch templates and use it in all browser_navigate calls during the
-  wizard session.
-- If you need the IP later (e.g., after a container restart), run:
-  shell_command with "hostname -I | awk '{print $1}'"
+    - name: open-ui
+      type: tool
+      args:
+        tool: browser_navigate
+        url: "http://localhost:3001/automation/create"
 
-For test YAML files, use the placeholder {{CONTAINER_IP}} in browser URLs:
+{{CONTAINER_IP}} remains supported for older drills:
   browser_navigate with url "http://{{CONTAINER_IP}}:3001/dashboard"
-The test runner automatically resolves this placeholder at runtime by
-discovering the container's bridge IP before executing tests. This means
-test YAMLs work regardless of what IP the container gets assigned.
 
-For the base_url field in suite YAML (sandbox mode):
-  base_url: "http://{{CONTAINER_IP}}:3001"
+For the base_url field in suite YAML:
+  base_url: "http://localhost:3001"
 Browser test steps can then use relative URLs (e.g., url: "/dashboard")
 and the runner will prepend the resolved base_url.
 
-IMPORTANT: Do NOT use localhost, 127.0.0.1, or the container hostname
-in browser_navigate when sandbox is enabled — they will fail or reach
-the wrong host. However, ready_check URLs and shell_command curl checks
-SHOULD use localhost because they run inside the container through the
-tool executor.
+Ready_check URLs and shell_command curl checks SHOULD use localhost because
+they run inside the container through the tool executor.
 
 ## Interactive App Configuration (during Step 1h service verification)
 

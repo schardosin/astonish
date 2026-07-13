@@ -865,6 +865,58 @@ func TestRunShellCommandBackground(t *testing.T) {
 	}
 }
 
+func TestRunShellCommandStartServicesForcesBackground(t *testing.T) {
+	t.Parallel()
+	mock := newMockExecutor()
+	mock.SetResult("shell_command", map[string]interface{}{
+		"stdout":     "started",
+		"session_id": "start-sess-1",
+	}, nil)
+
+	runner := NewSuiteRunner(mock, nil, false)
+	cmd := "bash /root/juicytrade/.astonish/start-services.sh"
+	if _, err := runner.runShellCommand(context.Background(), cmd, 120); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(mock.calls))
+	}
+	call := mock.calls[0]
+	if got, ok := call.args["command"].(string); !ok || got != cmd {
+		t.Errorf("command = %q, want %q", got, cmd)
+	}
+	if bg, ok := call.args["background"].(bool); !ok || !bg {
+		t.Errorf("background = %v, want true for start-services.sh", call.args["background"])
+	}
+	if len(runner.bgSessions) != 1 || runner.bgSessions[0] != "start-sess-1" {
+		t.Errorf("bgSessions = %v, want [start-sess-1]", runner.bgSessions)
+	}
+}
+
+func TestIsStartServicesCommand(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		cmd  string
+		want bool
+	}{
+		{"bash /root/app/.astonish/start-services.sh", true},
+		{"sh /root/app/.astonish/start-services.sh", true},
+		{"/root/app/.astonish/start-services.sh", true},
+		{"bash /root/app/.astonish/start-services.sh &", true},
+		{"bash /root/app/.astonish/stop-services.sh", false},
+		{"go build ./...", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.cmd, func(t *testing.T) {
+			t.Parallel()
+			if got := isStartServicesCommand(tt.cmd); got != tt.want {
+				t.Errorf("isStartServicesCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRunShellCommandForeground(t *testing.T) {
 	t.Parallel()
 	// When setup command does NOT end with &, it should run in normal mode.

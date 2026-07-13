@@ -626,10 +626,12 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 // runShellCommand executes a shell command via the tool executor.
 // Commands ending with & are automatically run in background mode to prevent
-// the PTY from closing and killing the process. The session ID is tracked
-// so background processes can be cleaned up after teardown.
+// the PTY from closing and killing the process. Spawn-and-return start scripts
+// (*.astonish/start-services.sh) are also forced to background=true — those
+// scripts must end with `wait` (or exec) so the session stays alive; without
+// background mode the runner would block forever on that wait.
 func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, timeout int) (string, error) {
-	bg := isBackgroundCommand(command)
+	bg := isBackgroundCommand(command) || isStartServicesCommand(command)
 
 	args := map[string]interface{}{
 		"command": command,
@@ -641,7 +643,7 @@ func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, time
 		// When background=true, the process manager keeps the PTY session
 		// alive so the child process survives. With "cmd &" in non-background
 		// mode, sh exits immediately and waitLoop closes the PTY, killing
-		// the backgrounded child via SIGHUP.
+		// the backgrounded child via SIGHUP (or leaving Vite hung).
 		args["command"] = stripBackgroundSuffix(command)
 		args["background"] = true
 	}
@@ -667,6 +669,18 @@ func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, time
 func isBackgroundCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
 	return strings.HasSuffix(trimmed, "&") && !strings.HasSuffix(trimmed, "&&")
+}
+
+// isStartServicesCommand reports whether cmd invokes a canonical
+// .astonish/start-services.sh bootstrap script. Those scripts spawn long-lived
+// services and should keep a process-manager session open (background=true).
+func isStartServicesCommand(cmd string) bool {
+	trimmed := strings.ToLower(strings.TrimSpace(stripBackgroundSuffix(cmd)))
+	if trimmed == "" {
+		return false
+	}
+	// Match common invocations: bash/sh/./ path …/start-services.sh
+	return strings.Contains(trimmed, "start-services.sh")
 }
 
 // stripBackgroundSuffix removes the trailing & from a command.

@@ -14,6 +14,7 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 - The **triage agent** is invoked on failure to produce a human-readable diagnosis. It is a helper, not a substitute for the failing test signal.
 - Artifacts (logs, screenshots, outputs) go through `ArtifactManager` — do not write files directly from step handlers.
 - **Browser vs shell networking**: shell and browser tools both run in the sandbox when sandboxed. Prefer `http://localhost:<port>` in drills; browser navigation rewrites loopback hostnames to `127.0.0.1` (Chromium IPv6-first vs IPv4-only listeners). Do not hard-code container bridge IPs. `{{CONTAINER_IP}}` remains supported for older drills.
+- **Start scripts**: suite setup invoking `start-services.sh` is forced to `background=true`. The script must end with `wait` (or `exec`) after starting children with `&`; bare `npm run dev &` + exit leaves Vite hung when the PTY closes.
 
 ## When editing
 1. Adding a new assertion type? Extend the runner's assertion registry rather than special-casing it in step handlers.

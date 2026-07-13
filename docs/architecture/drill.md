@@ -29,7 +29,7 @@ Services are started in declaration order and stopped in reverse order. Each ser
 
 ### Canonical start script (template bootstrap)
 
-For multi-service apps, prefer a single spawn-and-return script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed. Drill suite `setup` (and fleet/chat agents) call it explicitly after credentials are available:
+For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed. Drill suite `setup` (and fleet/chat agents) call it explicitly after credentials are available:
 
 ```yaml
 suite_config:
@@ -42,6 +42,8 @@ suite_config:
   teardown:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
+
+The runner runs `start-services.sh` with `background=true` so the process-manager PTY stays open. The script must **not** background services with bare `&` and exit — that leaves `npm`/`vite` processes alive but hung. Start children with `&`, then `wait` (or `exec` the last service). Prefer `npx vite --host 0.0.0.0` over `npm run dev`.
 
 ### Why Visual Regression Testing
 

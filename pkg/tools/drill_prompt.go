@@ -217,12 +217,30 @@ Ask the user: "I started <service> but I'm not sure how to verify it's
 working. What endpoint or port should I check?"
 
 **1h-iv. Record what you learned for this service (this becomes the suite YAML):**
-- Prefer writing/updating <workspace>/.astonish/start-services.sh (spawn-and-return) and
+- Prefer writing/updating <workspace>/.astonish/start-services.sh and
   stop-services.sh once the recipe works — suite setup should call those scripts.
+- CRITICAL for start-services.sh: do NOT background npm/vite with bare & and exit.
+  That leaves the process alive but hung (PTY closes). Instead:
+  1. Prefer "npx vite --host 0.0.0.0 --port <port>" (or the real binary) over "npm run dev"
+  2. Start each service with &, then end the script with "wait" (or exec the last
+     service) so the script does not return while services should stay up
+  3. The drill runner runs start-services.sh with background=true so wait does not
+     block the suite — ready_check polls until the stack is up
 - The exact build command → optional prior setup step in Step 3
 - The exact run/start command → fold into start-services.sh; suite setup runs the script
 - How to verify the service is ready (endpoint, port, output) → becomes ready_check in Step 3
 - The exact stop/teardown command → fold into stop-services.sh / suite teardown
+
+Example start-services.sh shape:
+
+    #!/usr/bin/env bash
+    set -euo pipefail
+    LOG_DIR="/root/myapp/.astonish/logs"
+    mkdir -p "$LOG_DIR"
+    cd /root/myapp/backend && ./server >"$LOG_DIR/backend.log" 2>&1 &
+    cd /root/myapp/frontend && npx vite --host 0.0.0.0 --port 3001 >"$LOG_DIR/frontend.log" 2>&1 &
+    # Keep this script (and the drill process session) alive until services exit.
+    wait
 
 Do NOT save this information to memory (memory_save) or SELF.md. It belongs
 in the suite YAML (and template bootstrap_files) that you will generate in Step 3.

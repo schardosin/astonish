@@ -324,7 +324,7 @@ steps:
     \ adds zero value beyond 3h.\n\nUse the repository name (the same name you will use for the template in 3j)\nas the suite\
     \ name. This keeps naming consistent: template, plan key, and\ndrill suite all share the same name.\n\n**Sub-steps:**\n\
     \n1. **Start the service(s)** using the canonical script from 3h-v:\
-    \   `shell_command(command: "bash <workspace>/.astonish/start-services.sh")`\
+    \   `shell_command(command: \"bash <workspace>/.astonish/start-services.sh\")`\
     \   (the script spawns services and returns). Verify with the same ready checks\
     \   as 3h-v. Do NOT reinvent start one-liners.\n\n2. **Design the suite YAML.** The suite's `setup:`\
     \ and `ready_check:` handle\n   building and starting services BEFORE any drill runs. Use the exact\n   commands from\
@@ -375,9 +375,8 @@ steps:
     \   {path: \"/root/<repo-name>/.astonish/stop-services.sh\", content: \"<file contents>\", mode: \"0755\"}\
     \ ])\n```\nUse the repository name (e.g., \"billing-api\" from \"acme/billing-api\") as\n\
     the template name. This keeps naming consistent and predictable.\n\nALWAYS pass `bootstrap_files` with the start/stop scripts written in 3h-v so every\
-    \ future container from this template gets them injected (not auto-run).\
-    \n\
-    \The returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
+    \ future container from this template gets them injected (not auto-run).\n\
+    \nThe returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
     `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
     `credential_injection` from the encrypted store.\"\n\n**Do NOT\
     \ proceed to step 4 until the template is saved.**"

@@ -125,6 +125,10 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	// recovery summary, and milestone tracker. The customer's comment
 	// exists on GitHub but was not in the JSONL transcript (the session
 	// was stopped when the customer replied).
+	// customerReplyMsg holds the customer message that triggered recovery (if any).
+	// It is delivered to the durable mailbox after runCtx is wired (below).
+	var customerReplyMsg *fleet.Message
+
 	if cfg.CustomerMessage != "" {
 		// Determine which agent should see this customer message.
 		// If the last recovered message was from an agent, the customer
@@ -140,7 +144,7 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 			targetAgent = fleetCfg.GetEntryPoint()
 		}
 
-		customerMsg := fleet.Message{
+		msg := fleet.Message{
 			ID:         uuid.New().String(),
 			Sender:     "customer",
 			Text:       cfg.CustomerMessage,
@@ -148,7 +152,8 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 			Timestamp:  time.Now(),
 			Mentions:   fleet.ParseMentions(cfg.CustomerMessage),
 		}
-		recoveredMessages = append(recoveredMessages, customerMsg)
+		customerReplyMsg = &msg
+		recoveredMessages = append(recoveredMessages, msg)
 		slog.Info("injected customer reply that triggered recovery", "component", "fleet-recover", "session_id", cfg.SessionID, "chars", len(cfg.CustomerMessage), "memory", targetAgent)
 	}
 
@@ -304,6 +309,15 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
 	// and other platform-mode resources during execution.
 	runCtx = fleetStores.InjectIntoContextForPlan(runCtx, plan)
+
+	// Deliver the customer reply to the durable mailbox so the resume-target
+	// agent sees it in BuildMailboxThreadContext. Without this, the agent only
+	// sees old mailbox messages from before the session exited and misses the
+	// customer's reply entirely (the channel fallback only triggers when the
+	// mailbox is empty, which it is not after a session has been running).
+	if customerReplyMsg != nil && resumeTarget != "" {
+		fleetSession.DeliverToMailbox(runCtx, *customerReplyMsg, []string{resumeTarget})
+	}
 
 	go func() {
 		defer func() {

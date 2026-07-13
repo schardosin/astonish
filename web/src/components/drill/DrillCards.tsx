@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Check, X, Shield } from 'lucide-react'
 import { formatDuration, statusColor, StatusDot } from './drillUtils'
+import { reportDurationMs } from '../../api/drillApi'
 
 // ─── Step Card ───
 
@@ -151,8 +152,8 @@ export function ReportStepCard({ step, index }: ReportStepCardProps) {
           )}
         </div>
         <div className="flex items-center gap-2">
-          {step.duration > 0 && (
-            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatDuration(step.duration)}</span>
+          {reportDurationMs(step) > 0 && (
+            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatDuration(reportDurationMs(step))}</span>
           )}
           {assertions.length > 0 && (
             <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>

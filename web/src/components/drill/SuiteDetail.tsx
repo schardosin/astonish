@@ -9,6 +9,7 @@ import {
   fetchSuiteYaml, saveSuiteYaml,
 } from '../../api/drillApi'
 import type { DrillSuiteDetail, DrillDetail } from '../../api/drillApi'
+import { reportTestEntries, reportDurationMs } from '../../api/drillApi'
 import { buildPath } from '../../hooks/useHashRouter'
 import YamlDrawer from '../YamlDrawer'
 import { formatTimeAgo, formatDuration, StatusDot, StatusBadge } from './drillUtils'
@@ -127,7 +128,7 @@ export default function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDri
   if (!suite) return null
 
   const report = suite.last_report
-  const reportTests = report?.drills || []
+  const reportTests = reportTestEntries(report)
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -345,7 +346,7 @@ export default function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDri
               <div className="flex items-center gap-3 mb-4">
                 <StatusBadge status={report.status} />
                 <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>{report.summary}</span>
-                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>&middot; {formatDuration(report.duration_ms)}</span>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>&middot; {formatDuration(reportDurationMs(report))}</span>
                 <span className="text-xs" style={{ color: 'var(--text-muted)' }}>&middot; {formatTimeAgo(report.finished_at)}</span>
               </div>
 
@@ -397,8 +398,8 @@ export default function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDri
                         <div className="flex items-center gap-2">
                           <StatusDot status={test.status} />
                           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{test.name}</span>
-                          {test.duration > 0 && (
-                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatDuration(test.duration)}</span>
+                          {reportDurationMs(test) > 0 && (
+                            <span className="text-[10px]" style={{ color: 'var(--text-muted)' }}>{formatDuration(reportDurationMs(test))}</span>
                           )}
                         </div>
                         <div className="flex items-center gap-2">

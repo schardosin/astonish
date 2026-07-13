@@ -14,7 +14,7 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 - The **triage agent** is invoked on failure to produce a human-readable diagnosis. It is a helper, not a substitute for the failing test signal.
 - Artifacts (logs, screenshots, outputs) go through `ArtifactManager` — do not write files directly from step handlers.
 - **Browser vs shell networking**: shell and browser tools both run in the sandbox when sandboxed. Prefer `http://localhost:<port>` in drills; browser navigation rewrites loopback hostnames to `127.0.0.1` (Chromium IPv6-first vs IPv4-only listeners). Do not hard-code container bridge IPs. `{{CONTAINER_IP}}` remains supported for older drills.
-- **Start scripts**: suite setup runs `start-services.sh` in the foreground. Scripts must fully detach children (`setsid`+`nohup`+`disown`), poll, and exit 0 — not `&`+`wait`. Prefer `npx vite` over `npm run dev`. Ready checks require `stable_count` consecutive successes (default 3).
+- **Start scripts**: suite setup runs `start-services.sh` in the foreground. Scripts must detach **restart supervisors** (`setsid`+`nohup`+`while true` restart + PID files), poll until stable, and exit 0 — not `&`+`wait` or one-shot detach. Prefer `npx vite` over `npm run dev`. Ready checks require `stable_count` consecutive successes (default 3).
 
 ## When editing
 1. Adding a new assertion type? Extend the runner's assertion registry rather than special-casing it in step handlers.

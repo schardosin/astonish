@@ -55,9 +55,9 @@ without any AI or human involvement at runtime. This means:
     "nohup cmd &" or "cmd &" without background=true — the process will die
     within seconds because the PTY closes when the shell exits. Use
     process_read to check output and process_kill to stop the process.
-    Exception: .astonish/start-services.sh must fully detach with
-    setsid+nohup+disown, poll, and exit 0 (see Step 1h-iv) — that is not
-    the interactive shell_command path.
+    Exception: .astonish/start-services.sh uses detached restart supervisors
+    (setsid+nohup + while-true restart loop + PID files) — see Step 1h-iv.
+    That is not the interactive shell_command path.
 
 ---
 
@@ -207,9 +207,10 @@ cause the process to die when the PTY closes:
 The process manager's PTY closes when the shell exits, sending SIGHUP to all
 children. Only background=true keeps the PTY session alive.
 
-NOTE: Inside .astonish/start-services.sh the opposite is required — fully
-detach with setsid+nohup+disown, poll, and exit 0 (see 1h-iv). That script
-is a different launch path from interactive shell_command.
+NOTE: Inside .astonish/start-services.sh the opposite is required — run each
+daemon under a detached restart supervisor (setsid+nohup, while-true restart,
+PID file), poll until ready + stable, then exit 0 (see 1h-iv). That script is
+a different launch path from interactive shell_command.
 
 After starting, use process_read with the session_id to check the output.
 Use process_kill with the session_id to stop the process when done.
@@ -229,50 +230,85 @@ working. What endpoint or port should I check?"
 - Prefer writing/updating <workspace>/.astonish/start-services.sh and
   stop-services.sh once the recipe works — suite setup should call those scripts.
 - CRITICAL for start-services.sh (different from interactive shell_command):
-  1. Fully detach each service: setsid + nohup + & + disown (and redirect stdin
-     from /dev/null). Bare "cmd &" without detach leaves processes hung after the
-     script's PTY closes.
+  1. Do NOT start daemons with bare setsid/nohup alone — Vite/npm often exit
+     seconds after the first successful curl. Wrap each command in a detached
+     supervisor: setsid+nohup, stdin from /dev/null, while-true restart loop,
+     write supervisor PID to .astonish/*.supervisor.pid, then disown.
   2. Prefer "npx vite --host 0.0.0.0 --port <port>" over "npm run dev".
-  3. Poll until services answer, then exit 0 — do NOT end with wait. Suite setup
-     runs the script in the foreground and waits for it to finish; suite
-     ready_check then requires several consecutive successes (stable_count).
-  4. After writing the script, verify stability yourself: curl a few times over
-     several seconds (or check pgrep) before declaring success.
+  3. Skip start when the service already answers (curl already-running guard).
+  4. Poll until ready, sample stability a few times, then exit 0 — do NOT end
+     with wait. Suite setup runs the script in the foreground; suite
+     ready_check also requires stable_count consecutive successes.
+  5. stop-services.sh must kill the supervisor process group
+     (kill -- -"$pid") then fall back to pkill; remove PID files.
+  6. After writing, verify: curl, then kill the child once and confirm it
+     restarts from the supervisor before declaring success.
 - The exact build command → optional prior setup step in Step 3
 - The exact run/start command → fold into start-services.sh; suite setup runs the script
 - How to verify the service is ready (endpoint, port, output) → becomes ready_check in Step 3
 - The exact stop/teardown command → fold into stop-services.sh / suite teardown
 
-Example start-services.sh shape:
+Example start-services.sh shape (restart supervisors):
 
     #!/usr/bin/env bash
     set -u
     WORKSPACE="/root/myapp"
-    LOG_DIR="$WORKSPACE/.astonish"
+    LOG_DIR="$WORKSPACE/.astonish/logs"
+    PID_DIR="$WORKSPACE/.astonish"
     mkdir -p "$LOG_DIR"
-
-    if ! curl -s -o /dev/null http://localhost:8080/health 2>/dev/null; then
-      cd "$WORKSPACE/backend" || exit 1
-      setsid nohup ./server >"$LOG_DIR/backend.log" 2>&1 < /dev/null &
+    is_up() { curl -sf --max-time 2 "$1" >/dev/null 2>&1; }
+    start_supervised() {
+      local name="$1" pidfile="$2" logfile="$3" cmd="$4"
+      if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+        echo "$name supervisor already running"; return 0
+      fi
+      setsid nohup bash -c '
+        logfile="$1"; cmd="$2"
+        while true; do
+          echo "[$(date -Is)] starting" >>"$logfile"
+          bash -lc "$cmd" >>"$logfile" 2>&1
+          echo "[$(date -Is)] exited $?; restarting in 1s" >>"$logfile"
+          sleep 1
+        done
+      ' _ "$logfile" "$cmd" </dev/null >/dev/null 2>&1 &
+      echo $! >"$pidfile"
       disown
+    }
+    if ! is_up "http://localhost:8080/health"; then
+      start_supervised backend "$PID_DIR/backend.supervisor.pid" "$LOG_DIR/backend.log" \
+        "cd '$WORKSPACE/backend' && exec ./server"
     fi
-    if ! curl -s -o /dev/null http://localhost:3001/ 2>/dev/null; then
-      cd "$WORKSPACE/frontend" || exit 1
-      setsid nohup npx vite --host 0.0.0.0 --port 3001 >"$LOG_DIR/frontend.log" 2>&1 < /dev/null &
-      disown
+    if ! is_up "http://localhost:3001/"; then
+      start_supervised frontend "$PID_DIR/frontend.supervisor.pid" "$LOG_DIR/frontend.log" \
+        "cd '$WORKSPACE/frontend' && exec npx vite --host 0.0.0.0 --port 3001"
     fi
-
-    for i in $(seq 1 30); do
-      BE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null || true)
-      FE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/ 2>/dev/null || true)
-      if [ "$BE" = "200" ] && [ "$FE" = "200" ]; then
-        echo "Both services ready"
-        exit 0
+    for i in $(seq 1 60); do
+      if is_up "http://localhost:8080/health" && is_up "http://localhost:3001/"; then
+        ok=0
+        for _ in 1 2 3; do
+          sleep 2
+          is_up "http://localhost:8080/health" && is_up "http://localhost:3001/" && ok=$((ok+1)) || ok=0
+        done
+        [ "$ok" -ge 3 ] && echo "All services ready" && exit 0
       fi
       sleep 1
     done
-    echo "Services started but may still be initializing"
-    exit 0
+    echo "Services failed to become stable"; exit 1
+
+Example stop-services.sh shape:
+
+    #!/usr/bin/env bash
+    set -u
+    PID_DIR="/root/myapp/.astonish"
+    for f in backend.supervisor.pid frontend.supervisor.pid; do
+      if [ -f "$PID_DIR/$f" ]; then
+        pid=$(cat "$PID_DIR/$f")
+        kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        rm -f "$PID_DIR/$f"
+      fi
+    done
+    pkill -f '/root/myapp/backend/server' 2>/dev/null || true
+    pkill -f 'vite --host 0.0.0.0 --port 3001' 2>/dev/null || true
 
 Do NOT save this information to memory (memory_save) or SELF.md. It belongs
 in the suite YAML (and template bootstrap_files) that you will generate in Step 3.
@@ -383,7 +419,7 @@ application, and how to verify it is ready.
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
       base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
       setup:
-        - "bash /root/myapp/.astonish/start-services.sh"  # full-detach spawn-and-return
+        - "bash /root/myapp/.astonish/start-services.sh"  # supervised restart + poll + exit
       ready_check:                       # OPTIONAL — only for servers/daemons
         type: http                       # "http", "port", or "output_contains"
         url: "http://localhost:8080/health"  # For http type
@@ -532,7 +568,7 @@ in browser_navigate URLs the same way.
 Guidelines:
 - Setup commands run IN ORDER before any tests.
 - Prefer bash <workspace>/.astonish/start-services.sh when that template
-  bootstrap script exists (full detach: setsid+nohup+disown, poll, exit 0).
+  bootstrap script exists (detached restart supervisors + poll + exit 0).
   Suite setup runs it in the foreground and waits for exit. Otherwise, for
   single-service suites, use & to background long-running processes in setup
   commands. The test runner automatically detects trailing & and uses the

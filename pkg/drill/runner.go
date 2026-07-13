@@ -627,8 +627,8 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 // runShellCommand executes a shell command via the tool executor.
 // Commands ending with & are automatically run in background mode to prevent
 // the PTY from closing and killing the process. Canonical start-services.sh
-// scripts should fully detach children (setsid+nohup+disown) and exit; they
-// run in the foreground so suite setup waits for their readiness poll.
+// scripts detach restart supervisors (setsid+nohup+restart loop) and exit;
+// they run in the foreground so suite setup waits for their readiness poll.
 func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, timeout int) (string, error) {
 	bg := isBackgroundCommand(command)
 

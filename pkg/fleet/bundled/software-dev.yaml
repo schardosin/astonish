@@ -871,7 +871,8 @@ agents:
       **Starting the stack:** If `<workspace>/.astonish/start-services.sh` exists
       (injected from the sandbox template), use it to start services after
       credentials are available. Prefer that script over ad-hoc background
-      one-liners. Suites should call the same script in `setup:`.
+      one-liners — it owns restart supervisors for daemons. Suites should
+      call the same script in `setup:` (and stop-services.sh in teardown).
 
       ## UI-First Testing (CRITICAL RULE)
 

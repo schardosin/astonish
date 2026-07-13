@@ -46,7 +46,7 @@ suite_config:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
 
-The runner runs `start-services.sh` in the **foreground** and waits for it to exit. The script must **fully detach** children (`setsid` + `nohup` + `&` + `disown`, stdin from `/dev/null`), poll until ready, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` without detach — that leaves Vite hung when the PTY closes. Prefer `npx vite --host 0.0.0.0` over `npm run dev`.
+The runner runs `start-services.sh` in the **foreground** and waits for it to exit. Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop — Vite/npm often exit shortly after the first successful curl. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. `stop-services.sh` should kill the supervisor process group (`kill -- -$pid`) with `pkill` fallbacks.
 
 `ready_check` then polls again and requires **`stable_count` consecutive successes** (default 3, spaced by `interval`) so a one-shot curl that succeeds just before a process dies cannot green the suite.
 

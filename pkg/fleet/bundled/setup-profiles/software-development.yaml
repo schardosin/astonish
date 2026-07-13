@@ -306,12 +306,16 @@ steps:
     \   shell_command(command: \"curl -s http://localhost:8080/health\")\n   ```\n   Confirm with the user: \"Configuration\
     \ is complete. All services are\n   responding correctly. Ready to proceed?\"\n\n5. **Persist the working start recipe as scripts (REQUIRED).**\
     \ From the EXACT commands that successfully started the services above, write:\
-    \ - `<workspace>/.astonish/start-services.sh` — fully detach each service\
-    \   (`setsid nohup … &` then `disown`, stdin from `/dev/null`), log under\
-    \   `.astonish/`, poll until ready, then **exit 0** (do NOT end with `wait`).\
-    \   Prefer `npx vite --host 0.0.0.0` over `npm run dev`. After writing,\
-    \   re-curl several times over a few seconds to confirm the process stays up.\
-    \ - `<workspace>/.astonish/stop-services.sh` — best-effort stop.\
+    \ - `<workspace>/.astonish/start-services.sh` — for each daemon, start a\
+    \   **detached restart supervisor** (`setsid nohup` + `while true` restart\
+    \   loop + supervisor PID under `.astonish/*.supervisor.pid` + `disown`),\
+    \   log under `.astonish/logs/`, skip if already answering curl, prefer\
+    \   `npx vite --host 0.0.0.0` over `npm run dev`, poll until ready+stable,\
+    \   then **exit 0** (do NOT end with `wait`). One-shot setsid without a\
+    \   restart loop is NOT enough — Vite often exits after the first curl.\
+    \   Verify by killing the child once and confirming the supervisor restarts it.\
+    \ - `<workspace>/.astonish/stop-services.sh` — `kill -- -$pid` on each\
+    \   supervisor PID (process group), then pkill fallbacks; remove PID files.\
     \ Use `write_file` with absolute paths. These become the single launch path for drills,\
     \ fleet agents, and chat. Do NOT paraphrase — copy the working recipe.\
     \n\
@@ -328,7 +332,7 @@ steps:
     \ name. This keeps naming consistent: template, plan key, and\ndrill suite all share the same name.\n\n**Sub-steps:**\n\
     \n1. **Start the service(s)** using the canonical script from 3h-v:\
     \   `shell_command(command: \"bash <workspace>/.astonish/start-services.sh\")`\
-    \   (full-detach spawn-and-return). Verify with the same ready checks\
+    \   (restart-supervisor spawn-and-return). Verify with the same ready checks\
     \   as 3h-v. Do NOT reinvent start one-liners.\n\n2. **Design the suite YAML.** The suite's `setup:`\
     \ and `ready_check:` handle\n   building and starting services BEFORE any drill runs. Use the exact\n   commands from\
     \ Steps 3h and 3h-v:\n   - `setup:` — call the canonical start script, e.g.\

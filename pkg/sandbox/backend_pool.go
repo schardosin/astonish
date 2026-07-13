@@ -147,6 +147,11 @@ func (c *backendNodeClient) EnsureReady(sessionID string) error {
 	return c.bindErr
 }
 
+// GetBackend exposes the underlying Backend for credential file PushFile and similar.
+func (c *backendNodeClient) GetBackend() Backend {
+	return c.backend
+}
+
 // provision does the CreateSession + StartSession round trip. Any error is
 // captured on c.bindErr; bindDone is always closed exactly once.
 func (c *backendNodeClient) provision(sessionID string) {

@@ -36,18 +36,24 @@ type ResolvedCredential struct {
 // Returns a map keyed by logical name. Returns an error listing any credentials
 // that could not be resolved.
 func ResolveCredentials(plan *FleetPlan, credStore *credentials.Store) (map[string]*ResolvedCredential, error) {
-	if len(plan.Credentials) == 0 {
+	if plan == nil {
 		return nil, nil
 	}
+	return ResolveCredentialsMap(plan.Credentials, credStore)
+}
 
+// ResolveCredentialsMap resolves a logical→store-name credentials map from the file store.
+func ResolveCredentialsMap(creds map[string]string, credStore *credentials.Store) (map[string]*ResolvedCredential, error) {
+	if len(creds) == 0 {
+		return nil, nil
+	}
 	if credStore == nil {
-		return nil, fmt.Errorf("credential store is not available; cannot resolve fleet plan credentials")
+		return nil, fmt.Errorf("credential store is not available; cannot resolve credentials")
 	}
 
-	resolved := make(map[string]*ResolvedCredential, len(plan.Credentials))
+	resolved := make(map[string]*ResolvedCredential, len(creds))
 	var missing []string
-
-	for logicalName, storeName := range plan.Credentials {
+	for logicalName, storeName := range creds {
 		rc := resolveOne(credStore, logicalName, storeName)
 		if rc == nil {
 			missing = append(missing, fmt.Sprintf("%s (store: %q)", logicalName, storeName))
@@ -55,11 +61,9 @@ func ResolveCredentials(plan *FleetPlan, credStore *credentials.Store) (map[stri
 		}
 		resolved[logicalName] = rc
 	}
-
 	if len(missing) > 0 {
 		return resolved, fmt.Errorf("credentials not found in store: %s", strings.Join(missing, ", "))
 	}
-
 	return resolved, nil
 }
 
@@ -67,18 +71,24 @@ func ResolveCredentials(plan *FleetPlan, credStore *credentials.Store) (map[stri
 // from a platform-mode store.CredentialStore (PG-backed). This is the platform
 // equivalent of ResolveCredentials which works with the file-based store.
 func ResolveCredentialsPlatform(ctx context.Context, plan *FleetPlan, cs store.CredentialStore) (map[string]*ResolvedCredential, error) {
-	if len(plan.Credentials) == 0 {
+	if plan == nil {
 		return nil, nil
 	}
+	return ResolveCredentialsPlatformMap(ctx, plan.Credentials, cs)
+}
 
+// ResolveCredentialsPlatformMap resolves a credentials map from a platform store.
+func ResolveCredentialsPlatformMap(ctx context.Context, creds map[string]string, cs store.CredentialStore) (map[string]*ResolvedCredential, error) {
+	if len(creds) == 0 {
+		return nil, nil
+	}
 	if cs == nil {
-		return nil, fmt.Errorf("credential store is not available; cannot resolve fleet plan credentials")
+		return nil, fmt.Errorf("credential store is not available; cannot resolve credentials")
 	}
 
-	resolved := make(map[string]*ResolvedCredential, len(plan.Credentials))
+	resolved := make(map[string]*ResolvedCredential, len(creds))
 	var missing []string
-
-	for logicalName, storeName := range plan.Credentials {
+	for logicalName, storeName := range creds {
 		rc := resolveOnePlatform(ctx, cs, logicalName, storeName)
 		if rc == nil {
 			missing = append(missing, fmt.Sprintf("%s (store: %q)", logicalName, storeName))
@@ -86,11 +96,9 @@ func ResolveCredentialsPlatform(ctx context.Context, plan *FleetPlan, cs store.C
 		}
 		resolved[logicalName] = rc
 	}
-
 	if len(missing) > 0 {
 		return resolved, fmt.Errorf("credentials not found in store: %s", strings.Join(missing, ", "))
 	}
-
 	return resolved, nil
 }
 

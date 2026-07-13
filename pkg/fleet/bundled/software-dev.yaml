@@ -868,11 +868,12 @@ agents:
       the RUNNING application — this is how you understand what the app
       actually does and what to assert in your drills.
 
-      **Starting the stack:** If `<workspace>/.astonish/start-services.sh` exists
-      (injected from the sandbox template), use it to start services after
-      credentials are available. Prefer that script over ad-hoc background
-      one-liners — it owns restart supervisors for daemons. Suites should
-      call the same script in `setup:` (and stop-services.sh in teardown).
+      **Starting the stack:** Prefer suite-owned readiness: suites declare
+      `credentials`/`credential_injection` (copied from the plan) and optional
+      `configure:` appendix; `run_drill` injects secrets then runs configure → setup.
+      If `<workspace>/.astonish/start-services.sh` exists, suites should call it in
+      `setup:` (and stop-services.sh in teardown) instead of ad-hoc background
+      one-liners — it owns restart supervisors for daemons.
 
       ## UI-First Testing (CRITICAL RULE)
 

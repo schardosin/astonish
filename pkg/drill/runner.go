@@ -98,8 +98,31 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 // runLegacySuite handles the original single-service setup/readycheck/teardown lifecycle.
 func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
-	// 2. Run setup commands
+	// 1. Configure appendix (after credential injection by run_drill/CLI; before start)
 	var setupLog strings.Builder
+	if sc != nil {
+		for _, cmd := range sc.Configure {
+			result, err := sr.runShellCommand(ctx, cmd, 120)
+			if result != "" {
+				setupLog.WriteString(result)
+				setupLog.WriteString("\n")
+			}
+			if err != nil {
+				report.Status = "error"
+				report.SetupLog = setupLog.String()
+				report.Summary = fmt.Sprintf("configure failed: %v", err)
+				report.FinishedAt = time.Now()
+				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
+				if sr.artifactMgr != nil {
+					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
+				}
+				sr.killBackgroundSessions(ctx)
+				return report, nil
+			}
+		}
+	}
+
+	// 2. Run setup commands (start services)
 	if sc != nil {
 		for _, cmd := range sc.Setup {
 			result, err := sr.runShellCommand(ctx, cmd, 120)
@@ -178,6 +201,32 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
 	var setupLog strings.Builder
 	var startedServices []config.ServiceConfig // track which services started (for reverse teardown)
+
+	// Configure appendix before starting services
+	if sc != nil {
+		for _, cmd := range sc.Configure {
+			if sr.verbose {
+				setupLog.WriteString(fmt.Sprintf("--- Configure: %s ---\n", cmd))
+			}
+			result, err := sr.runShellCommand(ctx, cmd, 120)
+			if result != "" {
+				setupLog.WriteString(result)
+				setupLog.WriteString("\n")
+			}
+			if err != nil {
+				sr.killBackgroundSessions(ctx)
+				report.Status = "error"
+				report.SetupLog = setupLog.String()
+				report.Summary = fmt.Sprintf("configure failed: %v", err)
+				report.FinishedAt = time.Now()
+				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
+				if sr.artifactMgr != nil {
+					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
+				}
+				return report, nil
+			}
+		}
+	}
 
 	// Start each service in declaration order
 	for _, svc := range sc.Services {

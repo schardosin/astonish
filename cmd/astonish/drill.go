@@ -576,6 +576,17 @@ func handleDrillRunCommand(args []string) error {
 		}
 	}
 
+	if useSandbox && lazyNode != nil {
+		if _, err := lazyNode.EnsureContainerReady(testSessionID); err != nil {
+			lazyNode.Cleanup()
+			return fmt.Errorf("sandbox container not ready: %w", err)
+		}
+		if err := injectCLIDrillBootstrapAndCredentials(lazyNode, testSessionID, suiteTemplate, suite.Name, suite.Config.SuiteConfig); err != nil {
+			lazyNode.Cleanup()
+			return fmt.Errorf("credential/bootstrap injection failed: %w", err)
+		}
+	}
+
 	// Browser executor: sandboxed runs use in-container Chromium (same path as chat).
 	// Local (non-sandbox) runs may use host Chrome.
 	var browserExec *browserToolExecutor
@@ -739,6 +750,60 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 
 	fmt.Printf("Sandbox: creating container from template %q...\n", template)
 	return lazyNode, testSessionID, true
+}
+
+// injectCLIDrillBootstrapAndCredentials injects template bootstrap_files and suite
+// credential_injection into the CLI drill sandbox before configure/setup.
+func injectCLIDrillBootstrapAndCredentials(lazyNode *sandbox.LazyNodeClient, sessionID, template, suiteName string, sc *config.DrillSuiteConfig) error {
+	ctx := context.Background()
+	tplRegistry, err := sandbox.NewTemplateRegistry()
+	if err != nil {
+		slog.Warn("CLI drill: template registry unavailable for bootstrap inject", "error", err)
+	} else {
+		_ = tplRegistry.Load()
+		files := sandbox.LookupBootstrapFiles(ctx, tplRegistry, nil, template)
+		if len(files) > 0 {
+			client := lazyNode.GetIncusClient()
+			containerName := lazyNode.GetContainerName()
+			if client != nil && containerName != "" {
+				if err := sandbox.MaterializeBootstrapFilesIncus(ctx, func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+					out, execErr := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+					if execErr != nil {
+						return nil, nil, -1, execErr
+					}
+					return []byte(out), nil, 0, nil
+				}, files); err != nil {
+					return fmt.Errorf("bootstrap_files: %w", err)
+				}
+			}
+		}
+	}
+
+	spec, err := adrill.ResolveInjectionSpec(ctx, suiteName, sc, nil)
+	if err != nil {
+		return err
+	}
+	if spec == nil || !spec.HasWork() {
+		return nil
+	}
+
+	client := lazyNode.GetIncusClient()
+	containerName := lazyNode.GetContainerName()
+	target := adrill.InjectionTarget{
+		SessionID:  sessionID,
+		LazyClient: lazyNode,
+	}
+	if client != nil && containerName != "" {
+		target.ExecIncus = func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+			out, execErr := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+			if execErr != nil {
+				return nil, nil, -1, execErr
+			}
+			return []byte(out), nil, 0, nil
+		}
+	}
+	_, err = adrill.ApplyCredentialInjection(ctx, spec, nil, tools.GetCredentialStore(), target)
+	return err
 }
 
 // setupTriageAgent initializes an AI triage agent using the user's default LLM

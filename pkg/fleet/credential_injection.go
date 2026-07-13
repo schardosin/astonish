@@ -167,7 +167,13 @@ func BuildInjectionEnv(plan *FleetPlan, resolved map[string]*ResolvedCredential,
 		return nil, nil
 	}
 	inj := plan.EffectiveCredentialInjection()
-	if len(inj.Env) == 0 {
+	return BuildInjectionEnvFromSpec(ctx, plan.Credentials, &inj, resolved, cs, plan.Key)
+}
+
+// BuildInjectionEnvFromSpec builds env from an explicit credentials map and injection spec.
+// ownerKey is used for audit logs only (plan key or suite name).
+func BuildInjectionEnvFromSpec(ctx context.Context, credentials map[string]string, inj *CredentialInjection, resolved map[string]*ResolvedCredential, cs store.CredentialStore, ownerKey string) (map[string]string, error) {
+	if inj == nil || len(inj.Env) == 0 {
 		return nil, nil
 	}
 
@@ -176,9 +182,9 @@ func BuildInjectionEnv(plan *FleetPlan, resolved map[string]*ResolvedCredential,
 		if spec.Var == "" || spec.Credential == "" || spec.Field == "" {
 			return nil, fmt.Errorf("credential_injection.env: credential, var, and field are required")
 		}
-		storeName, ok := plan.Credentials[spec.Credential]
+		storeName, ok := credentials[spec.Credential]
 		if !ok {
-			return nil, fmt.Errorf("credential_injection.env: logical credential %q not in plan.credentials", spec.Credential)
+			return nil, fmt.Errorf("credential_injection.env: logical credential %q not in credentials map", spec.Credential)
 		}
 		value, err := extractCredentialField(ctx, cs, storeName, spec.Field, resolved[spec.Credential])
 		if err != nil {
@@ -188,7 +194,7 @@ func BuildInjectionEnv(plan *FleetPlan, resolved map[string]*ResolvedCredential,
 			return nil, fmt.Errorf("credential_injection.env[%s]: field %q resolved to empty value", spec.Var, spec.Field)
 		}
 		env[spec.Var] = value
-		LogInjectionAudit(plan.Key, "", spec.Credential, "env", spec.Var, "")
+		LogInjectionAudit(ownerKey, "", spec.Credential, "env", spec.Var, "")
 	}
 	return env, nil
 }
@@ -211,14 +217,19 @@ func ValidateFileInjectionPaths(inj CredentialInjection) error {
 
 // MaterializeInjectionFiles writes declared credential files into a sandbox via Backend.PushFile.
 func MaterializeInjectionFiles(ctx context.Context, backend sandbox.Backend, sessionID string, plan *FleetPlan, resolved map[string]*ResolvedCredential, cs store.CredentialStore) error {
-	if plan == nil || backend == nil || sessionID == "" {
+	if plan == nil {
 		return nil
 	}
 	inj := plan.EffectiveCredentialInjection()
-	if len(inj.Files) == 0 {
+	return MaterializeInjectionFilesFromSpec(ctx, backend, sessionID, plan.Credentials, &inj, resolved, cs, plan.Key)
+}
+
+// MaterializeInjectionFilesFromSpec writes injection files using an explicit credentials map.
+func MaterializeInjectionFilesFromSpec(ctx context.Context, backend sandbox.Backend, sessionID string, credentials map[string]string, inj *CredentialInjection, resolved map[string]*ResolvedCredential, cs store.CredentialStore, ownerKey string) error {
+	if backend == nil || sessionID == "" || inj == nil || len(inj.Files) == 0 {
 		return nil
 	}
-	if err := ValidateFileInjectionPaths(inj); err != nil {
+	if err := ValidateFileInjectionPaths(*inj); err != nil {
 		return err
 	}
 
@@ -226,9 +237,9 @@ func MaterializeInjectionFiles(ctx context.Context, backend sandbox.Backend, ses
 		if spec.Credential == "" || spec.Field == "" {
 			return fmt.Errorf("credential_injection.files: credential and field are required")
 		}
-		storeName, ok := plan.Credentials[spec.Credential]
+		storeName, ok := credentials[spec.Credential]
 		if !ok {
-			return fmt.Errorf("credential_injection.files: logical credential %q not in plan.credentials", spec.Credential)
+			return fmt.Errorf("credential_injection.files: logical credential %q not in credentials map", spec.Credential)
 		}
 		content, err := extractCredentialField(ctx, cs, storeName, spec.Field, resolved[spec.Credential])
 		if err != nil {
@@ -247,7 +258,7 @@ func MaterializeInjectionFiles(ctx context.Context, backend sandbox.Backend, ses
 		if err := backend.PushFile(ctx, sessionID, spec.Path, strings.NewReader(content), mode); err != nil {
 			return fmt.Errorf("credential_injection.files[%s]: %w", spec.Path, err)
 		}
-		LogInjectionAudit(plan.Key, sessionID, spec.Credential, "file", spec.Path, spec.Format)
+		LogInjectionAudit(ownerKey, sessionID, spec.Credential, "file", spec.Path, spec.Format)
 	}
 	return nil
 }
@@ -255,21 +266,26 @@ func MaterializeInjectionFiles(ctx context.Context, backend sandbox.Backend, ses
 // MaterializeInjectionFilesIncus writes files via shell for Incus fleet sessions
 // (IncusBackend PushFile may not exist on all paths; exec is reliable).
 func MaterializeInjectionFilesIncus(ctx context.Context, execFn func(command []string, env map[string]string) (stdout, stderr []byte, exitCode int, err error), plan *FleetPlan, resolved map[string]*ResolvedCredential, cs store.CredentialStore) error {
-	if plan == nil || execFn == nil {
+	if plan == nil {
 		return nil
 	}
 	inj := plan.EffectiveCredentialInjection()
-	if len(inj.Files) == 0 {
+	return MaterializeInjectionFilesIncusFromSpec(ctx, execFn, plan.Credentials, &inj, resolved, cs, plan.Key)
+}
+
+// MaterializeInjectionFilesIncusFromSpec writes injection files via an exec function.
+func MaterializeInjectionFilesIncusFromSpec(ctx context.Context, execFn func(command []string, env map[string]string) (stdout, stderr []byte, exitCode int, err error), credentials map[string]string, inj *CredentialInjection, resolved map[string]*ResolvedCredential, cs store.CredentialStore, ownerKey string) error {
+	if execFn == nil || inj == nil || len(inj.Files) == 0 {
 		return nil
 	}
-	if err := ValidateFileInjectionPaths(inj); err != nil {
+	if err := ValidateFileInjectionPaths(*inj); err != nil {
 		return err
 	}
 
 	for _, spec := range inj.Files {
-		storeName, ok := plan.Credentials[spec.Credential]
+		storeName, ok := credentials[spec.Credential]
 		if !ok {
-			return fmt.Errorf("credential_injection.files: logical credential %q not in plan.credentials", spec.Credential)
+			return fmt.Errorf("credential_injection.files: logical credential %q not in credentials map", spec.Credential)
 		}
 		content, err := extractCredentialField(ctx, cs, storeName, spec.Field, resolved[spec.Credential])
 		if err != nil {
@@ -298,7 +314,7 @@ func MaterializeInjectionFilesIncus(ctx context.Context, execFn func(command []s
 		if exitCode != 0 {
 			return fmt.Errorf("credential_injection.files[%s]: exit %d: %s", spec.Path, exitCode, string(stderr))
 		}
-		LogInjectionAudit(plan.Key, "", spec.Credential, "file", spec.Path, spec.Format)
+		LogInjectionAudit(ownerKey, "", spec.Credential, "file", spec.Path, spec.Format)
 	}
 	return nil
 }

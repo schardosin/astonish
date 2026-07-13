@@ -171,6 +171,14 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
+	// Inject suite (or fleet-plan fallback) credentials before configure/setup.
+	if err := injectDrillCredentials(ctx, deps, suiteName, suite); err != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: fmt.Sprintf("credential injection failed: %v", err),
+		}, nil
+	}
+
 	// Filter tests by tag if requested
 	tests := suite.Tests
 	if args.Tag != "" {
@@ -849,6 +857,126 @@ func normalizeSandboxTemplateName(t string) string {
 		return ""
 	}
 	return t
+}
+
+// injectDrillCredentials materializes suite credential_injection (or a fleet-plan
+// fallback) into the active sandbox before configure/setup runs.
+func injectDrillCredentials(ctx tool.Context, deps *runDrillDeps, suiteName string, suite *adrill.LoadedSuite) error {
+	if suite == nil || suite.Config == nil {
+		return nil
+	}
+	sc := suite.Config.SuiteConfig
+	goCtx := context.Background()
+	if ctx != nil {
+		goCtx = ctx
+	}
+
+	planStore := store.FleetPlanStoreFromContext(goCtx)
+	spec, err := adrill.ResolveInjectionSpec(goCtx, suiteName, sc, planStore)
+	if err != nil {
+		return err
+	}
+	if spec == nil || !spec.HasWork() {
+		return nil
+	}
+
+	cs := getEffectiveCredStore(goCtx)
+	fileStore := GetCredentialStore()
+
+	target, err := buildDrillInjectionTarget(ctx, deps)
+	if err != nil {
+		return err
+	}
+	if target.SessionID == "" && target.LazyClient == nil && target.Backend == nil && target.ExecIncus == nil {
+		slog.Warn("run_drill skipping credential injection: no sandbox target",
+			"component", "run-drill", "suite", suiteName)
+		return nil
+	}
+
+	_, err = adrill.ApplyCredentialInjection(goCtx, spec, cs, fileStore, target)
+	if err != nil {
+		return err
+	}
+	slog.Info("run_drill applied credential injection",
+		"component", "run-drill",
+		"suite", suiteName,
+		"owner", spec.OwnerKey,
+		"env_count", len(spec.Injection.Env),
+		"file_count", len(spec.Injection.Files),
+	)
+	return nil
+}
+
+func buildDrillInjectionTarget(ctx tool.Context, deps *runDrillDeps) (adrill.InjectionTarget, error) {
+	target := adrill.InjectionTarget{}
+	if deps == nil {
+		return target, nil
+	}
+
+	if deps.lazyClient != nil {
+		target.LazyClient = deps.lazyClient
+		target.SessionID = deps.sessionID
+		if target.SessionID == "" && ctx != nil {
+			target.SessionID = ctx.SessionID()
+		}
+		if _, err := deps.lazyClient.EnsureContainerReady(target.SessionID); err != nil {
+			return target, fmt.Errorf("sandbox not ready for credential injection: %w", err)
+		}
+		client := deps.lazyClient.GetIncusClient()
+		containerName := deps.lazyClient.GetContainerName()
+		if client != nil && containerName != "" {
+			target.ExecIncus = func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+				out, err := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+				if err != nil {
+					return nil, nil, -1, err
+				}
+				return []byte(out), nil, 0, nil
+			}
+		}
+		return target, nil
+	}
+
+	if deps.toolClient != nil {
+		target.SessionID = deps.sessionID
+		if target.SessionID == "" && ctx != nil {
+			target.SessionID = ctx.SessionID()
+		}
+		_ = deps.toolClient.EnsureReady(target.SessionID)
+		type backendProvider interface {
+			GetBackend() sandbox.Backend
+		}
+		if bp, ok := deps.toolClient.(backendProvider); ok {
+			target.Backend = bp.GetBackend()
+		}
+		return target, nil
+	}
+
+	if deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" {
+		sessionID := ctx.SessionID()
+		target.SessionID = sessionID
+		lazy := deps.nodePool.GetOrCreate(sessionID)
+		if lazy != nil {
+			target.LazyClient = lazy
+			if _, err := lazy.EnsureContainerReady(sessionID); err != nil {
+				return target, fmt.Errorf("sandbox not ready for credential injection: %w", err)
+			}
+			client := lazy.GetIncusClient()
+			containerName := lazy.GetContainerName()
+			if client != nil && containerName != "" {
+				target.ExecIncus = func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+					out, err := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+					if err != nil {
+						return nil, nil, -1, err
+					}
+					return []byte(out), nil, 0, nil
+				}
+			}
+		}
+		if backend := deps.nodePool.GetBackend(); backend != nil && target.ExecIncus == nil {
+			target.Backend = backend
+		}
+	}
+	return target, nil
 }
 
 // ensureDrillSandboxTemplate switches the chat sandbox to the suite's required

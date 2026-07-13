@@ -418,6 +418,16 @@ application, and how to verify it is ready.
     suite_config:
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
       base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
+      credentials:                       # OPTIONAL — logical → store entry (copy from fleet plan)
+        providers: myapp-providers
+      credential_injection:              # OPTIONAL — inject before configure/setup
+        files:
+          - credential: providers
+            path: /root/myapp/config/providers.yaml
+            field: value
+            mode: "0600"
+      configure:                         # OPTIONAL — appendix after injection, before start
+        - "test -f /root/myapp/config/providers.yaml"
       setup:
         - "bash /root/myapp/.astonish/start-services.sh"  # supervised restart + poll + exit
       ready_check:                       # OPTIONAL — only for servers/daemons
@@ -567,6 +577,12 @@ in browser_navigate URLs the same way.
 
 Guidelines:
 - Setup commands run IN ORDER before any tests.
+- Runtime order is fixed: credential injection → configure: → setup: → ready_check.
+  Copy plan credentials + credential_injection onto the suite so standalone
+  run_drill (outside a fleet session) still gets secrets/config files.
+- configure: is the appendix for offline/API/file/cmd steps that make the app
+  usable (after secrets exist, before start). For APIs that need a live server,
+  put them in start-services.sh after the ready poll (or a setup line after start).
 - Prefer bash <workspace>/.astonish/start-services.sh when that template
   bootstrap script exists (detached restart supervisors + poll + exit 0).
   Suite setup runs it in the foreground and waits for exit. Otherwise, for

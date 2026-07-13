@@ -29,11 +29,29 @@ Services are started in declaration order and stopped in reverse order. Each ser
 
 ### Canonical start script (template bootstrap)
 
-For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed. Drill suite `setup` (and fleet/chat agents) call it explicitly after credentials are available:
+For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed.
+
+Standalone `run_drill` and CLI drills apply a **runtime readiness pipeline** before tests:
+
+1. Template switch + non-secret `bootstrap_files`
+2. Suite `credentials` / `credential_injection` (or fleet-plan fallback by suite name/template)
+3. Suite `configure:` appendix (ordered shell: APIs, files, one-off cmds)
+4. Suite `setup:` / `start-services.sh`
+5. `ready_check` (`stable_count` consecutive successes)
 
 ```yaml
 suite_config:
   template: "@myapp"
+  credentials:
+    providers: myapp-providers
+  credential_injection:
+    files:
+      - credential: providers
+        path: /root/myapp/config/providers.yaml
+        field: value
+        mode: "0600"
+  configure:
+    - "test -f /root/myapp/config/providers.yaml"
   setup:
     - "bash /root/myapp/.astonish/start-services.sh"
   ready_check:
@@ -45,6 +63,8 @@ suite_config:
   teardown:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
+
+Put offline / file / env configuration in `configure:`. If an API must run **after** services are up, call it from `start-services.sh` after the ready poll (or add a `configure-after-start.sh` as the last `setup` line).
 
 The runner runs `start-services.sh` in the **foreground** and waits for it to exit. Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop — Vite/npm often exit shortly after the first successful curl. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. `stop-services.sh` should kill the supervisor process group (`kill -- -$pid`) with `pkill` fallbacks.
 

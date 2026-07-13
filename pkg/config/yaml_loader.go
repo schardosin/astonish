@@ -85,14 +85,46 @@ func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
 
 // DrillSuiteConfig defines infrastructure for running drills.
 // Used by type: drill_suite flows.
+//
+// Runtime readiness order (runner + run_drill):
+//  1. credentials / credential_injection (materialized before configure)
+//  2. configure[] (offline / file / env appendix)
+//  3. setup[] / services (start processes)
+//  4. ready_check
 type DrillSuiteConfig struct {
-	Template    string            `yaml:"template,omitempty" json:"template,omitempty"`       // Container template name (e.g., "@myapp")
-	Services    []ServiceConfig   `yaml:"services,omitempty" json:"services,omitempty"`       // Multi-service definitions (started in order, stopped in reverse)
-	Setup       []string          `yaml:"setup,omitempty" json:"setup,omitempty"`             // Shell commands to run before tests (legacy single-service)
-	ReadyCheck  *ReadyCheck       `yaml:"ready_check,omitempty" json:"ready_check,omitempty"` // Wait for application readiness (legacy single-service)
-	Teardown    []string          `yaml:"teardown,omitempty" json:"teardown,omitempty"`       // Shell commands after all tests (legacy single-service)
-	Environment map[string]string `yaml:"environment,omitempty" json:"environment,omitempty"` // Shared environment variables
-	BaseURL     string            `yaml:"base_url,omitempty" json:"base_url,omitempty"`       // Base URL for browser tests (e.g., "http://localhost:3000")
+	Template             string                     `yaml:"template,omitempty" json:"template,omitempty"`                             // Container template name (e.g., "@myapp")
+	Services             []ServiceConfig            `yaml:"services,omitempty" json:"services,omitempty"`                             // Multi-service definitions (started in order, stopped in reverse)
+	Configure            []string                   `yaml:"configure,omitempty" json:"configure,omitempty"`                           // Shell appendix after credential injection, before setup
+	Setup                []string                   `yaml:"setup,omitempty" json:"setup,omitempty"`                                   // Shell commands to start services (legacy single-service)
+	ReadyCheck           *ReadyCheck                `yaml:"ready_check,omitempty" json:"ready_check,omitempty"`                     // Wait for application readiness (legacy single-service)
+	Teardown             []string                   `yaml:"teardown,omitempty" json:"teardown,omitempty"`                             // Shell commands after all tests (legacy single-service)
+	Environment          map[string]string          `yaml:"environment,omitempty" json:"environment,omitempty"`                     // Shared environment variables
+	BaseURL              string                     `yaml:"base_url,omitempty" json:"base_url,omitempty"`                             // Base URL for browser tests (e.g., "http://localhost:3000")
+	Credentials          map[string]string          `yaml:"credentials,omitempty" json:"credentials,omitempty"`                     // logical name → credential store entry
+	CredentialInjection  *SuiteCredentialInjection  `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"` // how credentials reach the sandbox
+}
+
+// SuiteCredentialInjection mirrors fleet credential_injection for drill suites.
+// Kept in config (not fleet) to avoid config→fleet imports.
+type SuiteCredentialInjection struct {
+	Env   []SuiteEnvInjection  `yaml:"env,omitempty" json:"env,omitempty"`
+	Files []SuiteFileInjection `yaml:"files,omitempty" json:"files,omitempty"`
+}
+
+// SuiteEnvInjection maps a logical suite credential to a container env var.
+type SuiteEnvInjection struct {
+	Credential string `yaml:"credential" json:"credential"`
+	Var        string `yaml:"var" json:"var"`
+	Field      string `yaml:"field" json:"field"`
+}
+
+// SuiteFileInjection materializes a credential field as a file in the sandbox.
+type SuiteFileInjection struct {
+	Credential string `yaml:"credential" json:"credential"`
+	Path       string `yaml:"path" json:"path"`
+	Format     string `yaml:"format,omitempty" json:"format,omitempty"`
+	Field      string `yaml:"field" json:"field"`
+	Mode       string `yaml:"mode,omitempty" json:"mode,omitempty"`
 }
 
 // ServiceConfig defines a single service in a multi-service drill suite.

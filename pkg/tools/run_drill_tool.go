@@ -17,7 +17,6 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
-	"gopkg.in/yaml.v3"
 )
 
 // RunDrillArgs are the arguments for the run_drill tool.
@@ -128,7 +127,7 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	}
 
 	var loadErr error
-	suite, loadErr = loadSuiteFromStore(fs, ctx, suiteName)
+	suite, loadErr = adrill.LoadSuiteFromStore(fs, ctx, suiteName)
 	if loadErr != nil {
 		return RunDrillResult{
 			Status:  "error",
@@ -282,52 +281,6 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		Summary: report.Summary,
 		Report:  buf.String(),
 	}, nil
-}
-
-// loadSuiteFromStore constructs a LoadedSuite from the team-scoped FlowStore.
-// It fetches the suite YAML and all child drills, parsing them into the same
-// data structures used by the filesystem-based discovery path.
-func loadSuiteFromStore(fs store.FlowStore, ctx context.Context, suiteName string) (*adrill.LoadedSuite, error) {
-	suiteYAML, err := fs.GetFlow(ctx, suiteName)
-	if err != nil {
-		return nil, fmt.Errorf("suite %q not found in store: %w", suiteName, err)
-	}
-
-	var suiteCfg config.AgentConfig
-	if err := yaml.Unmarshal([]byte(suiteYAML), &suiteCfg); err != nil {
-		return nil, fmt.Errorf("failed to parse suite %q: %w", suiteName, err)
-	}
-
-	if suiteCfg.Type != "drill_suite" && suiteCfg.Type != "test_suite" {
-		return nil, fmt.Errorf("%q has type %q, expected drill_suite", suiteName, suiteCfg.Type)
-	}
-
-	suite := &adrill.LoadedSuite{
-		Name:   suiteName,
-		Config: &suiteCfg,
-	}
-
-	// Find child drills that reference this suite
-	drillFlows := fs.ListFlowsByType(ctx, []string{"drill", "test"})
-	for _, d := range drillFlows {
-		if d.Suite != suiteName {
-			continue
-		}
-		drillYAML, dErr := fs.GetFlow(ctx, d.Name)
-		if dErr != nil {
-			continue
-		}
-		var drillCfg config.AgentConfig
-		if yaml.Unmarshal([]byte(drillYAML), &drillCfg) != nil {
-			continue
-		}
-		suite.Tests = append(suite.Tests, adrill.LoadedTest{
-			Name:   d.Name,
-			Config: &drillCfg,
-		})
-	}
-
-	return suite, nil
 }
 
 // ---------------------------------------------------------------------------

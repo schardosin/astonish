@@ -18,7 +18,6 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/config"
-	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/scheduler"
@@ -536,22 +535,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// /drill-add <suite>: add new drills to an existing suite
 	if strings.HasPrefix(msg, "/drill-add ") {
 		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/drill-add"))
-		if suiteName == "" {
-			SendSSE(w, flusher, "error", map[string]interface{}{"error": "Usage: /drill-add <suite_name>"})
-			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-			return
-		}
-		dirs := adrill.DefaultDrillDirs()
-		suite, err := adrill.FindSuite(dirs, suiteName)
+		_, wizardPrompt, err := resolveDrillAddWizard(r.Context(), flowStoreFromRequest(r), suiteName)
 		if err != nil {
-			SendSSE(w, flusher, "error", map[string]interface{}{"error": fmt.Sprintf("Suite %q not found: %v", suiteName, err)})
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 		}
-		suiteContext := adrill.BuildSuiteContext(suite)
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
-			"wizard_system_prompt": tools.GetDrillAddPrompt(suiteName, suiteContext),
+			"wizard_system_prompt": wizardPrompt,
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})

@@ -1,0 +1,137 @@
+package api
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/schardosin/astonish/pkg/store"
+)
+
+// drillAddMemFlowStore is a minimal FlowStore for resolveDrillAddWizard tests.
+type drillAddMemFlowStore struct {
+	flows map[string]string
+	meta  map[string]store.FlowSummary
+}
+
+func newDrillAddMemFlowStore() *drillAddMemFlowStore {
+	return &drillAddMemFlowStore{
+		flows: make(map[string]string),
+		meta:  make(map[string]store.FlowSummary),
+	}
+}
+
+func (m *drillAddMemFlowStore) ListAllFlows(_ context.Context) []store.FlowSummary {
+	out := make([]store.FlowSummary, 0, len(m.meta))
+	for _, s := range m.meta {
+		out = append(out, s)
+	}
+	return out
+}
+
+func (m *drillAddMemFlowStore) ListFlowsByType(_ context.Context, types []string) []store.FlowSummary {
+	want := map[string]bool{}
+	for _, t := range types {
+		want[t] = true
+	}
+	out := make([]store.FlowSummary, 0)
+	for _, s := range m.meta {
+		if want[s.Type] {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func (m *drillAddMemFlowStore) GetFlow(_ context.Context, name string) (string, error) {
+	yamlContent, ok := m.flows[name]
+	if !ok {
+		return "", fmt.Errorf("flow %q not found", name)
+	}
+	return yamlContent, nil
+}
+
+func (m *drillAddMemFlowStore) SaveFlow(_ context.Context, name string, yamlContent string) error {
+	m.flows[name] = yamlContent
+	typ := "flow"
+	suite := ""
+	if strings.Contains(yamlContent, "type: drill_suite") {
+		typ = "drill_suite"
+	} else if strings.Contains(yamlContent, "type: drill") {
+		typ = "drill"
+	}
+	for _, line := range strings.Split(yamlContent, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "suite:") {
+			suite = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "suite:")), `"'`)
+		}
+	}
+	m.meta[name] = store.FlowSummary{Name: name, Type: typ, Suite: suite}
+	return nil
+}
+
+func (m *drillAddMemFlowStore) DeleteFlow(_ context.Context, name string) error {
+	delete(m.flows, name)
+	delete(m.meta, name)
+	return nil
+}
+
+func (m *drillAddMemFlowStore) GetTaps(_ context.Context) []store.FlowTap             { return nil }
+func (m *drillAddMemFlowStore) AddTap(_ context.Context, _ string, _ string) (string, error) {
+	return "", fmt.Errorf("not implemented")
+}
+func (m *drillAddMemFlowStore) RemoveTap(_ context.Context, _ string) error { return nil }
+func (m *drillAddMemFlowStore) GetStoreDir(_ context.Context) string       { return "" }
+
+func TestResolveDrillAddWizard_LoadsFromTeamStore(t *testing.T) {
+	fs := newDrillAddMemFlowStore()
+	ctx := context.Background()
+	suiteYAML := "description: Juicytrade suite\ntype: drill_suite\nsuite_config:\n  template: juicytrade\n"
+	drillYAML := "type: drill\nsuite: juicytrade\ndescription: health\nnodes: []\n"
+	if err := fs.SaveFlow(ctx, "juicytrade", suiteYAML); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.SaveFlow(ctx, "health", drillYAML); err != nil {
+		t.Fatal(err)
+	}
+
+	suiteCtx, prompt, err := resolveDrillAddWizard(ctx, fs, "juicytrade")
+	if err != nil {
+		t.Fatalf("resolveDrillAddWizard: %v", err)
+	}
+	if !strings.Contains(suiteCtx, "Suite: juicytrade") {
+		t.Errorf("suite context missing suite name: %s", suiteCtx)
+	}
+	if !strings.Contains(suiteCtx, "health") {
+		t.Errorf("suite context missing existing drill: %s", suiteCtx)
+	}
+	if !strings.Contains(prompt, "juicytrade") {
+		t.Errorf("wizard prompt missing suite name: %s", prompt[:min(200, len(prompt))])
+	}
+}
+
+func TestResolveDrillAddWizard_NotFound(t *testing.T) {
+	fs := newDrillAddMemFlowStore()
+	_, _, err := resolveDrillAddWizard(context.Background(), fs, "juicytrade")
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !strings.Contains(err.Error(), `Suite "juicytrade" not found`) {
+		t.Errorf("error = %v", err)
+	}
+}
+
+func TestResolveDrillAddWizard_NilStore(t *testing.T) {
+	_, _, err := resolveDrillAddWizard(context.Background(), nil, "juicytrade")
+	if err == nil || !strings.Contains(err.Error(), "platform mode") {
+		t.Fatalf("error = %v, want platform mode message", err)
+	}
+}
+
+func TestResolveDrillAddWizard_EmptyName(t *testing.T) {
+	_, _, err := resolveDrillAddWizard(context.Background(), newDrillAddMemFlowStore(), "  ")
+	if err == nil || !strings.Contains(err.Error(), "Usage:") {
+		t.Fatalf("error = %v, want usage", err)
+	}
+}

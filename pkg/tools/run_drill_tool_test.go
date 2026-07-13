@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -414,6 +415,9 @@ func TestTestBrowserExecutor_RequiresSandboxedManager(t *testing.T) {
 		mgr.SandboxEnabled = true
 		mgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
 			return "astn-sess-" + sessionID, "10.0.0.1", nil
+		}
+		mgr.ContainerStartBrowserFunc = func(string) (io.Closer, error) {
+			return nil, nil
 		}
 		exec := newTestBrowserExecutor(mgr, "sess-abc", true)
 		if err := exec.ensureInit(); err != nil {

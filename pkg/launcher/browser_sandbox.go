@@ -1,9 +1,10 @@
 package launcher
 
 import (
+	"log/slog"
+
 	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/sandbox"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 )
 
@@ -26,17 +27,12 @@ func WireOpenShellBrowserManager(
 // containers using a lazily opened sandbox client. Used by console/flow paths
 // that do not already hold a NodeClientPool.
 func wireBrowserContainerCallbacks(mgr *browser.Manager) {
-	cfg := mgr.Config()
-	engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
-		ChromePath: cfg.ChromePath,
-	})
-	if !incus.IsContainerCompatibleEngine(engine) {
-		return
-	}
-
 	client, err := sandbox.SetupSandboxRuntime()
 	if err != nil {
+		slog.Debug("browser container callbacks: sandbox runtime unavailable", "error", err)
 		return
 	}
-	sandbox.WireIncusBrowserManager(mgr, client, nil)
+	if !sandbox.WireIncusBrowserManager(mgr, client, nil) {
+		slog.Warn("browser container callbacks: failed to wire in-container Chromium")
+	}
 }

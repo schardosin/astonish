@@ -213,11 +213,19 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	executor := buildTestExecutor(ctx, deps)
 	defer executor.Close()
 
-	// Discover the container IP for browser URL substitution.
-	// In sandbox mode, browser tools run on the host and need the container's
-	// bridge IP to reach services. We use the Incus API to get the correct
-	// global-scope IPv4 address (not the Docker bridge IP which is unreachable
-	// from the host).
+	// Fail closed before suite setup if sandbox is active but the shared
+	// browser Manager was never wired for in-container Chromium.
+	if executor.hasSandbox() && (deps.browserMgr == nil || !deps.browserMgr.SandboxEnabled) {
+		return RunDrillResult{
+			Status: "error",
+			Summary: "Sandbox is active but the in-container browser is not wired " +
+				"(SandboxEnabled=false). Restart Studio after upgrading; do not rewrite " +
+				"drill URLs to the container bridge IP — browser steps use Chromium inside the session.",
+		}, nil
+	}
+
+	// CONTAINER_IP is for optional {{CONTAINER_IP}} placeholders in older drills.
+	// Prefer localhost in YAML: shell and in-container browser share the sandbox network.
 	vars := map[string]string{
 		"CONTAINER_IP": "localhost", // default for local mode
 	}
@@ -478,7 +486,10 @@ func (b *testBrowserExecutor) ensureInit() error {
 		return nil
 	}
 	if b.mgr == nil || !b.mgr.SandboxEnabled {
-		return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled")
+		return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled — restart Studio if you recently upgraded")
+	}
+	if b.mgr.ContainerResolveFunc == nil || b.mgr.ContainerStartBrowserFunc == nil {
+		return fmt.Errorf("browser Manager has SandboxEnabled but missing container callbacks; in-container Chromium is not wired")
 	}
 	b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
 	b.refs = browser.NewRefMap()

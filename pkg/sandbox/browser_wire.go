@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 
 	"github.com/schardosin/astonish/pkg/browser"
@@ -10,8 +11,12 @@ import (
 )
 
 // WireIncusBrowserManager configures mgr so Chromium + KasmVNC run inside the
-// session container (same path Studio chat uses). Returns false when the
-// configured browser engine cannot run in a container.
+// session container (same path Studio chat uses).
+//
+// Host-only ChromePath values (macOS/Windows binaries) are treated as
+// "default" for the container: the sandbox installs Linux Chromium inside the
+// session. Returning false here previously left SandboxEnabled off and drills
+// fell through to host Chrome, which cannot reach container localhost services.
 func WireIncusBrowserManager(mgr *browser.Manager, client *IncusClient, touchActivity func(sessionID string)) bool {
 	if mgr == nil || client == nil {
 		return false
@@ -20,8 +25,14 @@ func WireIncusBrowserManager(mgr *browser.Manager, client *IncusClient, touchAct
 	engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
 		ChromePath: cfg.ChromePath,
 	})
+	containerChromePath := cfg.ChromePath
 	if !incus.IsContainerCompatibleEngine(engine) {
-		return false
+		slog.Info("browser ChromePath is host-only; using default Chromium in sandbox container",
+			"component", "browser-wire",
+			"chrome_path", cfg.ChromePath,
+			"detected_engine", engine,
+		)
+		containerChromePath = ""
 	}
 
 	bCfg := incus.BrowserContainerConfig{
@@ -30,11 +41,10 @@ func WireIncusBrowserManager(mgr *browser.Manager, client *IncusClient, touchAct
 		KasmVNCPort:         cfg.KasmVNCPort,
 		KasmVNCPassword:     cfg.KasmVNCPassword,
 		Proxy:               cfg.Proxy,
-		ChromePath:          cfg.ChromePath,
+		ChromePath:          containerChromePath,
 		FingerprintSeed:     cfg.FingerprintSeed,
 		FingerprintPlatform: cfg.FingerprintPlatform,
 	}
-
 	mgr.SandboxEnabled = true
 	mgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
 		containerName := SessionContainerName(sessionID)

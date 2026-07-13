@@ -906,7 +906,10 @@ for Chromium so IPv4-only listeners still work):
         tool: browser_navigate
         url: "http://localhost:3001/automation/create"
 
-Do NOT hard-code container bridge IPs in drill YAML — they change per session.
+Do NOT hard-code container bridge IPs in drill YAML — they change per session
+and are wrong for in-container Chromium (which shares localhost with services).
+If a prior assistant rewrote browser_navigate URLs to 10.x.x.x, change them
+back to http://localhost:<port>/...
 {{CONTAINER_IP}} remains supported for older drills if needed.
 
 For the base_url field in suite YAML:

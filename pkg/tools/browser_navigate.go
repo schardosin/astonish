@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/schardosin/astonish/pkg/browser"
 	"google.golang.org/adk/tool"
@@ -45,7 +46,13 @@ func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(
 		// Use navigation timeout for the Navigate() call itself to prevent
 		// indefinite blocking when CDP connection dies or page hangs.
 		if err := pg.Timeout(mgr.NavigationTimeout()).Navigate(args.URL); err != nil {
-			return BrowserNavigateResult{}, fmt.Errorf("navigation failed: %w", err)
+			err = fmt.Errorf("navigation failed: %w", err)
+			if mgr.SandboxEnabled && mgr.ContainerName() == "" {
+				err = fmt.Errorf("%w (sandbox browser was expected in-container but CDP is not bound to a session container — restart Studio after upgrading)", err)
+			} else if isConnectionRefused(err) && looksLikeLoopbackURL(args.URL) {
+				err = fmt.Errorf("%w (in-container Chromium could not reach %s — confirm the service listens on 0.0.0.0/127.0.0.1 inside the sandbox; do not rewrite drills to the container bridge IP)", err, args.URL)
+			}
+			return BrowserNavigateResult{}, err
 		}
 
 		// Wait for the page to load with a timeout.
@@ -64,6 +71,21 @@ func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(
 		}
 		return result, nil
 	}
+}
+
+func isConnectionRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "err_connection_refused") || strings.Contains(s, "connection refused")
+}
+
+func looksLikeLoopbackURL(rawURL string) bool {
+	u := strings.ToLower(rawURL)
+	return strings.Contains(u, "://127.0.0.1") ||
+		strings.Contains(u, "://localhost") ||
+		strings.Contains(u, "://[::1]")
 }
 
 // BrowserNavigateBackArgs is the input for browser_navigate_back.

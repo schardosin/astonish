@@ -1669,10 +1669,25 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             // Update the session title in the sidebar.
             // Use sessionId from the event payload to avoid stale closure issues
             // (activeSessionId may still be null for newly created sessions).
+            // Upsert when the session isn't in the list yet (title can arrive
+            // before the deferred loadSessions after isNew).
             if (data.title && data.sessionId) {
-              setSessions(prev =>
-                prev.map(s => s.id === data.sessionId ? { ...s, title: data.title as string } : s)
-              )
+              const sid = data.sessionId as string
+              const title = data.title as string
+              setSessions(prev => {
+                const idx = prev.findIndex(s => s.id === sid)
+                if (idx >= 0) {
+                  return prev.map(s => s.id === sid ? { ...s, title } : s)
+                }
+                const now = new Date().toISOString()
+                return [{
+                  id: sid,
+                  title,
+                  createdAt: now,
+                  updatedAt: now,
+                  messageCount: 0,
+                }, ...prev]
+              })
             }
             break
 

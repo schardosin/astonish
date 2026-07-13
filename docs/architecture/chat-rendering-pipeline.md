@@ -138,7 +138,7 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 |-------|-----------|----------------|
 | `thinking` | `{text}` | Show thinking indicator |
 | `retry` | `{attempt, maxRetries, reason}` | Show retry badge |
-| `session_title` | `{title}` | Update sidebar session title |
+| `session_title` | `{title, sessionId}` | Upsert sidebar session title (may fire twice: provisional then refined) |
 | `new_session` | `{sessionId}` | Switch to new session |
 | `system` | `{text}` | Show system info card |
 | `model_changed` | `{sessionId, pinnedProvider, pinnedModel, effectiveProvider, effectiveModel, credentialsAvailable}` | Refresh model status badge (no message added) |

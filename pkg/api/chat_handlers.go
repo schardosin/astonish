@@ -879,7 +879,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Launch background runner — the agent runs independently of this HTTP request.
 	runner := newChatRunner(sessionID, userID, isNew)
-	runner.titleWaitTimeout = 30 * time.Second // wait for title goroutine before closing SSE
+	runner.titleWaitTimeout = 30 * time.Second // wait for title refine before closing SSE
 
 	// Inject tenant-scoped credential store into the runner context so that
 	// credential tools (list_credentials, resolve_credential, etc.) can access

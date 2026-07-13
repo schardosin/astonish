@@ -50,11 +50,14 @@ without any AI or human involvement at runtime. This means:
 9. When the user says configuration is done through a UI wizard or setup
    page, use the browser tools to walk through that flow. Do not bypass it
    with direct API calls unless the user explicitly asks for that approach.
-10. When starting long-running services (servers, dev servers, databases),
-    use shell_command with background=true. NEVER use "nohup cmd &" or
-    "cmd &" without background=true — the process will die within seconds
-    because the PTY closes when the shell exits. Use process_read to check
-    output and process_kill to stop the process.
+10. When starting long-running services interactively via shell_command
+    (servers, dev servers, databases), use background=true. NEVER use
+    "nohup cmd &" or "cmd &" without background=true — the process will die
+    within seconds because the PTY closes when the shell exits. Use
+    process_read to check output and process_kill to stop the process.
+    Exception: .astonish/start-services.sh must fully detach with
+    setsid+nohup+disown, poll, and exit 0 (see Step 1h-iv) — that is not
+    the interactive shell_command path.
 
 ---
 
@@ -191,16 +194,22 @@ Start the service:
 - For frontend apps: Start the dev server with shell_command using background=true
 - For libraries: Run existing tests or a simple import check
 
-IMPORTANT: When starting long-running processes (servers, dev servers, etc.),
+IMPORTANT: When starting long-running processes interactively (servers, dev
+servers, etc. via shell_command — not via start-services.sh),
 you MUST use shell_command with background=true in the args. For example:
   shell_command with command="cd /root/myapp && npx vite --host 0.0.0.0" and background=true
 
-Do NOT use any of these patterns — they will cause the process to die:
+Do NOT use any of these patterns for interactive shell_command — they will
+cause the process to die when the PTY closes:
   - "nohup cmd &"
   - "cmd &" (trailing ampersand without background=true)
   - "setsid cmd"
 The process manager's PTY closes when the shell exits, sending SIGHUP to all
 children. Only background=true keeps the PTY session alive.
+
+NOTE: Inside .astonish/start-services.sh the opposite is required — fully
+detach with setsid+nohup+disown, poll, and exit 0 (see 1h-iv). That script
+is a different launch path from interactive shell_command.
 
 After starting, use process_read with the session_id to check the output.
 Use process_kill with the session_id to stop the process when done.
@@ -219,13 +228,16 @@ working. What endpoint or port should I check?"
 **1h-iv. Record what you learned for this service (this becomes the suite YAML):**
 - Prefer writing/updating <workspace>/.astonish/start-services.sh and
   stop-services.sh once the recipe works — suite setup should call those scripts.
-- CRITICAL for start-services.sh: do NOT background npm/vite with bare & and exit.
-  That leaves the process alive but hung (PTY closes). Instead:
-  1. Prefer "npx vite --host 0.0.0.0 --port <port>" (or the real binary) over "npm run dev"
-  2. Start each service with &, then end the script with "wait" (or exec the last
-     service) so the script does not return while services should stay up
-  3. The drill runner runs start-services.sh with background=true so wait does not
-     block the suite — ready_check polls until the stack is up
+- CRITICAL for start-services.sh (different from interactive shell_command):
+  1. Fully detach each service: setsid + nohup + & + disown (and redirect stdin
+     from /dev/null). Bare "cmd &" without detach leaves processes hung after the
+     script's PTY closes.
+  2. Prefer "npx vite --host 0.0.0.0 --port <port>" over "npm run dev".
+  3. Poll until services answer, then exit 0 — do NOT end with wait. Suite setup
+     runs the script in the foreground and waits for it to finish; suite
+     ready_check then requires several consecutive successes (stable_count).
+  4. After writing the script, verify stability yourself: curl a few times over
+     several seconds (or check pgrep) before declaring success.
 - The exact build command → optional prior setup step in Step 3
 - The exact run/start command → fold into start-services.sh; suite setup runs the script
 - How to verify the service is ready (endpoint, port, output) → becomes ready_check in Step 3
@@ -234,13 +246,33 @@ working. What endpoint or port should I check?"
 Example start-services.sh shape:
 
     #!/usr/bin/env bash
-    set -euo pipefail
-    LOG_DIR="/root/myapp/.astonish/logs"
+    set -u
+    WORKSPACE="/root/myapp"
+    LOG_DIR="$WORKSPACE/.astonish"
     mkdir -p "$LOG_DIR"
-    cd /root/myapp/backend && ./server >"$LOG_DIR/backend.log" 2>&1 &
-    cd /root/myapp/frontend && npx vite --host 0.0.0.0 --port 3001 >"$LOG_DIR/frontend.log" 2>&1 &
-    # Keep this script (and the drill process session) alive until services exit.
-    wait
+
+    if ! curl -s -o /dev/null http://localhost:8080/health 2>/dev/null; then
+      cd "$WORKSPACE/backend" || exit 1
+      setsid nohup ./server >"$LOG_DIR/backend.log" 2>&1 < /dev/null &
+      disown
+    fi
+    if ! curl -s -o /dev/null http://localhost:3001/ 2>/dev/null; then
+      cd "$WORKSPACE/frontend" || exit 1
+      setsid nohup npx vite --host 0.0.0.0 --port 3001 >"$LOG_DIR/frontend.log" 2>&1 < /dev/null &
+      disown
+    fi
+
+    for i in $(seq 1 30); do
+      BE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health 2>/dev/null || true)
+      FE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3001/ 2>/dev/null || true)
+      if [ "$BE" = "200" ] && [ "$FE" = "200" ]; then
+        echo "Both services ready"
+        exit 0
+      fi
+      sleep 1
+    done
+    echo "Services started but may still be initializing"
+    exit 0
 
 Do NOT save this information to memory (memory_save) or SELF.md. It belongs
 in the suite YAML (and template bootstrap_files) that you will generate in Step 3.
@@ -351,14 +383,15 @@ application, and how to verify it is ready.
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
       base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
       setup:
-        - "bash /root/myapp/.astonish/start-services.sh"  # spawn-and-return script from template
+        - "bash /root/myapp/.astonish/start-services.sh"  # full-detach spawn-and-return
       ready_check:                       # OPTIONAL — only for servers/daemons
         type: http                       # "http", "port", or "output_contains"
         url: "http://localhost:8080/health"  # For http type
         # port: 8080                     # For port type
         # pattern: "Server started"      # For output_contains type
-        timeout: 30
+        timeout: 60
         interval: 2
+        # stable_count: 3                # consecutive successes required (default 3)
       teardown:
         - "bash /root/myapp/.astonish/stop-services.sh || true"
       environment:
@@ -499,23 +532,27 @@ in browser_navigate URLs the same way.
 Guidelines:
 - Setup commands run IN ORDER before any tests.
 - Prefer bash <workspace>/.astonish/start-services.sh when that template
-  bootstrap script exists (spawn-and-return). Otherwise, for single-service
-  suites, use & to background long-running processes in setup commands. The
-  test runner automatically detects trailing & and uses the background mode
-  internally, so the process stays alive (unlike when you use & directly with
-  shell_command during the wizard — see Rule 10).
+  bootstrap script exists (full detach: setsid+nohup+disown, poll, exit 0).
+  Suite setup runs it in the foreground and waits for exit. Otherwise, for
+  single-service suites, use & to background long-running processes in setup
+  commands. The test runner automatically detects trailing & and uses the
+  background mode internally, so the process stays alive (unlike when you use
+  & directly with shell_command during the wizard — see Rule 10).
 - For multi-service suites, prefer one start script in top-level setup, or
   per-service setup strings with & for daemons.
 - Always include teardown (prefer stop-services.sh when present).
 - Use "|| true" in teardown so cleanup never fails the suite.
-- Ready check should match what you verified in Step 1h.
+- Ready check should match what you verified in Step 1h. Prefer timeout >= 60
+  and rely on stable_count (default 3) so a one-shot curl blip cannot green
+  a dying process.
 - Template field stores the sandbox template name from Step 1i (if applicable).
 - For simple CLI/tool tests with no server, setup, teardown, and ready_check
   can all be empty or omitted.
 - Use the EXACT commands you verified in Step 1h. Do not substitute different
   commands, simplify, or guess alternatives. If you used
   "npx vite --host 0.0.0.0" during verification, that exact command goes into
-  setup — not a shorter or different version. Add the trailing & for daemons.
+  setup — not a shorter or different version. Add the trailing & for daemons
+  only when not using start-services.sh.
 
 Show the suite YAML to the user and ask for confirmation before proceeding.
 

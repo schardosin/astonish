@@ -626,12 +626,11 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 // runShellCommand executes a shell command via the tool executor.
 // Commands ending with & are automatically run in background mode to prevent
-// the PTY from closing and killing the process. Spawn-and-return start scripts
-// (*.astonish/start-services.sh) are also forced to background=true — those
-// scripts must end with `wait` (or exec) so the session stays alive; without
-// background mode the runner would block forever on that wait.
+// the PTY from closing and killing the process. Canonical start-services.sh
+// scripts should fully detach children (setsid+nohup+disown) and exit; they
+// run in the foreground so suite setup waits for their readiness poll.
 func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, timeout int) (string, error) {
-	bg := isBackgroundCommand(command) || isStartServicesCommand(command)
+	bg := isBackgroundCommand(command)
 
 	args := map[string]interface{}{
 		"command": command,
@@ -669,18 +668,6 @@ func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, time
 func isBackgroundCommand(cmd string) bool {
 	trimmed := strings.TrimSpace(cmd)
 	return strings.HasSuffix(trimmed, "&") && !strings.HasSuffix(trimmed, "&&")
-}
-
-// isStartServicesCommand reports whether cmd invokes a canonical
-// .astonish/start-services.sh bootstrap script. Those scripts spawn long-lived
-// services and should keep a process-manager session open (background=true).
-func isStartServicesCommand(cmd string) bool {
-	trimmed := strings.ToLower(strings.TrimSpace(stripBackgroundSuffix(cmd)))
-	if trimmed == "" {
-		return false
-	}
-	// Match common invocations: bash/sh/./ path …/start-services.sh
-	return strings.Contains(trimmed, "start-services.sh")
 }
 
 // stripBackgroundSuffix removes the trailing & from a command.
@@ -740,6 +727,8 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 	if interval <= 0 {
 		interval = DefaultReadyCheckInterval
 	}
+	need := readyCheckStableCount(rc)
+	successes := 0
 
 	var checkCmd string
 	switch rc.Type {
@@ -780,8 +769,18 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 	// Track last error for diagnostic reporting on timeout
 	var lastErr error
 
+	record := func(err error) bool {
+		lastErr = err
+		if err == nil {
+			successes++
+			return successes >= need
+		}
+		successes = 0
+		return false
+	}
+
 	// Try immediately before first tick
-	if lastErr = sr.checkReadyOnce(ctx, rc.Type, checkCmd); lastErr == nil {
+	if record(sr.checkReadyOnce(ctx, rc.Type, checkCmd)) {
 		return nil
 	}
 
@@ -791,11 +790,11 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 			return fmt.Errorf("ready check cancelled: %w", ctx.Err())
 		case <-deadline:
 			if lastErr != nil {
-				return fmt.Errorf("ready check timed out after %ds (type: %s): last error: %v", timeout, rc.Type, lastErr)
+				return fmt.Errorf("ready check timed out after %ds (type: %s, need %d consecutive successes, had %d): last error: %v", timeout, rc.Type, need, successes, lastErr)
 			}
-			return fmt.Errorf("ready check timed out after %ds (type: %s)", timeout, rc.Type)
+			return fmt.Errorf("ready check timed out after %ds (type: %s, need %d consecutive successes, had %d)", timeout, rc.Type, need, successes)
 		case <-ticker.C:
-			if lastErr = sr.checkReadyOnce(ctx, rc.Type, checkCmd); lastErr == nil {
+			if record(sr.checkReadyOnce(ctx, rc.Type, checkCmd)) {
 				return nil
 			}
 		}

@@ -39,11 +39,16 @@ suite_config:
   ready_check:
     type: http
     url: "http://localhost:3000/"
+    timeout: 60
+    interval: 2
+    # stable_count: 3  # default; consecutive successes required
   teardown:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
 
-The runner runs `start-services.sh` with `background=true` so the process-manager PTY stays open. The script must **not** background services with bare `&` and exit — that leaves `npm`/`vite` processes alive but hung. Start children with `&`, then `wait` (or `exec` the last service). Prefer `npx vite --host 0.0.0.0` over `npm run dev`.
+The runner runs `start-services.sh` in the **foreground** and waits for it to exit. The script must **fully detach** children (`setsid` + `nohup` + `&` + `disown`, stdin from `/dev/null`), poll until ready, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` without detach — that leaves Vite hung when the PTY closes. Prefer `npx vite --host 0.0.0.0` over `npm run dev`.
+
+`ready_check` then polls again and requires **`stable_count` consecutive successes** (default 3, spaced by `interval`) so a one-shot curl that succeeds just before a process dies cannot green the suite.
 
 ### Why Visual Regression Testing
 

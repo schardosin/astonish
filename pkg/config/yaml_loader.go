@@ -107,13 +107,14 @@ type ServiceConfig struct {
 
 // ReadyCheck defines how to verify the application under test is ready.
 type ReadyCheck struct {
-	Type     string `yaml:"type" json:"type"`                             // "http", "port", "output_contains"
-	URL      string `yaml:"url,omitempty" json:"url,omitempty"`           // For http type: URL to poll
-	Host     string `yaml:"host,omitempty" json:"host,omitempty"`         // For port type (default: "localhost")
-	Port     int    `yaml:"port,omitempty" json:"port,omitempty"`         // For port type: TCP port number
-	Pattern  string `yaml:"pattern,omitempty" json:"pattern,omitempty"`   // For output_contains type: string to match
-	Timeout  int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`   // Max wait in seconds (default: 30)
-	Interval int    `yaml:"interval,omitempty" json:"interval,omitempty"` // Poll interval in seconds (default: 2)
+	Type         string `yaml:"type" json:"type"`                                         // "http", "port", "output_contains"
+	URL          string `yaml:"url,omitempty" json:"url,omitempty"`                       // For http type: URL to poll
+	Host         string `yaml:"host,omitempty" json:"host,omitempty"`                     // For port type (default: "localhost")
+	Port         int    `yaml:"port,omitempty" json:"port,omitempty"`                     // For port type: TCP port number
+	Pattern      string `yaml:"pattern,omitempty" json:"pattern,omitempty"`               // For output_contains type: string to match
+	Timeout      int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`               // Max wait in seconds (default: 30)
+	Interval     int    `yaml:"interval,omitempty" json:"interval,omitempty"`             // Poll interval in seconds (default: 2)
+	StableCount  int    `yaml:"stable_count,omitempty" json:"stable_count,omitempty"`     // Consecutive successes required (default: 3)
 }
 
 // DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).

@@ -865,12 +865,14 @@ func TestRunShellCommandBackground(t *testing.T) {
 	}
 }
 
-func TestRunShellCommandStartServicesForcesBackground(t *testing.T) {
+func TestRunShellCommandStartServicesRunsForeground(t *testing.T) {
 	t.Parallel()
+	// Fully-detached start-services.sh should run as a normal foreground
+	// setup command so the suite waits for its readiness poll + exit.
 	mock := newMockExecutor()
 	mock.SetResult("shell_command", map[string]interface{}{
-		"stdout":     "started",
-		"session_id": "start-sess-1",
+		"stdout":    "Both services ready\nstart-services.sh complete",
+		"exit_code": 0,
 	}, nil)
 
 	runner := NewSuiteRunner(mock, nil, false)
@@ -885,35 +887,11 @@ func TestRunShellCommandStartServicesForcesBackground(t *testing.T) {
 	if got, ok := call.args["command"].(string); !ok || got != cmd {
 		t.Errorf("command = %q, want %q", got, cmd)
 	}
-	if bg, ok := call.args["background"].(bool); !ok || !bg {
-		t.Errorf("background = %v, want true for start-services.sh", call.args["background"])
+	if bg, ok := call.args["background"].(bool); ok && bg {
+		t.Errorf("background = true, want false/unset for start-services.sh")
 	}
-	if len(runner.bgSessions) != 1 || runner.bgSessions[0] != "start-sess-1" {
-		t.Errorf("bgSessions = %v, want [start-sess-1]", runner.bgSessions)
-	}
-}
-
-func TestIsStartServicesCommand(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		cmd  string
-		want bool
-	}{
-		{"bash /root/app/.astonish/start-services.sh", true},
-		{"sh /root/app/.astonish/start-services.sh", true},
-		{"/root/app/.astonish/start-services.sh", true},
-		{"bash /root/app/.astonish/start-services.sh &", true},
-		{"bash /root/app/.astonish/stop-services.sh", false},
-		{"go build ./...", false},
-		{"", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.cmd, func(t *testing.T) {
-			t.Parallel()
-			if got := isStartServicesCommand(tt.cmd); got != tt.want {
-				t.Errorf("isStartServicesCommand(%q) = %v, want %v", tt.cmd, got, tt.want)
-			}
-		})
+	if len(runner.bgSessions) != 0 {
+		t.Errorf("bgSessions = %v, want empty for foreground start-services.sh", runner.bgSessions)
 	}
 }
 
@@ -1014,9 +992,10 @@ func TestRunReadyCheckViaExecutorHTTPSuccess(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:    "http",
-		URL:     "http://localhost:8080/health",
-		Timeout: 5,
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     5,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1047,10 +1026,11 @@ func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:     "http",
-		URL:      "http://localhost:8080/health",
-		Timeout:  10,
-		Interval: 1,
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     10,
+		Interval:    1,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1060,6 +1040,32 @@ func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
 
 	if len(mock.calls) < 2 {
 		t.Errorf("expected at least 2 calls (retry), got %d", len(mock.calls))
+	}
+}
+
+func TestRunReadyCheckViaExecutorStableCount(t *testing.T) {
+	t.Parallel()
+	mock := newMockExecutor()
+	mock.SetResult("shell_command", map[string]interface{}{
+		"stdout":    "200",
+		"exit_code": 0,
+	}, nil)
+
+	runner := NewSuiteRunner(mock, nil, false)
+	rc := &config.ReadyCheck{
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     10,
+		Interval:    1,
+		StableCount: 3,
+	}
+
+	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("expected success after stable checks, got: %v", err)
+	}
+	if len(mock.calls) < 3 {
+		t.Fatalf("expected at least 3 consecutive successes, got %d calls", len(mock.calls))
 	}
 }
 
@@ -1073,9 +1079,10 @@ func TestRunReadyCheckViaExecutorPortSuccess(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:    "port",
-		Port:    3000,
-		Timeout: 5,
+		Type:        "port",
+		Port:        3000,
+		Timeout:     5,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)

@@ -62,8 +62,7 @@ func (s *teamDrillReportStore) GetLatestReport(ctx context.Context, suite string
 	ent, err := s.client.DrillReport.Query().
 		Where(drillreport.SuiteEQ(suite)).
 		Order(drillreport.ByCreatedAt(sql.OrderDesc())).
-		Limit(1).
-		Only(ctx)
+		First(ctx)
 	if err != nil {
 		if teament.IsNotFound(err) {
 			return nil, nil

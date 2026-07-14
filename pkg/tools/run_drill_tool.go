@@ -474,7 +474,7 @@ func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[s
 type testLocalExecutor struct{}
 
 func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
-	return ExecuteTool(ctx, name, args)
+	return ExecuteTool(ctx, name, args, currentCaller)
 }
 
 // testBrowserExecutor dispatches browser tool calls through a Manager that is

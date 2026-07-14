@@ -251,6 +251,7 @@ func TestReadFile_BlocksCredentialsEnc(t *testing.T) {
 }
 
 func TestReadFile_AllowsNormalFiles(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	testFile := filepath.Join(dir, "normal.txt")
 	os.WriteFile(testFile, []byte("hello"), 0644)
@@ -259,8 +260,12 @@ func TestReadFile_AllowsNormalFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading normal file should work: %v", err)
 	}
-	if result.Content != "hello" {
-		t.Errorf("content = %q, want %q", result.Content, "hello")
+	// read_file now returns line-numbered content
+	if result.Content != "1: hello" {
+		t.Errorf("content = %q, want %q", result.Content, "1: hello")
+	}
+	if result.TotalLines != 1 {
+		t.Errorf("total_lines = %d, want 1", result.TotalLines)
 	}
 }
 

@@ -80,8 +80,15 @@ func handleNodeCommand(args []string) error {
 			continue
 		}
 
+		// Extract caller identity (injected by host-side NodeTool for cache scoping)
+		caller := ""
+		if c, ok := req.Args["_caller"].(string); ok {
+			caller = c
+			delete(req.Args, "_caller")
+		}
+
 		// Dispatch tool execution
-		result, err := tools.ExecuteTool(ctx, req.Tool, req.Args)
+		result, err := tools.ExecuteTool(ctx, req.Tool, req.Args, caller)
 
 		resp := NodeResponse{ID: req.ID}
 		if err != nil {

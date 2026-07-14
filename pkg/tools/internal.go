@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -108,12 +109,20 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// --- Read File Tool ---
+
 type ReadFileArgs struct {
-	Path string `json:"path" jsonschema:"The path to the file to read"`
+	Path   string `json:"path" jsonschema:"Absolute path to the file to read"`
+	Offset *int   `json:"offset,omitempty" jsonschema:"Line number to start reading from (1-indexed). Omit to start from line 1."`
+	Limit  *int   `json:"limit,omitempty" jsonschema:"Maximum number of lines to read. Omit to read to end of file."`
+	Force  bool   `json:"force,omitempty" jsonschema:"Bypass the read cache and always return file content even if unchanged since last read. Use when you no longer have the file content in your conversation history."`
 }
 
 type ReadFileResult struct {
-	Content string `json:"content"`
+	Content    string `json:"content"`
+	TotalLines int    `json:"total_lines"`
+	Range      string `json:"range,omitempty"`
+	Unchanged  bool   `json:"unchanged,omitempty"`
 }
 
 func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
@@ -121,11 +130,129 @@ func ReadFile(ctx tool.Context, args ReadFileArgs) (ReadFileResult, error) {
 	if isProtectedPath(args.Path) {
 		return ReadFileResult{}, fmt.Errorf("access denied: this file is part of the credential store and cannot be read")
 	}
-	content, err := os.ReadFile(args.Path)
+
+	// Determine offset and limit
+	offset := 1
+	if args.Offset != nil && *args.Offset > 0 {
+		offset = *args.Offset
+	}
+	limit := 0 // 0 means "read to end"
+	if args.Limit != nil && *args.Limit > 0 {
+		limit = *args.Limit
+	}
+
+	// Check the read cache (mtime-based dedup)
+	if !args.Force {
+		cache := LoadFileReadCache()
+		if cache != nil {
+			cacheKey := buildCacheKey(args.Path, offset, limit)
+			if entry, ok := cache.Get(cacheKey); ok && entry.Source == "read" {
+				// stat the file to compare mtime
+				info, err := os.Stat(args.Path)
+				if err == nil {
+					currentMtime := info.ModTime().UnixNano()
+					if currentMtime == entry.MtimeNs {
+						// Cache hit — file unchanged
+						slog.Info("file_read_cache", "hit", true, "path", args.Path, "offset", offset, "limit", limit)
+						rangeStr := ""
+						if entry.TotalLines > 0 {
+							if limit > 0 {
+								end := offset + limit - 1
+								if end > entry.TotalLines {
+									end = entry.TotalLines
+								}
+								rangeStr = fmt.Sprintf("lines %d-%d of %d", offset, end, entry.TotalLines)
+							} else {
+								rangeStr = fmt.Sprintf("lines %d-%d of %d", offset, entry.TotalLines, entry.TotalLines)
+							}
+						}
+						return ReadFileResult{
+							Unchanged:  true,
+							TotalLines: entry.TotalLines,
+							Range:      rangeStr,
+						}, nil
+					}
+					slog.Info("file_read_cache", "hit", false, "path", args.Path, "reason", "mtime_changed")
+				}
+			}
+		}
+	}
+
+	// Read the file
+	data, err := os.ReadFile(args.Path)
 	if err != nil {
 		return ReadFileResult{}, fmt.Errorf("failed to read file: %w", err)
 	}
-	return ReadFileResult{Content: string(content)}, nil
+	content := string(data)
+
+	// Split into lines
+	lines := strings.Split(content, "\n")
+	totalLines := len(lines)
+	// If the file ends with a newline, the last element is empty — don't count it as a line
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		totalLines = len(lines) - 1
+		lines = lines[:totalLines]
+	}
+
+	// Apply range
+	startIdx := offset - 1 // convert to 0-indexed
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if startIdx > totalLines {
+		startIdx = totalLines
+	}
+	endIdx := totalLines
+	if limit > 0 {
+		endIdx = startIdx + limit
+		if endIdx > totalLines {
+			endIdx = totalLines
+		}
+	}
+
+	selectedLines := lines[startIdx:endIdx]
+
+	// Add line numbers
+	var sb strings.Builder
+	for i, line := range selectedLines {
+		lineNum := startIdx + i + 1 // 1-indexed
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(strconv.Itoa(lineNum))
+		sb.WriteString(": ")
+		sb.WriteString(line)
+	}
+
+	// Build range string
+	rangeStr := ""
+	if limit > 0 || offset > 1 {
+		rangeStr = fmt.Sprintf("lines %d-%d of %d", startIdx+1, endIdx, totalLines)
+	}
+
+	// Update cache
+	cache := LoadFileReadCache()
+	if cache != nil {
+		info, err := os.Stat(args.Path)
+		if err == nil {
+			cacheKey := buildCacheKey(args.Path, offset, limit)
+			cache.Set(cacheKey, CacheEntry{
+				MtimeNs:    info.ModTime().UnixNano(),
+				TotalLines: totalLines,
+				Offset:     offset,
+				Limit:      limit,
+				Source:     "read",
+				Verified:   true,
+			})
+			cache.Save()
+		}
+	}
+
+	return ReadFileResult{
+		Content:    sb.String(),
+		TotalLines: totalLines,
+		Range:      rangeStr,
+	}, nil
 }
 
 // --- Write File Tool ---
@@ -193,6 +320,29 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 		return WriteFileResult{}, fmt.Errorf("failed to write to file %s: %w", args.FilePath, err)
 	}
 
+	// Invalidate cache entries for this path and update with source="write"
+	cache := LoadFileReadCache()
+	if cache != nil {
+		cache.InvalidatePath(args.FilePath)
+		info, statErr := os.Stat(args.FilePath)
+		if statErr == nil {
+			lines := strings.Split(finalContent, "\n")
+			totalLines := len(lines)
+			if totalLines > 0 && lines[totalLines-1] == "" {
+				totalLines--
+			}
+			cache.Set(buildCacheKey(args.FilePath, 1, 0), CacheEntry{
+				MtimeNs:    info.ModTime().UnixNano(),
+				TotalLines: totalLines,
+				Offset:     1,
+				Limit:      0,
+				Source:     "write",
+				Verified:   true,
+			})
+			cache.Save()
+		}
+	}
+
 	return WriteFileResult{Message: fmt.Sprintf("Content successfully written to %s", args.FilePath)}, nil
 }
 
@@ -215,6 +365,13 @@ func ShellCommand(ctx tool.Context, args ShellCommandArgs) (ShellCommandResult, 
 	// Block commands that reference credential store files
 	if matched, fileName := commandReferencesProtectedFile(args.Command); matched {
 		return ShellCommandResult{}, fmt.Errorf("access denied: command references credential store file '%s' which cannot be accessed", fileName)
+	}
+
+	// Mark all cache entries as unverified — shell commands may modify files.
+	// The next read_file will re-stat to confirm before returning cached results.
+	if cache := LoadFileReadCache(); cache != nil {
+		cache.MarkAllUnverified()
+		cache.Save()
 	}
 
 	// Apply timeout defaults and bounds
@@ -469,7 +626,7 @@ func FilterJson(ctx tool.Context, args FilterJsonArgs) (FilterJsonResult, error)
 func GetInternalTools() ([]tool.Tool, error) {
 	readFileTool, err := functiontool.New(functiontool.Config{
 		Name:        "read_file",
-		Description: "Read the contents of a file",
+		Description: "Read file contents with line numbers. For large files, use offset and limit to read specific sections. Use grep_search to find relevant line numbers first.",
 	}, ReadFile)
 	if err != nil {
 		return nil, err
@@ -571,7 +728,11 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}, nil
 }
 
-func ExecuteTool(ctx context.Context, name string, args map[string]interface{}) (any, error) {
+func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, caller string) (any, error) {
+	// Set the current caller for cache scoping. Safe because astonish node
+	// dispatches sequentially (one tool call at a time).
+	currentCaller = caller
+
 	// Helper to marshal map to struct
 	toStruct := func(input map[string]interface{}, target interface{}) error {
 		data, err := json.Marshal(input)

@@ -190,6 +190,14 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		}
 	}
 
+	// Inject caller identity for per-agent cache scoping inside the container.
+	// The container-side node handler extracts and removes this before dispatching.
+	if ctx != nil {
+		if agentName := ctx.AgentName(); agentName != "" {
+			argsMap["_caller"] = agentName
+		}
+	}
+
 	// Send to node (lazy init on first call)
 	rawResult, err := client.Call(sessionID, nt.Name(), argsMap)
 	if err != nil {

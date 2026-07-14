@@ -1624,8 +1624,9 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 	for _, c := range executor.calls {
 		if c.name == "browser_navigate" {
 			url := fmt.Sprintf("%v", c.args["url"])
-			if url != "http://localhost:3000/" {
-				t.Errorf("expected http://localhost:3000/, got: %s", url)
+			// Browser URLs normalize localhost → 127.0.0.1 for Chromium IPv6-first behavior.
+			if url != "http://127.0.0.1:3000/" {
+				t.Errorf("expected http://127.0.0.1:3000/, got: %s", url)
 			}
 		}
 	}

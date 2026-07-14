@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest'
 import {
   addAgentToFleetConfig,
   createDefaultFleetAgent,
+  getAgentColor,
   removeAgentFromFleetConfig,
+  renameAgentInFleetConfig,
   slugifyAgentKey,
 } from '../fleetUtils'
 import type { FleetPlanData } from '../fleetUtils'
@@ -11,8 +13,20 @@ import type { FleetPlanData } from '../fleetUtils'
 const baseConfig: FleetPlanData = {
   name: 'Test',
   agents: {
-    po: { name: 'PO', identity: 'PO', behaviors: 'Lead', tools: true },
-    dev: { name: 'Dev', identity: 'Dev', behaviors: 'Code', tools: true },
+    po: {
+      name: 'PO',
+      identity: 'PO',
+      behaviors: 'Lead',
+      tools: true,
+      memory: { receives: ['dev'] },
+    },
+    dev: {
+      name: 'Dev',
+      identity: 'Dev',
+      behaviors: 'Code',
+      tools: true,
+      memory: { receives: ['po'] },
+    },
   },
   communication: {
     flow: [
@@ -64,5 +78,32 @@ describe('fleet agent helpers', () => {
       talks_to: ['customer'],
       entry_point: true,
     })
+  })
+
+  it('renames an agent key and rewrites flow + memory.receives', () => {
+    const next = renameAgentInFleetConfig(baseConfig, 'dev', 'engineer')
+    expect(next.agents?.dev).toBeUndefined()
+    expect(next.agents?.engineer?.name).toBe('Dev')
+    expect(next.agents?.po?.memory?.receives).toEqual(['engineer'])
+    expect(next.agents?.engineer?.memory?.receives).toEqual(['po'])
+    expect(next.communication?.flow).toEqual([
+      { role: 'po', entry_point: true, talks_to: ['engineer', 'customer'] },
+      { role: 'engineer', talks_to: ['po', 'customer'] },
+    ])
+  })
+
+  it('refuses to rename onto an existing key', () => {
+    expect(() => renameAgentInFleetConfig(baseConfig, 'dev', 'po')).toThrow(/already exists/)
+  })
+
+  it('returns known role colors and distinct palette colors for unknown keys', () => {
+    expect(getAgentColor('po').text).toBe('#60a5fa')
+    expect(getAgentColor('e2e').text).toBe('#2dd4bf')
+    expect(getAgentColor('researcher').text).toBe(getAgentColor('researcher').text)
+    const a = getAgentColor('researcher')
+    const b = getAgentColor('reviewer')
+    expect(a.label).toBe('researcher')
+    expect(b.label).toBe('reviewer')
+    expect(a.text).not.toBe(b.text)
   })
 })

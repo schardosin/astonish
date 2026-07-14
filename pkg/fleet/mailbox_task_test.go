@@ -168,3 +168,136 @@ func TestClaimAndEnqueueTasks(t *testing.T) {
 		t.Fatalf("claimed = %v, want [architect]", claimed)
 	}
 }
+
+func TestApplyQuietExitGate_ContinuesWhenOpenTaskClaimable(t *testing.T) {
+	board := &memTaskBoard{}
+	_, err := board.Post(context.Background(), store.FleetTask{
+		SessionID:            "s1",
+		Title:                "Design",
+		RequiredCapabilities: []string{"design.architecture"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &FleetSession{
+		ID: "s1",
+		FleetConfig: &FleetConfig{
+			Agents: map[string]FleetAgentConfig{
+				"architect": {
+					Name:         "Architect",
+					Capabilities: map[string]bool{"design.architecture": true},
+					TaskPolicy:   &AgentTaskPolicy{Claims: []string{"design.architecture"}},
+				},
+			},
+			Communication: &CommunicationConfig{
+				Flow: []CommunicationNode{{Role: "architect", EntryPoint: true, TalksTo: []string{"customer"}}},
+			},
+			Settings: FleetSettings{TaskBoard: &TaskBoardConfig{ClaimPolicy: "capability_match"}},
+		},
+		Headless: true,
+	}
+	fs.mu.Lock()
+	fs.waitingAgent = "architect"
+	fs.ballWithCustomer = true
+	fs.mu.Unlock()
+
+	ctx := store.WithFleetTaskBoardStore(context.Background(), board)
+	next, stop := fs.applyQuietExitGate(ctx, nil, true)
+	if stop {
+		t.Fatal("expected continue, got stop")
+	}
+	if len(next) != 1 || next[0] != "architect" {
+		t.Fatalf("next = %v, want [architect]", next)
+	}
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	if fs.ballWithCustomer {
+		t.Fatal("expected ball back with agents after continuing")
+	}
+	if fs.waitingAgent != "" {
+		t.Fatalf("waitingAgent = %q, want empty", fs.waitingAgent)
+	}
+}
+
+func TestApplyQuietExitGate_StopsWhenNoIncompleteTasks(t *testing.T) {
+	board := &memTaskBoard{}
+	fs := &FleetSession{
+		ID: "s1",
+		FleetConfig: &FleetConfig{
+			Agents: map[string]FleetAgentConfig{
+				"po": {
+					Name:       "PO",
+					TaskPolicy: &AgentTaskPolicy{Claims: []string{"general"}},
+				},
+			},
+			Communication: &CommunicationConfig{
+				Flow: []CommunicationNode{{Role: "po", EntryPoint: true, TalksTo: []string{"customer"}}},
+			},
+			Settings: FleetSettings{TaskBoard: &TaskBoardConfig{ClaimPolicy: "capability_match"}},
+		},
+		Headless: true,
+	}
+	ctx := store.WithFleetTaskBoardStore(context.Background(), board)
+	next, stop := fs.applyQuietExitGate(ctx, nil, true)
+	if !stop {
+		t.Fatalf("expected stop, next=%v", next)
+	}
+	if len(next) != 0 {
+		t.Fatalf("next = %v, want empty", next)
+	}
+	if state, _ := fs.GetState(); state != StateStopped {
+		t.Fatalf("state = %q, want stopped", state)
+	}
+}
+
+func TestApplyQuietExitGate_TriagesUnclaimableIncompleteTasks(t *testing.T) {
+	board := &memTaskBoard{}
+	_, err := board.Post(context.Background(), store.FleetTask{
+		SessionID:            "s1",
+		Title:                "Need security review",
+		RequiredCapabilities: []string{"security.review"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &FleetSession{
+		ID: "s1",
+		FleetConfig: &FleetConfig{
+			Agents: map[string]FleetAgentConfig{
+				"po": {
+					Name:       "PO",
+					TaskPolicy: &AgentTaskPolicy{Claims: []string{"general"}},
+				},
+			},
+			Communication: &CommunicationConfig{
+				Flow: []CommunicationNode{{Role: "po", EntryPoint: true, TalksTo: []string{"customer"}}},
+			},
+			Settings: FleetSettings{TaskBoard: &TaskBoardConfig{ClaimPolicy: "capability_match"}},
+		},
+		Headless: true,
+	}
+	ctx := store.WithFleetTaskBoardStore(context.Background(), board)
+	next, stop := fs.applyQuietExitGate(ctx, nil, true)
+	if stop {
+		t.Fatal("expected triage continue, got stop")
+	}
+	if len(next) != 1 || next[0] != "po" {
+		t.Fatalf("next = %v, want [po]", next)
+	}
+}
+
+func TestHasIncompleteTasks(t *testing.T) {
+	board := &memTaskBoard{}
+	fs := &FleetSession{ID: "s1"}
+	ctx := store.WithFleetTaskBoardStore(context.Background(), board)
+	if fs.hasIncompleteTasks(ctx) {
+		t.Fatal("empty board should have no incomplete tasks")
+	}
+	_, err := board.Post(context.Background(), store.FleetTask{SessionID: "s1", Title: "Open"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fs.hasIncompleteTasks(ctx) {
+		t.Fatal("open task should count as incomplete")
+	}
+}

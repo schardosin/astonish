@@ -254,12 +254,33 @@ func RecoverFleetSession(ctx context.Context, cfg fleet.RecoverFleetConfig, sess
 
 	slog.Info("reconstructed milestones from transcript", "component", "fleet-recover", "session_id", cfg.SessionID, "milestone_count", milestoneCount, "customer_reply", isCustomerReply)
 
+	hasIncompleteTasks := false
+	if fleetStores != nil && fleetStores.TaskBoard != nil {
+		tasks, listErr := fleetStores.TaskBoard.List(context.Background(), cfg.SessionID, "open", "claimed", "in_progress")
+		if listErr != nil {
+			slog.Warn("failed to list incomplete tasks during recovery", "component", "fleet-recover", "session_id", cfg.SessionID, "error", listErr)
+		} else {
+			hasIncompleteTasks = len(tasks) > 0
+		}
+	}
+
 	// Determine who should act next based on the last message.
 	lastMsg := recoveredMessages[len(recoveredMessages)-1]
-	resumeTarget := determineResumeTarget(lastMsg, fleetCfg, subAgentMgr)
+	resumeTarget := determineResumeTarget(lastMsg, fleetCfg, subAgentMgr, hasIncompleteTasks)
 	fleetSession.ResumeTarget = resumeTarget
 
-	slog.Info("resume target determined", "component", "fleet-recover", "session_id", cfg.SessionID, "resume_target", resumeTarget, "last_sender", lastMsg.Sender)
+	slog.Info("resume target determined", "component", "fleet-recover", "session_id", cfg.SessionID, "resume_target", resumeTarget, "last_sender", lastMsg.Sender, "has_incomplete_tasks", hasIncompleteTasks)
+
+	// No human reply and no incomplete work: stay quiet. Closing the GitHub
+	// poller / sandbox avoids a 5-minute idle hang that would only exit.
+	if resumeTarget == "" && cfg.CustomerMessage == "" && !hasIncompleteTasks {
+		slog.Info("recovery staying quiet: ball with customer and no incomplete tasks", "component", "fleet-recover", "session_id", cfg.SessionID)
+		if err := ghChannel.Close(); err != nil {
+			slog.Warn("failed to close channel after quiet recovery", "component", "fleet-recover", "error", err)
+		}
+		fleetSession.Cleanup()
+		return nil
+	}
 
 	// Wire completion callback for issue lifecycle tracking
 	if cfg.CompletionFunc != nil {
@@ -401,48 +422,46 @@ func eventsToFleetMessages(events []*adksession.Event) []fleet.Message {
 }
 
 // determineResumeTarget figures out which agent should act next after recovery.
-// It looks at the last message in the recovered thread:
-//   - If from a human: route to the entry point
-//   - If from an agent: use LLM routing (or fallback to entry point)
-//   - If from system: route to entry point
-func determineResumeTarget(lastMsg fleet.Message, fleetCfg *fleet.FleetConfig, subAgentMgr *agent.SubAgentManager) string {
+// AI action is allowed only when a human message triggered recovery (last
+// message from customer) or incomplete tasks remain. Waiting on the customer
+// with an empty board stays quiet (empty resume target).
+func determineResumeTarget(lastMsg fleet.Message, fleetCfg *fleet.FleetConfig, subAgentMgr *agent.SubAgentManager, hasIncompleteTasks bool) string {
 	if lastMsg.Sender == "customer" {
 		return fleet.RouteCustomerMessage(fleetCfg, "")
 	}
 
 	if lastMsg.Sender == "system" {
-		return fleetCfg.GetEntryPoint()
-	}
-
-	// Last message was from an agent. Try LLM routing with a short timeout.
-	// The SubAgentManager has the LLM reference we need for routing.
-	if subAgentMgr.LLM != nil {
-		routeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		routing := fleet.RouteWithLLM(routeCtx, lastMsg, fleetCfg, subAgentMgr.LLM)
-		switch routing.Target {
-		case "customer":
-			// The agent was waiting for customer input. Rather than returning ""
-			// (which blocks forever in headless sessions with no customer), activate
-			// the entry point to reassess. If human input is truly needed the
-			// agent will say so, the session will enter WaitingForHuman state,
-			// and the GitHub comment poller will pick up any new replies.
+		if hasIncompleteTasks {
 			return fleetCfg.GetEntryPoint()
-		case "none":
-			// Same rationale: "none" after recovery usually means the LLM could
-			// not determine next steps from the truncated context. The entry
-			// point agent can re-evaluate with the full progress tracker.
-			return fleetCfg.GetEntryPoint()
-		case "self":
-			return lastMsg.Sender
-		default:
-			return routing.Target
 		}
+		return ""
 	}
 
-	// Fallback: re-activate the entry point agent to reassess the situation
-	return fleetCfg.GetEntryPoint()
+	var llm model.LLM
+	if subAgentMgr != nil {
+		llm = subAgentMgr.LLM
+	}
+	routeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	routing := fleet.RouteWithLLM(routeCtx, lastMsg, fleetCfg, llm)
+	switch routing.Target {
+	case "customer", "none":
+		if hasIncompleteTasks {
+			return fleetCfg.GetEntryPoint()
+		}
+		return ""
+	case "self":
+		return lastMsg.Sender
+	default:
+		if routing.Target == "" {
+			if hasIncompleteTasks {
+				return fleetCfg.GetEntryPoint()
+			}
+			return ""
+		}
+		return routing.Target
+	}
 }
 
 // wireFleetTranscriptAppend wires the OnMessagePosted callback to APPEND to

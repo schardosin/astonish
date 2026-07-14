@@ -108,7 +108,13 @@ func (s *teamFleetRunStateStore) ListRecoverable(ctx context.Context, planKey st
 	}
 	out := make([]store.FleetRunStateSnapshot, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, fleetRunStateToStore(row))
+		snap := fleetRunStateToStore(row)
+		// Ball with the customer means waiting on a human reply — only
+		// GitHub human-comment recovery should wake these sessions.
+		if snap.Ball == "customer" {
+			continue
+		}
+		out = append(out, snap)
 	}
 	return out, nil
 }

@@ -275,7 +275,7 @@ function SelectField({ label, value, options, onChange, disabled }: { label: str
 interface AgentsEditorProps {
   agents: [string, FleetAgentDef][]
   fleetSettings?: FleetSettings
-  onSaveAgent?: (agentKey: string, agent: FleetAgentDef) => Promise<void>
+  onSaveAgent?: (agentKey: string, agent: FleetAgentDef, nextKey?: string) => Promise<void>
   onAddAgent?: (agentKey: string, agent: FleetAgentDef) => Promise<void>
   onDeleteAgent?: (agentKey: string) => Promise<void>
   readOnly?: boolean
@@ -599,10 +599,11 @@ export function AgentEditorPanel({
   readOnly?: boolean
   canDelete?: boolean
   onClose: () => void
-  onSave?: (agentKey: string, agent: FleetAgentDef) => Promise<void>
+  onSave?: (agentKey: string, agent: FleetAgentDef, nextKey?: string) => Promise<void>
   onDelete?: () => Promise<void>
 }) {
   const [draft, setDraft] = useState<FleetAgentDef>(agent)
+  const [draftKey, setDraftKey] = useState(agentKey)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -612,6 +613,7 @@ export function AgentEditorPanel({
 
   useEffect(() => {
     setDraft(agent)
+    setDraftKey(agentKey)
     setError(null)
     setCapsText(enabledCapabilityKeys(agent.capabilities).join(', '))
     setClaimsText((agent.task_policy?.claims || []).join(', '))
@@ -646,10 +648,19 @@ export function AgentEditorPanel({
 
   const save = async () => {
     if (!onSave || saving || readOnly) return
+    const nextKey = slugifyAgentKey(draftKey)
+    if (!nextKey) {
+      setError('Role key is required')
+      return
+    }
+    if (nextKey !== agentKey && siblingAgentKeys.includes(nextKey)) {
+      setError(`Role "@${nextKey}" already exists`)
+      return
+    }
     setSaving(true)
     setError(null)
     try {
-      await onSave(agentKey, draft)
+      await onSave(agentKey, draft, nextKey !== agentKey ? nextKey : undefined)
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -672,11 +683,14 @@ export function AgentEditorPanel({
     }
   }
 
+  const headerKey = draftKey || agentKey
+  const roleColor = getAgentColor(headerKey)
+
   return (
     <div className="h-full flex flex-col overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
       <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-color)' }}>
         <div>
-          <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Edit @{agentKey}</h2>
+          <h2 className="text-base font-semibold" style={{ color: roleColor.text }}>Edit @{headerKey}</h2>
           <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{readOnly ? 'Template preview' : 'Agent configuration'}</p>
         </div>
         <button onClick={onClose} className="p-1 rounded hover:bg-white/10" style={{ color: 'var(--text-secondary)' }}>
@@ -703,6 +717,14 @@ export function AgentEditorPanel({
       <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
         {tab === 'identity' && (
           <>
+            <TextField
+              label="Role"
+              value={draftKey}
+              onChange={v => setDraftKey(v.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+              disabled={readOnly}
+              placeholder="e.g. po, architect, dev"
+              hint="Map key used in the communication graph and for color coding"
+            />
             <TextField label="Name" value={draft.name || ''} onChange={v => update('name', v)} disabled={readOnly} />
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
               <TextareaField label="Identity" value={draft.identity || ''} rows={12} onChange={v => update('identity', v)} disabled={readOnly} />
@@ -895,17 +917,33 @@ function CheckboxMultiSelectField({
   )
 }
 
-function TextField({ label, value, onChange, disabled }: { label: string; value: string; onChange: (value: string) => void; disabled?: boolean }) {
+function TextField({
+  label,
+  value,
+  onChange,
+  disabled,
+  placeholder,
+  hint,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+  placeholder?: string
+  hint?: string
+}) {
   return (
     <label className="block text-xs space-y-1" style={{ color: 'var(--text-secondary)' }}>
       <span>{label}</span>
       <input
         value={value}
         disabled={disabled}
+        placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
         className="w-full px-3 py-2 rounded-lg focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-60"
         style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
       />
+      {hint && <span className="block text-[11px]" style={{ color: 'var(--text-muted)' }}>{hint}</span>}
     </label>
   )
 }

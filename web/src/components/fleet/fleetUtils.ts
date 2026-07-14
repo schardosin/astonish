@@ -155,11 +155,36 @@ export const AGENT_COLORS: Record<string, AgentColor> = {
   ux: { bg: 'rgba(236, 72, 153, 0.1)', border: 'rgba(236, 72, 153, 0.3)', text: '#f472b6', label: 'UX' },
   dev: { bg: 'rgba(34, 197, 94, 0.1)', border: 'rgba(34, 197, 94, 0.3)', text: '#4ade80', label: 'Dev' },
   qa: { bg: 'rgba(234, 179, 8, 0.1)', border: 'rgba(234, 179, 8, 0.3)', text: '#facc15', label: 'QA' },
+  e2e: { bg: 'rgba(20, 184, 166, 0.1)', border: 'rgba(20, 184, 166, 0.3)', text: '#2dd4bf', label: 'E2E' },
   system: { bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.3)', text: '#9ca3af', label: 'System' },
 }
 
+/** Fallback palette for unknown agent keys (stable by hash). */
+export const AGENT_COLOR_PALETTE: Omit<AgentColor, 'label'>[] = [
+  { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.3)', text: '#22d3ee' },
+  { bg: 'rgba(249, 115, 22, 0.1)', border: 'rgba(249, 115, 22, 0.3)', text: '#fb923c' },
+  { bg: 'rgba(14, 165, 233, 0.1)', border: 'rgba(14, 165, 233, 0.3)', text: '#38bdf8' },
+  { bg: 'rgba(244, 63, 94, 0.1)', border: 'rgba(244, 63, 94, 0.3)', text: '#fb7185' },
+  { bg: 'rgba(132, 204, 22, 0.1)', border: 'rgba(132, 204, 22, 0.3)', text: '#a3e635' },
+  { bg: 'rgba(99, 102, 241, 0.1)', border: 'rgba(99, 102, 241, 0.3)', text: '#818cf8' },
+  { bg: 'rgba(217, 70, 239, 0.1)', border: 'rgba(217, 70, 239, 0.3)', text: '#e879f9' },
+  { bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.3)', text: '#fbbf24' },
+]
+
+function hashAgentKey(key: string): number {
+  let h = 0
+  for (let i = 0; i < key.length; i++) {
+    h = ((h << 5) - h) + key.charCodeAt(i)
+    h |= 0
+  }
+  return Math.abs(h)
+}
+
 export function getAgentColor(name: string): AgentColor {
-  return AGENT_COLORS[name] || { bg: 'rgba(6, 182, 212, 0.1)', border: 'rgba(6, 182, 212, 0.3)', text: '#22d3ee', label: name }
+  const known = AGENT_COLORS[name]
+  if (known) return known
+  const base = AGENT_COLOR_PALETTE[hashAgentKey(name) % AGENT_COLOR_PALETTE.length]
+  return { ...base, label: name }
 }
 
 // Extract the agent role from a sub-agent session label.
@@ -254,6 +279,47 @@ export function removeAgentFromFleetConfig(config: FleetPlanData, agentKey: stri
   if (flow.length > 0 && !flow.some(node => node.entry_point)) {
     flow = flow.map((node, i) => (i === 0 ? { ...node, entry_point: true } : node))
   }
+
+  return {
+    ...config,
+    agents,
+    communication: { ...(config.communication || {}), flow },
+  }
+}
+
+/** Rename an agent key and rewrite communication + memory.receives references. */
+export function renameAgentInFleetConfig(
+  config: FleetPlanData,
+  fromKey: string,
+  toKey: string,
+): FleetPlanData {
+  if (!fromKey || !toKey || fromKey === toKey) return config
+  const agents = { ...(config.agents || {}) }
+  const existing = agents[fromKey]
+  if (!existing) return config
+  if (agents[toKey]) {
+    throw new Error(`Role "@${toKey}" already exists`)
+  }
+
+  delete agents[fromKey]
+  agents[toKey] = existing
+
+  for (const [key, def] of Object.entries(agents)) {
+    const receives = def.memory?.receives
+    if (!receives?.length) continue
+    const nextReceives = receives.map(r => (r === fromKey ? toKey : r))
+    if (nextReceives.every((r, i) => r === receives[i])) continue
+    agents[key] = {
+      ...def,
+      memory: { ...(def.memory || {}), receives: nextReceives },
+    }
+  }
+
+  const flow = (config.communication?.flow || []).map(node => ({
+    ...node,
+    role: node.role === fromKey ? toKey : node.role,
+    talks_to: (node.talks_to || []).map(target => (target === fromKey ? toKey : target)),
+  }))
 
   return {
     ...config,

@@ -56,10 +56,29 @@ func TestFleetRunStateStore_UpsertGetHeartbeatRecoverableDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list recoverable: %v", err)
 	}
+	if len(recoverable) != 0 {
+		t.Fatalf("recoverable len = %d, want 0 (ball=customer sessions stay quiet until a human replies)", len(recoverable))
+	}
+
+	if err := runStates.Upsert(ctx, store.FleetRunStateSnapshot{
+		SessionID:       "session-1",
+		PlanKey:         "plan-a",
+		State:           "processing",
+		WaitingAgent:    "",
+		Ball:            "agents",
+		Progress:        map[string]any{"step": "building"},
+		LastHeartbeatAt: firstHeartbeat,
+	}); err != nil {
+		t.Fatalf("upsert agents-ball: %v", err)
+	}
+	recoverable, err = runStates.ListRecoverable(ctx, "plan-a")
+	if err != nil {
+		t.Fatalf("list recoverable agents-ball: %v", err)
+	}
 	if len(recoverable) != 1 {
 		t.Fatalf("recoverable len = %d, want 1", len(recoverable))
 	}
-	if recoverable[0].WaitingAgent != "po" || recoverable[0].Ball != "customer" {
+	if recoverable[0].Ball != "agents" {
 		t.Fatalf("recoverable snapshot = %+v", recoverable[0])
 	}
 

@@ -4,7 +4,7 @@ import { AlertCircle, ArrowRight, Copy, ExternalLink, Loader, Radio, Settings2, 
 import { cloneFleet, fetchFleet, saveFleet } from '../../api/fleetChat'
 import type { FleetDefinition, SetupProfileSummary } from '../../api/fleetChat'
 import type { CommFlowNode, FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
-import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig } from './fleetUtils'
+import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig } from './fleetUtils'
 import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
 import FleetTemplateDialog from './FleetTemplateDialog'
 import SetupWizard from './SetupWizard'
@@ -111,15 +111,23 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
     setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
   }
 
-  const handleSaveAgent = async (agentKey: string, agent: FleetAgentDef) => {
+  const handleSaveAgent = async (agentKey: string, agent: FleetAgentDef, nextKey?: string) => {
     if (!fullConfig || isBundled) return
     setSaveError(null)
-    const nextConfig: FleetPlanData = {
-      ...fullConfig,
-      agents: { ...(fullConfig.agents || {}), [agentKey]: agent },
+    const targetKey = nextKey && nextKey !== agentKey ? nextKey : agentKey
+    let nextConfig = fullConfig
+    if (targetKey !== agentKey) {
+      nextConfig = renameAgentInFleetConfig(nextConfig, agentKey, targetKey)
+    }
+    nextConfig = {
+      ...nextConfig,
+      agents: { ...(nextConfig.agents || {}), [targetKey]: agent },
     }
     await saveFleet(templateKey, nextConfig as Record<string, unknown>)
     setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
+    if (editingAgentKey === agentKey && targetKey !== agentKey) {
+      setEditingAgentKey(targetKey)
+    }
   }
 
   const handleAddAgent = async (agentKey: string, agent: FleetAgentDef) => {
@@ -269,7 +277,7 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
                 selectedKey={editingAgentKey}
                 onSelectedKeyChange={setEditingAgentKey}
                 readOnly={isBundled}
-                onSaveAgent={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
+                onSaveAgent={isBundled ? undefined : (agentKey, agent, nextKey) => handleSaveAgent(agentKey, agent, nextKey).catch(err => {
                   setSaveError(err instanceof Error ? err.message : String(err))
                   throw err
                 })}
@@ -298,7 +306,7 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
             readOnly={isBundled}
             canDelete={canDeleteAgent}
             onClose={() => setEditingAgentKey(null)}
-            onSave={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
+            onSave={isBundled ? undefined : (agentKey, agent, nextKey) => handleSaveAgent(agentKey, agent, nextKey).catch(err => {
               setSaveError(err instanceof Error ? err.message : String(err))
               throw err
             })}

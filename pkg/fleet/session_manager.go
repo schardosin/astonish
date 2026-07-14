@@ -375,25 +375,37 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 					return nil // clean shutdown (parent context cancelled)
 				}
 				// Idle watchdog fired: the child context timed out but the
-				// parent is still alive. Activate the entry point to reassess.
+				// parent is still alive. Only continue when incomplete work
+				// remains; otherwise exit quietly (human message or tasks
+				// are the only wake triggers).
 				if fs.Headless && waitCtx.Err() == context.DeadlineExceeded {
-					entryPoint := fs.FleetConfig.GetEntryPoint()
-					slog.Warn("idle watchdog fired", "component", "fleet", "session_id", fs.ID, "idle_timeout", idleWatchdogTimeout, "entry_point", entryPoint)
-
-					watchdogMsg := Message{
-						ID:        uuid.New().String(),
-						Sender:    "system",
-						Text:      fmt.Sprintf("Idle watchdog: no activity for %v. Re-activating @%s to reassess.", idleWatchdogTimeout, entryPoint),
-						Timestamp: time.Now(),
+					claimed := fs.claimAndEnqueueTasks(ctx)
+					if len(claimed) > 0 {
+						slog.Info("idle watchdog claimed tasks", "component", "fleet", "session_id", fs.ID, "agents", claimed)
+						pendingTargets = claimed
+						continue
 					}
-					if err := fs.Channel.PostMessage(ctx, watchdogMsg); err != nil {
-						slog.Warn("failed to post fleet session message", "error", err)
+					if fs.hasIncompleteTasks(ctx) {
+						entryPoint := fs.FleetConfig.GetEntryPoint()
+						slog.Warn("idle watchdog: incomplete tasks remain unclaimed, triaging via entry point", "component", "fleet", "session_id", fs.ID, "entry_point", entryPoint)
+						watchdogMsg := Message{
+							ID:        uuid.New().String(),
+							Sender:    "system",
+							Text:      fmt.Sprintf("Idle watchdog: incomplete tasks remain after %v with no claimants. Activating @%s to triage.", idleWatchdogTimeout, entryPoint),
+							Timestamp: time.Now(),
+						}
+						if err := fs.Channel.PostMessage(ctx, watchdogMsg); err != nil {
+							slog.Warn("failed to post fleet session message", "error", err)
+						}
+						fs.postExternal(watchdogMsg)
+						fs.notifyMessagePosted(watchdogMsg)
+						pendingTargets = []string{entryPoint}
+						continue
 					}
-					fs.postExternal(watchdogMsg)
-					fs.notifyMessagePosted(watchdogMsg)
-
-					pendingTargets = []string{entryPoint}
-					continue
+					slog.Info("idle watchdog: no human message and no incomplete tasks, exiting quietly", "component", "fleet", "session_id", fs.ID, "idle_timeout", idleWatchdogTimeout)
+					fs.notifyBallChange("customer")
+					fs.setState(StateStopped, "")
+					return nil
 				}
 				return fmt.Errorf("waiting for message: %w", err)
 			}
@@ -451,12 +463,12 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			if err != nil {
 				return err
 			}
-			if exit {
+			pendingTargets = append(next, pendingTargets...)
+			cont, stop := fs.applyQuietExitGate(ctx, pendingTargets, exit)
+			if stop {
 				return nil
 			}
-			pendingTargets = append(next, pendingTargets...)
-			pendingTargets = append(pendingTargets, fs.claimAndEnqueueTasks(ctx)...)
-			pendingTargets = dedupeTargets(pendingTargets)
+			pendingTargets = cont
 			continue
 		}
 
@@ -492,7 +504,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			fs.notifyMessagePosted(errMsg)
 
 			// Stop the session after too many consecutive failures.
-			// In headless mode there is no human to fix the problem, so
+			// In headless mode there is no human to intervene, so
 			// continuing would just loop forever.
 			if consecutiveErrors >= maxConsecutiveErrors {
 				slog.Error("session stopping after consecutive errors", "component", "fleet", "session_id", fs.ID, "consecutive_errors", consecutiveErrors)
@@ -532,12 +544,12 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			slog.Error("error posting agent response", "component", "fleet", "error", err)
 			continue
 		}
-		if exit {
+		pendingTargets = append(next, pendingTargets...)
+		cont, stop := fs.applyQuietExitGate(ctx, pendingTargets, exit)
+		if stop {
 			return nil
 		}
-		pendingTargets = append(next, pendingTargets...)
-		pendingTargets = append(pendingTargets, fs.claimAndEnqueueTasks(ctx)...)
-		pendingTargets = dedupeTargets(pendingTargets)
+		pendingTargets = cont
 	}
 }
 
@@ -573,6 +585,7 @@ func (fs *FleetSession) activateParallel(ctx context.Context, agents []string, c
 
 	var nextTargets []string
 	hadSuccess := false
+	exitRequested := false
 	for _, r := range results {
 		if r.err != nil {
 			*consecutiveErrors++
@@ -605,14 +618,15 @@ func (fs *FleetSession) activateParallel(ctx context.Context, agents []string, c
 			continue
 		}
 		if shouldExit {
-			return nil, true, nil
+			exitRequested = true
+			continue
 		}
 		nextTargets = append(nextTargets, n...)
 	}
 	if hadSuccess {
 		*consecutiveErrors = 0
 	}
-	return nextTargets, false, nil
+	return nextTargets, exitRequested, nil
 }
 
 // handleRoutingOutcome posts the agent response, applies routing, and returns
@@ -756,6 +770,52 @@ func (fs *FleetSession) deliverMailbox(ctx context.Context, msg Message, recipie
 // DeliverToMailbox exposes mailbox delivery for API bootstrap (initial customer messages).
 func (fs *FleetSession) DeliverToMailbox(ctx context.Context, msg Message, recipients []string) {
 	fs.deliverMailbox(ctx, msg, recipients)
+}
+
+// applyQuietExitGate runs claimAndEnqueueTasks before honoring a quiet exit
+// (route customer/none). AI continues only when claimants exist or incomplete
+// tasks remain to triage; otherwise marks the session stopped.
+func (fs *FleetSession) applyQuietExitGate(ctx context.Context, pending []string, exit bool) (next []string, stop bool) {
+	next = append([]string{}, pending...)
+	next = append(next, fs.claimAndEnqueueTasks(ctx)...)
+	next = dedupeTargets(next)
+	if !exit {
+		return next, false
+	}
+	if len(next) == 0 && fs.hasIncompleteTasks(ctx) {
+		if ep := fs.FleetConfig.GetEntryPoint(); ep != "" {
+			slog.Info("quiet-exit blocked: incomplete tasks remain, triaging via entry point", "component", "fleet", "session_id", fs.ID, "entry_point", ep)
+			next = []string{ep}
+		}
+	}
+	if len(next) > 0 {
+		fs.resumeAgentsAfterQuietGate()
+		return next, false
+	}
+	slog.Info("quiet exit: no pending agents and no incomplete tasks", "component", "fleet", "session_id", fs.ID)
+	fs.notifyBallChange("customer")
+	fs.setState(StateStopped, "")
+	return nil, true
+}
+
+func (fs *FleetSession) resumeAgentsAfterQuietGate() {
+	fs.mu.Lock()
+	fs.waitingAgent = ""
+	fs.mu.Unlock()
+	fs.notifyBallChange("agents")
+}
+
+func (fs *FleetSession) hasIncompleteTasks(ctx context.Context) bool {
+	board := store.FleetTaskBoardStoreFromContext(ctx)
+	if board == nil {
+		return false
+	}
+	tasks, err := board.List(ctx, fs.ID, "open", "claimed", "in_progress")
+	if err != nil {
+		slog.Warn("failed to list incomplete fleet tasks", "component", "fleet", "session_id", fs.ID, "error", err)
+		return false
+	}
+	return len(tasks) > 0
 }
 
 // claimAndEnqueueTasks claims open task-board items for eligible agents and

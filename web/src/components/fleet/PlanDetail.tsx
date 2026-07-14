@@ -9,7 +9,7 @@ import {
 } from '../../api/fleetChat'
 import { buildPath } from '../../hooks/useHashRouter'
 import type { CommFlowNode, FleetAgentDef, FleetArtifactDef, FleetPlanData, FleetPlanStatusExt, FleetSettings } from './fleetUtils'
-import { addAgentToFleetConfig, formatTimeAgo, getAgentColor, removeAgentFromFleetConfig } from './fleetUtils'
+import { addAgentToFleetConfig, formatTimeAgo, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig } from './fleetUtils'
 import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
 
 interface PlanDetailProps {
@@ -124,9 +124,22 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
     onRefresh?.()
   }
 
-  const handleSaveAgent = async (agentKey: string, agent: FleetAgentDef) => {
-    await patchFleetPlanAgent(planKey, agentKey, agent as Record<string, unknown>)
-    setPlan(prev => prev ? { ...prev, agents: { ...(prev.agents || {}), [agentKey]: agent } } : prev)
+  const handleSaveAgent = async (agentKey: string, agent: FleetAgentDef, nextKey?: string) => {
+    if (!plan) return
+    const targetKey = nextKey && nextKey !== agentKey ? nextKey : agentKey
+    if (targetKey !== agentKey) {
+      const renamed = renameAgentInFleetConfig(plan, agentKey, targetKey)
+      const nextPlan: FleetPlanData = {
+        ...renamed,
+        agents: { ...(renamed.agents || {}), [targetKey]: agent },
+      }
+      await saveFleetPlan(planKey, nextPlan as Record<string, unknown>)
+      setPlan(nextPlan)
+      if (editingAgentKey === agentKey) setEditingAgentKey(targetKey)
+    } else {
+      await patchFleetPlanAgent(planKey, agentKey, agent as Record<string, unknown>)
+      setPlan(prev => prev ? { ...prev, agents: { ...(prev.agents || {}), [agentKey]: agent } } : prev)
+    }
     onRefresh?.()
   }
 

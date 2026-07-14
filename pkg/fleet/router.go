@@ -77,6 +77,10 @@ func RouteWithLLM(ctx context.Context, msg Message, fleetCfg *FleetConfig, llm m
 		return RoutingResult{Target: "none", Reason: "sender has no communication targets"}
 	}
 
+	if llm == nil {
+		return fallbackRoute(msg, fleetCfg)
+	}
+
 	// Build the routing prompt
 	prompt := buildRoutingPrompt(senderKey, msg.Text, talksTo)
 

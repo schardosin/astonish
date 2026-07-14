@@ -255,6 +255,7 @@ func buildGenericOrchestrationPromptSection(sb *strings.Builder, agentCfg FleetA
 		sb.WriteString("- Use `fleet_task_post` to create a task with a title, description, and required capabilities.\n")
 		sb.WriteString("- Use `fleet_task_complete` when you finish a task you are responsible for.\n")
 		sb.WriteString("- Use `fleet_task_fail` with a clear reason if a task cannot be completed.\n")
+		sb.WriteString("- Only address @customer or stop with no further action when the board has no incomplete tasks (or the human truly blocks remaining work).\n")
 		sb.WriteString("Do not use the task board for normal conversation; use it for trackable work items.\n")
 
 		sb.WriteString("\n## Starting Project Services\n\n")

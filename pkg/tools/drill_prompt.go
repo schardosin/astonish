@@ -337,9 +337,9 @@ Wait for the user's response before proceeding to Step 2.
 If the user indicates that configuration requires using the UI (e.g., a
 setup wizard, onboarding flow, or configuration page):
 1. Keep the required services running (backend, frontend, etc.)
-2. Use the container IP from use_sandbox_template response (or run
-   shell_command with "hostname -I | awk '{print $1}'" to get it)
-3. Open the UI: browser_navigate with the container IP and port
+2. Prefer localhost/127.0.0.1 in browser_navigate — Chromium runs in the
+   same sandbox container as the services (do not use the bridge IP)
+3. Open the UI: browser_navigate with http://127.0.0.1:<port>/...
 4. Use browser_snapshot to understand the current page
 5. Walk through the wizard step by step:
    - If you know what to enter (from the user's instructions), proceed
@@ -930,8 +930,9 @@ After saving, ask: "Would you like me to run the tests now?"
 
 If yes, call the run_drill tool with suite_name set to the suite name.
 If the suite YAML declares a sandbox template and you are still on @base,
-run_drill switches to that template automatically before setup — you do not
-need a separate use_sandbox_template call (though calling it first is fine).
+run_drill switches to that template automatically before setup — do NOT
+call use_sandbox_template first, and do NOT manually write credential or
+provider config files (run_drill injects suite credential_injection).
 run_drill automatically handles setup, ready_check, and teardown from the
 suite config — do NOT manually start services before calling it.
 This tool runs the tests and automatically routes shell/file/browser tool
@@ -998,7 +999,10 @@ To run a test suite, use the run_drill tool (NOT shell_command with
 This means tests run in the SAME environment as your current session — the
 same container with the same code and dependencies. When the suite declares a
 template and the session is still on @base, run_drill switches to that
-template automatically before setup (unless force=true).
+template automatically before setup (unless force=true). Do NOT call
+use_sandbox_template first "to prepare", and do NOT manually write_file
+credential/provider configs — suite credential_injection runs inside
+run_drill before configure/setup.
 
 ## Browser Access to Container Services (sandbox mode)
 

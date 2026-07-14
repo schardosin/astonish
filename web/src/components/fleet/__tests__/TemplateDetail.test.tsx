@@ -193,7 +193,7 @@ describe('TemplateDetail', () => {
     })
   })
 
-  it('shows mandatory agent fields and hides capabilities until optional section is expanded', async () => {
+  it('shows identity fields first and keeps capabilities on the Advanced tab', async () => {
     const minimalFleet = {
       ...fleetPayload,
       agents: {
@@ -226,13 +226,14 @@ describe('TemplateDetail', () => {
     expect(await screen.findByText('Agents (1)')).toBeInTheDocument()
     fireEvent.click(screen.getByText('agent', { exact: true }))
     expect(await screen.findByLabelText('Identity')).toBeInTheDocument()
-    expect(screen.queryByText('Discovery & reasoning')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Capabilities')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByText('Optional settings'))
-    expect(await screen.findByText('Discovery & reasoning')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+    expect(await screen.findByLabelText('Capabilities')).toBeInTheDocument()
+    expect(await screen.findByLabelText('Task claims')).toBeInTheDocument()
   })
 
-  it('auto-expands optional settings when agent already has optional fields', async () => {
+  it('shows agent capabilities when opening the Advanced tab', async () => {
     fetchFleet.mockResolvedValue({ key: 'my-fleet', fleet: fleetPayload, source: 'custom' })
     window.location.hash = '#/fleet/template/my-fleet/agents'
 
@@ -253,7 +254,9 @@ describe('TemplateDetail', () => {
     expect(await screen.findByText('Agents (1)')).toBeInTheDocument()
     fireEvent.click(screen.getByText('dev', { exact: true }))
     expect(await screen.findByRole('heading', { name: 'Edit @dev' })).toBeInTheDocument()
-    expect(await screen.findByText('code.write')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }))
+    const caps = await screen.findByLabelText('Capabilities')
+    expect(caps).toHaveValue('code.write')
   })
 
   it('saves custom template settings through the fleet save API', async () => {

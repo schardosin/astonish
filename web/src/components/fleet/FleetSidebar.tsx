@@ -7,7 +7,7 @@ import {
 import { cloneFleet, cloneSetupProfile, deleteFleet, deleteSetupProfile, fetchFleetPlanYaml, saveFleet, saveFleetPlanYaml } from '../../api/fleetChat'
 import type { FleetPlanSummary, FleetDefinition, SetupProfileSummary } from '../../api/fleetChat'
 import type { FleetChatSession, SidebarItem, SelectedItem } from './fleetUtils'
-import { formatTimeAgo } from './fleetUtils'
+import { createDefaultFleetAgent, formatTimeAgo } from './fleetUtils'
 import FleetTemplateDialog from './FleetTemplateDialog'
 import type { FleetTemplateDialogMode } from './FleetTemplateDialog'
 import SetupProfileDialog from './SetupProfileDialog'
@@ -212,12 +212,7 @@ export default function FleetSidebar({
           description: '',
           setup_profile: 'generic',
           agents: {
-            agent: {
-              name: 'Agent',
-              identity: 'You are a helpful agent.',
-              behaviors: 'Follow the user instructions carefully.',
-              tools: true,
-            },
+            agent: createDefaultFleetAgent('Agent'),
           },
           communication: {
             flow: [{ role: 'agent', talks_to: ['customer'], entry_point: true }],
@@ -382,10 +377,10 @@ export default function FleetSidebar({
           <>
             {renderSection('Fleet Plans', <FileText size={12} />, planItems, 'plan', 'rgba(6, 182, 212, 0.6)')}
             {renderSection('Active Sessions', <Radio size={12} />, sessionItems, 'session', null)}
-            {renderSection('Bundled Setup Profiles', <Settings2 size={12} />, bundledSetupItems, 'setup-profile-bundled', 'rgba(6, 182, 212, 0.5)')}
-            {renderSection('Your Setup Profiles', <Settings2 size={12} />, customSetupItems, 'setup-profile-custom', null)}
             {renderSection('Astonish Templates', <Eye size={12} />, bundledItems, 'template-bundled', 'rgba(6, 182, 212, 0.7)')}
             {renderSection('Your Templates', <Eye size={12} />, customItems, 'template-custom', null)}
+            {renderSection('Bundled Setup Profiles', <Settings2 size={12} />, bundledSetupItems, 'setup-profile-bundled', 'rgba(6, 182, 212, 0.5)')}
+            {renderSection('Your Setup Profiles', <Settings2 size={12} />, customSetupItems, 'setup-profile-custom', null)}
           </>
         )}
       </div>

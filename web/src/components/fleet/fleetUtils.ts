@@ -210,6 +210,9 @@ export function createDefaultFleetAgent(name: string): FleetAgentDef {
     identity: `You are ${name}.`,
     behaviors: 'Follow the user instructions carefully and collaborate with other agents when needed.',
     tools: true,
+    // Task board is always on; validation requires at least one agent with claims.
+    capabilities: { general: true },
+    task_policy: { claims: ['general'] },
   }
 }
 

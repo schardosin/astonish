@@ -10,7 +10,7 @@ import {
 import { buildPath } from '../../hooks/useHashRouter'
 import type { CommFlowNode, FleetAgentDef, FleetArtifactDef, FleetPlanData, FleetPlanStatusExt, FleetSettings } from './fleetUtils'
 import { addAgentToFleetConfig, formatTimeAgo, getAgentColor, removeAgentFromFleetConfig } from './fleetUtils'
-import { FleetAgentsEditor, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
+import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
 
 interface PlanDetailProps {
   planKey: string
@@ -37,6 +37,7 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
   const [saveStatus, setSaveStatus] = useState<'saved' | 'error' | null>(null)
   const [retryingIssue, setRetryingIssue] = useState<number | null>(null)
   const [tab, setTab] = useFleetDetailTab('plan', planKey)
+  const [editingAgentKey, setEditingAgentKey] = useState<string | null>(null)
 
   const loadPlan = useCallback(async () => {
     setIsLoading(true)
@@ -70,6 +71,16 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
   }, [planKey])
 
   useEffect(() => { loadPlan() }, [loadPlan])
+
+  useEffect(() => {
+    setEditingAgentKey(null)
+    setShowYaml(false)
+  }, [planKey])
+
+  const handleTabChange = (next: typeof tab) => {
+    setEditingAgentKey(null)
+    setTab(next)
+  }
 
   const handleActivateToggle = async () => {
     if (isActivating) return
@@ -221,10 +232,13 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
   const agents: [string, FleetAgentDef][] = plan.agents ? Object.entries(plan.agents) : []
   const commFlow: CommFlowNode[] = plan.communication?.flow || []
   const artifacts: [string, FleetArtifactDef][] = plan.artifacts ? Object.entries(plan.artifacts) : []
+  const editingAgent = editingAgentKey ? agents.find(([key]) => key === editingAgentKey) || null : null
+  const canDeleteAgent = agents.length > 1
+  const bottomDock = Boolean(showYaml || editingAgent)
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className={`${showYaml ? 'h-1/2' : 'flex-1'} overflow-y-auto`}>
+      <div className={`${bottomDock ? 'h-1/2' : 'flex-1'} overflow-y-auto`}>
         <div className="max-w-4xl mx-auto p-6 space-y-6">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -240,14 +254,17 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
               showYaml={showYaml}
               isDuplicating={isDuplicating}
               isDeleting={isDeleting}
-              onToggleYaml={() => setShowYaml(!showYaml)}
+              onToggleYaml={() => {
+                setEditingAgentKey(null)
+                setShowYaml(v => !v)
+              }}
               onLaunch={() => setShowLaunchDialog(true)}
               onDuplicate={handleDuplicate}
               onDelete={handleDelete}
             />
           </div>
 
-          <FleetDetailTabs activeTab={tab} onChange={setTab} />
+          <FleetDetailTabs activeTab={tab} onChange={handleTabChange} />
 
           {tab === 'overview' && (
             <>
@@ -275,15 +292,40 @@ export default function PlanDetail({ planKey, onNavigate, onRefresh, theme }: Pl
             <FleetAgentsEditor
               agents={agents}
               fleetSettings={plan.settings}
+              selectedKey={editingAgentKey}
+              onSelectedKeyChange={(key) => {
+                setShowYaml(false)
+                setEditingAgentKey(key)
+              }}
               onSaveAgent={handleSaveAgent}
               onAddAgent={handleAddAgent}
-              onDeleteAgent={handleDeleteAgent}
+              onDeleteAgent={async (agentKey) => {
+                await handleDeleteAgent(agentKey)
+                if (editingAgentKey === agentKey) setEditingAgentKey(null)
+              }}
             />
           )}
         </div>
       </div>
 
-      {showYaml && (
+      {editingAgent && (
+        <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
+          <AgentEditorPanel
+            agentKey={editingAgent[0]}
+            agent={editingAgent[1]}
+            siblingAgentKeys={agents.map(([key]) => key).filter(key => key !== editingAgent[0])}
+            canDelete={canDeleteAgent}
+            onClose={() => setEditingAgentKey(null)}
+            onSave={handleSaveAgent}
+            onDelete={async () => {
+              await handleDeleteAgent(editingAgent[0])
+              setEditingAgentKey(null)
+            }}
+          />
+        </div>
+      )}
+
+      {showYaml && !editingAgent && (
         <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
           <YamlDrawer
             content={yamlContent}

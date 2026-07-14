@@ -221,15 +221,14 @@ export default function SetupProfileDetail({
       )}
 
       {tab === 'overview' ? (
-        <div className="flex-1 overflow-y-auto">
-          <div className="max-w-5xl mx-auto p-6 space-y-4">
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden px-6 pt-4 pb-6 space-y-4">
             {profile.intro_prompt && (
-              <div className="rounded-lg p-3 text-xs" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
+              <div className="rounded-lg p-3 text-xs shrink-0" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
                 <p className="font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Session intro</p>
                 <p className="whitespace-pre-wrap">{profile.intro_prompt}</p>
               </div>
             )}
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 shrink-0">
               <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Setup steps ({profile.steps.length})</h2>
               {!isBundled && profileDirty && (
                 <button
@@ -248,7 +247,6 @@ export default function SetupProfileDetail({
               readOnly={isBundled}
               onProfileChange={next => { setProfile(next); setProfileDirty(true); setSaveError(null) }}
             />
-          </div>
         </div>
       ) : (
         <div className="flex-1 flex flex-col overflow-hidden">

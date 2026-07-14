@@ -1,15 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronRight, Loader, Plus, Settings, Trash2, Users, X } from 'lucide-react'
+import { Check, Loader, Plus, Settings, Trash2, Users, X } from 'lucide-react'
 
 import type { SetupProfileSummary } from '../../api/fleetChat'
 import type { FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
-import { getAgentColor, slugifyAgentKey } from './fleetUtils'
+import { getAgentColor, slugifyAgentKey, createDefaultFleetAgent } from './fleetUtils'
 import {
   capabilityMapFromKeys,
   enabledCapabilityKeys,
   FLEET_AGENT_MODES,
-  FLEET_CAPABILITY_GROUPS,
-  FLEET_CAPABILITY_REGISTRY,
   FLEET_MEMORY_VISIBILITY,
   FLEET_ROUTING_MODES,
   FLEET_TASK_CLAIM_POLICIES,
@@ -281,28 +279,33 @@ interface AgentsEditorProps {
   onAddAgent?: (agentKey: string, agent: FleetAgentDef) => Promise<void>
   onDeleteAgent?: (agentKey: string) => Promise<void>
   readOnly?: boolean
+  /** Controlled selection for docking the editor in the parent. */
+  selectedKey?: string | null
+  onSelectedKeyChange?: (key: string | null) => void
 }
 
-function agentHasOptionalFields(agent: FleetAgentDef): boolean {
-  if (agent.description?.trim()) return true
-  if (agent.mode && agent.mode !== 'agentic') return true
-  if (enabledCapabilityKeys(agent.capabilities).length > 0) return true
-  const exec = agent.execution
-  if (exec?.max_turns || exec?.timeout_minutes || exec?.parallelizable) return true
-  if (exec?.workspace && exec.workspace !== 'shared') return true
-  if ((agent.memory?.receives?.length ?? 0) > 0 || agent.memory?.private_work) return true
-  if ((agent.task_policy?.claims?.length ?? 0) > 0 || agent.task_policy?.max_concurrent) return true
-  return false
-}
-
-export function FleetAgentsEditor({ agents, fleetSettings, onSaveAgent, onAddAgent, onDeleteAgent, readOnly }: AgentsEditorProps) {
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+export function FleetAgentsEditor({
+  agents,
+  onSaveAgent,
+  onAddAgent,
+  onDeleteAgent,
+  readOnly,
+  selectedKey: controlledSelectedKey,
+  onSelectedKeyChange,
+}: AgentsEditorProps) {
+  const [uncontrolledSelectedKey, setUncontrolledSelectedKey] = useState<string | null>(null)
+  const selectedKey = onSelectedKeyChange ? (controlledSelectedKey ?? null) : uncontrolledSelectedKey
+  const setSelectedKey = (key: string | null) => {
+    if (onSelectedKeyChange) onSelectedKeyChange(key)
+    else setUncontrolledSelectedKey(key)
+  }
   const [addOpen, setAddOpen] = useState(false)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   const [listError, setListError] = useState<string | null>(null)
   const selected = useMemo(() => agents.find(([key]) => key === selectedKey) || null, [agents, selectedKey])
   const canMutate = !readOnly && Boolean(onAddAgent || onDeleteAgent)
   const canDelete = Boolean(onDeleteAgent) && agents.length > 1
+  const dockExternally = Boolean(onSelectedKeyChange)
 
   const handleDelete = async (agentKey: string) => {
     if (!onDeleteAgent || !canDelete || busyKey) return
@@ -349,15 +352,20 @@ export function FleetAgentsEditor({ agents, fleetSettings, onSaveAgent, onAddAge
           <div className="space-y-2">
             {agents.map(([key, agent]) => {
               const color = getAgentColor(key)
+              const isActive = selectedKey === key
               return (
                 <div
                   key={key}
                   className="w-full text-left rounded-lg p-3 transition-colors"
-                  style={{ background: color.bg, border: `1px solid ${color.border}` }}
+                  style={{
+                    background: color.bg,
+                    border: `1px solid ${color.border}`,
+                    boxShadow: isActive ? `inset 0 0 0 1px ${color.text}` : undefined,
+                  }}
                 >
                   <div className="flex items-start gap-2">
                     <button
-                      onClick={() => setSelectedKey(key)}
+                      onClick={() => setSelectedKey(isActive ? null : key)}
                       className="flex-1 text-left min-w-0 hover:opacity-90"
                     >
                       <div className="flex items-center justify-between gap-3">
@@ -391,12 +399,11 @@ export function FleetAgentsEditor({ agents, fleetSettings, onSaveAgent, onAddAge
           </div>
         )}
       </div>
-      {selected && (
-        <AgentDrawer
+      {!dockExternally && selected && (
+        <AgentEditorPanel
           agentKey={selected[0]}
           agent={selected[1]}
           siblingAgentKeys={agents.map(([key]) => key).filter(key => key !== selected[0])}
-          fleetSettings={fleetSettings}
           readOnly={readOnly}
           canDelete={canDelete}
           onClose={() => setSelectedKey(null)}
@@ -409,12 +416,7 @@ export function FleetAgentsEditor({ agents, fleetSettings, onSaveAgent, onAddAge
           existingKeys={agents.map(([key]) => key)}
           onClose={() => setAddOpen(false)}
           onSubmit={async ({ key, name }) => {
-            await onAddAgent(key, {
-              name,
-              identity: `You are ${name}.`,
-              behaviors: 'Follow the user instructions carefully and collaborate with other agents when needed.',
-              tools: true,
-            })
+            await onAddAgent(key, createDefaultFleetAgent(name))
             setAddOpen(false)
             setSelectedKey(key)
           }}
@@ -559,53 +561,32 @@ function Pill({ children }: { children: React.ReactNode }) {
   )
 }
 
-function OptionalCollapsibleSection({
-  title,
-  subtitle,
-  defaultOpen,
-  children,
-}: {
-  title: string
-  subtitle: string
-  defaultOpen?: boolean
-  children: React.ReactNode
-}) {
-  const [open, setOpen] = useState(defaultOpen ?? false)
+type AgentEditorTab = 'identity' | 'execution' | 'advanced'
 
-  useEffect(() => {
-    setOpen(defaultOpen ?? false)
-  }, [defaultOpen])
+const AGENT_EDITOR_TABS: { id: AgentEditorTab; label: string }[] = [
+  { id: 'identity', label: 'Identity' },
+  { id: 'execution', label: 'Execution' },
+  { id: 'advanced', label: 'Advanced' },
+]
 
-  return (
-    <div
-      className="rounded-lg overflow-hidden"
-      style={{ border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.02)' }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        className="w-full flex items-start gap-2 px-4 py-3 text-left hover:bg-white/5 transition-colors"
-      >
-        {open ? <ChevronDown size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--text-muted)' }} /> : <ChevronRight size={14} className="mt-0.5 shrink-0" style={{ color: 'var(--text-muted)' }} />}
-        <div className="min-w-0">
-          <p className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>{title}</p>
-          <p className="text-[11px] mt-0.5" style={{ color: 'var(--text-muted)' }}>{subtitle}</p>
-        </div>
-      </button>
-      {open && (
-        <div className="px-4 pb-4 pt-1 space-y-4" style={{ borderTop: '1px solid var(--border-color)' }}>
-          {children}
-        </div>
-      )}
-    </div>
-  )
+/** Split free-text capability tags on commas/whitespace; normalize and dedupe. */
+function parseCapabilityTags(raw: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const part of raw.split(/[,\s]+/)) {
+    const key = normalizeCapabilityKey(part)
+    if (!key || !isValidCapabilityKey(key) || seen.has(key)) continue
+    seen.add(key)
+    out.push(key)
+  }
+  return out
 }
 
-function AgentDrawer({
+/** Bottom-docked agent editor (Flows-style), not a right-side overlay. */
+export function AgentEditorPanel({
   agentKey,
   agent,
   siblingAgentKeys,
-  fleetSettings,
   readOnly,
   canDelete,
   onClose,
@@ -615,7 +596,6 @@ function AgentDrawer({
   agentKey: string
   agent: FleetAgentDef
   siblingAgentKeys: string[]
-  fleetSettings?: FleetSettings
   readOnly?: boolean
   canDelete?: boolean
   onClose: () => void
@@ -626,20 +606,25 @@ function AgentDrawer({
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<AgentEditorTab>('identity')
+  const [capsText, setCapsText] = useState(() => enabledCapabilityKeys(agent.capabilities).join(', '))
+  const [claimsText, setClaimsText] = useState(() => (agent.task_policy?.claims || []).join(', '))
 
   useEffect(() => {
     setDraft(agent)
     setError(null)
+    setCapsText(enabledCapabilityKeys(agent.capabilities).join(', '))
+    setClaimsText((agent.task_policy?.claims || []).join(', '))
   }, [agent, agentKey])
+
+  useEffect(() => {
+    setTab('identity')
+  }, [agentKey])
 
   const update = <K extends keyof FleetAgentDef>(key: K, value: FleetAgentDef[K]) => {
     if (readOnly) return
     setDraft(prev => ({ ...prev, [key]: value }))
   }
-
-  const enabledCaps = enabledCapabilityKeys(draft.capabilities)
-  const taskClaims = draft.task_policy?.claims || []
-  const optionalDefaultOpen = agentHasOptionalFields(agent)
 
   const setCapabilities = (keys: string[]) => {
     update('capabilities', capabilityMapFromKeys(keys))
@@ -647,6 +632,16 @@ function AgentDrawer({
 
   const setTaskClaims = (keys: string[]) => {
     update('task_policy', { ...(draft.task_policy || {}), claims: keys })
+  }
+
+  const onCapsTextChange = (value: string) => {
+    setCapsText(value)
+    setCapabilities(parseCapabilityTags(value))
+  }
+
+  const onClaimsTextChange = (value: string) => {
+    setClaimsText(value)
+    setTaskClaims(parseCapabilityTags(value))
   }
 
   const save = async () => {
@@ -665,6 +660,7 @@ function AgentDrawer({
 
   const remove = async () => {
     if (!onDelete || deleting || !canDelete) return
+    if (!window.confirm(`Delete agent "@${agentKey}"? This cannot be undone.`)) return
     setDeleting(true)
     setError(null)
     try {
@@ -677,27 +673,46 @@ function AgentDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
-      <div className="w-full max-w-xl h-full overflow-y-auto shadow-2xl" style={{ background: 'var(--bg-secondary)', borderLeft: '1px solid var(--border-color)' }}>
-        <div className="sticky top-0 flex items-center justify-between px-5 py-4" style={{ background: 'var(--bg-secondary)', borderBottom: '1px solid var(--border-color)' }}>
-          <div>
-            <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Edit @{agentKey}</h2>
-            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{readOnly ? 'Template preview' : 'Agent configuration'}</p>
-          </div>
-          <button onClick={onClose} className="p-1 rounded hover:bg-white/10" style={{ color: 'var(--text-secondary)' }}>
-            <X size={18} />
-          </button>
+    <div className="h-full flex flex-col overflow-hidden" style={{ background: 'var(--bg-secondary)' }}>
+      <div className="flex items-center justify-between px-5 py-3 shrink-0" style={{ borderBottom: '1px solid var(--border-color)' }}>
+        <div>
+          <h2 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Edit @{agentKey}</h2>
+          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{readOnly ? 'Template preview' : 'Agent configuration'}</p>
         </div>
-        <div className="p-5 space-y-4">
-          <TextField label="Name" value={draft.name || ''} onChange={v => update('name', v)} disabled={readOnly} />
-          <TextareaField label="Identity" value={draft.identity || ''} rows={5} onChange={v => update('identity', v)} disabled={readOnly} />
-          <TextareaField label="Behaviors" value={draft.behaviors || ''} rows={6} onChange={v => update('behaviors', v)} disabled={readOnly} />
+        <button onClick={onClose} className="p-1 rounded hover:bg-white/10" style={{ color: 'var(--text-secondary)' }}>
+          <X size={18} />
+        </button>
+      </div>
 
-          <OptionalCollapsibleSection
-            title="Optional settings"
-            subtitle="Most fleets work without changing these. Capabilities and task-board tags are only needed for advanced orchestration."
-            defaultOpen={optionalDefaultOpen}
+      <div className="flex gap-1 px-5 shrink-0" style={{ borderBottom: '1px solid var(--border-color)' }}>
+        {AGENT_EDITOR_TABS.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => setTab(t.id)}
+            className={`px-3 py-2 text-xs font-medium capitalize border-b-2 -mb-px transition-colors ${
+              tab === t.id ? 'border-cyan-400 text-cyan-400' : 'border-transparent'
+            }`}
+            style={{ color: tab === t.id ? undefined : 'var(--text-muted)' }}
           >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto p-5 space-y-4">
+        {tab === 'identity' && (
+          <>
+            <TextField label="Name" value={draft.name || ''} onChange={v => update('name', v)} disabled={readOnly} />
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-stretch">
+              <TextareaField label="Identity" value={draft.identity || ''} rows={12} onChange={v => update('identity', v)} disabled={readOnly} />
+              <TextareaField label="Behaviors" value={draft.behaviors || ''} rows={12} onChange={v => update('behaviors', v)} disabled={readOnly} />
+            </div>
+          </>
+        )}
+
+        {tab === 'execution' && (
+          <>
             <SelectField
               label="Mode"
               value={draft.mode || 'agentic'}
@@ -706,245 +721,125 @@ function AgentDrawer({
               disabled={readOnly}
             />
             <TextareaField label="Description" value={draft.description || ''} rows={2} onChange={v => update('description', v)} disabled={readOnly} />
-
-            <div className="space-y-3">
-              <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Execution</p>
-              <div className="grid grid-cols-2 gap-3">
-                <NumberField label="Max turns" value={draft.execution?.max_turns} onChange={v => update('execution', { ...(draft.execution || {}), max_turns: v })} disabled={readOnly} />
-                <NumberField label="Timeout minutes" value={draft.execution?.timeout_minutes} onChange={v => update('execution', { ...(draft.execution || {}), timeout_minutes: v })} disabled={readOnly} />
-              </div>
-              <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={draft.execution?.parallelizable || false}
-                  disabled={readOnly}
-                  onChange={e => update('execution', { ...(draft.execution || {}), parallelizable: e.target.checked })}
-                  className="accent-cyan-500"
-                />
-                Parallelizable
-              </label>
-              <SelectField
-                label="Workspace"
-                value={draft.execution?.workspace || 'shared'}
-                options={[...FLEET_WORKSPACE_MODES]}
-                onChange={v => update('execution', { ...(draft.execution || {}), workspace: v as NonNullable<FleetAgentDef['execution']>['workspace'] })}
-                disabled={readOnly}
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <NumberField label="Max turns" value={draft.execution?.max_turns} onChange={v => update('execution', { ...(draft.execution || {}), max_turns: v })} disabled={readOnly} />
+              <NumberField label="Timeout minutes" value={draft.execution?.timeout_minutes} onChange={v => update('execution', { ...(draft.execution || {}), timeout_minutes: v })} disabled={readOnly} />
             </div>
-
-            <div className="space-y-3">
-              <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Memory</p>
-              <CheckboxMultiSelectField
-                label="Receives from agents"
-                options={siblingAgentKeys}
-                selected={draft.memory?.receives || []}
-                onChange={keys => update('memory', { ...(draft.memory || {}), receives: keys })}
+            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={draft.execution?.parallelizable || false}
                 disabled={readOnly}
-                emptyHint={siblingAgentKeys.length === 0 ? 'No other agents in this template yet.' : undefined}
+                onChange={e => update('execution', { ...(draft.execution || {}), parallelizable: e.target.checked })}
+                className="accent-cyan-500"
               />
-              <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
-                <input
-                  type="checkbox"
-                  checked={draft.memory?.private_work || false}
-                  disabled={readOnly}
-                  onChange={e => update('memory', { ...(draft.memory || {}), private_work: e.target.checked })}
-                  className="accent-cyan-500"
-                />
-                Private work
-              </label>
-            </div>
-
-            <CapabilityPicker
-              label="Capabilities"
-              selected={enabledCaps}
-              onChange={setCapabilities}
+              Parallelizable
+            </label>
+            <SelectField
+              label="Workspace"
+              value={draft.execution?.workspace || 'shared'}
+              options={[...FLEET_WORKSPACE_MODES]}
+              onChange={v => update('execution', { ...(draft.execution || {}), workspace: v as NonNullable<FleetAgentDef['execution']>['workspace'] })}
               disabled={readOnly}
-              hint="Tags for prompts and task-board matching."
             />
-
-            <div className="space-y-3">
-              <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>Task board</p>
-              <CapabilityPicker
-                label="Task claims"
-                selected={taskClaims}
-                onChange={setTaskClaims}
+            <CheckboxMultiSelectField
+              label="Receives from agents"
+              options={siblingAgentKeys}
+              selected={draft.memory?.receives || []}
+              onChange={keys => update('memory', { ...(draft.memory || {}), receives: keys })}
+              disabled={readOnly}
+              emptyHint={siblingAgentKeys.length === 0 ? 'No other agents in this template yet.' : undefined}
+            />
+            <label className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-secondary)' }}>
+              <input
+                type="checkbox"
+                checked={draft.memory?.private_work || false}
                 disabled={readOnly}
-                hint="Capabilities this agent will claim from the task board."
+                onChange={e => update('memory', { ...(draft.memory || {}), private_work: e.target.checked })}
+                className="accent-cyan-500"
               />
-              <NumberField label="Task max concurrent" value={draft.task_policy?.max_concurrent} onChange={v => update('task_policy', { ...(draft.task_policy || {}), max_concurrent: v })} disabled={readOnly} />
-            </div>
-          </OptionalCollapsibleSection>
+              Private work
+            </label>
+          </>
+        )}
 
-          {error && <p className="text-xs text-red-400">{error}</p>}
+        {tab === 'advanced' && (
+          <>
+            <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              Use free-form capability tags for mailbox/task-board orchestration. Tags are lowercase
+              (letters, numbers, dots, hyphens); separate multiple with commas.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label htmlFor={`agent-caps-${agentKey}`} className="block text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  Capabilities
+                </label>
+                <textarea
+                  id={`agent-caps-${agentKey}`}
+                  value={capsText}
+                  disabled={readOnly}
+                  rows={4}
+                  onChange={e => onCapsTextChange(e.target.value)}
+                  placeholder={"code.write, research\nanalysis"}
+                  className="w-full px-3 py-2 rounded-lg text-xs font-mono resize-y overflow-auto focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-60"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', minHeight: '5.5rem' }}
+                />
+                <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  What this agent can do. Shown in the agent prompt and matched against tasks’
+                  required capabilities when claiming work. Separate tags with commas or newlines.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor={`agent-claims-${agentKey}`} className="block text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  Task claims
+                </label>
+                <textarea
+                  id={`agent-claims-${agentKey}`}
+                  value={claimsText}
+                  disabled={readOnly}
+                  rows={4}
+                  onChange={e => onClaimsTextChange(e.target.value)}
+                  placeholder="code.write"
+                  className="w-full px-3 py-2 rounded-lg text-xs font-mono resize-y overflow-auto focus:outline-none focus:ring-1 focus:ring-cyan-500 disabled:opacity-60"
+                  style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)', minHeight: '5.5rem' }}
+                />
+                <p className="text-[11px] leading-snug" style={{ color: 'var(--text-muted)' }}>
+                  Which capability tags this agent will claim from the task board. At least one
+                  fleet agent usually needs claims when the board is in use. Separate tags with commas or newlines.
+                </p>
+              </div>
+            </div>
+            <NumberField label="Task max concurrent" value={draft.task_policy?.max_concurrent} onChange={v => update('task_policy', { ...(draft.task_policy || {}), max_concurrent: v })} disabled={readOnly} />
+          </>
+        )}
+
+        {error && <p className="text-xs text-red-400">{error}</p>}
+      </div>
+
+      <div className="flex items-center justify-between gap-2 px-5 py-3 shrink-0" style={{ borderTop: '1px solid var(--border-color)' }}>
+        <div>
+          {!readOnly && onDelete && (
+            <button
+              onClick={remove}
+              disabled={deleting || !canDelete}
+              title={canDelete ? `Delete @${agentKey}` : 'At least one agent is required'}
+              className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg hover:bg-red-500/15 text-red-400 disabled:opacity-40"
+            >
+              {deleting ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
+              Delete
+            </button>
+          )}
         </div>
-        <div className="sticky bottom-0 flex items-center justify-between gap-2 px-5 py-4" style={{ background: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}>
-          <div>
-            {!readOnly && onDelete && (
-              <button
-                onClick={remove}
-                disabled={deleting || !canDelete}
-                title={canDelete ? `Delete @${agentKey}` : 'At least one agent is required'}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg hover:bg-red-500/15 text-red-400 disabled:opacity-40"
-              >
-                {deleting ? <Loader size={14} className="animate-spin" /> : <Trash2 size={14} />}
-                Delete
-              </button>
-            )}
-          </div>
-          <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}>Cancel</button>
-            {!readOnly && (
-              <button onClick={save} disabled={saving} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50">
-                {saving ? 'Saving...' : 'Save Agent'}
-              </button>
-            )}
-          </div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm rounded-lg hover:bg-white/5" style={{ color: 'var(--text-secondary)' }}>Cancel</button>
+          {!readOnly && (
+            <button onClick={save} disabled={saving} className="px-4 py-2 text-sm bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50">
+              {saving ? 'Saving...' : 'Save Agent'}
+            </button>
+          )}
         </div>
       </div>
     </div>
-  )
-}
-
-function CapabilityPicker({
-  label,
-  selected,
-  onChange,
-  disabled,
-  hint,
-}: {
-  label: string
-  selected: string[]
-  onChange: (keys: string[]) => void
-  disabled?: boolean
-  hint?: string
-}) {
-  const registrySet = new Set<string>(FLEET_CAPABILITY_REGISTRY)
-  const registrySelected = selected.filter(key => registrySet.has(key))
-  const customSelected = selected.filter(key => !registrySet.has(key))
-  const [customInput, setCustomInput] = useState('')
-  const [customError, setCustomError] = useState('')
-
-  const removeKey = (key: string) => onChange(selected.filter(item => item !== key))
-
-  const addCustom = () => {
-    const key = normalizeCapabilityKey(customInput)
-    if (!key) {
-      setCustomError('Enter a capability name')
-      return
-    }
-    if (!isValidCapabilityKey(key)) {
-      setCustomError('Use lowercase letters, numbers, dots, hyphens, or underscores')
-      return
-    }
-    if (selected.includes(key)) {
-      setCustomError('Already added')
-      return
-    }
-    onChange([...selected, key])
-    setCustomInput('')
-    setCustomError('')
-  }
-
-  return (
-    <div className="space-y-3">
-      <GroupedCheckboxMultiSelectField
-        label={label}
-        groups={FLEET_CAPABILITY_GROUPS}
-        selected={registrySelected}
-        onChange={keys => onChange([...keys, ...customSelected])}
-        disabled={disabled}
-      />
-      {customSelected.length > 0 && (
-        <div className="space-y-1">
-          <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Domain-specific</p>
-          <div className="flex flex-wrap gap-1.5">
-            {customSelected.map(key => (
-              <span key={key} className="inline-flex items-center gap-1 text-[10px] px-2 py-1 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-                {key}
-                {!disabled && (
-                  <button type="button" onClick={() => removeKey(key)} className="hover:text-red-400">
-                    <X size={10} />
-                  </button>
-                )}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-      {!disabled && (
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={customInput}
-            onChange={(e) => { setCustomInput(e.target.value); setCustomError('') }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom() } }}
-            placeholder="Add custom capability, e.g. genetics.analysis"
-            className="flex-1 px-3 py-2 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-cyan-500"
-            style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
-          />
-          <button
-            type="button"
-            onClick={addCustom}
-            className="px-3 py-2 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white"
-          >
-            Add
-          </button>
-        </div>
-      )}
-      {customError && <p className="text-xs text-red-400">{customError}</p>}
-      {hint && <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{hint}</p>}
-    </div>
-  )
-}
-
-function GroupedCheckboxMultiSelectField({
-  label,
-  groups,
-  selected,
-  onChange,
-  disabled,
-}: {
-  label: string
-  groups: ReadonlyArray<{ label: string; options: readonly string[] }>
-  selected: string[]
-  onChange: (selected: string[]) => void
-  disabled?: boolean
-}) {
-  const toggle = (option: string) => {
-    if (disabled) return
-    if (selected.includes(option)) {
-      onChange(selected.filter(item => item !== option))
-    } else {
-      onChange([...selected, option])
-    }
-  }
-
-  return (
-    <fieldset className="block text-xs space-y-3" disabled={disabled}>
-      <legend style={{ color: 'var(--text-secondary)' }}>{label}</legend>
-      {groups.map(group => (
-        <div key={group.label} className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-wide" style={{ color: 'var(--text-muted)' }}>{group.label}</p>
-          <div className="flex flex-wrap gap-2">
-            {group.options.map(option => (
-              <label
-                key={option}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-pointer"
-                style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)' }}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.includes(option)}
-                  onChange={() => toggle(option)}
-                  className="accent-cyan-500"
-                />
-                <span style={{ color: 'var(--text-primary)' }}>{option}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      ))}
-    </fieldset>
   )
 }
 

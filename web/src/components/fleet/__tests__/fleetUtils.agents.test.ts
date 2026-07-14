@@ -28,12 +28,14 @@ describe('fleet agent helpers', () => {
     expect(slugifyAgentKey(' QA_Engineer ')).toBe('qa-engineer')
   })
 
-  it('creates a minimal valid default agent', () => {
+  it('creates a minimal valid default agent with task claims', () => {
     expect(createDefaultFleetAgent('Architect')).toEqual({
       name: 'Architect',
       identity: 'You are Architect.',
       behaviors: 'Follow the user instructions carefully and collaborate with other agents when needed.',
       tools: true,
+      capabilities: { general: true },
+      task_policy: { claims: ['general'] },
     })
   })
 

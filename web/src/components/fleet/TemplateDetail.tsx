@@ -5,7 +5,7 @@ import { cloneFleet, fetchFleet, saveFleet } from '../../api/fleetChat'
 import type { FleetDefinition, SetupProfileSummary } from '../../api/fleetChat'
 import type { CommFlowNode, FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
 import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig } from './fleetUtils'
-import { FleetAgentsEditor, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
+import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
 import FleetTemplateDialog from './FleetTemplateDialog'
 import SetupWizard from './SetupWizard'
 
@@ -35,6 +35,7 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
   const [setupOpen, setSetupOpen] = useState(false)
   const [cloning, setCloning] = useState(false)
   const [cloneError, setCloneError] = useState<string | null>(null)
+  const [editingAgentKey, setEditingAgentKey] = useState<string | null>(null)
 
   const loading = Boolean(templateKey && templateKey !== state.key)
   const fullConfig = state.key === templateKey ? state.config : null
@@ -62,6 +63,10 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
     return () => { cancelled = true }
   }, [templateKey, template?.source])
 
+  useEffect(() => {
+    setEditingAgentKey(null)
+  }, [templateKey])
+
   if (!template) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -76,6 +81,13 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
   const setupProfileKey = fullConfig?.setup_profile?.trim() || 'generic'
   const setupProfile = setupProfiles.find(p => p.key === setupProfileKey)
   const setupProfileLabel = setupProfile?.name || setupProfileKey
+  const editingAgent = editingAgentKey ? agents.find(([key]) => key === editingAgentKey) || null : null
+  const canDeleteAgent = Boolean(!isBundled && agents.length > 1)
+
+  const handleTabChange = (next: typeof tab) => {
+    setEditingAgentKey(null)
+    setTab(next)
+  }
 
   const handleCloneSubmit = async ({ key, name }: { key: string; name: string }) => {
     setCloning(true)
@@ -124,153 +136,178 @@ export default function TemplateDetail({ templateKey, templates, setupProfiles =
     const nextConfig = removeAgentFromFleetConfig(fullConfig, agentKey)
     await saveFleet(templateKey, nextConfig as Record<string, unknown>)
     setState({ config: nextConfig, key: templateKey, source: 'custom', error: null })
+    if (editingAgentKey === agentKey) setEditingAgentKey(null)
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
-      <div className="max-w-4xl mx-auto p-6 space-y-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{displayName}</h1>
-            {(fullConfig?.description || template.description) && (
-              <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{fullConfig?.description || template.description}</p>
-            )}
-            <div className="flex items-center gap-3 mt-2 flex-wrap">
-              <span
-                className="text-xs px-2 py-0.5 rounded"
-                style={{
-                  background: isBundled ? 'rgba(6, 182, 212, 0.15)' : 'var(--bg-tertiary)',
-                  color: isBundled ? '#22d3ee' : 'var(--text-muted)',
-                }}
-              >
-                {isBundled ? 'Astonish template' : 'Your template'}
-              </span>
-              <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
-                key: {templateKey}
-              </span>
-              <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                {template.agent_count} agent{template.agent_count !== 1 ? 's' : ''}
-              </span>
-              {!loading && (
-                <button
-                  type="button"
-                  onClick={() => onNavigateToSetupProfile?.(setupProfileKey)}
-                  className="flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-colors hover:bg-cyan-500/10"
-                  style={{ background: 'rgba(6, 182, 212, 0.12)', color: '#67e8f9', border: '1px solid rgba(6, 182, 212, 0.25)' }}
-                  title={`Setup profile: ${setupProfileKey}`}
-                >
-                  <Settings2 size={10} />
-                  Setup: {setupProfileLabel}
-                  {onNavigateToSetupProfile && <ExternalLink size={10} className="opacity-70" />}
-                </button>
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className={`${editingAgent ? 'h-1/2' : 'flex-1'} overflow-y-auto`}>
+        <div className="max-w-4xl mx-auto p-6 space-y-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>{displayName}</h1>
+              {(fullConfig?.description || template.description) && (
+                <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>{fullConfig?.description || template.description}</p>
               )}
+              <div className="flex items-center gap-3 mt-2 flex-wrap">
+                <span
+                  className="text-xs px-2 py-0.5 rounded"
+                  style={{
+                    background: isBundled ? 'rgba(6, 182, 212, 0.15)' : 'var(--bg-tertiary)',
+                    color: isBundled ? '#22d3ee' : 'var(--text-muted)',
+                  }}
+                >
+                  {isBundled ? 'Astonish template' : 'Your template'}
+                </span>
+                <span className="text-xs font-mono px-2 py-0.5 rounded" style={{ background: 'var(--bg-tertiary)', color: 'var(--text-muted)' }}>
+                  key: {templateKey}
+                </span>
+                <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                  {template.agent_count} agent{template.agent_count !== 1 ? 's' : ''}
+                </span>
+                {!loading && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToSetupProfile?.(setupProfileKey)}
+                    className="flex items-center gap-1 text-xs px-2 py-0.5 rounded transition-colors hover:bg-cyan-500/10"
+                    style={{ background: 'rgba(6, 182, 212, 0.12)', color: '#67e8f9', border: '1px solid rgba(6, 182, 212, 0.25)' }}
+                    title={`Setup profile: ${setupProfileKey}`}
+                  >
+                    <Settings2 size={10} />
+                    Setup: {setupProfileLabel}
+                    {onNavigateToSetupProfile && <ExternalLink size={10} className="opacity-70" />}
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { setCloneError(null); setCloneOpen(true) }}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+              >
+                <Copy size={12} />
+                {isBundled ? 'Clone to edit' : 'Clone'}
+              </button>
+              <button
+                onClick={() => setSetupOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
+              >
+                <Users size={12} /> Create Plan
+              </button>
+              <button
+                onClick={() => onCreatePlan?.(templateKey)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
+                style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
+              >
+                AI Guide
+              </button>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setCloneError(null); setCloneOpen(true) }}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
-            >
-              <Copy size={12} />
-              {isBundled ? 'Clone to edit' : 'Clone'}
-            </button>
-            <button
-              onClick={() => setSetupOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white transition-colors"
-            >
-              <Users size={12} /> Create Plan
-            </button>
-            <button
-              onClick={() => onCreatePlan?.(templateKey)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors"
-              style={{ background: 'var(--bg-tertiary)', color: 'var(--text-primary)', border: '1px solid var(--border-color)' }}
-            >
-              AI Guide
-            </button>
-          </div>
-        </div>
 
-        {isBundled && (
-          <div className="rounded-lg p-3 text-xs" style={{ background: 'rgba(6, 182, 212, 0.08)', border: '1px solid rgba(6, 182, 212, 0.25)', color: 'var(--text-secondary)' }}>
-            This template ships with Astonish and cannot be edited. Clone it to create a customizable copy stored in your team database.
-          </div>
-        )}
+          {isBundled && (
+            <div className="rounded-lg p-3 text-xs" style={{ background: 'rgba(6, 182, 212, 0.08)', border: '1px solid rgba(6, 182, 212, 0.25)', color: 'var(--text-secondary)' }}>
+              This template ships with Astonish and cannot be edited. Clone it to create a customizable copy stored in your team database.
+            </div>
+          )}
 
-        <FleetDetailTabs activeTab={tab} onChange={setTab} />
+          <FleetDetailTabs activeTab={tab} onChange={handleTabChange} />
 
-        {loading && (
-          <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-            <Loader size={12} className="animate-spin" /> Loading template details...
-          </div>
-        )}
-        {error && (
-          <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
-            <AlertCircle size={12} /> Failed to load details: {error}
-          </div>
-        )}
-        {saveError && (
-          <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
-            <AlertCircle size={12} /> {saveError}
-          </div>
-        )}
+          {loading && (
+            <div className="flex items-center gap-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <Loader size={12} className="animate-spin" /> Loading template details...
+            </div>
+          )}
+          {error && (
+            <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
+              <AlertCircle size={12} /> Failed to load details: {error}
+            </div>
+          )}
+          {saveError && (
+            <div className="flex items-center gap-2 text-xs" style={{ color: '#f87171' }}>
+              <AlertCircle size={12} /> {saveError}
+            </div>
+          )}
 
-        {tab === 'overview' && (
-          <>
-            <SetupProfileCard
-              profileKey={setupProfileKey}
-              profileName={setupProfileLabel}
-              profileDescription={setupProfile?.description}
-              stepCount={setupProfile?.step_count}
-              explicit={Boolean(fullConfig?.setup_profile?.trim())}
-              onOpen={() => onNavigateToSetupProfile?.(setupProfileKey)}
+          {tab === 'overview' && (
+            <>
+              <SetupProfileCard
+                profileKey={setupProfileKey}
+                profileName={setupProfileLabel}
+                profileDescription={setupProfile?.description}
+                stepCount={setupProfile?.step_count}
+                explicit={Boolean(fullConfig?.setup_profile?.trim())}
+                onOpen={() => onNavigateToSetupProfile?.(setupProfileKey)}
+              />
+              <CommunicationFlow flow={fullConfig?.communication?.flow || []} />
+              <div className="rounded-lg p-4" style={{ background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
+                <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                  Templates are base fleet configurations. Create a fleet plan from this template to add environment-specific channel and artifact settings.
+                </p>
+              </div>
+            </>
+          )}
+
+          {tab === 'settings' && fullConfig && (
+            <FleetSettingsEditor
+              settings={settings}
+              setupProfileKey={setupProfileKey}
+              setupProfiles={setupProfiles}
+              readOnly={isBundled}
+              onSave={isBundled ? undefined : (settings, setupProfileKey) => handleSaveSettings(settings, setupProfileKey).catch(err => {
+                setSaveError(err instanceof Error ? err.message : String(err))
+                throw err
+              })}
             />
-            <CommunicationFlow flow={fullConfig?.communication?.flow || []} />
-            <div className="rounded-lg p-4" style={{ background: 'rgba(6, 182, 212, 0.05)', border: '1px solid rgba(6, 182, 212, 0.2)' }}>
-              <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                Templates are base fleet configurations. Create a fleet plan from this template to add environment-specific channel and artifact settings.
-              </p>
-            </div>
-          </>
-        )}
+          )}
 
-        {tab === 'settings' && fullConfig && (
-          <FleetSettingsEditor
-            settings={settings}
-            setupProfileKey={setupProfileKey}
-            setupProfiles={setupProfiles}
+          {tab === 'agents' && (
+            fullConfig || !loading ? (
+              <FleetAgentsEditor
+                agents={agents}
+                fleetSettings={fullConfig?.settings}
+                selectedKey={editingAgentKey}
+                onSelectedKeyChange={setEditingAgentKey}
+                readOnly={isBundled}
+                onSaveAgent={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
+                  setSaveError(err instanceof Error ? err.message : String(err))
+                  throw err
+                })}
+                onAddAgent={isBundled ? undefined : (agentKey, agent) => handleAddAgent(agentKey, agent).catch(err => {
+                  setSaveError(err instanceof Error ? err.message : String(err))
+                  throw err
+                })}
+                onDeleteAgent={isBundled ? undefined : (agentKey) => handleDeleteAgent(agentKey).catch(err => {
+                  setSaveError(err instanceof Error ? err.message : String(err))
+                  throw err
+                })}
+              />
+            ) : (
+              <FallbackAgents names={template.agent_names || []} />
+            )
+          )}
+        </div>
+      </div>
+
+      {editingAgent && (
+        <div className="h-1/2" style={{ borderTop: '1px solid var(--border-color)' }}>
+          <AgentEditorPanel
+            agentKey={editingAgent[0]}
+            agent={editingAgent[1]}
+            siblingAgentKeys={agents.map(([key]) => key).filter(key => key !== editingAgent[0])}
             readOnly={isBundled}
-            onSave={isBundled ? undefined : (settings, setupProfileKey) => handleSaveSettings(settings, setupProfileKey).catch(err => {
+            canDelete={canDeleteAgent}
+            onClose={() => setEditingAgentKey(null)}
+            onSave={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
               setSaveError(err instanceof Error ? err.message : String(err))
               throw err
             })}
+            onDelete={isBundled ? undefined : async () => {
+              await handleDeleteAgent(editingAgent[0])
+            }}
           />
-        )}
-
-        {tab === 'agents' && (
-          fullConfig || !loading ? (
-            <FleetAgentsEditor
-              agents={agents}
-              fleetSettings={fullConfig?.settings}
-              readOnly={isBundled}
-              onSaveAgent={isBundled ? undefined : (agentKey, agent) => handleSaveAgent(agentKey, agent).catch(err => {
-                setSaveError(err instanceof Error ? err.message : String(err))
-                throw err
-              })}
-              onAddAgent={isBundled ? undefined : (agentKey, agent) => handleAddAgent(agentKey, agent).catch(err => {
-                setSaveError(err instanceof Error ? err.message : String(err))
-                throw err
-              })}
-              onDeleteAgent={isBundled ? undefined : (agentKey) => handleDeleteAgent(agentKey).catch(err => {
-                setSaveError(err instanceof Error ? err.message : String(err))
-                throw err
-              })}
-            />
-          ) : (
-            <FallbackAgents names={template.agent_names || []} />
-          )
-        )}
-      </div>
+        </div>
+      )}
 
       <FleetTemplateDialog
         isOpen={cloneOpen}

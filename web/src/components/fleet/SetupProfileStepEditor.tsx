@@ -72,8 +72,8 @@ export default function SetupProfileStepEditor({ profile, readOnly = false, onPr
   }
 
   return (
-    <div className="flex gap-4 min-h-[420px]">
-      <nav className="w-48 shrink-0 space-y-1">
+    <div className="flex gap-4 flex-1 min-h-0">
+      <nav className="w-48 shrink-0 space-y-1 overflow-y-auto">
         {profile.steps.map((step, i) => {
           const active = step.id === selected.id
           return (

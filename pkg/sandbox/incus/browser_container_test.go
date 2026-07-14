@@ -287,25 +287,64 @@ func TestLaunchScript_CloakBrowser_HasDiagnostics(t *testing.T) {
 	}
 }
 
-// TestLaunchScript_Default_NoDiagnostics verifies that the default Chromium
-// launch script does NOT include CloakBrowser-specific diagnostics (pgrep,
-// BROWSER_LOG, etc.) — the default engine is installed via apt and is more
-// reliable, so the extra diagnostics would be noise.
-func TestLaunchScript_Default_NoDiagnostics(t *testing.T) {
+// TestLaunchScript_Default_HasDiagnostics verifies the default Chromium launch
+// script checks process liveness and CDP binding (same resilience as CloakBrowser)
+// and is idempotent for reconnect.
+func TestLaunchScript_Default_HasDiagnostics(t *testing.T) {
 	script := buildLaunchScript("default", BrowserContainerConfig{}, 1280, 720)
 
-	// These are CloakBrowser-specific and should NOT appear in the default script.
-	unwanted := []string{
-		"BROWSER_LOG=",
-		"pgrep",
-		"CDP_READY=",
-		"CloakBrowser",
+	checks := []struct {
+		substr string
+		desc   string
+	}{
+		{"BROWSER_LOG=/tmp/chromium.log", "stderr log file path"},
+		{"pgrep -u browser", "process liveness check via pgrep"},
+		{"Chromium process died on startup", "crash error message"},
+		{"CDP_READY=", "CDP readiness loop variable"},
+		{"Chromium started but DevTools port", "CDP port failure message"},
+		{"Idempotent:", "skip-if-running preamble"},
+		{"pkill -u browser", "stale process cleanup before relaunch"},
 	}
 
-	for _, s := range unwanted {
-		if strings.Contains(script, s) {
-			t.Errorf("default launch script should not contain CloakBrowser diagnostic %q", s)
+	for _, c := range checks {
+		if !strings.Contains(script, c.substr) {
+			t.Errorf("default launch script missing %s (expected %q)", c.desc, c.substr)
 		}
+	}
+	if strings.Contains(script, "CloakBrowser") {
+		t.Error("default launch script should not reference CloakBrowser")
+	}
+}
+
+func TestLaunchScript_IdempotentPreamble(t *testing.T) {
+	for _, engine := range []string{"default", "cloakbrowser"} {
+		t.Run(engine, func(t *testing.T) {
+			cfg := BrowserContainerConfig{}
+			if engine == "cloakbrowser" {
+				cfg.ChromePath = "cloakbrowser"
+			}
+			script := buildLaunchScript(engine, cfg, 1280, 720)
+			if !strings.Contains(script, "Idempotent:") {
+				t.Error("missing idempotent preamble")
+			}
+			if !strings.Contains(script, "pkill -u browser") {
+				t.Error("missing stale browser cleanup")
+			}
+			if !strings.Contains(script, fmt.Sprintf("socat.*TCP-LISTEN:%d", DefaultCDPPort)) &&
+				!strings.Contains(script, fmt.Sprintf("TCP-LISTEN:%d", DefaultCDPPort)) {
+				t.Error("missing socat bridge")
+			}
+		})
+	}
+}
+
+func TestBrowserStackHealthyScript_MentionsPorts(t *testing.T) {
+	s := browserStackHealthyScript()
+	if !strings.Contains(s, fmt.Sprintf(":%d ", internalCDPPort)) {
+		t.Errorf("healthy script missing internal CDP port %d", internalCDPPort)
+	}
+	if !strings.Contains(s, fmt.Sprintf(":%d ", DefaultCDPPort)) {
+		t.Errorf("healthy script missing bridge CDP port %d", DefaultCDPPort)
 	}
 }
 

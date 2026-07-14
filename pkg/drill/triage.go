@@ -41,9 +41,77 @@ func NewTriageAgent(llm model.LLM, executor ToolExecutor, am *ArtifactManager, v
 	}
 }
 
+// ClassifyKnownFailure returns a deterministic triage verdict for well-known
+// browser-stack / environment flakes. nil means the caller should run LLM triage.
+//
+// Class A (CDP/start): transient + retry.
+// Class B (app died after ready — message already annotated by run_drill): environment, no retry.
+func ClassifyKnownFailure(step StepResult) *TriageVerdict {
+	msg := strings.ToLower(step.Error + "\n" + step.Output)
+	if msg == "" {
+		return nil
+	}
+
+	// Class B: service death distinguished by drill executor probe.
+	if strings.Contains(msg, "app/frontend likely died after ready_check") ||
+		strings.Contains(msg, "service not answering at") && strings.Contains(msg, "not a browser stack failure") {
+		return &TriageVerdict{
+			Classification: "environment",
+			Confidence:     0.9,
+			RootCause:      "Application service stopped answering after ready_check while Chromium was still up",
+			Evidence:       []string{truncateTriageEvidence(step.Error)},
+			Recommendation: "Restart services via start-services.sh (restart supervisors); do not switch sandbox templates",
+			Retry:          false,
+		}
+	}
+
+	needles := []string{
+		"failed to resolve cdp",
+		"closed pipe",
+		"broken pipe",
+		"devtools port",
+		"sandbox is not ready",
+		"browser preflight failed",
+		"failed to start browser",
+		"failed to launch browser",
+		"failed to connect cdp",
+		"failed to connect rod browser",
+		"target closed",
+		"websocket: close",
+		"cdp is not bound",
+		"browser stack",
+		"check cdp/kasmvnc",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return &TriageVerdict{
+				Classification: "transient",
+				Confidence:     0.85,
+				RootCause:      "In-container browser/CDP stack flake (Chromium, KasmVNC, or socat tunnel)",
+				Evidence:       []string{truncateTriageEvidence(step.Error)},
+				Recommendation: "Retry the drill; browser executor already attempts one CDP reconnect",
+				Retry:          true,
+			}
+		}
+	}
+	return nil
+}
+
+func truncateTriageEvidence(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) > 400 {
+		return s[:400] + "…"
+	}
+	return s
+}
+
 // Investigate runs the triage agent to analyze a failed test step.
 // It returns a structured verdict with classification, root cause, and recommendation.
 func (ta *TriageAgent) Investigate(ctx context.Context, step StepResult, test LoadedTest, suite *LoadedSuite, setupLog string) (*TriageVerdict, error) {
+	if v := ClassifyKnownFailure(step); v != nil {
+		return v, nil
+	}
+
 	// Build the system prompt with failure context
 	instruction := ta.buildInstruction(step, test, suite, setupLog)
 
@@ -178,10 +246,13 @@ Investigate the failure, classify it, and produce a structured JSON verdict.
 5. **Form hypothesis** — Based on evidence, determine the most likely root cause.
 
 ## Classification Categories
-- **transient**: Timing issue, race condition, network flake, or temporary service unavailability. These failures may pass on retry.
+- **transient**: Timing issue, race condition, network flake, temporary service unavailability, or in-container browser/CDP flake (failed to resolve CDP, closed pipe, DevTools port not listening, sandbox is not ready). These failures may pass on retry.
 - **bug**: Actual defect in the application code. The test correctly identified a problem.
-- **environment**: Infrastructure or configuration issue (missing dependency, wrong port, service not started, container misconfiguration).
+- **environment**: Infrastructure or configuration issue (missing dependency, wrong port, service not started, container misconfiguration, app/frontend died after ready_check while curl elsewhere still worked).
 - **test_issue**: The test itself is incorrect — wrong selector, wrong expected value, or flawed test logic.
+
+When the error mentions CDP, closed pipe, DevTools port, or browser preflight, classify as **transient** with retry=true.
+When the error says the service is not answering / app died after ready_check, classify as **environment** with retry=false.
 
 ## Output Format
 After your investigation, output a JSON verdict block enclosed in triple backticks with the "json" language tag. The JSON must have these exact fields:

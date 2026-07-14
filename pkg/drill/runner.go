@@ -482,19 +482,30 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 				stepOnFail = "triage"
 			}
 
-			if stepOnFail == "triage" && sr.triageAgent != nil && suite != nil {
-				// Run AI triage investigation
-				verdict, err := sr.triageAgent.Investigate(testCtx, stepResult, *test, suite, sr.setupLog)
-				if err != nil {
-					if sr.verbose {
-						fmt.Printf("  Triage error: %v\n", err)
+			if stepOnFail == "triage" && suite != nil {
+				var verdict *TriageVerdict
+				if known := ClassifyKnownFailure(stepResult); known != nil {
+					verdict = known
+				} else if sr.triageAgent != nil {
+					v, err := sr.triageAgent.Investigate(testCtx, stepResult, *test, suite, sr.setupLog)
+					if err != nil {
+						if sr.verbose {
+							fmt.Printf("  Triage error: %v\n", err)
+						}
+					} else {
+						verdict = v
 					}
-				} else {
-					// Attach verdict to the step
+				}
+				if verdict != nil {
 					report.Steps[len(report.Steps)-1].Triage = verdict
 				}
 				// Triage mode implies stop-after-triage (we've diagnosed the problem)
 				break
+			}
+			// Even without triage mode, attach known transient browser verdicts so
+			// shouldRetry can re-run when MaxRetries > 0.
+			if known := ClassifyKnownFailure(stepResult); known != nil && known.Retry {
+				report.Steps[len(report.Steps)-1].Triage = known
 			}
 			if stepOnFail == "stop" || stepOnFail == "triage" {
 				break

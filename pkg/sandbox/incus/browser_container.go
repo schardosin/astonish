@@ -581,14 +581,68 @@ func StopKasmVNC(_ *IncusClient, _ string, _ int) error {
 	return nil
 }
 
+// browserStackHealthyScript returns a shell snippet that exits 0 when Chromium
+// (or CloakBrowser) and the socat CDP bridge are both listening. Used for
+// idempotent StartChromiumInContainer and script-level skip-if-running.
+func browserStackHealthyScript() string {
+	return fmt.Sprintf(
+		`pgrep -u browser -f 'remote-debugging-port|chrome|chromium' >/dev/null 2>&1 && `+
+			`{ ss -tln 2>/dev/null | grep -q ':%d ' || grep -qi ':%04X ' /proc/net/tcp 2>/dev/null; } && `+
+			`{ ss -tln 2>/dev/null | grep -q ':%d ' || grep -qi ':%04X ' /proc/net/tcp 2>/dev/null; }`,
+		internalCDPPort, internalCDPPort,
+		DefaultCDPPort, DefaultCDPPort,
+	)
+}
+
+// killStaleBrowserStackScript clears half-dead Chromium/socat remnants so a
+// relaunch can rebind CDP ports cleanly.
+func killStaleBrowserStackScript() string {
+	return fmt.Sprintf(
+		`pkill -u browser -f 'remote-debugging-port|chrome|chromium' 2>/dev/null || true
+pkill -f 'socat.*TCP-LISTEN:%d' 2>/dev/null || true
+sleep 0.5
+`, DefaultCDPPort)
+}
+
+// cdpVerifyScript polls until the internal DevTools port is listening, or fails
+// with a diagnostic message. engineLabel is used in error text only.
+func cdpVerifyScript(engineLabel string) string {
+	return fmt.Sprintf(`
+CDP_READY=0
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  if ss -tln 2>/dev/null | grep -q ':%d '; then
+    CDP_READY=1
+    break
+  fi
+  sleep 0.5
+done
+if [ "$CDP_READY" = "0" ]; then
+  echo "%s started but DevTools port %d is not listening after 5s." >&2
+  echo "Listening ports:" >&2
+  ss -tln >&2 2>/dev/null
+  if [ -n "$BROWSER_LOG" ] && [ -f "$BROWSER_LOG" ]; then
+    echo "--- browser log ---" >&2
+    cat "$BROWSER_LOG" >&2 2>/dev/null
+    echo "--- end log ---" >&2
+  fi
+  exit 1
+fi
+`, internalCDPPort, engineLabel, internalCDPPort)
+}
+
 // buildLaunchScript generates the shell script that starts the browser inside
 // the container. Extracted from StartChromiumInContainer so it can be tested
 // without a real IncusClient.
+//
+// The script is idempotent: if Chromium + socat are already healthy it exits 0
+// without stacking another instance. Half-dead remnants are killed first.
 func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height int) string {
-	// socat bridge: expose CDP on all interfaces.
+	// socat bridge: expose CDP on all interfaces. Skip if already listening.
 	socatBridge := fmt.Sprintf(
-		"socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &\n",
-		DefaultCDPPort, internalCDPPort,
+		"if ! pgrep -f 'socat.*TCP-LISTEN:%d' >/dev/null 2>&1; then\n"+
+			"  socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &\n"+
+			"fi\n",
+		DefaultCDPPort, DefaultCDPPort, internalCDPPort,
 	)
 
 	display := fmt.Sprintf(":%s", kasmVNCDisplay)
@@ -610,6 +664,13 @@ func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height 
 		ldPreload = "LD_PRELOAD=/usr/lib/hwcap_mask.so "
 	}
 
+	idempotentPreamble := fmt.Sprintf(`# Idempotent: reuse a healthy browser stack (CDP reconnect path).
+if %s; then
+  %sexit 0
+fi
+# Half-dead remnants (proc without port, or port without proc) break relaunch.
+%s`, browserStackHealthyScript(), socatBridge, killStaleBrowserStackScript())
+
 	switch engine {
 	case "cloakbrowser":
 		fingerprintFlags := ""
@@ -625,7 +686,7 @@ func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height 
 			proxyFlag = fmt.Sprintf(" --proxy-server=%s", cfg.Proxy)
 		}
 
-		return fmt.Sprintf(`
+		return fmt.Sprintf(`%s
 BROWSER_BIN=$(runuser -u browser -- python3 -c "from cloakbrowser.config import get_binary_path; print(get_binary_path())")
 if [ -z "$BROWSER_BIN" ] || [ ! -f "$BROWSER_BIN" ]; then
   echo "CloakBrowser binary not found" >&2
@@ -663,30 +724,10 @@ if ! pgrep -u browser -f 'chrome|chromium' >/dev/null 2>&1; then
   echo "--- end log ---" >&2
   exit 1
 fi
-# Verify the DevTools port is bound. CloakBrowser may start the main process
-# but fail to initialize the DevTools server (e.g. if the binary does not
-# support --remote-debugging-port). Wait up to 5 seconds for port %d.
-CDP_READY=0
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  if ss -tln 2>/dev/null | grep -q ':%d '; then
-    CDP_READY=1
-    break
-  fi
-  sleep 0.5
-done
-if [ "$CDP_READY" = "0" ]; then
-  echo "CloakBrowser started but DevTools port %d is not listening after 5s." >&2
-  echo "Binary: $BROWSER_BIN" >&2
-  echo "Listening ports:" >&2
-  ss -tln >&2 2>/dev/null
-  echo "--- browser log ---" >&2
-  cat $BROWSER_LOG >&2 2>/dev/null
-  echo "--- end log ---" >&2
-  exit 1
-fi
+%s
 # Bridge CDP port to all interfaces so the host can connect
-%s`, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag,
-			internalCDPPort, internalCDPPort, internalCDPPort, socatBridge)
+%s`, idempotentPreamble, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, fingerprintFlags, proxyFlag,
+			cdpVerifyScript("CloakBrowser"), socatBridge)
 
 	default: // "default" — headed Google Chrome (/usr/bin/chromium via symlink)
 		proxyFlag := ""
@@ -694,29 +735,50 @@ fi
 			proxyFlag = fmt.Sprintf(" --proxy-server=%s", cfg.Proxy)
 		}
 
-		return fmt.Sprintf(
-			"export DISPLAY=%s\n"+
-				"runuser -l browser -c \"%sDISPLAY=%s chromium "+
-				"--no-sandbox "+
-				"--test-type "+
-				"--disable-gpu "+
-				"--disable-dev-shm-usage "+
-				"--remote-debugging-port=%d "+
-				"--window-size=%d,%d "+
-				"--user-data-dir=%s "+
-				"--disable-background-timer-throttling "+
-				"--disable-backgrounding-occluded-windows "+
-				"--disable-renderer-backgrounding "+
-				"--disable-blink-features=AutomationControlled "+
-				"--no-first-run "+
-				"--no-default-browser-check "+
-				"--noerrdialogs "+
-				"--disable-features=TranslateUI%s "+
-				"about:blank &\"\nsleep 1\n"+
-				"# Bridge CDP port to all interfaces so the host can connect\n%s",
-			display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag, socatBridge,
-		)
+		return fmt.Sprintf(`%s
+export DISPLAY=%s
+BROWSER_LOG=/tmp/chromium.log
+runuser -l browser -c "%sDISPLAY=%s chromium \
+  --no-sandbox \
+  --test-type \
+  --disable-gpu \
+  --disable-dev-shm-usage \
+  --remote-debugging-port=%d \
+  --window-size=%d,%d \
+  --user-data-dir=%s \
+  --disable-background-timer-throttling \
+  --disable-backgrounding-occluded-windows \
+  --disable-renderer-backgrounding \
+  --disable-blink-features=AutomationControlled \
+  --no-first-run \
+  --no-default-browser-check \
+  --noerrdialogs \
+  --disable-features=TranslateUI%s \
+  about:blank >$BROWSER_LOG 2>&1 &"
+sleep 2
+if ! pgrep -u browser -f 'chrome|chromium' >/dev/null 2>&1; then
+  echo "Chromium process died on startup." >&2
+  echo "--- browser log ---" >&2
+  cat $BROWSER_LOG >&2 2>/dev/null
+  echo "--- end log ---" >&2
+  exit 1
+fi
+%s
+# Bridge CDP port to all interfaces so the host can connect
+%s`, idempotentPreamble, display, ldPreload, display, internalCDPPort, width, height, BrowserProfileMountPath, proxyFlag,
+			cdpVerifyScript("Chromium"), socatBridge)
 	}
+}
+
+// isBrowserStackHealthy reports whether Chromium (or CloakBrowser) and the
+// socat CDP bridge are already up inside the container.
+func isBrowserStackHealthy(client *IncusClient, containerName string) bool {
+	if client == nil || containerName == "" {
+		return false
+	}
+	cmd := []string{"sh", "-c", browserStackHealthyScript()}
+	exitCode, err := client.ExecSimple(containerName, cmd)
+	return err == nil && exitCode == 0
 }
 
 // StartChromiumInContainer launches the browser inside the container with
@@ -728,9 +790,12 @@ fi
 // (loopback) and using socat to forward from 0.0.0.0:DefaultCDPPort to
 // 127.0.0.1:internalCDPPort, making CDP accessible from the host.
 //
-// Both engines run Chromium in headed mode on DISPLAY=:1. The X server is
+// Both engines run Chromium in headed mode on DISPLAY=:0. The X server is
 // provided by KasmVNC (Xvnc), which is started first and persists for the
 // container's lifetime.
+//
+// Idempotent: if the browser stack is already healthy, this is a no-op so
+// CDP reconnect after a dead pipe does not stack Chromium/socat processes.
 func StartChromiumInContainer(client *IncusClient, containerName string, cfg BrowserContainerConfig) error {
 	width := cfg.ViewportWidth
 	if width == 0 {
@@ -741,12 +806,19 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 		height = 720
 	}
 
-	// Start KasmVNC (Xvnc) as the X server for display :1. This provides
+	// Start KasmVNC (Xvnc) as the X server for display :0. This provides
 	// both the virtual display for headed Chromium and the VNC web client
 	// for human handoff sessions. Xvnc stays alive for the container's
 	// lifetime — it IS the display backend.
 	if err := StartKasmVNC(client, containerName, cfg); err != nil {
 		return fmt.Errorf("failed to start Xvnc display server: %w", err)
+	}
+
+	// Fast path: Chromium + socat already healthy (Manager reconnect).
+	if isBrowserStackHealthy(client, containerName) {
+		slog.Info("browser stack already healthy; skipping relaunch",
+			"component", "incus-browser", "container", containerName)
+		return nil
 	}
 
 	// Brief wait for Xvnc to be ready to accept X11 connections.
@@ -779,8 +851,8 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 		return fmt.Errorf("browser launch exited with code %d: %s", exitCode, strings.TrimSpace(output))
 	}
 
-	// Wait briefly for Chromium + socat to start
-	time.Sleep(2 * time.Second)
+	// Wait briefly for Chromium + socat to settle after launch.
+	time.Sleep(1 * time.Second)
 
 	return nil
 }

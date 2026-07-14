@@ -594,7 +594,10 @@ func handleDrillRunCommand(args []string) error {
 	if useSandbox && lazyNode != nil {
 		browserMgr = browser.NewManager(browser.DefaultConfig())
 		client := lazyNode.GetIncusClient()
-		if client == nil || !sandbox.WireIncusBrowserManager(browserMgr, client, nil) {
+		// TouchActivity keeps the idle watchdog from reclaiming the session
+		// during long browser drills (browser tools bypass NDJSON Call()).
+		touch := func(string) { lazyNode.TouchActivity() }
+		if client == nil || !sandbox.WireIncusBrowserManager(browserMgr, client, touch) {
 			lazyNode.Cleanup()
 			return fmt.Errorf("sandbox drill browser: could not wire in-container Chromium (host Chrome is disabled for sandboxed drills)")
 		}

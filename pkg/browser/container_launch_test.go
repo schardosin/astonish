@@ -372,19 +372,28 @@ func TestGetOrLaunch_HealthyBrowserNotReconnected(t *testing.T) {
 		}
 	}
 
-	// Pipe-related errors SHOULD trigger reconnection
+	// Pipe/CDP errors SHOULD trigger reconnection
 	deadErrors := []error{
 		fmt.Errorf("io: read/write on closed pipe"),
 		fmt.Errorf("write tcp: broken pipe"),
 		fmt.Errorf("read: connection reset by peer"),
 		fmt.Errorf("use of closed network connection"),
 		fmt.Errorf("unexpected EOF"),
+		fmt.Errorf("failed to resolve CDP URL at 10.0.0.1:9222 after 15s"),
+		fmt.Errorf("websocket: close 1006 abnormal closure"),
+		fmt.Errorf("target closed"),
+		fmt.Errorf("failed to connect CDP WebSocket via tunnel: dial tcp 127.0.0.1:9222"),
 	}
 
 	for _, err := range deadErrors {
 		if !m.isBrowserDead(err) {
 			t.Errorf("isBrowserDead should return true for %q", err)
 		}
+	}
+
+	// App URL refused must NOT look like a dead CDP stack.
+	if m.isBrowserDead(fmt.Errorf("navigation failed: net::ERR_CONNECTION_REFUSED")) {
+		t.Error("app ERR_CONNECTION_REFUSED must not be classified as dead browser")
 	}
 }
 

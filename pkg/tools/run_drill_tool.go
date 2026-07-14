@@ -244,6 +244,17 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
+	// Warm Chromium/CDP before suite setup when drills use browser_* tools so
+	// the cold start does not race the first navigate after ready_check.
+	if suiteUsesBrowserTools(tests) {
+		if err := warmBrowserForDrill(executor); err != nil {
+			return RunDrillResult{
+				Status:  "error",
+				Summary: err.Error(),
+			}, nil
+		}
+	}
+
 	// CONTAINER_IP is for optional {{CONTAINER_IP}} placeholders in older drills.
 	// Prefer localhost in YAML: shell and in-container browser share the sandbox network.
 	vars := map[string]string{
@@ -393,6 +404,11 @@ func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
 
 	hasSandbox := toolClient != nil
 	browserExec := newTestBrowserExecutor(deps.browserMgr, sessionID, hasSandbox)
+	if toolClient != nil {
+		browserExec.probeURL = func(rawURL string) bool {
+			return sandboxHTTPReachable(toolClient, sessionID, rawURL)
+		}
+	}
 
 	if toolClient != nil {
 		return &testCompositeExecutor{
@@ -487,6 +503,9 @@ type testBrowserExecutor struct {
 	refs        *browser.RefMap
 	sessionID   string
 	initialized bool
+	// probeURL, when set, curls the navigate target inside the sandbox to
+	// distinguish app death (Class B) from browser/CDP failure (Class A).
+	probeURL func(rawURL string) bool
 }
 
 func newTestBrowserExecutor(mgr *browser.Manager, sessionID string, _ bool) *testBrowserExecutor {
@@ -520,6 +539,17 @@ func (b *testBrowserExecutor) ensureInit() error {
 	return nil
 }
 
+// warmCDP starts Chromium and verifies CDP. Safe to call more than once.
+func (b *testBrowserExecutor) warmCDP() error {
+	if err := b.ensureInit(); err != nil {
+		return err
+	}
+	if err := b.mgr.EnsureCDPReady(); err != nil {
+		return fmt.Errorf("browser preflight failed (in-container Chromium/CDP not ready): %w", err)
+	}
+	return nil
+}
+
 func (b *testBrowserExecutor) Close() {
 	// Manager is owned by chat/fleet/CLI wiring — do not Cleanup here.
 }
@@ -529,6 +559,42 @@ func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[s
 		return nil, err
 	}
 
+	result, err := b.executeOnce(name, args)
+	if err == nil {
+		return result, nil
+	}
+
+	navURL := navigateURLFromArgs(name, args)
+	retried := false
+
+	// Class B: connection refused to loopback — check whether the app is still up.
+	if navURL != "" && isConnectionRefused(err) && looksLikeLoopbackURL(navURL) && b.probeURL != nil {
+		if !b.probeURL(navURL) {
+			return nil, fmt.Errorf("%w (service not answering at %s inside the sandbox — app/frontend likely died after ready_check; restore via start-services.sh / restart supervisors. This is not a browser stack failure)", err, navURL)
+		}
+		// Service still answers curl → browser/CDP flake; reset and retry once.
+		b.mgr.ResetForReconnect()
+		retried = true
+		result, err = b.executeOnce(name, args)
+		if err == nil {
+			return result, nil
+		}
+	} else if isBrowserStackTransientError(err) {
+		b.mgr.ResetForReconnect()
+		retried = true
+		result, err = b.executeOnce(name, args)
+		if err == nil {
+			return result, nil
+		}
+	}
+
+	if retried && navURL != "" && isConnectionRefused(err) && looksLikeLoopbackURL(navURL) && b.probeURL != nil && b.probeURL(navURL) {
+		return nil, fmt.Errorf("%w (service answers curl at %s but Chromium navigate still failed after one browser reconnect — check CDP/KasmVNC)", err, navURL)
+	}
+	return result, err
+}
+
+func (b *testBrowserExecutor) executeOnce(name string, args map[string]interface{}) (any, error) {
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("marshal browser tool args: %w", err)
@@ -776,6 +842,102 @@ func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[s
 	default:
 		return nil, fmt.Errorf("unknown browser tool: %s", name)
 	}
+}
+
+func suiteUsesBrowserTools(tests []adrill.LoadedTest) bool {
+	for _, test := range tests {
+		if test.Config == nil {
+			continue
+		}
+		for _, node := range test.Config.Nodes {
+			if node.Type != "tool" {
+				continue
+			}
+			toolVal, ok := node.Args["tool"]
+			if !ok {
+				continue
+			}
+			name, _ := toolVal.(string)
+			if testBrowserToolNames[name] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func warmBrowserForDrill(executor closableExecutor) error {
+	comp, ok := executor.(*testCompositeExecutor)
+	if !ok || comp.browser == nil {
+		return nil
+	}
+	return comp.browser.warmCDP()
+}
+
+func navigateURLFromArgs(name string, args map[string]interface{}) string {
+	if name != "browser_navigate" || args == nil {
+		return ""
+	}
+	u, _ := args["url"].(string)
+	return browser.NormalizeLoopbackURL(u)
+}
+
+// isBrowserStackTransientError detects Class A CDP/start failures that warrant
+// one automatic ResetForReconnect + retry inside the drill browser executor.
+func isBrowserStackTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	needles := []string{
+		"closed pipe",
+		"broken pipe",
+		"failed to resolve cdp",
+		"devtools port",
+		"browser preflight failed",
+		"failed to start browser",
+		"failed to launch browser",
+		"sandbox is not ready",
+		"target closed",
+		"websocket: close",
+		"failed to connect cdp",
+		"failed to connect rod browser",
+		"session container",
+		"cdp is not bound",
+	}
+	for _, n := range needles {
+		if strings.Contains(msg, n) {
+			return true
+		}
+	}
+	return false
+}
+
+// sandboxHTTPReachable curls the URL inside the sandbox. Used to separate
+// Class B (app died) from Class A (browser/CDP flake) after navigate refusal.
+func sandboxHTTPReachable(client sandbox.ToolNodeClient, sessionID, rawURL string) bool {
+	if client == nil || sessionID == "" || rawURL == "" {
+		return false
+	}
+	rawURL = browser.NormalizeLoopbackURL(rawURL)
+	cmd := fmt.Sprintf("curl -sf -o /dev/null --max-time 5 %s", shellSingleQuote(rawURL))
+	raw, err := client.Call(sessionID, "shell_command", map[string]interface{}{
+		"command": cmd,
+	})
+	if err != nil {
+		return false
+	}
+	var parsed map[string]any
+	if json.Unmarshal(raw, &parsed) != nil {
+		return false
+	}
+	if code, ok := parsed["exit_code"].(float64); ok {
+		return code == 0
+	}
+	if errMsg, ok := parsed["error"].(string); ok && errMsg != "" {
+		return false
+	}
+	return true
 }
 
 // enrichReportWithFailureContext appends detailed failure information to the

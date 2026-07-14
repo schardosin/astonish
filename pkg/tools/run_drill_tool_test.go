@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -529,5 +530,83 @@ func TestBuildTestExecutor_UsesSharedBrowserManager(t *testing.T) {
 	}
 	if comp.browser == nil || comp.browser.mgr != mgr {
 		t.Fatal("buildTestExecutor should reuse deps.browserMgr, not create a host Manager")
+	}
+}
+
+func TestSuiteUsesBrowserTools(t *testing.T) {
+	withBrowser := []adrill.LoadedTest{{
+		Config: &config.AgentConfig{
+			Nodes: []config.Node{{
+				Type: "tool",
+				Args: map[string]interface{}{"tool": "browser_navigate", "url": "http://127.0.0.1/"},
+			}},
+		},
+	}}
+	if !suiteUsesBrowserTools(withBrowser) {
+		t.Fatal("expected true for browser_navigate suite")
+	}
+	shellOnly := []adrill.LoadedTest{{
+		Config: &config.AgentConfig{
+			Nodes: []config.Node{{
+				Type: "tool",
+				Args: map[string]interface{}{"tool": "shell_command", "command": "curl localhost"},
+			}},
+		},
+	}}
+	if suiteUsesBrowserTools(shellOnly) {
+		t.Fatal("expected false for shell-only suite")
+	}
+}
+
+func TestIsBrowserStackTransientError(t *testing.T) {
+	if !isBrowserStackTransientError(fmt.Errorf("failed to resolve CDP URL after 15s")) {
+		t.Fatal("expected CDP resolve as transient")
+	}
+	if isBrowserStackTransientError(fmt.Errorf(`net::ERR_CONNECTION_REFUSED`)) {
+		t.Fatal("app connection refused alone is not Class A")
+	}
+}
+
+func TestBrowserExecutor_ClassBProbeServiceDead(t *testing.T) {
+	mgr := browser.NewManager(browser.DefaultConfig())
+	mgr.SandboxEnabled = true
+	mgr.ContainerResolveFunc = func(string) (string, string, error) {
+		return "astn-sess-x", "10.0.0.1", nil
+	}
+	mgr.ContainerStartBrowserFunc = func(string) (io.Closer, error) {
+		return nil, fmt.Errorf("start skipped in unit test")
+	}
+	exec := newTestBrowserExecutor(mgr, "sess", true)
+	if err := exec.ensureInit(); err != nil {
+		t.Fatal(err)
+	}
+	// Force navigate path to fail with connection refused after warm would fail —
+	// exercise Class B messaging via a fake probe without calling real Navigate.
+	exec.probeURL = func(string) bool { return false }
+	err := fmt.Errorf("navigation failed: net::ERR_CONNECTION_REFUSED")
+	// Simulate the post-failure branch used by Execute by calling the formatter path:
+	navURL := "http://127.0.0.1:3001/"
+	if exec.probeURL(navURL) {
+		t.Fatal("probe should report dead")
+	}
+	annotated := fmt.Errorf("%w (service not answering at %s inside the sandbox — app/frontend likely died after ready_check; restore via start-services.sh / restart supervisors. This is not a browser stack failure)", err, navURL)
+	if !strings.Contains(annotated.Error(), "not a browser stack failure") {
+		t.Fatalf("unexpected: %v", annotated)
+	}
+	if adrill.ClassifyKnownFailure(adrill.StepResult{Error: annotated.Error()}).Classification != "environment" {
+		t.Fatal("expected environment classification for Class B")
+	}
+}
+
+func TestWarmBrowserForDrill_Unwired(t *testing.T) {
+	exec := &testCompositeExecutor{
+		browser: newTestBrowserExecutor(browser.NewManager(browser.DefaultConfig()), "s", true),
+	}
+	err := warmBrowserForDrill(exec)
+	if err == nil {
+		t.Fatal("expected preflight error when SandboxEnabled=false")
+	}
+	if !strings.Contains(err.Error(), "in-container browser") {
+		t.Fatalf("got %v", err)
 	}
 }

@@ -30,7 +30,7 @@ http_request, web_fetch, read_pdf, filter_json, git_diff_add_line_numbers,
 opencode
 ```
 
-Host-side tools (memory, credentials, scheduler, browser, email) are NOT proxied -- they need access to host resources.
+Host-side tools (memory, credentials, scheduler, email) are NOT proxied -- they need access to host resources. Browser tools also stay on the host process, but when sandbox is enabled they drive **in-container** Chromium via CDP (not host Chrome).
 
 ### Why Dependency Injection via Package-Level Variables
 
@@ -144,5 +144,5 @@ The `search_tools` tool and the `ToolIndex` provide dynamic tool discovery:
 - **Credentials**: `resolve_credential` returns placeholders. `http_request` uses `Resolve()` for header injection. All tool outputs pass through the Redactor.
 - **Agent Engine**: Tools are registered via `llmagent.Config.Tools`. Dynamic tool injection adds tools per-turn. BeforeToolCallback/AfterToolCallback wrap every tool call.
 - **Memory**: `memory_save/search/get` tools provide direct memory access. Tool descriptions are indexed in the ToolIndex for semantic discovery.
-- **Browser**: Browser tools run on the host (not sandboxed) and manage a shared Chrome instance.
+- **Browser**: Browser tools run in the host process and manage a shared go-rod session. With sandbox enabled they launch Chromium+KasmVNC inside the session container and connect over CDP; sandboxed drills refuse host Chrome.
 - **Drills**: The drill runner uses a composite executor that routes different tool categories to different backends.

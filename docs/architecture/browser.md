@@ -4,7 +4,7 @@
 
 Astonish includes a comprehensive browser automation system built on Chrome DevTools Protocol (CDP) via the go-rod library. It provides the AI agent with the ability to navigate websites, fill forms, take screenshots, read page content, and interact with web applications -- all while employing extensive anti-detection measures to avoid being blocked as a bot.
 
-The browser runs on the host (not inside sandbox containers) because it needs access to a display server and persistent cookie storage.
+In sandboxed Studio chat, fleet, and drill sessions the browser runs **inside the session container** (Chromium + KasmVNC + socat CDP bridge). The host process drives go-rod over CDP; it does not launch host Chrome for sandboxed work. Host Chrome is only used for non-sandbox local runs.
 
 ## Key Design Decisions
 
@@ -150,7 +150,7 @@ Browser tools are organized into functional groups:
 
 ## Interactions
 
-- **Agent Engine**: Browser tools run on the host (not sandboxed). Screenshots are extracted from tool results via image side-channels.
+- **Agent Engine**: Browser tools are invoked from the host process; with sandbox enabled Chromium runs in-container over CDP. Screenshots are extracted from tool results via image side-channels.
 - **Channels**: Screenshots are delivered as photos (Telegram) or attachments (email).
 - **Credentials**: Browser credential tools (`browser_set_credentials`) handle HTTP auth. Account store references the credential store.
 - **Drills**: Browser tools run inside the sandbox session container (same Chromium + KasmVNC path as Studio chat).

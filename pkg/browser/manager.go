@@ -395,16 +395,74 @@ func (m *Manager) IsContainerMode() bool {
 // isBrowserDead returns true if the error indicates the CDP connection to the
 // browser is no longer functional (pipe closed, connection reset, EOF, etc.).
 // This mirrors the isContainerGone() pattern in pkg/sandbox/node.go.
+//
+// App-level net::ERR_CONNECTION_REFUSED (navigate to a service port) is NOT
+// treated as a dead browser — that is a Class B service failure.
 func (m *Manager) isBrowserDead(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := err.Error()
-	return strings.Contains(msg, "closed pipe") ||
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "closed pipe") ||
 		strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "EOF")
+		strings.Contains(msg, "eof") ||
+		strings.Contains(msg, "websocket: close") ||
+		strings.Contains(msg, "target closed") ||
+		strings.Contains(msg, "session closed") ||
+		strings.Contains(msg, "failed to resolve cdp") ||
+		strings.Contains(msg, "devtools port") {
+		return true
+	}
+	// CDP dial/connect failures (not app URL refused)
+	if (strings.Contains(msg, "failed to connect") || strings.Contains(msg, "failed to dial")) &&
+		(strings.Contains(msg, "cdp") || strings.Contains(msg, "devtools") ||
+			strings.Contains(msg, "9222") || strings.Contains(msg, "9223") ||
+			strings.Contains(msg, "tunnel")) {
+		return true
+	}
+	return false
+}
+
+// ResetForReconnect clears the live browser/CDP state so the next GetOrLaunch
+// re-resolves the session container and starts Chromium again. Safe for drill
+// executors to call after a dead CDP or flaky first navigate.
+func (m *Manager) ResetForReconnect() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.resetBrowserLocked()
+}
+
+// EnsureCDPReady launches (or reuses) the sandboxed browser and verifies CDP
+// with Browser.Version(). Used by drill preflight so the first browser_* step
+// does not pay an unguarded cold start.
+func (m *Manager) EnsureCDPReady() error {
+	if m == nil {
+		return fmt.Errorf("browser Manager is nil")
+	}
+	b, err := m.GetOrLaunch()
+	if err != nil {
+		return err
+	}
+	if _, err := b.Version(); err != nil {
+		if m.isBrowserDead(err) {
+			m.ResetForReconnect()
+			b, err = m.GetOrLaunch()
+			if err != nil {
+				return err
+			}
+			if _, err := b.Version(); err != nil {
+				return err
+			}
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // resetBrowserLocked tears down the dead browser state so the next launch

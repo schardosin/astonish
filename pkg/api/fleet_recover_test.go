@@ -46,15 +46,15 @@ func TestDetermineResumeTarget_WaitingOnCustomerStaysQuiet(t *testing.T) {
 	}
 }
 
-func TestDetermineResumeTarget_WaitingOnCustomerWithIncompleteTasksTriages(t *testing.T) {
+func TestDetermineResumeTarget_WaitingOnCustomerWithIncompleteTasksStaysQuiet(t *testing.T) {
 	cfg := testResumeFleetConfig()
 	got := determineResumeTarget(fleet.Message{
 		Sender:   "po",
 		Text:     "Please review the PR @customer",
 		Mentions: []string{"customer"},
 	}, cfg, &agent.SubAgentManager{}, true)
-	if got != "po" {
-		t.Fatalf("resume = %q, want po for incomplete-task triage", got)
+	if got != "" {
+		t.Fatalf("resume = %q, want empty (customer wait overrides incomplete tasks)", got)
 	}
 }
 

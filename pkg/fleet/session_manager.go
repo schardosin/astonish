@@ -376,9 +376,18 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 				}
 				// Idle watchdog fired: the child context timed out but the
 				// parent is still alive. Only continue when incomplete work
-				// remains; otherwise exit quietly (human message or tasks
-				// are the only wake triggers).
+				// remains and we are not waiting on a human; otherwise exit
+				// quietly (human message or tasks are the only wake triggers).
 				if fs.Headless && waitCtx.Err() == context.DeadlineExceeded {
+					fs.mu.RLock()
+					waitingOnCustomer := fs.waitingAgent != ""
+					fs.mu.RUnlock()
+					if waitingOnCustomer {
+						slog.Info("idle watchdog: still waiting on customer, exiting quietly", "component", "fleet", "session_id", fs.ID)
+						fs.notifyBallChange("customer")
+						fs.setState(StateStopped, "")
+						return nil
+					}
 					claimed := fs.claimAndEnqueueTasks(ctx)
 					if len(claimed) > 0 {
 						slog.Info("idle watchdog claimed tasks", "component", "fleet", "session_id", fs.ID, "agents", claimed)
@@ -659,7 +668,9 @@ func (fs *FleetSession) handleRoutingOutcome(ctx context.Context, response Messa
 
 	switch routing.Target {
 	case "customer":
-		fs.deliverMailbox(ctx, response, []string{"customer"})
+		// Deliver to customer and to the sender so a later triage/resume sees
+		// the clarifying question already asked (avoids re-asking the same thing).
+		fs.deliverMailbox(ctx, response, []string{"customer", response.Sender})
 		fs.postExternal(response)
 
 		fs.mu.Lock()
@@ -773,15 +784,29 @@ func (fs *FleetSession) DeliverToMailbox(ctx context.Context, msg Message, recip
 }
 
 // applyQuietExitGate runs claimAndEnqueueTasks before honoring a quiet exit
-// (route customer/none). AI continues only when claimants exist or incomplete
-// tasks remain to triage; otherwise marks the session stopped.
+// (route customer/none). Waiting on a human (waitingAgent set) is a hard stop
+// even if incomplete tasks remain — the human is the blocker. For "none"/other
+// exits, incomplete tasks may still triage via claimants or the entry point.
 func (fs *FleetSession) applyQuietExitGate(ctx context.Context, pending []string, exit bool) (next []string, stop bool) {
+	if !exit {
+		next = append([]string{}, pending...)
+		next = append(next, fs.claimAndEnqueueTasks(ctx)...)
+		return dedupeTargets(next), false
+	}
+
+	fs.mu.RLock()
+	waitingOnCustomer := fs.waitingAgent != ""
+	fs.mu.RUnlock()
+	if waitingOnCustomer {
+		slog.Info("quiet exit: waiting on customer (tasks deferred until human replies)", "component", "fleet", "session_id", fs.ID)
+		fs.notifyBallChange("customer")
+		fs.setState(StateStopped, "")
+		return nil, true
+	}
+
 	next = append([]string{}, pending...)
 	next = append(next, fs.claimAndEnqueueTasks(ctx)...)
 	next = dedupeTargets(next)
-	if !exit {
-		return next, false
-	}
 	if len(next) == 0 && fs.hasIncompleteTasks(ctx) {
 		if ep := fs.FleetConfig.GetEntryPoint(); ep != "" {
 			slog.Info("quiet-exit blocked: incomplete tasks remain, triaging via entry point", "component", "fleet", "session_id", fs.ID, "entry_point", ep)

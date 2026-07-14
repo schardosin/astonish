@@ -1178,6 +1178,31 @@ func TestGitHubMonitor_MarkSeenAndGetState(t *testing.T) {
 	}
 }
 
+func TestGitHubMonitor_MarkSeenPreservesCursor(t *testing.T) {
+	t.Parallel()
+	stateDir := t.TempDir()
+	m := NewGitHubMonitor("test-plan", map[string]any{"repo": "owner/repo"}, NewFileMonitorStateStore(stateDir))
+
+	m.MarkSeen(10, "sess-1", "Issue 10")
+	m.UpdateCursor(10, 555)
+	m.IncrementRetryCount(10, "transient")
+
+	m.MarkSeen(10, "sess-2", "Issue 10 updated")
+	s := m.GetIssueState(10)
+	if s == nil {
+		t.Fatal("expected state")
+	}
+	if s.SessionID != "sess-2" {
+		t.Errorf("session_id = %q, want sess-2", s.SessionID)
+	}
+	if s.LastCommentID != 555 {
+		t.Errorf("LastCommentID = %d, want 555 (must not reset)", s.LastCommentID)
+	}
+	if s.RetryCount != 1 {
+		t.Errorf("RetryCount = %d, want 1", s.RetryCount)
+	}
+}
+
 func TestGitHubMonitor_UpdateCursorOnlyAdvances(t *testing.T) {
 	t.Parallel()
 	stateDir := t.TempDir()

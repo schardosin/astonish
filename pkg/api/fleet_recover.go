@@ -446,7 +446,10 @@ func determineResumeTarget(lastMsg fleet.Message, fleetCfg *fleet.FleetConfig, s
 
 	routing := fleet.RouteWithLLM(routeCtx, lastMsg, fleetCfg, llm)
 	switch routing.Target {
-	case "customer", "none":
+	case "customer":
+		// Human is the blocker — do not triage incomplete tasks until they reply.
+		return ""
+	case "none":
 		if hasIncompleteTasks {
 			return fleetCfg.GetEntryPoint()
 		}

@@ -8,7 +8,9 @@ import (
 	"testing"
 
 	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/schardosin/astonish/pkg/config"
 	adrill "github.com/schardosin/astonish/pkg/drill"
+	"github.com/schardosin/astonish/pkg/sandbox"
 )
 
 // ---------------------------------------------------------------------------
@@ -306,7 +308,7 @@ func TestNormalizeSandboxTemplateName(t *testing.T) {
 
 func TestEnsureDrillSandboxTemplate_NoopWithoutPool(t *testing.T) {
 	deps := &runDrillDeps{}
-	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", false); err != nil {
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", nil, false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -314,8 +316,94 @@ func TestEnsureDrillSandboxTemplate_NoopWithoutPool(t *testing.T) {
 func TestEnsureDrillSandboxTemplate_ForceSkips(t *testing.T) {
 	deps := &runDrillDeps{}
 	// force=true must not attempt ReplaceSession even with a required template.
-	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", true); err != nil {
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", nil, true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestDecideDrillTemplateSwitch(t *testing.T) {
+	cases := []struct {
+		name                         string
+		current, required            string
+		requiredExists, startPresent bool
+		want                         drillTemplateSwitchAction
+	}{
+		{"same template", "juicytrade", "juicytrade", true, false, drillSwitchNoop},
+		{"empty required", "juicytrade", "", false, false, drillSwitchNoop},
+		{"preserve when start script present", "", "juicytrade", true, true, drillSwitchPreserve},
+		{"preserve prepared non-base without script", "other", "juicytrade", true, false, drillSwitchPreserve},
+		{"skip when template missing on base", "", "juicytrade", false, false, drillSwitchSkipMissingTemplate},
+		{"replace from base when template exists", "", "juicytrade", true, false, drillSwitchReplace},
+		{"preserve when script present even if template missing", "prep", "juicytrade", false, true, drillSwitchPreserve},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := decideDrillTemplateSwitch(tc.current, tc.required, tc.requiredExists, tc.startPresent)
+			if got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExtractStartServicesPaths(t *testing.T) {
+	sc := &config.DrillSuiteConfig{
+		Setup: []string{
+			"bash /root/juicytrade/.astonish/start-services.sh",
+			"echo already started",
+		},
+		Services: []config.ServiceConfig{
+			{Name: "api", Setup: "bash /root/juicytrade/.astonish/start-services.sh"},
+		},
+	}
+	paths := extractStartServicesPaths(sc)
+	if len(paths) != 1 || paths[0] != "/root/juicytrade/.astonish/start-services.sh" {
+		t.Fatalf("paths = %#v, want single absolute start-services path", paths)
+	}
+	if !suiteReferencesStartServices(sc) {
+		t.Fatal("expected suiteReferencesStartServices true")
+	}
+	if suiteReferencesStartServices(&config.DrillSuiteConfig{Setup: []string{"echo hi"}}) {
+		t.Fatal("expected false when no start-services reference")
+	}
+	if !suiteReferencesStartServices(&config.DrillSuiteConfig{Setup: []string{"bash .astonish/start-services.sh"}}) {
+		t.Fatal("expected true for relative start-services reference")
+	}
+}
+
+func TestPreflightDrillStartServices_NoRef(t *testing.T) {
+	deps := &runDrillDeps{nodePool: &sandbox.NodeClientPool{}}
+	err := preflightDrillStartServices(nil, deps, "suite", "myapp", &config.DrillSuiteConfig{
+		Setup: []string{"echo ready"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPreflightDrillStartServices_MissingPathError(t *testing.T) {
+	// nodePool non-nil triggers sandbox-aware preflight; without a real container
+	// path checks return false and bootstrap inject is a no-op → clear error.
+	deps := &runDrillDeps{nodePool: &sandbox.NodeClientPool{}}
+	sc := &config.DrillSuiteConfig{
+		Setup: []string{"bash /root/myapp/.astonish/start-services.sh"},
+	}
+	err := preflightDrillStartServices(nil, deps, "myapp", "myapp", sc)
+	if err == nil {
+		t.Fatal("expected error for missing start-services.sh")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "start-services.sh") || !strings.Contains(msg, "Do not switch") {
+		t.Fatalf("unexpected error message: %v", err)
+	}
+}
+
+func TestPreflightDrillStartServices_NoSandboxSkips(t *testing.T) {
+	err := preflightDrillStartServices(nil, &runDrillDeps{}, "suite", "myapp", &config.DrillSuiteConfig{
+		Setup: []string{"bash /root/myapp/.astonish/start-services.sh"},
+	})
+	if err != nil {
+		t.Fatalf("expected skip without sandbox deps, got %v", err)
 	}
 }
 

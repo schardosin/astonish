@@ -923,8 +923,15 @@ agents:
       1. Identify the drill suite name. It typically matches the project/repo
          name (the same name as the sandbox template). Check the conversation
          thread for references, or use the workspace directory name.
-      2. Call `run_drill` with the suite name.
-      3. **If drills FAIL before any new code was applied:** These are
+      2. Before `run_drill`, confirm the start script exists:
+         `shell_command(command: "test -f <workspace>/.astonish/start-services.sh")`.
+         If missing, restore it from the suite/template `bootstrap_files` or
+         rewrite the proven start recipe with `write_file` — then re-check.
+         Do NOT call `use_sandbox_template` and do NOT rely on template
+         auto-switch (fleet already excludes that tool; switching would wipe
+         this prepared container).
+      3. Call `run_drill` with the suite name.
+      4. **If drills FAIL before any new code was applied:** These are
          pre-existing issues — the codebase was broken before this task started.
          Report to @po immediately:
          "@po, the E2E regression suite failed BEFORE any new changes were
@@ -933,7 +940,7 @@ agents:
          Please decide whether this needs to be fixed first (assign to Dev)
          or reported to the customer."
          STOP here. Do NOT proceed to Phase 2 until @po responds.
-      4. **If all drills pass:** Baseline is green. Proceed to Phase 2.
+      5. **If all drills pass:** Baseline is green. Proceed to Phase 2.
 
       ## Phase 2: Assess what changed and plan new coverage
 
@@ -1190,7 +1197,9 @@ agents:
 
       After creating new drills, run the entire suite to verify everything.
       `run_drill` handles setup/ready_check/teardown automatically — you
-      do NOT need to start or stop services yourself.
+      do NOT need to start or stop services yourself. Before calling it,
+      `test -f <workspace>/.astonish/start-services.sh` and restore the script
+      if missing (never switch templates).
 
       1. Call `run_drill` with the suite name.
       2. **If NEW drills fail:** Investigate — is it a code bug or a drill

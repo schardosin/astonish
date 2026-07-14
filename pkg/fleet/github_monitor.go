@@ -354,15 +354,25 @@ func (m *GitHubMonitor) isBackoffExpired(s *SeenIssueState) bool {
 }
 
 // MarkSeen records that an issue has been seen and a session started for it.
-// Called when a new fleet session is created for an issue.
+// Called when a new fleet session is created for an issue. Preserves the
+// comment cursor and retry tracking so poll cycles don't treat old comments
+// as new human replies after a session restart.
 func (m *GitHubMonitor) MarkSeen(issueNumber int, sessionID string, issueTitle string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.state.SeenIssues[issueNumber] = &SeenIssueState{
+	prev := m.state.SeenIssues[issueNumber]
+	next := &SeenIssueState{
 		SessionID:  sessionID,
 		IssueTitle: issueTitle,
 	}
+	if prev != nil {
+		next.LastCommentID = prev.LastCommentID
+		next.RetryCount = prev.RetryCount
+		next.LastFailedAt = prev.LastFailedAt
+		next.LastError = prev.LastError
+	}
+	m.state.SeenIssues[issueNumber] = next
 
 	if err := m.saveStateLocked(); err != nil {
 		slog.Warn("failed to persist state after marking issue seen", "component", "github-monitor", "issue", issueNumber, "error", err)

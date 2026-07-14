@@ -196,8 +196,8 @@ func TestApplyQuietExitGate_ContinuesWhenOpenTaskClaimable(t *testing.T) {
 		},
 		Headless: true,
 	}
+	// Route "none" exit: ball may be customer but waitingAgent is empty.
 	fs.mu.Lock()
-	fs.waitingAgent = "architect"
 	fs.ballWithCustomer = true
 	fs.mu.Unlock()
 
@@ -214,8 +214,54 @@ func TestApplyQuietExitGate_ContinuesWhenOpenTaskClaimable(t *testing.T) {
 	if fs.ballWithCustomer {
 		t.Fatal("expected ball back with agents after continuing")
 	}
-	if fs.waitingAgent != "" {
-		t.Fatalf("waitingAgent = %q, want empty", fs.waitingAgent)
+}
+
+func TestApplyQuietExitGate_StopsWhenWaitingOnCustomerEvenWithTasks(t *testing.T) {
+	board := &memTaskBoard{}
+	_, err := board.Post(context.Background(), store.FleetTask{
+		SessionID:            "s1",
+		Title:                "Design",
+		RequiredCapabilities: []string{"design.architecture"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fs := &FleetSession{
+		ID: "s1",
+		FleetConfig: &FleetConfig{
+			Agents: map[string]FleetAgentConfig{
+				"po": {
+					Name:       "PO",
+					TaskPolicy: &AgentTaskPolicy{Claims: []string{"general"}},
+				},
+				"architect": {
+					Name:         "Architect",
+					Capabilities: map[string]bool{"design.architecture": true},
+					TaskPolicy:   &AgentTaskPolicy{Claims: []string{"design.architecture"}},
+				},
+			},
+			Communication: &CommunicationConfig{
+				Flow: []CommunicationNode{{Role: "po", EntryPoint: true, TalksTo: []string{"customer", "architect"}}},
+			},
+			Settings: FleetSettings{TaskBoard: &TaskBoardConfig{ClaimPolicy: "capability_match"}},
+		},
+		Headless: true,
+	}
+	fs.mu.Lock()
+	fs.waitingAgent = "po"
+	fs.ballWithCustomer = true
+	fs.mu.Unlock()
+
+	ctx := store.WithFleetTaskBoardStore(context.Background(), board)
+	next, stop := fs.applyQuietExitGate(ctx, nil, true)
+	if !stop {
+		t.Fatalf("expected hard stop while waiting on customer, next=%v", next)
+	}
+	if len(next) != 0 {
+		t.Fatalf("next = %v, want empty", next)
+	}
+	if state, _ := fs.GetState(); state != StateStopped {
+		t.Fatalf("state = %q, want stopped", state)
 	}
 }
 

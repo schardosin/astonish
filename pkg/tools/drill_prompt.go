@@ -50,11 +50,14 @@ without any AI or human involvement at runtime. This means:
 9. When the user says configuration is done through a UI wizard or setup
    page, use the browser tools to walk through that flow. Do not bypass it
    with direct API calls unless the user explicitly asks for that approach.
-10. When starting long-running services (servers, dev servers, databases),
-    use shell_command with background=true. NEVER use "nohup cmd &" or
-    "cmd &" without background=true — the process will die within seconds
-    because the PTY closes when the shell exits. Use process_read to check
-    output and process_kill to stop the process.
+10. When starting long-running services interactively via shell_command
+    (servers, dev servers, databases), use background=true. NEVER use
+    "nohup cmd &" or "cmd &" without background=true — the process will die
+    within seconds because the PTY closes when the shell exits. Use
+    process_read to check output and process_kill to stop the process.
+    Exception: .astonish/start-services.sh uses detached restart supervisors
+    (setsid+nohup + while-true restart loop + PID files) — see Step 1h-iv.
+    That is not the interactive shell_command path.
 
 ---
 
@@ -98,9 +101,7 @@ I'll use the existing environment — no need to set up a new container."
     Once a template is selected, call use_sandbox_template with the chosen
     template name. This switches the sandbox container to one cloned from that
     template, so all file and shell tools will see the project code and
-    pre-installed dependencies. The tool response includes the container's
-    bridge IP (in the container_ip field) — save this IP for later use in
-    browser_navigate calls. Wait for the tool to confirm success, then
+    pre-installed dependencies. Wait for the tool to confirm success, then
     jump to Step 1e (analyze the project) — even though the template has
     everything installed, you still need to understand the project structure,
     identify services, and verify builds/runs before designing tests.
@@ -193,16 +194,23 @@ Start the service:
 - For frontend apps: Start the dev server with shell_command using background=true
 - For libraries: Run existing tests or a simple import check
 
-IMPORTANT: When starting long-running processes (servers, dev servers, etc.),
+IMPORTANT: When starting long-running processes interactively (servers, dev
+servers, etc. via shell_command — not via start-services.sh),
 you MUST use shell_command with background=true in the args. For example:
   shell_command with command="cd /root/myapp && npx vite --host 0.0.0.0" and background=true
 
-Do NOT use any of these patterns — they will cause the process to die:
+Do NOT use any of these patterns for interactive shell_command — they will
+cause the process to die when the PTY closes:
   - "nohup cmd &"
   - "cmd &" (trailing ampersand without background=true)
   - "setsid cmd"
 The process manager's PTY closes when the shell exits, sending SIGHUP to all
 children. Only background=true keeps the PTY session alive.
+
+NOTE: Inside .astonish/start-services.sh the opposite is required — run each
+daemon under a detached restart supervisor (setsid+nohup, while-true restart,
+PID file), poll until ready + stable, then exit 0 (see 1h-iv). That script is
+a different launch path from interactive shell_command.
 
 After starting, use process_read with the session_id to check the output.
 Use process_kill with the session_id to stop the process when done.
@@ -219,16 +227,92 @@ Ask the user: "I started <service> but I'm not sure how to verify it's
 working. What endpoint or port should I check?"
 
 **1h-iv. Record what you learned for this service (this becomes the suite YAML):**
-- The exact build command → becomes a setup command in Step 3
-- The exact run/start command → becomes a setup command (or service setup) in Step 3.
-  When writing this into suite YAML, append & to background it (the test runner
-  auto-detects trailing & and handles it correctly).
+- Prefer writing/updating <workspace>/.astonish/start-services.sh and
+  stop-services.sh once the recipe works — suite setup should call those scripts.
+- CRITICAL for start-services.sh (different from interactive shell_command):
+  1. Do NOT start daemons with bare setsid/nohup alone — Vite/npm often exit
+     seconds after the first successful curl. Wrap each command in a detached
+     supervisor: setsid+nohup, stdin from /dev/null, while-true restart loop,
+     write supervisor PID to .astonish/*.supervisor.pid, then disown.
+  2. Prefer "npx vite --host 0.0.0.0 --port <port>" over "npm run dev".
+  3. Skip start when the service already answers (curl already-running guard).
+  4. Poll until ready, sample stability a few times, then exit 0 — do NOT end
+     with wait. Suite setup runs the script in the foreground; suite
+     ready_check also requires stable_count consecutive successes.
+  5. stop-services.sh must kill the supervisor process group
+     (kill -- -"$pid") then fall back to pkill; remove PID files.
+  6. After writing, verify: curl, then kill the child once and confirm it
+     restarts from the supervisor before declaring success.
+- The exact build command → optional prior setup step in Step 3
+- The exact run/start command → fold into start-services.sh; suite setup runs the script
 - How to verify the service is ready (endpoint, port, output) → becomes ready_check in Step 3
-- The exact stop/teardown command → becomes teardown in Step 3
+- The exact stop/teardown command → fold into stop-services.sh / suite teardown
+
+Example start-services.sh shape (restart supervisors):
+
+    #!/usr/bin/env bash
+    set -u
+    WORKSPACE="/root/myapp"
+    LOG_DIR="$WORKSPACE/.astonish/logs"
+    PID_DIR="$WORKSPACE/.astonish"
+    mkdir -p "$LOG_DIR"
+    is_up() { curl -sf --max-time 2 "$1" >/dev/null 2>&1; }
+    start_supervised() {
+      local name="$1" pidfile="$2" logfile="$3" cmd="$4"
+      if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+        echo "$name supervisor already running"; return 0
+      fi
+      setsid nohup bash -c '
+        logfile="$1"; cmd="$2"
+        while true; do
+          echo "[$(date -Is)] starting" >>"$logfile"
+          bash -lc "$cmd" >>"$logfile" 2>&1
+          echo "[$(date -Is)] exited $?; restarting in 1s" >>"$logfile"
+          sleep 1
+        done
+      ' _ "$logfile" "$cmd" </dev/null >/dev/null 2>&1 &
+      echo $! >"$pidfile"
+      disown
+    }
+    if ! is_up "http://localhost:8080/health"; then
+      start_supervised backend "$PID_DIR/backend.supervisor.pid" "$LOG_DIR/backend.log" \
+        "cd '$WORKSPACE/backend' && exec ./server"
+    fi
+    if ! is_up "http://localhost:3001/"; then
+      start_supervised frontend "$PID_DIR/frontend.supervisor.pid" "$LOG_DIR/frontend.log" \
+        "cd '$WORKSPACE/frontend' && exec npx vite --host 0.0.0.0 --port 3001"
+    fi
+    for i in $(seq 1 60); do
+      if is_up "http://localhost:8080/health" && is_up "http://localhost:3001/"; then
+        ok=0
+        for _ in 1 2 3; do
+          sleep 2
+          is_up "http://localhost:8080/health" && is_up "http://localhost:3001/" && ok=$((ok+1)) || ok=0
+        done
+        [ "$ok" -ge 3 ] && echo "All services ready" && exit 0
+      fi
+      sleep 1
+    done
+    echo "Services failed to become stable"; exit 1
+
+Example stop-services.sh shape:
+
+    #!/usr/bin/env bash
+    set -u
+    PID_DIR="/root/myapp/.astonish"
+    for f in backend.supervisor.pid frontend.supervisor.pid; do
+      if [ -f "$PID_DIR/$f" ]; then
+        pid=$(cat "$PID_DIR/$f")
+        kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+        rm -f "$PID_DIR/$f"
+      fi
+    done
+    pkill -f '/root/myapp/backend/server' 2>/dev/null || true
+    pkill -f 'vite --host 0.0.0.0 --port 3001' 2>/dev/null || true
 
 Do NOT save this information to memory (memory_save) or SELF.md. It belongs
-in the suite YAML that you will generate in Step 3. Keep it in your working
-context as you continue through the remaining steps.
+in the suite YAML (and template bootstrap_files) that you will generate in Step 3.
+Keep it in your working context as you continue through the remaining steps.
 
 Stop any background processes after verification using process_kill with the
 session_id (you will start them again during test execution via the suite YAML).
@@ -253,9 +337,9 @@ Wait for the user's response before proceeding to Step 2.
 If the user indicates that configuration requires using the UI (e.g., a
 setup wizard, onboarding flow, or configuration page):
 1. Keep the required services running (backend, frontend, etc.)
-2. Use the container IP from use_sandbox_template response (or run
-   shell_command with "hostname -I | awk '{print $1}'" to get it)
-3. Open the UI: browser_navigate with the container IP and port
+2. Prefer localhost/127.0.0.1 in browser_navigate — Chromium runs in the
+   same sandbox container as the services (do not use the bridge IP)
+3. Open the UI: browser_navigate with http://127.0.0.1:<port>/...
 4. Use browser_snapshot to understand the current page
 5. Walk through the wizard step by step:
    - If you know what to enter (from the user's instructions), proceed
@@ -333,20 +417,29 @@ application, and how to verify it is ready.
     type: drill_suite
     suite_config:
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
-      base_url: "http://{{CONTAINER_IP}}:3000"  # OPTIONAL — for browser tests in sandbox mode.
-                                                 # Without sandbox, use "http://localhost:3000".
+      base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
+      credentials:                       # OPTIONAL — logical → store entry (copy from fleet plan)
+        providers: myapp-providers
+      credential_injection:              # OPTIONAL — inject before configure/setup
+        files:
+          - credential: providers
+            path: /root/myapp/config/providers.yaml
+            field: value
+            mode: "0600"
+      configure:                         # OPTIONAL — appendix after injection, before start
+        - "test -f /root/myapp/config/providers.yaml"
       setup:
-        - "<build command>"              # e.g., "cd /root/myapp && go build -o myapp ."
-        - "<start command> &"            # e.g., "cd /root/myapp && ./myapp &"
+        - "bash /root/myapp/.astonish/start-services.sh"  # supervised restart + poll + exit
       ready_check:                       # OPTIONAL — only for servers/daemons
         type: http                       # "http", "port", or "output_contains"
         url: "http://localhost:8080/health"  # For http type
         # port: 8080                     # For port type
         # pattern: "Server started"      # For output_contains type
-        timeout: 30
+        timeout: 60
         interval: 2
+        # stable_count: 3                # consecutive successes required (default 3)
       teardown:
-        - "pkill -f myapp || true"       # Always clean up processes
+        - "bash /root/myapp/.astonish/stop-services.sh || true"
       environment:
         MY_ENV_VAR: "test-value"         # Optional shared env vars
 
@@ -361,7 +454,7 @@ Each service has its own setup command, optional ready check, and teardown.
     type: drill_suite
     suite_config:
       template: "@fullstack"
-      base_url: "http://{{CONTAINER_IP}}:3000"  # Resolved at runtime in sandbox mode
+      base_url: "http://localhost:3000"  # Shell and browser share the sandbox network
       environment:
         NODE_ENV: test
       services:
@@ -410,18 +503,18 @@ Each service has its own setup command, optional ready check, and teardown.
   Do NOT generate a placeholder ready_check with port: 0 or empty values —
   that will cause the test runner to fail.
 
-IMPORTANT: Ready check URLs should use localhost (e.g., http://localhost:8080/health),
-NOT the container bridge IP. The test runner executes ready checks through the
-same tool executor as setup commands, so they run inside the container where
-localhost reaches the service. Only browser_navigate needs the container bridge IP
-(because the browser runs on the host).
+IMPORTANT: Ready check URLs should use localhost (e.g., http://localhost:8080/health).
+The test runner executes ready checks through the same tool executor as setup
+commands, so they run inside the container where localhost reaches the service.
+Browser steps also run inside the container (Chromium+KasmVNC), so use localhost
+in browser_navigate URLs the same way.
 
 ### When to include base_url:
 
 - Include base_url when the suite includes browser-based tests that interact
   with a web UI. This documents the entry point for browser_navigate steps.
-- In sandbox mode: Use base_url: "http://{{CONTAINER_IP}}:<port>" so the
-  test runner resolves the actual container IP at runtime.
+- Prefer base_url: "http://localhost:<port>" (shell and browser share the
+  sandbox network namespace). {{CONTAINER_IP}} remains supported if needed.
 - Without sandbox: Use base_url: "http://localhost:<port>".
 - Browser test steps can use relative paths (e.g., url: "/dashboard")
   and the runner prepends the resolved base_url automatically.
@@ -456,7 +549,7 @@ localhost reaches the service. Only browser_navigate needs the container bridge 
     type: drill_suite
     suite_config:
       template: "myapp-fullstack"
-      base_url: "http://{{CONTAINER_IP}}:3000"  # Resolved at runtime
+      base_url: "http://localhost:3000"  # Same localhost for shell and browser
       environment:
         NODE_ENV: test
       services:
@@ -484,22 +577,34 @@ localhost reaches the service. Only browser_navigate needs the container bridge 
 
 Guidelines:
 - Setup commands run IN ORDER before any tests.
-- For single-service suites, use & to background long-running processes in
-  setup commands. The test runner automatically detects trailing & and uses
-  the background mode internally, so the process stays alive (unlike when
-  you use & directly with shell_command during the wizard — see Rule 10).
-- For multi-service suites, each service setup command is a single string.
-  Use & to background it if it is a long-running daemon.
-- Always include teardown to kill background processes.
+- Runtime order is fixed: credential injection → configure: → setup: → ready_check.
+  Copy plan credentials + credential_injection onto the suite so standalone
+  run_drill (outside a fleet session) still gets secrets/config files.
+- configure: is the appendix for offline/API/file/cmd steps that make the app
+  usable (after secrets exist, before start). For APIs that need a live server,
+  put them in start-services.sh after the ready poll (or a setup line after start).
+- Prefer bash <workspace>/.astonish/start-services.sh when that template
+  bootstrap script exists (detached restart supervisors + poll + exit 0).
+  Suite setup runs it in the foreground and waits for exit. Otherwise, for
+  single-service suites, use & to background long-running processes in setup
+  commands. The test runner automatically detects trailing & and uses the
+  background mode internally, so the process stays alive (unlike when you use
+  & directly with shell_command during the wizard — see Rule 10).
+- For multi-service suites, prefer one start script in top-level setup, or
+  per-service setup strings with & for daemons.
+- Always include teardown (prefer stop-services.sh when present).
 - Use "|| true" in teardown so cleanup never fails the suite.
-- Ready check should match what you verified in Step 1h.
+- Ready check should match what you verified in Step 1h. Prefer timeout >= 60
+  and rely on stable_count (default 3) so a one-shot curl blip cannot green
+  a dying process.
 - Template field stores the sandbox template name from Step 1i (if applicable).
 - For simple CLI/tool tests with no server, setup, teardown, and ready_check
   can all be empty or omitted.
 - Use the EXACT commands you verified in Step 1h. Do not substitute different
   commands, simplify, or guess alternatives. If you used
   "npx vite --host 0.0.0.0" during verification, that exact command goes into
-  setup — not a shorter or different version. Add the trailing & for daemons.
+  setup — not a shorter or different version. Add the trailing & for daemons
+  only when not using start-services.sh.
 
 Show the suite YAML to the user and ask for confirmation before proceeding.
 
@@ -581,8 +686,7 @@ Browser tools are available in the deterministic test runner.
 If the suite has base_url set, you can use relative paths in browser_navigate
 and the runner will prepend the resolved base_url automatically:
 
-    # Suite has: base_url: "http://{{CONTAINER_IP}}:3000"  (sandbox)
-    #        or: base_url: "http://localhost:3000"           (no sandbox)
+    # Suite has: base_url: "http://localhost:3000"
 
     - name: navigate_to_app
       type: tool
@@ -618,13 +722,14 @@ and the runner will prepend the resolved base_url automatically:
       args:
         tool: browser_take_screenshot
 
-You can also use full URLs with the {{CONTAINER_IP}} placeholder directly:
+Prefer localhost full URLs (shell and browser share the sandbox).
+{{CONTAINER_IP}} remains supported for older drills:
 
     - name: navigate_to_app
       type: tool
       args:
         tool: browser_navigate
-        url: "http://{{CONTAINER_IP}}:3000"   # Resolved at runtime
+        url: "http://localhost:3000"
 
 Browser tools available for test steps:
 - browser_navigate — Navigate to a URL
@@ -824,17 +929,21 @@ Report the saved file paths.
 After saving, ask: "Would you like me to run the tests now?"
 
 If yes, call the run_drill tool with suite_name set to the suite name.
+If the suite YAML declares a sandbox template and you are still on @base,
+run_drill switches to that template automatically before setup — do NOT
+call use_sandbox_template first, and do NOT manually write credential or
+provider config files (run_drill injects suite credential_injection).
 run_drill automatically handles setup, ready_check, and teardown from the
 suite config — do NOT manually start services before calling it.
-This tool runs the tests on the host and automatically routes shell/file
-tool steps into the current sandbox container (if sandbox is active).
-Browser tool steps run on the host where Chrome is available.
+This tool runs the tests and automatically routes shell/file/browser tool
+steps into the current sandbox container (if sandbox is active). Browser
+steps use Chromium+KasmVNC in the session — same as chat. Use localhost in URLs.
 
 The test runner automatically resolves {{CONTAINER_IP}} placeholders in
 all tool args and in base_url before executing steps. In sandbox mode, it
 discovers the container's bridge IP at startup; without sandbox, it uses
-localhost. Browser test steps with relative URLs (starting with /) get
-the resolved base_url prepended.
+localhost. Prefer localhost for both shell and browser steps. Browser test
+steps with relative URLs (starting with /) get the resolved base_url prepended.
 
 Show the results and explain any failures.
 
@@ -874,13 +983,13 @@ commands). Use browser_* tools when testing web UIs that require interaction
 To run a test suite, use the run_drill tool (NOT shell_command with
 "astonish drill run"). The run_drill tool:
 
-- Runs on the HOST (where test suite YAML files and Chrome are available)
-- Automatically routes shell_command and file tool steps into the current
-  sandbox container (if sandbox is active)
+- Automatically routes shell_command, file, and browser tool steps into the
+  current sandbox container (if sandbox is active). Browser uses the same
+  in-container Chromium+KasmVNC path as Studio chat.
 - Ready checks (http/port) are also routed through the executor, so they
   run inside the container — use localhost in ready_check URLs
-- Browser tool steps execute on the host and can reach container services
-  via the container's bridge IP
+- Browser tool steps also run inside the container — use localhost the same
+  way you would in shell_command curls
 - Resolves {{CONTAINER_IP}} placeholders in all tool args and in base_url
   before executing steps (discovers the container IP automatically)
 - Browser steps with relative URLs (starting with /) get the resolved
@@ -888,40 +997,39 @@ To run a test suite, use the run_drill tool (NOT shell_command with
 - Returns the full test report with pass/fail status
 
 This means tests run in the SAME environment as your current session — the
-same container with the same code and dependencies. No new container is
-created for test execution.
+same container with the same code and dependencies. When the suite declares a
+template and the session is still on @base, run_drill switches to that
+template automatically before setup (unless force=true). Do NOT call
+use_sandbox_template first "to prepare", and do NOT manually write_file
+credential/provider configs — suite credential_injection runs inside
+run_drill before configure/setup.
 
 ## Browser Access to Container Services (sandbox mode)
 
-When sandbox is enabled, services run INSIDE the container but browser tools
-run on the HOST. You cannot use localhost or 127.0.0.1 in browser_navigate
-to reach container services — those addresses refer to the host, not the
-container.
+When sandbox is enabled, services and browser tools both run INSIDE the
+session container. Use localhost in browser_navigate the same way you use
+them in shell_command curls (the runner rewrites localhost/::1 to 127.0.0.1
+for Chromium so IPv4-only listeners still work):
 
-How to get the container IP:
-- The use_sandbox_template tool returns the container's bridge IP in its
-  container_ip field (e.g., "10.99.0.5"). Save this IP when you first
-  switch templates and use it in all browser_navigate calls during the
-  wizard session.
-- If you need the IP later (e.g., after a container restart), run:
-  shell_command with "hostname -I | awk '{print $1}'"
+    - name: open-ui
+      type: tool
+      args:
+        tool: browser_navigate
+        url: "http://localhost:3001/automation/create"
 
-For test YAML files, use the placeholder {{CONTAINER_IP}} in browser URLs:
-  browser_navigate with url "http://{{CONTAINER_IP}}:3001/dashboard"
-The test runner automatically resolves this placeholder at runtime by
-discovering the container's bridge IP before executing tests. This means
-test YAMLs work regardless of what IP the container gets assigned.
+Do NOT hard-code container bridge IPs in drill YAML — they change per session
+and are wrong for in-container Chromium (which shares localhost with services).
+If a prior assistant rewrote browser_navigate URLs to 10.x.x.x, change them
+back to http://localhost:<port>/...
+{{CONTAINER_IP}} remains supported for older drills if needed.
 
-For the base_url field in suite YAML (sandbox mode):
-  base_url: "http://{{CONTAINER_IP}}:3001"
+For the base_url field in suite YAML:
+  base_url: "http://localhost:3001"
 Browser test steps can then use relative URLs (e.g., url: "/dashboard")
 and the runner will prepend the resolved base_url.
 
-IMPORTANT: Do NOT use localhost, 127.0.0.1, or the container hostname
-in browser_navigate when sandbox is enabled — they will fail or reach
-the wrong host. However, ready_check URLs and shell_command curl checks
-SHOULD use localhost because they run inside the container through the
-tool executor.
+Ready_check URLs and shell_command curl checks SHOULD use localhost because
+they run inside the container through the tool executor.
 
 ## Interactive App Configuration (during Step 1h service verification)
 

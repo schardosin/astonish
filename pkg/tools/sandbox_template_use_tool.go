@@ -49,8 +49,9 @@ func NewUseSandboxTemplateTool(nodePool *sandbox.NodeClientPool, templateRegistr
 			"from the specified template, which includes all pre-installed dependencies and " +
 			"project code. Call this after the user selects a template from list_sandbox_templates. " +
 			"After this call, all file and shell tools will operate inside the new container. " +
-			"The response includes the container's bridge IP (container_ip field) which is " +
-			"needed for browser_navigate calls to reach container services. " +
+			"Browser tools use in-container Chromium — use localhost/127.0.0.1 in " +
+			"browser_navigate URLs, not the bridge IP. For running a drill suite, prefer " +
+			"run_drill alone (it auto-switches to the suite template). " +
 			"IMPORTANT: This operation takes a few seconds as it recreates the container.",
 	}, useSandboxTemplate)
 	if err != nil {
@@ -118,8 +119,8 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 	slog.Info("session now using template", "component", "sandbox-template", "session", sessionID[:min(8, len(sessionID))], "template", name)
 
 	// Eagerly bind the new session to trigger container creation, then
-	// discover the container's bridge IP. This lets the AI know the IP
-	// immediately instead of requiring a separate hostname -I call.
+	// discover the container's bridge IP (returned as container_ip for
+	// {{CONTAINER_IP}} / rare host-side needs — not for browser_navigate).
 	var containerIP string
 	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
 		if ip, err := client.GetContainerIP(sessionID); err == nil {
@@ -130,11 +131,16 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 		}
 	}
 
+	// Inject template bootstrap files (mount only — never auto-exec).
+	sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, name)
+
 	msg := fmt.Sprintf("Sandbox container switched to template %q. All file and shell tools now "+
-		"operate inside a container with the template's pre-installed dependencies and project code.", name)
+		"operate inside a container with the template's pre-installed dependencies and project code. "+
+		"Browser tools use Chromium inside the same container — use http://localhost:<port> or "+
+		"http://127.0.0.1:<port> in browser_navigate (do not rewrite URLs to the container bridge IP).", name)
 	if containerIP != "" {
-		msg += fmt.Sprintf(" The container's bridge IP is %s — use this IP (not localhost) in "+
-			"browser_navigate URLs to reach services running in the container.", containerIP)
+		msg += fmt.Sprintf(" Bridge IP %s is available as container_ip for rare host-side needs "+
+			"(e.g. {{CONTAINER_IP}}); prefer localhost for shell and browser.", containerIP)
 	}
 
 	return UseSandboxTemplateResult{
@@ -144,3 +150,4 @@ func useSandboxTemplate(ctx tool.Context, args UseSandboxTemplateArgs) (UseSandb
 		Message:      msg,
 	}, nil
 }
+

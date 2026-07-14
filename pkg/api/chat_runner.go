@@ -54,13 +54,14 @@ type ChatRunner struct {
 	done   bool
 	doneMu sync.RWMutex
 
-	// titleDone is closed when the title-generation goroutine completes
+	// titleDone is closed when the title-refine goroutine completes
 	// (or immediately if no title generation is needed). The defer block
 	// in Run() waits on this channel before closing subscriber channels,
-	// ensuring the session_title SSE event reaches the browser.
+	// so a refined session_title SSE event can still reach the browser.
+	// A provisional title is emitted synchronously before the agent runs.
 	titleDone chan struct{}
 
-	// Maximum time to wait for the title goroutine after the "done"
+	// Maximum time to wait for the title-refine goroutine after the "done"
 	// event before closing subscribers regardless.
 	titleWaitTimeout time.Duration
 
@@ -83,7 +84,7 @@ type ChatRunner struct {
 }
 
 // newChatRunner creates a new ChatRunner with a background context.
-// titleWaitTimeout controls how long to wait for the title goroutine
+// titleWaitTimeout controls how long to wait for the title-refine goroutine
 // after the "done" event before closing subscribers. Zero means close
 // immediately (used in tests).
 func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
@@ -101,6 +102,38 @@ func newChatRunner(sessionID, userID string, isNew bool) *ChatRunner {
 		titleDone:              make(chan struct{}),
 		pendingNetworkToolURLs: make(map[string]string),
 	}
+}
+
+// startSessionTitle sets a provisional title from the user message immediately,
+// then kicks off a best-effort LLM refine in a goroutine. Always closes
+// titleDone (immediately when no title work is needed, or when refine finishes).
+func (cr *ChatRunner) startSessionTitle(llm model.LLM, titleSetter SessionTitleSetter, msg string) {
+	emitTitle := func(title string) {
+		cr.emitEvent("session_title", map[string]any{"title": title, "sessionId": cr.SessionID})
+	}
+
+	if !sessionNeedsTitle(cr.ctx, cr.SessionID, cr.IsNew, msg, titleSetter) {
+		close(cr.titleDone)
+		return
+	}
+
+	provisional := fallbackTitle(msg)
+	if provisional != "" {
+		setSessionTitleNow(titleSetter, cr.SessionID, provisional, emitTitle)
+	}
+
+	titleLLM := agent.LLMFromContext(cr.ctx)
+	if titleLLM == nil {
+		titleLLM = llm
+	}
+	if titleLLM == nil {
+		close(cr.titleDone)
+		return
+	}
+	go func() {
+		defer close(cr.titleDone)
+		generateStudioSessionTitle(titleLLM, titleSetter, cr.SessionID, msg, provisional, emitTitle)
+	}()
 }
 
 // InjectLLM adds a per-request LLM override to the runner's context.
@@ -143,11 +176,17 @@ func (cr *ChatRunner) InjectMemorySaveOrMerge(fn store.MemorySaveOrMergeFunc) {
 }
 
 // InjectFlowStore adds a tenant-scoped flow store to the runner's context
-// so that drill tools (save_drill, delete_drill, list_drills, read_drill,
-// edit_drill) and the run_drill tool can read/write flows from the database
-// rather than the local filesystem in platform mode. Must be called before Run().
+// so that flow tools (run_flow, search_flows) can read/write flows from the
+// database rather than the local filesystem in platform mode. Must be called before Run().
 func (cr *ChatRunner) InjectFlowStore(fs store.FlowStore) {
 	cr.ctx = store.WithFlowStore(cr.ctx, fs)
+}
+
+// InjectTeamFlowStore adds the team-scoped flow store to the runner's context.
+// Drill tools use this exclusively (drills are team-only artifacts).
+// Must be called before Run().
+func (cr *ChatRunner) InjectTeamFlowStore(fs store.FlowStore) {
+	cr.ctx = store.WithTeamFlowStore(cr.ctx, fs)
 }
 
 // InjectSkillStores adds tenant-scoped skill stores to the runner's context
@@ -349,9 +388,9 @@ func (cr *ChatRunner) Run(
 
 		// Send the done event immediately so the frontend can finalize the
 		// response and hide the processing spinner. Then wait for the
-		// title-generation goroutine (if any) before closing subscriber
-		// channels — this ensures the session_title SSE event reaches the
-		// browser before the stream ends.
+		// title-refine goroutine (if any) before closing subscriber
+		// channels — this lets a polished session_title reach the browser
+		// before the stream ends. A provisional title was already emitted.
 		cr.emitEvent("done", map[string]any{"done": true})
 
 		timeout := cr.titleWaitTimeout
@@ -362,11 +401,11 @@ func (cr *ChatRunner) Run(
 			go func() {
 				select {
 				case <-cr.titleDone:
-					// Title goroutine finished — give a brief moment for
+					// Title refine finished — give a brief moment for
 					// the SSE flush, then close.
 				case <-time.After(timeout):
-					// Title took too long — close anyway; the title is
-					// still persisted to disk for future loadSessions().
+					// Refine took too long — close anyway; provisional
+					// title is already persisted for future loadSessions().
 				}
 				cr.closeSubscribers()
 			}()
@@ -378,6 +417,11 @@ func (cr *ChatRunner) Run(
 		"sessionId": cr.SessionID,
 		"isNew":     cr.IsNew,
 	})
+
+	// Provisional title from the first message (sync), then best-effort LLM
+	// refine in parallel with the agent turn. Guarantees the sidebar never
+	// sticks on Untitled when a titleSetter is available.
+	cr.startSessionTitle(llm, titleSetter, msg)
 
 	// Prepare the ADK runner
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -828,41 +872,6 @@ runLoop:
 		cr.emitEvent("error", map[string]any{
 			"error": "The model returned an empty response. Please try sending your message again.",
 		})
-	}
-
-	// Generate title for new sessions after first exchange, or retry for
-	// existing sessions that still have no title (previous attempt may have failed).
-	// Runs asynchronously — the deferred done event fires immediately so the
-	// UI isn't blocked. The defer block waits on cr.titleDone (up to
-	// titleWaitTimeout) before closing subscribers, so the session_title
-	// SSE event reaches the browser if the LLM responds in time.
-	needsTitle := false
-	if cr.IsNew && msg != "" && titleSetter != nil {
-		needsTitle = true
-	} else if !cr.IsNew && msg != "" && titleSetter != nil {
-		// Check if session still has no title — retry generation.
-		if checker, ok := titleSetter.(SessionTitleChecker); ok {
-			if existing, err := checker.GetSessionTitle(cr.ctx, cr.SessionID); err == nil && existing == "" {
-				needsTitle = true
-			}
-		}
-	}
-
-	if needsTitle {
-		// Prefer per-request LLM (team-specific) over the singleton for title generation.
-		titleLLM := agent.LLMFromContext(cr.ctx)
-		if titleLLM == nil {
-			titleLLM = llm
-		}
-		go func() {
-			defer close(cr.titleDone)
-			generateStudioSessionTitle(titleLLM, titleSetter, cr.SessionID, msg, func(title string) {
-				cr.emitEvent("session_title", map[string]any{"title": title, "sessionId": cr.SessionID})
-			})
-		}()
-	} else {
-		// No title generation needed — unblock the defer immediately.
-		close(cr.titleDone)
 	}
 
 	// Post-processing: detect astonish-app code fences in the accumulated response

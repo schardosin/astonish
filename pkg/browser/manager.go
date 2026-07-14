@@ -458,20 +458,29 @@ func (m *Manager) GetOrLaunch() (*rod.Browser, error) {
 	defer m.mu.Unlock()
 
 	if m.browser != nil {
-		// Health check: verify the CDP connection is still alive.
-		// Browser.Version() is a lightweight CDP call (Browser.getVersion)
-		// that exercises the full pipe/WebSocket without side effects.
-		if _, err := m.browser.Version(); err != nil {
-			if m.isBrowserDead(err) {
-				m.logger.Printf("Browser CDP connection is dead (%v), reconnecting...", err)
-				m.resetBrowserLocked()
-				// Fall through to launch a new browser below.
+		// Sandbox mode must never reuse a host-launched browser (e.g. Chrome
+		// started before SandboxEnabled was wired, or before container callbacks
+		// were attached). Force a container relaunch.
+		if m.SandboxEnabled && m.containerName == "" {
+			m.logger.Printf("Sandbox browser enabled but connected browser is host-side; relaunching in container")
+			m.resetBrowserLocked()
+			// Fall through to launchInContainer below.
+		} else {
+			// Health check: verify the CDP connection is still alive.
+			// Browser.Version() is a lightweight CDP call (Browser.getVersion)
+			// that exercises the full pipe/WebSocket without side effects.
+			if _, err := m.browser.Version(); err != nil {
+				if m.isBrowserDead(err) {
+					m.logger.Printf("Browser CDP connection is dead (%v), reconnecting...", err)
+					m.resetBrowserLocked()
+					// Fall through to launch a new browser below.
+				} else {
+					// Non-pipe error (unlikely) — still return the browser.
+					return m.browser, nil
+				}
 			} else {
-				// Non-pipe error (unlikely) — still return the browser.
 				return m.browser, nil
 			}
-		} else {
-			return m.browser, nil
 		}
 	}
 

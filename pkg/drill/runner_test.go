@@ -865,6 +865,36 @@ func TestRunShellCommandBackground(t *testing.T) {
 	}
 }
 
+func TestRunShellCommandStartServicesRunsForeground(t *testing.T) {
+	t.Parallel()
+	// Fully-detached start-services.sh should run as a normal foreground
+	// setup command so the suite waits for its readiness poll + exit.
+	mock := newMockExecutor()
+	mock.SetResult("shell_command", map[string]interface{}{
+		"stdout":    "Both services ready\nstart-services.sh complete",
+		"exit_code": 0,
+	}, nil)
+
+	runner := NewSuiteRunner(mock, nil, false)
+	cmd := "bash /root/juicytrade/.astonish/start-services.sh"
+	if _, err := runner.runShellCommand(context.Background(), cmd, 120); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(mock.calls))
+	}
+	call := mock.calls[0]
+	if got, ok := call.args["command"].(string); !ok || got != cmd {
+		t.Errorf("command = %q, want %q", got, cmd)
+	}
+	if bg, ok := call.args["background"].(bool); ok && bg {
+		t.Errorf("background = true, want false/unset for start-services.sh")
+	}
+	if len(runner.bgSessions) != 0 {
+		t.Errorf("bgSessions = %v, want empty for foreground start-services.sh", runner.bgSessions)
+	}
+}
+
 func TestRunShellCommandForeground(t *testing.T) {
 	t.Parallel()
 	// When setup command does NOT end with &, it should run in normal mode.
@@ -962,9 +992,10 @@ func TestRunReadyCheckViaExecutorHTTPSuccess(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:    "http",
-		URL:     "http://localhost:8080/health",
-		Timeout: 5,
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     5,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -995,10 +1026,11 @@ func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:     "http",
-		URL:      "http://localhost:8080/health",
-		Timeout:  10,
-		Interval: 1,
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     10,
+		Interval:    1,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1008,6 +1040,32 @@ func TestRunReadyCheckViaExecutorHTTPRetry(t *testing.T) {
 
 	if len(mock.calls) < 2 {
 		t.Errorf("expected at least 2 calls (retry), got %d", len(mock.calls))
+	}
+}
+
+func TestRunReadyCheckViaExecutorStableCount(t *testing.T) {
+	t.Parallel()
+	mock := newMockExecutor()
+	mock.SetResult("shell_command", map[string]interface{}{
+		"stdout":    "200",
+		"exit_code": 0,
+	}, nil)
+
+	runner := NewSuiteRunner(mock, nil, false)
+	rc := &config.ReadyCheck{
+		Type:        "http",
+		URL:         "http://localhost:8080/health",
+		Timeout:     10,
+		Interval:    1,
+		StableCount: 3,
+	}
+
+	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("expected success after stable checks, got: %v", err)
+	}
+	if len(mock.calls) < 3 {
+		t.Fatalf("expected at least 3 consecutive successes, got %d calls", len(mock.calls))
 	}
 }
 
@@ -1021,9 +1079,10 @@ func TestRunReadyCheckViaExecutorPortSuccess(t *testing.T) {
 
 	runner := NewSuiteRunner(mock, nil, false)
 	rc := &config.ReadyCheck{
-		Type:    "port",
-		Port:    3000,
-		Timeout: 5,
+		Type:        "port",
+		Port:        3000,
+		Timeout:     5,
+		StableCount: 1,
 	}
 
 	err := runner.runReadyCheckViaExecutor(context.Background(), rc)
@@ -1174,6 +1233,152 @@ func TestSubstituteVarsInString(t *testing.T) {
 				t.Errorf("got %q, want %q", result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestBrowserNavigateKeepsLocalhostInSandbox(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok", "title": "Juicy Trade"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "10.135.224.241"})
+
+	suite := &LoadedSuite{
+		Name: "juicytrade",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "ui-toggle",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "juicytrade",
+			Nodes: []config.Node{
+				{
+					Name: "open-form",
+					Args: map[string]interface{}{
+						"tool": "browser_navigate",
+						"url":  "http://localhost:3001/automation/create",
+					},
+					Assert: &config.AssertConfig{Type: "contains", Expected: "Juicy Trade"},
+				},
+			},
+		},
+	}
+
+	report, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test})
+	if err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	if report.Status != "passed" {
+		t.Fatalf("Status = %q, want passed. Summary: %s", report.Status, report.Summary)
+	}
+
+	var navURL string
+	for _, c := range executor.calls {
+		if c.name == "browser_navigate" {
+			navURL = fmt.Sprintf("%v", c.args["url"])
+		}
+	}
+	// Do not rewrite to bridge IP; normalize localhost → 127.0.0.1 for Chromium.
+	want := "http://127.0.0.1:3001/automation/create"
+	if navURL != want {
+		t.Errorf("browser_navigate url = %q, want %q", navURL, want)
+	}
+}
+
+func TestBrowserNavigateLocalhostUnchangedWithoutSandboxIP(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("browser_navigate", map[string]interface{}{"status": "ok"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "localhost"})
+
+	suite := &LoadedSuite{
+		Name: "localapp",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "nav",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "localapp",
+			Nodes: []config.Node{
+				{
+					Name: "open",
+					Args: map[string]interface{}{
+						"tool": "browser_navigate",
+						"url":  "http://localhost:3001/",
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test}); err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	for _, c := range executor.calls {
+		if c.name == "browser_navigate" {
+			if got := fmt.Sprintf("%v", c.args["url"]); got != "http://127.0.0.1:3001/" {
+				t.Errorf("url = %q, want normalized 127.0.0.1 loopback", got)
+			}
+		}
+	}
+}
+
+func TestShellCommandLocalhostNotRewritten(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok", "exit_code": 0}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+	runner.SetVars(map[string]string{"CONTAINER_IP": "10.135.224.241"})
+
+	suite := &LoadedSuite{
+		Name: "juicytrade",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+	test := LoadedTest{
+		Name: "curl-local",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "juicytrade",
+			Nodes: []config.Node{
+				{
+					Name: "curl",
+					Args: map[string]interface{}{
+						"tool":    "shell_command",
+						"command": "curl -s http://localhost:8008/api/providers/instances",
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := runner.RunSuite(context.Background(), suite, []LoadedTest{test}); err != nil {
+		t.Fatalf("RunSuite: %v", err)
+	}
+	for _, c := range executor.calls {
+		if c.name == "shell_command" {
+			cmd := fmt.Sprintf("%v", c.args["command"])
+			if !strings.Contains(cmd, "http://localhost:8008") {
+				t.Errorf("shell_command should keep localhost (runs in container), got %q", cmd)
+			}
+			if strings.Contains(cmd, "10.135.224.241") {
+				t.Errorf("shell_command must not rewrite to bridge IP, got %q", cmd)
+			}
+		}
 	}
 }
 
@@ -1419,8 +1624,9 @@ func TestContainerIPFallbackToLocalhost(t *testing.T) {
 	for _, c := range executor.calls {
 		if c.name == "browser_navigate" {
 			url := fmt.Sprintf("%v", c.args["url"])
-			if url != "http://localhost:3000/" {
-				t.Errorf("expected http://localhost:3000/, got: %s", url)
+			// Browser URLs normalize localhost → 127.0.0.1 for Chromium IPv6-first behavior.
+			if url != "http://127.0.0.1:3000/" {
+				t.Errorf("expected http://127.0.0.1:3000/, got: %s", url)
 			}
 		}
 	}

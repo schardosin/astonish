@@ -392,6 +392,36 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             setFleetState({ state: data.state as string, active_agent: data.active_agent as string })
             break
 
+          case 'fleet_agent_started':
+          case 'fleet_agent_finished':
+          case 'fleet_task_posted':
+          case 'fleet_task_claimed':
+          case 'fleet_task_completed':
+          case 'fleet_mailbox_delivered':
+            setMessages((prev: ChatMsg[]) => {
+              const event: FleetEvent = {
+                ...data,
+                type: eventType,
+                timestamp: Date.now(),
+              }
+              const existing = prev.find(m => m.type === 'fleet_execution') as FleetExecutionMessage | undefined
+              if (existing) {
+                const maxParallelAgents = Number(data.max_parallel_agents || data.maxParallelAgents || existing.maxParallelAgents || 1)
+                return prev.map(m => m.type === 'fleet_execution'
+                  ? { ...existing, events: [...existing.events, event], maxParallelAgents }
+                  : m)
+              }
+              return [...prev, {
+                type: 'fleet_execution',
+                events: [event],
+                currentPhase: (data.phase as string) || null,
+                currentAgent: (data.agent as string) || null,
+                status: 'running',
+                maxParallelAgents: Number(data.max_parallel_agents || data.maxParallelAgents || 1),
+              } as FleetExecutionMessage]
+            })
+            break
+
           case 'fleet_done':
             setIsStreaming(false)
             break
@@ -1639,10 +1669,25 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             // Update the session title in the sidebar.
             // Use sessionId from the event payload to avoid stale closure issues
             // (activeSessionId may still be null for newly created sessions).
+            // Upsert when the session isn't in the list yet (title can arrive
+            // before the deferred loadSessions after isNew).
             if (data.title && data.sessionId) {
-              setSessions(prev =>
-                prev.map(s => s.id === data.sessionId ? { ...s, title: data.title as string } : s)
-              )
+              const sid = data.sessionId as string
+              const title = data.title as string
+              setSessions(prev => {
+                const idx = prev.findIndex(s => s.id === sid)
+                if (idx >= 0) {
+                  return prev.map(s => s.id === sid ? { ...s, title } : s)
+                }
+                const now = new Date().toISOString()
+                return [{
+                  id: sid,
+                  title,
+                  createdAt: now,
+                  updatedAt: now,
+                  messageCount: 0,
+                }, ...prev]
+              })
             }
             break
 
@@ -1692,19 +1737,34 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               const hint = (data.hint as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
               const pinnedGroups = (data.pinned_tool_groups as string[]) || null
+              const setupDraftId = (data.setup_draft_id as string) || ''
+              const setupProfileKey = (data.setup_profile_key as string) || ''
+              const currentStepTitle = (data.current_setup_step_title as string) || ''
 
               if (wizardSystemPrompt) {
-                // Template has a wizard: persist the system prompt so it's sent on every turn
                 setActiveWizardContext(wizardSystemPrompt)
                 if (pinnedGroups && pinnedGroups.length > 0) {
                   setActivePinnedToolGroups(pinnedGroups)
                 }
-                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: wizardSystemPrompt, pinnedToolGroups: pinnedGroups || undefined })
+                const kickoff = currentStepTitle
+                  ? `Help me set up a fleet plan. Let's start with ${currentStepTitle.toLowerCase()}.`
+                  : 'Help me set up a fleet plan.'
+                const agentOps = setupDraftId
+                  ? `\n\nSETUP SESSION:\n- draft_id: ${setupDraftId}\n- profile_key: ${setupProfileKey || hint || 'generic'}\n- Call get_setup_profile with draft_id and profile_key before asking questions.\n- Work ONLY on the current step.\n- Call update_setup_draft when the step is complete.\n- Follow the profile step order; do not skip ahead.`
+                  : ''
+                setPendingFleetPlanPrompt({
+                  message: kickoff,
+                  systemContext: wizardSystemPrompt + agentOps,
+                  pinnedToolGroups: pinnedGroups || undefined,
+                })
               } else if (hint) {
-                // No wizard in template: use generic prompt as system context, persist it too
-                const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Guide them through:\n1. Plan identity (key, name, description)\n2. Communication channel type and settings\n3. Artifact destinations\n4. Credentials for external services\n5. Any agent behavior customizations\n\nBefore saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes. Include the same credentials in the save call.`
+                // Profile resolution failed — still avoid hardcoding identity-first ordering.
+                const genericSystemPrompt = `You are helping the user create a fleet plan based on the "${hint}" fleet template. The base_fleet_key is "${hint}". Call get_setup_profile to load the setup profile and current step, then follow that step order strictly. Do not ask for plan identity unless the current setup step is identity. Before saving, call validate_fleet_plan with all config including credentials. Only call save_fleet_plan after validation passes.`
                 setActiveWizardContext(genericSystemPrompt)
-                setPendingFleetPlanPrompt({ message: `Create a fleet plan from the "${hint}" template.`, systemContext: genericSystemPrompt })
+                setPendingFleetPlanPrompt({
+                  message: `Help me create a fleet plan from the "${hint}" template.`,
+                  systemContext: genericSystemPrompt,
+                })
               } else {
                 // No hint: show template picker so user selects one, then re-issue /fleet-plan <key>
                 setShowTemplatePicker(true)
@@ -1758,9 +1818,10 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 result: data.result !== undefined ? data.result : null,
                 text: (data.text as string) || '',
               }
+              const maxParallelAgents = Number(data.max_parallel_agents || data.maxParallelAgents || existing?.maxParallelAgents || 1)
 
               if (existing) {
-                const updated: FleetExecutionMessage = { ...existing, events: [...existing.events, event] }
+                const updated: FleetExecutionMessage = { ...existing, events: [...existing.events, event], maxParallelAgents }
                 // Update current phase/status
                 if (data.type === 'phase_start' || data.type === 'conversation_start') {
                   updated.currentPhase = data.phase as string
@@ -1779,6 +1840,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 currentPhase: (data.type === 'phase_start' || data.type === 'conversation_start') ? data.phase as string : null,
                 currentAgent: (data.type === 'phase_start' || data.type === 'conversation_start') ? data.agent as string : null,
                 status: 'running',
+                maxParallelAgents,
               } as FleetExecutionMessage]
             })
             break

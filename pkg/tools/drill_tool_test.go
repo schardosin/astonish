@@ -1,11 +1,160 @@
 package tools
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/schardosin/astonish/pkg/store"
+	"google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
+	"google.golang.org/adk/session"
+	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
+	"google.golang.org/genai"
 )
+
+// ---------------------------------------------------------------------------
+// Test helpers: in-memory FlowStore and minimal tool.Context mock
+// ---------------------------------------------------------------------------
+
+// memFlowStore is a minimal in-memory implementation of store.FlowStore for tests.
+type memFlowStore struct {
+	mu    sync.Mutex
+	flows map[string]string // name -> yaml content
+	types map[string]string // name -> flow type (parsed from yaml)
+}
+
+func newMemFlowStore() *memFlowStore {
+	return &memFlowStore{
+		flows: make(map[string]string),
+		types: make(map[string]string),
+	}
+}
+
+func (m *memFlowStore) ListAllFlows(_ context.Context) []store.FlowSummary {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []store.FlowSummary
+	for name := range m.flows {
+		out = append(out, m.flowSummary(name))
+	}
+	return out
+}
+
+func (m *memFlowStore) ListFlowsByType(_ context.Context, types []string) []store.FlowSummary {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	typeSet := make(map[string]bool, len(types))
+	for _, t := range types {
+		typeSet[t] = true
+	}
+	var out []store.FlowSummary
+	for name := range m.flows {
+		if typeSet[m.types[name]] {
+			out = append(out, m.flowSummary(name))
+		}
+	}
+	return out
+}
+
+func (m *memFlowStore) GetFlow(_ context.Context, name string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if yaml, ok := m.flows[name]; ok {
+		return yaml, nil
+	}
+	return "", fmt.Errorf("flow %q not found", name)
+}
+
+func (m *memFlowStore) SaveFlow(_ context.Context, name string, yamlContent string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.flows[name] = yamlContent
+	// Extract type from YAML (crude but sufficient for tests).
+	for _, line := range strings.Split(yamlContent, "\n") {
+		if strings.HasPrefix(line, "type:") {
+			m.types[name] = strings.TrimSpace(strings.TrimPrefix(line, "type:"))
+			break
+		}
+	}
+	// Also extract suite field for drill flows.
+	return nil
+}
+
+func (m *memFlowStore) DeleteFlow(_ context.Context, name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.flows[name]; !ok {
+		return fmt.Errorf("flow %q not found", name)
+	}
+	delete(m.flows, name)
+	delete(m.types, name)
+	return nil
+}
+
+func (m *memFlowStore) GetTaps(_ context.Context) []store.FlowTap { return nil }
+func (m *memFlowStore) AddTap(_ context.Context, _ string, _ string) (string, error) {
+	return "", nil
+}
+func (m *memFlowStore) RemoveTap(_ context.Context, _ string) error { return nil }
+func (m *memFlowStore) GetStoreDir(_ context.Context) string       { return "" }
+
+// flowSummary builds a FlowSummary from stored data (must hold lock).
+func (m *memFlowStore) flowSummary(name string) store.FlowSummary {
+	yaml := m.flows[name]
+	summary := store.FlowSummary{
+		Name: name,
+		Type: m.types[name],
+	}
+	// Extract description and suite from YAML.
+	for _, line := range strings.Split(yaml, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "description:") {
+			summary.Description = strings.TrimSpace(strings.TrimPrefix(line, "description:"))
+		}
+		if strings.HasPrefix(line, "suite:") {
+			summary.Suite = strings.TrimSpace(strings.TrimPrefix(line, "suite:"))
+		}
+	}
+	return summary
+}
+
+// mockToolCtx is a minimal implementation of tool.Context for unit tests.
+// It delegates context.Context methods to a wrapped context and stubs all
+// ADK-specific methods.
+type mockToolCtx struct {
+	context.Context
+}
+
+var _ tool.Context = (*mockToolCtx)(nil)
+
+func (m *mockToolCtx) UserContent() *genai.Content                                    { return nil }
+func (m *mockToolCtx) InvocationID() string                                           { return "test" }
+func (m *mockToolCtx) AgentName() string                                              { return "test" }
+func (m *mockToolCtx) ReadonlyState() session.ReadonlyState                           { return nil }
+func (m *mockToolCtx) UserID() string                                                 { return "" }
+func (m *mockToolCtx) AppName() string                                                { return "" }
+func (m *mockToolCtx) SessionID() string                                              { return "" }
+func (m *mockToolCtx) Branch() string                                                 { return "" }
+func (m *mockToolCtx) Artifacts() agent.Artifacts                                     { return nil }
+func (m *mockToolCtx) State() session.State                                           { return nil }
+func (m *mockToolCtx) FunctionCallID() string                                         { return "" }
+func (m *mockToolCtx) Actions() *session.EventActions                                 { return nil }
+func (m *mockToolCtx) SearchMemory(_ context.Context, _ string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (m *mockToolCtx) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+func (m *mockToolCtx) RequestConfirmation(_ string, _ any) error            { return nil }
+
+// testCtxWithStore creates a tool.Context backed by a memFlowStore in the
+// team flow store slot.
+func testCtxWithStore(fs store.FlowStore) tool.Context {
+	ctx := store.WithTeamFlowStore(context.Background(), fs)
+	return &mockToolCtx{Context: ctx}
+}
 
 // ---------------------------------------------------------------------------
 // saveDrill tests
@@ -206,20 +355,15 @@ func TestSaveDrill_TestNoNodes(t *testing.T) {
 }
 
 func TestSaveDrill_AppendMode_SavesFiles(t *testing.T) {
-	// Set up a temp directory and override XDG_CONFIG_HOME so flowstore
-	// resolves there. This avoids touching the real config.
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
-
-	// Write a stub suite so save_drill's append mode works
+	fs := newMemFlowStore()
+	// Pre-populate suite so append mode works.
 	suiteYAML := "description: test suite\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "myapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "myapp", suiteYAML)
+
+	ctx := testCtxWithStore(fs)
 
 	drillYAML := "type: drill\nsuite: myapp\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	result, err := saveDrill(nil, SaveDrillArgs{
+	result, err := saveDrill(ctx, SaveDrillArgs{
 		SuiteName: "myapp",
 		SuiteYAML: "", // append mode
 		Tests:     []DrillFileArg{{Name: "health-check", YAML: drillYAML}},
@@ -237,24 +381,24 @@ func TestSaveDrill_AppendMode_SavesFiles(t *testing.T) {
 		t.Errorf("SuitePath should be empty in append mode, got %q", result.SuitePath)
 	}
 
-	// Verify file was written
-	content, err := os.ReadFile(result.TestPaths[0])
+	// Verify drill was stored
+	content, err := fs.GetFlow(context.Background(), "health-check")
 	if err != nil {
-		t.Fatalf("failed to read drill file: %v", err)
+		t.Fatalf("failed to read drill from store: %v", err)
 	}
-	if !strings.Contains(string(content), "type: drill") {
-		t.Error("drill file does not contain expected content")
+	if !strings.Contains(content, "type: drill") {
+		t.Error("drill content does not contain expected content")
 	}
 }
 
 func TestSaveDrill_FullMode_SavesSuiteAndTests(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: test suite\ntype: drill_suite\nsuite_config:\n  setup: []\n"
 	drillYAML := "type: drill\nsuite: newapp\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
 
-	result, err := saveDrill(nil, SaveDrillArgs{
+	result, err := saveDrill(ctx, SaveDrillArgs{
 		SuiteName: "newapp",
 		SuiteYAML: suiteYAML,
 		Tests:     []DrillFileArg{{Name: "test1", YAML: drillYAML}},
@@ -272,13 +416,13 @@ func TestSaveDrill_FullMode_SavesSuiteAndTests(t *testing.T) {
 		t.Fatalf("TestPaths len = %d, want 1", len(result.TestPaths))
 	}
 
-	// Verify suite was written
-	content, err := os.ReadFile(result.SuitePath)
+	// Verify suite was stored
+	content, err := fs.GetFlow(context.Background(), "newapp")
 	if err != nil {
-		t.Fatalf("failed to read suite file: %v", err)
+		t.Fatalf("failed to read suite from store: %v", err)
 	}
-	if !strings.Contains(string(content), "drill_suite") {
-		t.Error("suite file does not contain expected content")
+	if !strings.Contains(content, "drill_suite") {
+		t.Error("suite content does not contain expected content")
 	}
 }
 
@@ -639,7 +783,9 @@ suite_config:
 // ---------------------------------------------------------------------------
 
 func TestDeleteDrill_NoArgs(t *testing.T) {
-	result, err := deleteDrill(nil, DeleteDrillArgs{})
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
+	result, err := deleteDrill(ctx, DeleteDrillArgs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +798,9 @@ func TestDeleteDrill_NoArgs(t *testing.T) {
 }
 
 func TestDeleteDrill_NonexistentTest(t *testing.T) {
-	result, err := deleteDrill(nil, DeleteDrillArgs{TestName: "nonexistent-drill-99"})
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
+	result, err := deleteDrill(ctx, DeleteDrillArgs{TestName: "nonexistent-drill-99"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +810,9 @@ func TestDeleteDrill_NonexistentTest(t *testing.T) {
 }
 
 func TestDeleteDrill_NonexistentSuite(t *testing.T) {
-	result, err := deleteDrill(nil, DeleteDrillArgs{SuiteName: "nonexistent-suite-99"})
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
+	result, err := deleteDrill(ctx, DeleteDrillArgs{SuiteName: "nonexistent-suite-99"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,11 +826,10 @@ func TestDeleteDrill_NonexistentSuite(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestListDrills_NoSuites(t *testing.T) {
-	// Point to empty temp dir
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
-	result, err := listDrills(nil, ListDrillsArgs{})
+	result, err := listDrills(ctx, ListDrillsArgs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -693,10 +842,10 @@ func TestListDrills_NoSuites(t *testing.T) {
 }
 
 func TestListDrills_NonexistentSuite(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
-	result, err := listDrills(nil, ListDrillsArgs{SuiteName: "nonexistent"})
+	result, err := listDrills(ctx, ListDrillsArgs{SuiteName: "nonexistent"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -706,21 +855,17 @@ func TestListDrills_NonexistentSuite(t *testing.T) {
 }
 
 func TestListDrills_WithSuiteAndDrills(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
-
-	// Write a suite
+	// Store a suite and a drill
 	suiteYAML := "description: Test App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 
-	// Write a drill
 	drillYAML := "type: drill\nsuite: testapp\ndescription: health check\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: echo"
-	os.WriteFile(filepath.Join(flowsDir, "health-check.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "health-check", drillYAML)
 
-	result, err := listDrills(nil, ListDrillsArgs{})
+	result, err := listDrills(ctx, ListDrillsArgs{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -745,19 +890,16 @@ func TestListDrills_WithSuiteAndDrills(t *testing.T) {
 }
 
 func TestListDrills_SpecificSuite(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: My App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "myapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "myapp", suiteYAML)
 
 	drillYAML := "type: drill\nsuite: myapp\ndescription: api check\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo"
-	os.WriteFile(filepath.Join(flowsDir, "api-check.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "api-check", drillYAML)
 
-	result, err := listDrills(nil, ListDrillsArgs{SuiteName: "myapp"})
+	result, err := listDrills(ctx, ListDrillsArgs{SuiteName: "myapp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,10 +932,10 @@ func TestReadDrill_EmptyName(t *testing.T) {
 }
 
 func TestReadDrill_NotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
-	result, err := readDrill(nil, ReadDrillArgs{Name: "nonexistent"})
+	result, err := readDrill(ctx, ReadDrillArgs{Name: "nonexistent"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -806,21 +948,18 @@ func TestReadDrill_NotFound(t *testing.T) {
 }
 
 func TestReadDrill_ReadDrillYAML(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	// Suite
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 
 	// Drill
 	drillYAML := "type: drill\nsuite: testapp\ndescription: the health check\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	os.WriteFile(filepath.Join(flowsDir, "health-check.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "health-check", drillYAML)
 
-	result, err := readDrill(nil, ReadDrillArgs{Name: "health-check"})
+	result, err := readDrill(ctx, ReadDrillArgs{Name: "health-check"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,19 +975,16 @@ func TestReadDrill_ReadDrillYAML(t *testing.T) {
 }
 
 func TestReadDrill_ReadSuiteOverview(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: My App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "myapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "myapp", suiteYAML)
 
 	drillYAML := "type: drill\nsuite: myapp\ndescription: api test\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo"
-	os.WriteFile(filepath.Join(flowsDir, "api-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "api-test", drillYAML)
 
-	result, err := readDrill(nil, ReadDrillArgs{Name: "myapp"})
+	result, err := readDrill(ctx, ReadDrillArgs{Name: "myapp"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -864,16 +1000,13 @@ func TestReadDrill_ReadSuiteOverview(t *testing.T) {
 }
 
 func TestReadDrill_StripsYAMLExtension(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "xapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "xapp", suiteYAML)
 
-	result, err := readDrill(nil, ReadDrillArgs{Name: "xapp.yaml"})
+	result, err := readDrill(ctx, ReadDrillArgs{Name: "xapp.yaml"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/schardosin/astonish/pkg/browser"
 	"github.com/schardosin/astonish/pkg/config"
 )
 
@@ -79,9 +80,12 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 	// TODO: apply sc.Environment to container in Phase 2
 
-	// Resolve base_url from suite config (apply placeholder substitution)
+	// Resolve base_url from suite config (apply placeholder substitution).
+	// Shell and browser both run in the sandbox when sandboxed, so localhost
+	// in base_url is kept for authors but normalized to 127.0.0.1 for Chromium
+	// (avoids ::1 / IPv4-only listener mismatches).
 	if sc != nil && sc.BaseURL != "" {
-		sr.baseURL = substituteVarsInString(sc.BaseURL, sr.vars)
+		sr.baseURL = browser.NormalizeLoopbackURL(substituteVarsInString(sc.BaseURL, sr.vars))
 	}
 
 	// Dispatch to multi-service or legacy single-service lifecycle
@@ -94,8 +98,31 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 // runLegacySuite handles the original single-service setup/readycheck/teardown lifecycle.
 func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
-	// 2. Run setup commands
+	// 1. Configure appendix (after credential injection by run_drill/CLI; before start)
 	var setupLog strings.Builder
+	if sc != nil {
+		for _, cmd := range sc.Configure {
+			result, err := sr.runShellCommand(ctx, cmd, 120)
+			if result != "" {
+				setupLog.WriteString(result)
+				setupLog.WriteString("\n")
+			}
+			if err != nil {
+				report.Status = "error"
+				report.SetupLog = setupLog.String()
+				report.Summary = fmt.Sprintf("configure failed: %v", err)
+				report.FinishedAt = time.Now()
+				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
+				if sr.artifactMgr != nil {
+					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
+				}
+				sr.killBackgroundSessions(ctx)
+				return report, nil
+			}
+		}
+	}
+
+	// 2. Run setup commands (start services)
 	if sc != nil {
 		for _, cmd := range sc.Setup {
 			result, err := sr.runShellCommand(ctx, cmd, 120)
@@ -174,6 +201,32 @@ func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, 
 func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
 	var setupLog strings.Builder
 	var startedServices []config.ServiceConfig // track which services started (for reverse teardown)
+
+	// Configure appendix before starting services
+	if sc != nil {
+		for _, cmd := range sc.Configure {
+			if sr.verbose {
+				setupLog.WriteString(fmt.Sprintf("--- Configure: %s ---\n", cmd))
+			}
+			result, err := sr.runShellCommand(ctx, cmd, 120)
+			if result != "" {
+				setupLog.WriteString(result)
+				setupLog.WriteString("\n")
+			}
+			if err != nil {
+				sr.killBackgroundSessions(ctx)
+				report.Status = "error"
+				report.SetupLog = setupLog.String()
+				report.Summary = fmt.Sprintf("configure failed: %v", err)
+				report.FinishedAt = time.Now()
+				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
+				if sr.artifactMgr != nil {
+					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
+				}
+				return report, nil
+			}
+		}
+	}
 
 	// Start each service in declaration order
 	for _, svc := range sc.Services {
@@ -529,8 +582,17 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 	// Apply base_url resolution for browser_navigate with relative URLs
 	if sr.baseURL != "" && toolName == "browser_navigate" {
-		if url, ok := toolArgs["url"].(string); ok && strings.HasPrefix(url, "/") {
-			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + url
+		if urlStr, ok := toolArgs["url"].(string); ok && strings.HasPrefix(urlStr, "/") {
+			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + urlStr
+		}
+	}
+	// Prefer 127.0.0.1 over localhost/::1 for browser URLs (IPv6-first Chromium
+	// vs IPv4-only listeners). BrowserNavigate also normalizes; do it here so
+	// relative+base_url joins and {{CONTAINER_IP}}=localhost cases are covered
+	// before the tool runs.
+	if strings.HasPrefix(toolName, "browser_") {
+		if urlStr, ok := toolArgs["url"].(string); ok && urlStr != "" {
+			toolArgs["url"] = browser.NormalizeLoopbackURL(urlStr)
 		}
 	}
 
@@ -613,8 +675,9 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 // runShellCommand executes a shell command via the tool executor.
 // Commands ending with & are automatically run in background mode to prevent
-// the PTY from closing and killing the process. The session ID is tracked
-// so background processes can be cleaned up after teardown.
+// the PTY from closing and killing the process. Canonical start-services.sh
+// scripts detach restart supervisors (setsid+nohup+restart loop) and exit;
+// they run in the foreground so suite setup waits for their readiness poll.
 func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, timeout int) (string, error) {
 	bg := isBackgroundCommand(command)
 
@@ -628,7 +691,7 @@ func (sr *SuiteRunner) runShellCommand(ctx context.Context, command string, time
 		// When background=true, the process manager keeps the PTY session
 		// alive so the child process survives. With "cmd &" in non-background
 		// mode, sh exits immediately and waitLoop closes the PTY, killing
-		// the backgrounded child via SIGHUP.
+		// the backgrounded child via SIGHUP (or leaving Vite hung).
 		args["command"] = stripBackgroundSuffix(command)
 		args["background"] = true
 	}
@@ -713,6 +776,8 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 	if interval <= 0 {
 		interval = DefaultReadyCheckInterval
 	}
+	need := readyCheckStableCount(rc)
+	successes := 0
 
 	var checkCmd string
 	switch rc.Type {
@@ -753,8 +818,18 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 	// Track last error for diagnostic reporting on timeout
 	var lastErr error
 
+	record := func(err error) bool {
+		lastErr = err
+		if err == nil {
+			successes++
+			return successes >= need
+		}
+		successes = 0
+		return false
+	}
+
 	// Try immediately before first tick
-	if lastErr = sr.checkReadyOnce(ctx, rc.Type, checkCmd); lastErr == nil {
+	if record(sr.checkReadyOnce(ctx, rc.Type, checkCmd)) {
 		return nil
 	}
 
@@ -764,11 +839,11 @@ func (sr *SuiteRunner) runReadyCheckViaExecutor(ctx context.Context, rc *config.
 			return fmt.Errorf("ready check cancelled: %w", ctx.Err())
 		case <-deadline:
 			if lastErr != nil {
-				return fmt.Errorf("ready check timed out after %ds (type: %s): last error: %v", timeout, rc.Type, lastErr)
+				return fmt.Errorf("ready check timed out after %ds (type: %s, need %d consecutive successes, had %d): last error: %v", timeout, rc.Type, need, successes, lastErr)
 			}
-			return fmt.Errorf("ready check timed out after %ds (type: %s)", timeout, rc.Type)
+			return fmt.Errorf("ready check timed out after %ds (type: %s, need %d consecutive successes, had %d)", timeout, rc.Type, need, successes)
 		case <-ticker.C:
-			if lastErr = sr.checkReadyOnce(ctx, rc.Type, checkCmd); lastErr == nil {
+			if record(sr.checkReadyOnce(ctx, rc.Type, checkCmd)) {
 				return nil
 			}
 		}

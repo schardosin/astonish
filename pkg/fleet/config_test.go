@@ -29,6 +29,8 @@ agents:
   po:
     name: Product Owner
     identity: You are a product owner.
+    task_policy:
+      claims: [planning]
     tools:
       - read_file
       - write_file
@@ -37,12 +39,16 @@ agents:
   dev:
     name: Developer
     identity: You are a developer.
+    task_policy:
+      claims: [code.write]
     tools: true
     behaviors: |
       When receiving a task, implement it.
   qa:
     name: QA Engineer
     identity: You are a QA engineer.
+    task_policy:
+      claims: [code.test]
     tools: true
     behaviors: |
       When receiving code, test it.
@@ -61,6 +67,8 @@ agents:
   dev:
     name: Developer
     identity: You are a developer.
+    task_policy:
+      claims: [code.write]
     delegate:
       tool: opencode
       params:
@@ -320,7 +328,7 @@ func TestFleetValidate_CommunicationCustomerAllowed(t *testing.T) {
 	f := &FleetConfig{
 		Name: "test",
 		Agents: map[string]FleetAgentConfig{
-			"po": {Name: "Product Owner", Identity: "You are a product owner.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
+			"po": baseAgent("Product Owner"),
 		},
 		Communication: &CommunicationConfig{
 			Flow: []CommunicationNode{
@@ -519,12 +527,7 @@ func TestRegistry_SaveAndDelete(t *testing.T) {
 	fleet := &FleetConfig{
 		Name: "saved-fleet",
 		Agents: map[string]FleetAgentConfig{
-			"dev": {
-				Name:      "Developer",
-				Identity:  "You are a developer.",
-				Tools:     ToolsConfig{All: true},
-				Behaviors: "implement stuff",
-			},
+			"dev": baseAgent("Developer"),
 		},
 	}
 
@@ -2565,5 +2568,348 @@ func TestProjectSourceConfigYAML(t *testing.T) {
 	}
 	if parsed.ProjectSource.Type != "git_repo" || parsed.ProjectSource.Repo != "owner/myrepo" {
 		t.Errorf("round-trip failed: got %+v", parsed.ProjectSource)
+	}
+}
+
+func TestFleetSettings_NewDefaults(t *testing.T) {
+	t.Parallel()
+	s := FleetSettings{}
+	if s.GetMaxParallelAgents() != 1 {
+		t.Errorf("expected default max_parallel_agents 1, got %d", s.GetMaxParallelAgents())
+	}
+	if s.GetRoutingMode() != "llm_mentions" {
+		t.Errorf("expected default routing_mode llm_mentions, got %q", s.GetRoutingMode())
+	}
+	if s.GetClaimPolicy() != "capability_match" {
+		t.Errorf("expected default claim_policy capability_match, got %q", s.GetClaimPolicy())
+	}
+	if s.GetMemoryVisibility() != "scoped" {
+		t.Errorf("expected default memory_visibility scoped, got %q", s.GetMemoryVisibility())
+	}
+}
+
+func TestFleetAgentConfig_ExecutionHelpers(t *testing.T) {
+	t.Parallel()
+	a := FleetAgentConfig{}
+	if a.IsParallelizable() {
+		t.Error("expected not parallelizable by default")
+	}
+	if a.GetWorkspace() != "shared" {
+		t.Errorf("expected default workspace shared, got %q", a.GetWorkspace())
+	}
+	a.Execution = &AgentExecutionConfig{Parallelizable: true, Workspace: "isolated"}
+	if !a.IsParallelizable() {
+		t.Error("expected parallelizable")
+	}
+	if a.GetWorkspace() != "isolated" {
+		t.Errorf("expected workspace isolated, got %q", a.GetWorkspace())
+	}
+}
+
+func baseAgent(name string) FleetAgentConfig {
+	return FleetAgentConfig{
+		Name: name, Identity: "id", Behaviors: "behave", Tools: ToolsConfig{All: true},
+		TaskPolicy: &AgentTaskPolicy{Claims: []string{"generic"}},
+	}
+}
+
+func TestFleetValidate_ParallelRequiresParallelizable(t *testing.T) {
+	t.Parallel()
+	f := &FleetConfig{
+		Name: "p",
+		Agents: map[string]FleetAgentConfig{
+			"a": baseAgent("A"),
+			"b": baseAgent("B"),
+		},
+		Settings: FleetSettings{MaxParallelAgents: 2},
+	}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error when max_parallel_agents>1 without parallelizable agents")
+	}
+}
+
+func TestFleetValidate_ParallelOK(t *testing.T) {
+	t.Parallel()
+	a, b := baseAgent("A"), baseAgent("B")
+	a.Execution = &AgentExecutionConfig{Parallelizable: true}
+	b.Execution = &AgentExecutionConfig{Parallelizable: true}
+	po := baseAgent("PO")
+	f := &FleetConfig{
+		Name: "p",
+		Agents: map[string]FleetAgentConfig{
+			"po": po, "a": a, "b": b,
+		},
+		Communication: &CommunicationConfig{Flow: []CommunicationNode{
+			{Role: "po", TalksTo: []string{"a", "b"}, EntryPoint: true},
+			{Role: "a", TalksTo: []string{"po"}},
+			{Role: "b", TalksTo: []string{"po"}},
+		}},
+		Settings: FleetSettings{MaxParallelAgents: 2},
+	}
+	if err := f.Validate(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFleetValidate_ParallelSiblingsNeedSharedPredecessor(t *testing.T) {
+	t.Parallel()
+	a, b := baseAgent("A"), baseAgent("B")
+	a.Execution = &AgentExecutionConfig{Parallelizable: true}
+	b.Execution = &AgentExecutionConfig{Parallelizable: true}
+	f := &FleetConfig{
+		Name: "p",
+		Agents: map[string]FleetAgentConfig{
+			"a": a, "b": b,
+		},
+		Communication: &CommunicationConfig{Flow: []CommunicationNode{
+			{Role: "a", TalksTo: []string{"customer"}, EntryPoint: true},
+			{Role: "b", TalksTo: []string{"customer"}},
+		}},
+		Settings: FleetSettings{MaxParallelAgents: 2},
+	}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error when parallelizable siblings share no predecessor")
+	}
+}
+
+func TestFleetValidate_SupervisorMode(t *testing.T) {
+	t.Parallel()
+	po := baseAgent("PO")
+	po.Capabilities = map[string]bool{"supervisor": true}
+	dev := baseAgent("Dev")
+	f := &FleetConfig{
+		Name: "s",
+		Agents: map[string]FleetAgentConfig{"po": po, "dev": dev},
+		Communication: &CommunicationConfig{Flow: []CommunicationNode{
+			{Role: "po", TalksTo: []string{"dev", "customer"}, EntryPoint: true},
+			{Role: "dev", TalksTo: []string{"po"}},
+		}},
+		Settings: FleetSettings{RoutingMode: "supervisor"},
+	}
+	if err := f.Validate(); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+
+	// No supervisor
+	f.Agents["po"] = baseAgent("PO")
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error with no supervisor")
+	}
+
+	// Two supervisors
+	po2 := baseAgent("PO")
+	po2.Capabilities = map[string]bool{"supervisor": true}
+	dev2 := baseAgent("Dev")
+	dev2.Capabilities = map[string]bool{"supervisor": true}
+	f.Agents = map[string]FleetAgentConfig{"po": po2, "dev": dev2}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error with two supervisors")
+	}
+}
+
+func TestFleetValidate_SupervisorReachability(t *testing.T) {
+	t.Parallel()
+	po := baseAgent("PO")
+	po.Capabilities = map[string]bool{"supervisor": true}
+	orphan := baseAgent("Orphan")
+	f := &FleetConfig{
+		Name: "s",
+		Agents: map[string]FleetAgentConfig{"po": po, "orphan": orphan},
+		Communication: &CommunicationConfig{Flow: []CommunicationNode{
+			{Role: "po", TalksTo: []string{"customer"}, EntryPoint: true},
+			{Role: "orphan", TalksTo: []string{"customer"}},
+		}},
+		Settings: FleetSettings{RoutingMode: "supervisor"},
+	}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected supervisor reachability error")
+	}
+}
+
+func TestFleetValidate_TaskBoardRequiresClaims(t *testing.T) {
+	t.Parallel()
+	f := &FleetConfig{
+		Name: "t",
+		Agents: map[string]FleetAgentConfig{
+			"a": {Name: "A", Identity: "id", Behaviors: "behave", Tools: ToolsConfig{All: true}},
+		},
+	}
+	if err := f.Validate(); err == nil {
+		t.Fatal("expected error when no agent has task_policy.claims")
+	}
+	a := baseAgent("A")
+	a.TaskPolicy = &AgentTaskPolicy{Claims: []string{"code.test"}}
+	f.Agents["a"] = a
+	if err := f.Validate(); err != nil {
+		t.Fatalf("unexpected: %v", err)
+	}
+}
+
+func TestFleetValidate_InvalidEnums(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		mut  func(*FleetConfig)
+	}{
+		{"memory", func(f *FleetConfig) { f.Settings.MemoryVisibility = "telepathy" }},
+		{"routing", func(f *FleetConfig) { f.Settings.RoutingMode = "telepathy" }},
+		{"workspace", func(f *FleetConfig) {
+			a := baseAgent("A")
+			a.Execution = &AgentExecutionConfig{Workspace: "cloud"}
+			f.Agents["a"] = a
+		}},
+		{"claim_policy", func(f *FleetConfig) {
+			f.Settings.TaskBoard = &TaskBoardConfig{ClaimPolicy: "random"}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &FleetConfig{Name: "e", Agents: map[string]FleetAgentConfig{"a": baseAgent("A")}}
+			tc.mut(f)
+			if err := f.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
+
+func TestFleetConfig_NewFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+	a := baseAgent("A")
+	a.Capabilities = map[string]bool{"code.write": true}
+	a.Execution = &AgentExecutionConfig{MaxTurns: 5, TimeoutMinutes: 10, Parallelizable: true, Workspace: "isolated"}
+	a.Memory = &AgentMemoryConfig{Receives: []string{"b"}, PrivateWork: true}
+	a.TaskPolicy = &AgentTaskPolicy{Claims: []string{"code.write"}, MaxConcurrent: 2}
+	b := baseAgent("B")
+	b.Execution = &AgentExecutionConfig{Parallelizable: true}
+	f := &FleetConfig{
+		Name: "rt",
+		Agents: map[string]FleetAgentConfig{"po": baseAgent("PO"), "a": a, "b": b},
+		Communication: &CommunicationConfig{Flow: []CommunicationNode{
+			{Role: "po", TalksTo: []string{"a", "b"}, EntryPoint: true},
+			{Role: "a", TalksTo: []string{"po"}},
+			{Role: "b", TalksTo: []string{"po"}},
+		}},
+		Settings: FleetSettings{
+			MaxTurnsPerAgent:    20,
+			MaxParallelAgents:   2,
+			MaxWallClockMinutes: 60,
+			RoutingMode:         "llm_mentions",
+			MemoryVisibility:    "private_plus_handoffs",
+			TaskBoard:           &TaskBoardConfig{ClaimPolicy: "capability_match"},
+		},
+	}
+	data, err := yaml.Marshal(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed FleetConfig
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if parsed.Settings.MaxParallelAgents != 2 || parsed.Settings.GetClaimPolicy() != "capability_match" {
+		t.Fatalf("settings round-trip: %+v", parsed.Settings)
+	}
+	pa := parsed.Agents["a"]
+	if !pa.Capabilities["code.write"] || !pa.IsParallelizable() || pa.GetWorkspace() != "isolated" {
+		t.Errorf("agent round-trip failed: %+v", pa)
+	}
+	if pa.Memory == nil || !pa.Memory.PrivateWork || pa.TaskPolicy == nil || pa.TaskPolicy.MaxConcurrent != 2 {
+		t.Errorf("agent memory/task round-trip failed: %+v %+v", pa.Memory, pa.TaskPolicy)
+	}
+}
+
+func TestPlanArtifactConfig_S3AndHTTPUploadRoundTrip(t *testing.T) {
+	t.Parallel()
+	plan := &FleetPlan{
+		Name: "art", Key: "art",
+		FleetConfig: FleetConfig{Agents: map[string]FleetAgentConfig{"a": baseAgent("A")}},
+		Channel:     PlanChannelConfig{Type: "chat"},
+		Artifacts: map[string]PlanArtifactConfig{
+			"bucket": {
+				Type: "s3",
+				S3:   &S3ArtifactConfig{Bucket: "b", Prefix: "p/", CredentialRef: "aws", Region: "us-east-1"},
+			},
+			"upload": {
+				Type: "http_upload",
+				HTTPUpload: &HTTPUploadArtifactConfig{
+					URL: "https://example.com/up", Method: "PUT",
+					Headers: map[string]string{"X-A": "1"}, CredentialRef: "tok",
+				},
+			},
+		},
+	}
+	data, err := yaml.Marshal(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed FleetPlan
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Artifacts["bucket"].S3 == nil || parsed.Artifacts["bucket"].S3.Bucket != "b" {
+		t.Errorf("s3 round-trip failed: %+v", parsed.Artifacts["bucket"])
+	}
+	if parsed.Artifacts["upload"].HTTPUpload == nil || parsed.Artifacts["upload"].HTTPUpload.URL == "" {
+		t.Errorf("http_upload round-trip failed: %+v", parsed.Artifacts["upload"])
+	}
+}
+
+func TestSoftwareDevYAML_RoundTrip(t *testing.T) {
+	t.Parallel()
+	configs, err := LoadBundledConfigs()
+	if err != nil {
+		t.Fatalf("LoadBundledConfigs: %v", err)
+	}
+	orig, ok := configs["software-dev"]
+	if !ok {
+		t.Fatal("software-dev bundled config missing")
+	}
+	if err := orig.Validate(); err != nil {
+		t.Fatalf("original validate: %v", err)
+	}
+	data, err := yaml.Marshal(orig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed FleetConfig
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if err := parsed.Validate(); err != nil {
+		t.Fatalf("parsed validate: %v", err)
+	}
+	if parsed.Name != orig.Name {
+		t.Errorf("name: got %q want %q", parsed.Name, orig.Name)
+	}
+	if len(parsed.Agents) != len(orig.Agents) {
+		t.Errorf("agents count: got %d want %d", len(parsed.Agents), len(orig.Agents))
+	}
+	for key := range orig.Agents {
+		if _, ok := parsed.Agents[key]; !ok {
+			t.Errorf("missing agent %q after round-trip", key)
+		}
+	}
+	if orig.Communication != nil {
+		if parsed.Communication == nil || len(parsed.Communication.Flow) != len(orig.Communication.Flow) {
+			t.Errorf("communication flow round-trip mismatch")
+		}
+	}
+	if parsed.Settings.GetMaxTurnsPerAgent() != orig.Settings.GetMaxTurnsPerAgent() {
+		t.Errorf("settings max_turns round-trip mismatch")
+	}
+	if orig.Settings.GetMaxParallelAgents() != 1 {
+		t.Errorf("software-dev expected max_parallel_agents 1, got %d", orig.Settings.GetMaxParallelAgents())
+	}
+	qa := orig.Agents["qa"]
+	e2e := orig.Agents["e2e"]
+	if qa.IsParallelizable() || e2e.IsParallelizable() {
+		t.Error("software-dev qa/e2e must not be parallelizable")
+	}
+	if orig.ProjectContext == nil || orig.ProjectContext.Generator != "load_file" {
+		t.Errorf("software-dev project_context.generator want load_file, got %#v", orig.ProjectContext)
 	}
 }

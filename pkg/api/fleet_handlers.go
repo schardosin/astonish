@@ -2,7 +2,9 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/fleet"
@@ -51,42 +53,26 @@ type FleetListItem struct {
 func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	// Use store abstraction if available (platform mode).
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		// Start with bundled templates (always available from the binary).
-		items := bundledFleetListItems()
-
-		// Merge DB templates (custom, user-created). DB templates with the
-		// same key as a bundled one override it (user forked/customized).
-		dbSummaries := svc.FleetTemplates.ListFleets(r.Context())
-		bundledKeys := make(map[string]bool, len(items))
-		for _, item := range items {
-			bundledKeys[item.Key] = true
-		}
-		for _, s := range dbSummaries {
-			if bundledKeys[s.Key] {
-				// Replace the bundled entry with the DB (custom) version.
-				for i := range items {
-					if items[i].Key == s.Key {
-						items[i] = FleetListItem{
-							Key:         s.Key,
-							Name:        s.Name,
-							Description: s.Description,
-							AgentCount:  s.AgentCount,
-							AgentNames:  s.AgentNames,
-							Source:      "custom",
-						}
-						break
-					}
+		// Store already returns bundled (source=bundled) + non-colliding custom rows.
+		summaries := svc.FleetTemplates.ListFleets(r.Context())
+		items := make([]FleetListItem, 0, len(summaries))
+		for _, s := range summaries {
+			source := s.Source
+			if source == "" {
+				if fleet.IsBundledKey(s.Key) {
+					source = "bundled"
+				} else {
+					source = "custom"
 				}
-			} else {
-				items = append(items, FleetListItem{
-					Key:         s.Key,
-					Name:        s.Name,
-					Description: s.Description,
-					AgentCount:  s.AgentCount,
-					AgentNames:  s.AgentNames,
-					Source:      "custom",
-				})
 			}
+			items = append(items, FleetListItem{
+				Key:         s.Key,
+				Name:        s.Name,
+				Description: s.Description,
+				AgentCount:  s.AgentCount,
+				AgentNames:  s.AgentNames,
+				Source:      source,
+			})
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -94,7 +80,7 @@ func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: direct registry access (personal mode).
+	// Fallback: direct registry access (legacy personal mode).
 	if fleetRegistryVar == nil {
 		respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
 		return
@@ -103,12 +89,17 @@ func ListFleetsHandler(w http.ResponseWriter, r *http.Request) {
 	summaries := fleetRegistryVar.ListFleets()
 	items := make([]FleetListItem, len(summaries))
 	for i, s := range summaries {
+		source := "custom"
+		if fleet.IsBundledKey(s.Key) {
+			source = "bundled"
+		}
 		items[i] = FleetListItem{
 			Key:         s.Key,
 			Name:        s.Name,
 			Description: s.Description,
 			AgentCount:  s.AgentCount,
 			AgentNames:  s.AgentNames,
+			Source:      source,
 		}
 	}
 
@@ -121,22 +112,15 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-		// Check DB first (custom templates take priority).
 		if f, ok := svc.FleetTemplates.GetFleet(r.Context(), key); ok {
+			source := "custom"
+			if fleet.IsBundledKey(key) {
+				source = "bundled"
+			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": "custom"})
+			json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": source})
 			return
 		}
-
-		// Fall back to bundled templates.
-		if bundled, err := fleet.LoadBundledConfigs(); err == nil {
-			if f, ok := bundled[key]; ok {
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": "bundled"})
-				return
-			}
-		}
-
 		respondError(w, http.StatusNotFound, "Fleet not found")
 		return
 	}
@@ -152,13 +136,22 @@ func GetFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	source := "custom"
+	if fleet.IsBundledKey(key) {
+		source = "bundled"
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f})
+	json.NewEncoder(w).Encode(map[string]interface{}{"key": key, "fleet": f, "source": source})
 }
 
 // SaveFleetHandler handles PUT /api/fleets/{key}
 func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
+
+	if fleet.IsBundledKey(key) {
+		respondError(w, http.StatusConflict, "Bundled fleet templates are immutable; clone to a new key to customize")
+		return
+	}
 
 	var f fleet.FleetConfig
 	if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
@@ -173,11 +166,15 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		if err := svc.FleetTemplates.Save(r.Context(), key, &f); err != nil {
+			if errors.Is(err, store.ErrBundledTemplateImmutable) {
+				respondError(w, http.StatusConflict, err.Error())
+				return
+			}
 			respondError(w, http.StatusInternalServerError, "Failed to save fleet: "+err.Error())
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "key": key})
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "key": key, "source": "custom"})
 		return
 	}
 
@@ -199,8 +196,17 @@ func SaveFleetHandler(w http.ResponseWriter, r *http.Request) {
 func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 	key := mux.Vars(r)["key"]
 
+	if fleet.IsBundledKey(key) {
+		respondError(w, http.StatusConflict, "Bundled fleet templates cannot be deleted")
+		return
+	}
+
 	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
 		if err := svc.FleetTemplates.Delete(r.Context(), key); err != nil {
+			if errors.Is(err, store.ErrBundledTemplateImmutable) {
+				respondError(w, http.StatusConflict, err.Error())
+				return
+			}
 			respondError(w, http.StatusInternalServerError, "Failed to delete fleet: "+err.Error())
 			return
 		}
@@ -223,27 +229,112 @@ func DeleteFleetHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
 }
 
-// bundledFleetListItems returns list items for all bundled fleet templates.
-func bundledFleetListItems() []FleetListItem {
-	bundled, err := fleet.LoadBundledConfigs()
-	if err != nil || len(bundled) == 0 {
-		return nil
+// CloneFleetRequest is the body for POST /api/fleets/{key}/clone.
+type CloneFleetRequest struct {
+	NewKey string `json:"new_key"`
+	Name   string `json:"name,omitempty"`
+}
+
+// CloneFleetHandler handles POST /api/fleets/{key}/clone.
+// Copies a bundled or custom template into a new custom DB key.
+func CloneFleetHandler(w http.ResponseWriter, r *http.Request) {
+	fromKey := mux.Vars(r)["key"]
+
+	var req CloneFleetRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "Invalid request body: "+err.Error())
+		return
+	}
+	newKey := strings.TrimSpace(req.NewKey)
+	if newKey == "" {
+		respondError(w, http.StatusBadRequest, "new_key is required")
+		return
+	}
+	if fleet.IsBundledKey(newKey) {
+		respondError(w, http.StatusConflict, "Cannot clone onto a bundled template key; choose a different new_key")
+		return
 	}
 
-	items := make([]FleetListItem, 0, len(bundled))
-	for key, cfg := range bundled {
-		names := make([]string, 0, len(cfg.Agents))
-		for name := range cfg.Agents {
-			names = append(names, name)
+	if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
+		src, ok := svc.FleetTemplates.GetFleet(r.Context(), fromKey)
+		if !ok {
+			respondError(w, http.StatusNotFound, "Source fleet not found")
+			return
 		}
-		items = append(items, FleetListItem{
-			Key:         key,
-			Name:        cfg.Name,
-			Description: cfg.Description,
-			AgentCount:  len(cfg.Agents),
-			AgentNames:  names,
-			Source:      "bundled",
-		})
+		// Reject if a custom template already occupies newKey.
+		if existing, exists := svc.FleetTemplates.GetFleet(r.Context(), newKey); exists {
+			_ = existing
+			respondError(w, http.StatusConflict, "A fleet template with key "+newKey+" already exists")
+			return
+		}
+
+		cfg, err := normalizeFleetConfig(src)
+		if err != nil {
+			respondError(w, http.StatusInternalServerError, "Failed to read source fleet: "+err.Error())
+			return
+		}
+		if strings.TrimSpace(req.Name) != "" {
+			cfg.Name = strings.TrimSpace(req.Name)
+		} else if cfg.Name != "" {
+			cfg.Name = cfg.Name + " Copy"
+		} else {
+			cfg.Name = newKey
+		}
+		if err := cfg.Validate(); err != nil {
+			respondError(w, http.StatusBadRequest, "Validation error: "+err.Error())
+			return
+		}
+		if err := svc.FleetTemplates.Save(r.Context(), newKey, cfg); err != nil {
+			if errors.Is(err, store.ErrBundledTemplateImmutable) {
+				respondError(w, http.StatusConflict, err.Error())
+				return
+			}
+			respondError(w, http.StatusInternalServerError, "Failed to save cloned fleet: "+err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "key": newKey, "source": "custom"})
+		return
 	}
-	return items
+
+	respondError(w, http.StatusServiceUnavailable, "Fleet system not initialized")
+}
+
+func normalizeFleetConfig(src any) (*fleet.FleetConfig, error) {
+	switch v := src.(type) {
+	case *fleet.FleetConfig:
+		// Deep-ish copy via JSON so the clone is independent of the cached bundled pointer.
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		var cfg fleet.FleetConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, err
+		}
+		return &cfg, nil
+	case fleet.FleetConfig:
+		cfg := v
+		return &cfg, nil
+	case map[string]any:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		var cfg fleet.FleetConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, err
+		}
+		return &cfg, nil
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return nil, err
+		}
+		var cfg fleet.FleetConfig
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, err
+		}
+		return &cfg, nil
+	}
 }

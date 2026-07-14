@@ -12,6 +12,7 @@ const credStoreKey contextKey = "astonish_credential_store"
 const memoryStoreKey contextKey = "astonish_memory_store"
 const memorySearcherKey contextKey = "astonish_memory_searcher"
 const flowStoreKey contextKey = "astonish_flow_store"
+const teamFlowStoreKey contextKey = "astonish_team_flow_store"
 const drillReportStoreKey contextKey = "astonish_drill_report_store"
 const sessionIDKey contextKey = "astonish_session_id"
 
@@ -100,6 +101,22 @@ func WithFlowStore(ctx context.Context, fs FlowStore) context.Context {
 // Returns nil if no FlowStore is present (personal mode or tests).
 func FlowStoreFromContext(ctx context.Context) FlowStore {
 	fs, _ := ctx.Value(flowStoreKey).(FlowStore)
+	return fs
+}
+
+// WithTeamFlowStore returns a new context containing the team-scoped FlowStore.
+// Used by drill tools which are always team-scoped (drills are team-level
+// artifacts, never personal). This is separate from the general FlowStore
+// (which may be a composite personal+team store for regular flow tools).
+func WithTeamFlowStore(ctx context.Context, fs FlowStore) context.Context {
+	return context.WithValue(ctx, teamFlowStoreKey, fs)
+}
+
+// TeamFlowStoreFromContext retrieves the team-scoped FlowStore from a context.
+// Returns nil if not in platform mode. Drill tools use this to ensure they
+// always read/write from the team schema.
+func TeamFlowStoreFromContext(ctx context.Context) FlowStore {
+	fs, _ := ctx.Value(teamFlowStoreKey).(FlowStore)
 	return fs
 }
 
@@ -197,6 +214,27 @@ func MCPServerStoresFromContext(ctx context.Context) *MCPServerStores {
 
 const fleetTemplateStoreKey contextKey = "astonish_fleet_template_store"
 const fleetPlanStoreKey contextKey = "astonish_fleet_plan_store"
+const fleetRunStateStoreKey contextKey = "astonish_fleet_run_state_store"
+const fleetMailboxStoreKey contextKey = "astonish_fleet_mailbox_store"
+const fleetTaskBoardStoreKey contextKey = "astonish_fleet_task_board_store"
+const fleetTaskEventHandlerKey contextKey = "astonish_fleet_task_event_handler"
+
+// FleetTaskEventHandler notifies listeners when a task board entry changes.
+type FleetTaskEventHandler func(event string, task FleetTask)
+
+// WithFleetTaskEventHandler attaches a task-board event callback to ctx.
+func WithFleetTaskEventHandler(ctx context.Context, h FleetTaskEventHandler) context.Context {
+	return context.WithValue(ctx, fleetTaskEventHandlerKey, h)
+}
+
+// FleetTaskEventHandlerFromContext returns the task event handler, if any.
+func FleetTaskEventHandlerFromContext(ctx context.Context) FleetTaskEventHandler {
+	if ctx == nil {
+		return nil
+	}
+	h, _ := ctx.Value(fleetTaskEventHandlerKey).(FleetTaskEventHandler)
+	return h
+}
 
 // WithFleetTemplateStore returns a new context containing a tenant-scoped FleetTemplateStore.
 // Used to propagate the PG fleet template store into the ADK runner context so that
@@ -229,6 +267,48 @@ func FleetPlanStoreFromContext(ctx context.Context) FleetPlanStore {
 		return nil
 	}
 	fs, _ := ctx.Value(fleetPlanStoreKey).(FleetPlanStore)
+	return fs
+}
+
+// WithFleetRunStateStore returns a new context containing a tenant-scoped FleetRunStateStore.
+func WithFleetRunStateStore(ctx context.Context, fs FleetRunStateStore) context.Context {
+	return context.WithValue(ctx, fleetRunStateStoreKey, fs)
+}
+
+// FleetRunStateStoreFromContext retrieves the FleetRunStateStore from a context.
+func FleetRunStateStoreFromContext(ctx context.Context) FleetRunStateStore {
+	if ctx == nil {
+		return nil
+	}
+	fs, _ := ctx.Value(fleetRunStateStoreKey).(FleetRunStateStore)
+	return fs
+}
+
+// WithFleetMailboxStore returns a new context containing a tenant-scoped FleetMailboxStore.
+func WithFleetMailboxStore(ctx context.Context, fs FleetMailboxStore) context.Context {
+	return context.WithValue(ctx, fleetMailboxStoreKey, fs)
+}
+
+// FleetMailboxStoreFromContext retrieves the FleetMailboxStore from a context.
+func FleetMailboxStoreFromContext(ctx context.Context) FleetMailboxStore {
+	if ctx == nil {
+		return nil
+	}
+	fs, _ := ctx.Value(fleetMailboxStoreKey).(FleetMailboxStore)
+	return fs
+}
+
+// WithFleetTaskBoardStore returns a new context containing a tenant-scoped FleetTaskBoardStore.
+func WithFleetTaskBoardStore(ctx context.Context, fs FleetTaskBoardStore) context.Context {
+	return context.WithValue(ctx, fleetTaskBoardStoreKey, fs)
+}
+
+// FleetTaskBoardStoreFromContext retrieves the FleetTaskBoardStore from a context.
+func FleetTaskBoardStoreFromContext(ctx context.Context) FleetTaskBoardStore {
+	if ctx == nil {
+		return nil
+	}
+	fs, _ := ctx.Value(fleetTaskBoardStoreKey).(FleetTaskBoardStore)
 	return fs
 }
 

@@ -153,7 +153,9 @@ type SaveFleetPlanArgs struct {
 	// the agents map and the communication flow graph.
 	IncludeAgents []string `json:"include_agents,omitempty" jsonschema:"Optional list of agent roles to include from the base fleet (e.g., ['dev'] or ['po', 'dev']). If omitted, all agents are included. When set, agents NOT in this list are removed along with their communication flow entries."`
 	// Credentials maps logical names to credential store entry names.
-	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings for external service authentication. Key is a logical name agents use (e.g., 'github', 'jira', 'deploy-ssh'). Value is the credential name in the encrypted store. IMPORTANT: For github_issues channel plans, include a 'github' entry so the GitHub token is auto-injected into gh CLI commands. If credentials were validated with validate_fleet_plan, include the same mappings here."`
+	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings for external service authentication. Key is a logical name agents use (e.g., 'github', 'trading'). Value is the credential name in the encrypted store. IMPORTANT: For github_issues channel plans, include a 'github' entry so the GitHub token is auto-injected into gh CLI commands. If credentials were validated with validate_fleet_plan, include the same mappings here."`
+	// CredentialInjection declares how credentials are injected into fleet sandbox containers at session start (env vars and files).
+	CredentialInjection *SaveFleetPlanCredentialInjection `json:"credential_injection,omitempty" jsonschema:"How plan credentials are injected at fleet session start. env: map logical credentials to container environment variables. files: materialize credential fields to absolute paths inside the container (e.g., /root/app/config/credentials.yaml). Required for apps that read config files — store the file content via save_credential (type api_key, field value) and reference it here. GitHub-only plans get GH_TOKEN by default when omitted."`
 	// WorkspaceBaseDir overrides the base directory where project files are stored.
 	// The final workspace path will be <workspace_base_dir>/<repo-name or plan-key>.
 	// If omitted, the template's default is used (typically ~/astonish_projects).
@@ -191,6 +193,55 @@ type SaveFleetPlanProjectSource struct {
 	Type string `json:"type" jsonschema:"Source type: 'git_repo' (clone from GitHub) or 'local' (copy from local path)"`
 	Repo string `json:"repo,omitempty" jsonschema:"GitHub repository as 'owner/repo' for 'git_repo' type"`
 	Path string `json:"path,omitempty" jsonschema:"Filesystem path for 'local' type"`
+}
+
+// SaveFleetPlanCredentialInjection declares env and file injection for fleet sessions.
+type SaveFleetPlanCredentialInjection struct {
+	Env   []SaveFleetPlanEnvInjection  `json:"env,omitempty" jsonschema:"Environment variable injection entries"`
+	Files []SaveFleetPlanFileInjection `json:"files,omitempty" jsonschema:"File materialization entries"`
+}
+
+// SaveFleetPlanEnvInjection maps a logical credential to a container env var.
+type SaveFleetPlanEnvInjection struct {
+	Credential string `json:"credential" jsonschema:"Logical name from the credentials map (e.g., 'github', 'trading')"`
+	Var        string `json:"var" jsonschema:"Container environment variable name (e.g., 'GH_TOKEN')"`
+	Field      string `json:"field" jsonschema:"Credential field to read: token, value, password, username"`
+}
+
+// SaveFleetPlanFileInjection materializes a credential field as a file in the container.
+type SaveFleetPlanFileInjection struct {
+	Credential string `json:"credential" jsonschema:"Logical name from the credentials map"`
+	Path       string `json:"path" jsonschema:"Absolute path inside the container (e.g., '/root/app/config/credentials.yaml')"`
+	Field      string `json:"field" jsonschema:"Credential field to write (usually 'value' for api_key blobs)"`
+	Format     string `json:"format,omitempty" jsonschema:"Optional format hint: yaml, json, raw, dotenv"`
+	Mode       string `json:"mode,omitempty" jsonschema:"Optional file permissions in octal (e.g., '0600')"`
+}
+
+func (inj *SaveFleetPlanCredentialInjection) toFleet() *fleet.CredentialInjection {
+	if inj == nil {
+		return nil
+	}
+	out := &fleet.CredentialInjection{}
+	for _, e := range inj.Env {
+		out.Env = append(out.Env, fleet.EnvInjection{
+			Credential: e.Credential,
+			Var:        e.Var,
+			Field:      e.Field,
+		})
+	}
+	for _, f := range inj.Files {
+		out.Files = append(out.Files, fleet.FileInjection{
+			Credential: f.Credential,
+			Path:       f.Path,
+			Field:      f.Field,
+			Format:     f.Format,
+			Mode:       f.Mode,
+		})
+	}
+	if len(out.Env) == 0 && len(out.Files) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SaveFleetPlanResult is the result of the save_fleet_plan tool.
@@ -361,6 +412,15 @@ func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult
 		}
 	}
 
+	credInjection := args.CredentialInjection.toFleet()
+	if err := fleet.ValidateCredentialInjectionSpec(args.Credentials, credInjection); err != nil {
+		return SaveFleetPlanResult{
+			Status:  "error",
+			Message: err.Error(),
+		}, nil
+	}
+	credInjection = fleet.NormalizeCredentialInjection(args.Credentials, credInjection)
+
 	plan := &fleet.FleetPlan{
 		Name:                  name,
 		Key:                   key,
@@ -368,6 +428,7 @@ func saveFleetPlan(tc tool.Context, args SaveFleetPlanArgs) (SaveFleetPlanResult
 		CreatedFrom:           baseKey,
 		FleetConfig:           snapshotCfg,
 		Credentials:           args.Credentials,
+		CredentialInjection:   credInjection,
 		Channel:               channelCfg,
 		Artifacts:             artifacts,
 		ProjectSource:         projectSource,
@@ -498,11 +559,13 @@ func GetFleetPlanTools() ([]tool.Tool, error) {
 		Name: "save_fleet_plan",
 		Description: "Save a fleet plan configuration. Creates a reusable, fully-configured fleet definition " +
 			"that includes the team composition (snapshotted from a base fleet), environment-specific " +
-			"settings like communication channel and artifact destinations, and credential mappings " +
-			"for authenticating with external services. " +
+			"settings like communication channel and artifact destinations, credential mappings " +
+			"for authenticating with external services, and credential_injection for runtime env/file " +
+			"injection into fleet sandbox containers. " +
 			"IMPORTANT: If credentials were validated with validate_fleet_plan, pass the same " +
-			"credentials map here so they are stored in the plan. Without credentials, the plan " +
-			"cannot authenticate with external services at runtime. " +
+			"credentials map and credential_injection here. Use save_credential during setup to store " +
+			"secrets in the encrypted store, then reference store entry names in credentials and declare " +
+			"how they are injected (env vars and/or file paths) in credential_injection. " +
 			"Use include_agents to select a subset of agents from the template (e.g., only ['dev']). " +
 			"The plan is stored as a YAML file and can be launched from the Studio UI.",
 	}, saveFleetPlan)

@@ -88,6 +88,9 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 	env := map[string]string{
 		"ASTONISH_SESSION_ID": spec.SessionID,
 	}
+	for k, v := range spec.Env {
+		env[k] = v
+	}
 
 	// Build labels. Sanitize session ID for K8s label compliance (values
 	// allow only [a-zA-Z0-9._-]). The primary fix is at session-key creation

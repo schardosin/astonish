@@ -140,13 +140,24 @@ func (fs *personalFlowStore) GetStoreDir(ctx context.Context) string {
 
 func entPersonalFlowToSummary(e *personalent.Flow) store.FlowSummary {
 	s := store.FlowSummary{
-		Name:  e.Name,
-		Type:  e.Type,
-		Scope: "personal",
+		Name:      e.Name,
+		Type:      e.Type,
+		Scope:     "personal",
+		Installed: true,
 	}
 	if e.Definition != nil {
 		if desc, ok := e.Definition["description"].(string); ok {
 			s.Description = desc
+		}
+		if suite, ok := e.Definition["suite"].(string); ok {
+			s.Suite = suite
+		}
+		if tags, ok := e.Definition["tags"].([]any); ok {
+			for _, t := range tags {
+				if tag, ok := t.(string); ok {
+					s.Tags = append(s.Tags, tag)
+				}
+			}
 		}
 	}
 	return s

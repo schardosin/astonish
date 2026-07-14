@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
@@ -60,9 +61,11 @@ type FleetSession struct {
 	// State
 	state            SessionState
 	activeAgent      string // which agent is currently processing (or last processed)
+	activeAgents     map[string]struct{} // agents currently activated (parallel dispatcher)
 	waitingAgent     string // which agent is waiting for human input
 	ballWithCustomer bool   // true when ball was moved to customer (used for state tracking)
 	mu               sync.RWMutex
+	runStateStore    store.FleetRunStateStore
 
 	// OnStateChange is called whenever the session state changes.
 	// Used by the API layer to stream state updates to the UI.
@@ -71,6 +74,17 @@ type FleetSession struct {
 	// OnAgentMessage is called when an agent posts a message.
 	// Used for SSE streaming of agent responses.
 	OnAgentMessage func(msg Message)
+
+	// OnAgentStarted and OnAgentFinished are called around agent activation.
+	// Callback implementations must be concurrency-safe when parallel dispatch is enabled.
+	OnAgentStarted  func(agentKey string, laneIndex int)
+	OnAgentFinished func(agentKey string, laneIndex int, duration time.Duration)
+
+	// OnMailboxDelivered is called after a mailbox-mode handoff is persisted.
+	OnMailboxDelivered func(recipient string, sender string)
+
+	// OnTaskEvent is called when a task board entry is posted, claimed, completed, or failed.
+	OnTaskEvent func(event string, task store.FleetTask)
 
 	// OnMessagePosted is called after every message is posted to the channel
 	// (human, agent, or system). Used for transcript persistence.
@@ -215,10 +229,40 @@ func (fs *FleetSession) setState(state SessionState, activeAgent string) {
 	fs.mu.Lock()
 	fs.state = state
 	fs.activeAgent = activeAgent
+	if state != StateProcessing {
+		fs.activeAgents = nil
+	} else if activeAgent != "" {
+		fs.activeAgents = map[string]struct{}{activeAgent: {}}
+	}
 	fs.mu.Unlock()
+
+	fs.persistRunStateSnapshot()
 
 	if fs.OnStateChange != nil {
 		fs.OnStateChange(state, activeAgent)
+	}
+}
+
+// setActiveAgents updates the parallel active-agent set while in processing state.
+func (fs *FleetSession) setActiveAgents(agents []string) {
+	fs.mu.Lock()
+	fs.state = StateProcessing
+	fs.activeAgents = make(map[string]struct{}, len(agents))
+	for _, a := range agents {
+		fs.activeAgents[a] = struct{}{}
+	}
+	if len(agents) == 1 {
+		fs.activeAgent = agents[0]
+	} else if len(agents) > 0 {
+		fs.activeAgent = agents[0]
+	} else {
+		fs.activeAgent = ""
+	}
+	active := fs.activeAgent
+	fs.mu.Unlock()
+	fs.persistRunStateSnapshot()
+	if fs.OnStateChange != nil {
+		fs.OnStateChange(StateProcessing, active)
 	}
 }
 
@@ -245,6 +289,22 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		fs.cancel = cancel
 	}
 	cancel := fs.cancel
+	ctx = store.WithSessionID(ctx, fs.ID)
+	ctx = store.WithFleetTaskEventHandler(ctx, func(event string, task store.FleetTask) {
+		if fs.OnTaskEvent != nil {
+			fs.OnTaskEvent(event, task)
+		}
+	})
+	if fs.FleetConfig != nil && fs.FleetConfig.Settings.MaxWallClockMinutes > 0 {
+		var wallCancel context.CancelFunc
+		ctx, wallCancel = context.WithTimeout(ctx, time.Duration(fs.FleetConfig.Settings.MaxWallClockMinutes)*time.Minute)
+		defer wallCancel()
+	}
+	fs.ctx = ctx
+	fs.runStateStore = store.FleetRunStateStoreFromContext(ctx)
+	fs.persistRunStateSnapshot()
+	stopHeartbeat := fs.startRunStateHeartbeat(ctx)
+	defer stopHeartbeat()
 	slog.Info("session started", "component", "fleet", "session_id", fs.ID, "fleet", fs.FleetKey)
 	defer func() {
 		cancel()
@@ -257,17 +317,15 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		}
 	}()
 
-	// pendingTarget holds the next agent to activate when LLM routing
-	// determined who should go next. This skips WaitForMessage on the
-	// next iteration to avoid the deadlock where the message is already
-	// in the channel.
-	var pendingTarget string
+	// pendingTargets holds agents to activate from prior routing decisions.
+	// Serial mode uses at most one entry; parallel mode may hold a fan-out batch.
+	var pendingTargets []string
 
 	// If resuming after a restart (or auto-starting), use the pre-computed target.
 	if fs.ResumeTarget != "" {
-		pendingTarget = fs.ResumeTarget
+		pendingTargets = []string{fs.ResumeTarget}
 		fs.ResumeTarget = "" // consume it
-		slog.Info("resuming session with target agent", "component", "fleet", "agent", pendingTarget)
+		slog.Info("resuming session with target agent", "component", "fleet", "agent", pendingTargets[0])
 	}
 
 	// Track consecutive agent failures to prevent infinite error loops.
@@ -275,6 +333,10 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 	// the session should stop rather than hang forever.
 	const maxConsecutiveErrors = 3
 	consecutiveErrors := 0
+	maxParallel := 1
+	if fs.FleetConfig != nil {
+		maxParallel = fs.FleetConfig.Settings.GetMaxParallelAgents()
+	}
 
 	for {
 		// Check context
@@ -283,14 +345,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			return ctx.Err()
 		}
 
-		var targetAgent string
-
-		if pendingTarget != "" {
-			// We already know who should act next from a previous routing decision.
-			targetAgent = pendingTarget
-			pendingTarget = ""
-			slog.Info("auto-chaining to agent", "component", "fleet", "agent", targetAgent)
-		} else {
+		if len(pendingTargets) == 0 {
 			// Wait for the next message.
 			// For headless sessions, arm the idle watchdog so the session
 			// does not hang forever if an agent gets stuck.
@@ -320,32 +375,44 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 					return nil // clean shutdown (parent context cancelled)
 				}
 				// Idle watchdog fired: the child context timed out but the
-				// parent is still alive. Activate the entry point to reassess.
+				// parent is still alive. Only continue when incomplete work
+				// remains; otherwise exit quietly (human message or tasks
+				// are the only wake triggers).
 				if fs.Headless && waitCtx.Err() == context.DeadlineExceeded {
-					entryPoint := fs.FleetConfig.GetEntryPoint()
-					slog.Warn("idle watchdog fired", "component", "fleet", "session_id", fs.ID, "idle_timeout", idleWatchdogTimeout, "entry_point", entryPoint)
-
-					watchdogMsg := Message{
-						ID:        uuid.New().String(),
-						Sender:    "system",
-						Text:      fmt.Sprintf("Idle watchdog: no activity for %v. Re-activating @%s to reassess.", idleWatchdogTimeout, entryPoint),
-						Timestamp: time.Now(),
+					claimed := fs.claimAndEnqueueTasks(ctx)
+					if len(claimed) > 0 {
+						slog.Info("idle watchdog claimed tasks", "component", "fleet", "session_id", fs.ID, "agents", claimed)
+						pendingTargets = claimed
+						continue
 					}
-					if err := fs.Channel.PostMessage(ctx, watchdogMsg); err != nil {
-						slog.Warn("failed to post fleet session message", "error", err)
+					if fs.hasIncompleteTasks(ctx) {
+						entryPoint := fs.FleetConfig.GetEntryPoint()
+						slog.Warn("idle watchdog: incomplete tasks remain unclaimed, triaging via entry point", "component", "fleet", "session_id", fs.ID, "entry_point", entryPoint)
+						watchdogMsg := Message{
+							ID:        uuid.New().String(),
+							Sender:    "system",
+							Text:      fmt.Sprintf("Idle watchdog: incomplete tasks remain after %v with no claimants. Activating @%s to triage.", idleWatchdogTimeout, entryPoint),
+							Timestamp: time.Now(),
+						}
+						if err := fs.Channel.PostMessage(ctx, watchdogMsg); err != nil {
+							slog.Warn("failed to post fleet session message", "error", err)
+						}
+						fs.postExternal(watchdogMsg)
+						fs.notifyMessagePosted(watchdogMsg)
+						pendingTargets = []string{entryPoint}
+						continue
 					}
-					fs.postExternal(watchdogMsg)
-					fs.notifyMessagePosted(watchdogMsg)
-
-					pendingTarget = entryPoint
-					continue
+					slog.Info("idle watchdog: no human message and no incomplete tasks, exiting quietly", "component", "fleet", "session_id", fs.ID, "idle_timeout", idleWatchdogTimeout)
+					fs.notifyBallChange("customer")
+					fs.setState(StateStopped, "")
+					return nil
 				}
 				return fmt.Errorf("waiting for message: %w", err)
 			}
 
 			// Customer messages use fast-path routing (no LLM needed)
 			if msg.IsFromCustomer() {
-				targetAgent = RouteCustomerMessage(fs.FleetConfig, fs.waitingAgent)
+				targetAgent := RouteCustomerMessage(fs.FleetConfig, fs.waitingAgent)
 
 				// Customer message goes into the target agent's memory only.
 				// The customer doesn't have their own "memory" in the fleet model;
@@ -367,6 +434,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 
 				// Ball moves to agents since a customer replied
 				fs.notifyBallChange("agents")
+				fs.deliverMailbox(ctx, msg, []string{targetAgent})
 
 				// Customer intervention resets the error counter
 				consecutiveErrors = 0
@@ -377,6 +445,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 						fs.Progress.AddMilestone(m)
 					}
 				}
+				pendingTargets = []string{targetAgent}
 			} else {
 				// This is an agent or system message that arrived from outside
 				// the main loop (e.g., a message posted by an external caller).
@@ -385,10 +454,38 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			}
 		}
 
-		// Activate the target agent
+		serialTarget, parallelBatch, rest := partitionPending(pendingTargets, fs.FleetConfig, maxParallel)
+		pendingTargets = rest
+
+		if len(parallelBatch) > 0 {
+			slog.Info("parallel dispatch", "component", "fleet", "agents", parallelBatch)
+			next, exit, err := fs.activateParallel(ctx, parallelBatch, &consecutiveErrors, maxConsecutiveErrors)
+			if err != nil {
+				return err
+			}
+			pendingTargets = append(next, pendingTargets...)
+			cont, stop := fs.applyQuietExitGate(ctx, pendingTargets, exit)
+			if stop {
+				return nil
+			}
+			pendingTargets = cont
+			continue
+		}
+
+		targetAgent := serialTarget
+		slog.Info("auto-chaining to agent", "component", "fleet", "agent", targetAgent)
+
+		// Activate the target agent (serial path — byte-compatible with prior behavior)
 		fs.setState(StateProcessing, targetAgent)
 
+		agentStartedAt := time.Now()
+		if fs.OnAgentStarted != nil {
+			fs.OnAgentStarted(targetAgent, -1)
+		}
 		response, err := fs.activateAgent(ctx, targetAgent)
+		if fs.OnAgentFinished != nil {
+			fs.OnAgentFinished(targetAgent, -1, time.Since(agentStartedAt))
+		}
 		if err != nil {
 			consecutiveErrors++
 			slog.Error("error activating agent", "component", "fleet", "agent", targetAgent, "consecutive_errors", consecutiveErrors, "max_errors", maxConsecutiveErrors, "error", err)
@@ -407,7 +504,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			fs.notifyMessagePosted(errMsg)
 
 			// Stop the session after too many consecutive failures.
-			// In headless mode there is no human to fix the problem, so
+			// In headless mode there is no human to intervene, so
 			// continuing would just loop forever.
 			if consecutiveErrors >= maxConsecutiveErrors {
 				slog.Error("session stopping after consecutive errors", "component", "fleet", "session_id", fs.ID, "consecutive_errors", consecutiveErrors)
@@ -432,7 +529,7 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 			// session would hang forever in headless mode with no human to
 			// send a new message.
 			if isRetriableError(err) {
-				pendingTarget = targetAgent
+				pendingTargets = append([]string{targetAgent}, pendingTargets...)
 				slog.Info("will retry agent", "component", "fleet", "agent", targetAgent)
 			}
 
@@ -442,97 +539,169 @@ func (fs *FleetSession) Run(ctx context.Context) (runErr error) {
 		// Successful activation resets the error counter
 		consecutiveErrors = 0
 
-		// Use LLM to determine who should act next. The routing decision
-		// determines who "owns" this message in memory.
-		routing := RouteWithLLM(ctx, response, fs.FleetConfig, fs.LLM)
-		slog.Info("routing decision", "component", "fleet", "sender", response.Sender, "target", routing.Target, "reason", routing.Reason)
-
-		// Stamp MemoryKeys based on routing decision:
-		//   → customer: agent's own memory only (customer sees it externally)
-		//   → self:     agent's own memory only (private continuation)
-		//   → none:     agent's own memory only (final message)
-		//   → other:    both sender + target memory (handoff/shared conversation)
-		switch routing.Target {
-		case "customer", "self", "none":
-			response.MemoryKeys = []string{response.Sender}
-		default:
-			response.MemoryKeys = []string{response.Sender, routing.Target}
-		}
-
-		// Post agent's response to the channel (internal thread + SSE only;
-		// GitHub posting is deferred until after routing to avoid flooding
-		// the issue with intermediate messages during self-routing chains).
-		if postErr := fs.Channel.PostMessage(ctx, response); postErr != nil {
-			slog.Error("error posting agent response", "component", "fleet", "error", postErr)
+		next, exit, err := fs.handleRoutingOutcome(ctx, response)
+		if err != nil {
+			slog.Error("error posting agent response", "component", "fleet", "error", err)
 			continue
 		}
-		fs.notifyMessagePosted(response)
-
-		// Notify listeners
-		if fs.OnAgentMessage != nil {
-			fs.OnAgentMessage(response)
+		pendingTargets = append(next, pendingTargets...)
+		cont, stop := fs.applyQuietExitGate(ctx, pendingTargets, exit)
+		if stop {
+			return nil
 		}
+		pendingTargets = cont
+	}
+}
 
-		// Track milestones from the agent's response (approvals, completions, handoffs)
-		if fs.Progress != nil {
-			for _, m := range AnalyzeMessageForMilestones(response) {
-				fs.Progress.AddMilestone(m)
+// activateParallel runs multiple parallelizable agents concurrently and
+// merges their routing outcomes into a pending target list.
+func (fs *FleetSession) activateParallel(ctx context.Context, agents []string, consecutiveErrors *int, maxConsecutiveErrors int) (next []string, exit bool, err error) {
+	fs.setActiveAgents(agents)
+
+	type result struct {
+		agent    string
+		lane     int
+		response Message
+		err      error
+	}
+	results := make([]result, len(agents))
+	var wg sync.WaitGroup
+	for i, agentKey := range agents {
+		wg.Add(1)
+		go func(idx int, key string) {
+			defer wg.Done()
+			started := time.Now()
+			if fs.OnAgentStarted != nil {
+				fs.OnAgentStarted(key, idx)
 			}
-		}
-
-		switch routing.Target {
-		case "customer":
-			// Post to GitHub — this is a deliverable directed at the customer.
-			fs.postExternal(response)
-
-			fs.mu.Lock()
-			fs.waitingAgent = response.Sender
-			fs.mu.Unlock()
-			fs.setState(StateWaitingForCustomer, response.Sender)
-			fs.notifyBallChange("customer")
-
-			// In headless mode, exit cleanly. The plan scheduler will
-			// detect the customer's reply and recover the session.
-			if fs.Headless {
-				slog.Info("ball moved to customer, exiting headless session", "component", "fleet", "session_id", fs.ID)
-				return nil
+			resp, actErr := fs.activateAgent(ctx, key)
+			if fs.OnAgentFinished != nil {
+				fs.OnAgentFinished(key, idx, time.Since(started))
 			}
+			results[idx] = result{agent: key, lane: idx, response: resp, err: actErr}
+		}(i, agentKey)
+	}
+	wg.Wait()
 
-		case "self":
-			// Sender still has the action; re-activate them.
-			// Do NOT post to GitHub — this is an intermediate step in a
-			// multi-activation chain. The message is already in the agent's
-			// memory and SSE (for UI).
-			pendingTarget = response.Sender
-
-		case "none":
-			// Post to GitHub — this is a final message with no follow-up.
-			fs.postExternal(response)
-
-			// No one needs to act; go idle and wait for next message.
-			// Ball moves to customer since no agent has pending work.
-			fs.notifyBallChange("customer")
-
-			// In headless mode, exit cleanly. The plan scheduler will
-			// detect the customer's reply and recover the session.
-			if fs.Headless {
-				slog.Info("no agent has pending work, exiting headless session", "component", "fleet", "session_id", fs.ID)
-				return nil
+	var nextTargets []string
+	hadSuccess := false
+	exitRequested := false
+	for _, r := range results {
+		if r.err != nil {
+			*consecutiveErrors++
+			slog.Error("error activating agent", "component", "fleet", "agent", r.agent, "consecutive_errors", *consecutiveErrors, "max_errors", maxConsecutiveErrors, "error", r.err)
+			errMsg := Message{
+				ID:         uuid.New().String(),
+				Sender:     "system",
+				Text:       fmt.Sprintf("Error from %s: %v", r.agent, r.err),
+				MemoryKeys: []string{r.agent},
+				Timestamp:  time.Now(),
+			}
+			if postErr := fs.Channel.PostMessage(ctx, errMsg); postErr != nil {
+				slog.Error("error posting error message", "component", "fleet", "error", postErr)
+			}
+			fs.postExternal(errMsg)
+			fs.notifyMessagePosted(errMsg)
+			if *consecutiveErrors >= maxConsecutiveErrors {
+				fs.setState(StateStopped, "")
+				return nil, false, fmt.Errorf("stopped after %d consecutive errors", *consecutiveErrors)
+			}
+			if isRetriableError(r.err) {
+				nextTargets = append(nextTargets, r.agent)
 			}
 			continue
+		}
+		hadSuccess = true
+		n, shouldExit, routeErr := fs.handleRoutingOutcome(ctx, r.response)
+		if routeErr != nil {
+			slog.Error("error handling routing outcome", "component", "fleet", "agent", r.agent, "error", routeErr)
+			continue
+		}
+		if shouldExit {
+			exitRequested = true
+			continue
+		}
+		nextTargets = append(nextTargets, n...)
+	}
+	if hadSuccess {
+		*consecutiveErrors = 0
+	}
+	return nextTargets, exitRequested, nil
+}
 
-		default:
-			// Post to GitHub — this message is being handed off to another agent,
-			// so it represents a meaningful communication step.
-			fs.postExternal(response)
+// handleRoutingOutcome posts the agent response, applies routing, and returns
+// any newly pending agent targets. exit=true means the headless session should stop.
+func (fs *FleetSession) handleRoutingOutcome(ctx context.Context, response Message) (next []string, exit bool, err error) {
+	routing := RouteWithLLM(ctx, response, fs.FleetConfig, fs.LLM)
+	slog.Info("routing decision", "component", "fleet", "sender", response.Sender, "target", routing.Target, "reason", routing.Reason)
 
-			// Route to the specified agent.
-			if fs.FleetConfig.CanTalkTo(response.Sender, routing.Target) {
-				pendingTarget = routing.Target
+	switch routing.Target {
+	case "customer", "self", "none":
+		response.MemoryKeys = []string{response.Sender}
+	default:
+		response.MemoryKeys = []string{response.Sender, routing.Target}
+	}
+
+	if postErr := fs.Channel.PostMessage(ctx, response); postErr != nil {
+		return nil, false, postErr
+	}
+	fs.notifyMessagePosted(response)
+
+	if fs.OnAgentMessage != nil {
+		fs.OnAgentMessage(response)
+	}
+
+	if fs.Progress != nil {
+		for _, m := range AnalyzeMessageForMilestones(response) {
+			fs.Progress.AddMilestone(m)
+		}
+	}
+
+	switch routing.Target {
+	case "customer":
+		fs.deliverMailbox(ctx, response, []string{"customer"})
+		fs.postExternal(response)
+
+		fs.mu.Lock()
+		fs.waitingAgent = response.Sender
+		fs.mu.Unlock()
+		fs.setState(StateWaitingForCustomer, response.Sender)
+		fs.notifyBallChange("customer")
+
+		if fs.Headless {
+			slog.Info("ball moved to customer, exiting headless session", "component", "fleet", "session_id", fs.ID)
+			return nil, true, nil
+		}
+		return nil, false, nil
+
+	case "self":
+		return []string{response.Sender}, false, nil
+
+	case "none":
+		fs.postExternal(response)
+		fs.notifyBallChange("customer")
+		if fs.Headless {
+			slog.Info("no agent has pending work, exiting headless session", "component", "fleet", "session_id", fs.ID)
+			return nil, true, nil
+		}
+		return nil, false, nil
+
+	default:
+		targets := collectActivationTargets(response, routing, fs.FleetConfig)
+		if len(targets) == 0 {
+			return nil, false, nil
+		}
+		fs.deliverMailbox(ctx, response, targets)
+		fs.postExternal(response)
+		var reachable []string
+		for _, t := range targets {
+			if fs.FleetConfig.CanTalkTo(response.Sender, t) {
+				reachable = append(reachable, t)
 			} else {
-				slog.Warn("llm routed to unreachable agent, ignoring", "component", "fleet", "target", routing.Target, "sender", response.Sender)
+				slog.Warn("llm routed to unreachable agent, ignoring", "component", "fleet", "target", t, "sender", response.Sender)
 			}
 		}
+		return reachable, false, nil
 	}
 }
 
@@ -558,9 +727,230 @@ func (fs *FleetSession) notifyBallChange(ball string) {
 	fs.mu.Lock()
 	fs.ballWithCustomer = (ball == "customer")
 	fs.mu.Unlock()
+	fs.persistRunStateSnapshot()
 	if fs.OnBallChange != nil {
 		fs.OnBallChange(ball)
 	}
+}
+
+func (fs *FleetSession) deliverMailbox(ctx context.Context, msg Message, recipients []string) {
+	if len(recipients) == 0 {
+		return
+	}
+	mailbox := store.FleetMailboxStoreFromContext(ctx)
+	if mailbox == nil {
+		return
+	}
+	if msg.Timestamp.IsZero() {
+		msg.Timestamp = time.Now()
+	}
+	metadata := msg.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	mail := store.FleetMailboxMessage{
+		SessionID: fs.ID,
+		Sender:    msg.Sender,
+		Body:      msg.Text,
+		Mentions:  append([]string(nil), msg.Mentions...),
+		Metadata:  metadata,
+		CreatedAt: msg.Timestamp,
+	}
+	if err := mailbox.Deliver(ctx, fs.ID, mail, recipients); err != nil {
+		slog.Warn("failed to deliver fleet mailbox message", "component", "fleet", "session_id", fs.ID, "sender", msg.Sender, "error", err)
+		return
+	}
+	if fs.OnMailboxDelivered != nil {
+		for _, recipient := range recipients {
+			fs.OnMailboxDelivered(recipient, msg.Sender)
+		}
+	}
+}
+
+// DeliverToMailbox exposes mailbox delivery for API bootstrap (initial customer messages).
+func (fs *FleetSession) DeliverToMailbox(ctx context.Context, msg Message, recipients []string) {
+	fs.deliverMailbox(ctx, msg, recipients)
+}
+
+// applyQuietExitGate runs claimAndEnqueueTasks before honoring a quiet exit
+// (route customer/none). AI continues only when claimants exist or incomplete
+// tasks remain to triage; otherwise marks the session stopped.
+func (fs *FleetSession) applyQuietExitGate(ctx context.Context, pending []string, exit bool) (next []string, stop bool) {
+	next = append([]string{}, pending...)
+	next = append(next, fs.claimAndEnqueueTasks(ctx)...)
+	next = dedupeTargets(next)
+	if !exit {
+		return next, false
+	}
+	if len(next) == 0 && fs.hasIncompleteTasks(ctx) {
+		if ep := fs.FleetConfig.GetEntryPoint(); ep != "" {
+			slog.Info("quiet-exit blocked: incomplete tasks remain, triaging via entry point", "component", "fleet", "session_id", fs.ID, "entry_point", ep)
+			next = []string{ep}
+		}
+	}
+	if len(next) > 0 {
+		fs.resumeAgentsAfterQuietGate()
+		return next, false
+	}
+	slog.Info("quiet exit: no pending agents and no incomplete tasks", "component", "fleet", "session_id", fs.ID)
+	fs.notifyBallChange("customer")
+	fs.setState(StateStopped, "")
+	return nil, true
+}
+
+func (fs *FleetSession) resumeAgentsAfterQuietGate() {
+	fs.mu.Lock()
+	fs.waitingAgent = ""
+	fs.mu.Unlock()
+	fs.notifyBallChange("agents")
+}
+
+func (fs *FleetSession) hasIncompleteTasks(ctx context.Context) bool {
+	board := store.FleetTaskBoardStoreFromContext(ctx)
+	if board == nil {
+		return false
+	}
+	tasks, err := board.List(ctx, fs.ID, "open", "claimed", "in_progress")
+	if err != nil {
+		slog.Warn("failed to list incomplete fleet tasks", "component", "fleet", "session_id", fs.ID, "error", err)
+		return false
+	}
+	return len(tasks) > 0
+}
+
+// claimAndEnqueueTasks claims open task-board items for eligible agents and
+// returns agent keys that should be activated.
+func (fs *FleetSession) claimAndEnqueueTasks(ctx context.Context) []string {
+	if fs.FleetConfig == nil {
+		return nil
+	}
+	board := store.FleetTaskBoardStoreFromContext(ctx)
+	if board == nil {
+		return nil
+	}
+	policy := fs.FleetConfig.Settings.GetClaimPolicy()
+	var claimed []string
+	for agentKey, agentCfg := range fs.FleetConfig.Agents {
+		if agentCfg.TaskPolicy == nil || len(agentCfg.TaskPolicy.Claims) == 0 {
+			continue
+		}
+		caps := agentCapabilitiesForClaim(agentCfg)
+		task, err := board.Claim(ctx, fs.ID, agentKey, caps, policy)
+		if err != nil {
+			slog.Warn("task board claim failed", "component", "fleet", "session_id", fs.ID, "agent", agentKey, "error", err)
+			continue
+		}
+		if task == nil {
+			continue
+		}
+		claimed = append(claimed, agentKey)
+		if fs.OnTaskEvent != nil {
+			fs.OnTaskEvent("fleet_task_claimed", *task)
+		}
+		slog.Info("task claimed", "component", "fleet", "session_id", fs.ID, "agent", agentKey, "task_id", task.ID.String(), "title", task.Title)
+	}
+	return claimed
+}
+
+func agentCapabilitiesForClaim(agentCfg FleetAgentConfig) map[string]bool {
+	caps := map[string]bool{}
+	for k, v := range agentCfg.Capabilities {
+		if v {
+			caps[k] = true
+		}
+	}
+	if agentCfg.TaskPolicy != nil {
+		for _, claim := range agentCfg.TaskPolicy.Claims {
+			caps[claim] = true
+		}
+	}
+	return caps
+}
+
+func dedupeTargets(targets []string) []string {
+	if len(targets) <= 1 {
+		return targets
+	}
+	seen := make(map[string]bool, len(targets))
+	out := make([]string, 0, len(targets))
+	for _, t := range targets {
+		if t == "" || seen[t] {
+			continue
+		}
+		seen[t] = true
+		out = append(out, t)
+	}
+	return out
+}
+
+func (fs *FleetSession) persistRunStateSnapshot() {
+	if fs.runStateStore == nil {
+		return
+	}
+	snap := fs.runStateSnapshot()
+	if err := fs.runStateStore.Upsert(context.Background(), snap); err != nil {
+		slog.Warn("failed to persist fleet run state", "component", "fleet", "session_id", fs.ID, "error", err)
+	}
+}
+
+func (fs *FleetSession) runStateSnapshot() store.FleetRunStateSnapshot {
+	fs.mu.RLock()
+	state := fs.state
+	activeAgent := fs.activeAgent
+	activeSet := fs.activeAgents
+	waitingAgent := fs.waitingAgent
+	ballWithCustomer := fs.ballWithCustomer
+	fs.mu.RUnlock()
+
+	var activeAgents []string
+	if len(activeSet) > 0 {
+		activeAgents = make([]string, 0, len(activeSet))
+		for a := range activeSet {
+			activeAgents = append(activeAgents, a)
+		}
+	} else if state == StateProcessing && activeAgent != "" {
+		activeAgents = []string{activeAgent}
+	}
+	ball := "agents"
+	if ballWithCustomer {
+		ball = "customer"
+	}
+	progress := map[string]any{}
+	if fs.Progress != nil {
+		progress["milestones"] = fs.Progress.GetMilestones()
+	}
+	return store.FleetRunStateSnapshot{
+		SessionID:       fs.ID,
+		PlanKey:         fs.FleetKey,
+		State:           string(state),
+		ActiveAgents:    activeAgents,
+		WaitingAgent:    waitingAgent,
+		Ball:            ball,
+		Progress:        progress,
+		LastHeartbeatAt: time.Now(),
+	}
+}
+
+func (fs *FleetSession) startRunStateHeartbeat(ctx context.Context) func() {
+	if fs.runStateStore == nil {
+		return func() {}
+	}
+	heartbeatCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-heartbeatCtx.Done():
+				return
+			case now := <-ticker.C:
+				if err := fs.runStateStore.Heartbeat(context.Background(), fs.ID, now); err != nil {
+					slog.Warn("failed to heartbeat fleet run state", "component", "fleet", "session_id", fs.ID, "error", err)
+				}
+			}
+		}
+	}()
+	return cancel
 }
 
 // activateAgent builds the context and runs the agent as a sub-agent.
@@ -579,10 +969,18 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// Build system prompt with communication graph awareness
 	systemPrompt := BuildAgentPrompt(agentCfg, fs.FleetConfig, agentKey, fs.Progress, fs.ProjectContext, fs.TaskSlug, fs.WorkspaceDir, fs.Plan)
 
-	// Build thread context from the agent's personal memory
-	threadContext, err := BuildThreadContext(ctx, fs.Channel, agentKey)
+	// Build thread context from the agent's durable mailbox.
+	threadContext, err := BuildMailboxThreadContext(ctx, store.FleetMailboxStoreFromContext(ctx), fs.ID, agentKey)
 	if err != nil {
 		return Message{}, fmt.Errorf("building agent memory context: %w", err)
+	}
+	// Bootstrap fallback: if mailbox is empty (e.g. first turn before deliver),
+	// seed from channel memory once so the agent is not blind.
+	if strings.TrimSpace(threadContext) == "" {
+		threadContext, err = BuildThreadContext(ctx, fs.Channel, agentKey)
+		if err != nil {
+			return Message{}, fmt.Errorf("building agent memory context: %w", err)
+		}
 	}
 
 	// Build tool filter
@@ -612,6 +1010,9 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// OpenCode tasks can take 30-45 minutes for complex multi-step work,
 	// so the fleet agent timeout must exceed that to allow completion.
 	timeoutOverride := 60 * time.Minute
+	if agentCfg.Execution != nil && agentCfg.Execution.TimeoutMinutes > 0 {
+		timeoutOverride = time.Duration(agentCfg.Execution.TimeoutMinutes) * time.Minute
+	}
 
 	// Track intermediate text for real-time progress messaging.
 	// When the LLM produces text followed by a tool call in the same turn,

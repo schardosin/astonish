@@ -21,11 +21,26 @@ type Credential func(*sql.Selector)
 // DrillReport is the predicate function for drillreport builders.
 type DrillReport func(*sql.Selector)
 
+// FleetMailboxMessage is the predicate function for fleetmailboxmessage builders.
+type FleetMailboxMessage func(*sql.Selector)
+
 // FleetMonitorState is the predicate function for fleetmonitorstate builders.
 type FleetMonitorState func(*sql.Selector)
 
 // FleetPlan is the predicate function for fleetplan builders.
 type FleetPlan func(*sql.Selector)
+
+// FleetRunState is the predicate function for fleetrunstate builders.
+type FleetRunState func(*sql.Selector)
+
+// FleetSetupDraft is the predicate function for fleetsetupdraft builders.
+type FleetSetupDraft func(*sql.Selector)
+
+// FleetSetupProfile is the predicate function for fleetsetupprofile builders.
+type FleetSetupProfile func(*sql.Selector)
+
+// FleetTask is the predicate function for fleettask builders.
+type FleetTask func(*sql.Selector)
 
 // FleetTemplate is the predicate function for fleettemplate builders.
 type FleetTemplate func(*sql.Selector)

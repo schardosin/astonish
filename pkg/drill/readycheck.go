@@ -17,7 +17,21 @@ const DefaultReadyCheckTimeout = 30
 // DefaultReadyCheckInterval is the default poll interval in seconds.
 const DefaultReadyCheckInterval = 2
 
+// DefaultReadyCheckStableCount is the default number of consecutive successful
+// polls required before a service is considered ready. Prevents one-shot curl
+// success from greening when a process dies seconds later.
+const DefaultReadyCheckStableCount = 3
+
+// readyCheckStableCount returns the configured consecutive-success count, or the default.
+func readyCheckStableCount(rc *config.ReadyCheck) int {
+	if rc != nil && rc.StableCount > 0 {
+		return rc.StableCount
+	}
+	return DefaultReadyCheckStableCount
+}
+
 // RunReadyCheck polls until the application under test is ready or timeout expires.
+// Requires readyCheckStableCount consecutive successes (default 3) spaced by Interval.
 func RunReadyCheck(ctx context.Context, rc *config.ReadyCheck) error {
 	if rc == nil {
 		return nil
@@ -31,13 +45,24 @@ func RunReadyCheck(ctx context.Context, rc *config.ReadyCheck) error {
 	if interval <= 0 {
 		interval = DefaultReadyCheckInterval
 	}
+	need := readyCheckStableCount(rc)
+	successes := 0
 
 	deadline := time.After(time.Duration(timeout) * time.Second)
 	ticker := time.NewTicker(time.Duration(interval) * time.Second)
 	defer ticker.Stop()
 
+	record := func(err error) bool {
+		if err == nil {
+			successes++
+			return successes >= need
+		}
+		successes = 0
+		return false
+	}
+
 	// Try immediately before first tick
-	if err := checkOnce(ctx, rc); err == nil {
+	if record(checkOnce(ctx, rc)) {
 		return nil
 	}
 
@@ -46,9 +71,9 @@ func RunReadyCheck(ctx context.Context, rc *config.ReadyCheck) error {
 		case <-ctx.Done():
 			return fmt.Errorf("ready check cancelled: %w", ctx.Err())
 		case <-deadline:
-			return fmt.Errorf("ready check timed out after %ds (type: %s)", timeout, rc.Type)
+			return fmt.Errorf("ready check timed out after %ds (type: %s, need %d consecutive successes, had %d)", timeout, rc.Type, need, successes)
 		case <-ticker.C:
-			if err := checkOnce(ctx, rc); err == nil {
+			if record(checkOnce(ctx, rc)) {
 				return nil
 			}
 		}

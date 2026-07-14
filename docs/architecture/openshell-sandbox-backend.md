@@ -721,6 +721,14 @@ container).
    at spawn time — no changes to the `astonish node` protocol needed
 4. Configure credential rotation policies (optional)
 
+**Implemented (Fleet v1):** `pkg/fleet/openshell_providers.go` registers
+providers from `plan.credential_injection.env` at fleet session start;
+`pkg/api/fleet_sandbox_wiring.go` attaches them after sandbox creation and
+detaches on cleanup. Plan-bound credentials (`plan.credentials` allowlist)
+are resolved via `PlanBoundCredentialStore` in `pkg/fleet/plan_bound_store.go`.
+File credentials use `Backend.PushFile` / Incus exec materialization in
+`pkg/fleet/credential_injection.go`. Regular Studio Chat is unchanged.
+
 **gRPC methods involved:**
 - `CreateProvider` — register a named credential bundle
 - `ListProviders` / `GetProvider` — introspect registered providers

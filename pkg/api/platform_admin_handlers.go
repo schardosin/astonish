@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/schardosin/astonish/pkg/mailer"
+	"github.com/schardosin/astonish/pkg/sandbox"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/entstore"
 	"golang.org/x/crypto/bcrypt"
@@ -1096,6 +1097,7 @@ func SetPlatformBackend(backend store.PlatformBackend) {
 		if es, ok := backend.(*entstore.Store); ok {
 			platformSecretsInstance = es.Secrets()
 		}
+		sandbox.SetSandboxTemplateStoreForBootstrap(backend.SandboxTemplates())
 	}
 }
 

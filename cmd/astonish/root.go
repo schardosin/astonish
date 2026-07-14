@@ -86,6 +86,7 @@ func Execute() error {
 		mustBeRemote("skills")
 		return handleSkillsCommand(os.Args[2:])
 	case "drill", "test":
+		mustBeRemote("drill")
 		return handleDrillCommand(os.Args[2:])
 	case "sandbox":
 		mustNotBeRemote("sandbox")

@@ -11,8 +11,13 @@ import (
 	"github.com/schardosin/astonish/ent/team/chatsessionevent"
 	"github.com/schardosin/astonish/ent/team/credential"
 	"github.com/schardosin/astonish/ent/team/drillreport"
+	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
 	"github.com/schardosin/astonish/ent/team/fleetmonitorstate"
 	"github.com/schardosin/astonish/ent/team/fleetplan"
+	"github.com/schardosin/astonish/ent/team/fleetrunstate"
+	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
+	"github.com/schardosin/astonish/ent/team/fleetsetupprofile"
+	"github.com/schardosin/astonish/ent/team/fleettask"
 	"github.com/schardosin/astonish/ent/team/fleettemplate"
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
@@ -161,6 +166,36 @@ func init() {
 	drillreportDescID := drillreportFields[0].Descriptor()
 	// drillreport.DefaultID holds the default value on creation for the id field.
 	drillreport.DefaultID = drillreportDescID.Default.(func() uuid.UUID)
+	fleetmailboxmessageFields := schema.FleetMailboxMessage{}.Fields()
+	_ = fleetmailboxmessageFields
+	// fleetmailboxmessageDescSessionID is the schema descriptor for session_id field.
+	fleetmailboxmessageDescSessionID := fleetmailboxmessageFields[1].Descriptor()
+	// fleetmailboxmessage.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	fleetmailboxmessage.SessionIDValidator = fleetmailboxmessageDescSessionID.Validators[0].(func(string) error)
+	// fleetmailboxmessageDescRecipient is the schema descriptor for recipient field.
+	fleetmailboxmessageDescRecipient := fleetmailboxmessageFields[2].Descriptor()
+	// fleetmailboxmessage.RecipientValidator is a validator for the "recipient" field. It is called by the builders before save.
+	fleetmailboxmessage.RecipientValidator = fleetmailboxmessageDescRecipient.Validators[0].(func(string) error)
+	// fleetmailboxmessageDescSender is the schema descriptor for sender field.
+	fleetmailboxmessageDescSender := fleetmailboxmessageFields[3].Descriptor()
+	// fleetmailboxmessage.SenderValidator is a validator for the "sender" field. It is called by the builders before save.
+	fleetmailboxmessage.SenderValidator = fleetmailboxmessageDescSender.Validators[0].(func(string) error)
+	// fleetmailboxmessageDescBody is the schema descriptor for body field.
+	fleetmailboxmessageDescBody := fleetmailboxmessageFields[4].Descriptor()
+	// fleetmailboxmessage.DefaultBody holds the default value on creation for the body field.
+	fleetmailboxmessage.DefaultBody = fleetmailboxmessageDescBody.Default.(string)
+	// fleetmailboxmessageDescDeliveryStatus is the schema descriptor for delivery_status field.
+	fleetmailboxmessageDescDeliveryStatus := fleetmailboxmessageFields[7].Descriptor()
+	// fleetmailboxmessage.DefaultDeliveryStatus holds the default value on creation for the delivery_status field.
+	fleetmailboxmessage.DefaultDeliveryStatus = fleetmailboxmessageDescDeliveryStatus.Default.(string)
+	// fleetmailboxmessageDescCreatedAt is the schema descriptor for created_at field.
+	fleetmailboxmessageDescCreatedAt := fleetmailboxmessageFields[10].Descriptor()
+	// fleetmailboxmessage.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fleetmailboxmessage.DefaultCreatedAt = fleetmailboxmessageDescCreatedAt.Default.(func() time.Time)
+	// fleetmailboxmessageDescID is the schema descriptor for id field.
+	fleetmailboxmessageDescID := fleetmailboxmessageFields[0].Descriptor()
+	// fleetmailboxmessage.DefaultID holds the default value on creation for the id field.
+	fleetmailboxmessage.DefaultID = fleetmailboxmessageDescID.Default.(func() uuid.UUID)
 	fleetmonitorstateFields := schema.FleetMonitorState{}.Fields()
 	_ = fleetmonitorstateFields
 	// fleetmonitorstateDescState is the schema descriptor for state field.
@@ -205,6 +240,134 @@ func init() {
 	fleetplanDescID := fleetplanFields[0].Descriptor()
 	// fleetplan.DefaultID holds the default value on creation for the id field.
 	fleetplan.DefaultID = fleetplanDescID.Default.(func() uuid.UUID)
+	fleetrunstateFields := schema.FleetRunState{}.Fields()
+	_ = fleetrunstateFields
+	// fleetrunstateDescSessionID is the schema descriptor for session_id field.
+	fleetrunstateDescSessionID := fleetrunstateFields[1].Descriptor()
+	// fleetrunstate.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	fleetrunstate.SessionIDValidator = fleetrunstateDescSessionID.Validators[0].(func(string) error)
+	// fleetrunstateDescPlanKey is the schema descriptor for plan_key field.
+	fleetrunstateDescPlanKey := fleetrunstateFields[2].Descriptor()
+	// fleetrunstate.PlanKeyValidator is a validator for the "plan_key" field. It is called by the builders before save.
+	fleetrunstate.PlanKeyValidator = fleetrunstateDescPlanKey.Validators[0].(func(string) error)
+	// fleetrunstateDescState is the schema descriptor for state field.
+	fleetrunstateDescState := fleetrunstateFields[3].Descriptor()
+	// fleetrunstate.StateValidator is a validator for the "state" field. It is called by the builders before save.
+	fleetrunstate.StateValidator = fleetrunstateDescState.Validators[0].(func(string) error)
+	// fleetrunstateDescActiveAgents is the schema descriptor for active_agents field.
+	fleetrunstateDescActiveAgents := fleetrunstateFields[4].Descriptor()
+	// fleetrunstate.DefaultActiveAgents holds the default value on creation for the active_agents field.
+	fleetrunstate.DefaultActiveAgents = fleetrunstateDescActiveAgents.Default.([]string)
+	// fleetrunstateDescBall is the schema descriptor for ball field.
+	fleetrunstateDescBall := fleetrunstateFields[6].Descriptor()
+	// fleetrunstate.DefaultBall holds the default value on creation for the ball field.
+	fleetrunstate.DefaultBall = fleetrunstateDescBall.Default.(string)
+	// fleetrunstateDescProgress is the schema descriptor for progress field.
+	fleetrunstateDescProgress := fleetrunstateFields[7].Descriptor()
+	// fleetrunstate.DefaultProgress holds the default value on creation for the progress field.
+	fleetrunstate.DefaultProgress = fleetrunstateDescProgress.Default.(map[string]interface{})
+	// fleetrunstateDescLastHeartbeatAt is the schema descriptor for last_heartbeat_at field.
+	fleetrunstateDescLastHeartbeatAt := fleetrunstateFields[8].Descriptor()
+	// fleetrunstate.DefaultLastHeartbeatAt holds the default value on creation for the last_heartbeat_at field.
+	fleetrunstate.DefaultLastHeartbeatAt = fleetrunstateDescLastHeartbeatAt.Default.(func() time.Time)
+	// fleetrunstateDescCreatedAt is the schema descriptor for created_at field.
+	fleetrunstateDescCreatedAt := fleetrunstateFields[9].Descriptor()
+	// fleetrunstate.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fleetrunstate.DefaultCreatedAt = fleetrunstateDescCreatedAt.Default.(func() time.Time)
+	// fleetrunstateDescUpdatedAt is the schema descriptor for updated_at field.
+	fleetrunstateDescUpdatedAt := fleetrunstateFields[10].Descriptor()
+	// fleetrunstate.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	fleetrunstate.DefaultUpdatedAt = fleetrunstateDescUpdatedAt.Default.(func() time.Time)
+	// fleetrunstate.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	fleetrunstate.UpdateDefaultUpdatedAt = fleetrunstateDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// fleetrunstateDescID is the schema descriptor for id field.
+	fleetrunstateDescID := fleetrunstateFields[0].Descriptor()
+	// fleetrunstate.DefaultID holds the default value on creation for the id field.
+	fleetrunstate.DefaultID = fleetrunstateDescID.Default.(func() uuid.UUID)
+	fleetsetupdraftFields := schema.FleetSetupDraft{}.Fields()
+	_ = fleetsetupdraftFields
+	// fleetsetupdraftDescTemplateKey is the schema descriptor for template_key field.
+	fleetsetupdraftDescTemplateKey := fleetsetupdraftFields[1].Descriptor()
+	// fleetsetupdraft.TemplateKeyValidator is a validator for the "template_key" field. It is called by the builders before save.
+	fleetsetupdraft.TemplateKeyValidator = fleetsetupdraftDescTemplateKey.Validators[0].(func(string) error)
+	// fleetsetupdraftDescSetupProfileKey is the schema descriptor for setup_profile_key field.
+	fleetsetupdraftDescSetupProfileKey := fleetsetupdraftFields[2].Descriptor()
+	// fleetsetupdraft.SetupProfileKeyValidator is a validator for the "setup_profile_key" field. It is called by the builders before save.
+	fleetsetupdraft.SetupProfileKeyValidator = fleetsetupdraftDescSetupProfileKey.Validators[0].(func(string) error)
+	// fleetsetupdraftDescCreatedAt is the schema descriptor for created_at field.
+	fleetsetupdraftDescCreatedAt := fleetsetupdraftFields[6].Descriptor()
+	// fleetsetupdraft.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fleetsetupdraft.DefaultCreatedAt = fleetsetupdraftDescCreatedAt.Default.(func() time.Time)
+	// fleetsetupdraftDescUpdatedAt is the schema descriptor for updated_at field.
+	fleetsetupdraftDescUpdatedAt := fleetsetupdraftFields[7].Descriptor()
+	// fleetsetupdraft.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	fleetsetupdraft.DefaultUpdatedAt = fleetsetupdraftDescUpdatedAt.Default.(func() time.Time)
+	// fleetsetupdraft.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	fleetsetupdraft.UpdateDefaultUpdatedAt = fleetsetupdraftDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// fleetsetupdraftDescID is the schema descriptor for id field.
+	fleetsetupdraftDescID := fleetsetupdraftFields[0].Descriptor()
+	// fleetsetupdraft.DefaultID holds the default value on creation for the id field.
+	fleetsetupdraft.DefaultID = fleetsetupdraftDescID.Default.(func() uuid.UUID)
+	fleetsetupprofileFields := schema.FleetSetupProfile{}.Fields()
+	_ = fleetsetupprofileFields
+	// fleetsetupprofileDescKey is the schema descriptor for key field.
+	fleetsetupprofileDescKey := fleetsetupprofileFields[1].Descriptor()
+	// fleetsetupprofile.KeyValidator is a validator for the "key" field. It is called by the builders before save.
+	fleetsetupprofile.KeyValidator = fleetsetupprofileDescKey.Validators[0].(func(string) error)
+	// fleetsetupprofileDescName is the schema descriptor for name field.
+	fleetsetupprofileDescName := fleetsetupprofileFields[2].Descriptor()
+	// fleetsetupprofile.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	fleetsetupprofile.NameValidator = fleetsetupprofileDescName.Validators[0].(func(string) error)
+	// fleetsetupprofileDescCreatedAt is the schema descriptor for created_at field.
+	fleetsetupprofileDescCreatedAt := fleetsetupprofileFields[5].Descriptor()
+	// fleetsetupprofile.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fleetsetupprofile.DefaultCreatedAt = fleetsetupprofileDescCreatedAt.Default.(func() time.Time)
+	// fleetsetupprofileDescUpdatedAt is the schema descriptor for updated_at field.
+	fleetsetupprofileDescUpdatedAt := fleetsetupprofileFields[6].Descriptor()
+	// fleetsetupprofile.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	fleetsetupprofile.DefaultUpdatedAt = fleetsetupprofileDescUpdatedAt.Default.(func() time.Time)
+	// fleetsetupprofile.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	fleetsetupprofile.UpdateDefaultUpdatedAt = fleetsetupprofileDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// fleetsetupprofileDescID is the schema descriptor for id field.
+	fleetsetupprofileDescID := fleetsetupprofileFields[0].Descriptor()
+	// fleetsetupprofile.DefaultID holds the default value on creation for the id field.
+	fleetsetupprofile.DefaultID = fleetsetupprofileDescID.Default.(func() uuid.UUID)
+	fleettaskFields := schema.FleetTask{}.Fields()
+	_ = fleettaskFields
+	// fleettaskDescSessionID is the schema descriptor for session_id field.
+	fleettaskDescSessionID := fleettaskFields[1].Descriptor()
+	// fleettask.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	fleettask.SessionIDValidator = fleettaskDescSessionID.Validators[0].(func(string) error)
+	// fleettaskDescTitle is the schema descriptor for title field.
+	fleettaskDescTitle := fleettaskFields[2].Descriptor()
+	// fleettask.TitleValidator is a validator for the "title" field. It is called by the builders before save.
+	fleettask.TitleValidator = fleettaskDescTitle.Validators[0].(func(string) error)
+	// fleettaskDescDescription is the schema descriptor for description field.
+	fleettaskDescDescription := fleettaskFields[3].Descriptor()
+	// fleettask.DefaultDescription holds the default value on creation for the description field.
+	fleettask.DefaultDescription = fleettaskDescDescription.Default.(string)
+	// fleettaskDescRequiredCapabilities is the schema descriptor for required_capabilities field.
+	fleettaskDescRequiredCapabilities := fleettaskFields[4].Descriptor()
+	// fleettask.DefaultRequiredCapabilities holds the default value on creation for the required_capabilities field.
+	fleettask.DefaultRequiredCapabilities = fleettaskDescRequiredCapabilities.Default.([]string)
+	// fleettaskDescStatus is the schema descriptor for status field.
+	fleettaskDescStatus := fleettaskFields[6].Descriptor()
+	// fleettask.DefaultStatus holds the default value on creation for the status field.
+	fleettask.DefaultStatus = fleettaskDescStatus.Default.(string)
+	// fleettaskDescCreatedAt is the schema descriptor for created_at field.
+	fleettaskDescCreatedAt := fleettaskFields[11].Descriptor()
+	// fleettask.DefaultCreatedAt holds the default value on creation for the created_at field.
+	fleettask.DefaultCreatedAt = fleettaskDescCreatedAt.Default.(func() time.Time)
+	// fleettaskDescUpdatedAt is the schema descriptor for updated_at field.
+	fleettaskDescUpdatedAt := fleettaskFields[12].Descriptor()
+	// fleettask.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	fleettask.DefaultUpdatedAt = fleettaskDescUpdatedAt.Default.(func() time.Time)
+	// fleettask.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	fleettask.UpdateDefaultUpdatedAt = fleettaskDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// fleettaskDescID is the schema descriptor for id field.
+	fleettaskDescID := fleettaskFields[0].Descriptor()
+	// fleettask.DefaultID holds the default value on creation for the id field.
+	fleettask.DefaultID = fleettaskDescID.Default.(func() uuid.UUID)
 	fleettemplateFields := schema.FleetTemplate{}.Fields()
 	_ = fleettemplateFields
 	// fleettemplateDescKey is the schema descriptor for key field.

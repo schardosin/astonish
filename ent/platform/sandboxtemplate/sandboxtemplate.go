@@ -48,6 +48,8 @@ const (
 	FieldLastBuiltImage = "last_built_image"
 	// FieldBuildStartedAt holds the string denoting the build_started_at field in the database.
 	FieldBuildStartedAt = "build_started_at"
+	// FieldBootstrapFiles holds the string denoting the bootstrap_files field in the database.
+	FieldBootstrapFiles = "bootstrap_files"
 	// FieldBaseConfig holds the string denoting the base_config field in the database.
 	FieldBaseConfig = "base_config"
 	// FieldConfiguredBy holds the string denoting the configured_by field in the database.
@@ -108,6 +110,7 @@ var Columns = []string{
 	FieldBuildError,
 	FieldLastBuiltImage,
 	FieldBuildStartedAt,
+	FieldBootstrapFiles,
 	FieldBaseConfig,
 	FieldConfiguredBy,
 	FieldConfiguredAt,

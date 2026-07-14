@@ -90,6 +90,22 @@ func (m *mockGateway) Close() error {
 	return nil
 }
 
+func (m *mockGateway) CreateProvider(_ context.Context, _, _ string, _ map[string]string) error {
+	return nil
+}
+
+func (m *mockGateway) DeleteProvider(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockGateway) AttachSandboxProvider(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockGateway) DetachSandboxProvider(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // newTestBackendWithGateway creates an OpenShellBackend with a mock gateway.
 func newTestBackendWithGateway(t *testing.T, gw GatewayClient) *OpenShellBackend {
 	t.Helper()

@@ -25,27 +25,26 @@ type teamFleetTemplateStore struct {
 var _ store.FleetTemplateStore = (*teamFleetTemplateStore)(nil)
 
 func (s *teamFleetTemplateStore) GetFleet(ctx context.Context, key string) (any, bool) {
-	// Check DB first (custom templates take priority).
-	ent, err := s.client.FleetTemplate.Query().
-		Where(fleettemplate.KeyEQ(key)).
-		Only(ctx)
-	if err == nil {
-		return ent.Definition, true
-	}
-
-	// Fall back to bundled templates embedded in the binary.
+	// Bundled templates always win — ignore any same-key DB orphan row.
 	if bundled, loadErr := fleet.LoadBundledConfigs(); loadErr == nil {
 		if f, ok := bundled[key]; ok {
 			return f, true
 		}
 	}
-	return nil, false
+
+	ent, err := s.client.FleetTemplate.Query().
+		Where(fleettemplate.KeyEQ(key)).
+		Only(ctx)
+	if err != nil {
+		return nil, false
+	}
+	return ent.Definition, true
 }
 
 func (s *teamFleetTemplateStore) ListFleets(ctx context.Context) []store.FleetTemplateSummary {
-	// Start with bundled templates (always available from the binary).
 	var summaries []store.FleetTemplateSummary
-	bundledKeys := make(map[string]int) // key -> index in summaries
+	bundledKeySet := fleet.BundledKeys()
+
 	if bundled, err := fleet.LoadBundledConfigs(); err == nil {
 		for key, cfg := range bundled {
 			summary := store.FleetTemplateSummary{
@@ -53,56 +52,79 @@ func (s *teamFleetTemplateStore) ListFleets(ctx context.Context) []store.FleetTe
 				Name:        cfg.Name,
 				Description: cfg.Description,
 				AgentCount:  len(cfg.Agents),
+				Source:      "bundled",
 			}
 			for _, a := range cfg.Agents {
 				summary.AgentNames = append(summary.AgentNames, a.Name)
 			}
-			bundledKeys[key] = len(summaries)
 			summaries = append(summaries, summary)
 		}
 	}
 
-	// Merge DB templates — custom templates with the same key as a bundled
-	// one override it (user forked/customized).
+	// Custom DB templates only — skip keys that collide with bundled (orphans stay in DB).
 	templates, err := s.client.FleetTemplate.Query().
 		Order(fleettemplate.ByKey()).
 		All(ctx)
 	if err != nil {
-		return summaries // return bundled only on DB error
+		return summaries
 	}
 
 	for _, t := range templates {
+		if _, isBundled := bundledKeySet[t.Key]; isBundled {
+			continue
+		}
 		summary := store.FleetTemplateSummary{
-			Key:  t.Key,
-			Name: t.Name,
+			Key:    t.Key,
+			Name:   t.Name,
+			Source: "custom",
 		}
 		if desc, ok := t.Definition["description"].(string); ok {
 			summary.Description = desc
 		}
-		if agents, ok := t.Definition["agents"].([]any); ok {
-			summary.AgentCount = len(agents)
-			for _, a := range agents {
-				if agentMap, ok := a.(map[string]any); ok {
-					if name, ok := agentMap["name"].(string); ok {
-						summary.AgentNames = append(summary.AgentNames, name)
-					}
-				}
-			}
-		}
-
-		if idx, exists := bundledKeys[t.Key]; exists {
-			// Override the bundled entry with DB version.
-			summaries[idx] = summary
-		} else {
-			summaries = append(summaries, summary)
-		}
+		summary.AgentCount, summary.AgentNames = fleetTemplateAgentInfo(t.Definition)
+		summaries = append(summaries, summary)
 	}
 
 	return summaries
 }
 
-func (s *teamFleetTemplateStore) Save(ctx context.Context, key string, fleet any) error {
-	definition, err := toMapAny(fleet)
+func fleetTemplateAgentInfo(definition map[string]any) (int, []string) {
+	agentsRaw, ok := definition["agents"]
+	if !ok || agentsRaw == nil {
+		return 0, nil
+	}
+	switch agents := agentsRaw.(type) {
+	case map[string]any:
+		names := make([]string, 0, len(agents))
+		for _, a := range agents {
+			if agentMap, ok := a.(map[string]any); ok {
+				if name, ok := agentMap["name"].(string); ok {
+					names = append(names, name)
+				}
+			}
+		}
+		return len(agents), names
+	case []any:
+		names := make([]string, 0, len(agents))
+		for _, a := range agents {
+			if agentMap, ok := a.(map[string]any); ok {
+				if name, ok := agentMap["name"].(string); ok {
+					names = append(names, name)
+				}
+			}
+		}
+		return len(agents), names
+	default:
+		return 0, nil
+	}
+}
+
+func (s *teamFleetTemplateStore) Save(ctx context.Context, key string, fleetCfg any) error {
+	if fleet.IsBundledKey(key) {
+		return store.ErrBundledTemplateImmutable
+	}
+
+	definition, err := toMapAny(fleetCfg)
 	if err != nil {
 		return fmt.Errorf("entstore: FleetTemplateStore.Save: %w", err)
 	}
@@ -135,6 +157,9 @@ func (s *teamFleetTemplateStore) Save(ctx context.Context, key string, fleet any
 }
 
 func (s *teamFleetTemplateStore) Delete(ctx context.Context, key string) error {
+	if fleet.IsBundledKey(key) {
+		return store.ErrBundledTemplateImmutable
+	}
 	_, err := s.client.FleetTemplate.Delete().
 		Where(fleettemplate.KeyEQ(key)).
 		Exec(ctx)

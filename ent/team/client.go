@@ -21,8 +21,13 @@ import (
 	"github.com/schardosin/astonish/ent/team/chatsessionevent"
 	"github.com/schardosin/astonish/ent/team/credential"
 	"github.com/schardosin/astonish/ent/team/drillreport"
+	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
 	"github.com/schardosin/astonish/ent/team/fleetmonitorstate"
 	"github.com/schardosin/astonish/ent/team/fleetplan"
+	"github.com/schardosin/astonish/ent/team/fleetrunstate"
+	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
+	"github.com/schardosin/astonish/ent/team/fleetsetupprofile"
+	"github.com/schardosin/astonish/ent/team/fleettask"
 	"github.com/schardosin/astonish/ent/team/fleettemplate"
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
@@ -53,10 +58,20 @@ type Client struct {
 	Credential *CredentialClient
 	// DrillReport is the client for interacting with the DrillReport builders.
 	DrillReport *DrillReportClient
+	// FleetMailboxMessage is the client for interacting with the FleetMailboxMessage builders.
+	FleetMailboxMessage *FleetMailboxMessageClient
 	// FleetMonitorState is the client for interacting with the FleetMonitorState builders.
 	FleetMonitorState *FleetMonitorStateClient
 	// FleetPlan is the client for interacting with the FleetPlan builders.
 	FleetPlan *FleetPlanClient
+	// FleetRunState is the client for interacting with the FleetRunState builders.
+	FleetRunState *FleetRunStateClient
+	// FleetSetupDraft is the client for interacting with the FleetSetupDraft builders.
+	FleetSetupDraft *FleetSetupDraftClient
+	// FleetSetupProfile is the client for interacting with the FleetSetupProfile builders.
+	FleetSetupProfile *FleetSetupProfileClient
+	// FleetTask is the client for interacting with the FleetTask builders.
+	FleetTask *FleetTaskClient
 	// FleetTemplate is the client for interacting with the FleetTemplate builders.
 	FleetTemplate *FleetTemplateClient
 	// Flow is the client for interacting with the Flow builders.
@@ -99,8 +114,13 @@ func (c *Client) init() {
 	c.ChatSessionEvent = NewChatSessionEventClient(c.config)
 	c.Credential = NewCredentialClient(c.config)
 	c.DrillReport = NewDrillReportClient(c.config)
+	c.FleetMailboxMessage = NewFleetMailboxMessageClient(c.config)
 	c.FleetMonitorState = NewFleetMonitorStateClient(c.config)
 	c.FleetPlan = NewFleetPlanClient(c.config)
+	c.FleetRunState = NewFleetRunStateClient(c.config)
+	c.FleetSetupDraft = NewFleetSetupDraftClient(c.config)
+	c.FleetSetupProfile = NewFleetSetupProfileClient(c.config)
+	c.FleetTask = NewFleetTaskClient(c.config)
 	c.FleetTemplate = NewFleetTemplateClient(c.config)
 	c.Flow = NewFlowClient(c.config)
 	c.McpServer = NewMcpServerClient(c.config)
@@ -204,28 +224,33 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	cfg := c.config
 	cfg.driver = tx
 	return &Tx{
-		ctx:               ctx,
-		config:            cfg,
-		App:               NewAppClient(cfg),
-		AppState:          NewAppStateClient(cfg),
-		ChatSessionEvent:  NewChatSessionEventClient(cfg),
-		Credential:        NewCredentialClient(cfg),
-		DrillReport:       NewDrillReportClient(cfg),
-		FleetMonitorState: NewFleetMonitorStateClient(cfg),
-		FleetPlan:         NewFleetPlanClient(cfg),
-		FleetTemplate:     NewFleetTemplateClient(cfg),
-		Flow:              NewFlowClient(cfg),
-		McpServer:         NewMcpServerClient(cfg),
-		Memory:            NewMemoryClient(cfg),
-		NetworkPolicy:     NewNetworkPolicyClient(cfg),
-		SandboxSession:    NewSandboxSessionClient(cfg),
-		ScheduledJob:      NewScheduledJobClient(cfg),
-		Session:           NewSessionClient(cfg),
-		SessionEvent:      NewSessionEventClient(cfg),
-		Setting:           NewSettingClient(cfg),
-		Skill:             NewSkillClient(cfg),
-		SkillFile:         NewSkillFileClient(cfg),
-		TeamAuditLog:      NewTeamAuditLogClient(cfg),
+		ctx:                 ctx,
+		config:              cfg,
+		App:                 NewAppClient(cfg),
+		AppState:            NewAppStateClient(cfg),
+		ChatSessionEvent:    NewChatSessionEventClient(cfg),
+		Credential:          NewCredentialClient(cfg),
+		DrillReport:         NewDrillReportClient(cfg),
+		FleetMailboxMessage: NewFleetMailboxMessageClient(cfg),
+		FleetMonitorState:   NewFleetMonitorStateClient(cfg),
+		FleetPlan:           NewFleetPlanClient(cfg),
+		FleetRunState:       NewFleetRunStateClient(cfg),
+		FleetSetupDraft:     NewFleetSetupDraftClient(cfg),
+		FleetSetupProfile:   NewFleetSetupProfileClient(cfg),
+		FleetTask:           NewFleetTaskClient(cfg),
+		FleetTemplate:       NewFleetTemplateClient(cfg),
+		Flow:                NewFlowClient(cfg),
+		McpServer:           NewMcpServerClient(cfg),
+		Memory:              NewMemoryClient(cfg),
+		NetworkPolicy:       NewNetworkPolicyClient(cfg),
+		SandboxSession:      NewSandboxSessionClient(cfg),
+		ScheduledJob:        NewScheduledJobClient(cfg),
+		Session:             NewSessionClient(cfg),
+		SessionEvent:        NewSessionEventClient(cfg),
+		Setting:             NewSettingClient(cfg),
+		Skill:               NewSkillClient(cfg),
+		SkillFile:           NewSkillFileClient(cfg),
+		TeamAuditLog:        NewTeamAuditLogClient(cfg),
 	}, nil
 }
 
@@ -243,28 +268,33 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	cfg := c.config
 	cfg.driver = &txDriver{tx: tx, drv: c.driver}
 	return &Tx{
-		ctx:               ctx,
-		config:            cfg,
-		App:               NewAppClient(cfg),
-		AppState:          NewAppStateClient(cfg),
-		ChatSessionEvent:  NewChatSessionEventClient(cfg),
-		Credential:        NewCredentialClient(cfg),
-		DrillReport:       NewDrillReportClient(cfg),
-		FleetMonitorState: NewFleetMonitorStateClient(cfg),
-		FleetPlan:         NewFleetPlanClient(cfg),
-		FleetTemplate:     NewFleetTemplateClient(cfg),
-		Flow:              NewFlowClient(cfg),
-		McpServer:         NewMcpServerClient(cfg),
-		Memory:            NewMemoryClient(cfg),
-		NetworkPolicy:     NewNetworkPolicyClient(cfg),
-		SandboxSession:    NewSandboxSessionClient(cfg),
-		ScheduledJob:      NewScheduledJobClient(cfg),
-		Session:           NewSessionClient(cfg),
-		SessionEvent:      NewSessionEventClient(cfg),
-		Setting:           NewSettingClient(cfg),
-		Skill:             NewSkillClient(cfg),
-		SkillFile:         NewSkillFileClient(cfg),
-		TeamAuditLog:      NewTeamAuditLogClient(cfg),
+		ctx:                 ctx,
+		config:              cfg,
+		App:                 NewAppClient(cfg),
+		AppState:            NewAppStateClient(cfg),
+		ChatSessionEvent:    NewChatSessionEventClient(cfg),
+		Credential:          NewCredentialClient(cfg),
+		DrillReport:         NewDrillReportClient(cfg),
+		FleetMailboxMessage: NewFleetMailboxMessageClient(cfg),
+		FleetMonitorState:   NewFleetMonitorStateClient(cfg),
+		FleetPlan:           NewFleetPlanClient(cfg),
+		FleetRunState:       NewFleetRunStateClient(cfg),
+		FleetSetupDraft:     NewFleetSetupDraftClient(cfg),
+		FleetSetupProfile:   NewFleetSetupProfileClient(cfg),
+		FleetTask:           NewFleetTaskClient(cfg),
+		FleetTemplate:       NewFleetTemplateClient(cfg),
+		Flow:                NewFlowClient(cfg),
+		McpServer:           NewMcpServerClient(cfg),
+		Memory:              NewMemoryClient(cfg),
+		NetworkPolicy:       NewNetworkPolicyClient(cfg),
+		SandboxSession:      NewSandboxSessionClient(cfg),
+		ScheduledJob:        NewScheduledJobClient(cfg),
+		Session:             NewSessionClient(cfg),
+		SessionEvent:        NewSessionEventClient(cfg),
+		Setting:             NewSettingClient(cfg),
+		Skill:               NewSkillClient(cfg),
+		SkillFile:           NewSkillFileClient(cfg),
+		TeamAuditLog:        NewTeamAuditLogClient(cfg),
 	}, nil
 }
 
@@ -295,9 +325,10 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.App, c.AppState, c.ChatSessionEvent, c.Credential, c.DrillReport,
-		c.FleetMonitorState, c.FleetPlan, c.FleetTemplate, c.Flow, c.McpServer,
-		c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob, c.Session,
-		c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
+		c.FleetMailboxMessage, c.FleetMonitorState, c.FleetPlan, c.FleetRunState,
+		c.FleetSetupDraft, c.FleetSetupProfile, c.FleetTask, c.FleetTemplate, c.Flow,
+		c.McpServer, c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob,
+		c.Session, c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
 	} {
 		n.Use(hooks...)
 	}
@@ -308,9 +339,10 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.App, c.AppState, c.ChatSessionEvent, c.Credential, c.DrillReport,
-		c.FleetMonitorState, c.FleetPlan, c.FleetTemplate, c.Flow, c.McpServer,
-		c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob, c.Session,
-		c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
+		c.FleetMailboxMessage, c.FleetMonitorState, c.FleetPlan, c.FleetRunState,
+		c.FleetSetupDraft, c.FleetSetupProfile, c.FleetTask, c.FleetTemplate, c.Flow,
+		c.McpServer, c.Memory, c.NetworkPolicy, c.SandboxSession, c.ScheduledJob,
+		c.Session, c.SessionEvent, c.Setting, c.Skill, c.SkillFile, c.TeamAuditLog,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -329,10 +361,20 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Credential.mutate(ctx, m)
 	case *DrillReportMutation:
 		return c.DrillReport.mutate(ctx, m)
+	case *FleetMailboxMessageMutation:
+		return c.FleetMailboxMessage.mutate(ctx, m)
 	case *FleetMonitorStateMutation:
 		return c.FleetMonitorState.mutate(ctx, m)
 	case *FleetPlanMutation:
 		return c.FleetPlan.mutate(ctx, m)
+	case *FleetRunStateMutation:
+		return c.FleetRunState.mutate(ctx, m)
+	case *FleetSetupDraftMutation:
+		return c.FleetSetupDraft.mutate(ctx, m)
+	case *FleetSetupProfileMutation:
+		return c.FleetSetupProfile.mutate(ctx, m)
+	case *FleetTaskMutation:
+		return c.FleetTask.mutate(ctx, m)
 	case *FleetTemplateMutation:
 		return c.FleetTemplate.mutate(ctx, m)
 	case *FlowMutation:
@@ -1045,6 +1087,139 @@ func (c *DrillReportClient) mutate(ctx context.Context, m *DrillReportMutation) 
 	}
 }
 
+// FleetMailboxMessageClient is a client for the FleetMailboxMessage schema.
+type FleetMailboxMessageClient struct {
+	config
+}
+
+// NewFleetMailboxMessageClient returns a client for the FleetMailboxMessage from the given config.
+func NewFleetMailboxMessageClient(c config) *FleetMailboxMessageClient {
+	return &FleetMailboxMessageClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fleetmailboxmessage.Hooks(f(g(h())))`.
+func (c *FleetMailboxMessageClient) Use(hooks ...Hook) {
+	c.hooks.FleetMailboxMessage = append(c.hooks.FleetMailboxMessage, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fleetmailboxmessage.Intercept(f(g(h())))`.
+func (c *FleetMailboxMessageClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FleetMailboxMessage = append(c.inters.FleetMailboxMessage, interceptors...)
+}
+
+// Create returns a builder for creating a FleetMailboxMessage entity.
+func (c *FleetMailboxMessageClient) Create() *FleetMailboxMessageCreate {
+	mutation := newFleetMailboxMessageMutation(c.config, OpCreate)
+	return &FleetMailboxMessageCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FleetMailboxMessage entities.
+func (c *FleetMailboxMessageClient) CreateBulk(builders ...*FleetMailboxMessageCreate) *FleetMailboxMessageCreateBulk {
+	return &FleetMailboxMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FleetMailboxMessageClient) MapCreateBulk(slice any, setFunc func(*FleetMailboxMessageCreate, int)) *FleetMailboxMessageCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FleetMailboxMessageCreateBulk{err: fmt.Errorf("calling to FleetMailboxMessageClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FleetMailboxMessageCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FleetMailboxMessageCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FleetMailboxMessage.
+func (c *FleetMailboxMessageClient) Update() *FleetMailboxMessageUpdate {
+	mutation := newFleetMailboxMessageMutation(c.config, OpUpdate)
+	return &FleetMailboxMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FleetMailboxMessageClient) UpdateOne(_m *FleetMailboxMessage) *FleetMailboxMessageUpdateOne {
+	mutation := newFleetMailboxMessageMutation(c.config, OpUpdateOne, withFleetMailboxMessage(_m))
+	return &FleetMailboxMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FleetMailboxMessageClient) UpdateOneID(id uuid.UUID) *FleetMailboxMessageUpdateOne {
+	mutation := newFleetMailboxMessageMutation(c.config, OpUpdateOne, withFleetMailboxMessageID(id))
+	return &FleetMailboxMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FleetMailboxMessage.
+func (c *FleetMailboxMessageClient) Delete() *FleetMailboxMessageDelete {
+	mutation := newFleetMailboxMessageMutation(c.config, OpDelete)
+	return &FleetMailboxMessageDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FleetMailboxMessageClient) DeleteOne(_m *FleetMailboxMessage) *FleetMailboxMessageDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FleetMailboxMessageClient) DeleteOneID(id uuid.UUID) *FleetMailboxMessageDeleteOne {
+	builder := c.Delete().Where(fleetmailboxmessage.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FleetMailboxMessageDeleteOne{builder}
+}
+
+// Query returns a query builder for FleetMailboxMessage.
+func (c *FleetMailboxMessageClient) Query() *FleetMailboxMessageQuery {
+	return &FleetMailboxMessageQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFleetMailboxMessage},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FleetMailboxMessage entity by its id.
+func (c *FleetMailboxMessageClient) Get(ctx context.Context, id uuid.UUID) (*FleetMailboxMessage, error) {
+	return c.Query().Where(fleetmailboxmessage.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FleetMailboxMessageClient) GetX(ctx context.Context, id uuid.UUID) *FleetMailboxMessage {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FleetMailboxMessageClient) Hooks() []Hook {
+	return c.hooks.FleetMailboxMessage
+}
+
+// Interceptors returns the client interceptors.
+func (c *FleetMailboxMessageClient) Interceptors() []Interceptor {
+	return c.inters.FleetMailboxMessage
+}
+
+func (c *FleetMailboxMessageClient) mutate(ctx context.Context, m *FleetMailboxMessageMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FleetMailboxMessageCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FleetMailboxMessageUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FleetMailboxMessageUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FleetMailboxMessageDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown FleetMailboxMessage mutation op: %q", m.Op())
+	}
+}
+
 // FleetMonitorStateClient is a client for the FleetMonitorState schema.
 type FleetMonitorStateClient struct {
 	config
@@ -1308,6 +1483,538 @@ func (c *FleetPlanClient) mutate(ctx context.Context, m *FleetPlanMutation) (Val
 		return (&FleetPlanDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("team: unknown FleetPlan mutation op: %q", m.Op())
+	}
+}
+
+// FleetRunStateClient is a client for the FleetRunState schema.
+type FleetRunStateClient struct {
+	config
+}
+
+// NewFleetRunStateClient returns a client for the FleetRunState from the given config.
+func NewFleetRunStateClient(c config) *FleetRunStateClient {
+	return &FleetRunStateClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fleetrunstate.Hooks(f(g(h())))`.
+func (c *FleetRunStateClient) Use(hooks ...Hook) {
+	c.hooks.FleetRunState = append(c.hooks.FleetRunState, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fleetrunstate.Intercept(f(g(h())))`.
+func (c *FleetRunStateClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FleetRunState = append(c.inters.FleetRunState, interceptors...)
+}
+
+// Create returns a builder for creating a FleetRunState entity.
+func (c *FleetRunStateClient) Create() *FleetRunStateCreate {
+	mutation := newFleetRunStateMutation(c.config, OpCreate)
+	return &FleetRunStateCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FleetRunState entities.
+func (c *FleetRunStateClient) CreateBulk(builders ...*FleetRunStateCreate) *FleetRunStateCreateBulk {
+	return &FleetRunStateCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FleetRunStateClient) MapCreateBulk(slice any, setFunc func(*FleetRunStateCreate, int)) *FleetRunStateCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FleetRunStateCreateBulk{err: fmt.Errorf("calling to FleetRunStateClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FleetRunStateCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FleetRunStateCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FleetRunState.
+func (c *FleetRunStateClient) Update() *FleetRunStateUpdate {
+	mutation := newFleetRunStateMutation(c.config, OpUpdate)
+	return &FleetRunStateUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FleetRunStateClient) UpdateOne(_m *FleetRunState) *FleetRunStateUpdateOne {
+	mutation := newFleetRunStateMutation(c.config, OpUpdateOne, withFleetRunState(_m))
+	return &FleetRunStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FleetRunStateClient) UpdateOneID(id uuid.UUID) *FleetRunStateUpdateOne {
+	mutation := newFleetRunStateMutation(c.config, OpUpdateOne, withFleetRunStateID(id))
+	return &FleetRunStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FleetRunState.
+func (c *FleetRunStateClient) Delete() *FleetRunStateDelete {
+	mutation := newFleetRunStateMutation(c.config, OpDelete)
+	return &FleetRunStateDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FleetRunStateClient) DeleteOne(_m *FleetRunState) *FleetRunStateDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FleetRunStateClient) DeleteOneID(id uuid.UUID) *FleetRunStateDeleteOne {
+	builder := c.Delete().Where(fleetrunstate.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FleetRunStateDeleteOne{builder}
+}
+
+// Query returns a query builder for FleetRunState.
+func (c *FleetRunStateClient) Query() *FleetRunStateQuery {
+	return &FleetRunStateQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFleetRunState},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FleetRunState entity by its id.
+func (c *FleetRunStateClient) Get(ctx context.Context, id uuid.UUID) (*FleetRunState, error) {
+	return c.Query().Where(fleetrunstate.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FleetRunStateClient) GetX(ctx context.Context, id uuid.UUID) *FleetRunState {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FleetRunStateClient) Hooks() []Hook {
+	return c.hooks.FleetRunState
+}
+
+// Interceptors returns the client interceptors.
+func (c *FleetRunStateClient) Interceptors() []Interceptor {
+	return c.inters.FleetRunState
+}
+
+func (c *FleetRunStateClient) mutate(ctx context.Context, m *FleetRunStateMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FleetRunStateCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FleetRunStateUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FleetRunStateUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FleetRunStateDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown FleetRunState mutation op: %q", m.Op())
+	}
+}
+
+// FleetSetupDraftClient is a client for the FleetSetupDraft schema.
+type FleetSetupDraftClient struct {
+	config
+}
+
+// NewFleetSetupDraftClient returns a client for the FleetSetupDraft from the given config.
+func NewFleetSetupDraftClient(c config) *FleetSetupDraftClient {
+	return &FleetSetupDraftClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fleetsetupdraft.Hooks(f(g(h())))`.
+func (c *FleetSetupDraftClient) Use(hooks ...Hook) {
+	c.hooks.FleetSetupDraft = append(c.hooks.FleetSetupDraft, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fleetsetupdraft.Intercept(f(g(h())))`.
+func (c *FleetSetupDraftClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FleetSetupDraft = append(c.inters.FleetSetupDraft, interceptors...)
+}
+
+// Create returns a builder for creating a FleetSetupDraft entity.
+func (c *FleetSetupDraftClient) Create() *FleetSetupDraftCreate {
+	mutation := newFleetSetupDraftMutation(c.config, OpCreate)
+	return &FleetSetupDraftCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FleetSetupDraft entities.
+func (c *FleetSetupDraftClient) CreateBulk(builders ...*FleetSetupDraftCreate) *FleetSetupDraftCreateBulk {
+	return &FleetSetupDraftCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FleetSetupDraftClient) MapCreateBulk(slice any, setFunc func(*FleetSetupDraftCreate, int)) *FleetSetupDraftCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FleetSetupDraftCreateBulk{err: fmt.Errorf("calling to FleetSetupDraftClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FleetSetupDraftCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FleetSetupDraftCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FleetSetupDraft.
+func (c *FleetSetupDraftClient) Update() *FleetSetupDraftUpdate {
+	mutation := newFleetSetupDraftMutation(c.config, OpUpdate)
+	return &FleetSetupDraftUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FleetSetupDraftClient) UpdateOne(_m *FleetSetupDraft) *FleetSetupDraftUpdateOne {
+	mutation := newFleetSetupDraftMutation(c.config, OpUpdateOne, withFleetSetupDraft(_m))
+	return &FleetSetupDraftUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FleetSetupDraftClient) UpdateOneID(id uuid.UUID) *FleetSetupDraftUpdateOne {
+	mutation := newFleetSetupDraftMutation(c.config, OpUpdateOne, withFleetSetupDraftID(id))
+	return &FleetSetupDraftUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FleetSetupDraft.
+func (c *FleetSetupDraftClient) Delete() *FleetSetupDraftDelete {
+	mutation := newFleetSetupDraftMutation(c.config, OpDelete)
+	return &FleetSetupDraftDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FleetSetupDraftClient) DeleteOne(_m *FleetSetupDraft) *FleetSetupDraftDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FleetSetupDraftClient) DeleteOneID(id uuid.UUID) *FleetSetupDraftDeleteOne {
+	builder := c.Delete().Where(fleetsetupdraft.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FleetSetupDraftDeleteOne{builder}
+}
+
+// Query returns a query builder for FleetSetupDraft.
+func (c *FleetSetupDraftClient) Query() *FleetSetupDraftQuery {
+	return &FleetSetupDraftQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFleetSetupDraft},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FleetSetupDraft entity by its id.
+func (c *FleetSetupDraftClient) Get(ctx context.Context, id uuid.UUID) (*FleetSetupDraft, error) {
+	return c.Query().Where(fleetsetupdraft.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FleetSetupDraftClient) GetX(ctx context.Context, id uuid.UUID) *FleetSetupDraft {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FleetSetupDraftClient) Hooks() []Hook {
+	return c.hooks.FleetSetupDraft
+}
+
+// Interceptors returns the client interceptors.
+func (c *FleetSetupDraftClient) Interceptors() []Interceptor {
+	return c.inters.FleetSetupDraft
+}
+
+func (c *FleetSetupDraftClient) mutate(ctx context.Context, m *FleetSetupDraftMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FleetSetupDraftCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FleetSetupDraftUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FleetSetupDraftUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FleetSetupDraftDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown FleetSetupDraft mutation op: %q", m.Op())
+	}
+}
+
+// FleetSetupProfileClient is a client for the FleetSetupProfile schema.
+type FleetSetupProfileClient struct {
+	config
+}
+
+// NewFleetSetupProfileClient returns a client for the FleetSetupProfile from the given config.
+func NewFleetSetupProfileClient(c config) *FleetSetupProfileClient {
+	return &FleetSetupProfileClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fleetsetupprofile.Hooks(f(g(h())))`.
+func (c *FleetSetupProfileClient) Use(hooks ...Hook) {
+	c.hooks.FleetSetupProfile = append(c.hooks.FleetSetupProfile, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fleetsetupprofile.Intercept(f(g(h())))`.
+func (c *FleetSetupProfileClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FleetSetupProfile = append(c.inters.FleetSetupProfile, interceptors...)
+}
+
+// Create returns a builder for creating a FleetSetupProfile entity.
+func (c *FleetSetupProfileClient) Create() *FleetSetupProfileCreate {
+	mutation := newFleetSetupProfileMutation(c.config, OpCreate)
+	return &FleetSetupProfileCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FleetSetupProfile entities.
+func (c *FleetSetupProfileClient) CreateBulk(builders ...*FleetSetupProfileCreate) *FleetSetupProfileCreateBulk {
+	return &FleetSetupProfileCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FleetSetupProfileClient) MapCreateBulk(slice any, setFunc func(*FleetSetupProfileCreate, int)) *FleetSetupProfileCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FleetSetupProfileCreateBulk{err: fmt.Errorf("calling to FleetSetupProfileClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FleetSetupProfileCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FleetSetupProfileCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FleetSetupProfile.
+func (c *FleetSetupProfileClient) Update() *FleetSetupProfileUpdate {
+	mutation := newFleetSetupProfileMutation(c.config, OpUpdate)
+	return &FleetSetupProfileUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FleetSetupProfileClient) UpdateOne(_m *FleetSetupProfile) *FleetSetupProfileUpdateOne {
+	mutation := newFleetSetupProfileMutation(c.config, OpUpdateOne, withFleetSetupProfile(_m))
+	return &FleetSetupProfileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FleetSetupProfileClient) UpdateOneID(id uuid.UUID) *FleetSetupProfileUpdateOne {
+	mutation := newFleetSetupProfileMutation(c.config, OpUpdateOne, withFleetSetupProfileID(id))
+	return &FleetSetupProfileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FleetSetupProfile.
+func (c *FleetSetupProfileClient) Delete() *FleetSetupProfileDelete {
+	mutation := newFleetSetupProfileMutation(c.config, OpDelete)
+	return &FleetSetupProfileDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FleetSetupProfileClient) DeleteOne(_m *FleetSetupProfile) *FleetSetupProfileDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FleetSetupProfileClient) DeleteOneID(id uuid.UUID) *FleetSetupProfileDeleteOne {
+	builder := c.Delete().Where(fleetsetupprofile.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FleetSetupProfileDeleteOne{builder}
+}
+
+// Query returns a query builder for FleetSetupProfile.
+func (c *FleetSetupProfileClient) Query() *FleetSetupProfileQuery {
+	return &FleetSetupProfileQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFleetSetupProfile},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FleetSetupProfile entity by its id.
+func (c *FleetSetupProfileClient) Get(ctx context.Context, id uuid.UUID) (*FleetSetupProfile, error) {
+	return c.Query().Where(fleetsetupprofile.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FleetSetupProfileClient) GetX(ctx context.Context, id uuid.UUID) *FleetSetupProfile {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FleetSetupProfileClient) Hooks() []Hook {
+	return c.hooks.FleetSetupProfile
+}
+
+// Interceptors returns the client interceptors.
+func (c *FleetSetupProfileClient) Interceptors() []Interceptor {
+	return c.inters.FleetSetupProfile
+}
+
+func (c *FleetSetupProfileClient) mutate(ctx context.Context, m *FleetSetupProfileMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FleetSetupProfileCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FleetSetupProfileUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FleetSetupProfileUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FleetSetupProfileDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown FleetSetupProfile mutation op: %q", m.Op())
+	}
+}
+
+// FleetTaskClient is a client for the FleetTask schema.
+type FleetTaskClient struct {
+	config
+}
+
+// NewFleetTaskClient returns a client for the FleetTask from the given config.
+func NewFleetTaskClient(c config) *FleetTaskClient {
+	return &FleetTaskClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `fleettask.Hooks(f(g(h())))`.
+func (c *FleetTaskClient) Use(hooks ...Hook) {
+	c.hooks.FleetTask = append(c.hooks.FleetTask, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `fleettask.Intercept(f(g(h())))`.
+func (c *FleetTaskClient) Intercept(interceptors ...Interceptor) {
+	c.inters.FleetTask = append(c.inters.FleetTask, interceptors...)
+}
+
+// Create returns a builder for creating a FleetTask entity.
+func (c *FleetTaskClient) Create() *FleetTaskCreate {
+	mutation := newFleetTaskMutation(c.config, OpCreate)
+	return &FleetTaskCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of FleetTask entities.
+func (c *FleetTaskClient) CreateBulk(builders ...*FleetTaskCreate) *FleetTaskCreateBulk {
+	return &FleetTaskCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *FleetTaskClient) MapCreateBulk(slice any, setFunc func(*FleetTaskCreate, int)) *FleetTaskCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &FleetTaskCreateBulk{err: fmt.Errorf("calling to FleetTaskClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*FleetTaskCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &FleetTaskCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for FleetTask.
+func (c *FleetTaskClient) Update() *FleetTaskUpdate {
+	mutation := newFleetTaskMutation(c.config, OpUpdate)
+	return &FleetTaskUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *FleetTaskClient) UpdateOne(_m *FleetTask) *FleetTaskUpdateOne {
+	mutation := newFleetTaskMutation(c.config, OpUpdateOne, withFleetTask(_m))
+	return &FleetTaskUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *FleetTaskClient) UpdateOneID(id uuid.UUID) *FleetTaskUpdateOne {
+	mutation := newFleetTaskMutation(c.config, OpUpdateOne, withFleetTaskID(id))
+	return &FleetTaskUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for FleetTask.
+func (c *FleetTaskClient) Delete() *FleetTaskDelete {
+	mutation := newFleetTaskMutation(c.config, OpDelete)
+	return &FleetTaskDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *FleetTaskClient) DeleteOne(_m *FleetTask) *FleetTaskDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *FleetTaskClient) DeleteOneID(id uuid.UUID) *FleetTaskDeleteOne {
+	builder := c.Delete().Where(fleettask.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &FleetTaskDeleteOne{builder}
+}
+
+// Query returns a query builder for FleetTask.
+func (c *FleetTaskClient) Query() *FleetTaskQuery {
+	return &FleetTaskQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeFleetTask},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a FleetTask entity by its id.
+func (c *FleetTaskClient) Get(ctx context.Context, id uuid.UUID) (*FleetTask, error) {
+	return c.Query().Where(fleettask.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *FleetTaskClient) GetX(ctx context.Context, id uuid.UUID) *FleetTask {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *FleetTaskClient) Hooks() []Hook {
+	return c.hooks.FleetTask
+}
+
+// Interceptors returns the client interceptors.
+func (c *FleetTaskClient) Interceptors() []Interceptor {
+	return c.inters.FleetTask
+}
+
+func (c *FleetTaskClient) mutate(ctx context.Context, m *FleetTaskMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&FleetTaskCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&FleetTaskUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&FleetTaskUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&FleetTaskDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("team: unknown FleetTask mutation op: %q", m.Op())
 	}
 }
 
@@ -3123,15 +3830,17 @@ func (c *TeamAuditLogClient) mutate(ctx context.Context, m *TeamAuditLogMutation
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMonitorState,
-		FleetPlan, FleetTemplate, Flow, McpServer, Memory, NetworkPolicy,
-		SandboxSession, ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
-		TeamAuditLog []ent.Hook
+		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMailboxMessage,
+		FleetMonitorState, FleetPlan, FleetRunState, FleetSetupDraft,
+		FleetSetupProfile, FleetTask, FleetTemplate, Flow, McpServer, Memory,
+		NetworkPolicy, SandboxSession, ScheduledJob, Session, SessionEvent, Setting,
+		Skill, SkillFile, TeamAuditLog []ent.Hook
 	}
 	inters struct {
-		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMonitorState,
-		FleetPlan, FleetTemplate, Flow, McpServer, Memory, NetworkPolicy,
-		SandboxSession, ScheduledJob, Session, SessionEvent, Setting, Skill, SkillFile,
-		TeamAuditLog []ent.Interceptor
+		App, AppState, ChatSessionEvent, Credential, DrillReport, FleetMailboxMessage,
+		FleetMonitorState, FleetPlan, FleetRunState, FleetSetupDraft,
+		FleetSetupProfile, FleetTask, FleetTemplate, Flow, McpServer, Memory,
+		NetworkPolicy, SandboxSession, ScheduledJob, Session, SessionEvent, Setting,
+		Skill, SkillFile, TeamAuditLog []ent.Interceptor
 	}
 )

@@ -27,6 +27,49 @@ Real applications often require multiple services (database, backend, frontend).
 
 Services are started in declaration order and stopped in reverse order. Each service can have its own ready check and environment variables.
 
+### Canonical start script (template bootstrap)
+
+For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed.
+
+Standalone `run_drill` and CLI drills apply a **runtime readiness pipeline** before tests:
+
+1. Template switch + non-secret `bootstrap_files`
+2. Suite `credentials` / `credential_injection` (or fleet-plan fallback by suite name/template)
+3. Suite `configure:` appendix (ordered shell: APIs, files, one-off cmds)
+4. Suite `setup:` / `start-services.sh`
+5. `ready_check` (`stable_count` consecutive successes)
+
+```yaml
+suite_config:
+  template: "@myapp"
+  credentials:
+    providers: myapp-providers
+  credential_injection:
+    files:
+      - credential: providers
+        path: /root/myapp/config/providers.yaml
+        field: value
+        mode: "0600"
+  configure:
+    - "test -f /root/myapp/config/providers.yaml"
+  setup:
+    - "bash /root/myapp/.astonish/start-services.sh"
+  ready_check:
+    type: http
+    url: "http://localhost:3000/"
+    timeout: 60
+    interval: 2
+    # stable_count: 3  # default; consecutive successes required
+  teardown:
+    - "bash /root/myapp/.astonish/stop-services.sh || true"
+```
+
+Put offline / file / env configuration in `configure:`. If an API must run **after** services are up, call it from `start-services.sh` after the ready poll (or add a `configure-after-start.sh` as the last `setup` line).
+
+The runner runs `start-services.sh` in the **foreground** and waits for it to exit. Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop — Vite/npm often exit shortly after the first successful curl. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. `stop-services.sh` should kill the supervisor process group (`kill -- -$pid`) with `pkill` fallbacks.
+
+`ready_check` then polls again and requires **`stable_count` consecutive successes** (default 3, spaced by `interval`) so a one-shot curl that succeeds just before a process dies cannot green the suite.
+
 ### Why Visual Regression Testing
 
 Drill includes pixel-level visual comparison:
@@ -149,10 +192,12 @@ nodes:
 The drill runner uses a composite executor that routes different tool categories to different backends:
 
 - **Container tools** (shell_command, file ops): Routed to the sandbox container via NDJSON.
-- **Browser tools**: Routed to the host browser (with container IP for URL resolution).
+- **Browser tools**: Routed to Chromium + KasmVNC inside the same session container (same path as Studio chat). Use `localhost` in URLs just like shell curls.
 - **Local tools**: Direct in-process execution for tools that don't need sandbox or browser.
 
-This handles the common case where a drill starts services in a container but tests them via a browser on the host.
+This handles the common case where a drill starts services in a container and tests them via an in-container browser.
+
+Authors can write `http://localhost:<port>` in both `shell_command` curls and `browser_navigate` URLs. Shell keeps localhost as written. Browser navigation normalizes `localhost` / `::1` to `127.0.0.1` so Chromium does not fail against IPv4-only listeners (common with Vite `--host 0.0.0.0`). `{{CONTAINER_IP}}` placeholders remain supported; prefer localhost over hard-coded bridge IPs.
 
 ### Parameterized Tests
 
@@ -196,7 +241,7 @@ The drill runner collects:
 ## Interactions
 
 - **Sandbox**: Drill services run inside containers. The composite executor routes container tools through the sandbox node protocol.
-- **Browser**: Browser-based drills use the host browser pointed at the container's IP address.
+- **Browser**: Browser-based drills use Chromium + KasmVNC inside the same sandbox session as shell tools (same path as Studio chat). Use localhost URLs.
 - **Flows**: Drills are a specialized flow type (`type: drill`/`drill_suite`) stored in the flow directory.
 - **Fleet**: The E2E agent in a fleet can run drills as part of its validation workflow.
 - **API/Studio**: Drill view in Studio provides suite management, execution, and result viewing.

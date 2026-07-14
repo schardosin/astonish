@@ -17,7 +17,6 @@ import (
 	"github.com/schardosin/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
-	"gopkg.in/yaml.v3"
 )
 
 // RunDrillArgs are the arguments for the run_drill tool.
@@ -26,7 +25,7 @@ type RunDrillArgs struct {
 	TestName  string `json:"test_name,omitempty" jsonschema:"Run a single drill by name instead of the full suite. The drill must belong to the specified suite."`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
-	Force     bool   `json:"force,omitempty" jsonschema:"Run on the current container even if its template doesn't match the suite's required template. Use after the user declines a template switch."`
+	Force     bool   `json:"force,omitempty" jsonschema:"Skip auto-switching to the suite's sandbox template and run on the current container instead. Only use when the user explicitly wants to stay on the current sandbox."`
 }
 
 // RunDrillResult is the result of the run_drill tool.
@@ -40,30 +39,54 @@ type RunDrillResult struct {
 // For chat sessions, nodePool is set and lazyClient is resolved at runtime.
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
-	nodePool    *sandbox.NodeClientPool // Chat/Studio sessions (nil when no sandbox)
-	lazyClient  *sandbox.LazyNodeClient // Fleet sessions (nil for chat sessions)
-	sessionID   string                  // Fleet session ID (empty for chat sessions)
-	llmProvider adrill.LLMProvider      // Optional LLM for semantic assertions
+	nodePool         *sandbox.NodeClientPool   // Chat/Studio sessions (nil when no sandbox)
+	templateRegistry *sandbox.TemplateRegistry // Optional; used to inject bootstrap_files after auto-switch
+	browserMgr       *browser.Manager          // Shared in-container browser (chat/fleet); never host Chrome
+	lazyClient       *sandbox.LazyNodeClient   // Fleet Incus sessions
+	toolClient       sandbox.ToolNodeClient    // Fleet backend-agnostic sessions
+	sessionID        string                    // Fleet session ID (empty for chat sessions)
+	llmProvider      adrill.LLMProvider        // Optional LLM for semantic assertions
 }
 
 // NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
+// tplRegistry is optional — when set, auto-switching to the suite template also
+// injects that template's bootstrap_files.
+// browserMgr should be the chat-wired Manager (SandboxEnabled + container callbacks).
+// Browser steps refuse to launch host Chromium when browserMgr is nil or unwired.
 // llmProvider is optional — when set, semantic assertions (assert.type: "semantic")
 // will use it to evaluate whether tool output satisfies the expected condition.
-func NewRunDrillTool(nodePool *sandbox.NodeClientPool, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+func NewRunDrillTool(nodePool *sandbox.NodeClientPool, tplRegistry *sandbox.TemplateRegistry, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
-		nodePool:    nodePool,
-		llmProvider: llmProvider,
+		nodePool:         nodePool,
+		templateRegistry: tplRegistry,
+		browserMgr:       browserMgr,
+		llmProvider:      llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
 }
 
 // NewRunDrillToolWithClient creates the run_drill tool for fleet sessions
 // with a dedicated LazyNodeClient that routes into the fleet's container.
-func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+// browserMgr must be wired for in-container Chromium (same session as lazyClient).
+func NewRunDrillToolWithClient(lazyClient *sandbox.LazyNodeClient, sessionID string, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
 	deps := &runDrillDeps{
 		lazyClient:  lazyClient,
 		sessionID:   sessionID,
+		browserMgr:  browserMgr,
+		llmProvider: llmProvider,
+	}
+	return newRunDrillToolFromDeps(deps)
+}
+
+// NewRunDrillToolWithToolClient creates run_drill for fleet sessions using a
+// backend-agnostic ToolNodeClient (OpenShell/K8s fleet path).
+// browserMgr must be wired for in-container Chromium when browser steps are used.
+func NewRunDrillToolWithToolClient(client sandbox.ToolNodeClient, sessionID string, browserMgr *browser.Manager, llmProvider adrill.LLMProvider) (tool.Tool, error) {
+	deps := &runDrillDeps{
+		toolClient:  client,
+		sessionID:   sessionID,
+		browserMgr:  browserMgr,
 		llmProvider: llmProvider,
 	}
 	return newRunDrillToolFromDeps(deps)
@@ -80,7 +103,11 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 		Description: "Run a deterministic drill suite (or a single drill with test_name). " +
 			"Automatically handles setup, ready_check, and teardown from the suite config — " +
 			"do NOT manually start services before calling this tool. " +
-			"Shell and file tool steps are routed into the sandbox container; browser tool steps run on the host. " +
+			"When the suite declares a sandbox template and the current session is on a different " +
+			"template (typically @base), run_drill switches to the suite template first, then runs. " +
+			"Pass force=true only if the user explicitly wants to stay on the current container. " +
+			"Shell, file, and browser tool steps all run inside the sandbox container " +
+			"(browser via Chromium+KasmVNC in the session — same as chat). Use localhost in URLs. " +
 			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
 }
@@ -98,29 +125,23 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	suiteName = strings.TrimSuffix(suiteName, ".yaml")
 	suiteName = strings.TrimSuffix(suiteName, ".yml")
 
-	// Discover the suite — platform mode (DB) or personal mode (filesystem)
+	// Discover the suite from the team-scoped flow store (drills are team-only).
 	var suite *adrill.LoadedSuite
-	if fs := getEffectiveFlowStore(ctx); fs != nil {
-		// Platform mode: load from team-scoped flow store
-		var loadErr error
-		suite, loadErr = loadSuiteFromStore(fs, ctx, suiteName)
-		if loadErr != nil {
-			return RunDrillResult{
-				Status:  "error",
-				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, loadErr),
-			}, nil
-		}
-	} else {
-		// Personal mode: discover from filesystem
-		dirs := adrill.DefaultDrillDirs()
-		var findErr error
-		suite, findErr = adrill.FindSuite(dirs, suiteName)
-		if findErr != nil {
-			return RunDrillResult{
-				Status:  "error",
-				Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, findErr),
-			}, nil
-		}
+	fs := getDrillFlowStore(ctx)
+	if fs == nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: "Drill management requires platform mode (team-scoped store not available)",
+		}, nil
+	}
+
+	var loadErr error
+	suite, loadErr = adrill.LoadSuiteFromStore(fs, ctx, suiteName)
+	if loadErr != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: fmt.Sprintf("Suite %q not found: %v", suiteName, loadErr),
+		}, nil
 	}
 
 	// Validate the suite
@@ -131,28 +152,31 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
-	// Template mismatch check (chat mode with sandbox only).
+	// Template auto-switch (chat mode with sandbox only).
 	// Fleet sessions skip this — the container is already provisioned for the fleet.
 	// No-sandbox sessions skip this — template is irrelevant for local execution.
+	// By default, switch to the suite's template before running so drills never
+	// start against @base when the suite requires a project template.
 	suiteTemplate := ""
 	if suite.Config != nil && suite.Config.SuiteConfig != nil {
 		suiteTemplate = suite.Config.SuiteConfig.Template
 	}
-	if deps.lazyClient == nil && deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" && suiteTemplate != "" {
-		lazyClient := deps.nodePool.GetOrCreate(ctx.SessionID())
-		if lazyClient != nil {
-			currentTemplate := lazyClient.Template()
-			if currentTemplate != suiteTemplate && !args.Force {
-				return RunDrillResult{
-					Status: "template_mismatch",
-					Summary: fmt.Sprintf(
-						"Suite %q requires template %s but the current sandbox is %s. "+
-							"Ask the user whether to switch templates (use use_sandbox_template tool) or "+
-							"re-run with force=true to run on the current container anyway.",
-						suiteName, templateDisplay(suiteTemplate), templateDisplay(currentTemplate)),
-				}, nil
-			}
-		}
+	if suiteTemplate == "" && suite.Config != nil {
+		suiteTemplate = suite.Config.Template
+	}
+	if err := ensureDrillSandboxTemplate(ctx, deps, suiteName, suiteTemplate, args.Force); err != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: err.Error(),
+		}, nil
+	}
+
+	// Inject suite (or fleet-plan fallback) credentials before configure/setup.
+	if err := injectDrillCredentials(ctx, deps, suiteName, suite); err != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: fmt.Sprintf("credential injection failed: %v", err),
+		}, nil
 	}
 
 	// Filter tests by tag if requested
@@ -197,11 +221,19 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	executor := buildTestExecutor(ctx, deps)
 	defer executor.Close()
 
-	// Discover the container IP for browser URL substitution.
-	// In sandbox mode, browser tools run on the host and need the container's
-	// bridge IP to reach services. We use the Incus API to get the correct
-	// global-scope IPv4 address (not the Docker bridge IP which is unreachable
-	// from the host).
+	// Fail closed before suite setup if sandbox is active but the shared
+	// browser Manager was never wired for in-container Chromium.
+	if executor.hasSandbox() && (deps.browserMgr == nil || !deps.browserMgr.SandboxEnabled) {
+		return RunDrillResult{
+			Status: "error",
+			Summary: "Sandbox is active but the in-container browser is not wired " +
+				"(SandboxEnabled=false). Restart Studio after upgrading; do not rewrite " +
+				"drill URLs to the container bridge IP — browser steps use Chromium inside the session.",
+		}, nil
+	}
+
+	// CONTAINER_IP is for optional {{CONTAINER_IP}} placeholders in older drills.
+	// Prefer localhost in YAML: shell and in-container browser share the sandbox network.
 	vars := map[string]string{
 		"CONTAINER_IP": "localhost", // default for local mode
 	}
@@ -276,52 +308,6 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	}, nil
 }
 
-// loadSuiteFromStore constructs a LoadedSuite from the team-scoped FlowStore.
-// It fetches the suite YAML and all child drills, parsing them into the same
-// data structures used by the filesystem-based discovery path.
-func loadSuiteFromStore(fs store.FlowStore, ctx context.Context, suiteName string) (*adrill.LoadedSuite, error) {
-	suiteYAML, err := fs.GetFlow(ctx, suiteName)
-	if err != nil {
-		return nil, fmt.Errorf("suite %q not found in store: %w", suiteName, err)
-	}
-
-	var suiteCfg config.AgentConfig
-	if err := yaml.Unmarshal([]byte(suiteYAML), &suiteCfg); err != nil {
-		return nil, fmt.Errorf("failed to parse suite %q: %w", suiteName, err)
-	}
-
-	if suiteCfg.Type != "drill_suite" && suiteCfg.Type != "test_suite" {
-		return nil, fmt.Errorf("%q has type %q, expected drill_suite", suiteName, suiteCfg.Type)
-	}
-
-	suite := &adrill.LoadedSuite{
-		Name:   suiteName,
-		Config: &suiteCfg,
-	}
-
-	// Find child drills that reference this suite
-	drillFlows := fs.ListFlowsByType(ctx, []string{"drill", "test"})
-	for _, d := range drillFlows {
-		if d.Suite != suiteName {
-			continue
-		}
-		drillYAML, dErr := fs.GetFlow(ctx, d.Name)
-		if dErr != nil {
-			continue
-		}
-		var drillCfg config.AgentConfig
-		if yaml.Unmarshal([]byte(drillYAML), &drillCfg) != nil {
-			continue
-		}
-		suite.Tests = append(suite.Tests, adrill.LoadedTest{
-			Name:   d.Name,
-			Config: &drillCfg,
-		})
-	}
-
-	return suite, nil
-}
-
 // ---------------------------------------------------------------------------
 // Executor types for the run_drill tool
 // ---------------------------------------------------------------------------
@@ -377,37 +363,38 @@ type closableExecutor interface {
 
 // buildTestExecutor creates the appropriate executor for the run_drill tool.
 func buildTestExecutor(ctx tool.Context, deps *runDrillDeps) closableExecutor {
-	// Resolve the LazyNodeClient based on context
-	var lazyClient *sandbox.LazyNodeClient
+	var toolClient sandbox.ToolNodeClient
 	var sessionID string
+	var ipClient *sandbox.LazyNodeClient
 
-	if deps.lazyClient != nil {
-		// Fleet mode: use the pre-injected client
-		lazyClient = deps.lazyClient
+	if deps.toolClient != nil {
+		toolClient = deps.toolClient
 		sessionID = deps.sessionID
+	} else if deps.lazyClient != nil {
+		toolClient = deps.lazyClient
+		sessionID = deps.sessionID
+		ipClient = deps.lazyClient
 	} else if deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" {
-		// Chat mode: resolve from pool
-		lazyClient = deps.nodePool.GetOrCreate(ctx.SessionID())
+		toolClient = deps.nodePool.GetOrCreate(ctx.SessionID())
 		sessionID = ctx.SessionID()
 	}
 
-	// Browser executor (always host-side)
-	hasSandbox := lazyClient != nil
-	browserExec := newTestBrowserExecutor(hasSandbox)
+	hasSandbox := toolClient != nil
+	browserExec := newTestBrowserExecutor(deps.browserMgr, sessionID, hasSandbox)
 
-	if lazyClient != nil {
-		// Sandbox mode: container tools → LazyNodeClient, browser → host, rest → local
+	if toolClient != nil {
 		return &testCompositeExecutor{
 			sandbox: &testSandboxExecutor{
-				lazyClient: lazyClient,
-				sessionID:  sessionID,
+				client:    toolClient,
+				sessionID: sessionID,
+				ipClient:  ipClient,
 			},
 			browser: browserExec,
 			local:   &testLocalExecutor{},
 		}
 	}
 
-	// No sandbox: everything local or browser
+	// No sandbox: shell/file run locally; browser still requires in-container mgr.
 	return &testCompositeExecutor{
 		browser: browserExec,
 		local:   &testLocalExecutor{},
@@ -445,24 +432,21 @@ func (c *testCompositeExecutor) containerIP() (string, error) {
 	if c.sandbox == nil {
 		return "", fmt.Errorf("no sandbox active")
 	}
-	return c.sandbox.lazyClient.GetContainerIP(c.sandbox.sessionID)
+	if c.sandbox.ipClient != nil {
+		return c.sandbox.ipClient.GetContainerIP(c.sandbox.sessionID)
+	}
+	return "", fmt.Errorf("container IP not available for this sandbox backend")
 }
 
-// testLocalExecutor dispatches to tools.ExecuteTool for local execution.
-type testLocalExecutor struct{}
-
-func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
-	return ExecuteTool(ctx, name, args)
-}
-
-// testSandboxExecutor proxies container tool calls through a LazyNodeClient.
+// testSandboxExecutor proxies container tool calls through a ToolNodeClient.
 type testSandboxExecutor struct {
-	lazyClient *sandbox.LazyNodeClient
-	sessionID  string
+	client    sandbox.ToolNodeClient
+	sessionID string
+	ipClient  *sandbox.LazyNodeClient // optional, Incus only
 }
 
 func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	raw, err := e.lazyClient.Call(e.sessionID, name, args)
+	raw, err := e.client.Call(e.sessionID, name, args)
 	if err != nil {
 		return nil, fmt.Errorf("sandbox call %s: %w", name, err)
 	}
@@ -474,49 +458,64 @@ func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[s
 	return result, nil
 }
 
-// testBrowserExecutor lazily initializes a browser.Manager and dispatches
-// browser tool calls using the closure-based factory pattern from pkg/tools.
+// testLocalExecutor dispatches to tools.ExecuteTool for local execution.
+type testLocalExecutor struct{}
+
+func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
+	return ExecuteTool(ctx, name, args)
+}
+
+// testBrowserExecutor dispatches browser tool calls through a Manager that is
+// already wired for in-container Chromium (same path as Studio chat). It never
+// launches host Chrome.
 type testBrowserExecutor struct {
 	mu             sync.Mutex
 	mgr            *browser.Manager
 	guard          *browser.NavigationGuard
 	refs           *browser.RefMap
-	blockPrivateIP bool // true = block private IPs (non-sandbox), false = allow (sandbox)
+	sessionID      string
+	initialized    bool
 }
 
-func newTestBrowserExecutor(sandbox bool) *testBrowserExecutor {
+func newTestBrowserExecutor(mgr *browser.Manager, sessionID string, _ bool) *testBrowserExecutor {
 	return &testBrowserExecutor{
-		blockPrivateIP: !sandbox,
+		mgr:       mgr,
+		sessionID: sessionID,
 	}
 }
 
-func (b *testBrowserExecutor) ensureInit() {
+func (b *testBrowserExecutor) ensureInit() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.mgr != nil {
-		return
+	if b.initialized {
+		if b.mgr != nil && b.sessionID != "" {
+			b.mgr.EnsureSessionID(b.sessionID)
+		}
+		return nil
 	}
-	cfg := browser.DefaultConfig()
-	cfg.Headless = true  // test runner always headless
-	cfg.UserDataDir = "" // temp dir avoids SingletonLock conflict with Studio browser
-	b.mgr = browser.NewManager(cfg)
-	b.guard = browser.DefaultNavigationGuard()
-	if !b.blockPrivateIP {
-		b.guard.BlockPrivateNetworks = false
+	if b.mgr == nil || !b.mgr.SandboxEnabled {
+		return fmt.Errorf("browser drills require an in-container browser (sandbox Chromium+KasmVNC); host Chromium is disabled — restart Studio if you recently upgraded")
 	}
+	if b.mgr.ContainerResolveFunc == nil || b.mgr.ContainerStartBrowserFunc == nil {
+		return fmt.Errorf("browser Manager has SandboxEnabled but missing container callbacks; in-container Chromium is not wired")
+	}
+	b.guard = &browser.NavigationGuard{BlockPrivateNetworks: false}
 	b.refs = browser.NewRefMap()
+	if b.sessionID != "" {
+		b.mgr.EnsureSessionID(b.sessionID)
+	}
+	b.initialized = true
+	return nil
 }
 
 func (b *testBrowserExecutor) Close() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.mgr != nil {
-		b.mgr.Cleanup()
-	}
+	// Manager is owned by chat/fleet/CLI wiring — do not Cleanup here.
 }
 
 func (b *testBrowserExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	b.ensureInit()
+	if err := b.ensureInit(); err != nil {
+		return nil, err
+	}
 
 	argsJSON, err := json.Marshal(args)
 	if err != nil {
@@ -843,8 +842,191 @@ func enrichReportWithFailureContext(buf *bytes.Buffer, report *adrill.SuiteRepor
 // templateDisplay returns a user-friendly display name for a sandbox template.
 // Empty string (the default base container) is rendered as "@base".
 func templateDisplay(t string) string {
-	if t == "" {
+	n := normalizeSandboxTemplateName(t)
+	if n == "" {
 		return "@base"
 	}
+	return n
+}
+
+// normalizeSandboxTemplateName canonicalizes template names for comparison.
+// Strips a leading "@" and treats "" / "base" as the default @base sandbox.
+func normalizeSandboxTemplateName(t string) string {
+	t = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(t), "@"))
+	if t == "" || t == "base" {
+		return ""
+	}
 	return t
+}
+
+// injectDrillCredentials materializes suite credential_injection (or a fleet-plan
+// fallback) into the active sandbox before configure/setup runs.
+func injectDrillCredentials(ctx tool.Context, deps *runDrillDeps, suiteName string, suite *adrill.LoadedSuite) error {
+	if suite == nil || suite.Config == nil {
+		return nil
+	}
+	sc := suite.Config.SuiteConfig
+	goCtx := context.Background()
+	if ctx != nil {
+		goCtx = ctx
+	}
+
+	planStore := store.FleetPlanStoreFromContext(goCtx)
+	spec, err := adrill.ResolveInjectionSpec(goCtx, suiteName, sc, planStore)
+	if err != nil {
+		return err
+	}
+	if spec == nil || !spec.HasWork() {
+		return nil
+	}
+
+	cs := getEffectiveCredStore(goCtx)
+	fileStore := GetCredentialStore()
+
+	target, err := buildDrillInjectionTarget(ctx, deps)
+	if err != nil {
+		return err
+	}
+	if target.SessionID == "" && target.LazyClient == nil && target.Backend == nil && target.ExecIncus == nil {
+		slog.Warn("run_drill skipping credential injection: no sandbox target",
+			"component", "run-drill", "suite", suiteName)
+		return nil
+	}
+
+	_, err = adrill.ApplyCredentialInjection(goCtx, spec, cs, fileStore, target)
+	if err != nil {
+		return err
+	}
+	slog.Info("run_drill applied credential injection",
+		"component", "run-drill",
+		"suite", suiteName,
+		"owner", spec.OwnerKey,
+		"env_count", len(spec.Injection.Env),
+		"file_count", len(spec.Injection.Files),
+	)
+	return nil
+}
+
+func buildDrillInjectionTarget(ctx tool.Context, deps *runDrillDeps) (adrill.InjectionTarget, error) {
+	target := adrill.InjectionTarget{}
+	if deps == nil {
+		return target, nil
+	}
+
+	if deps.lazyClient != nil {
+		target.LazyClient = deps.lazyClient
+		target.SessionID = deps.sessionID
+		if target.SessionID == "" && ctx != nil {
+			target.SessionID = ctx.SessionID()
+		}
+		if _, err := deps.lazyClient.EnsureContainerReady(target.SessionID); err != nil {
+			return target, fmt.Errorf("sandbox not ready for credential injection: %w", err)
+		}
+		client := deps.lazyClient.GetIncusClient()
+		containerName := deps.lazyClient.GetContainerName()
+		if client != nil && containerName != "" {
+			target.ExecIncus = func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+				out, err := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+				if err != nil {
+					return nil, nil, -1, err
+				}
+				return []byte(out), nil, 0, nil
+			}
+		}
+		return target, nil
+	}
+
+	if deps.toolClient != nil {
+		target.SessionID = deps.sessionID
+		if target.SessionID == "" && ctx != nil {
+			target.SessionID = ctx.SessionID()
+		}
+		_ = deps.toolClient.EnsureReady(target.SessionID)
+		type backendProvider interface {
+			GetBackend() sandbox.Backend
+		}
+		if bp, ok := deps.toolClient.(backendProvider); ok {
+			target.Backend = bp.GetBackend()
+		}
+		return target, nil
+	}
+
+	if deps.nodePool != nil && ctx != nil && ctx.SessionID() != "" {
+		sessionID := ctx.SessionID()
+		target.SessionID = sessionID
+		lazy := deps.nodePool.GetOrCreate(sessionID)
+		if lazy != nil {
+			target.LazyClient = lazy
+			if _, err := lazy.EnsureContainerReady(sessionID); err != nil {
+				return target, fmt.Errorf("sandbox not ready for credential injection: %w", err)
+			}
+			client := lazy.GetIncusClient()
+			containerName := lazy.GetContainerName()
+			if client != nil && containerName != "" {
+				target.ExecIncus = func(command []string, env map[string]string) ([]byte, []byte, int, error) {
+					out, err := sandbox.ExecSimpleWithEnv(client, containerName, command, env)
+					if err != nil {
+						return nil, nil, -1, err
+					}
+					return []byte(out), nil, 0, nil
+				}
+			}
+		}
+		if backend := deps.nodePool.GetBackend(); backend != nil && target.ExecIncus == nil {
+			target.Backend = backend
+		}
+	}
+	return target, nil
+}
+
+// ensureDrillSandboxTemplate switches the chat sandbox to the suite's required
+// template before execution. Fleet / no-sandbox sessions are no-ops. force=true
+// skips the switch so the suite can run on the current container.
+func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName, suiteTemplate string, force bool) error {
+	required := normalizeSandboxTemplateName(suiteTemplate)
+	if required == "" || force {
+		return nil
+	}
+	// Fleet sessions already have a provisioned container.
+	if deps.lazyClient != nil || deps.toolClient != nil || deps.nodePool == nil {
+		return nil
+	}
+	if ctx == nil || ctx.SessionID() == "" {
+		return nil
+	}
+
+	sessionID := ctx.SessionID()
+	lazyClient := deps.nodePool.GetOrCreate(sessionID)
+	if lazyClient == nil {
+		return nil
+	}
+
+	current := normalizeSandboxTemplateName(lazyClient.Template())
+	if current == required {
+		return nil
+	}
+
+	slog.Info("run_drill switching sandbox template",
+		"component", "run-drill",
+		"suite", suiteName,
+		"from", templateDisplay(current),
+		"to", templateDisplay(required),
+	)
+	if err := deps.nodePool.ReplaceSession(sessionID, required); err != nil {
+		return fmt.Errorf(
+			"suite %q requires template %s (current sandbox is %s) but switching failed: %v",
+			suiteName, templateDisplay(required), templateDisplay(current), err,
+		)
+	}
+
+	// Eagerly create the new container so setup commands have a ready sandbox,
+	// then inject template bootstrap_files (same path as use_sandbox_template).
+	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
+		if _, err := client.GetContainerIP(sessionID); err != nil {
+			slog.Warn("run_drill template switch: container IP not ready yet",
+				"component", "run-drill", "suite", suiteName, "template", required, "error", err)
+		}
+		sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, required)
+	}
+	return nil
 }

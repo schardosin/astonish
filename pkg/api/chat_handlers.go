@@ -18,13 +18,11 @@ import (
 	"github.com/schardosin/astonish/pkg/agent"
 	"github.com/schardosin/astonish/pkg/apps"
 	"github.com/schardosin/astonish/pkg/config"
-	adrill "github.com/schardosin/astonish/pkg/drill"
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/scheduler"
 	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/fleet"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -537,22 +535,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	// /drill-add <suite>: add new drills to an existing suite
 	if strings.HasPrefix(msg, "/drill-add ") {
 		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/drill-add"))
-		if suiteName == "" {
-			SendSSE(w, flusher, "error", map[string]interface{}{"error": "Usage: /drill-add <suite_name>"})
-			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-			return
-		}
-		dirs := adrill.DefaultDrillDirs()
-		suite, err := adrill.FindSuite(dirs, suiteName)
+		_, wizardPrompt, err := resolveDrillAddWizard(r.Context(), flowStoreFromRequest(r), suiteName)
 		if err != nil {
-			SendSSE(w, flusher, "error", map[string]interface{}{"error": fmt.Sprintf("Suite %q not found: %v", suiteName, err)})
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return
 		}
-		suiteContext := adrill.BuildSuiteContext(suite)
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
-			"wizard_system_prompt": tools.GetDrillAddPrompt(suiteName, suiteContext),
+			"wizard_system_prompt": wizardPrompt,
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -561,35 +552,43 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// /fleet-plan: start a fleet plan creation conversation
 	if msg == "/fleet-plan" || strings.HasPrefix(msg, "/fleet-plan ") {
-		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		rawHint := strings.TrimSpace(strings.TrimPrefix(msg, "/fleet-plan"))
+		draftID := ""
+		hint := rawHint
+		if idx := strings.Index(rawHint, " --draft="); idx >= 0 {
+			hint = strings.TrimSpace(rawHint[:idx])
+			draftID = strings.TrimSpace(rawHint[idx+len(" --draft="):])
+		}
+		if draftID == "" {
+			draftID = strings.TrimSpace(r.URL.Query().Get("draft_id"))
+		}
 		eventData := map[string]interface{}{
 			"hint": hint,
 		}
-		// If the hint is a fleet template key, look up the wizard config
-		if hint != "" {
-			// Try store from request first (platform mode), then global registry
-			var wizardFound bool
-			if svc := store.FromRequest(r); svc != nil && svc.FleetTemplates != nil {
-				if cfgAny, ok := svc.FleetTemplates.GetFleet(r.Context(), hint); ok {
-					if cfg, ok := cfgAny.(*fleet.FleetConfig); ok && cfg.PlanWizard != nil {
-						eventData["wizard_description"] = cfg.PlanWizard.Description
-						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
-						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
-							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
-						}
-						wizardFound = true
-					}
-				}
+		if hint != "" && draftID == "" {
+			if newDraftID, err := ensureSetupDraft(r, hint, ""); err == nil {
+				draftID = newDraftID
 			}
-			if !wizardFound {
-				if reg := GetFleetRegistry(); reg != nil {
-					if cfg, ok := reg.GetFleet(hint); ok && cfg.PlanWizard != nil {
-						eventData["wizard_description"] = cfg.PlanWizard.Description
-						eventData["wizard_system_prompt"] = cfg.PlanWizard.SystemPrompt
-						if len(cfg.PlanWizard.PinnedToolGroups) > 0 {
-							eventData["pinned_tool_groups"] = cfg.PlanWizard.PinnedToolGroups
-						}
-					}
+		}
+		if draftID != "" {
+			eventData["setup_draft_id"] = draftID
+		}
+		if hint != "" {
+			profileKey, desc, prompt, pinned, currentStepID, currentStepTitle, err := ResolveSetupWizardContext(r, hint, draftID)
+			if err == nil && prompt != "" {
+				if desc != "" {
+					eventData["wizard_description"] = desc
+				}
+				eventData["wizard_system_prompt"] = prompt
+				if profileKey != "" {
+					eventData["setup_profile_key"] = profileKey
+				}
+				if len(pinned) > 0 {
+					eventData["pinned_tool_groups"] = pinned
+				}
+				if currentStepID != "" {
+					eventData["current_setup_step"] = currentStepID
+					eventData["current_setup_step_title"] = currentStepTitle
 				}
 			}
 		}
@@ -880,7 +879,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Launch background runner — the agent runs independently of this HTTP request.
 	runner := newChatRunner(sessionID, userID, isNew)
-	runner.titleWaitTimeout = 30 * time.Second // wait for title goroutine before closing SSE
+	runner.titleWaitTimeout = 30 * time.Second // wait for title refine before closing SSE
 
 	// Inject tenant-scoped credential store into the runner context so that
 	// credential tools (list_credentials, resolve_credential, etc.) can access
@@ -940,10 +939,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject composite flow store (personal-first, team-fallback) into the runner
-	// context so that drill tools, run_flow, search_flows, etc. resolve personal
-	// flows first and save to personal. Users promote to team explicitly.
+	// context so that run_flow, search_flows, etc. resolve personal flows first
+	// and save to personal. Users promote to team explicitly.
 	if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
 		runner.InjectFlowStore(store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+	}
+
+	// Inject team-only flow store for drill tools (drills are team-scoped artifacts).
+	if svc := store.FromRequest(r); svc != nil && svc.Flows != nil {
+		runner.InjectTeamFlowStore(svc.Flows)
 	}
 
 	// Inject tenant-scoped drill report store into the runner context so that

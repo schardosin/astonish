@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"os"
 	"sort"
 	"strings"
@@ -517,99 +515,67 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 				skillToolSlice = sandbox.WrapToolsWithPool(skillToolSlice, pool)
 			}
 			// Note: browserToolsSlice NOT wrapped — browser tools call the
-			// Manager directly (which connects to the sandbox via CDP tunnel).
+			// Manager directly (which connects to Chromium in the sandbox via CDP).
 
 			// Wire browser-in-sandbox for OpenShell. CloakBrowser + KasmVNC
 			// are pre-installed in the sandbox image; we just need to launch
 			// them and tunnel the CDP connection through the gateway exec API.
 			if kind == sandbox.BackendKindOpenShell {
 				if osb, ok := b.(*openshell.OpenShellBackend); ok && osb.Gateway() != nil {
-					browserMgr.SandboxEnabled = true
 					gw := osb.Gateway()
 					sessReg := osb.Sessions()
+					if WireOpenShellBrowserManager(browserMgr, gw, sessReg, sessReg.TouchActivity) {
+						// Register the dial func for the VNC proxy handler so it
+						// can tunnel HTTP/WebSocket to KasmVNC inside the sandbox.
+						api.SetVNCContainerDialFunc(browserMgr.ContainerDialFunc)
 
-					browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
-						rec, err := sessReg.GetSession(sessionID)
-						if err != nil || rec == nil || rec.PodName == "" {
-							return "", "", fmt.Errorf("no running sandbox for session %q", sessionID)
+						// Register callbacks for the PDF browser manager so PDF
+						// export uses the same sandbox Chrome (OpenShell path).
+						// The PDF resolve func ensures a sandbox exists (re-creates
+						// it if pruned), mirroring the Incus EnsureSessionContainer
+						// behaviour. This is different from the browse resolve (which
+						// only does a lookup) because PDF export can be triggered long
+						// after the sandbox was pruned by the orphan reconciler.
+						pdfResolve := func(sessionID string) (string, string, error) {
+							rec, err := sessReg.GetSession(sessionID)
+							if err == nil && rec != nil && rec.PodName != "" {
+								return rec.PodName, "127.0.0.1", nil
+							}
+
+							slog.Info("PDF resolve: sandbox not found, creating",
+								"component", "chat-factory", "sessionID", sessionID)
+							ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+							defer cancel()
+
+							if _, err := osb.CreateSession(ctx, sandbox.SessionSpec{
+								SessionID:  sessionID,
+								TemplateID: sandbox.BaseTemplateID,
+							}); err != nil {
+								return "", "", fmt.Errorf("PDF resolve: create session: %w", err)
+							}
+							if err := osb.StartSession(ctx, sessionID); err != nil {
+								return "", "", fmt.Errorf("PDF resolve: start session: %w", err)
+							}
+							if err := osb.WaitForSessionReady(ctx, sessionID); err != nil {
+								return "", "", fmt.Errorf("PDF resolve: wait for ready: %w", err)
+							}
+
+							rec, err = sessReg.GetSession(sessionID)
+							if err != nil || rec == nil || rec.PodName == "" {
+								return "", "", fmt.Errorf("PDF resolve: session still not found after create")
+							}
+							return rec.PodName, "127.0.0.1", nil
 						}
-						// IP is unused — we tunnel via exec, so use a placeholder.
-						return rec.PodName, "127.0.0.1", nil
+
+						api.SetPDFBrowserCallbacks(
+							pdfResolve,
+							browserMgr.ContainerStartBrowserFunc,
+							browserMgr.ContainerDialFunc,
+						)
+
+						slog.Info("browser-in-sandbox enabled for OpenShell",
+							"component", "chat-factory")
 					}
-
-					bcfg := browserMgr.Config()
-					browserMgr.ContainerStartBrowserFunc = func(podName string) (io.Closer, error) {
-						return openshell.StartBrowserInSandbox(context.Background(), gw, podName, openshell.BrowserLaunchConfig{
-							ViewportWidth:       bcfg.ViewportWidth,
-							ViewportHeight:      bcfg.ViewportHeight,
-							FingerprintSeed:     bcfg.FingerprintSeed,
-							FingerprintPlatform: bcfg.FingerprintPlatform,
-							Proxy:               bcfg.Proxy,
-							KasmVNCPort:         bcfg.KasmVNCPort,
-						})
-					}
-
-					browserMgr.ContainerDialFunc = func(podName string, port int) (net.Conn, error) {
-						return openshell.DialSandboxPort(context.Background(), gw, podName, port)
-					}
-
-					// Register the dial func for the VNC proxy handler so it
-					// can tunnel HTTP/WebSocket to KasmVNC inside the sandbox.
-					api.SetVNCContainerDialFunc(browserMgr.ContainerDialFunc)
-
-				// Register callbacks for the PDF browser manager so PDF
-				// export uses the same sandbox Chrome (OpenShell path).
-				// The PDF resolve func ensures a sandbox exists (re-creates
-				// it if pruned), mirroring the Incus EnsureSessionContainer
-				// behaviour. This is different from the browse resolve (which
-				// only does a lookup) because PDF export can be triggered long
-				// after the sandbox was pruned by the orphan reconciler.
-				pdfResolve := func(sessionID string) (string, string, error) {
-					// Fast path: session record exists.
-					rec, err := sessReg.GetSession(sessionID)
-					if err == nil && rec != nil && rec.PodName != "" {
-						return rec.PodName, "127.0.0.1", nil
-					}
-
-					// Session record missing (pruned). Re-create the sandbox.
-					slog.Info("PDF resolve: sandbox not found, creating",
-						"component", "chat-factory", "sessionID", sessionID)
-					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-					defer cancel()
-
-					if _, err := osb.CreateSession(ctx, sandbox.SessionSpec{
-						SessionID:  sessionID,
-						TemplateID: sandbox.BaseTemplateID,
-					}); err != nil {
-						return "", "", fmt.Errorf("PDF resolve: create session: %w", err)
-					}
-					if err := osb.StartSession(ctx, sessionID); err != nil {
-						return "", "", fmt.Errorf("PDF resolve: start session: %w", err)
-					}
-					if err := osb.WaitForSessionReady(ctx, sessionID); err != nil {
-						return "", "", fmt.Errorf("PDF resolve: wait for ready: %w", err)
-					}
-
-					// Re-read to get the pod name (GatewayID).
-					rec, err = sessReg.GetSession(sessionID)
-					if err != nil || rec == nil || rec.PodName == "" {
-						return "", "", fmt.Errorf("PDF resolve: session still not found after create")
-					}
-					return rec.PodName, "127.0.0.1", nil
-				}
-
-				api.SetPDFBrowserCallbacks(
-					pdfResolve,
-					browserMgr.ContainerStartBrowserFunc,
-					browserMgr.ContainerDialFunc,
-				)
-
-					browserMgr.ActivityTouchFunc = func(sessionID string) {
-						sessReg.TouchActivity(sessionID)
-					}
-
-					slog.Info("browser-in-sandbox enabled for OpenShell",
-						"component", "chat-factory")
 				}
 			}
 
@@ -692,7 +658,8 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			if len(skillToolSlice) > 0 {
 				skillToolSlice = sandbox.WrapToolsWithNode(skillToolSlice, nodePool)
 			}
-			// Note: browserToolsSlice is intentionally NOT wrapped — browser runs on host
+			// Note: browserToolsSlice is intentionally NOT wrapped — Manager
+			// drives in-container Chromium via SandboxEnabled callbacks.
 
 			// Hoist references for template tool registration
 			sandboxNodePool = nodePool
@@ -704,54 +671,9 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			// available. The browser resolves the session container (already
 			// managed by NodeClientPool) and starts Chromium + KasmVNC inside it.
 			{
-				bcfg := browserMgr.Config()
-				engine := incus.DetectBrowserEngine(incus.BrowserContainerConfig{
-					ChromePath: bcfg.ChromePath,
-				})
-				if incus.IsContainerCompatibleEngine(engine) {
-					browserMgr.SandboxEnabled = true
-					client := sandboxClient // capture for closures
-					bCfg := incus.BrowserContainerConfig{
-						ViewportWidth:       bcfg.ViewportWidth,
-						ViewportHeight:      bcfg.ViewportHeight,
-						KasmVNCPort:         bcfg.KasmVNCPort,
-						KasmVNCPassword:     bcfg.KasmVNCPassword,
-						Proxy:               bcfg.Proxy,
-						ChromePath:          bcfg.ChromePath,
-						FingerprintSeed:     bcfg.FingerprintSeed,
-						FingerprintPlatform: bcfg.FingerprintPlatform,
-					}
-					browserMgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
-						containerName := incus.SessionContainerName(sessionID)
-						if !client.IsRunning(containerName) {
-							return "", "", fmt.Errorf("session container %q is not running", containerName)
-						}
-						ip, err := client.GetContainerIPv4(containerName)
-						if err != nil {
-							return "", "", fmt.Errorf("failed to get IP for session container %q: %w", containerName, err)
-						}
-						return containerName, ip, nil
-					}
-					browserMgr.ContainerStartBrowserFunc = func(containerName string) (io.Closer, error) {
-						return nil, incus.StartChromiumInContainer(client, containerName, bCfg)
-					}
-
-					// ContainerDialFunc: tunnel TCP connections through the Incus exec API.
-					// This makes CDP (and /json/version HTTP) work even when container
-					// bridge IPs are not routable from the host (Docker+Incus on macOS).
-					browserMgr.ContainerDialFunc = func(containerName string, port int) (net.Conn, error) {
-						dialer := &incus.ContainerDialer{Client: client}
-						return dialer.Dial(containerName, port)
-					}
-
-					// ActivityTouchFunc: reset the sandbox idle timer on every browser
-					// tool call. Browser tools communicate with Chromium via CDP, bypassing
-					// the node process — without this, the idle watchdog would kill
-					// containers with active browser sessions after 10 minutes.
-					pool := nodePool // capture for closure
-					browserMgr.ActivityTouchFunc = func(sessionID string) {
-						pool.TouchActivity(sessionID)
-					}
+				pool := nodePool // capture for closure
+				if WireIncusBrowserManager(browserMgr, sandboxClient, pool.TouchActivity) {
+					// browser-in-sandbox enabled
 				}
 			}
 
@@ -1116,6 +1038,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		fleetToolsSlice = append(fleetToolsSlice, fleetPlanValidateTools...)
 	}
 
+	fleetSetupTools, fstErr := tools.GetFleetSetupTools()
+	if fstErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create fleet setup tools", "error", fstErr)
+		}
+	} else {
+		fleetToolsSlice = append(fleetToolsSlice, fleetSetupTools...)
+	}
+
 	if len(fleetToolsSlice) > 0 {
 		toolGroups["fleet"] = &agent.ToolGroup{
 			Name:        "fleet",
@@ -1190,7 +1121,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		drillToolsSlice = append(drillToolsSlice, drillTools...)
 	}
 
-	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, adrill.NewLLMProviderFromModel(llm))
+	runDrillTool, runDrillErr := tools.NewRunDrillTool(sandboxNodePool, sandboxTplRegistry, browserMgr, adrill.NewLLMProviderFromModel(llm))
 	if runDrillErr != nil {
 		if cfg.DebugMode {
 			slog.Warn("failed to create run_drill tool", "error", runDrillErr)

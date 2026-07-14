@@ -753,11 +753,72 @@ func fleetEventsToMessages(events []*session.Event) []FleetMessageSummary {
 	return messages
 }
 
-// generateStudioSessionTitle calls the LLM to produce a short session title.
-// The optional onTitle callback is invoked with the generated title so callers
-// can push a real-time SSE event to connected browsers.
-func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, sessionID, userMessage string, onTitle func(string)) {
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+// titleRefineTimeout bounds the best-effort LLM title polish. Kept under the
+// production SSE titleWaitTimeout (30s) so a successful refine can still flush
+// before subscribers close. The provisional fallback title is already on screen.
+const titleRefineTimeout = 25 * time.Second
+
+// sessionNeedsTitle reports whether this turn should assign/refresh a title.
+func sessionNeedsTitle(ctx context.Context, sessionID string, isNew bool, msg string, titleSetter SessionTitleSetter) bool {
+	if msg == "" || titleSetter == nil {
+		return false
+	}
+	if isNew {
+		return true
+	}
+	checker, ok := titleSetter.(SessionTitleChecker)
+	if !ok {
+		return false
+	}
+	existing, err := checker.GetSessionTitle(ctx, sessionID)
+	return err == nil && existing == ""
+}
+
+// setSessionTitleNow persists a title and invokes onTitle on success.
+func setSessionTitleNow(store SessionTitleSetter, sessionID, title string, onTitle func(string)) {
+	if store == nil || title == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
+		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
+		return
+	}
+	if onTitle != nil {
+		onTitle(title)
+	}
+}
+
+// cleanLLMTitle strips thinking tags/preambles and truncates to 80 chars.
+// Returns empty string when the model output is unusable.
+func cleanLLMTitle(raw string) string {
+	title := titleThinkTagRe.ReplaceAllString(raw, "")
+	// Also strip unclosed thinking tags (model hit token limit mid-tag)
+	if idx := strings.Index(title, "<think"); idx >= 0 {
+		title = title[:idx]
+	}
+	if idx := strings.Index(title, "<thinking"); idx >= 0 {
+		title = title[:idx]
+	}
+	title = stripThinkingPreamble(title)
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return ""
+	}
+	if len(title) > 80 {
+		title = title[:77] + "..."
+	}
+	return title
+}
+
+// generateStudioSessionTitle best-effort LLM polish of a session title.
+// provisionalTitle is the title already shown/persisted from fallbackTitle; when
+// set, LLM errors or empty output are a no-op (provisional stays). When empty,
+// falls back to fallbackTitle on failure (defense in depth).
+// onTitle is invoked only when a new title is successfully persisted.
+func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, sessionID, userMessage, provisionalTitle string, onTitle func(string)) {
+	ctx, cancel := context.WithTimeout(context.Background(), titleRefineTimeout)
 	defer cancel()
 
 	prompt := fmt.Sprintf(
@@ -776,10 +837,13 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 		},
 	}
 
-	var title string
+	var raw string
 	for resp, err := range llm.GenerateContent(ctx, req, false) {
 		if err != nil {
 			slog.Warn("session title LLM error", "session_id", sessionID, "error", err)
+			if provisionalTitle == "" {
+				setSessionTitleNow(store, sessionID, fallbackTitle(userMessage), onTitle)
+			}
 			return
 		}
 		if resp.Content == nil {
@@ -787,41 +851,26 @@ func generateStudioSessionTitle(llm model.LLM, store SessionTitleSetter, session
 		}
 		for _, part := range resp.Content.Parts {
 			if part.Text != "" && !part.Thought {
-				title += part.Text
+				raw += part.Text
 			}
 		}
 	}
 
-	title = titleThinkTagRe.ReplaceAllString(title, "")
-	// Also strip unclosed thinking tags (model hit token limit mid-tag)
-	if idx := strings.Index(title, "<think"); idx >= 0 {
-		title = title[:idx]
-	}
-	if idx := strings.Index(title, "<thinking"); idx >= 0 {
-		title = title[:idx]
-	}
-	// Strip plain-text thinking preambles that some models emit without XML tags.
-	// These typically start with a recognizable prefix followed by multi-line reasoning.
-	title = stripThinkingPreamble(title)
-	title = strings.TrimSpace(title)
-
-	// Fallback: if the LLM produced nothing usable, derive a title from the user message.
+	title := cleanLLMTitle(raw)
 	if title == "" {
+		if provisionalTitle != "" {
+			return
+		}
 		title = fallbackTitle(userMessage)
+		if title == "" {
+			slog.Debug("session title generation produced empty result", "session_id", sessionID)
+			return
+		}
 	}
-	if title == "" {
-		slog.Debug("session title generation produced empty result", "session_id", sessionID)
+	if title == provisionalTitle {
 		return
 	}
-	if len(title) > 80 {
-		title = title[:77] + "..."
-	}
-
-	if err := store.SetSessionTitle(ctx, sessionID, title); err != nil {
-		slog.Warn("failed to set session title", "session_id", sessionID, "error", err)
-	} else if onTitle != nil {
-		onTitle(title)
-	}
+	setSessionTitleNow(store, sessionID, title, onTitle)
 }
 
 // thinkingPreambleRe matches common plain-text thinking preambles that models

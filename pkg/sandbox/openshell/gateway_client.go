@@ -66,6 +66,20 @@ type GatewayClient interface {
 
 	// Close releases any resources held by the client (e.g., gRPC connection).
 	Close() error
+
+	// --- OpenShell Providers (Phase 2) --------------------------------
+
+	// CreateProvider registers a named provider with credential key-value pairs.
+	CreateProvider(ctx context.Context, name, providerType string, credentials map[string]string) error
+
+	// DeleteProvider removes a provider by name.
+	DeleteProvider(ctx context.Context, name string) error
+
+	// AttachSandboxProvider binds a provider to a sandbox for per-process env injection.
+	AttachSandboxProvider(ctx context.Context, sandboxName, providerName string) error
+
+	// DetachSandboxProvider unbinds a provider from a sandbox.
+	DetachSandboxProvider(ctx context.Context, sandboxName, providerName string) error
 }
 
 // DraftPolicyResponse contains the draft policy chunks returned by GetDraftPolicy.

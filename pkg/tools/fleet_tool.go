@@ -27,7 +27,11 @@ func GetFleetTools() ([]tool.Tool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return []tool.Tool{ocT}, nil
+	taskTools, err := GetFleetTaskTools()
+	if err != nil {
+		return nil, err
+	}
+	return append([]tool.Tool{ocT}, taskTools...), nil
 }
 
 // getEffectiveFleetTemplateStore returns the FleetTemplateStore from context (platform mode)

@@ -1076,6 +1076,16 @@ func BuildStartedAtNotNil() predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldNotNull(FieldBuildStartedAt))
 }
 
+// BootstrapFilesIsNil applies the IsNil predicate on the "bootstrap_files" field.
+func BootstrapFilesIsNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldIsNull(FieldBootstrapFiles))
+}
+
+// BootstrapFilesNotNil applies the NotNil predicate on the "bootstrap_files" field.
+func BootstrapFilesNotNil() predicate.SandboxTemplate {
+	return predicate.SandboxTemplate(sql.FieldNotNull(FieldBootstrapFiles))
+}
+
 // BaseConfigIsNil applies the IsNil predicate on the "base_config" field.
 func BaseConfigIsNil() predicate.SandboxTemplate {
 	return predicate.SandboxTemplate(sql.FieldIsNull(FieldBaseConfig))

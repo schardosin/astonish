@@ -145,6 +145,23 @@ describe('Core Chat Flow Scenarios', () => {
       await waitFor(() => {
         expect(screen.getByText(/Go testing best practices/)).toBeInTheDocument()
       }, { timeout: 5000 })
+
+      await waitFor(() => {
+        expect(screen.getByText('Go Testing Tips')).toBeInTheDocument()
+      }, { timeout: 5000 })
+    })
+
+    it('upserts sidebar title when session is not yet in the list', async () => {
+      result = renderChat({
+        scenarioEvents: sessionTitle.events as FixtureEvent[],
+        sessions: [],
+      })
+
+      await result.sendMessage('Tell me about Go testing')
+
+      await waitFor(() => {
+        expect(screen.getByText('Go Testing Tips')).toBeInTheDocument()
+      }, { timeout: 5000 })
     })
   })
 })

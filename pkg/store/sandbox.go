@@ -47,6 +47,16 @@ const (
 	SandboxTemplatePurposeFleet SandboxTemplatePurpose = "fleet"
 )
 
+// BootstrapFile is a non-secret file injected into every sandbox container
+// created from a template (e.g. .astonish/start-services.sh). Content is
+// stored on the template row and materialized at session start — never
+// auto-executed by the container entrypoint.
+type BootstrapFile struct {
+	Path    string `json:"path" yaml:"path"`
+	Content string `json:"content" yaml:"content"`
+	Mode    string `json:"mode,omitempty" yaml:"mode,omitempty"` // octal string, default 0755 for .sh
+}
+
 // SandboxTemplate is a DAG node.
 //
 // Invariants:
@@ -88,6 +98,9 @@ type SandboxTemplate struct {
 	LastBuiltImage  string                 `json:"last_built_image,omitempty"`
 	// BuildStartedAt records when the last build was triggered.
 	BuildStartedAt  *time.Time             `json:"build_started_at,omitempty"`
+	// BootstrapFiles are injected into every container from this template
+	// at session start (mount only — callers must execute them explicitly).
+	BootstrapFiles  []BootstrapFile        `json:"bootstrap_files,omitempty"`
 	Version         int                    `json:"version"`
 	CreatedBy       string                 `json:"created_by,omitempty"`
 	CreatedAt       time.Time              `json:"created_at"`

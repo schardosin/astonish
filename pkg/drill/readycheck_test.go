@@ -27,10 +27,11 @@ func TestReadyCheckHTTPSuccess(t *testing.T) {
 	defer server.Close()
 
 	rc := &config.ReadyCheck{
-		Type:     "http",
-		URL:      server.URL,
-		Timeout:  5,
-		Interval: 1,
+		Type:        "http",
+		URL:         server.URL,
+		Timeout:     5,
+		Interval:    1,
+		StableCount: 1,
 	}
 
 	err := RunReadyCheck(context.Background(), rc)
@@ -72,10 +73,11 @@ func TestReadyCheckHTTPBecomeReady(t *testing.T) {
 	defer server.Close()
 
 	rc := &config.ReadyCheck{
-		Type:     "http",
-		URL:      server.URL,
-		Timeout:  10,
-		Interval: 1,
+		Type:        "http",
+		URL:         server.URL,
+		Timeout:     10,
+		Interval:    1,
+		StableCount: 1,
 	}
 
 	err := RunReadyCheck(context.Background(), rc)
@@ -111,11 +113,12 @@ func TestReadyCheckPortSuccess(t *testing.T) {
 	port, _ := strconv.Atoi(portStr)
 
 	rc := &config.ReadyCheck{
-		Type:     "port",
-		Host:     "127.0.0.1",
-		Port:     port,
-		Timeout:  5,
-		Interval: 1,
+		Type:        "port",
+		Host:        "127.0.0.1",
+		Port:        port,
+		Timeout:     5,
+		Interval:    1,
+		StableCount: 1,
 	}
 
 	err = RunReadyCheck(context.Background(), rc)
@@ -186,14 +189,67 @@ func TestReadyCheckDefaultTimeouts(t *testing.T) {
 	defer server.Close()
 
 	rc := &config.ReadyCheck{
-		Type: "http",
-		URL:  server.URL,
+		Type:        "http",
+		URL:         server.URL,
+		StableCount: 1,
 		// Timeout and Interval are 0 — should use defaults
 	}
 
 	err := RunReadyCheck(context.Background(), rc)
 	if err != nil {
 		t.Errorf("expected success with defaults, got: %v", err)
+	}
+}
+
+func TestReadyCheckHTTPStableCount(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		// Briefly healthy, then die — stable_count=3 must not pass on a transient blip.
+		if hits == 1 || hits == 2 {
+			w.WriteHeader(200)
+			return
+		}
+		w.WriteHeader(503)
+	}))
+	defer server.Close()
+
+	rc := &config.ReadyCheck{
+		Type:        "http",
+		URL:         server.URL,
+		Timeout:     4,
+		Interval:    1,
+		StableCount: 3,
+	}
+
+	err := RunReadyCheck(context.Background(), rc)
+	if err == nil {
+		t.Fatal("expected timeout when readiness is not stable")
+	}
+}
+
+func TestReadyCheckHTTPStableCountSuccess(t *testing.T) {
+	var hits int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.WriteHeader(200)
+	}))
+	defer server.Close()
+
+	rc := &config.ReadyCheck{
+		Type:        "http",
+		URL:         server.URL,
+		Timeout:     5,
+		Interval:    1,
+		StableCount: 3,
+	}
+
+	err := RunReadyCheck(context.Background(), rc)
+	if err != nil {
+		t.Fatalf("expected success after 3 consecutive checks, got: %v", err)
+	}
+	if hits < 3 {
+		t.Fatalf("expected at least 3 hits, got %d", hits)
 	}
 }
 

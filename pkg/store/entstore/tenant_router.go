@@ -18,8 +18,8 @@ import (
 	orgent "github.com/schardosin/astonish/ent/org"
 	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 	personalent "github.com/schardosin/astonish/ent/personal"
-	teament "github.com/schardosin/astonish/ent/team"
 	"github.com/schardosin/astonish/ent/platform/organization"
+	teament "github.com/schardosin/astonish/ent/team"
 	"github.com/schardosin/astonish/pkg/credentials"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/store/pgutil"
@@ -1099,25 +1099,54 @@ func (t *teamDataStore) Memories() store.MemoryStore {
 	}
 	return ms
 }
-func (t *teamDataStore) Credentials() store.CredentialStore   { return &teamCredentialStore{client: t.client, credKey: t.parentOrg.getOrCreateCredentialKey()} }
-func (t *teamDataStore) Apps() store.AppStore                 { return &teamAppStore{client: t.client} }
-func (t *teamDataStore) AppState() store.AppStateStore        { return &teamAppStateStore{client: t.client} }
+func (t *teamDataStore) Credentials() store.CredentialStore {
+	return &teamCredentialStore{client: t.client, credKey: t.parentOrg.getOrCreateCredentialKey()}
+}
+func (t *teamDataStore) Apps() store.AppStore          { return &teamAppStore{client: t.client} }
+func (t *teamDataStore) AppState() store.AppStateStore { return &teamAppStateStore{client: t.client} }
 func (t *teamDataStore) AppStateSQL() store.AppStateSQLStore {
 	if t.parentOrg.dialect == DialectPostgres {
 		return &pgAppStateSQLStore{db: t.db, teamSchema: teamSchemaName(t.teamSlug)}
 	}
 	return newSQLiteAppStateSQLStore(filepath.Join(t.parentOrg.parentStore.dataDir, "orgs", t.parentOrg.orgSlug, "teams", t.teamSlug))
 }
-func (t *teamDataStore) Flows() store.FlowStore               { return &teamFlowStore{client: t.client} }
-func (t *teamDataStore) Skills() store.SkillStore             { return &teamSkillStore{client: t.client} }
-func (t *teamDataStore) MCPServers() store.MCPServerStore     { return &teamMCPServerStore{client: t.client} }
-func (t *teamDataStore) NetworkPolicies() store.NetworkPolicyStore { return &teamNetworkPolicyStore{client: t.client} }
-func (t *teamDataStore) ScheduledJobs() store.SchedulerStore  { return &teamSchedulerStore{client: t.client} }
-func (t *teamDataStore) FleetTemplates() store.FleetTemplateStore { return &teamFleetTemplateStore{client: t.client} }
-func (t *teamDataStore) FleetPlans() store.FleetPlanStore     { return &teamFleetPlanStore{client: t.client} }
-func (t *teamDataStore) DrillReports() store.DrillReportStore { return &teamDrillReportStore{client: t.client} }
-func (t *teamDataStore) Settings() store.SettingsStore        { return &teamSettingsStore{client: t.client} }
-func (t *teamDataStore) Audit() store.AuditStore              { return &teamAuditStore{client: t.client} }
+func (t *teamDataStore) Flows() store.FlowStore   { return &teamFlowStore{client: t.client} }
+func (t *teamDataStore) Skills() store.SkillStore { return &teamSkillStore{client: t.client} }
+func (t *teamDataStore) MCPServers() store.MCPServerStore {
+	return &teamMCPServerStore{client: t.client}
+}
+func (t *teamDataStore) NetworkPolicies() store.NetworkPolicyStore {
+	return &teamNetworkPolicyStore{client: t.client}
+}
+func (t *teamDataStore) ScheduledJobs() store.SchedulerStore {
+	return &teamSchedulerStore{client: t.client}
+}
+func (t *teamDataStore) FleetTemplates() store.FleetTemplateStore {
+	return &teamFleetTemplateStore{client: t.client}
+}
+func (t *teamDataStore) FleetPlans() store.FleetPlanStore {
+	return &teamFleetPlanStore{client: t.client}
+}
+func (t *teamDataStore) FleetSetupProfiles() store.FleetSetupProfileStore {
+	return &teamFleetSetupProfileStore{client: t.client}
+}
+func (t *teamDataStore) FleetSetupDrafts() store.FleetSetupDraftStore {
+	return &teamFleetSetupDraftStore{client: t.client}
+}
+func (t *teamDataStore) FleetRunStates() store.FleetRunStateStore {
+	return &teamFleetRunStateStore{client: t.client}
+}
+func (t *teamDataStore) FleetMailbox() store.FleetMailboxStore {
+	return &teamFleetMailboxStore{client: t.client}
+}
+func (t *teamDataStore) FleetTaskBoard() store.FleetTaskBoardStore {
+	return &teamFleetTaskBoardStore{client: t.client}
+}
+func (t *teamDataStore) DrillReports() store.DrillReportStore {
+	return &teamDrillReportStore{client: t.client}
+}
+func (t *teamDataStore) Settings() store.SettingsStore { return &teamSettingsStore{client: t.client} }
+func (t *teamDataStore) Audit() store.AuditStore       { return &teamAuditStore{client: t.client} }
 
 func (t *teamDataStore) SessionPin(ctx context.Context, sessionID string) (*store.SessionPin, error) {
 	return getSessionPinTeam(ctx, t.client, sessionID)
@@ -1159,11 +1188,17 @@ func (p *personalDataStore) Memories() store.MemoryStore {
 	}
 	return ms
 }
-func (p *personalDataStore) Apps() store.AppStore               { return &personalAppStore{client: p.client} }
-func (p *personalDataStore) Sessions() store.SessionStore       { return &personalSessionStore{client: p.client} }
-func (p *personalDataStore) AppState() store.AppStateStore      { return &personalAppStateStore{client: p.client} }
-func (p *personalDataStore) Flows() store.FlowStore             { return &personalFlowStore{client: p.client} }
-func (p *personalDataStore) Credentials() store.CredentialStore { return &personalCredentialStore{client: p.client, credKey: p.credKey} }
+func (p *personalDataStore) Apps() store.AppStore { return &personalAppStore{client: p.client} }
+func (p *personalDataStore) Sessions() store.SessionStore {
+	return &personalSessionStore{client: p.client}
+}
+func (p *personalDataStore) AppState() store.AppStateStore {
+	return &personalAppStateStore{client: p.client}
+}
+func (p *personalDataStore) Flows() store.FlowStore { return &personalFlowStore{client: p.client} }
+func (p *personalDataStore) Credentials() store.CredentialStore {
+	return &personalCredentialStore{client: p.client, credKey: p.credKey}
+}
 
 func (p *personalDataStore) PersonalSettings() store.PersonalSettingsStore {
 	return &personalSettingsStore{client: p.client, userID: p.userID}

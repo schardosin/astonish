@@ -2,11 +2,12 @@ package tools
 
 import (
 	"bytes"
-	"os"
-	"path/filepath"
+	"context"
+	"io"
 	"strings"
 	"testing"
 
+	"github.com/schardosin/astonish/pkg/browser"
 	adrill "github.com/schardosin/astonish/pkg/drill"
 )
 
@@ -29,11 +30,11 @@ func TestExecuteRunDrill_EmptySuiteName(t *testing.T) {
 }
 
 func TestExecuteRunDrill_SuiteNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{SuiteName: "nonexistent-suite"})
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{SuiteName: "nonexistent-suite"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,12 +47,12 @@ func TestExecuteRunDrill_SuiteNotFound(t *testing.T) {
 }
 
 func TestExecuteRunDrill_StripYAMLExtension(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	deps := &runDrillDeps{}
 	// This should strip .yaml and then fail with "not found" (not "empty suite name")
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{SuiteName: "someapp.yaml"})
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{SuiteName: "someapp.yaml"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,20 +65,17 @@ func TestExecuteRunDrill_StripYAMLExtension(t *testing.T) {
 }
 
 func TestExecuteRunDrill_TestNameNotFound(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	// Create a valid suite with one test
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: testapp\ndescription: s\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	os.WriteFile(filepath.Join(flowsDir, "existing-drill.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "existing-drill", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "testapp",
 		TestName:  "nonexistent-drill",
 	})
@@ -93,19 +91,16 @@ func TestExecuteRunDrill_TestNameNotFound(t *testing.T) {
 }
 
 func TestExecuteRunDrill_TagFilterNoMatch(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "testapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "testapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: testapp\ndescription: s\ndrill_config:\n  tags: [smoke]\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"
-	os.WriteFile(filepath.Join(flowsDir, "smoke-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "smoke-test", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "testapp",
 		Tag:       "regression",
 	})
@@ -121,19 +116,16 @@ func TestExecuteRunDrill_TagFilterNoMatch(t *testing.T) {
 }
 
 func TestExecuteRunDrill_RunsLocally(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: Echo App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "echoapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "echoapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: echoapp\ndescription: echo test\nnodes:\n  - name: echo-step\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo hello-drill-test\"\n    assert:\n      type: contains\n      expected: \"hello-drill-test\""
-	os.WriteFile(filepath.Join(flowsDir, "echo-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "echo-test", drillYAML)
 
 	deps := &runDrillDeps{} // no sandbox
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "echoapp",
 	})
 	if err != nil {
@@ -148,22 +140,19 @@ func TestExecuteRunDrill_RunsLocally(t *testing.T) {
 }
 
 func TestExecuteRunDrill_SingleTestFilter(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "multiapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "multiapp", suiteYAML)
 
 	drill1 := "type: drill\nsuite: multiapp\ndescription: test1\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo aaa\"\n    assert:\n      type: contains\n      expected: aaa"
 	drill2 := "type: drill\nsuite: multiapp\ndescription: test2\nnodes:\n  - name: s\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo bbb\"\n    assert:\n      type: contains\n      expected: bbb"
-	os.WriteFile(filepath.Join(flowsDir, "drill-one.yaml"), []byte(drill1), 0o644)
-	os.WriteFile(filepath.Join(flowsDir, "drill-two.yaml"), []byte(drill2), 0o644)
+	fs.SaveFlow(context.Background(), "drill-one", drill1)
+	fs.SaveFlow(context.Background(), "drill-two", drill2)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "multiapp",
 		TestName:  "drill-one",
 	})
@@ -180,19 +169,16 @@ func TestExecuteRunDrill_SingleTestFilter(t *testing.T) {
 }
 
 func TestExecuteRunDrill_AssertionFail(t *testing.T) {
-	tmpDir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	flowsDir := filepath.Join(tmpDir, "astonish", "flows")
-	os.MkdirAll(flowsDir, 0o755)
+	fs := newMemFlowStore()
+	ctx := testCtxWithStore(fs)
 
 	suiteYAML := "description: Fail App\ntype: drill_suite\nsuite_config:\n  setup: []\n"
-	os.WriteFile(filepath.Join(flowsDir, "failapp.yaml"), []byte(suiteYAML), 0o644)
+	fs.SaveFlow(context.Background(), "failapp", suiteYAML)
 	drillYAML := "type: drill\nsuite: failapp\ndescription: failing test\nnodes:\n  - name: step1\n    type: tool\n    args:\n      tool: shell_command\n      command: \"echo actual-output\"\n    assert:\n      type: contains\n      expected: \"expected-but-missing\""
-	os.WriteFile(filepath.Join(flowsDir, "fail-test.yaml"), []byte(drillYAML), 0o644)
+	fs.SaveFlow(context.Background(), "fail-test", drillYAML)
 
 	deps := &runDrillDeps{}
-	result, err := executeRunDrill(nil, deps, RunDrillArgs{
+	result, err := executeRunDrill(ctx, deps, RunDrillArgs{
 		SuiteName: "failapp",
 	})
 	if err != nil {
@@ -292,6 +278,47 @@ func TestTemplateDisplay_Named(t *testing.T) {
 	}
 }
 
+func TestTemplateDisplay_AtPrefix(t *testing.T) {
+	if got := templateDisplay("@juicytrade"); got != "juicytrade" {
+		t.Errorf("templateDisplay(\"@juicytrade\") = %q, want juicytrade", got)
+	}
+	if got := templateDisplay("@base"); got != "@base" {
+		t.Errorf("templateDisplay(\"@base\") = %q, want @base", got)
+	}
+}
+
+func TestNormalizeSandboxTemplateName(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"base", ""},
+		{"@base", ""},
+		{" juicytrade ", "juicytrade"},
+		{"@juicytrade", "juicytrade"},
+	}
+	for _, tc := range cases {
+		if got := normalizeSandboxTemplateName(tc.in); got != tc.want {
+			t.Errorf("normalizeSandboxTemplateName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestEnsureDrillSandboxTemplate_NoopWithoutPool(t *testing.T) {
+	deps := &runDrillDeps{}
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", false); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestEnsureDrillSandboxTemplate_ForceSkips(t *testing.T) {
+	deps := &runDrillDeps{}
+	// force=true must not attempt ReplaceSession even with a required template.
+	if err := ensureDrillSandboxTemplate(nil, deps, "suite", "myapp", true); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // enrichReportWithFailureContext tests
 // ---------------------------------------------------------------------------
@@ -350,5 +377,69 @@ func TestEnrichReportWithFailureContext(t *testing.T) {
 	}
 }
 
-// adrill is imported for report struct types
-var _ adrill.SuiteReport
+func TestTestBrowserExecutor_RequiresSandboxedManager(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil manager", func(t *testing.T) {
+		t.Parallel()
+		exec := newTestBrowserExecutor(nil, "sess-1", true)
+		_, err := exec.Execute(context.Background(), "browser_navigate", map[string]interface{}{
+			"url": "http://localhost:3000/",
+		})
+		if err == nil {
+			t.Fatal("expected error when browser manager is nil")
+		}
+		if !strings.Contains(err.Error(), "in-container") {
+			t.Errorf("error = %v, want mention of in-container browser", err)
+		}
+	})
+
+	t.Run("host manager not sandboxed", func(t *testing.T) {
+		t.Parallel()
+		mgr := browser.NewManager(browser.DefaultConfig())
+		exec := newTestBrowserExecutor(mgr, "sess-1", true)
+		_, err := exec.Execute(context.Background(), "browser_navigate", map[string]interface{}{
+			"url": "http://localhost:3000/",
+		})
+		if err == nil {
+			t.Fatal("expected error when SandboxEnabled is false")
+		}
+		if !strings.Contains(err.Error(), "in-container") {
+			t.Errorf("error = %v, want mention of in-container browser", err)
+		}
+	})
+
+	t.Run("sandboxed manager accepts init", func(t *testing.T) {
+		t.Parallel()
+		mgr := browser.NewManager(browser.DefaultConfig())
+		mgr.SandboxEnabled = true
+		mgr.ContainerResolveFunc = func(sessionID string) (string, string, error) {
+			return "astn-sess-" + sessionID, "10.0.0.1", nil
+		}
+		mgr.ContainerStartBrowserFunc = func(string) (io.Closer, error) {
+			return nil, nil
+		}
+		exec := newTestBrowserExecutor(mgr, "sess-abc", true)
+		if err := exec.ensureInit(); err != nil {
+			t.Fatalf("ensureInit: %v", err)
+		}
+		if !exec.initialized {
+			t.Fatal("expected executor to be initialized")
+		}
+	})
+}
+
+func TestBuildTestExecutor_UsesSharedBrowserManager(t *testing.T) {
+	t.Parallel()
+	mgr := browser.NewManager(browser.DefaultConfig())
+	mgr.SandboxEnabled = true
+	deps := &runDrillDeps{browserMgr: mgr, sessionID: "fleet-1"}
+	exec := buildTestExecutor(nil, deps)
+	comp, ok := exec.(*testCompositeExecutor)
+	if !ok {
+		t.Fatalf("executor type = %T", exec)
+	}
+	if comp.browser == nil || comp.browser.mgr != mgr {
+		t.Fatal("buildTestExecutor should reuse deps.browserMgr, not create a host Manager")
+	}
+}

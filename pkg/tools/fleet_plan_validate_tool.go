@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/schardosin/astonish/pkg/fleet"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )
@@ -21,7 +22,9 @@ type ValidateFleetPlanArgs struct {
 	// Artifacts maps artifact categories to destinations to validate
 	Artifacts map[string]SaveFleetPlanArtifact `json:"artifacts,omitempty" jsonschema:"Artifact destinations to validate (checks repo access, path existence, etc.)"`
 	// Credentials maps logical names to credential store entry names to validate
-	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings to validate. Key is a logical name (e.g., 'github', 'jira'). Value is the credential name in the encrypted store. Validates that each credential exists in the store. For 'github' credentials, the resolved token is used to test gh CLI authentication."`
+	Credentials map[string]string `json:"credentials,omitempty" jsonschema:"Credential mappings to validate. Key is a logical name (e.g., 'github', 'trading'). Value is the credential name in the encrypted store. Validates that each credential exists in the store. For 'github' credentials, the resolved token is used to test gh CLI authentication."`
+	// CredentialInjection validates env/file injection spec references declared credentials.
+	CredentialInjection *SaveFleetPlanCredentialInjection `json:"credential_injection,omitempty" jsonschema:"Optional injection spec to validate alongside credentials. Each env/file entry must reference a logical name in credentials. File paths must be absolute."`
 }
 
 // ValidateFleetPlanResult is the result of validation.
@@ -43,6 +46,7 @@ func validateFleetPlan(ctx tool.Context, args ValidateFleetPlanArgs) (ValidateFl
 
 	// Validate credentials first (independent of channel type)
 	credChecks, ghToken := validateCredentials(ctx, args.Credentials)
+	credChecks = append(credChecks, validateCredentialInjection(args.Credentials, args.CredentialInjection)...)
 
 	if channelType == "" || channelType == "chat" {
 		checks := []ValidationCheck{{Name: "channel_type", Status: "passed", Message: "Chat channel requires no external validation."}}
@@ -375,6 +379,43 @@ func validateCredentials(ctx tool.Context, creds map[string]string) ([]Validatio
 	}
 
 	return checks, ghToken
+}
+
+func validateCredentialInjection(credentials map[string]string, inj *SaveFleetPlanCredentialInjection) []ValidationCheck {
+	if inj == nil {
+		return nil
+	}
+	fleetInj := inj.toFleet()
+	if err := fleet.ValidateCredentialInjectionSpec(credentials, fleetInj); err != nil {
+		return []ValidationCheck{{
+			Name:    "credential_injection",
+			Status:  "failed",
+			Message: err.Error(),
+		}}
+	}
+	var checks []ValidationCheck
+	for _, spec := range fleetInj.Env {
+		checks = append(checks, ValidationCheck{
+			Name:    fmt.Sprintf("credential_injection_env_%s", spec.Var),
+			Status:  "passed",
+			Message: fmt.Sprintf("Env injection %q ← credential %q field %q.", spec.Var, spec.Credential, spec.Field),
+		})
+	}
+	for _, spec := range fleetInj.Files {
+		checks = append(checks, ValidationCheck{
+			Name:    fmt.Sprintf("credential_injection_file_%s", spec.Credential),
+			Status:  "passed",
+			Message: fmt.Sprintf("File injection %q ← credential %q field %q.", spec.Path, spec.Credential, spec.Field),
+		})
+	}
+	if len(checks) == 0 {
+		return []ValidationCheck{{
+			Name:    "credential_injection",
+			Status:  "passed",
+			Message: "Credential injection spec is valid.",
+		}}
+	}
+	return checks
 }
 
 // validateArtifacts validates artifact destination configs.

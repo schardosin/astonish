@@ -11,6 +11,8 @@ import {
   saveDrillYaml,
   fetchSuiteYaml,
   saveSuiteYaml,
+  reportTestEntries,
+  reportDurationMs,
 } from '../../api/drillApi'
 
 function mockFetchJson(data: unknown, ok = true, statusText = 'OK') {
@@ -159,6 +161,39 @@ describe('drillApi', () => {
       }))
       const headers = getCallHeaders(globalThis.fetch as ReturnType<typeof vi.fn>)
       expect(headers.get('Content-Type')).toBe('text/yaml')
+    })
+  })
+
+  describe('reportTestEntries', () => {
+    it('prefers tests over drills', () => {
+      const tests = [{ name: 'a', status: 'passed', steps: [] }]
+      const drills = [{ name: 'legacy', status: 'failed', steps: [] }]
+      expect(reportTestEntries({
+        suite: 's', status: 'passed', summary: '', duration_ms: 1,
+        started_at: '', finished_at: '', tests, drills,
+      })).toEqual(tests)
+    })
+
+    it('falls back to drills when tests missing', () => {
+      const drills = [{ name: 'legacy', status: 'passed', steps: [] }]
+      expect(reportTestEntries({
+        suite: 's', status: 'passed', summary: '', duration_ms: 1,
+        started_at: '', finished_at: '', drills,
+      })).toEqual(drills)
+    })
+
+    it('returns empty for null report', () => {
+      expect(reportTestEntries(null)).toEqual([])
+    })
+  })
+
+  describe('reportDurationMs', () => {
+    it('prefers duration_ms', () => {
+      expect(reportDurationMs({ duration_ms: 42, duration: 7 })).toBe(42)
+    })
+
+    it('falls back to duration', () => {
+      expect(reportDurationMs({ duration: 7 })).toBe(7)
     })
   })
 })

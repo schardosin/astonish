@@ -1,0 +1,538 @@
+key: software-development
+name: Software Development Setup
+description: Configure channel, credentials, sandbox provisioning, and artifacts for software development fleets.
+domain: software-development
+pinned_tool_groups:
+- fleet
+- sandbox_templates
+- drill
+- credentials
+- browser
+- process
+steps:
+- id: overview
+  title: Overview
+  type: info
+  required: false
+  guidance: Present the fleet workflow overview and confirm the user wants to proceed.
+  content: "Before collecting configuration, give the user a clear picture of how this\nfleet operates so they can decide\
+    \ if the workflow fits their needs or if they\nwant customizations. Present the following overview in a readable format:\n\
+    \n**Team composition — six autonomous agents:**\n\n1. **PO (Product Owner)** — The team leader and your single point of\
+    \ contact.\n   The PO triages every request into one of two routes: bug fixes go\n   straight to Dev, and everything else\
+    \ goes through a requirements →\n   approval → design → implement → test cycle. The PO's primary job is\n   to understand\
+    \ your intent and document it clearly before any work begins.\n2. **Architect** — Designs technical solutions for new\
+    \ features. Writes\n   architecture and design documents. Only involved when the PO determines\n   a request needs architectural\
+    \ design. Does NOT write source code.\n3. **UX (UX Designer)** — Evaluates UI changes for usability, layout, and\n   visual\
+    \ coherence. Only involved when the request touches what the user\n   sees or interacts with. Produces a UX design spec\
+    \ that guides the\n   developer on how to integrate changes naturally into the existing UI.\n   Does NOT write source\
+    \ code.\n4. **Dev (Developer)** — Implements the solution. Works incrementally:\n   creates a plan, executes step by step,\
+    \ writes tests, and commits after\n   each step. For bug fixes, also writes regression tests.\n5. **QA (QA Engineer)**\
+    \ — Tests the implementation against requirements and\n   acceptance criteria using unit and integration tests. Only involved\
+    \ for\n   new features or when the PO requests a dedicated QA cycle.\n6. **E2E (E2E Test Engineer)** — Creates and runs\
+    \ deterministic end-to-end\n   drill tests that verify services work at the integration level. Drills\n   execute without\
+    \ AI (zero LLM cost, fully deterministic), making them\n   ideal for fast regression testing. The E2E agent expands drill\
+    \ coverage\n   with each task, building a growing regression safety net over time.\n\n**Communication flow (hub-and-spoke,\
+    \ PO coordinates):**\n\n```\nHuman (you) ↔ PO ↔ Architect\n               PO ↔ UX\n               PO ↔ Dev\n         \
+    \      PO ↔ QA\n               PO ↔ E2E\n```\n\nThe PO is the hub. All agents report back to the PO, who decides next\n\
+    steps. Bug fixes can be as fast as: PO → Dev → PO → done. All other\nrequests go through a requirements and approval process\
+    \ first.\n\n**Execution flow — depends on request type:**\n\n*Bug fix:* PO receives report → asks you for clarification\
+    \ if needed →\nsends to Dev with fix instructions → Dev fixes, writes tests, runs all\ntests → E2E runs drill regression\
+    \ suite → PO verifies and reports to you.\n\n*New request (everything else):* PO receives request → asks you clarifying\n\
+    questions if needed → writes a requirements document with acceptance\ncriteria → presents requirements to you for approval\
+    \ (STOP and wait) →\nafter approval, delegates to Architect (if new logic/architecture needed)\n→ UX (if UI involved)\
+    \ → Dev for implementation → QA for unit/integration\ntesting → E2E for drill-based regression testing → reports final\
+    \ result\nto you.\n\n**For GitHub Issues channels:** When a new issue is detected, the PO picks\nit up and posts comments\
+    \ directly on the issue to ask you questions. Your\nreplies on the issue are polled automatically and fed back into the\
+    \ session.\nAll agent activity is posted as comments on the issue in real time, so you\ncan follow the full conversation\
+    \ on GitHub.\n\nAfter presenting this overview, ask: **\"Does this workflow look right for\nyour use case, or would you\
+    \ like to adjust anything before we configure the\nplan?\"** This gives the user a chance to request changes early (e.g.,\
+    \ keep\nonly the Dev agent, skip the UX agent, or modify how an agent behaves).\n\n**If the user wants to remove agents\
+    \ or keep only specific agents**, note\nwhich agents they want and pass them as `include_agents` when saving. For\nexample,\
+    \ if the user says \"keep only dev,\" set `include_agents: [\"dev\"]`.\nThe tool will automatically remove all other agents\
+    \ from the plan and\nrebuild the communication flow. Do NOT use behavior_overrides as a\nsubstitute for agent removal.\n\
+    \n**If the user wants to change how an agent behaves** (without removing it),\nnote the changes and incorporate them as\
+    \ behavior_overrides when saving.\n\nThen proceed to the configuration steps below.\n\n**CRITICAL RULES — you MUST follow\
+    \ these:**\n1. Walk through each numbered step IN ORDER. Do NOT skip steps.\n2. Do NOT bundle multiple steps into a single\
+    \ message. Each step gets its\n   own question-and-answer exchange with the user.\n3. For **github_issues** plans, you\
+    \ MUST collect and validate credentials\n   in Step 2 BEFORE performing any GitHub operations (cloning, API calls,\n \
+    \  etc.) in Step 3. NEVER attempt to clone a repository or call GitHub\n   APIs without first ensuring credentials are\
+    \ available.\n4. Step 3 (container provisioning and project analysis) is MANDATORY. You\n   MUST clone the repository,\
+    \ analyze it, install all dependencies, verify\n   the build works, create a baseline drill suite, and save a sandbox\n\
+    \   template before proceeding.\n5. Do NOT call save_fleet_plan until ALL steps are completed, including\n   the container\
+    \ provisioning and template creation in step 3.\n6. The `save_sandbox_template` tool MUST be called before `save_fleet_plan`.\n\
+    \   Every fleet plan needs a ready-to-use container template with the project\n   code, toolchains, and dependencies pre-installed.\
+    \ Do NOT save a plan\n   without first creating its template."
+  summary: Workflow overview
+  icon: eye
+- id: channel
+  title: Communication channel
+  type: form
+  required: true
+  fields:
+  - id: type
+    label: Channel type
+    type: enum
+    required: true
+    maps_to: plan.channel.type
+    options:
+    - value: chat
+      label: Chat (manual start)
+    - value: github_issues
+      label: GitHub Issues
+    default: chat
+  - id: repo
+    label: GitHub repository
+    type: repo
+    required: true
+    when: channel.type == 'github_issues'
+    maps_to: plan.channel.config.repo
+  - id: labels
+    label: Filter labels
+    type: string
+    required: false
+    when: channel.type == 'github_issues'
+    maps_to: plan.channel.config.labels
+  - id: schedule
+    label: Poll schedule
+    type: cron
+    required: false
+    when: channel.type == 'github_issues'
+    maps_to: plan.channel.schedule
+    default: '*/5 * * * *'
+  prompt: "Ask which channel type:\n- **chat** — Manual start, the user triggers tasks directly from the UI or CLI\n- **github_issues**\
+    \ — Auto-triggered by new GitHub issues (with optional label filter)\n\nThese are the two currently supported channel\
+    \ types. Do NOT offer other options\nlike jira or email; those integrations are not yet available.\n\nIf **github_issues**:\n\
+    - Ask for the GitHub repository (owner/repo format)\n- Ask for filter labels (optional, e.g., \"fleet\" to only process\
+    \ labeled issues)\n- Ask for polling schedule (suggest \"*/5 * * * *\" for every 5 minutes, or\n  \"* * * * *\" for every\
+    \ minute during testing)\n\nIf **chat**: no channel config needed, skip to step 3 (project setup)."
+  summary: How the fleet receives work
+  icon: radio
+- id: credentials
+  title: Credentials
+  type: credentials
+  required: false
+  fields:
+  - id: github
+    label: GitHub credential
+    type: credential_ref
+    required: false
+    when: channel.type == 'github_issues'
+    maps_to: plan.credentials.github
+  - id: trading
+    label: App/providers credential
+    type: credential_ref
+    required: false
+    maps_to: plan.credentials.trading
+  - id: credential_injection
+    label: Credential injection spec
+    type: string
+    required: false
+    maps_to: plan.credential_injection
+  prompt: "**For github_issues plans: this step is MANDATORY. Do NOT skip it.**\nGitHub credentials must be in place BEFORE\
+    \ any repository operations (cloning,\nAPI calls) in Step 3. Without credentials, clone and validation will fail.\n\n\
+    **For chat plans:** Ask if the plan needs credentials for external services\n(API keys, provider tokens, config files).\
+    \ If yes, collect them here. If no secrets\nare needed, skip to Step 3.\n\n**How credentials work in Fleet (IMPORTANT):**\n\
+    1. Store secrets in the encrypted credential store with `save_credential`.\n2. Map logical names in `plan.credentials`\
+    \ (e.g., github → github-work-pat,\n   trading → juicytrade-providers).\n3. Declare `credential_injection` so Fleet injects\
+    \ env vars and/or files into\n   the sandbox at session start — secrets are NEVER baked into templates.\n\n\
+    **Sub-steps:**\n\n**2a. Check for existing credentials.**\nCall `list_credentials` to see what's already in the credential\
+    \ store.\n\n**2b. Collect and save credentials.**\nFor each required integration:\n- Ask the user for the secret value.\n\
+    - Use `save_credential` to store it (bearer for tokens; api_key with field\n  `value` for YAML/JSON config file contents).\n\
+    - Record the mapping: logical name → store entry name.\n\nFor GitHub (github_issues or private repos):\n- PAT with `repo`\
+    \ scope; logical name `github`.\n- Validate: `test_credential` or `GH_TOKEN=... gh auth status`.\n\nFor config-file apps\
+    \ (e.g., trading providers YAML):\n- Save full file content as api_key type, logical name e.g. `trading`.\n- Declare file\
+    \ injection in `credential_injection` (see 2c).\n\n**2c. Wire credential_injection.**\nCall `update_setup_draft` with\
+    \ a `credential_injection` object describing how\nsecrets reach the container at session start:\n\n```yaml\ncredential_injection:\n\
+    \  env:\n    - credential: github\n      var: GH_TOKEN\n      field: token\n  files:\n    - credential: trading\n\
+    \      path: /root/<app>/config/credentials.yaml\n      field: value\n      format: yaml\n      mode: \"0600\"\n```\n\n\
+    GitHub-only plans: if you omit `credential_injection`, Fleet defaults to\nGH_TOKEN from the `github` credential.\n\n\
+    **2d. Persist mappings in the draft.**\nUse `update_setup_draft` step_id=credentials with:\n- github: <store-name> (when\
+    \ applicable)\n- any other logical names as additional fields\n- credential_injection: { env: [...], files: [...] }\n\n\
+    Do NOT write secrets into sandbox config files during provisioning — only\ninto the credential store + injection spec."
+  tools:
+  - list_credentials
+  - save_credential
+  - test_credential
+  - update_setup_draft
+- id: project_source
+  title: Project source
+  type: form
+  required: true
+  fields:
+  - id: type
+    label: Source type
+    type: enum
+    required: true
+    maps_to: plan.project_source.type
+    options:
+    - value: git_repo
+      label: Git repository
+    - value: local
+      label: Local path
+    default: git_repo
+  - id: repo
+    label: Repository
+    type: repo
+    required: true
+    when: project_source.type == 'git_repo'
+    maps_to: plan.project_source.repo
+  - id: path
+    label: Local path
+    type: string
+    required: true
+    when: project_source.type == 'local'
+    maps_to: plan.project_source.path
+  prompt: Determine project source. For github_issues channel, derive repo from channel config. Ask for git_repo or local
+    path.
+- id: provisioning
+  title: Container provisioning
+  type: provision
+  required: true
+  provisioner: sandbox_git_project
+  inputs:
+  - from: project_source.repo
+    to: repo
+  - from: credentials.github
+    to: credentials.github
+  outputs:
+  - from: template
+    to: plan.template
+  - from: container_workspace_dir
+    to: plan.container_workspace_dir
+  guidance: Clone the repository, install toolchains, verify build, create drill suite, and save sandbox template.
+  prompt: "**THIS STEP IS MANDATORY. DO NOT SKIP IT.**\n\nEvery fleet session runs inside its own isolated Linux container.\
+    \ In this\nstep you will set up the container with the project code, all required\ntoolchains, and verified dependencies.\
+    \ At the end, you freeze the container\nas a reusable template so future sessions start instantly with everything\npre-installed.\n\
+    \n**Context:** You are already running inside a sandbox container. The shell\ncommands you run execute inside this container.\
+    \ When you are done, you will\nsnapshot this container as a reusable template.\n\nIf the user already provided a GitHub\
+    \ repo in step 1 (for github_issues\nchannel), use that same repo. Otherwise, ask where the project code lives:\n- **git_repo**:\
+    \ repository in owner/repo format\n\nDerive `<repo-name>` from the repository (e.g., \"juicytrade\" from\n\"schardosin/juicytrade\"\
+    ). The project will be cloned to `/root/<repo-name>/`.\nUse this path consistently in ALL subsequent commands and tool\
+    \ calls.\n\nOnce you know the repository, execute these sub-steps IN ORDER:\n\n**3a. Confirm the project source.**\n\n\
+    Tell the user:\n\"I'll clone <owner/repo> into `/root/<repo-name>/` inside the sandbox\ncontainer. This container will\
+    \ become the template for all fleet sessions —\neach session gets its own fresh copy of this pre-provisioned environment.\"\
+    \n\n**3b. Install system tools needed for the project.**\n\nBased on what you know so far (repo URL, channel type, credentials),\n\
+    install the system tools the project will need. You decide what to install\nbased on the project context — these are examples,\
+    \ not a fixed list:\n\n- **gh (GitHub CLI)** — install if the plan uses GitHub (github_issues\n  channel, or git_repo\
+    \ artifacts). Required for cloning private repos and\n  creating PRs.\n  ```\n  shell_command(command: \"curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg\
+    \ | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && echo 'deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg]\
+    \ https://cli.github.com/packages stable main' | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && apt-get update\
+    \ && apt-get install -y gh\")\n  ```\n\n- **Go** — install if the project uses Go (go.mod present).\n  ```\n  shell_command(command:\
+    \ \"curl -fsSL https://go.dev/dl/go1.24.4.linux-amd64.tar.gz | tar -C /usr/local -xzf - && echo 'export PATH=$PATH:/usr/local/go/bin'\
+    \ >> /root/.bashrc && export PATH=$PATH:/usr/local/go/bin && go version\")\n  ```\n\n- Other toolchains (Rust, Ruby, Java,\
+    \ etc.) — install as needed based on\n  project analysis. The base container has Python 3, Node.js 22, and common\n  build\
+    \ tools pre-installed.\n\n**3c. Configure git authentication in the container.**\n\nIf GitHub credentials are available\
+    \ (from Step 2), configure git auth:\n```\nshell_command(command: \"gh auth setup-git\")\n```\nThis configures the git\
+    \ credential helper to use GH_TOKEN for HTTPS clones.\nThe GH_TOKEN environment variable is automatically injected into\
+    \ the container\nfrom the credential store.\n\n**3d. Clone the repository into the container.**\n\nClone into `/root/<repo-name>/`:\n\
+    ```\nshell_command(command: \"cd /root && gh repo clone <owner>/<repo>\")\n```\nThis creates `/root/<repo-name>/` automatically.\n\
+    \nFor non-GitHub repos where gh is not available, use git clone directly:\n```\nshell_command(command: \"git clone https://<host>/<owner>/<repo>.git\
+    \ /root/<repo-name>\")\n```\n\nVerify the clone succeeded:\n```\nshell_command(command: \"ls -la /root/<repo-name>/ &&\
+    \ git -C /root/<repo-name> log --oneline -3\")\n```\n\n**3e. Check for existing AGENTS.md and analyze if needed.**\n\n\
+    First, check if AGENTS.md already exists in the project:\n```\nshell_command(command: \"test -f /root/<repo-name>/AGENTS.md\
+    \ && echo EXISTS || echo MISSING\")\n```\n\n**If EXISTS:** Read it directly — no need to regenerate:\n```\nread_file(path:\
+    \ \"/root/<repo-name>/AGENTS.md\")\n```\nPresent a brief summary to the user:\n\"Found an existing AGENTS.md. Here's what\
+    \ it says:\n[summarize key points: stack, structure, build commands].\"\n\n**If MISSING:** Generate AGENTS.md yourself using core tools (do NOT use OpenCode\
+    \ or any delegate tool):\n1. Survey structure with `file_tree` (shallow) and `find_files` / `shell_command`\
+    \ for markers (`go.mod`, `package.json`, `Makefile`, `Cargo.toml`, CI configs).\n2. Use `read_file` and `grep_search`\
+    \ on README, Makefile/scripts, and CI to extract build/test/lint/run commands and conventions.\n3. Write a concise AGENTS.md\
+    \ (keep under ~10KB) with `write_file` covering: stack, layout, build/test/lint/run commands,\
+    \ key conventions, and architectural patterns an AI coding agent needs. Include `Start stack: bash <workspace>/.astonish/start-services.sh`.\n4. Read it back and present a brief summary.\
+    \ For example:\n\"I analyzed the project and found it's a Vue.js + Go application with\nsource code in trade-app/ and\
+    \ a Go backend in cmd/.\"\n\n**3e-scope.\
+    \ Identify services and confirm scope with the user.**\n\nIf the project contains MULTIPLE services (e.g., backend + frontend,\n\
+    API + microservices, monorepo with subprojects):\n\n1. List the services you found and their roles (from AGENTS.md, README,\n\
+    \   docker-compose.yml, or directory structure).\n2. Present them to the user and explicitly ask:\n\n   \"I found these\
+    \ services in the project:\n   - **<service 1>**: <language>, port <port> — <brief description>\n   - **<service 2>**:\
+    \ <language>, port <port> — <brief description>\n   - ...\n\n   Which of these should be included in the fleet scope?\n\
+    \   (All of them, or just a subset?)\"\n\n3. **WAIT for the user's answer.** Do NOT proceed until they confirm.\n   Do\
+    \ NOT assume \"all services\" — the user may want only a subset.\n4. Record the in-scope services — you will build, run,\
+    \ and test ONLY\n   these in Steps 3g through 3i. Services not in scope should be\n   skipped during dependency installation,\
+    \ build verification, runtime\n   verification, and drill creation.\n\nIf the project is a single service/application,\
+    \ skip this step and\nproceed — all steps implicitly apply to the single service.\n\n**3f. Commit and push AGENTS.md (newly\
+    \ generated only).**\n**SKIP this step if AGENTS.md already existed (was not just generated).**\n\nAfter generating a\
+    \ new AGENTS.md, ask the user:\n\"I've generated AGENTS.md for the project. Would you like me to commit\nand push it to\
+    \ the repository so it's available for the whole team?\"\n\nIf the user agrees:\n```\nshell_command(command: \"cd /root/<repo-name>\
+    \ && git add AGENTS.md && git commit -m 'docs: add AGENTS.md with project analysis for fleet agents' && git push origin\
+    \ HEAD\")\n```\n\nIf the user declines, that's fine — the file stays in the container and\nfleet sessions will still have\
+    \ it (baked into the template).\n\n**3g. Detect and install project toolchains.**\n\nBased on AGENTS.md analysis and project\
+    \ file inspection, install the\nrequired toolchains and runtimes **for in-scope services only** (as\nconfirmed by the\
+    \ user in Step 3e-scope). Inspect the project files to\ndetermine what is needed:\n```\nshell_command(command: \"ls /root/<repo-name>/go.mod\
+    \ /root/<repo-name>/package.json /root/<repo-name>/Cargo.toml /root/<repo-name>/requirements.txt /root/<repo-name>/pyproject.toml\
+    \ /root/<repo-name>/Gemfile /root/<repo-name>/pom.xml /root/<repo-name>/build.gradle 2>/dev/null\")\n```\n\nInstall what\
+    \ the project needs. Examples:\n- Go project (go.mod found): ensure Go is installed (step 3b), then:\n  `shell_command(command:\
+    \ \"cd /root/<repo-name> && go mod download\")`\n- Node project (package.json found):\n  `shell_command(command: \"cd\
+    \ /root/<repo-name> && npm install\")`\n- Python project (requirements.txt or pyproject.toml found):\n  `shell_command(command:\
+    \ \"cd /root/<repo-name> && pip install -r requirements.txt\")`\n  or `shell_command(command: \"cd /root/<repo-name> &&\
+    \ uv sync\")`\n- Multi-language projects: install each set of dependencies\n\n**3h. Run the build and verify it works.**\n\
+    \nThis step is CRITICAL. You MUST verify that each **in-scope service**\nbuilds successfully before saving the template.\
+    \ Use the build commands\nfrom AGENTS.md:\n```\nshell_command(command: \"cd /root/<repo-name> && <build-command-from-agents-md>\"\
+    )\n```\n\n**If the build fails:** This is expected for complex projects. You MUST\niterate:\n1. Read the error output\
+    \ carefully\n2. Diagnose the missing dependency or configuration issue\n3. Install the missing dependency or fix the configuration\n\
+    4. Re-run the build\n5. Repeat until the build passes\n\nIf you cannot diagnose a failure after 2-3 attempts, ask the\
+    \ user:\n\"The build is failing with: [error summary]. Do you know what's needed\nto fix this?\"\n\n**Do NOT save the\
+    \ template until the build passes** (or the user explicitly\nsays to proceed despite build failures).\n\n**3h-v. Start\
+    \ services, verify runtime, and confirm configuration with the user.**\n\nThe build passes, but that only proves compilation\
+    \ works. Before creating\nthe drill suite or saving the template, you MUST verify the application\nactually RUNS and is\
+    \ FULLY CONFIGURED. Many applications require runtime\nconfiguration (API keys, provider setup, database seeding, onboarding\n\
+    wizards) that is invisible at build time.\n\n**Sub-steps:**\n\n1. **Start each in-scope service.** Use the run commands\
+    \ discovered in\n   AGENTS.md or the build analysis. For servers and long-running processes,\n   use `shell_command` with\
+    \ `background=true`:\n   ```\n   shell_command(command: \"cd /root/<repo> && ./server\", background: true)\n   ```\n \
+    \  For frontend dev servers:\n   ```\n   shell_command(command: \"cd /root/<repo>/web && npm run dev -- --host 0.0.0.0\"\
+    , background: true)\n   ```\n   Use `process_read` to check startup output. If a service fails to start,\n   diagnose\
+    \ and fix (up to 3 attempts), then ask the user for help.\n\n2. **Verify each service is accessible.** Hit the health/status\
+    \ endpoint,\n   check a port, or verify output:\n   ```\n   shell_command(command: \"curl -s http://localhost:8080/health\"\
+    )\n   shell_command(command: \"curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/\")\n   ```\n   Record the\
+    \ exact verification method — you will reuse this as the\n   `ready_check` in the drill suite YAML (Step 3i).\n\n3. **Present\
+    \ a summary and ASK the user about configuration.**\n   This checkpoint is MANDATORY — do NOT skip it or auto-answer it.\n\
+    \n   Present what you verified and explicitly ask:\n\n   \"Here is what I have verified:\n   - **<service 1>**: Builds\
+    \ with `<cmd>`, runs on port <port>, health check returns `<response>`\n   - **<service 2>**: Builds with `<cmd>`, dev\
+    \ server at port <port>\n\n   Before I create the baseline drill suite and save the template:\n\n   1. **Does this application\
+    \ need any configuration to be fully functional?**\n      For example: API keys, provider credentials, account setup,\
+    \ database\n      seeding, license keys, or third-party service connections.\n   2. **Is there a setup wizard or onboarding\
+    \ flow in the UI?**\n      If so, I can open it in the browser and walk through it with you.\n   3. **Are there environment\
+    \ variables or config files I should set up?**\n   4. **Anything else that needs to happen before the app is production-ready?**\n\
+    \n   The template will NOT contain secrets. Save credentials with `save_credential`\n   and declare `credential_injection` on the fleet plan — secrets are injected\n   at fleet session start (env vars and file paths), not baked into the image.\"\
+    \n\n   **WAIT for the user's response.** Do NOT proceed until they confirm.\n\n4. **If\
+    \ the user says configuration is needed:**\n\n   **For UI-based configuration (setup wizard, onboarding, config pages):**\n\
+    \   - Get the container's bridge IP:\n     `shell_command(command: \"hostname -I | awk '{print $1}'\")`\n   - Open the\
+    \ UI in the browser:\n     `browser_navigate(url: \"http://<container-ip>:<port>\")`\n   - Use `browser_snapshot` to see\
+    \ the current page\n   - Walk through the wizard step by step:\n     - If you know what to enter (from user's instructions),\
+    \ proceed\n     - If you need information (API keys, credentials, etc.), ask the user:\n       \"The page is asking for\
+    \ <field>. What should I enter here?\"\n   - Use `browser_take_screenshot` at key steps to show progress\n   - After completing\
+    \ the wizard, verify the configuration took effect\n     (re-check the health endpoint, look for status changes, etc.)\n\
+    \n   **For API key / environment variable / credentials file configuration:**\n   - Ask the user for values and save with `save_credential` (api_key for YAML/JSON blobs,\n     bearer for tokens)\n   - Map logical names in `plan.credentials` and add `credential_injection` (env + files)\n   - Do NOT write secrets into container config files that will be saved in the template\n   - Verify services using runtime-injected credentials during drill runs\n\n   **For database seeding / initial data:**\n   - Run the seed commands the user provides\n   - Verify\
+    \ the data is accessible through the service\n\n   After ALL configuration is complete, re-verify each service:\n   ```\n\
+    \   shell_command(command: \"curl -s http://localhost:8080/health\")\n   ```\n   Confirm with the user: \"Configuration\
+    \ is complete. All services are\n   responding correctly. Ready to proceed?\"\n\n5. **Persist the working start recipe as scripts (REQUIRED).**\
+    \ From the EXACT commands that successfully started the services above, write:\
+    \ - `<workspace>/.astonish/start-services.sh` — for each daemon, start a\
+    \   **detached restart supervisor** (`setsid nohup` + `while true` restart\
+    \   loop + supervisor PID under `.astonish/*.supervisor.pid` + `disown`),\
+    \   log under `.astonish/logs/`, skip if already answering curl, prefer\
+    \   `npx vite --host 0.0.0.0` over `npm run dev`, poll until ready+stable,\
+    \   then **exit 0** (do NOT end with `wait`). One-shot setsid without a\
+    \   restart loop is NOT enough — Vite often exits after the first curl.\
+    \   Verify by killing the child once and confirming the supervisor restarts it.\
+    \ - `<workspace>/.astonish/stop-services.sh` — `kill -- -$pid` on each\
+    \   supervisor PID (process group), then pkill fallbacks; remove PID files.\
+    \ Use `write_file` with absolute paths. These become the single launch path for drills,\
+    \ fleet agents, and chat. Do NOT paraphrase — copy the working recipe.\
+    \n\
+    \n\
+6. **Stop all services.** Use `process_kill`\
+    \ to stop any background\n   processes started in sub-step 1. The container must be quiescent\n   before entering the\
+    \ drill suite creation step (Step 3i will start\n   services again for drill assertion design).\n\n**Do NOT proceed to\
+    \ Step 3i until the user confirms everything is configured.**\n\n**3i. Create a baseline drill suite for E2E regression\
+    \ testing.**\n\nThe services have been verified and the user has confirmed the application\nis fully configured (Step\
+    \ 3h-v). Now create a drill suite that captures\nthis as deterministic, repeatable tests.\n\n**DO NOT create drills that\
+    \ only run build or compile commands.** Step 3h\nalready proved the build works. Drills must go further: start the service,\n\
+    hit an endpoint (or run a CLI operation), and assert the response. A drill\nthat just runs `go build` or `npm run build`\
+    \ adds zero value beyond 3h.\n\nUse the repository name (the same name you will use for the template in 3j)\nas the suite\
+    \ name. This keeps naming consistent: template, plan key, and\ndrill suite all share the same name.\n\n**Sub-steps:**\n\
+    \n1. **Start the service(s)** using the canonical script from 3h-v:\
+    \   `shell_command(command: \"bash <workspace>/.astonish/start-services.sh\")`\
+    \   (restart-supervisor spawn-and-return). Verify with the same ready checks\
+    \   as 3h-v. Do NOT reinvent start one-liners.\n\n2. **Design the suite YAML.** The suite readiness pipeline runs BEFORE any drill:\n   credential injection → `configure:` → `setup:` → `ready_check:`. Use the exact\n   commands from Steps 3h and 3h-v:\n   - `credentials` + `credential_injection` — COPY the same mapping from the fleet plan\n     so standalone `run_drill` injects secrets/config files without a fleet session.\n   - `configure:` — ordered appendix of shell steps that make the app usable after\n     secrets exist (verify injected files, offline config). For APIs that need a live\n     server, put them in start-services.sh after the ready poll.\n   - `setup:` — call the canonical start script, e.g.\
+    \     `bash <workspace>/.astonish/start-services.sh`\
+    \     (optional prior build step if needed). Do NOT reinvent one-liner start\
+    \     commands — use the script proven in 3h-v.\n   - `ready_check:` — the verification method (type: http, port, or\
+    \     output_contains) with the same endpoint/port you tested.\
+    \     Prefer timeout >= 60; stable_count defaults to 3 consecutive successes.\n   - `teardown:` — `bash <workspace>/.astonish/stop-services.sh || true`\n   - `template:` — the template name (same as what you will save in 3j).\n   - For multi-service projects, use the `services:` format instead.\n\n   The suite handles building and starting. The drills (sub-step 3) test\n  \
+    \ the RUNNING service.\n\n3. **Design 2-3 smoke drill YAMLs that test runtime behavior.**\n\n   Before writing any drill\
+    \ YAML, use `shell_command` to manually run\n   each operation you plan to test against the live service started in\n\
+    \   sub-step 1. Observe the actual response, then write the assertion\n   based on what you saw. NEVER guess what the\
+    \ output will be.\n\n   Each drill verifies one behavior of the RUNNING service:\n\n   - **Health check drill (REQUIRED):**\
+    \ Hit the health/status endpoint\n     and assert the response contains an expected string. Example:\n     `curl -s http://localhost:8080/health`\
+    \ → assert contains \"ok\".\n     If the service has no explicit health endpoint, hit the root or\n     any endpoint that\
+    \ returns a known response.\n\n   - **Basic API drill (REQUIRED if the service has an API):** Perform\n     one core API\
+    \ operation (e.g., GET /api/items, GET /api/version,\n     POST a minimal record) and assert the response contains expected\n\
+    \     data. Pick the simplest endpoint that proves the service is\n     processing requests correctly.\n\n   - **CLI drill\
+    \ (if the project has a CLI):** Run a basic CLI command\n     and assert the output. E.g., `./myapp --version` → assert\
+    \ contains\n     the version string.\n\n   **What drills are NOT:** Drills are not build checks. The suite's\n   `setup:`\
+    \ already builds and starts the service. A drill step that\n   runs `go build` or `npm run build` is wrong — it tests\
+    \ the compiler,\n   not the service. Drill steps must interact with the running service.\n\n   Each drill YAML must have\
+    \ `type: drill`, `suite:` referencing the suite\n    name, and nodes using this EXACT format:\n\n    ```yaml\n    description:\
+    \ \"Verify health endpoint responds\"\n    type: drill\n    suite: <suite-name>\n    nodes:\n      - name: health-check\n\
+    \        type: tool                    # MUST be \"tool\" (not \"shell\" or anything else)\n        args:\n          tool:\
+    \ shell_command         # tool name goes INSIDE args, not at node level\n          command: \"curl -s http://localhost:8080/health\"\
+    \n        assert:                       # MUST be \"assert:\" (singular, NOT \"assertions:\")\n          type: contains\n\
+    \          expected: \"ok\"              # MUST be \"expected:\" (NOT \"value:\")\n    ```\n\n    Exit code assertion\
+    \ example (for CLI drills):\n    ```yaml\n      - name: cli-version\n        type: tool\n        args:\n          tool:\
+    \ shell_command\n          command: \"./myapp --version\"\n        assert:\n          type: exit_code\n          source:\
+    \ exit_code           # REQUIRED for exit_code assertions\n          expected: \"0\"\n    ```\n\n    **CRITICAL node format\
+    \ rules:**\n    - Node `type` MUST be `tool` — there is no `shell` type\n    - Tool name goes in `args.tool`, NOT as a\
+    \ top-level `tool:` field\n    - Assertion key is `assert:` (singular) — `assertions:` (plural) is silently ignored\n\
+    \    - Assertion value key is `expected:` — `value:` is silently ignored\n    - For exit code checks, include `source:\
+    \ exit_code` in the assert block\n    - For output checks, use `type: contains` with `expected: \"some text\"`\n    -\
+    \ Each node MUST have an `assert:` block\n\n4. **Validate and save.** Call `validate_drill` first, then `save_drill`\n\
+    \   with the suite YAML and test files.\n\n5. **Run the drill suite.** Call `run_drill` with the suite name. This\n  \
+    \ executes the drills inside the current container.\n   - If all pass: tell the user \"Baseline drill suite created with\
+    \ N smoke\n     tests. The E2E agent will expand this coverage as the project evolves.\"\n   - If any fail: diagnose and\
+    \ fix the drill YAML (not the project — the\n      project was already verified in 3h-v). Adjust assertions, commands,\
+    \ or\n     timing, then re-run until all pass.\n\n6. **Stop services.** Use process_kill to stop any background processes\n\
+    \   started in sub-step 1. The template must be saved in a quiescent state.\n\n**Do NOT proceed to Step 3j until the drill\
+    \ suite passes.**\n\n**3j. Save the sandbox template (code + deps only — no secrets).**\n\nOnce the build passes and drills are designed, freeze the baseline environment.\n\
+    On **Incus**, save a sandbox template. On **OpenShell**, save an image/build spec\n    without secrets — credentials are injected at fleet session start via\n    `credential_injection`.\n```\n\
+    save_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary>\",\
+    \ bootstrap_files: [\
+    \   {path: \"/root/<repo-name>/.astonish/start-services.sh\", content: \"<file contents>\", mode: \"0755\"},\
+    \   {path: \"/root/<repo-name>/.astonish/stop-services.sh\", content: \"<file contents>\", mode: \"0755\"}\
+    \ ])\n```\nUse the repository name (e.g., \"billing-api\" from \"acme/billing-api\") as\n\
+    the template name. This keeps naming consistent and predictable.\n\nALWAYS pass `bootstrap_files` with the start/stop scripts written in 3h-v so every\
+    \ future container from this template gets them injected (not auto-run).\n\
+    \nThe returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
+    `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
+    `credential_injection` from the encrypted store.\"\n\n**Do NOT\
+    \ proceed to step 4 until the template is saved.**"
+  tools:
+  - save_sandbox_template
+  - list_sandbox_templates
+  - run_drill
+  - shell_command
+  - read_file
+  - write_file
+  - file_tree
+  - find_files
+  - grep_search
+  pinned_tool_groups:
+  - sandbox_templates
+  - drill
+  - core
+  - process
+- id: artifacts
+  title: Artifact destinations
+  type: form
+  required: true
+  defaults:
+    code:
+      type: git_repo
+      branch_pattern: fleet/{task}
+      auto_pr: true
+    docs:
+      type: git_repo
+      branch_pattern: fleet/{task}
+      sub_path: docs
+      auto_pr: true
+  fields:
+  - id: code_repo
+    label: Code repository
+    type: repo
+    required: true
+    maps_to: plan.artifacts.code.repo
+  - id: docs_repo
+    label: Docs repository
+    type: repo
+    required: true
+    maps_to: plan.artifacts.docs.repo
+  prompt: "Based on the project analysis from step 3, configure TWO artifact destinations.\n**You MUST configure both a \"\
+    code\" and a \"docs\" artifact.**\n\nDefault configuration (inform the user, do not ask):\n- **code**: type `git_repo`,\
+    \ repo `<owner/repo>`, branch_pattern `fleet/{task}`,\n  NO sub_path (agents work from the project root, following the\
+    \ existing\n  structure discovered in AGENTS.md), auto_pr: true\n- **docs**: type `git_repo`, SAME repo, branch_pattern\
+    \ `fleet/{task}`,\n  sub_path `docs` (fleet documentation — requirements, architecture, UX design,\n  test plans — organized\
+    \ in `docs/<task-name>/` subfolders, one per task),\n  auto_pr: true\n\nTell the user:\n\"Based on the project analysis,\
+    \ I'll configure:\n- Code: agents work from the project root following the existing structure\n- Docs: fleet documentation\
+    \ goes in docs/<task>/ (one subfolder per task\n  for requirements, architecture, UX specs, test plans)\n- Branch pattern:\
+    \ fleet/{task} with auto-PR on completion\nWant to change any of these?\"\n\nWhen calling save_fleet_plan, include BOTH\
+    \ artifacts:\nartifacts: {\n  \"code\": { type: \"git_repo\", repo: \"<owner/repo>\", branch_pattern: \"fleet/{task}\"\
+    , auto_pr: true },\n  \"docs\": { type: \"git_repo\", repo: \"<owner/repo>\", branch_pattern: \"fleet/{task}\", sub_path:\
+    \ \"docs\", auto_pr: true }\n}\n\nOnly modify if the user explicitly requests changes."
+- id: agents
+  title: Agents
+  type: agent_select
+  required: false
+  fields:
+  - id: include_agents
+    label: Include agents
+    type: agent_multi_select
+    required: false
+    maps_to: plan.include_agents
+  - id: behavior_overrides
+    label: Behavior overrides
+    type: string
+    required: false
+    maps_to: plan.behavior_overrides
+  prompt: 'If the user already requested agent changes during the overview step (e.g.,
+
+    "keep only dev" or "remove QA"), confirm those changes. You will pass them
+
+    as `include_agents` when calling save_fleet_plan.
+
+
+    Then ask if they want to add any behavior overrides for the agents that will
+
+    be included. Remind them that overrides are appended to the base behaviors,
+
+    not replacing them.'
+- id: identity
+  title: Plan identity
+  type: form
+  required: true
+  fields:
+  - id: key
+    label: Plan key
+    type: string
+    required: true
+    maps_to: plan.key
+  - id: name
+    label: Plan name
+    type: string
+    required: true
+    maps_to: plan.name
+  - id: description
+    label: Description
+    type: string
+    required: false
+    maps_to: plan.description
+  prompt: "By now you have enough context from the previous steps (channel type, repo,\nproject analysis) to propose sensible\
+    \ defaults. Present all three to the\nuser in a single message and let them adjust if needed:\n\n- **key** (lowercase,\
+    \ hyphens, e.g., \"frontend-bugs\") — derive from the\n  repo name and/or channel type. For example, repo \"acme/billing-api\"\
+    \ with\n  github_issues channel → key \"billing-api\".\n- **name** — a human-readable version of the key, e.g., \"Billing\
+    \ API\".\n- **description** — a one-sentence summary of what this plan handles, based\n  on the project and channel. E.g.,\
+    \ \"Autonomous software development for\n  acme/billing-api, triggered by GitHub issues.\"\n\nPresent your proposal:\n\
+    \"Based on the configuration so far, I'll use:\n- Key: <key>\n- Name: <name>\n- Description: <description>\nWant to change\
+    \ any of these?\"\n\nAdjust if the user requests changes, then proceed to validation."
+- id: review
+  title: Review and save
+  type: review
+  required: true
+  guidance: Validate configuration and save the fleet plan.
+  prompt: "Once all information is collected:\n1. Call **validate_fleet_plan** with channel_type, channel_config, artifacts\n\
+    \   (BOTH code and docs), credentials, and credential_injection. Show the results\n   to the user.\n2. If validation passes, call **save_fleet_plan**\
+    \ with ALL collected configuration:\n   - key, name, description\n   - base_fleet_key: \"software-dev\"\n   - channel_type,\
+    \ channel_config, channel_schedule\n   - artifacts: BOTH \"code\" and \"docs\" entries\n   - credentials\n   - credential_injection\
+    \ (env + files — required for config-file secrets; optional\n     for GitHub-only plans which default to GH_TOKEN)\n   - project_source:\
+    \ { type: \"git_repo\", repo: \"<owner/repo>\" }\n   - template: \"<repo-name>\" (the template_name returned by save_sandbox_template\
+    \ in step 3j)\n   - container_workspace_dir: \"/root/<repo-name>\" (the project path inside the container)\n   - validation_passed:\
+    \ true\n   - include_agents (only if the user requested specific agents)\n3. If validation fails, show what went wrong\
+    \ and help fix it before retrying.\n\nCRITICAL: The credentials map AND credential_injection MUST be included in both\
+    \ the validate and save calls when the plan uses external secrets.\n\
+    If the user provided credentials during the conversation, always pass them through.\n\nCRITICAL: The artifacts map MUST\
+    \ include BOTH \"code\" and \"docs\" entries.\nDo NOT save a plan with only a \"code\" artifact.\n\nAfter the plan is\
+    \ saved successfully, tell the user what to do next.\n\nThe `save_fleet_plan` tool automatically activates non-chat plans,\
+    \ so\npolling starts immediately. You do NOT need to tell the user to activate\nmanually.\n\nIf the channel type is **github_issues**\
+    \ (or any non-chat channel):\n- Tell the user: \"Your plan is saved and **monitoring is now live**. New\n  issues matching\
+    \ your configuration will automatically trigger fleet\n  sessions.\"\n- Mention they can view active sessions in the **Fleet\
+    \ tab** in Studio.\n\nIf the channel type is **chat**:\n- Tell the user: \"Your plan is saved and ready to use.\"\n- Direct\
+    \ them to: **Fleet tab** → click on the plan → click **Launch** to start\n  a session with an optional initial task message."
+  tools:
+  - validate_fleet_plan
+  - save_fleet_plan
+  - update_setup_draft
+intro_prompt: 'You are guiding the user through creating a fleet plan based on the "software-dev"
+
+  fleet template. The base_fleet_key is "software-dev". Do NOT ask which template to
+
+  use; it has already been selected.'
+channel_types:
+  chat:
+    label: Chat
+    description: Manual start from Studio
+  github_issues:
+    label: GitHub Issues
+    description: Auto-triggered by new GitHub issues
+    requires_credentials:
+    - github
+    pinned_tool_groups:
+    - fleet
+    - credentials

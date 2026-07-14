@@ -13,6 +13,13 @@ import (
 	"github.com/google/uuid"
 )
 
+// BootstrapFileSchema is the JSON shape for sandbox_templates.bootstrap_files.
+type BootstrapFileSchema struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+	Mode    string `json:"mode,omitempty"`
+}
+
 // SandboxTemplate holds the schema for the sandbox_templates table.
 type SandboxTemplate struct {
 	ent.Schema
@@ -81,6 +88,11 @@ func (SandboxTemplate) Fields() []ent.Field {
 		field.Time("build_started_at").
 			Optional().
 			Nillable(),
+		// bootstrap_files holds non-secret scripts/files injected into every
+		// container created from this template (e.g. start-services.sh).
+		// Mounted at session start; never auto-executed.
+		field.JSON("bootstrap_files", []BootstrapFileSchema{}).
+			Optional(),
 		field.JSON("base_config", map[string]any{}).
 			Optional(),
 		field.UUID("configured_by", uuid.UUID{}).

@@ -92,7 +92,11 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	fleetSession.TeamSlug = cfg.TeamSlug
 
 	// Wire sandbox container for this fleet session (fails if sandbox is enabled but unavailable)
-	if err := wireFleetSandbox(fleetSession, plan, cfg.GHToken, nil, ""); err != nil {
+	var credStore store.CredentialStore
+	if fleetStores != nil {
+		credStore = fleetStores.Credentials
+	}
+	if err := wireFleetSandbox(fleetSession, plan, credStore, nil, ""); err != nil {
 		return "", fmt.Errorf("cannot start headless fleet session: %w", err)
 	}
 
@@ -153,7 +157,7 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	// Inject tenant-scoped stores (FlowStore, DrillReportStore, CredentialStore,
 	// SkillStores, etc.) so fleet sub-agents can access team drills, credentials,
 	// and other platform-mode resources during execution.
-	runCtx = fleetStores.InjectIntoContext(runCtx)
+	runCtx = fleetStores.InjectIntoContextForPlan(runCtx, plan)
 
 	go func() {
 		defer func() {
@@ -170,15 +174,18 @@ func StartHeadlessFleetSession(ctx context.Context, cfg fleet.HeadlessFleetConfi
 	// For GitHub channels, this stays in-memory only (the issue body IS the
 	// initial message; we do not re-post it as a comment).
 	if cfg.InitialMsg != "" {
+		entryPoint := fleetCfg.GetEntryPoint()
 		initialMsg := fleet.Message{
-			Sender:    "customer",
-			Text:      cfg.InitialMsg,
-			Timestamp: time.Now(),
+			Sender:     "customer",
+			Text:       cfg.InitialMsg,
+			MemoryKeys: []string{entryPoint},
+			Timestamp:  time.Now(),
 		}
 		if err := channel.PostMessage(context.Background(), initialMsg); err != nil {
 			slog.Error("failed to post initial message", "component", "fleet-headless", "error", err)
 			return "", err
 		}
+		fleetSession.DeliverToMailbox(runCtx, initialMsg, []string{entryPoint})
 		if fleetSession.OnMessagePosted != nil {
 			fleetSession.OnMessagePosted(initialMsg)
 		}

@@ -24,6 +24,7 @@ export interface DrillSuiteDetail {
   name: string
   description: string
   file: string
+  template?: string
   suite_config: Record<string, unknown>
   drills: DrillDetail[]
   last_report: DrillReport | null
@@ -60,16 +61,36 @@ export interface DrillReport {
   duration_ms: number
   started_at: string
   finished_at: string
-  drills: DrillResult[]
+  /** SuiteReport JSON from the runner uses `tests` (canonical). */
+  tests?: DrillResult[]
+  /** Legacy alias; prefer `tests`. */
+  drills?: DrillResult[]
   [key: string]: unknown
 }
 
 export interface DrillResult {
   name: string
   status: string
-  duration_ms: number
+  duration_ms?: number
+  /** Legacy alias; prefer `duration_ms`. */
+  duration?: number
   steps: unknown[]
   [key: string]: unknown
+}
+
+/** Normalize suite report test list (backend SuiteReport uses `tests`). */
+export function reportTestEntries(report: DrillReport | null | undefined): DrillResult[] {
+  if (!report) return []
+  if (Array.isArray(report.tests) && report.tests.length > 0) return report.tests
+  if (Array.isArray(report.drills)) return report.drills
+  return report.tests || []
+}
+
+/** Normalize duration field on report rows / steps. */
+export function reportDurationMs(row: { duration_ms?: number; duration?: number } | null | undefined): number {
+  if (!row) return 0
+  const ms = row.duration_ms ?? row.duration
+  return typeof ms === 'number' ? ms : 0
 }
 
 // --- API Functions ---

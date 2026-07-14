@@ -39,6 +39,11 @@ Authoritative reference: `docs/architecture/generative-ui.md`.
 ### SSE consumer contract
 Every SSE event type produced by `pkg/api/chat_runner.go` has a matching handler in `StudioChat.tsx` (and related components). If you add an event type on the backend, add its handler here and add a scenario fixture. If you rename an event type, update both sides in the same commit.
 
+Fleet SSE (`fleet_*` events from `FleetSessionStreamHandler`) follows the same same-commit rule. New events such as `fleet_agent_started` / `fleet_agent_finished` / `fleet_task_*` / `fleet_mailbox_delivered` must land with their Studio handlers together.
+
+### FleetExecutionPanel parallel lanes
+When `maxParallelAgents ≤ 1` (or no `lane_index >= 0` events), keep the single-column Perplexity timeline. Multi-column lanes are only for parallel sessions — do not force a multi-column layout onto serial fleets.
+
 ## When editing
 1. Adding a new component? `.tsx`, functional + hooks, keep it under 300 lines. Extract if it grows.
 2. Adding a new SSE event? See the "SSE consumer contract" above.

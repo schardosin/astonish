@@ -17,8 +17,13 @@ import (
 	"github.com/schardosin/astonish/ent/team/chatsessionevent"
 	"github.com/schardosin/astonish/ent/team/credential"
 	"github.com/schardosin/astonish/ent/team/drillreport"
+	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
 	"github.com/schardosin/astonish/ent/team/fleetmonitorstate"
 	"github.com/schardosin/astonish/ent/team/fleetplan"
+	"github.com/schardosin/astonish/ent/team/fleetrunstate"
+	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
+	"github.com/schardosin/astonish/ent/team/fleetsetupprofile"
+	"github.com/schardosin/astonish/ent/team/fleettask"
 	"github.com/schardosin/astonish/ent/team/fleettemplate"
 	"github.com/schardosin/astonish/ent/team/flow"
 	"github.com/schardosin/astonish/ent/team/mcpserver"
@@ -92,26 +97,31 @@ var (
 func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
-			app.Table:               app.ValidColumn,
-			appstate.Table:          appstate.ValidColumn,
-			chatsessionevent.Table:  chatsessionevent.ValidColumn,
-			credential.Table:        credential.ValidColumn,
-			drillreport.Table:       drillreport.ValidColumn,
-			fleetmonitorstate.Table: fleetmonitorstate.ValidColumn,
-			fleetplan.Table:         fleetplan.ValidColumn,
-			fleettemplate.Table:     fleettemplate.ValidColumn,
-			flow.Table:              flow.ValidColumn,
-			mcpserver.Table:         mcpserver.ValidColumn,
-			memory.Table:            memory.ValidColumn,
-			networkpolicy.Table:     networkpolicy.ValidColumn,
-			sandboxsession.Table:    sandboxsession.ValidColumn,
-			scheduledjob.Table:      scheduledjob.ValidColumn,
-			session.Table:           session.ValidColumn,
-			sessionevent.Table:      sessionevent.ValidColumn,
-			setting.Table:           setting.ValidColumn,
-			skill.Table:             skill.ValidColumn,
-			skillfile.Table:         skillfile.ValidColumn,
-			teamauditlog.Table:      teamauditlog.ValidColumn,
+			app.Table:                 app.ValidColumn,
+			appstate.Table:            appstate.ValidColumn,
+			chatsessionevent.Table:    chatsessionevent.ValidColumn,
+			credential.Table:          credential.ValidColumn,
+			drillreport.Table:         drillreport.ValidColumn,
+			fleetmailboxmessage.Table: fleetmailboxmessage.ValidColumn,
+			fleetmonitorstate.Table:   fleetmonitorstate.ValidColumn,
+			fleetplan.Table:           fleetplan.ValidColumn,
+			fleetrunstate.Table:       fleetrunstate.ValidColumn,
+			fleetsetupdraft.Table:     fleetsetupdraft.ValidColumn,
+			fleetsetupprofile.Table:   fleetsetupprofile.ValidColumn,
+			fleettask.Table:           fleettask.ValidColumn,
+			fleettemplate.Table:       fleettemplate.ValidColumn,
+			flow.Table:                flow.ValidColumn,
+			mcpserver.Table:           mcpserver.ValidColumn,
+			memory.Table:              memory.ValidColumn,
+			networkpolicy.Table:       networkpolicy.ValidColumn,
+			sandboxsession.Table:      sandboxsession.ValidColumn,
+			scheduledjob.Table:        scheduledjob.ValidColumn,
+			session.Table:             session.ValidColumn,
+			sessionevent.Table:        sessionevent.ValidColumn,
+			setting.Table:             setting.ValidColumn,
+			skill.Table:               skill.ValidColumn,
+			skillfile.Table:           skillfile.ValidColumn,
+			teamauditlog.Table:        teamauditlog.ValidColumn,
 		})
 	})
 	return columnCheck(t, c)

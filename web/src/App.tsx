@@ -1609,8 +1609,11 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
-              onCreatePlan={(templateKey: string) => {
-                setPendingChatMessage({ message: `/fleet-plan ${templateKey}` })
+              onCreatePlan={(templateKey: string, draftId?: string) => {
+                const msg = draftId
+                  ? `/fleet-plan ${templateKey} --draft=${draftId}`
+                  : `/fleet-plan ${templateKey}`
+                setPendingChatMessage({ message: msg })
                 navigate(buildPath('chat'))
               }}
             />
@@ -1622,12 +1625,14 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
-              onRunSuite={(suiteName: string, template?: unknown) => {
-                if (template) {
-                  setPendingChatMessage({ message: `Switch the sandbox to template "${template}" and then run the drill suite "${suiteName}"` })
-                } else {
-                  setPendingChatMessage({ message: `Run the drill suite "${suiteName}"` })
-                }
+              onRunSuite={(suiteName: string, _template?: unknown) => {
+                // run_drill auto-switches to the suite template and injects
+                // credentials/bootstrap — do not ask for use_sandbox_template
+                // first (that leads the agent to manually rewrite provider files
+                // and delay/skip a clean suite setup).
+                setPendingChatMessage({
+                  message: `Run the drill suite "${suiteName}" with run_drill. Do not call use_sandbox_template, write credential files, or start services manually — run_drill handles template switch, injection, setup, and ready_check.`,
+                })
                 navigate(buildPath('chat'))
               }}
               onAddDrills={(suiteName: string) => {

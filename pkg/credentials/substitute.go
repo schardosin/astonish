@@ -335,6 +335,12 @@ func containsPlaceholderValue(v any) bool {
 	return false
 }
 
+// ResolveField looks up a single credential field value by store name.
+// Returns empty string if the credential or field is not found.
+func ResolveField(resolver CredentialResolver, name, field string) string {
+	return resolveField(resolver, name, field, "")
+}
+
 // resolveField looks up a single credential field value.
 // Returns the fallback string if the credential or field is not found.
 func resolveField(resolver CredentialResolver, name, field, fallback string) string {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -25,7 +26,7 @@ type RunDrillArgs struct {
 	TestName  string `json:"test_name,omitempty" jsonschema:"Run a single drill by name instead of the full suite. The drill must belong to the specified suite."`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
 	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
-	Force     bool   `json:"force,omitempty" jsonschema:"Skip auto-switching to the suite's sandbox template and run on the current container instead. Only use when the user explicitly wants to stay on the current sandbox."`
+	Force     bool   `json:"force,omitempty" jsonschema:"Stay on the current sandbox even when the suite template name differs. Preferred when a prepared workspace already has start-services.sh; do not use force to recover a missing script (rewrite/restore the script instead)."`
 }
 
 // RunDrillResult is the result of the run_drill tool.
@@ -103,9 +104,11 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 		Description: "Run a deterministic drill suite (or a single drill with test_name). " +
 			"Automatically handles setup, ready_check, and teardown from the suite config — " +
 			"do NOT manually start services before calling this tool. " +
-			"When the suite declares a sandbox template and the current session is on a different " +
-			"template (typically @base), run_drill switches to the suite template first, then runs. " +
-			"Pass force=true only if the user explicitly wants to stay on the current container. " +
+			"Preserves a prepared sandbox that already has the suite's start-services.sh. " +
+			"Only auto-switches from @base when the suite template is registered and the start " +
+			"script is missing on the current container. Pass force=true to stay on the current " +
+			"sandbox when the suite template name differs. If start-services.sh is missing, restore " +
+			"or rewrite it (and ensure template bootstrap_files) — do not switch templates to fix it. " +
 			"Shell, file, and browser tool steps all run inside the sandbox container " +
 			"(browser via Chromium+KasmVNC in the session — same as chat). Use localhost in URLs. " +
 			"Returns the full report with pass/fail status for each drill and step.",
@@ -155,16 +158,25 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	// Template auto-switch (chat mode with sandbox only).
 	// Fleet sessions skip this — the container is already provisioned for the fleet.
 	// No-sandbox sessions skip this — template is irrelevant for local execution.
-	// By default, switch to the suite's template before running so drills never
-	// start against @base when the suite requires a project template.
+	// Prefer preserving a prepared workspace; only switch from @base when needed.
 	suiteTemplate := ""
+	var suiteCfg *config.DrillSuiteConfig
 	if suite.Config != nil && suite.Config.SuiteConfig != nil {
-		suiteTemplate = suite.Config.SuiteConfig.Template
+		suiteCfg = suite.Config.SuiteConfig
+		suiteTemplate = suiteCfg.Template
 	}
 	if suiteTemplate == "" && suite.Config != nil {
 		suiteTemplate = suite.Config.Template
 	}
-	if err := ensureDrillSandboxTemplate(ctx, deps, suiteName, suiteTemplate, args.Force); err != nil {
+	if err := ensureDrillSandboxTemplate(ctx, deps, suiteName, suiteTemplate, suiteCfg, args.Force); err != nil {
+		return RunDrillResult{
+			Status:  "error",
+			Summary: err.Error(),
+		}, nil
+	}
+
+	// Ensure setup will find start-services.sh (inject bootstrap or clear error).
+	if err := preflightDrillStartServices(ctx, deps, suiteName, suiteTemplate, suiteCfg); err != nil {
 		return RunDrillResult{
 			Status:  "error",
 			Summary: err.Error(),
@@ -462,19 +474,19 @@ func (e *testSandboxExecutor) Execute(_ context.Context, name string, args map[s
 type testLocalExecutor struct{}
 
 func (e *testLocalExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
-	return ExecuteTool(ctx, name, args)
+	return ExecuteTool(ctx, name, args, currentCaller)
 }
 
 // testBrowserExecutor dispatches browser tool calls through a Manager that is
 // already wired for in-container Chromium (same path as Studio chat). It never
 // launches host Chrome.
 type testBrowserExecutor struct {
-	mu             sync.Mutex
-	mgr            *browser.Manager
-	guard          *browser.NavigationGuard
-	refs           *browser.RefMap
-	sessionID      string
-	initialized    bool
+	mu          sync.Mutex
+	mgr         *browser.Manager
+	guard       *browser.NavigationGuard
+	refs        *browser.RefMap
+	sessionID   string
+	initialized bool
 }
 
 func newTestBrowserExecutor(mgr *browser.Manager, sessionID string, _ bool) *testBrowserExecutor {
@@ -979,10 +991,262 @@ func buildDrillInjectionTarget(ctx tool.Context, deps *runDrillDeps) (adrill.Inj
 	return target, nil
 }
 
+// drillTemplateSwitchAction is the decision result for ensureDrillSandboxTemplate.
+type drillTemplateSwitchAction int
+
+const (
+	drillSwitchNoop drillTemplateSwitchAction = iota
+	drillSwitchPreserve
+	drillSwitchReplace
+	drillSwitchSkipMissingTemplate
+)
+
+// decideDrillTemplateSwitch chooses whether to ReplaceSession.
+//
+// Policy: never tear down a prepared workspace. Only switch when the current
+// sandbox is @base/empty, the required template is registered, and the suite's
+// start-services.sh is not already on the current filesystem.
+func decideDrillTemplateSwitch(current, required string, requiredExists, startScriptPresent bool) drillTemplateSwitchAction {
+	if required == "" || current == required {
+		return drillSwitchNoop
+	}
+	if startScriptPresent {
+		return drillSwitchPreserve
+	}
+	if !requiredExists {
+		return drillSwitchSkipMissingTemplate
+	}
+	// current != "" means a non-base template is already bound — preserve it.
+	if current != "" {
+		return drillSwitchPreserve
+	}
+	return drillSwitchReplace
+}
+
+var startServicesPathRE = regexp.MustCompile(`/[^\s;'"]+/\.astonish/start-services\.sh`)
+
+// extractStartServicesPaths returns absolute paths to start-services.sh referenced
+// by suite setup (legacy) or services[].setup commands.
+func extractStartServicesPaths(sc *config.DrillSuiteConfig) []string {
+	if sc == nil {
+		return nil
+	}
+	var cmds []string
+	cmds = append(cmds, sc.Setup...)
+	for _, svc := range sc.Services {
+		if strings.TrimSpace(svc.Setup) != "" {
+			cmds = append(cmds, svc.Setup)
+		}
+	}
+	seen := make(map[string]bool)
+	var paths []string
+	for _, cmd := range cmds {
+		for _, p := range startServicesPathRE.FindAllString(cmd, -1) {
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	return paths
+}
+
+// suiteReferencesStartServices reports whether setup/services mention start-services.sh
+// (absolute path preferred; also catches relative references).
+func suiteReferencesStartServices(sc *config.DrillSuiteConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if len(extractStartServicesPaths(sc)) > 0 {
+		return true
+	}
+	check := func(s string) bool {
+		return strings.Contains(s, "start-services.sh")
+	}
+	for _, c := range sc.Setup {
+		if check(c) {
+			return true
+		}
+	}
+	for _, svc := range sc.Services {
+		if check(svc.Setup) {
+			return true
+		}
+	}
+	return false
+}
+
+func drillLazyPathExists(lazy *sandbox.LazyNodeClient, sessionID, path string) bool {
+	if lazy == nil || path == "" {
+		return false
+	}
+	containerName, err := lazy.EnsureContainerReady(sessionID)
+	if err != nil || containerName == "" {
+		return false
+	}
+	client := lazy.GetIncusClient()
+	if client == nil {
+		return false
+	}
+	exitCode, err := client.ExecSimple(containerName, []string{"test", "-f", path})
+	return err == nil && exitCode == 0
+}
+
+func drillPathExists(ctx tool.Context, deps *runDrillDeps, path string) bool {
+	if deps == nil || path == "" {
+		return false
+	}
+	sessionID := ""
+	if ctx != nil {
+		sessionID = ctx.SessionID()
+	}
+	if deps.sessionID != "" {
+		sessionID = deps.sessionID
+	}
+	if deps.lazyClient != nil {
+		return drillLazyPathExists(deps.lazyClient, sessionID, path)
+	}
+	if deps.toolClient != nil && sessionID != "" {
+		raw, err := deps.toolClient.Call(sessionID, "shell_command", map[string]interface{}{
+			"command": fmt.Sprintf("test -f %s", shellSingleQuote(path)),
+		})
+		if err != nil {
+			return false
+		}
+		var parsed map[string]any
+		if json.Unmarshal(raw, &parsed) != nil {
+			return false
+		}
+		if code, ok := parsed["exit_code"].(float64); ok {
+			return code == 0
+		}
+		// Some adapters omit exit_code on success.
+		if errMsg, ok := parsed["error"].(string); ok && errMsg != "" {
+			return false
+		}
+		return true
+	}
+	if deps.nodePool != nil && sessionID != "" {
+		lazy := deps.nodePool.GetOrCreate(sessionID)
+		return drillLazyPathExists(lazy, sessionID, path)
+	}
+	return false
+}
+
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func anyStartServicesPathExists(ctx tool.Context, deps *runDrillDeps, paths []string) bool {
+	for _, p := range paths {
+		if drillPathExists(ctx, deps, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func templateRegistered(deps *runDrillDeps, name string) bool {
+	name = normalizeSandboxTemplateName(name)
+	if name == "" || deps == nil || deps.templateRegistry == nil {
+		return false
+	}
+	_ = deps.templateRegistry.Load()
+	return deps.templateRegistry.Exists(name)
+}
+
+func injectDrillBootstrapFiles(ctx tool.Context, deps *runDrillDeps, templateName string) error {
+	if deps == nil {
+		return nil
+	}
+	required := normalizeSandboxTemplateName(templateName)
+	if required == "" {
+		return nil
+	}
+	goCtx := context.Background()
+	if ctx != nil {
+		goCtx = ctx
+	}
+	files := sandbox.LookupBootstrapFiles(goCtx, deps.templateRegistry, nil, required)
+	if len(files) == 0 {
+		return nil
+	}
+
+	target, err := buildDrillInjectionTarget(ctx, deps)
+	if err != nil {
+		return err
+	}
+	if target.ExecIncus != nil {
+		return sandbox.MaterializeBootstrapFilesIncus(goCtx, target.ExecIncus, files)
+	}
+	if target.Backend != nil && target.SessionID != "" {
+		return sandbox.MaterializeBootstrapFiles(goCtx, target.Backend, target.SessionID, files)
+	}
+	if deps.nodePool != nil {
+		sessionID := target.SessionID
+		if sessionID == "" && ctx != nil {
+			sessionID = ctx.SessionID()
+		}
+		if sessionID != "" {
+			sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, required)
+		}
+	}
+	return nil
+}
+
+// preflightDrillStartServices ensures start-services.sh exists when the suite
+// references it. Tries bootstrap_files injection first; otherwise returns a
+// clear error (do not suggest template switching).
+func preflightDrillStartServices(ctx tool.Context, deps *runDrillDeps, suiteName, suiteTemplate string, sc *config.DrillSuiteConfig) error {
+	if !suiteReferencesStartServices(sc) {
+		return nil
+	}
+	// No sandbox at all — local runners resolve paths differently; skip.
+	if deps == nil || (deps.nodePool == nil && deps.lazyClient == nil && deps.toolClient == nil) {
+		return nil
+	}
+
+	paths := extractStartServicesPaths(sc)
+	if anyStartServicesPathExists(ctx, deps, paths) {
+		return nil
+	}
+	// Relative references: still attempt bootstrap inject for the suite template.
+	if err := injectDrillBootstrapFiles(ctx, deps, suiteTemplate); err != nil {
+		slog.Warn("run_drill preflight bootstrap inject failed",
+			"component", "run-drill", "suite", suiteName, "error", err)
+	}
+	if len(paths) > 0 && anyStartServicesPathExists(ctx, deps, paths) {
+		return nil
+	}
+	// Bootstrap may have injected under a known path even when YAML used relative refs.
+	if len(paths) == 0 {
+		// Re-check common bootstrap targets from the registry.
+		required := normalizeSandboxTemplateName(suiteTemplate)
+		if files := sandbox.LookupBootstrapFiles(context.Background(), deps.templateRegistry, nil, required); len(files) > 0 {
+			for _, f := range files {
+				if strings.HasSuffix(f.Path, "start-services.sh") && drillPathExists(ctx, deps, f.Path) {
+					return nil
+				}
+			}
+		}
+	}
+
+	hintPath := "<workspace>/.astonish/start-services.sh"
+	if len(paths) > 0 {
+		hintPath = paths[0]
+	}
+	return fmt.Errorf(
+		"suite %q setup references start-services.sh but %s is missing in the sandbox. "+
+			"Write or restore that script (and save it on the template via bootstrap_files) before run_drill. "+
+			"Do not switch sandbox templates to fix a missing script",
+		suiteName, hintPath,
+	)
+}
+
 // ensureDrillSandboxTemplate switches the chat sandbox to the suite's required
-// template before execution. Fleet / no-sandbox sessions are no-ops. force=true
+// template only when safe. Fleet / no-sandbox sessions are no-ops. force=true
 // skips the switch so the suite can run on the current container.
-func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName, suiteTemplate string, force bool) error {
+func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName, suiteTemplate string, sc *config.DrillSuiteConfig, force bool) error {
 	required := normalizeSandboxTemplateName(suiteTemplate)
 	if required == "" || force {
 		return nil
@@ -1002,8 +1266,32 @@ func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName,
 	}
 
 	current := normalizeSandboxTemplateName(lazyClient.Template())
-	if current == required {
+	paths := extractStartServicesPaths(sc)
+	startPresent := anyStartServicesPathExists(ctx, deps, paths)
+	requiredExists := templateRegistered(deps, required)
+
+	switch decideDrillTemplateSwitch(current, required, requiredExists, startPresent) {
+	case drillSwitchNoop:
 		return nil
+	case drillSwitchPreserve:
+		slog.Info("run_drill preserving prepared sandbox",
+			"component", "run-drill",
+			"suite", suiteName,
+			"current", templateDisplay(current),
+			"required", templateDisplay(required),
+			"start_script_present", startPresent,
+		)
+		return nil
+	case drillSwitchSkipMissingTemplate:
+		slog.Info("run_drill skipping template switch: required template not registered",
+			"component", "run-drill",
+			"suite", suiteName,
+			"current", templateDisplay(current),
+			"required", templateDisplay(required),
+		)
+		return nil
+	case drillSwitchReplace:
+		// fall through
 	}
 
 	slog.Info("run_drill switching sandbox template",
@@ -1019,14 +1307,24 @@ func ensureDrillSandboxTemplate(ctx tool.Context, deps *runDrillDeps, suiteName,
 		)
 	}
 
-	// Eagerly create the new container so setup commands have a ready sandbox,
-	// then inject template bootstrap_files (same path as use_sandbox_template).
-	if client := deps.nodePool.GetOrCreate(sessionID); client != nil {
-		if _, err := client.GetContainerIP(sessionID); err != nil {
-			slog.Warn("run_drill template switch: container IP not ready yet",
-				"component", "run-drill", "suite", suiteName, "template", required, "error", err)
-		}
-		sandbox.InjectBootstrapFilesAfterSwitch(deps.nodePool, deps.templateRegistry, sessionID, required)
+	// Eagerly create with the required template (never bare GetOrCreate → @base).
+	client := deps.nodePool.GetOrCreateWithTemplate(sessionID, required)
+	if client == nil {
+		return fmt.Errorf(
+			"suite %q switched to template %s but sandbox client is unavailable",
+			suiteName, templateDisplay(required),
+		)
+	}
+	if _, err := client.GetContainerIP(sessionID); err != nil {
+		return fmt.Errorf(
+			"suite %q switched to template %s but the sandbox failed to become ready: %v. "+
+				"Fix the template or restore start-services.sh on the prepared workspace — "+
+				"do not continue on an empty @base container",
+			suiteName, templateDisplay(required), err,
+		)
+	}
+	if err := injectDrillBootstrapFiles(ctx, deps, required); err != nil {
+		return fmt.Errorf("suite %q: bootstrap_files injection after template switch failed: %w", suiteName, err)
 	}
 	return nil
 }

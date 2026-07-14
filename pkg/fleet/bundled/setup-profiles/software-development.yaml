@@ -366,13 +366,16 @@ steps:
     \    - Assertion value key is `expected:` — `value:` is silently ignored\n    - For exit code checks, include `source:\
     \ exit_code` in the assert block\n    - For output checks, use `type: contains` with `expected: \"some text\"`\n    -\
     \ Each node MUST have an `assert:` block\n\n4. **Validate and save.** Call `validate_drill` first, then `save_drill`\n\
-    \   with the suite YAML and test files.\n\n5. **Run the drill suite.** Call `run_drill` with the suite name. This\n  \
-    \ executes the drills inside the current container.\n   - If all pass: tell the user \"Baseline drill suite created with\
-    \ N smoke\n     tests. The E2E agent will expand this coverage as the project evolves.\"\n   - If any fail: diagnose and\
-    \ fix the drill YAML (not the project — the\n      project was already verified in 3h-v). Adjust assertions, commands,\
-    \ or\n     timing, then re-run until all pass.\n\n6. **Stop services.** Use process_kill to stop any background processes\n\
-    \   started in sub-step 1. The template must be saved in a quiescent state.\n\n**Do NOT proceed to Step 3j until the drill\
-    \ suite passes.**\n\n**3j. Save the sandbox template (code + deps only — no secrets).**\n\nOnce the build passes and drills are designed, freeze the baseline environment.\n\
+    \   with the suite YAML and test files.\n\n5. **Stop services (quiescent).** Use `process_kill` to stop background\n\
+    \   processes started in sub-step 1. The template must be saved in a\n\
+    \   quiescent state. If `start-services.sh` is ever missing after a kill,\n\
+    \   recreate it from the 3h-v recipe with `write_file` BEFORE inventing\n\
+    \   ad-hoc start one-liners or calling `run_drill`.\n\n\
+    **Do NOT run `run_drill` yet.** Save the template with `bootstrap_files`\n\
+    first (Step 3j) so the suite's `template:` name is registered and the\n\
+    start script is preserved on future clones.\n\n\
+    **3j. Save the sandbox template (code + deps only — no secrets), then run drills.**\n\n\
+    Once the build passes and drills are designed, freeze the baseline environment.\n\
     On **Incus**, save a sandbox template. On **OpenShell**, save an image/build spec\n    without secrets — credentials are injected at fleet session start via\n    `credential_injection`.\n```\n\
     save_sandbox_template(template_name: \"<repo-name>\", description: \"<brief stack summary>\",\
     \ bootstrap_files: [\
@@ -382,9 +385,21 @@ steps:
     the template name. This keeps naming consistent and predictable.\n\nALWAYS pass `bootstrap_files` with the start/stop scripts written in 3h-v so every\
     \ future container from this template gets them injected (not auto-run).\n\
     \nThe returned `template_name` MUST be passed to `save_fleet_plan`'s\n\
-    `template` field in the final save step.\n\nTell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
+    `template` field in the final save step.\n\n\
+    **After the template is saved**, run the drill suite on the **current prepared**\n\
+    sandbox (do not switch away from it):\n\
+    1. `shell_command(command: \"test -f <workspace>/.astonish/start-services.sh\")`\n\
+    \   — if missing, restore with `write_file` from the 3h-v recipe (or from\n\
+    \   bootstrap_files). Never call `use_sandbox_template` to fix a missing script.\n\
+    2. Call `run_drill(suite_name: \"<repo-name>\", force: true)` so the prepared\n\
+    \   workspace is preserved even if the template name differs from @base.\n\
+    3. If all pass: tell the user \"Baseline drill suite created with N smoke\n\
+    \   tests. The E2E agent will expand this coverage as the project evolves.\"\n\
+    4. If any fail: diagnose and fix the drill YAML (not the project — already\n\
+    \   verified in 3h-v), then re-run until all pass.\n\n\
+    Tell the user:\n\"I've saved a sandbox baseline with the project repo and dependencies\npre-installed (no secrets). Fleet sessions inject credentials at runtime via\n\
     `credential_injection` from the encrypted store.\"\n\n**Do NOT\
-    \ proceed to step 4 until the template is saved.**"
+    \ proceed to step 4 until the template is saved and the baseline drill suite passes.**"
   tools:
   - save_sandbox_template
   - list_sandbox_templates

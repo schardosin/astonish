@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"google.golang.org/adk/tool"
@@ -20,10 +21,11 @@ type EditFileArgs struct {
 
 // EditFileResult is the result of the edit_file tool.
 type EditFileResult struct {
-	Success      bool   `json:"success"`
-	Path         string `json:"path"`
-	Replacements int    `json:"replacements"`
-	Message      string `json:"message"`
+	Success             bool   `json:"success"`
+	Path                string `json:"path"`
+	Replacements        int    `json:"replacements"`
+	Message             string `json:"message"`
+	VerificationContext string `json:"verification_context,omitempty"`
 }
 
 // EditFile performs a find-and-replace operation on a file.
@@ -36,6 +38,19 @@ func EditFile(ctx tool.Context, args EditFileArgs) (EditFileResult, error) {
 	}
 
 	args.Path = expandPath(args.Path)
+
+	// Must-read-before-edit guard: if the cache is active (has any read entries),
+	// verify that this specific file has been read before allowing edits.
+	// This prevents hallucinated edits where the LLM guesses file content.
+	// The guard is lenient when no cache exists (e.g., in tests or first-time use).
+	cache := LoadFileReadCache()
+	if cache != nil && cache.HasAnyReadEntries() && !cache.HasReadEntry(args.Path) {
+		return EditFileResult{
+			Success: false,
+			Path:    args.Path,
+			Message: "You must read this file before editing it. Use read_file first.",
+		}, nil
+	}
 
 	// Read the file
 	data, err := os.ReadFile(args.Path)
@@ -64,13 +79,116 @@ func EditFile(ctx tool.Context, args EditFileArgs) (EditFileResult, error) {
 		return EditFileResult{}, fmt.Errorf("failed to write file: %w", err)
 	}
 
+	// Build verification context: ±10 lines around the edit point
+	verificationCtx := buildVerificationContext(newContent, args.OldString, args.NewString, args.ReplaceAll)
+
+	// Invalidate cache entries for this path
+	if cache != nil {
+		cache.InvalidatePath(args.Path)
+		// Update with new mtime, source="edit"
+		info, statErr := os.Stat(args.Path)
+		if statErr == nil {
+			lines := strings.Split(newContent, "\n")
+			totalLines := len(lines)
+			if totalLines > 0 && lines[totalLines-1] == "" {
+				totalLines--
+			}
+			cache.Set(buildCacheKey(args.Path, 1, 0), CacheEntry{
+				MtimeNs:    info.ModTime().UnixNano(),
+				TotalLines: totalLines,
+				Offset:     1,
+				Limit:      0,
+				Source:     "edit",
+				Verified:   true,
+			})
+			cache.Save()
+		}
+	}
+
 	msg := fmt.Sprintf("Replaced %d occurrence(s) in %s", replacements, args.Path)
 	return EditFileResult{
-		Success:      true,
-		Path:         args.Path,
-		Replacements: replacements,
-		Message:      msg,
+		Success:             true,
+		Path:                args.Path,
+		Replacements:        replacements,
+		Message:             msg,
+		VerificationContext: verificationCtx,
 	}, nil
+}
+
+// buildVerificationContext extracts ±10 lines around the edit point with line numbers.
+func buildVerificationContext(newContent, oldString, newString string, replaceAll bool) string {
+	// For deletions (empty newString), find where the old content was (use surrounding context)
+	searchStr := newString
+	if searchStr == "" {
+		// For deletions, we need to find the context around where old_string was removed.
+		// Find a line that would be adjacent to the deletion point.
+		// Use the content before oldString would have been to locate the edit region.
+		// Approximate: search for lines adjacent to where old content existed.
+		// Since old_string is gone, use a heuristic: find the first line in newContent
+		// that differs from what would exist with old_string inserted back.
+		// Simpler approach: just show the first 20 lines of the file as context.
+		searchStr = ""
+	}
+
+	lines := strings.Split(newContent, "\n")
+	totalLines := len(lines)
+	if totalLines > 0 && lines[totalLines-1] == "" {
+		totalLines--
+		lines = lines[:totalLines]
+	}
+
+	// Find the line where the edit landed
+	editLine := 0
+	if searchStr != "" {
+		// Find byte offset of newString in newContent
+		idx := strings.Index(newContent, searchStr)
+		if idx >= 0 {
+			// Count newlines before this position to get line number
+			editLine = strings.Count(newContent[:idx], "\n")
+		}
+	} else {
+		// Deletion: find approximate location by looking for where old_string would have been
+		// Use the byte position approach: find the first difference between old and new content
+		// Since we don't have the old content here, just center on the middle of the file
+		// Actually, for deletions we can search for surrounding context of old_string
+		// Simple heuristic: use line 0 (show first 20 lines)
+		editLine = 0
+	}
+
+	// Extract window: ±10 lines around editLine, capped at 30 total
+	const contextRadius = 10
+	const maxContextLines = 30
+	startLine := editLine - contextRadius
+	if startLine < 0 {
+		startLine = 0
+	}
+	endLine := editLine + contextRadius + 1
+	if searchStr != "" {
+		// Account for multi-line replacements
+		newStringLines := strings.Count(searchStr, "\n") + 1
+		endLine = editLine + newStringLines + contextRadius
+	}
+	if endLine > totalLines {
+		endLine = totalLines
+	}
+	if endLine-startLine > maxContextLines {
+		endLine = startLine + maxContextLines
+	}
+
+	if startLine >= totalLines {
+		return ""
+	}
+
+	var sb strings.Builder
+	for i := startLine; i < endLine; i++ {
+		if i > startLine {
+			sb.WriteByte('\n')
+		}
+		sb.WriteString(strconv.Itoa(i + 1)) // 1-indexed
+		sb.WriteString(": ")
+		sb.WriteString(lines[i])
+	}
+	return sb.String()
 }
 
 // editFileExact performs exact string matching and replacement.

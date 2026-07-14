@@ -6,6 +6,17 @@ import (
 	"testing"
 )
 
+// resetTestCache redirects the file read cache to a temp directory
+// and ensures it starts empty for each test.
+func resetTestCache(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	cacheFilePath = filepath.Join(dir, "cache.json")
+	t.Cleanup(func() {
+		cacheFilePath = defaultCacheFilePath
+	})
+}
+
 func writeTestFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -25,6 +36,7 @@ func readTestFile(t *testing.T, path string) string {
 }
 
 func TestEditFile_ExactSingleMatch(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "Hello World\nGoodbye World\n")
 
@@ -50,6 +62,7 @@ func TestEditFile_ExactSingleMatch(t *testing.T) {
 }
 
 func TestEditFile_ExactMultipleMatchError(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "foo bar foo baz")
 
@@ -64,6 +77,7 @@ func TestEditFile_ExactMultipleMatchError(t *testing.T) {
 }
 
 func TestEditFile_ExactReplaceAll(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "foo bar foo baz foo")
 
@@ -87,6 +101,7 @@ func TestEditFile_ExactReplaceAll(t *testing.T) {
 }
 
 func TestEditFile_ExactNotFound(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "Hello World")
 
@@ -101,6 +116,7 @@ func TestEditFile_ExactNotFound(t *testing.T) {
 }
 
 func TestEditFile_ExactDeletion(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "keep this remove this keep this too")
 
@@ -123,6 +139,7 @@ func TestEditFile_ExactDeletion(t *testing.T) {
 }
 
 func TestEditFile_RegexSingleMatch(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.go", "func oldName() {\n}\n")
 
@@ -146,6 +163,7 @@ func TestEditFile_RegexSingleMatch(t *testing.T) {
 }
 
 func TestEditFile_RegexCaptureGroups(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "version=1.2.3")
 
@@ -169,6 +187,7 @@ func TestEditFile_RegexCaptureGroups(t *testing.T) {
 }
 
 func TestEditFile_RegexReplaceAll(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "  foo  \n  bar  \n  baz  \n")
 
@@ -193,6 +212,7 @@ func TestEditFile_RegexReplaceAll(t *testing.T) {
 }
 
 func TestEditFile_RegexMultipleMatchError(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "abc 123 def 456")
 
@@ -208,6 +228,7 @@ func TestEditFile_RegexMultipleMatchError(t *testing.T) {
 }
 
 func TestEditFile_RegexNoMatch(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "hello world")
 
@@ -223,6 +244,7 @@ func TestEditFile_RegexNoMatch(t *testing.T) {
 }
 
 func TestEditFile_InvalidRegex(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	path := writeTestFile(t, dir, "test.txt", "hello world")
 
@@ -238,6 +260,7 @@ func TestEditFile_InvalidRegex(t *testing.T) {
 }
 
 func TestEditFile_EmptyPathError(t *testing.T) {
+	resetTestCache(t)
 	_, err := EditFile(nil, EditFileArgs{
 		Path:      "",
 		OldString: "x",
@@ -249,6 +272,7 @@ func TestEditFile_EmptyPathError(t *testing.T) {
 }
 
 func TestEditFile_EmptyOldStringError(t *testing.T) {
+	resetTestCache(t)
 	_, err := EditFile(nil, EditFileArgs{
 		Path:      "/tmp/doesnt_matter",
 		OldString: "",
@@ -260,6 +284,7 @@ func TestEditFile_EmptyOldStringError(t *testing.T) {
 }
 
 func TestEditFile_NonexistentFile(t *testing.T) {
+	resetTestCache(t)
 	_, err := EditFile(nil, EditFileArgs{
 		Path:      filepath.Join(t.TempDir(), "nope.txt"),
 		OldString: "x",
@@ -271,6 +296,7 @@ func TestEditFile_NonexistentFile(t *testing.T) {
 }
 
 func TestEditFile_MultilineExact(t *testing.T) {
+	resetTestCache(t)
 	dir := t.TempDir()
 	content := "func old() {\n\treturn 1\n}\n\nfunc keep() {\n\treturn 2\n}\n"
 	path := writeTestFile(t, dir, "test.go", content)

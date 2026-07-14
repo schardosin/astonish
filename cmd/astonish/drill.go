@@ -61,7 +61,7 @@ func printDrillUsage() {
 type internalToolExecutor struct{}
 
 func (e *internalToolExecutor) Execute(ctx context.Context, name string, args map[string]interface{}) (any, error) {
-	return tools.ExecuteTool(ctx, name, args)
+	return tools.ExecuteTool(ctx, name, args, "")
 }
 
 // browserToolNames lists all browser tool names for detection.

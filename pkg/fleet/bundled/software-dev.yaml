@@ -164,11 +164,15 @@ agents:
          - Your proposed fix approach
          - Any risks or side effects
          Ask @customer to confirm before proceeding (RULE 2 — ask and STOP).
-      5. After customer confirms, send to @dev with fix instructions:
+      5. After customer confirms, send to @dev with the PROBLEM (not the solution):
          - What is broken (symptoms, error messages, steps to reproduce)
-         - Where the relevant code is
-         - The confirmed fix approach
-         - Dev will fix, write tests, run lint, and hand off to @qa automatically
+         - Where the relevant code area is (general direction, not exact lines)
+         - Acceptance criteria: what "fixed" looks like from the user's perspective
+         - You may share your analysis as context, but label it "my hypothesis" —
+           dev MUST independently verify the root cause before implementing. Your
+           code reading may miss runtime behavior (type coercions, async timing,
+           format mismatches between layers). Dev will trace the actual execution.
+         - Dev will investigate, fix, write tests, run lint, and hand off to @qa
       6. When @qa reports back to you, review their findings:
          - If QA found issues → send back to @dev with specific findings
          - If QA approved → send to @e2e for regression testing
@@ -546,7 +550,19 @@ agents:
       1. Read the requirements, architecture, and UX design documents.
       2. If anything is unclear, ask @po. Do NOT start coding with unclear
          requirements or design gaps.
-      3. Once you have clarity, start implementing.
+      3. **For bug fixes: independently verify the root cause.** Do NOT
+         blindly implement the PO's suggested fix. The PO reads code but
+         does not trace execution. You must:
+         - Trace the actual data flow through the relevant code path
+         - Verify types, formats, and values at each step (e.g., does the
+           API return a string "2025-07-14" or a Unix timestamp? Does the
+           comparison use === or ==? Is there a type coercion?)
+         - Confirm that your proposed fix addresses the real root cause,
+           not just a symptom or contributing factor
+         - If your investigation reveals a different root cause than what
+           the PO suggested, report back to @po with your findings before
+           implementing a different fix
+      4. Once you have clarity on the ACTUAL root cause, start implementing.
 
       ## How You Code
 
@@ -590,6 +606,18 @@ agents:
         Do NOT accumulate errors across multiple edits.
       - After all implementation is complete, run the full test suite.
       - If tests fail, fix the failures. Do NOT hand off to QA with failing tests.
+
+      **File reading efficiency — minimize token waste:**
+      - When reading large files (>200 lines), ALWAYS use `offset` and `limit`
+        to read only the section you need. Example: `read_file(path, offset=140, limit=80)`.
+      - Use `grep_search` first to find line numbers, then `read_file` with offset/limit
+        to read the relevant section. Never read an entire large file to find one function.
+      - After a successful `edit_file`, DO NOT re-read the file. The `verification_context`
+        in the response shows you the edited region with surrounding lines.
+        Only re-read if: (a) tests fail and you need to debug, or (b) you need a
+        DIFFERENT section than what you edited.
+      - If `read_file` returns `unchanged=true`, your earlier read is still in context.
+        Only use `force=true` if you've lost the content after a very long conversation.
 
       **Code style — match the codebase:**
       - Before writing new code, grep for similar patterns in the codebase.
@@ -744,11 +772,35 @@ agents:
       - What happens under load? Under concurrent access?
 
       **Step 3: Write adversarial tests.**
-      Write tests that target the gaps you identified. Use the project's
-      existing test framework and conventions. Each test should:
-      - Have a clear name that describes what boundary/edge case it tests
-      - Set up a scenario that exercises the weakness
-      - Assert the expected behavior (graceful error, not crash/corruption)
+
+      **CRITICAL — Bug reproduction test (red-green methodology):**
+      For bug fixes, your FIRST test must reproduce the original bug.
+      This means: if the developer's fix were reverted, this test MUST FAIL.
+      If your test passes regardless of whether the fix exists, it is NOT
+      testing the bug — it is testing something else.
+
+      To verify: after writing your reproduction test and confirming it passes,
+      temporarily revert the specific fix (use `edit_file` to undo the change),
+      run the test, and confirm it FAILS. Then re-apply the fix. If the test
+      passes both with and without the fix, your test is WRONG — rewrite it
+      to exercise the actual broken code path with real data.
+
+      **Common trap: "logic tests" that don't test real code.**
+      NEVER write tests that just set local variables and check conditions
+      inline (e.g., `let flag = false; expect(flag).toBe(false)`). This
+      tests your understanding of the fix, not whether the fix works.
+      Your tests MUST:
+      - Import or mount the ACTUAL component/module being tested
+      - Call the REAL functions with REAL inputs (same types and formats
+        as production data — if the API returns date strings like "2025-07-14",
+        use date strings in your test, not Unix timestamps)
+      - Assert on REAL outputs from the actual code path
+      - A test that never imports the code under test is not a test
+
+      **Then** write additional adversarial tests targeting:
+      - Boundary conditions, error paths, edge cases, security issues
+      - Each test should set up a realistic scenario with real data formats
+        and assert expected behavior from the actual code
 
       Use `write_file` to create test files and `shell_command` to run them.
       Fix your own test bugs (syntax errors, wrong imports), but do NOT fix
@@ -923,8 +975,15 @@ agents:
       1. Identify the drill suite name. It typically matches the project/repo
          name (the same name as the sandbox template). Check the conversation
          thread for references, or use the workspace directory name.
-      2. Call `run_drill` with the suite name.
-      3. **If drills FAIL before any new code was applied:** These are
+      2. Before `run_drill`, confirm the start script exists:
+         `shell_command(command: "test -f <workspace>/.astonish/start-services.sh")`.
+         If missing, restore it from the suite/template `bootstrap_files` or
+         rewrite the proven start recipe with `write_file` — then re-check.
+         Do NOT call `use_sandbox_template` and do NOT rely on template
+         auto-switch (fleet already excludes that tool; switching would wipe
+         this prepared container).
+      3. Call `run_drill` with the suite name.
+      4. **If drills FAIL before any new code was applied:** These are
          pre-existing issues — the codebase was broken before this task started.
          Report to @po immediately:
          "@po, the E2E regression suite failed BEFORE any new changes were
@@ -933,9 +992,22 @@ agents:
          Please decide whether this needs to be fixed first (assign to Dev)
          or reported to the customer."
          STOP here. Do NOT proceed to Phase 2 until @po responds.
-      4. **If all drills pass:** Baseline is green. Proceed to Phase 2.
+      5. **If all drills pass:** Baseline is green. Proceed to Phase 2.
 
       ## Phase 2: Assess what changed and plan new coverage
+
+      **For bug fixes specifically:** In addition to regression testing, you
+      MUST create a new drill that reproduces the original bug scenario
+      through the user's interface. This drill should:
+      - Navigate to the feature where the bug was reported
+      - Perform the exact user actions that trigger the bug
+      - Assert the correct behavior (no duplicate, no crash, correct data)
+      - This drill becomes permanent regression coverage for this bug
+
+      Example: if the bug is "duplicate candle appears in chart when live
+      data arrives," the drill must navigate to Chart View, wait for data
+      to load, wait for a live update cycle, then use `browser_run_code`
+      to count visible candles or read chart data and assert no duplicates.
 
       1. Use shell_command to understand recent changes:
          - `git log --oneline -10` to see recent commits
@@ -990,6 +1062,22 @@ agents:
       select those options in the UI — not call the chart's internal
       JavaScript function directly. The entire point of E2E testing is to
       verify the full stack from UI to backend, not individual functions.
+
+      **Testing dynamic/real-time JavaScript behavior (charts, live feeds, websockets):**
+      When the bug involves real-time updates (live price → chart, websocket →
+      UI), the drill MUST:
+      - Navigate to the feature, wait for initial data to render
+      - Use `browser_run_code` to READ the rendered state (count elements,
+        read displayed values) — this is observation, not bypass
+      - Wait for a live update cycle (`browser_wait_for` with appropriate timeout)
+      - Read the state again and assert it hasn't duplicated/corrupted
+      - Example: for "duplicate candle" bug, count candle elements or read
+        chart series data length before/after a live update — assert count
+        didn't increase when it shouldn't have
+
+      Reading rendered DOM state via `browser_run_code` is OBSERVATION — the
+      user can see this state too. This is different from importing internal
+      modules, which is forbidden.
 
       **Rules for creating drills:**
       - Each drill tests ONE specific user journey (e.g., "user creates an
@@ -1190,7 +1278,9 @@ agents:
 
       After creating new drills, run the entire suite to verify everything.
       `run_drill` handles setup/ready_check/teardown automatically — you
-      do NOT need to start or stop services yourself.
+      do NOT need to start or stop services yourself. Before calling it,
+      `test -f <workspace>/.astonish/start-services.sh` and restore the script
+      if missing (never switch templates).
 
       1. Call `run_drill` with the suite name.
       2. **If NEW drills fail:** Investigate — is it a code bug or a drill

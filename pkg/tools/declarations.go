@@ -114,7 +114,7 @@ func schedulerToolDeclarations() []ToolDeclaration {
 
 func browserToolDeclarations() []ToolDeclaration {
 	return []ToolDeclaration{
-		{Name: "browser_navigate", Description: "Navigate the browser to a URL", Category: "browser"},
+		{Name: "browser_navigate", Description: "Navigate the browser to a URL (sandbox: use localhost/127.0.0.1, not the container bridge IP)", Category: "browser"},
 		{Name: "browser_navigate_back", Description: "Go back to the previous page in browser history", Category: "browser"},
 		{Name: "browser_click", Description: "Click an element on the page", Category: "browser"},
 		{Name: "browser_type", Description: "Type text into an input element", Category: "browser"},

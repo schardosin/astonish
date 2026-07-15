@@ -287,18 +287,17 @@ func (m *Manager) SetSessionID(id string) {
 
 // EnsureSessionID sets the session ID, resolving delegate sub-agent aliases
 // to the parent session. Called from browser tools on every invocation.
-// When the session changes (e.g. new chat session), the browser connection
+// When the session changes (e.g. new Studio chat), the browser connection
 // is reset so GetOrLaunch re-resolves the container for the new session.
 // Also touches the sandbox idle timer to prevent container eviction during
 // long browser automation sequences.
 //
-// Concurrency safety: when parallel browser tool calls hit this method
-// simultaneously (ADK dispatches tool calls in goroutines), we must not
-// destructively reset the browser if it's already active. The check is:
-// only close the browser if the resolved session genuinely differs from
-// the current one. Sub-agent aliases that haven't been registered yet
-// (race window between OnChildSession and first tool call) are handled
-// by keeping the existing session if a browser is already connected.
+// Sub-agents must be registered via AliasSession (OnChildSession runs
+// synchronously before the child agent starts) so their IDs resolve to the
+// parent and do not trigger a reset. Unaliased IDs are treated as real
+// session switches — a previous soft-keep for "unaliased child race"
+// incorrectly left Chromium bound to a prior chat while shell tools used
+// the current session container.
 func (m *Manager) EnsureSessionID(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -311,43 +310,72 @@ func (m *Manager) EnsureSessionID(id string) {
 		resolved = alias
 	}
 
-	// Touch sandbox activity on every browser tool call to prevent idle eviction.
-	if m.ActivityTouchFunc != nil && (m.sessionID != "" || resolved != "") {
-		touchID := m.sessionID
-		if touchID == "" {
-			touchID = resolved
-		}
-		m.ActivityTouchFunc(touchID)
-	}
-
 	if m.sessionID == resolved {
+		// Touch sandbox activity on every browser tool call to prevent idle eviction.
+		if m.ActivityTouchFunc != nil && m.sessionID != "" {
+			m.ActivityTouchFunc(m.sessionID)
+		}
 		return // no change — most common path for parallel tool calls
 	}
 
-	// If the browser is already connected and the resolved ID is unaliased
-	// (i.e., the raw child session ID that didn't match any alias), this is
-	// likely a sub-agent whose alias hasn't been registered yet. Keep the
-	// existing session to avoid destructively closing the browser mid-operation.
-	if m.browser != nil && m.sessionID != "" && resolved == id {
-		// No alias found for this ID. If we already have an active browser,
-		// assume this is a sub-agent race condition — don't reset.
-		return
+	// Session genuinely changed (or first bind) — reset browser connection so
+	// GetOrLaunch re-resolves the container for the new session. Do this even
+	// when a browser is already connected: that connection belongs to the
+	// previous chat/session and must not be reused.
+	prev := m.sessionID
+	m.clearBrowserConnectionLocked()
+	m.sessionID = resolved
+	if prev != "" {
+		m.logger.Printf("Browser session rebound %s → %s (CDP reset)", shortSessionID(prev), shortSessionID(resolved))
 	}
 
-	// Session genuinely changed — reset browser connection so GetOrLaunch
-	// re-resolves the container for the new session.
+	if m.ActivityTouchFunc != nil && resolved != "" {
+		m.ActivityTouchFunc(resolved)
+	}
+}
+
+// clearBrowserConnectionLocked drops CDP/browser state. Must hold m.mu.
+// Close is best-effort and panic-safe: a dead or never-connected rod Browser
+// can panic on Close, and we must still finish the session rebound.
+func (m *Manager) clearBrowserConnectionLocked() {
 	if m.browser != nil {
-		_ = m.browser.Close()
+		b := m.browser
 		m.browser = nil
+		func() {
+			defer func() { _ = recover() }()
+			_ = b.Close()
+		}()
 	}
 	if m.browserProcess != nil {
 		_ = m.browserProcess.Close()
 		m.browserProcess = nil
 	}
-	m.sessionID = resolved
 	m.containerName = ""
 	m.containerIP = ""
 	m.config.RemoteCDPURL = ""
+}
+
+func shortSessionID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
+}
+
+// SessionID returns the session currently bound for container resolution.
+func (m *Manager) SessionID() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.sessionID
+}
+
+// SetContainerForTest sets container name/IP without launching Chromium.
+// Tests use this to assert wrong-session vs matching-session error tips.
+func (m *Manager) SetContainerForTest(name, ip string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.containerName = name
+	m.containerIP = ip
 }
 
 // AliasSession maps a delegate sub-agent's session ID to its parent session ID.
@@ -470,23 +498,21 @@ func (m *Manager) EnsureCDPReady() error {
 // crashed, the container was destroyed, or the CDP tunnel pipe broke.
 // Must be called with m.mu held.
 func (m *Manager) resetBrowserLocked() {
-	if m.browser != nil {
-		_ = m.browser.Close() // best-effort; likely already dead
-		m.browser = nil
-	}
 	m.activePg = nil
 	m.cdpURL = ""
 
 	// For container mode: clear container state to force full re-resolve
 	// on the next GetOrLaunch() call (resolve → start → connect sequence).
+	// Host mode only drops the browser handle (container fields are unused).
 	if m.SandboxEnabled {
-		m.containerName = ""
-		m.containerIP = ""
-		m.config.RemoteCDPURL = ""
-		if m.browserProcess != nil {
-			_ = m.browserProcess.Close()
-			m.browserProcess = nil
-		}
+		m.clearBrowserConnectionLocked()
+	} else if m.browser != nil {
+		b := m.browser
+		m.browser = nil
+		func() {
+			defer func() { _ = recover() }()
+			_ = b.Close()
+		}()
 	}
 
 	m.pagesMu.Lock()
@@ -792,7 +818,10 @@ func (m *Manager) launchInContainerInner() (*rod.Browser, error) {
 
 	name, ip, err := m.ContainerResolveFunc(m.sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to resolve session container: %w", err)
+		return nil, fmt.Errorf(
+			"failed to resolve session container for session %s: %w",
+			shortSessionID(m.sessionID), err,
+		)
 	}
 	m.containerName = name
 	m.containerIP = ip

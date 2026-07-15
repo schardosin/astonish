@@ -31,7 +31,8 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	navigateTool, err := functiontool.New(functiontool.Config{
 		Name: "browser_navigate",
 		Description: "Navigate the browser to a URL. When sandbox is enabled, Chromium runs inside " +
-			"the session container (same as shell tools) — use localhost to reach services in that container.",
+			"the session container (same network as shell tools) — use http://localhost:<port> or " +
+			"http://127.0.0.1:<port> to reach services there. Never use the container bridge IP.",
 	}, safeBrowserFunc(BrowserNavigate(mgr, guard)))
 	if err != nil {
 		return nil, err

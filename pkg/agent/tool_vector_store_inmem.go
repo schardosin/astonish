@@ -148,6 +148,18 @@ func (s *inMemoryToolVectorStore) Count() int {
 	return len(s.docs)
 }
 
+// AllIDs returns every document ID currently in the store. Used by SyncTools
+// to prune orphaned entries after process restarts.
+func (s *inMemoryToolVectorStore) AllIDs(_ context.Context) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ids := make([]string, len(s.docs))
+	for i, d := range s.docs {
+		ids[i] = d.ID
+	}
+	return ids, nil
+}
+
 func (s *inMemoryToolVectorStore) DeleteByIDs(_ context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil

@@ -222,22 +222,32 @@ func (idx *ToolIndex) SyncTools(ctx context.Context, mainTools []tool.Tool, grou
 		toEmbed = append(toEmbed, doc)
 	}
 
-	// Prune stale entries: remove docs that were in the previous sync but
-	// are no longer in the current tool set (e.g., MCP server was removed
-	// or its tools changed between sessions).
-	if idx.knownIDs != nil {
-		var staleIDs []string
+	// Prune stale entries not in the current tool set. Prefer store-wide
+	// enumeration (covers process restarts against a persistent backend);
+	// fall back to IDs from the previous SyncTools call in this process.
+	var staleIDs []string
+	if lister, ok := idx.vectorStore.(interface {
+		AllIDs(context.Context) ([]string, error)
+	}); ok {
+		if all, err := lister.AllIDs(ctx); err == nil {
+			for _, id := range all {
+				if !currentIDs[id] {
+					staleIDs = append(staleIDs, id)
+				}
+			}
+		}
+	} else if idx.knownIDs != nil {
 		for id := range idx.knownIDs {
 			if !currentIDs[id] {
 				staleIDs = append(staleIDs, id)
 			}
 		}
-		if len(staleIDs) > 0 {
-			if err := idx.vectorStore.DeleteByIDs(ctx, staleIDs); err != nil {
-				slog.Warn("failed to prune stale tool index entries", "count", len(staleIDs), "error", err)
-			} else if len(staleIDs) > 0 {
-				slog.Debug("pruned stale tool index entries", "count", len(staleIDs))
-			}
+	}
+	if len(staleIDs) > 0 {
+		if err := idx.vectorStore.DeleteByIDs(ctx, staleIDs); err != nil {
+			slog.Warn("failed to prune stale tool index entries", "count", len(staleIDs), "error", err)
+		} else {
+			slog.Debug("pruned stale tool index entries", "count", len(staleIDs))
 		}
 	}
 	idx.knownIDs = currentIDs

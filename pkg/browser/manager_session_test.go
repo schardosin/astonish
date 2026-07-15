@@ -134,6 +134,60 @@ func TestEnsureSessionID_UnknownAlias_TreatedAsNewSession(t *testing.T) {
 	}
 }
 
+// TestEnsureSessionID_TopLevelChatSwitch_ResetsBoundContainer regresses the
+// sticky-session bug: a shared Manager that still has container/CDP state
+// from chat A must rebind when EnsureSessionID(B) is called for a new chat.
+func TestEnsureSessionID_TopLevelChatSwitch_ResetsBoundContainer(t *testing.T) {
+	m := NewManager(BrowserConfig{})
+	m.EnsureSessionID("2033fdea-fb63-46a2-bb3b-8b219400b38d")
+	m.SetContainerForTest("astn-sess-2033fdea-fb63-46a2-bb3b-8b219400b38d", "10.99.0.86")
+	m.mu.Lock()
+	m.config.RemoteCDPURL = "ws://10.99.0.86:9222/devtools/browser/old"
+	m.mu.Unlock()
+
+	newID := "aec5c0cb-af29-41a1-9d4b-a18b3e17fb03"
+	m.EnsureSessionID(newID)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.sessionID != newID {
+		t.Fatalf("top-level chat switch: sessionID=%q want %q", m.sessionID, newID)
+	}
+	if m.containerName != "" || m.containerIP != "" || m.config.RemoteCDPURL != "" {
+		t.Fatal("top-level chat switch must reset container CDP state")
+	}
+}
+
+// TestEnsureSessionID_AliasedChildKeepsParent ensures registered sub-agents
+// still resolve to the parent without resetting CDP/container state.
+func TestEnsureSessionID_AliasedChildKeepsParent(t *testing.T) {
+	m := NewManager(BrowserConfig{})
+	parent := "parent-session-111"
+	child := "child-session-222"
+	m.AliasSession(child, parent)
+	m.EnsureSessionID(parent)
+	m.SetContainerForTest("astn-sess-"+parent, "10.99.0.1")
+	m.mu.Lock()
+	m.config.RemoteCDPURL = "ws://10.99.0.1:9222/devtools/browser/x"
+	m.mu.Unlock()
+
+	m.EnsureSessionID(child)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.sessionID != parent {
+		t.Fatalf("aliased child: sessionID=%q want parent %q", m.sessionID, parent)
+	}
+	if m.containerName != "astn-sess-"+parent {
+		t.Fatalf("aliased child reset containerName: %q", m.containerName)
+	}
+	if m.config.RemoteCDPURL == "" {
+		t.Fatal("aliased child must keep RemoteCDPURL")
+	}
+}
+
 func TestAliasSession_Basic(t *testing.T) {
 	m := NewManager(BrowserConfig{})
 	m.AliasSession("child-1", "parent-1")

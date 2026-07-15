@@ -40,17 +40,19 @@ func BrowserNavigate(mgr *browser.Manager, guard *browser.NavigationGuard) func(
 
 		pg, err := mgr.CurrentPage()
 		if err != nil {
-			return BrowserNavigateResult{}, fmt.Errorf("failed to get browser page: %w", err)
+			err = fmt.Errorf("failed to get browser page: %w", err)
+			if tip := sandboxBrowserErrorTip(mgr, err, ""); tip != "" {
+				err = fmt.Errorf("%w (%s)", err, tip)
+			}
+			return BrowserNavigateResult{}, err
 		}
 
 		// Use navigation timeout for the Navigate() call itself to prevent
 		// indefinite blocking when CDP connection dies or page hangs.
 		if err := pg.Timeout(mgr.NavigationTimeout()).Navigate(args.URL); err != nil {
 			err = fmt.Errorf("navigation failed: %w", err)
-			if mgr.SandboxEnabled && mgr.ContainerName() == "" {
-				err = fmt.Errorf("%w (sandbox browser was expected in-container but CDP is not bound to a session container — restart Studio after upgrading)", err)
-			} else if isConnectionRefused(err) && looksLikeLoopbackURL(args.URL) {
-				err = fmt.Errorf("%w (in-container Chromium could not reach %s — confirm the service listens on 0.0.0.0/127.0.0.1 inside the sandbox; do not rewrite drills to the container bridge IP)", err, args.URL)
+			if tip := sandboxBrowserErrorTip(mgr, err, args.URL); tip != "" {
+				err = fmt.Errorf("%w (%s)", err, tip)
 			}
 			return BrowserNavigateResult{}, err
 		}
@@ -86,6 +88,69 @@ func looksLikeLoopbackURL(rawURL string) bool {
 	return strings.Contains(u, "://127.0.0.1") ||
 		strings.Contains(u, "://localhost") ||
 		strings.Contains(u, "://[::1]")
+}
+
+// sandboxBrowserErrorTip returns a context-aware hint for navigate/page failures.
+// It never claims in-container Chromium when SandboxEnabled is false or when
+// CDP is bound to a container that does not match the current session.
+func sandboxBrowserErrorTip(mgr *browser.Manager, err error, navURL string) string {
+	if mgr == nil {
+		return ""
+	}
+	sessionID := mgr.SessionID()
+	container := mgr.ContainerName()
+
+	if !mgr.SandboxEnabled {
+		if isConnectionRefused(err) && looksLikeLoopbackURL(navURL) {
+			return fmt.Sprintf(
+				"host Chromium / sandbox browser not wired (SandboxEnabled=false session=%q) — "+
+					"cannot reach sandbox localhost; do not rewrite URLs to the container bridge IP",
+				shortID(sessionID),
+			)
+		}
+		return ""
+	}
+
+	if container == "" {
+		return fmt.Sprintf(
+			"sandbox browser was expected in-container but CDP is not bound to a session container "+
+				"(session=%q) — restart Studio after upgrading",
+			shortID(sessionID),
+		)
+	}
+
+	if sessionID != "" && !containerMatchesSession(container, sessionID) {
+		return fmt.Sprintf(
+			"browser CDP is bound to container %q but the tool session is %q — "+
+				"Manager was stuck on a previous session; retry browser_navigate after session rebound "+
+				"(do not rewrite URLs to the container bridge IP)",
+			container, shortID(sessionID),
+		)
+	}
+
+	if isConnectionRefused(err) && looksLikeLoopbackURL(navURL) {
+		return fmt.Sprintf(
+			"in-container Chromium could not reach %s (session=%q container=%q) — "+
+				"confirm the service listens on 0.0.0.0/127.0.0.1 inside the sandbox; "+
+				"do not rewrite drills to the container bridge IP",
+			navURL, shortID(sessionID), container,
+		)
+	}
+	return ""
+}
+
+func containerMatchesSession(containerName, sessionID string) bool {
+	if containerName == "" || sessionID == "" {
+		return false
+	}
+	return strings.Contains(containerName, sessionID)
+}
+
+func shortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 // BrowserNavigateBackArgs is the input for browser_navigate_back.

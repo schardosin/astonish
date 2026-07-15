@@ -2,6 +2,7 @@ package incus
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -364,6 +365,40 @@ func TestKillStaleBrowserStackScript_MatchesCDPFlag(t *testing.T) {
 	}
 	if !strings.Contains(s, "/home/browser/.cloakbrowser/") {
 		t.Error("killStale should also match CloakBrowser install path")
+	}
+	if !strings.Contains(s, socatBridgeKillPattern()) {
+		t.Errorf("killStale should use anchored socat pattern %q", socatBridgeKillPattern())
+	}
+	if strings.Contains(s, "socat.*TCP-LISTEN") {
+		t.Error("killStale must not use unscoped socat.*TCP-LISTEN pattern (matches sh -c launcher argv)")
+	}
+}
+
+// TestSocatBridgeKillPattern_DoesNotMatchLauncherArgv documents the invariant
+// that pkill -f on the socat pattern must not SIGTERM the launcher shell whose
+// argv embeds the full launch script (including killStale / socat bridge text).
+func TestSocatBridgeKillPattern_DoesNotMatchLauncherArgv(t *testing.T) {
+	pat := socatBridgeKillPattern()
+	re, err := regexp.Compile(pat)
+	if err != nil {
+		t.Fatalf("compile %q: %v", pat, err)
+	}
+	if !strings.HasPrefix(pat, "^socat") {
+		t.Fatalf("pattern %q must start with ^socat", pat)
+	}
+
+	realSocat := fmt.Sprintf(
+		"socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d",
+		DefaultCDPPort, internalCDPPort,
+	)
+	if !re.MatchString(realSocat) {
+		t.Fatalf("pattern %q must match real socat cmdline %q", pat, realSocat)
+	}
+
+	script := buildLaunchScript("cloakbrowser", BrowserContainerConfig{ChromePath: "cloakbrowser"}, 1280, 720)
+	launcherArgv := "sh -c " + script
+	if re.MatchString(launcherArgv) {
+		t.Fatalf("pattern %q must not match launcher argv that embeds the launch script", pat)
 	}
 }
 

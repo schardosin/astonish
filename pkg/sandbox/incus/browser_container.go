@@ -2,6 +2,7 @@ package incus
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"time"
@@ -28,6 +29,10 @@ const (
 	internalCDPPort = 9223
 	// BrowserProfileMountPath is the Chromium profile dir inside containers.
 	BrowserProfileMountPath = "/home/browser/.config/chromium"
+	// browserLaunchScriptPath is where StartChromiumInContainer writes the
+	// launch script before exec. Running by path keeps kill needles out of
+	// the launcher process argv (defense in depth against pkill -f self-match).
+	browserLaunchScriptPath = "/tmp/astonish-browser-launch.sh"
 
 	// kasmVNCVersion is the KasmVNC release version to install.
 	kasmVNCVersion = "1.4.0"
@@ -594,17 +599,25 @@ func browserStackHealthyScript() string {
 	)
 }
 
+// socatBridgeKillPattern is the pkill/pgrep -f pattern for the CDP socat
+// bridge. Anchored at ^ so it matches only a real `socat TCP-LISTEN:…`
+// argv, never a launcher shell whose cmdline embeds that string in an
+// `sh -c` script body.
+func socatBridgeKillPattern() string {
+	return fmt.Sprintf("^socat TCP-LISTEN:%d,", DefaultCDPPort)
+}
+
 // killStaleBrowserStackScript clears half-dead Chromium/socat remnants so a
 // relaunch can rebind CDP ports cleanly. Match by --remote-debugging-port=
-// (not bare chrome|chromium) so pkill cannot hit a launcher shell whose
-// cmdline embeds those words.
+// (not bare chrome|chromium) and an argv-anchored socat pattern so pkill
+// cannot hit a launcher shell whose cmdline embeds those words.
 func killStaleBrowserStackScript() string {
 	return fmt.Sprintf(
 		`pkill -u browser -f -- '--remote-debugging-port=' 2>/dev/null || true
 pkill -u browser -f -- '/home/browser/.cloakbrowser/' 2>/dev/null || true
-pkill -f 'socat.*TCP-LISTEN:%d' 2>/dev/null || true
+pkill -f -- '%s' 2>/dev/null || true
 sleep 0.5
-`, DefaultCDPPort)
+`, socatBridgeKillPattern())
 }
 
 // cdpVerifyScript polls until the internal DevTools port is listening, or fails
@@ -641,11 +654,13 @@ fi
 // without stacking another instance. Half-dead remnants are killed first.
 func buildLaunchScript(engine string, cfg BrowserContainerConfig, width, height int) string {
 	// socat bridge: expose CDP on all interfaces. Skip if already listening.
+	// Use the same argv-anchored pattern as killStale (pgrep is read-only
+	// but keep patterns consistent so "already up" detection matches kills).
 	socatBridge := fmt.Sprintf(
-		"if ! pgrep -f 'socat.*TCP-LISTEN:%d' >/dev/null 2>&1; then\n"+
+		"if ! pgrep -f -- '%s' >/dev/null 2>&1; then\n"+
 			"  socat TCP-LISTEN:%d,fork,bind=0.0.0.0,reuseaddr TCP:127.0.0.1:%d &\n"+
 			"fi\n",
-		DefaultCDPPort, DefaultCDPPort, internalCDPPort,
+		socatBridgeKillPattern(), DefaultCDPPort, internalCDPPort,
 	)
 
 	display := fmt.Sprintf(":%s", kasmVNCDisplay)
@@ -866,10 +881,14 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 	return nil
 }
 
-// runBrowserLaunchScript executes the generated launch script once and returns
-// a diagnostic error on non-zero exit (including SIGTERM enrichment).
+// runBrowserLaunchScript writes the launch script to a temp file inside the
+// container, then runs it by path so the launcher process argv does not embed
+// pkill needles (killStale patterns). Returns a diagnostic error on non-zero exit.
 func runBrowserLaunchScript(client *IncusClient, containerName, launchScript string) error {
-	cmd := []string{"sh", "-c", launchScript + "\n"}
+	if err := writeBrowserLaunchScript(client, containerName, launchScript); err != nil {
+		return err
+	}
+	cmd := []string{"sh", browserLaunchScriptPath}
 	exitCode, output, err := ExecWithOutput(client, containerName, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to launch browser: %w (output: %s)", err, strings.TrimSpace(output))
@@ -878,6 +897,39 @@ func runBrowserLaunchScript(client *IncusClient, containerName, launchScript str
 		return nil
 	}
 	return formatBrowserLaunchExitError(client, containerName, exitCode, output)
+}
+
+// writeBrowserLaunchScript streams the script to browserLaunchScriptPath via
+// tee so the content never appears in a long-lived process argv.
+func writeBrowserLaunchScript(client *IncusClient, containerName, script string) error {
+	proc, err := ExecNonInteractive(client, containerName, []string{"tee", browserLaunchScriptPath}, ExecOpts{})
+	if err != nil {
+		return fmt.Errorf("failed to write browser launch script: %w", err)
+	}
+
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		_, _ = io.Copy(io.Discard, proc.Stdout)
+	}()
+
+	if _, err := io.WriteString(proc.Stdin, script); err != nil {
+		_ = proc.Close()
+		<-drainDone
+		return fmt.Errorf("failed to write browser launch script: %w", err)
+	}
+	// Close stdin (via Close) so tee gets EOF, flushes, and exits.
+	_ = proc.Close()
+
+	exitCode, err := proc.Wait()
+	<-drainDone
+	if err != nil {
+		return fmt.Errorf("failed to write browser launch script: %w", err)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("failed to write browser launch script: tee exited with code %d", exitCode)
+	}
+	return nil
 }
 
 // formatBrowserLaunchExitError builds a launch failure error. Exit 143 is

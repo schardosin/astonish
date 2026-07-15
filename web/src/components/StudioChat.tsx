@@ -33,6 +33,7 @@ import NetworkDenialPrompt from './chat/NetworkDenialPrompt'
 import ModelCredentialBanner from './chat/ModelCredentialBanner'
 import SessionModelPicker from './chat/SessionModelPicker'
 import PreChatModelPicker from './chat/PreChatModelPicker'
+import { fileTypeFromFileName } from '../utils/artifactMedia'
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -282,16 +283,12 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Pre-compute which artifact paths should be rendered as embedded file viewers
   // inside the last agent message bubble instead of as standalone inline ArtifactCards.
   //
-  // The gate is intentionally NARROW (three conditions, all required) to prevent
-  // the b5310ae regression where any last-turn markdown file was treated as a
-  // report. Today's contract: an artifact is embedded iff
-  //   1. it was produced in the *last turn* (after the last user message), AND
-  //   2. its fileType === 'Markdown' (only markdown reports promote to inline), AND
-  //   3. its isReport flag is true — meaning the agent emitted a matching
-  //      ```astonish-report``` fence whose `path` exactly matches this artifact.
-  // The third condition is the explicit signal the agent must opt into. Code
-  // files, configs, scripts, and incidental edits never satisfy condition 3, so
-  // they correctly stay as compact ArtifactCards.
+  // Markdown reports use a narrow three-signal gate (do NOT widen — see AGENTS.md):
+  //   1. produced in the *last turn*, AND
+  //   2. fileType === 'Markdown', AND
+  //   3. isReport === true (matching ```astonish-report``` fence).
+  // Last-turn Video artifacts (e.g. browser_stop_recording) also embed so the
+  // user gets an inline player — separate from the markdown report contract.
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
@@ -309,12 +306,14 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
     // Only embed artifacts that belong to the last turn
     if (lastTurnArtifactPaths.size === 0) return paths
-    // Find the last agent message and collect matching artifacts that ALSO
-    // satisfy the markdown + isReport gate.
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
         for (const a of sessionArtifacts) {
           if (!lastTurnArtifactPaths.has(a.path)) continue
+          if (a.fileType === 'Video') {
+            paths.add(a.path)
+            continue
+          }
           if (a.fileType !== 'Markdown') continue
           if (!a.isReport) continue
           paths.add(a.path)
@@ -785,8 +784,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'artifact':
             if (data.path) {
               const fileName = (data.path as string).split('/').pop() || 'file'
-              const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
-              const fileType = ext === 'md' ? 'Markdown' : ext === 'py' ? 'Python' : ext === 'go' ? 'Go' : ext === 'js' ? 'JavaScript' : ext === 'ts' ? 'TypeScript' : ext || 'File'
+              const fileType = fileTypeFromFileName(fileName)
               setSessionArtifacts(prev => {
                 if (prev.some(a => a.path === data.path)) return prev
                 return [...prev, { path: data.path as string, fileName, fileType, toolName: (data.tool_name as string) || 'write_file' }]
@@ -1600,8 +1598,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           case 'artifact':
             if (data.path) {
               const fileName = (data.path as string).split('/').pop() || 'file'
-              const ext = fileName.includes('.') ? fileName.split('.').pop()?.toLowerCase() || '' : ''
-              const fileType = ext === 'md' ? 'Markdown' : ext === 'py' ? 'Python' : ext === 'go' ? 'Go' : ext === 'js' ? 'JavaScript' : ext === 'ts' ? 'TypeScript' : ext || 'File'
+              const fileType = fileTypeFromFileName(fileName)
               setSessionArtifacts(prev => {
                 if (prev.some(a => a.path === data.path)) return prev
                 return [...prev, { path: data.path as string, fileName, fileType, toolName: (data.tool_name as string) || 'write_file' }]

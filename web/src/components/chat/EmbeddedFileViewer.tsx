@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Maximize2, ChevronDown, FileText, Download, Loader, FilePlus, Edit3 } from 'lucide-react'
+import { Maximize2, ChevronDown, FileText, Download, Loader, FilePlus, Edit3, Film } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './markdownComponents'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
+import { artifactMediaKind, downloadLabelForArtifact } from '../../utils/artifactMedia'
+import ArtifactMediaPlayer from './ArtifactMediaPlayer'
 import type { SessionArtifact } from './chatTypes'
 
 // File type badge color mapping (same as FilePanel)
@@ -18,6 +20,7 @@ function fileTypeBadgeStyle(fileType: string) {
     HTML: { bg: 'rgba(249, 115, 22, 0.15)', text: '#fb923c' },
     CSS: { bg: 'rgba(59, 130, 246, 0.15)', text: '#60a5fa' },
     Shell: { bg: 'rgba(34, 197, 94, 0.15)', text: '#4ade80' },
+    Video: { bg: 'rgba(244, 63, 94, 0.15)', text: '#fb7185' },
   }
   const c = colors[fileType] || { bg: 'rgba(148, 163, 184, 0.12)', text: 'var(--text-muted)' }
   return { background: c.bg, color: c.text }
@@ -25,7 +28,7 @@ function fileTypeBadgeStyle(fileType: string) {
 
 // Embedded file viewer for a single artifact — renders the file content inline
 // with a header bar (filename, type badge, download dropdown, fullscreen button).
-// Used inside agent message bubbles to show report files and other created artifacts.
+// Used inside agent message bubbles for markdown reports and last-turn media.
 export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel }: {
   artifact: SessionArtifact
   sessionId?: string | null
@@ -39,10 +42,18 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const isMarkdown = artifact.fileType === 'Markdown'
+  const mediaKind = artifactMediaKind(artifact.fileType, artifact.fileName)
   const isEdit = artifact.toolName === 'edit_file'
+  const downloadLabel = downloadLabelForArtifact(artifact.fileType, artifact.fileName)
 
-  // Load file content on mount
+  // Load text content only for non-media files (media uses ArtifactMediaPlayer).
   useEffect(() => {
+    if (mediaKind) {
+      setContent('')
+      setLoading(false)
+      setError(null)
+      return
+    }
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -51,7 +62,7 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
       .catch(err => { if (!cancelled) setError(err.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [artifact.path, sessionId])
+  }, [artifact.path, sessionId, mediaKind])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -65,7 +76,7 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
     return () => document.removeEventListener('mousedown', handler)
   }, [downloadOpen])
 
-  const handleDownloadMarkdown = useCallback(() => {
+  const handleDownloadFile = useCallback(() => {
     const url = getArtifactDownloadUrl(artifact.path, sessionId || undefined)
     const a = document.createElement('a')
     a.href = url
@@ -133,11 +144,13 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
         {/* File icon */}
         <div
           className="flex items-center justify-center w-7 h-7 rounded shrink-0"
-          style={{ background: 'rgba(34, 197, 94, 0.12)' }}
+          style={{ background: mediaKind === 'video' ? 'rgba(244, 63, 94, 0.12)' : 'rgba(34, 197, 94, 0.12)' }}
         >
-          {isEdit
-            ? <Edit3 size={14} className="text-green-400" />
-            : <FilePlus size={14} className="text-green-400" />
+          {mediaKind === 'video'
+            ? <Film size={14} className="text-rose-400" />
+            : isEdit
+              ? <Edit3 size={14} className="text-green-400" />
+              : <FilePlus size={14} className="text-green-400" />
           }
         </div>
 
@@ -146,7 +159,10 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
             the human-readable label and demote the basename to a tooltip.
             Falls back to the basename when no title is available. */}
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <FileText size={13} className="text-green-400 shrink-0" />
+          {mediaKind === 'video'
+            ? <Film size={13} className="text-rose-400 shrink-0" />
+            : <FileText size={13} className="text-green-400 shrink-0" />
+          }
           <span
             className="text-xs font-medium truncate"
             style={{ color: 'var(--text-primary)' }}
@@ -188,11 +204,11 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
               }}
             >
               <button
-                onClick={handleDownloadMarkdown}
+                onClick={handleDownloadFile}
                 className="w-full text-left px-3 py-1.5 hover:opacity-80 transition-opacity"
                 style={{ color: 'var(--text-primary)' }}
               >
-                Download as Markdown
+                {downloadLabel}
               </button>
               {isMarkdown && (
                 <>
@@ -232,43 +248,54 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
       {/* File content */}
       <div
         className="overflow-y-auto p-4"
-        style={{ maxHeight: '500px' }}
+        style={{ maxHeight: mediaKind === 'video' ? 'none' : '500px' }}
       >
-        {loading && (
-          <div className="flex items-center justify-center py-8">
-            <Loader size={18} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
-          </div>
-        )}
-        {error && (
-          <div className="text-xs p-3 rounded" style={{ color: '#f87171', background: 'rgba(248, 113, 113, 0.08)' }}>
-            Failed to load file: {error}
-          </div>
-        )}
-        {!loading && !error && content && (
-          <div className="max-w-4xl">
-            {isMarkdown ? (
-              <div className="markdown-body markdown-body--document text-sm">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+        {mediaKind ? (
+          <ArtifactMediaPlayer
+            path={artifact.path}
+            fileName={artifact.fileName}
+            kind={mediaKind}
+            sessionId={sessionId}
+          />
+        ) : (
+          <>
+            {loading && (
+              <div className="flex items-center justify-center py-8">
+                <Loader size={18} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
               </div>
-            ) : (
-              <pre
-                className="text-xs whitespace-pre-wrap break-words p-3 rounded"
-                style={{
-                  color: 'var(--text-primary)',
-                  fontFamily: 'var(--font-mono, monospace)',
-                  background: 'var(--bg-secondary)',
-                  border: '1px solid var(--border-color)',
-                }}
-              >
-                {content}
-              </pre>
             )}
-          </div>
-        )}
-        {!loading && !error && !content && (
-          <div className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
-            File is empty
-          </div>
+            {error && (
+              <div className="text-xs p-3 rounded" style={{ color: '#f87171', background: 'rgba(248, 113, 113, 0.08)' }}>
+                Failed to load file: {error}
+              </div>
+            )}
+            {!loading && !error && content && (
+              <div className="max-w-4xl">
+                {isMarkdown ? (
+                  <div className="markdown-body markdown-body--document text-sm">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+                  </div>
+                ) : (
+                  <pre
+                    className="text-xs whitespace-pre-wrap break-words p-3 rounded"
+                    style={{
+                      color: 'var(--text-primary)',
+                      fontFamily: 'var(--font-mono, monospace)',
+                      background: 'var(--bg-secondary)',
+                      border: '1px solid var(--border-color)',
+                    }}
+                  >
+                    {content}
+                  </pre>
+                )}
+              </div>
+            )}
+            {!loading && !error && !content && (
+              <div className="text-xs text-center py-6" style={{ color: 'var(--text-muted)' }}>
+                File is empty
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

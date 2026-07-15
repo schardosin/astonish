@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { X, FileText, Download, ChevronDown, Loader, FilePlus, Edit3, Eye } from 'lucide-react'
+import { X, FileText, Download, ChevronDown, Loader, FilePlus, Edit3, Eye, Film } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from './markdownComponents'
 import { unified } from 'unified'
 import remarkParse from 'remark-parse'
 import { fetchArtifactContent, getArtifactDownloadUrl, getArtifactPDFUrl } from '../../api/studioChat'
+import { artifactMediaKind, downloadLabelForArtifact } from '../../utils/artifactMedia'
+import ArtifactMediaPlayer from './ArtifactMediaPlayer'
 import type { SessionArtifact } from './chatTypes'
 
 interface FilePanelProps {
@@ -15,8 +17,11 @@ interface FilePanelProps {
   onClose: () => void
 }
 
-// Icon for the artifact based on tool name
-function ArtifactIcon({ toolName, size = 14 }: { toolName: string; size?: number }) {
+// Icon for the artifact based on type / tool name
+function ArtifactIcon({ toolName, fileType, size = 14 }: { toolName: string; fileType?: string; size?: number }) {
+  if (fileType === 'Video') {
+    return <Film size={size} className="text-rose-400" />
+  }
   if (toolName === 'edit_file') return <Edit3 size={size} className="text-green-400" />
   return <FilePlus size={size} className="text-green-400" />
 }
@@ -31,6 +36,7 @@ function fileTypeBadgeStyle(fileType: string) {
     HTML: { bg: 'rgba(249, 115, 22, 0.15)', text: '#fb923c' },
     CSS: { bg: 'rgba(59, 130, 246, 0.15)', text: '#60a5fa' },
     Shell: { bg: 'rgba(34, 197, 94, 0.15)', text: '#4ade80' },
+    Video: { bg: 'rgba(244, 63, 94, 0.15)', text: '#fb7185' },
   }
   const c = colors[fileType] || { bg: 'rgba(148, 163, 184, 0.12)', text: 'var(--text-muted)' }
   return { background: c.bg, color: c.text }
@@ -49,6 +55,12 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
 
   const overlayArtifact = artifacts.find(a => a.path === overlayPath)
   const isMarkdown = overlayArtifact?.fileType === 'Markdown'
+  const overlayMediaKind = overlayArtifact
+    ? artifactMediaKind(overlayArtifact.fileType, overlayArtifact.fileName)
+    : null
+  const overlayDownloadLabel = overlayArtifact
+    ? downloadLabelForArtifact(overlayArtifact.fileType, overlayArtifact.fileName)
+    : 'Download File'
 
   // When initialPath changes (e.g., clicking "Open in Files" on an inline artifact card),
   // open the overlay directly for that file
@@ -56,11 +68,18 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     if (initialPath) setOverlayPath(initialPath)
   }, [initialPath])
 
-  // Load content when overlay file changes
+  // Load text content when overlay file changes (media uses ArtifactMediaPlayer).
   useEffect(() => {
-    if (!overlayPath) {
+    if (!overlayPath || !overlayArtifact) {
       setContent('')
       setError(null)
+      setLoading(false)
+      return
+    }
+    if (artifactMediaKind(overlayArtifact.fileType, overlayArtifact.fileName)) {
+      setContent('')
+      setError(null)
+      setLoading(false)
       return
     }
     let cancelled = false
@@ -71,7 +90,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
       .catch(err => { if (!cancelled) setError(err.message) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [overlayPath, sessionId])
+  }, [overlayPath, overlayArtifact, sessionId])
 
   // Close download dropdown on outside click
   useEffect(() => {
@@ -103,7 +122,7 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
     setDownloadOpen(false)
   }, [])
 
-  const handleDownloadMarkdown = useCallback(() => {
+  const handleDownloadFile = useCallback(() => {
     if (!overlayPath) return
     const url = getArtifactDownloadUrl(overlayPath, sessionId || undefined)
     const a = document.createElement('a')
@@ -197,8 +216,11 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
               }}
             >
               {/* File icon */}
-              <div className="flex items-center justify-center w-8 h-8 rounded shrink-0" style={{ background: 'rgba(34, 197, 94, 0.1)' }}>
-                <ArtifactIcon toolName={a.toolName} size={15} />
+              <div
+                className="flex items-center justify-center w-8 h-8 rounded shrink-0"
+                style={{ background: a.fileType === 'Video' ? 'rgba(244, 63, 94, 0.1)' : 'rgba(34, 197, 94, 0.1)' }}
+              >
+                <ArtifactIcon toolName={a.toolName} fileType={a.fileType} size={15} />
               </div>
 
               {/* File info */}
@@ -256,8 +278,11 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
               style={{ borderBottom: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}
             >
               {/* File icon + name */}
-              <div className="flex items-center justify-center w-8 h-8 rounded" style={{ background: 'rgba(34, 197, 94, 0.12)' }}>
-                <ArtifactIcon toolName={overlayArtifact.toolName} size={16} />
+              <div
+                className="flex items-center justify-center w-8 h-8 rounded"
+                style={{ background: overlayMediaKind === 'video' ? 'rgba(244, 63, 94, 0.12)' : 'rgba(34, 197, 94, 0.12)' }}
+              >
+                <ArtifactIcon toolName={overlayArtifact.toolName} fileType={overlayArtifact.fileType} size={16} />
               </div>
               <div className="flex flex-col min-w-0 flex-1">
                 <div className="flex items-center gap-2">
@@ -302,11 +327,11 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
                     }}
                   >
                     <button
-                      onClick={handleDownloadMarkdown}
+                      onClick={handleDownloadFile}
                       className="w-full text-left px-3 py-2 hover:opacity-80 transition-opacity"
                       style={{ color: 'var(--text-primary)' }}
                     >
-                      Download as Markdown
+                      {overlayDownloadLabel}
                     </button>
                     {isMarkdown && (
                       <>
@@ -342,41 +367,54 @@ export default function FilePanel({ artifacts, initialPath, sessionId, onClose }
 
             {/* Overlay content */}
             <div className="flex-1 overflow-y-auto p-6">
-              {loading && (
-                <div className="flex items-center justify-center py-16">
-                  <Loader size={24} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
-                </div>
-              )}
-              {error && (
-                <div className="text-sm p-4 rounded-lg" style={{ color: '#f87171', background: 'rgba(248, 113, 113, 0.08)' }}>
-                  Failed to load file: {error}
-                </div>
-              )}
-              {!loading && !error && content && (
+              {overlayMediaKind ? (
                 <div ref={contentRef} className="max-w-4xl mx-auto">
-                  {isMarkdown ? (
-                    <div className="markdown-body markdown-body--document">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+                  <ArtifactMediaPlayer
+                    path={overlayArtifact.path}
+                    fileName={overlayArtifact.fileName}
+                    kind={overlayMediaKind}
+                    sessionId={sessionId}
+                  />
+                </div>
+              ) : (
+                <>
+                  {loading && (
+                    <div className="flex items-center justify-center py-16">
+                      <Loader size={24} className="animate-spin" style={{ color: 'var(--text-muted)' }} />
                     </div>
-                  ) : (
-                    <pre
-                      className="text-sm whitespace-pre-wrap break-words p-4 rounded-lg"
-                      style={{
-                        color: 'var(--text-primary)',
-                        fontFamily: 'var(--font-mono, monospace)',
-                        background: 'var(--bg-secondary)',
-                        border: '1px solid var(--border-color)',
-                      }}
-                    >
-                      {content}
-                    </pre>
                   )}
-                </div>
-              )}
-              {!loading && !error && !content && (
-                <div className="text-sm text-center py-16" style={{ color: 'var(--text-muted)' }}>
-                  File is empty
-                </div>
+                  {error && (
+                    <div className="text-sm p-4 rounded-lg" style={{ color: '#f87171', background: 'rgba(248, 113, 113, 0.08)' }}>
+                      Failed to load file: {error}
+                    </div>
+                  )}
+                  {!loading && !error && content && (
+                    <div ref={contentRef} className="max-w-4xl mx-auto">
+                      {isMarkdown ? (
+                        <div className="markdown-body markdown-body--document">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</ReactMarkdown>
+                        </div>
+                      ) : (
+                        <pre
+                          className="text-sm whitespace-pre-wrap break-words p-4 rounded-lg"
+                          style={{
+                            color: 'var(--text-primary)',
+                            fontFamily: 'var(--font-mono, monospace)',
+                            background: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-color)',
+                          }}
+                        >
+                          {content}
+                        </pre>
+                      )}
+                    </div>
+                  )}
+                  {!loading && !error && !content && (
+                    <div className="text-sm text-center py-16" style={{ color: 'var(--text-muted)' }}>
+                      File is empty
+                    </div>
+                  )}
+                </>
               )}
             </div>
           </div>

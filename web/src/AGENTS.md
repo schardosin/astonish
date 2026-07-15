@@ -27,7 +27,9 @@ React 19 SPA for Astonish Studio. Mixed **TypeScript (`.ts`/`.tsx`)** and **lega
 2. `fileType === 'Markdown'`.
 3. `isReport === true` (set by the backend when an `` ```astonish-report `` fence's `path:` matched the artifact path).
 
-Anything failing any one of these renders as the compact `ArtifactCard`. **Do not widen the gate in the SPA.** If the backend regresses the marker, fix it in `pkg/api/chat_runner.go`, not by weakening the client check.
+Anything failing any one of these renders as the compact `ArtifactCard`. **Do not widen the markdown report gate in the SPA.** If the backend regresses the marker, fix it in `pkg/api/chat_runner.go`, not by weakening the client check.
+
+Last-turn **Video** artifacts (e.g. `browser_stop_recording`) also embed via `EmbeddedFileViewer` with a native player — separate from the markdown report contract. FilePanel / EmbeddedFileViewer must not fetch video as text; use `fetchArtifactBlob` + `<video>`.
 
 Authoritative reference: `docs/architecture/chat-rendering-pipeline.md`, "The Report Pipeline" section.
 

@@ -275,7 +275,9 @@ A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering **iff a
 2. `fileType === 'Markdown'`. Code, configs, scripts, JSON, etc. always render as `ArtifactCard`.
 3. `isReport === true`. This flips only when the agent emits an `astonish-report` fence whose `path` matches the artifact's path; the backend's `detectAndEmitReportMarkers` validates the match before emitting `report_marker`.
 
-Any artifact failing any of these conditions falls back to the compact `ArtifactCard` download tile. There is no other path to inline rendering.
+Any markdown artifact failing any of these conditions falls back to the compact `ArtifactCard` download tile.
+
+**Video (separate from the report gate):** last-turn artifacts with `fileType === 'Video'` (e.g. `browser_stop_recording` MP4s) also embed in `EmbeddedFileViewer`. The viewer loads bytes via `fetchArtifactBlob` (team-auth headers) into a blob URL and plays them with `<video controls>`. FilePanel uses the same player. Download labels use "Download Video" — never "Download as Markdown". Do not classify video as Markdown or set `isReport` for it.
 
 ### Fence shape
 

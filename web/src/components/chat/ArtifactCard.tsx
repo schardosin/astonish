@@ -1,4 +1,4 @@
-import { FileText, Download, Edit3, FilePlus, ExternalLink } from 'lucide-react'
+import { FileText, Download, Edit3, FilePlus, ExternalLink, Film } from 'lucide-react'
 import type { ArtifactMessage } from './chatTypes'
 import { getArtifactDownloadUrl } from '../../api/studioChat'
 
@@ -18,6 +18,7 @@ function getFileType(path: string): string {
     csv: 'CSV', xml: 'XML', sql: 'SQL', toml: 'TOML',
     rs: 'Rust', rb: 'Ruby', java: 'Java', c: 'C', cpp: 'C++', h: 'Header',
     dockerfile: 'Dockerfile', makefile: 'Makefile',
+    mp4: 'Video', webm: 'Video', mov: 'Video',
   }
   return typeMap[ext || ''] || (ext ? ext.toUpperCase() : 'File')
 }
@@ -34,6 +35,7 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
   const fileName = getFileName(data.path)
   const fileType = getFileType(data.path)
   const isEdit = data.toolName === 'edit_file'
+  const isVideo = fileType === 'Video'
 
   const handleDownload = () => {
     const url = getArtifactDownloadUrl(data.path, sessionId || undefined)
@@ -44,12 +46,14 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
     <div
       className="my-1.5 rounded-lg overflow-hidden inline-flex items-center gap-3 px-3 py-2 max-w-md"
       style={{
-        border: '1px solid rgba(34, 197, 94, 0.3)',
-        background: 'rgba(34, 197, 94, 0.05)',
+        border: isVideo ? '1px solid rgba(244, 63, 94, 0.35)' : '1px solid rgba(34, 197, 94, 0.3)',
+        background: isVideo ? 'rgba(244, 63, 94, 0.06)' : 'rgba(34, 197, 94, 0.05)',
       }}
     >
-      <div className="flex items-center justify-center w-8 h-8 rounded bg-green-500/15">
-        {isEdit ? (
+      <div className={`flex items-center justify-center w-8 h-8 rounded ${isVideo ? 'bg-rose-500/15' : 'bg-green-500/15'}`}>
+        {isVideo ? (
+          <Film size={16} className="text-rose-400" />
+        ) : isEdit ? (
           <Edit3 size={16} className="text-green-400" />
         ) : (
           <FilePlus size={16} className="text-green-400" />
@@ -57,7 +61,10 @@ export default function ArtifactCard({ data, sessionId, onOpenInPanel }: Artifac
       </div>
       <div className="flex flex-col min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
-          <FileText size={12} className="text-green-400 flex-shrink-0" />
+          {isVideo
+            ? <Film size={12} className="text-rose-400 flex-shrink-0" />
+            : <FileText size={12} className="text-green-400 flex-shrink-0" />
+          }
           <span className="text-xs font-medium text-gray-200 truncate">{fileName}</span>
           <span className="text-[10px] text-gray-500 flex-shrink-0">{fileType}</span>
         </div>

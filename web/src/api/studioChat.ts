@@ -311,6 +311,19 @@ export async function fetchArtifactContent(path: string, sessionId?: string): Pr
   return resp.text()
 }
 
+/**
+ * Fetch a binary artifact (e.g. MP4) via the download endpoint.
+ * Uses teamFetch so X-Astonish-Team / CSRF headers are applied — a bare
+ * `<video src={downloadUrl}>` cannot send those headers.
+ */
+export async function fetchArtifactBlob(path: string, sessionId?: string): Promise<Blob> {
+  let url = `${API_BASE}/artifacts?path=${encodeURIComponent(path)}`
+  if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
+  const resp = await teamFetch(url)
+  if (!resp.ok) throw new Error(`Failed to fetch artifact: ${resp.status}`)
+  return resp.blob()
+}
+
 /** Get the download URL for a raw file artifact. */
 export function getArtifactDownloadUrl(path: string, sessionId?: string): string {
   let url = `${API_BASE}/artifacts?path=${encodeURIComponent(path)}`

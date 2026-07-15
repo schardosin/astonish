@@ -822,14 +822,20 @@ func StudioArtifactDownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 // serveArtifactDownload writes content as a downloadable file response with
 // appropriate Content-Type and Content-Disposition headers.
+// Media (video/audio/image) uses disposition=inline so Studio can play the
+// bytes in a <video>/<audio>/<img> element; other files stay attachments.
 func serveArtifactDownload(w http.ResponseWriter, fileName string, content []byte) {
 	// Detect content type from extension
 	ct := mime.TypeByExtension(filepath.Ext(fileName))
 	if ct == "" {
 		ct = http.DetectContentType(content)
 	}
+	disposition := "attachment"
+	if strings.HasPrefix(ct, "video/") || strings.HasPrefix(ct, "audio/") || strings.HasPrefix(ct, "image/") {
+		disposition = "inline"
+	}
 	w.Header().Set("Content-Type", ct)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", fileName))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("%s; filename=%q", disposition, fileName))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
 	w.Write(content)
 }

@@ -14,6 +14,8 @@ type BrowserStartRecordingArgs struct {
 type BrowserStartRecordingResult struct {
 	Status string `json:"status"`
 	Path   string `json:"path"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 func BrowserStartRecording(mgr *browser.Manager) func(tool.Context, BrowserStartRecordingArgs) (BrowserStartRecordingResult, error) {
@@ -21,13 +23,15 @@ func BrowserStartRecording(mgr *browser.Manager) func(tool.Context, BrowserStart
 		if ctx != nil {
 			mgr.EnsureSessionID(ctx.SessionID())
 		}
-		path, err := mgr.StartRecording(browser.RecordingOptions{Filename: args.Filename})
+		res, err := mgr.StartRecording(browser.RecordingOptions{Filename: args.Filename})
 		if err != nil {
 			return BrowserStartRecordingResult{}, err
 		}
 		return BrowserStartRecordingResult{
 			Status: "recording",
-			Path:   path,
+			Path:   res.Path,
+			Width:  res.Width,
+			Height: res.Height,
 		}, nil
 	}
 }

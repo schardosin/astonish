@@ -192,6 +192,7 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 			deps.libjpegTurbo, "libwebp-dev", "libssl3",
 			"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 			"x11-xserver-utils",
+			"x11-utils", // xdpyinfo for recording display probe
 			// openssl for generating the KasmVNC snakeoil cert directly into
 			// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
 			// on /etc/ssl/private/).
@@ -232,6 +233,7 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					deps.libjpegTurbo, "libwebp-dev", "libssl3",
 					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 					"x11-xserver-utils",
+					"x11-utils", // xdpyinfo for recording display probe
 					// openssl for generating the KasmVNC snakeoil cert directly into
 					// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
 					// on /etc/ssl/private/).
@@ -270,6 +272,7 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					deps.libjpegTurbo, "libwebp-dev", "libssl3",
 					"xfonts-base", "xfonts-75dpi", "xfonts-100dpi",
 					"x11-xserver-utils",
+					"x11-utils", // xdpyinfo for recording display probe
 					// openssl for generating the KasmVNC snakeoil cert directly into
 					// /home/browser/.vnc/ (avoids unprivileged container chmod restrictions
 					// on /etc/ssl/private/).
@@ -364,6 +367,11 @@ network:
     require_ssl: false
     pem_certificate: /home/browser/.vnc/snakeoil.pem
     pem_key: /home/browser/.vnc/snakeoil.key
+desktop:
+  allow_resize: false
+  resolution:
+    width: 1920
+    height: 1080
 user_session:
   concurrent_connections_prompt: false
 logging:
@@ -562,8 +570,10 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 	// shifts ALL UIDs (not just root) during template creation. The shifted
 	// UIDs are captured in the snapshot and inherited by session containers.
 	geometry := fmt.Sprintf("%dx%d", width, height)
+	// -AcceptSetDesktopSize 0 prevents the Studio/noVNC client from shrinking
+	// the X framebuffer to the host canvas (breaks ffmpeg x11grab at configured size).
 	startCmd := []string{"runuser", "-l", "browser", "-c",
-		fmt.Sprintf("vncserver :%s -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth",
+		fmt.Sprintf("vncserver :%s -geometry %s -depth 24 -websocketPort %d -DisableBasicAuth -AcceptSetDesktopSize 0",
 			kasmVNCDisplay,
 			geometry,
 			port,

@@ -13,29 +13,34 @@ const recordingPIDFile = "/tmp/astonish-recording.pid"
 const recordingLogFile = "/tmp/astonish-recording.log"
 
 // StartRecordingInContainer launches ffmpeg x11grab against the KasmVNC
-// display inside the session container. The returned stop function sends
-// SIGINT and waits for the MP4 to finalize.
-func StartRecordingInContainer(client *IncusClient, containerName, display string, width, height int, outPath string) (func() error, error) {
+// display inside the session container. The live X root size is probed via
+// xdpyinfo so capture never exceeds the framebuffer. The returned stop
+// function sends SIGINT and waits for the MP4 to finalize.
+func StartRecordingInContainer(client *IncusClient, containerName, display, outPath string) (func() error, int, int, error) {
 	if client == nil {
-		return nil, fmt.Errorf("incus client is nil")
+		return nil, 0, 0, fmt.Errorf("incus client is nil")
 	}
 	if containerName == "" {
-		return nil, fmt.Errorf("container name is required")
+		return nil, 0, 0, fmt.Errorf("container name is required")
 	}
 	if outPath == "" || !strings.HasPrefix(outPath, "/") {
-		return nil, fmt.Errorf("recording outPath must be absolute, got %q", outPath)
+		return nil, 0, 0, fmt.Errorf("recording outPath must be absolute, got %q", outPath)
 	}
 
 	dir := filepath.Dir(outPath)
 	mkdirCmd := []string{"mkdir", "-p", dir}
 	if code, err := client.ExecSimple(containerName, mkdirCmd); err != nil {
-		return nil, fmt.Errorf("mkdir recordings dir: %w", err)
+		return nil, 0, 0, fmt.Errorf("mkdir recordings dir: %w", err)
 	} else if code != 0 {
-		return nil, fmt.Errorf("mkdir recordings dir exited %d", code)
+		return nil, 0, 0, fmt.Errorf("mkdir recordings dir exited %d", code)
+	}
+
+	width, height, err := probeDisplaySize(client, containerName, display)
+	if err != nil {
+		return nil, 0, 0, err
 	}
 
 	args := browser.BuildFFmpegX11GrabArgs(display, width, height, outPath)
-	// Quote for shell: paths may contain spaces (unlikely for our defaults).
 	quoted := make([]string, len(args))
 	for i, a := range args {
 		quoted[i] = shellQuote(a)
@@ -56,9 +61,9 @@ fi
 		shellQuote(recordingPIDFile), shellQuote(recordingLogFile))
 
 	if code, out, err := ExecWithOutput(client, containerName, []string{"sh", "-c", startScript}); err != nil {
-		return nil, fmt.Errorf("start ffmpeg: %w (output: %s)", err, out)
+		return nil, 0, 0, fmt.Errorf("start ffmpeg: %w (output: %s)", err, out)
 	} else if code != 0 {
-		return nil, fmt.Errorf("start ffmpeg exited %d: %s", code, strings.TrimSpace(out))
+		return nil, 0, 0, fmt.Errorf("start ffmpeg exited %d: %s", code, strings.TrimSpace(out))
 	}
 
 	return func() error {
@@ -93,10 +98,25 @@ fi
 		if code != 0 {
 			return fmt.Errorf("stop ffmpeg exited %d: %s", code, strings.TrimSpace(out))
 		}
-		// Brief settle for filesystem flush.
 		time.Sleep(100 * time.Millisecond)
 		return nil
-	}, nil
+	}, width, height, nil
+}
+
+func probeDisplaySize(client *IncusClient, containerName, display string) (int, int, error) {
+	cmd := []string{"sh", "-c", browser.DisplayProbeShellCommand(display)}
+	code, out, err := ExecWithOutput(client, containerName, cmd)
+	if err != nil {
+		return 0, 0, fmt.Errorf("probe display size: %w (output: %s)", err, out)
+	}
+	if code != 0 {
+		return 0, 0, fmt.Errorf("probe display size exited %d: %s", code, strings.TrimSpace(out))
+	}
+	w, h, err := browser.ParseXdpyinfoDimensions(out)
+	if err != nil {
+		return 0, 0, fmt.Errorf("probe display size: %w", err)
+	}
+	return w, h, nil
 }
 
 func shellQuote(s string) string {

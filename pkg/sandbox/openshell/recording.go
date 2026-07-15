@@ -14,22 +14,32 @@ const recordingPIDFile = "/tmp/astonish-recording.pid"
 const recordingLogFile = "/tmp/astonish-recording.log"
 
 // StartRecordingInSandbox launches ffmpeg x11grab against the KasmVNC display
-// inside the OpenShell pod. The returned stop function sends SIGINT and waits
-// for the MP4 to finalize.
-func StartRecordingInSandbox(ctx context.Context, gw GatewayClient, podName, display string, width, height int, outPath string) (func() error, error) {
+// inside the OpenShell pod. The live X root size is probed via xdpyinfo so
+// capture never exceeds the framebuffer. The returned stop function sends
+// SIGINT and waits for the MP4 to finalize.
+func StartRecordingInSandbox(ctx context.Context, gw GatewayClient, podName, display, outPath string) (func() error, int, int, error) {
 	if gw == nil {
-		return nil, fmt.Errorf("gateway client is nil")
+		return nil, 0, 0, fmt.Errorf("gateway client is nil")
 	}
 	if podName == "" {
-		return nil, fmt.Errorf("pod name is required")
+		return nil, 0, 0, fmt.Errorf("pod name is required")
 	}
 	if outPath == "" || !strings.HasPrefix(outPath, "/") {
-		return nil, fmt.Errorf("recording outPath must be absolute, got %q", outPath)
+		return nil, 0, 0, fmt.Errorf("recording outPath must be absolute, got %q", outPath)
 	}
 
 	dir := filepath.Dir(outPath)
 	if _, err := execShell(ctx, gw, podName, fmt.Sprintf("mkdir -p %s", shellQuote(dir))); err != nil {
-		return nil, fmt.Errorf("mkdir recordings dir: %w", err)
+		return nil, 0, 0, fmt.Errorf("mkdir recordings dir: %w", err)
+	}
+
+	probeOut, err := execShell(ctx, gw, podName, browser.DisplayProbeShellCommand(display))
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("probe display size: %w", err)
+	}
+	width, height, err := browser.ParseXdpyinfoDimensions(probeOut)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("probe display size: %w", err)
 	}
 
 	args := browser.BuildFFmpegX11GrabArgs(display, width, height, outPath)
@@ -53,7 +63,7 @@ fi
 		shellQuote(recordingPIDFile), shellQuote(recordingLogFile))
 
 	if out, err := execShell(ctx, gw, podName, startScript); err != nil {
-		return nil, fmt.Errorf("start ffmpeg: %w (output: %s)", err, out)
+		return nil, 0, 0, fmt.Errorf("start ffmpeg: %w (output: %s)", err, out)
 	}
 
 	return func() error {
@@ -86,7 +96,7 @@ fi
 		}
 		time.Sleep(100 * time.Millisecond)
 		return nil
-	}, nil
+	}, width, height, nil
 }
 
 func execShell(ctx context.Context, gw GatewayClient, podName, script string) (string, error) {

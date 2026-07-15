@@ -46,10 +46,41 @@ func TestSanitizeRecordingFilename(t *testing.T) {
 	}
 }
 
+func TestParseXdpyinfoDimensions(t *testing.T) {
+	tests := []struct {
+		in      string
+		wantW   int
+		wantH   int
+		wantErr bool
+	}{
+		{"1728x996", 1728, 996, false},
+		{"  dimensions:    1920x1080 pixels (508x286 millimeters)", 1920, 1080, false},
+		{"", 0, 0, true},
+		{"no size here", 0, 0, true},
+		{"1x1", 0, 0, true}, // implausible
+	}
+	for _, tt := range tests {
+		w, h, err := ParseXdpyinfoDimensions(tt.in)
+		if tt.wantErr {
+			if err == nil {
+				t.Errorf("ParseXdpyinfoDimensions(%q) expected error", tt.in)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("ParseXdpyinfoDimensions(%q): %v", tt.in, err)
+			continue
+		}
+		if w != tt.wantW || h != tt.wantH {
+			t.Errorf("ParseXdpyinfoDimensions(%q) = %dx%d, want %dx%d", tt.in, w, h, tt.wantW, tt.wantH)
+		}
+	}
+}
+
 func TestBuildFFmpegX11GrabArgs(t *testing.T) {
-	args := BuildFFmpegX11GrabArgs(":0", 1920, 1080, "/tmp/out.mp4")
+	args := BuildFFmpegX11GrabArgs(":0", 1728, 996, "/tmp/out.mp4")
 	joined := strings.Join(args, " ")
-	for _, want := range []string{"ffmpeg", "x11grab", "1920x1080", ":0.0", "libx264", "/tmp/out.mp4"} {
+	for _, want := range []string{"ffmpeg", "x11grab", "1728x996", ":0.0", "libx264", "/tmp/out.mp4"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args missing %q: %v", want, args)
 		}
@@ -131,19 +162,18 @@ func TestStartRecording_SandboxPathViaHook(t *testing.T) {
 	m.SandboxEnabled = true
 	m.containerName = "sess-ctr"
 
-	var gotDisplay string
+	var gotDisplay, gotPath string
 	var gotW, gotH int
-	var gotPath string
 	var stopped bool
 
-	m.ContainerStartRecordingFunc = func(containerName, display string, width, height int, outPath string) (func() error, error) {
+	m.ContainerStartRecordingFunc = func(containerName, display, outPath string) (func() error, int, int, error) {
 		gotDisplay = display
-		gotW, gotH = width, height
 		gotPath = outPath
+		gotW, gotH = 1728, 996
 		return func() error {
 			stopped = true
 			return nil
-		}, nil
+		}, gotW, gotH, nil
 	}
 
 	// Exercise the sandbox start branch without GetOrLaunch / rod.
@@ -157,15 +187,15 @@ func TestStartRecording_SandboxPathViaHook(t *testing.T) {
 		m.mu.Unlock()
 		t.Fatal(err)
 	}
-	stopFn, err := m.ContainerStartRecordingFunc(m.containerName, containerDisplay, m.config.ViewportWidth, m.config.ViewportHeight, outPath)
+	stopFn, width, height, err := m.ContainerStartRecordingFunc(m.containerName, containerDisplay, outPath)
 	if err != nil {
 		m.mu.Unlock()
 		t.Fatal(err)
 	}
-	m.recording = &activeRecording{path: outPath, startedAt: time.Now(), stopFn: stopFn}
+	m.recording = &activeRecording{path: outPath, width: width, height: height, startedAt: time.Now(), stopFn: stopFn}
 	m.mu.Unlock()
 
-	if gotDisplay != ":0" || gotW != 1920 || gotH != 1080 {
+	if gotDisplay != ":0" || gotW != 1728 || gotH != 996 {
 		t.Fatalf("start args display=%q size=%dx%d", gotDisplay, gotW, gotH)
 	}
 	if gotPath != "/tmp/astonish-recordings/demo.mp4" {
@@ -204,5 +234,12 @@ func TestRecordingOutputPath_LocalCreatesDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(tmp, "recordings")); err != nil {
 		t.Fatalf("recordings dir not created: %v", err)
+	}
+}
+
+func TestDisplayProbeShellCommand(t *testing.T) {
+	cmd := DisplayProbeShellCommand(":0")
+	if !strings.Contains(cmd, "xdpyinfo") || !strings.Contains(cmd, "DISPLAY=':0'") {
+		t.Fatalf("unexpected probe command: %s", cmd)
 	}
 }

@@ -128,10 +128,12 @@ Browser tools are organized into functional groups:
 Browser display recording uses **ffmpeg `x11grab`** of the real X display (KasmVNC `:0` in sandbox, Xvfb/`DISPLAY` locally) — not CDP screencast.
 
 Invariants:
-- Capture size is the **launch-time** viewport (default **1920×1080**): KasmVNC `-geometry`, Chrome `--window-size`, and CDP `SetViewport` must match. `browser_resize` only changes CDP metrics and does **not** resize the recorded display.
+- Capture size is the **live X root window** (probed via `xdpyinfo` at record start), not config/`browser_resize`. The start tool returns the actual `width`/`height`.
+- KasmVNC must **not** client-resize the desktop: `desktop.allow_resize: false` in `kasmvnc.yaml` and `-AcceptSetDesktopSize 0` on launch. Otherwise Studio’s noVNC iframe shrinks the framebuffer to the host canvas (e.g. ~1728×996 on a Mac) and a 1920×1080 capture request fails.
+- Launch geometry stays at the configured viewport (default **1920×1080**): KasmVNC `-geometry`, Chrome `--window-size`, and CDP `SetViewport` should match. `browser_resize` only changes CDP metrics.
 - Only one recording at a time; `Cleanup` / reconnect finalize an orphan recording.
 - Sandbox recordings write to `/tmp/astonish-recordings/*.mp4` (downloadable via sandbox PullFile). Local recordings write under `recordings/`.
-- Local Linux requires `ffmpeg` (+ Xvfb when headed without a physical display). Sandbox images install ffmpeg with the browser stack.
+- Local Linux requires `ffmpeg` + `xdpyinfo` (`x11-utils`) (+ Xvfb when headed without a physical display). Sandbox images install those with the browser stack.
 
 ### Screenshot Handling
 

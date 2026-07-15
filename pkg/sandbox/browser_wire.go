@@ -64,8 +64,8 @@ func WireIncusBrowserManager(mgr *browser.Manager, client *IncusClient, touchAct
 		dialer := &incus.ContainerDialer{Client: client}
 		return dialer.Dial(containerName, port)
 	}
-	mgr.ContainerStartRecordingFunc = func(containerName, display string, width, height int, outPath string) (func() error, error) {
-		return incus.StartRecordingInContainer(client, containerName, display, width, height, outPath)
+	mgr.ContainerStartRecordingFunc = func(containerName, display, outPath string) (func() error, int, int, error) {
+		return incus.StartRecordingInContainer(client, containerName, display, outPath)
 	}
 	if touchActivity != nil {
 		mgr.ActivityTouchFunc = touchActivity

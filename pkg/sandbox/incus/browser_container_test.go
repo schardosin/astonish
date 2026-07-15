@@ -95,6 +95,8 @@ func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 			assertContainsStr(t, flat, "kasmvnc.yaml", "KasmVNC config file creation")
 			assertContainsStr(t, flat, "require_ssl: false", "SSL disabled in KasmVNC config")
 			assertContainsStr(t, flat, "use_ipv6: false", "IPv6 disabled in KasmVNC config")
+			assertContainsStr(t, flat, "allow_resize: false", "client desktop resize disabled")
+			assertContainsStr(t, flat, "x11-utils", "x11-utils for xdpyinfo recording probe")
 
 			// SSL cert is now generated with openssl directly into the browser
 			// user's .vnc directory (avoids unprivileged container restrictions

@@ -250,7 +250,8 @@ type Manager struct {
 	ActivityTouchFunc func(sessionID string)
 
 	// ContainerStartRecordingFunc starts ffmpeg x11grab inside the session
-	// container. Wired by the sandbox package when SandboxEnabled is true.
+	// container after probing the live X display size. Wired by the sandbox
+	// package when SandboxEnabled is true.
 	ContainerStartRecordingFunc ContainerStartRecordingFunc
 
 	// SandboxEnabled is set to true by the launcher when sandbox is available.

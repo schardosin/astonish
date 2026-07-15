@@ -83,6 +83,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libjpeg-turbo8 libwebp-dev libssl3 \
       xfonts-base xfonts-75dpi xfonts-100dpi \
       x11-xserver-utils \
+      x11-utils \
     && rm -rf /var/lib/apt/lists/*
 
 # ===========================================================================
@@ -136,6 +137,11 @@ RUN mkdir -p /etc/kasmvnc && printf '%s\n' \
       '    require_ssl: false' \
       '    pem_certificate: /home/browser/.vnc/snakeoil.pem' \
       '    pem_key: /home/browser/.vnc/snakeoil.key' \
+      'desktop:' \
+      '  allow_resize: false' \
+      '  resolution:' \
+      '    width: 1920' \
+      '    height: 1080' \
       'user_session:' \
       '  concurrent_connections_prompt: false' \
       'logging:' \

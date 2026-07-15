@@ -269,6 +269,7 @@ if ! proc_running 'Xkasmvnc.*:%s'; then
     -auth /tmp/.Xauthority \
     -AlwaysShared \
     -DisableBasicAuth \
+    -AcceptSetDesktopSize 0 \
     -SecurityTypes None \
     -interface 0.0.0.0 \
     -publicIP 127.0.0.1 \

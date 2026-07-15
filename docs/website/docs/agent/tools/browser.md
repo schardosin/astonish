@@ -90,11 +90,11 @@ Configure browser settings via `astonish config edit` or Studio Settings.
 
 | Tool | Description |
 |------|-------------|
-| `browser_start_recording` | Start recording the browser display to an MP4 (ffmpeg x11grab) |
+| `browser_start_recording` | Start recording the browser display to an MP4 (ffmpeg x11grab); returns path + capture width/height |
 | `browser_stop_recording` | Stop recording and finalize the MP4 (emitted as a session artifact) |
 | `browser_recording_status` | Check whether a recording is in progress |
 
-Recording uses the real display at the configured viewport (default **1920×1080**). Call `browser_start_recording` before a scripted demo, then `browser_stop_recording` when finished. Local mode needs `ffmpeg` installed; sandboxes include it with the browser image.
+Recording captures the **live X display** (probed via `xdpyinfo`). KasmVNC is locked against client resize so Studio’s VNC view does not shrink the session below the configured viewport (default **1920×1080**). Call `browser_start_recording` before a scripted demo, then `browser_stop_recording` when finished. Local mode needs `ffmpeg` + `xdpyinfo`; sandboxes include them with the browser image.
 
 ## Example Workflow
 

@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -24,11 +25,21 @@ const (
 // safeRecordingName matches basename filenames we allow the agent to supply.
 var safeRecordingName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// xdpyinfoDimensionsRe matches "1920x1080" (optionally with surrounding text).
+var xdpyinfoDimensionsRe = regexp.MustCompile(`(\d{2,5})x(\d{2,5})`)
+
 // RecordingOptions configures StartRecording.
 type RecordingOptions struct {
 	// Filename is an optional basename (e.g. "demo.mp4"). Path separators and
 	// unsafe characters are rejected. Empty uses a timestamped default.
 	Filename string
+}
+
+// StartRecordingResult is returned by StartRecording.
+type StartRecordingResult struct {
+	Path   string `json:"path"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 // RecordingResult is returned by StopRecording.
@@ -48,82 +59,88 @@ type RecordingStatus struct {
 // activeRecording tracks an in-progress capture.
 type activeRecording struct {
 	path      string
+	width     int
+	height    int
 	startedAt time.Time
 	stopFn    func() error
 }
 
 // ContainerStartRecordingFunc starts ffmpeg x11grab inside the session container.
-// The returned stop function must gracefully end the capture (SIGINT/'q') and
-// wait for the muxer to finalize the MP4.
-type ContainerStartRecordingFunc func(containerName, display string, width, height int, outPath string) (stop func() error, err error)
+// The implementation must probe the live X display size and start capture at
+// that size (not the configured viewport). Returns the probed dimensions.
+type ContainerStartRecordingFunc func(containerName, display, outPath string) (stop func() error, width, height int, err error)
 
 // startLocalRecordingFunc is the local (host) ffmpeg starter. Overridable in tests.
 var startLocalRecordingFunc = startLocalRecording
 
+// probeLocalDisplayFunc is overridable in tests.
+var probeLocalDisplayFunc = probeLocalDisplaySize
+
 // StartRecording begins capturing the browser display to an MP4 file.
+// Capture size is the live X root window (via xdpyinfo), not config viewport.
 // The browser must already be launched (headed with a display). Only one
 // recording may be active at a time.
-func (m *Manager) StartRecording(opts RecordingOptions) (path string, err error) {
+func (m *Manager) StartRecording(opts RecordingOptions) (StartRecordingResult, error) {
 	if m == nil {
-		return "", fmt.Errorf("browser Manager is nil")
+		return StartRecordingResult{}, fmt.Errorf("browser Manager is nil")
 	}
 
 	// Ensure browser is up before taking the lock for recording state.
 	if _, err := m.GetOrLaunch(); err != nil {
-		return "", fmt.Errorf("browser must be launched before recording: %w", err)
+		return StartRecordingResult{}, fmt.Errorf("browser must be launched before recording: %w", err)
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.recording != nil {
-		return "", fmt.Errorf("recording already in progress at %s", m.recording.path)
-	}
-
-	width := m.config.ViewportWidth
-	height := m.config.ViewportHeight
-	if width <= 0 {
-		width = 1920
-	}
-	if height <= 0 {
-		height = 1080
+		return StartRecordingResult{}, fmt.Errorf("recording already in progress at %s", m.recording.path)
 	}
 
 	outPath, err := m.recordingOutputPathLocked(opts.Filename)
 	if err != nil {
-		return "", err
+		return StartRecordingResult{}, err
 	}
 
-	var stopFn func() error
+	var (
+		stopFn        func() error
+		width, height int
+	)
 	if m.SandboxEnabled {
 		if m.ContainerStartRecordingFunc == nil {
-			return "", fmt.Errorf("sandbox recording is not wired (ContainerStartRecordingFunc is nil)")
+			return StartRecordingResult{}, fmt.Errorf("sandbox recording is not wired (ContainerStartRecordingFunc is nil)")
 		}
 		if m.containerName == "" {
-			return "", fmt.Errorf("sandbox browser is not running in a container")
+			return StartRecordingResult{}, fmt.Errorf("sandbox browser is not running in a container")
 		}
-		stopFn, err = m.ContainerStartRecordingFunc(m.containerName, containerDisplay, width, height, outPath)
+		stopFn, width, height, err = m.ContainerStartRecordingFunc(m.containerName, containerDisplay, outPath)
 		if err != nil {
-			return "", fmt.Errorf("failed to start container recording: %w", err)
+			return StartRecordingResult{}, fmt.Errorf("failed to start container recording: %w", err)
 		}
 	} else {
 		display := m.displayForRecordingLocked()
 		if display == "" {
-			return "", fmt.Errorf("recording requires a headed browser with a display (set DISPLAY or run with Xvfb); headless capture is not supported")
+			return StartRecordingResult{}, fmt.Errorf("recording requires a headed browser with a display (set DISPLAY or run with Xvfb); headless capture is not supported")
+		}
+		width, height, err = probeLocalDisplayFunc(display)
+		if err != nil {
+			return StartRecordingResult{}, fmt.Errorf("failed to probe display size: %w", err)
 		}
 		stopFn, err = startLocalRecordingFunc(display, width, height, outPath)
 		if err != nil {
-			return "", fmt.Errorf("failed to start local recording: %w", err)
+			return StartRecordingResult{}, fmt.Errorf("failed to start local recording: %w", err)
 		}
 	}
 
 	m.recording = &activeRecording{
 		path:      outPath,
+		width:     width,
+		height:    height,
 		startedAt: time.Now(),
 		stopFn:    stopFn,
 	}
 	m.logger.Printf("recording started: %s (%dx%d)", outPath, width, height)
-	return outPath, nil
+	return StartRecordingResult{Path: outPath, Width: width, Height: height}, nil
 }
 
 // StopRecording ends the active capture and returns the finalized file metadata.
@@ -164,8 +181,6 @@ func (m *Manager) StopRecording() (RecordingResult, error) {
 	}, nil
 }
 
-// RecordingStatusLocked returns whether a recording is active. Does not lock;
-// callers that already hold m.mu should use this. Prefer RecordingStatus().
 func (m *Manager) recordingStatusLocked() RecordingStatus {
 	if m.recording == nil {
 		return RecordingStatus{Recording: false}
@@ -245,6 +260,52 @@ func sanitizeRecordingFilename(filename string) (string, error) {
 	return name, nil
 }
 
+// ParseXdpyinfoDimensions extracts WxH from xdpyinfo output (full or awk'd).
+func ParseXdpyinfoDimensions(output string) (int, int, error) {
+	m := xdpyinfoDimensionsRe.FindStringSubmatch(strings.TrimSpace(output))
+	if len(m) != 3 {
+		return 0, 0, fmt.Errorf("no dimensions in xdpyinfo output: %q", strings.TrimSpace(output))
+	}
+	w, err := strconv.Atoi(m[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	h, err := strconv.Atoi(m[2])
+	if err != nil {
+		return 0, 0, err
+	}
+	if w < 16 || h < 16 || w > 16384 || h > 16384 {
+		return 0, 0, fmt.Errorf("implausible display size %dx%d", w, h)
+	}
+	return w, h, nil
+}
+
+// DisplayProbeShellCommand returns a shell one-liner that prints WxH for DISPLAY.
+// Used by sandbox recording helpers so Incus/OpenShell stay consistent.
+func DisplayProbeShellCommand(display string) string {
+	return fmt.Sprintf("DISPLAY=%s xdpyinfo 2>/dev/null | awk '/dimensions:/{print $2; exit}'", shellQuoteForDisplay(display))
+}
+
+func shellQuoteForDisplay(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func probeLocalDisplaySize(display string) (int, int, error) {
+	bin, err := exec.LookPath("xdpyinfo")
+	if err != nil {
+		return 0, 0, fmt.Errorf("xdpyinfo not found (install x11-utils): %w", err)
+	}
+	cmd := exec.Command(bin, "-display", display)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return 0, 0, fmt.Errorf("xdpyinfo %s: %w (%s)", display, err, strings.TrimSpace(string(out)))
+	}
+	return ParseXdpyinfoDimensions(string(out))
+}
+
 // startLocalRecording launches ffmpeg x11grab against the given DISPLAY.
 func startLocalRecording(display string, width, height int, outPath string) (func() error, error) {
 	bin, err := exec.LookPath("ffmpeg")
@@ -255,23 +316,8 @@ func startLocalRecording(display string, width, height int, outPath string) (fun
 		return nil, err
 	}
 
-	input := display
-	if !strings.Contains(input, ".") {
-		input = input + ".0"
-	}
-
-	cmd := exec.Command(bin,
-		"-y",
-		"-f", "x11grab",
-		"-video_size", fmt.Sprintf("%dx%d", width, height),
-		"-framerate", fmt.Sprintf("%d", defaultRecordingFPS),
-		"-i", input,
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-crf", "23",
-		"-pix_fmt", "yuv420p",
-		outPath,
-	)
+	args := BuildFFmpegX11GrabArgs(display, width, height, outPath)
+	cmd := exec.Command(bin, args[1:]...) // skip "ffmpeg" — Command uses bin
 	cmd.Env = append(os.Environ(), "DISPLAY="+display)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {

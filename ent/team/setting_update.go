@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/predicate"
-	"github.com/schardosin/astonish/ent/team/setting"
+	"github.com/SAP/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/setting"
 )
 
 // SettingUpdate is the builder for updating Setting entities.

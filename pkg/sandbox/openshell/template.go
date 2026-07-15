@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // ---------------------------------------------------------------------------

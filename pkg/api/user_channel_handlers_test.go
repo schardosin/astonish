@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // memLinkCodeStore is a minimal in-memory store.LinkCodeStore for unit tests.

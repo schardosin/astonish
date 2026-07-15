@@ -49,14 +49,14 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store/pgutil"
+	"github.com/SAP/astonish/tests/e2eboot"
 
 	// Register sandbox backends so Configure Base, MCP stdio discovery,
 	// and other sandbox-dependent E2E features work.
-	_ "github.com/schardosin/astonish/pkg/sandbox/k8s"
-	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
+	_ "github.com/SAP/astonish/pkg/sandbox/k8s"
+	_ "github.com/SAP/astonish/pkg/sandbox/mock"
 )
 
 func main() {

@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	personalapp "github.com/schardosin/astonish/ent/personal/app"
-	teament "github.com/schardosin/astonish/ent/team"
-	teamapp "github.com/schardosin/astonish/ent/team/app"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	personalapp "github.com/SAP/astonish/ent/personal/app"
+	teament "github.com/SAP/astonish/ent/team"
+	teamapp "github.com/SAP/astonish/ent/team/app"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func derefOrEmpty(p *string) string {

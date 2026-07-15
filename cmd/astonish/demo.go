@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/schardosin/astonish/pkg/demo"
+	"github.com/SAP/astonish/pkg/demo"
 )
 
 func handleDemoCommand(args []string) error {

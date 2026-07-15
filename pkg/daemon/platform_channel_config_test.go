@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
 )
 
 func TestLoadChannelsConfigFromDB_NilBackend(t *testing.T) {

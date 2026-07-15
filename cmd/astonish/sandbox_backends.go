@@ -21,14 +21,14 @@ package astonish
 import (
 	// Register the k8s backend with sandbox.NewBackend so that
 	// configurations setting backend=k8s succeed.
-	_ "github.com/schardosin/astonish/pkg/sandbox/k8s"
+	_ "github.com/SAP/astonish/pkg/sandbox/k8s"
 
 	// Register the mock backend so tests and demos that request
 	// backend=mock succeed without a separate build tag.
-	_ "github.com/schardosin/astonish/pkg/sandbox/mock"
+	_ "github.com/SAP/astonish/pkg/sandbox/mock"
 
 	// Register the openshell backend so configurations setting
 	// backend=openshell succeed. Links the NVIDIA OpenShell gRPC
 	// client, gateway connection, and init-container support.
-	_ "github.com/schardosin/astonish/pkg/sandbox/openshell"
+	_ "github.com/SAP/astonish/pkg/sandbox/openshell"
 )

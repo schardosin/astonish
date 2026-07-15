@@ -6,10 +6,10 @@ import (
 
 	"github.com/google/uuid"
 
-	orgent "github.com/schardosin/astonish/ent/org"
-	"github.com/schardosin/astonish/ent/org/team"
-	"github.com/schardosin/astonish/ent/org/teammembership"
-	"github.com/schardosin/astonish/pkg/store"
+	orgent "github.com/SAP/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org/team"
+	"github.com/SAP/astonish/ent/org/teammembership"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgTeamStore implements store.TeamManagementStore using the org Ent client.

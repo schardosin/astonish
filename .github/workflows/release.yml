@@ -89,7 +89,7 @@ jobs:
           go clean -cache
           
           # Build with fresh embed
-          go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ github.ref_name }}" -o astonish-${{ matrix.suffix }} .
+          go build -ldflags="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${{ github.ref_name }}" -o astonish-${{ matrix.suffix }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -102,7 +102,7 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish'
+    if: github.repository == 'SAP/astonish'
 
     steps:
       - name: Download all artifacts

@@ -113,7 +113,7 @@ RUN CGO_ENABLED=0 go run ./cmd/astonish-sandbox-entrypoint-script \
 # Dockerfile; version is left as "sandbox-base" because this is an
 # infrastructure image, not a shippable daemon build.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
-      -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=sandbox-base" \
+      -ldflags="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=sandbox-base" \
       -o /tmp/astonish \
       .
 
@@ -131,7 +131,7 @@ FROM debian:bookworm-slim
 # give image-signing tools something stable to chew on.
 LABEL org.opencontainers.image.title="astonish-sandbox-base" \
       org.opencontainers.image.description="Minimal base image for Astonish K8s sandbox pods" \
-      org.opencontainers.image.source="https://github.com/schardosin/astonish" \
+      org.opencontainers.image.source="https://github.com/SAP/astonish" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENV DEBIAN_FRONTEND=noninteractive

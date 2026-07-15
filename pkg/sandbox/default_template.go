@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // DefaultTemplateResolver resolves "the template a new chat session should

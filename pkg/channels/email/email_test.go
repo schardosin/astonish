@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	emailpkg "github.com/schardosin/astonish/pkg/email"
-	"github.com/schardosin/astonish/pkg/session"
+	emailpkg "github.com/SAP/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/session"
 )
 
 func TestExtractEmailAddr(t *testing.T) {

@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/schardosin/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform"
 )
 
 // The DeviceSessionFunc type is an adapter to allow the use of ordinary

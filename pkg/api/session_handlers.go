@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/apps"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/pdfgen"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/apps"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/pdfgen"
+	"github.com/SAP/astonish/pkg/sandbox"
+	persistentsession "github.com/SAP/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/session"
 )
 

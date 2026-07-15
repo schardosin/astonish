@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/platformskill"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformskill"
 )
 
 // PlatformSkill is the model entity for the PlatformSkill schema.

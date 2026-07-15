@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
 )
 
 // TestResolveChannelUser_InjectsAllSkillStores verifies that the channel

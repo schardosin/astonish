@@ -7,10 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/skill"
-	"github.com/schardosin/astonish/ent/team/skillfile"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/skill"
+	"github.com/SAP/astonish/ent/team/skillfile"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // teamSkillStore implements store.SkillStore using the Ent team client.

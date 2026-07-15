@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/scheduler"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

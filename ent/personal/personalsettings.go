@@ -9,8 +9,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/personal/personalsettings"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/personal/personalsettings"
 )
 
 // PersonalSettings is the model entity for the PersonalSettings schema.

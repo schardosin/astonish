@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/session"
 	"gopkg.in/yaml.v3"
 )

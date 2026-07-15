@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // platformAuthSettingsResponse is returned by GET /api/platform/admin/auth-settings.

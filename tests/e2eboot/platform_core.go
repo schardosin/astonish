@@ -17,12 +17,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/launcher"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
+	"github.com/SAP/astonish/pkg/api"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/launcher"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store/pgutil"
 )
 
 // CoreLogger is the minimal logger interface BootstrapPlatformCore needs.

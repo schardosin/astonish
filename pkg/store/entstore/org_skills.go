@@ -7,10 +7,10 @@ import (
 
 	"github.com/google/uuid"
 
-	orgent "github.com/schardosin/astonish/ent/org"
-	"github.com/schardosin/astonish/ent/org/orgskill"
-	"github.com/schardosin/astonish/ent/org/orgskillfile"
-	"github.com/schardosin/astonish/pkg/store"
+	orgent "github.com/SAP/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org/orgskill"
+	"github.com/SAP/astonish/ent/org/orgskillfile"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgSkillStore implements store.SkillStore for org-level skills.

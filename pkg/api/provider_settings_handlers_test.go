@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
 )
 
 // TestSavePlatformProviders_PreservesChannels verifies that saving provider

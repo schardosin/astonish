@@ -7,9 +7,9 @@ import (
 
 	"github.com/google/uuid"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/userchannel"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/userchannel"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // userChannelStore implements store.UserChannelStore using the Ent platform client.

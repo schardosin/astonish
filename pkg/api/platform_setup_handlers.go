@@ -17,10 +17,10 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store/pgutil"
 )
 
 // PlatformInitRequest is the request body for POST /api/platform/init.

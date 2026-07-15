@@ -7,11 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/common"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/provider"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
 )

@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/devicesession"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/devicesession"
 )
 
 // DeviceSessionStore provides CRUD operations for device sessions using the

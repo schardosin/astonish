@@ -5,18 +5,18 @@ package org
 import (
 	"time"
 
+	"github.com/SAP/astonish/ent/org/orgapp"
+	"github.com/SAP/astonish/ent/org/orgauditlog"
+	"github.com/SAP/astonish/ent/org/orgencryptionkey"
+	"github.com/SAP/astonish/ent/org/orgmcpserver"
+	"github.com/SAP/astonish/ent/org/orgmemory"
+	"github.com/SAP/astonish/ent/org/orgnetworkpolicy"
+	"github.com/SAP/astonish/ent/org/orgskill"
+	"github.com/SAP/astonish/ent/org/orgskillfile"
+	"github.com/SAP/astonish/ent/org/schema"
+	"github.com/SAP/astonish/ent/org/team"
+	"github.com/SAP/astonish/ent/org/teammembership"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgapp"
-	"github.com/schardosin/astonish/ent/org/orgauditlog"
-	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
-	"github.com/schardosin/astonish/ent/org/orgmcpserver"
-	"github.com/schardosin/astonish/ent/org/orgmemory"
-	"github.com/schardosin/astonish/ent/org/orgnetworkpolicy"
-	"github.com/schardosin/astonish/ent/org/orgskill"
-	"github.com/schardosin/astonish/ent/org/orgskillfile"
-	"github.com/schardosin/astonish/ent/org/schema"
-	"github.com/schardosin/astonish/ent/org/team"
-	"github.com/schardosin/astonish/ent/org/teammembership"
 )
 
 // The init function reads all schema descriptors with runtime code

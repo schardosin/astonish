@@ -8,7 +8,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-rod/rod/lib/input"
 	"github.com/go-rod/rod/lib/proto"
-	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/browser"
 	"google.golang.org/adk/tool"
 )
 

@@ -78,7 +78,7 @@ function extractReason(pkg, test) {
 const raw = createWriteStream(outputFile)
 
 function shortPackage(pkg) {
-  // github.com/schardosin/astonish/tests/e2e/chat_core -> tests/e2e/chat_core
+  // github.com/SAP/astonish/tests/e2e/chat_core -> tests/e2e/chat_core
   const idx = pkg.indexOf('/tests/e2e/')
   return idx >= 0 ? pkg.slice(idx + 1) : pkg
 }

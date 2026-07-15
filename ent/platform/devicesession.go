@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/platform/devicesession"
+	"github.com/SAP/astonish/ent/platform/devicesession"
 )
 
 // DeviceSession is the model entity for the DeviceSession schema.

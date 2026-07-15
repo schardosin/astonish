@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/sandbox/openshell"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // OpenShellProviderBinding tracks providers attached to a fleet sandbox session.

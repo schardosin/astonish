@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/provider/llmerror"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestTruncate(t *testing.T) {

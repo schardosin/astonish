@@ -7,9 +7,9 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/flowstore"
+	"github.com/SAP/astonish/pkg/mcpstore"
 )
 
 // TestResolveMCPDependencies_ExactNameMatching verifies that the dependency

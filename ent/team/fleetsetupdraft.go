@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/fleetsetupdraft"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
 )
 
 // FleetSetupDraft is the model entity for the FleetSetupDraft schema.

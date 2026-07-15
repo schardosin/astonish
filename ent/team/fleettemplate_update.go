@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleettemplate"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleettemplate"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // FleetTemplateUpdate is the builder for updating FleetTemplate entities.

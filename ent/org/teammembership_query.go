@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/predicate"
+	"github.com/SAP/astonish/ent/org/team"
+	"github.com/SAP/astonish/ent/org/teammembership"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/predicate"
-	"github.com/schardosin/astonish/ent/org/team"
-	"github.com/schardosin/astonish/ent/org/teammembership"
 )
 
 // TeamMembershipQuery is the builder for querying TeamMembership entities.

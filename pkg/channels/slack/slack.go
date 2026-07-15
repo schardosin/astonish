@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/channels"
 
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"

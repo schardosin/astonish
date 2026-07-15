@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleetplan"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetplan"
 )
 
 // FleetPlanCreate is the builder for creating a FleetPlan entity.

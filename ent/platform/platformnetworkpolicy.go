@@ -9,8 +9,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/platformnetworkpolicy"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformnetworkpolicy"
 )
 
 // PlatformNetworkPolicy is the model entity for the PlatformNetworkPolicy schema.

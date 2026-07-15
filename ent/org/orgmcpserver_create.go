@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgmcpserver"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgmcpserver"
 )
 
 // OrgMCPServerCreate is the builder for creating a OrgMCPServer entity.

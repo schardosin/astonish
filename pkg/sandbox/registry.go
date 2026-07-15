@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // SessionEntry maps a session to its container. This is the legacy in-memory

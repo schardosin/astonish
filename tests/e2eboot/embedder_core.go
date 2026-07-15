@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/schardosin/astonish/pkg/memory"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/memory"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // initEmbedFuncCore initializes the local Hugot embedding function and sets it

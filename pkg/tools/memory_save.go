@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/mcpstore"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/flowstore"
+	"github.com/SAP/astonish/pkg/mcpstore"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // MCPStoreListResponse is the response for GET /api/mcp-store

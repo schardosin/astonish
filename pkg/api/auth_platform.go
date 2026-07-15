@@ -20,9 +20,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mailer"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/mailer"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgResolver is the subset of PGStore used for resolving org data stores.

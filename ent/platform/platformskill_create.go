@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/platformskill"
+	"github.com/SAP/astonish/ent/platform/platformskillfile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformskill"
-	"github.com/schardosin/astonish/ent/platform/platformskillfile"
 )
 
 // PlatformSkillCreate is the builder for creating a PlatformSkill entity.

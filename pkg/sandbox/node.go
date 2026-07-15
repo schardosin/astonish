@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // nodeRequest mirrors cmd/astonish.NodeRequest for the host side.

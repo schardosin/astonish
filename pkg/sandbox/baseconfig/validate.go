@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // validEngines is the set of allowed browser engine values.

@@ -1645,8 +1645,8 @@ const file_sandbox_proto_rawDesc = "" +
 	"\fPolicySource\x12\x1d\n" +
 	"\x19POLICY_SOURCE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15POLICY_SOURCE_SANDBOX\x10\x01\x12\x18\n" +
-	"\x14POLICY_SOURCE_GLOBAL\x10\x02B\xe0\x01\n" +
-	"\x18com.openshell.sandbox.v1B\fSandboxProtoP\x01ZDgithub.com/schardosin/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03OSX\xaa\x02\x14Openshell.Sandbox.V1\xca\x02\x14Openshell\\Sandbox\\V1\xe2\x02 Openshell\\Sandbox\\V1\\GPBMetadata\xea\x02\x16Openshell::Sandbox::V1b\x06proto3"
+	"\x14POLICY_SOURCE_GLOBAL\x10\x02B\xd9\x01\n" +
+	"\x18com.openshell.sandbox.v1B\fSandboxProtoP\x01Z=github.com/SAP/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03OSX\xaa\x02\x14Openshell.Sandbox.V1\xca\x02\x14Openshell\\Sandbox\\V1\xe2\x02 Openshell\\Sandbox\\V1\\GPBMetadata\xea\x02\x16Openshell::Sandbox::V1b\x06proto3"
 
 var (
 	file_sandbox_proto_rawDescOnce sync.Once

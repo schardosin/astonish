@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strings"
 
-	adrill "github.com/schardosin/astonish/pkg/drill"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/tools"
+	adrill "github.com/SAP/astonish/pkg/drill"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // resolveDrillAddWizard loads a suite from the team-scoped FlowStore and

@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // Define styles

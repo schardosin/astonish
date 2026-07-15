@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/pendinglinkcode"
+	"github.com/SAP/astonish/ent/platform/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
-	"github.com/schardosin/astonish/ent/platform/predicate"
 )
 
 // PendingLinkCodeUpdate is the builder for updating PendingLinkCode entities.

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/provider/llmerror"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/agent/llmagent"
 	"google.golang.org/adk/model"

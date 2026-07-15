@@ -60,7 +60,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // builderPodNamePrefix is the stable prefix for template-builder pods.

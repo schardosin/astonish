@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // EmbeddingFunc is a function that embeds a single text string into a vector.

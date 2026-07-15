@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
+	incus "github.com/SAP/astonish/pkg/sandbox/incus"
+	persistentsession "github.com/SAP/astonish/pkg/session"
 )
 
 // validTemplateName matches only safe template names: lowercase alphanumeric,

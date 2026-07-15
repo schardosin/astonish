@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/app"
-	"github.com/schardosin/astonish/ent/personal/appstate"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/app"
+	"github.com/SAP/astonish/ent/personal/appstate"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // personalAppStore implements store.AppStore for personal scope.

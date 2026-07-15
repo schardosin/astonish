@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlanFromSetupBuildOptions configures plan creation from a setup build.

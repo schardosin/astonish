@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // secretKeyMapping defines which provider config keys contain sensitive values

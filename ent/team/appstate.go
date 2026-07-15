@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/appstate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/appstate"
 )
 
 // AppState is the model entity for the AppState schema.

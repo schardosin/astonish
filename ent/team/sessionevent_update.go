@@ -10,9 +10,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/predicate"
-	"github.com/schardosin/astonish/ent/team/session"
-	"github.com/schardosin/astonish/ent/team/sessionevent"
+	"github.com/SAP/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/session"
+	"github.com/SAP/astonish/ent/team/sessionevent"
 )
 
 // SessionEventUpdate is the builder for updating SessionEvent entities.

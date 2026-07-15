@@ -45,9 +45,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"

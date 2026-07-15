@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox/incus"
 )
 
 // DefaultSandboxConfig returns sensible defaults for the sandbox system.

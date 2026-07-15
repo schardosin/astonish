@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/user"
+	"github.com/SAP/astonish/ent/platform/userchannel"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/predicate"
-	"github.com/schardosin/astonish/ent/platform/user"
-	"github.com/schardosin/astonish/ent/platform/userchannel"
 )
 
 // UserChannelQuery is the builder for querying UserChannel entities.

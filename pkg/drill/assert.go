@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // AssertionResult holds the outcome of a single assertion evaluation.

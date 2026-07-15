@@ -6,7 +6,7 @@ Taps are git-based repositories of community and organization flows. They work l
 
 ```bash
 # Add a community tap (supports shorthand or full URL)
-astonish tap add schardosin/astonish-flows
+astonish tap add SAP/astonish-flows
 
 # Add a private org tap (uses git credentials)
 astonish tap add https://github.com/myorg/astonish-flows

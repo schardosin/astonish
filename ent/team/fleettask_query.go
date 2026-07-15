@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleettask"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleettask"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // FleetTaskQuery is the builder for querying FleetTask entities.

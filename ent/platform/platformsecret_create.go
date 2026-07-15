@@ -11,7 +11,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/platformsecret"
+	"github.com/SAP/astonish/ent/platform/platformsecret"
 )
 
 // PlatformSecretCreate is the builder for creating a PlatformSecret entity.

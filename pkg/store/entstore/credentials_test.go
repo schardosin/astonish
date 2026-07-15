@@ -11,12 +11,12 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/credential"
-	teament "github.com/schardosin/astonish/ent/team"
-	teamcredential "github.com/schardosin/astonish/ent/team/credential"
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/credential"
+	teament "github.com/SAP/astonish/ent/team"
+	teamcredential "github.com/SAP/astonish/ent/team/credential"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/store"
 
 	_ "modernc.org/sqlite"
 )

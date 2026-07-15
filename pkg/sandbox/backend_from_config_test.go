@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // TestBackendFromAppConfig_NilAppConfig pins the nil-input error path.

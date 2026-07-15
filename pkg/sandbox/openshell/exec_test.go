@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // seedSession inserts a test session and returns its sandbox ID.

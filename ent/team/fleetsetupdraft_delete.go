@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/fleetsetupdraft"
-	"github.com/schardosin/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/fleetsetupdraft"
+	"github.com/SAP/astonish/ent/team/predicate"
 )
 
 // FleetSetupDraftDelete is the builder for deleting a FleetSetupDraft entity.

@@ -8,11 +8,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/launcher"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/launcher"
+	"github.com/SAP/astonish/pkg/sandbox"
+	persistentsession "github.com/SAP/astonish/pkg/session"
 )
 
 // SessionPinStore is the minimal surface the chat command needs to persist

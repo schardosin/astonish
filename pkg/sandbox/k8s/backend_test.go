@@ -28,8 +28,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // newRegistry builds a SessionRegistry backed by the sandbox package's

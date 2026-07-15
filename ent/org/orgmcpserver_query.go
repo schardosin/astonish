@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgmcpserver"
+	"github.com/SAP/astonish/ent/org/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgmcpserver"
-	"github.com/schardosin/astonish/ent/org/predicate"
 )
 
 // OrgMCPServerQuery is the builder for querying OrgMCPServer entities.

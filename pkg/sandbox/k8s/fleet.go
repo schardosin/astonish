@@ -30,8 +30,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // labelFleetKey records the caller-supplied FleetKey on the pod so

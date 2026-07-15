@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/platformskillfile"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/platformskillfile"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // PlatformSkillFileDelete is the builder for deleting a PlatformSkillFile entity.

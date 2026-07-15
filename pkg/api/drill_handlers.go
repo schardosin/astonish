@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 	"gopkg.in/yaml.v3"
 )
 

@@ -13,12 +13,12 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/tools"
-	"github.com/schardosin/astonish/web"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/api"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
+	"github.com/SAP/astonish/web"
 )
 
 // studioBackend is the minimal interface that StudioServer needs from the

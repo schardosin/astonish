@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/platform/toolindex"
+	"github.com/SAP/astonish/ent/platform/toolindex"
 )
 
 // ToolIndex is the model entity for the ToolIndex schema.

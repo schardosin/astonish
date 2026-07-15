@@ -17,10 +17,10 @@ import (
 	"google.golang.org/adk/tool"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/provider/llmerror"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
+	persistentsession "github.com/SAP/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // SubAgentConfig holds configuration for the sub-agent system.

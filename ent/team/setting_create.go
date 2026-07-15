@@ -11,7 +11,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/setting"
+	"github.com/SAP/astonish/ent/team/setting"
 )
 
 // SettingCreate is the builder for creating a Setting entity.

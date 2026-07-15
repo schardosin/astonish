@@ -608,12 +608,12 @@ endif
 # Cross-compile Linux binary (for macOS/Windows dev pushing into sandbox containers)
 build-linux:
 	@echo "Cross-compiling Linux amd64 binary..."
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-amd64 .
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-amd64 .
 	@echo "Linux binary built: astonish-linux-amd64"
 
 build-linux-arm64:
 	@echo "Cross-compiling Linux arm64 binary..."
-	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-arm64 .
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=$(VERSION)" -o astonish-linux-arm64 .
 	@echo "Linux binary built: astonish-linux-arm64"
 
 # Generate Go gRPC stubs from vendored NVIDIA OpenShell proto files

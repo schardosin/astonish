@@ -24,8 +24,8 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"golang.org/x/sync/singleflight"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/pkg/store"
 
 	_ "modernc.org/sqlite" // Register the pure-Go sqlite driver.
 )

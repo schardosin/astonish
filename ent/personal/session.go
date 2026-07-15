@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/personal/session"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/personal/session"
 )
 
 // Session is the model entity for the Session schema.

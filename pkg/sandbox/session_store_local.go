@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // localSessionStore is the personal-mode implementation of

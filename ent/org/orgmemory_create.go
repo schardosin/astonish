@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgmemory"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgmemory"
 )
 
 // OrgMemoryCreate is the builder for creating a OrgMemory entity.

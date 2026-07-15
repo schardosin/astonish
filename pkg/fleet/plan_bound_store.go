@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlanBoundCredentialStore wraps a team CredentialStore and only exposes

@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/channels"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )

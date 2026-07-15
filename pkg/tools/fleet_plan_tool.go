@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 	"gopkg.in/yaml.v3"

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"

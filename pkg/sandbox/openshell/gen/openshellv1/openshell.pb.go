@@ -11681,8 +11681,8 @@ const file_openshell_proto_rawDesc = "" +
 	"\x10ClearDraftChunks\x12%.openshell.v1.ClearDraftChunksRequest\x1a&.openshell.v1.ClearDraftChunksResponse\x12^\n" +
 	"\x0fGetDraftHistory\x12$.openshell.v1.GetDraftHistoryRequest\x1a%.openshell.v1.GetDraftHistoryResponse\x12d\n" +
 	"\x11IssueSandboxToken\x12&.openshell.v1.IssueSandboxTokenRequest\x1a'.openshell.v1.IssueSandboxTokenResponse\x12j\n" +
-	"\x13RefreshSandboxToken\x12(.openshell.v1.RefreshSandboxTokenRequest\x1a).openshell.v1.RefreshSandboxTokenResponseB\xb9\x01\n" +
-	"\x10com.openshell.v1B\x0eOpenshellProtoP\x01ZDgithub.com/schardosin/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03OXX\xaa\x02\fOpenshell.V1\xca\x02\fOpenshell\\V1\xe2\x02\x18Openshell\\V1\\GPBMetadata\xea\x02\rOpenshell::V1b\x06proto3"
+	"\x13RefreshSandboxToken\x12(.openshell.v1.RefreshSandboxTokenRequest\x1a).openshell.v1.RefreshSandboxTokenResponseB\xb2\x01\n" +
+	"\x10com.openshell.v1B\x0eOpenshellProtoP\x01Z=github.com/SAP/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03OXX\xaa\x02\fOpenshell.V1\xca\x02\fOpenshell\\V1\xe2\x02\x18Openshell\\V1\\GPBMetadata\xea\x02\rOpenshell::V1b\x06proto3"
 
 var (
 	file_openshell_proto_rawDescOnce sync.Once

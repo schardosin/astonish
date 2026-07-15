@@ -3,7 +3,7 @@ package astonish
 import (
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/client"
 )
 
 func handleLogoutCommand(_ []string) error {

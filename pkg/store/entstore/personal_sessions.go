@@ -13,11 +13,11 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/predicate"
-	"github.com/schardosin/astonish/ent/personal/session"
-	"github.com/schardosin/astonish/ent/personal/sessionevent"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/predicate"
+	"github.com/SAP/astonish/ent/personal/session"
+	"github.com/SAP/astonish/ent/personal/sessionevent"
+	"github.com/SAP/astonish/pkg/store"
 
 	adksession "google.golang.org/adk/session"
 )

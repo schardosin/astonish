@@ -12,9 +12,9 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgmcpserver"
+	"github.com/SAP/astonish/ent/org/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgmcpserver"
-	"github.com/schardosin/astonish/ent/org/predicate"
 )
 
 // OrgMCPServerUpdate is the builder for updating OrgMCPServer entities.

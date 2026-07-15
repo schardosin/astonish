@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/platform/platformsetting"
+	"github.com/SAP/astonish/ent/platform/platformsetting"
 )
 
 // PlatformSetting is the model entity for the PlatformSetting schema.

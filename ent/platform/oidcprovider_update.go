@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/oidcprovider"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/oidcprovider"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/predicate"
 )
 
 // OIDCProviderUpdate is the builder for updating OIDCProvider entities.

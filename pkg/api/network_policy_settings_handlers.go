@@ -7,7 +7,7 @@ import (
 	"sort"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // NetworkPolicyListItem represents a network policy rule in listing responses.

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // TestE2E_Chat_CredentialRedactionLiveStream verifies that when the LLM

@@ -13,12 +13,12 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/config"
-	adrill "github.com/schardosin/astonish/pkg/drill"
-	"github.com/schardosin/astonish/pkg/provider"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/config"
+	adrill "github.com/SAP/astonish/pkg/drill"
+	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 func handleDrillCommand(args []string) error {

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ---------------------------------------------------------------------------

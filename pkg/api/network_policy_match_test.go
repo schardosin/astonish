@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestHostMatches(t *testing.T) {

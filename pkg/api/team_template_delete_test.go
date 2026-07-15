@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ---------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
+	"github.com/SAP/astonish/ent/platform/sandboxlayer"
 )
 
 // SandboxLayer is the model entity for the SandboxLayer schema.

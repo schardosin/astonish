@@ -2,7 +2,7 @@
 set -e
 
 # --- CONFIGURATION (CHANGE THESE) ---
-OWNER="schardosin"
+OWNER="SAP"
 REPO="astonish"
 BINARY="astonish"
 # ------------------------------------

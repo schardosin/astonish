@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlatformAuthMiddleware returns an HTTP middleware that validates JWT tokens

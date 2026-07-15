@@ -11,11 +11,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/config"
-	adrill "github.com/schardosin/astonish/pkg/drill"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/config"
+	adrill "github.com/SAP/astonish/pkg/drill"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

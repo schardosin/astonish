@@ -17,7 +17,7 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/oauth2"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --------------------------------------------------------------------------

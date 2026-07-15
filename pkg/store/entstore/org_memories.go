@@ -11,9 +11,9 @@ import (
 
 	"github.com/google/uuid"
 
-	orgent "github.com/schardosin/astonish/ent/org"
-	"github.com/schardosin/astonish/ent/org/orgmemory"
-	"github.com/schardosin/astonish/pkg/store"
+	orgent "github.com/SAP/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org/orgmemory"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgMemoryStore implements store.MemoryStore for org-level memories.

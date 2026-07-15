@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/provider"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --- Model Pin + Resume + Fallback Integration Tests ---

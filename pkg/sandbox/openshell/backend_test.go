@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 func TestOpenShellBackendKind(t *testing.T) {

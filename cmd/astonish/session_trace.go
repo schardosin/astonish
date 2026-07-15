@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	persistentsession "github.com/schardosin/astonish/pkg/session"
+	persistentsession "github.com/SAP/astonish/pkg/session"
 	adksession "google.golang.org/adk/session"
 )
 

@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/platformmcpserver"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
 )
 
 // PlatformMCPServer is the model entity for the PlatformMCPServer schema.

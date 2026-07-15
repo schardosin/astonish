@@ -3,8 +3,8 @@ package daemon
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/mailer"
-	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/mailer"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // TestSetupEmailTools_RefreshesOnSecondCall verifies that calling setupEmailTools

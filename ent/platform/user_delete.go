@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/predicate"
-	"github.com/schardosin/astonish/ent/platform/user"
+	"github.com/SAP/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/user"
 )
 
 // UserDelete is the builder for deleting a User entity.

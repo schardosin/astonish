@@ -12,7 +12,7 @@ type Message interface {
 }
 
 // logoURL is the hosted Astonish logo used in the email header.
-const logoURL = "https://schardosin.github.io/astonish/astonish-logo.png"
+const logoURL = "https://sap.github.io/astonish/astonish-logo.png"
 
 // wrapHTML wraps inner HTML content in the shared Astonish email layout.
 // Provides consistent branding: logo, card container, purple accent, footer.

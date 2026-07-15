@@ -4,7 +4,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/schardosin/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/client"
 )
 
 // addRemoteAuthHeaders adds Authorization and X-Astonish-Team headers to a

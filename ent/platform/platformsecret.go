@@ -9,7 +9,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/platform/platformsecret"
+	"github.com/SAP/astonish/ent/platform/platformsecret"
 )
 
 // PlatformSecret is the model entity for the PlatformSecret schema.

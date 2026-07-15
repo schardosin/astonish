@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/planner"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/planner"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"

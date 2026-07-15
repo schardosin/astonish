@@ -12,10 +12,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/skill"
+	"github.com/SAP/astonish/ent/team/skillfile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/predicate"
-	"github.com/schardosin/astonish/ent/team/skill"
-	"github.com/schardosin/astonish/ent/team/skillfile"
 )
 
 // SkillQuery is the builder for querying Skill entities.

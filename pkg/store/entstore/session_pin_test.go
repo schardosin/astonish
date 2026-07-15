@@ -10,7 +10,7 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 
-	teament "github.com/schardosin/astonish/ent/team"
+	teament "github.com/SAP/astonish/ent/team"
 
 	_ "modernc.org/sqlite"
 )

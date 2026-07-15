@@ -223,8 +223,8 @@ const file_datamodel_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1aH\n" +
 	"\x1aCredentialExpiresAtMsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01B\xec\x01\n" +
-	"\x1acom.openshell.datamodel.v1B\x0eDatamodelProtoP\x01ZDgithub.com/schardosin/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03ODX\xaa\x02\x16Openshell.Datamodel.V1\xca\x02\x16Openshell\\Datamodel\\V1\xe2\x02\"Openshell\\Datamodel\\V1\\GPBMetadata\xea\x02\x18Openshell::Datamodel::V1b\x06proto3"
+	"\x05value\x18\x02 \x01(\x03R\x05value:\x028\x01B\xe5\x01\n" +
+	"\x1acom.openshell.datamodel.v1B\x0eDatamodelProtoP\x01Z=github.com/SAP/astonish/pkg/sandbox/openshell/gen/openshellv1\xa2\x02\x03ODX\xaa\x02\x16Openshell.Datamodel.V1\xca\x02\x16Openshell\\Datamodel\\V1\xe2\x02\"Openshell\\Datamodel\\V1\\GPBMetadata\xea\x02\x18Openshell::Datamodel::V1b\x06proto3"
 
 var (
 	file_datamodel_proto_rawDescOnce sync.Once

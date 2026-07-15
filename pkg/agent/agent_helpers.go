@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/ui"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/ui"
 	"google.golang.org/adk/session"
 )
 

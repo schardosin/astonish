@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/launcher"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/api"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/launcher"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
 )
 
 // bootstrapSQLite sets up a full platform instance backed by SQLite.

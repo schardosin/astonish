@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/orgmembership"
+	"github.com/SAP/astonish/ent/platform/user"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/orgmembership"
-	"github.com/schardosin/astonish/ent/platform/user"
 )
 
 // OrgMembershipCreate is the builder for creating a OrgMembership entity.

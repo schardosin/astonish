@@ -24,7 +24,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/credentials"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"

@@ -4,8 +4,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 const (

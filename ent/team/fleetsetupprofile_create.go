@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleetsetupprofile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetsetupprofile"
 )
 
 // FleetSetupProfileCreate is the builder for creating a FleetSetupProfile entity.

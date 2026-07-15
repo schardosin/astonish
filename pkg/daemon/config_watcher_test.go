@@ -3,7 +3,7 @@ package daemon
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 func boolPtr(b bool) *bool { return &b }

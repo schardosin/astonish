@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // templateSnapshotMu protects template snapshots from being deleted while

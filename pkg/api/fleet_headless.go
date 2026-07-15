@@ -7,10 +7,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // StartHeadlessFleetSession creates and runs a fleet session without an HTTP

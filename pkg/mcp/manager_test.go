@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 func TestGetStderr_NilBuffer(t *testing.T) {

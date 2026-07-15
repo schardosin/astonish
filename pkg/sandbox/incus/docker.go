@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/version"
+	"github.com/SAP/astonish/pkg/version"
 )
 
 // Docker container and image constants for the Incus runtime on macOS/Windows.

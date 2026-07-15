@@ -16,8 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/config"
 
 	"google.golang.org/adk/session"
 )

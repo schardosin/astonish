@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/browser"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/SAP/astonish/pkg/browser"
+	incus "github.com/SAP/astonish/pkg/sandbox/incus"
 	"google.golang.org/adk/tool"
 )
 

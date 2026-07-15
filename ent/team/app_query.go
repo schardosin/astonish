@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/app"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/app"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // AppQuery is the builder for querying App entities.

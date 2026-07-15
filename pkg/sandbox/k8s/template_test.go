@@ -44,7 +44,7 @@ import (
 	clientgotesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/remotecommand"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // ---------------------------------------------------------------------------

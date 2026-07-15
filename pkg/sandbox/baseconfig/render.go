@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // Render produces the ordered list of shell command strings suitable for

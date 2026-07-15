@@ -11,8 +11,8 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/schardosin/astonish/pkg/mailer"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/mailer"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // RegisterUserRoutes registers admin user management endpoints.

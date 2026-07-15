@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/skill"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/skill"
 )
 
 // Skill is the model entity for the Skill schema.

@@ -1,4 +1,4 @@
-module github.com/schardosin/astonish
+module github.com/SAP/astonish
 
 go 1.26.0
 

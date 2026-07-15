@@ -6,9 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // loginSessionStore implements store.LoginSessionStore using the Ent platform client.

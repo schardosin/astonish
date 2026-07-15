@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/sandbox/mock"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/mock"
 )
 
 // TestPruneOrphansForBackend_DeletesUnreferenced creates three mock sessions,

@@ -21,7 +21,7 @@ jobs:
       - name: Checkout homebrew-astonish
         uses: actions/checkout@v7
         with:
-          repository: schardosin/homebrew-astonish
+          repository: SAP/homebrew-astonish
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           path: homebrew-tap
 
@@ -42,7 +42,7 @@ jobs:
       - name: Download release assets and calculate checksums
         run: |
           VERSION="${{ steps.release.outputs.tag }}"
-          BASE_URL="https://github.com/schardosin/astonish/releases/download/${VERSION}"
+          BASE_URL="https://github.com/SAP/astonish/releases/download/${VERSION}"
           
           echo "Downloading binaries from ${BASE_URL}..."
           
@@ -67,30 +67,30 @@ jobs:
 
           class Astonish < Formula
             desc "AI-powered terminal assistant"
-            homepage "https://github.com/schardosin/astonish"
+            homepage "https://github.com/SAP/astonish"
             version "${FORMULA_VERSION}"
             license "MIT"
 
             on_macos do
               on_intel do
-                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-darwin-amd64"
+                url "https://github.com/SAP/astonish/releases/download/${VERSION}/astonish-darwin-amd64"
                 sha256 "${DARWIN_AMD64_SHA}"
               end
 
               on_arm do
-                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-darwin-arm64"
+                url "https://github.com/SAP/astonish/releases/download/${VERSION}/astonish-darwin-arm64"
                 sha256 "${DARWIN_ARM64_SHA}"
               end
             end
 
             on_linux do
               on_intel do
-                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-linux-amd64"
+                url "https://github.com/SAP/astonish/releases/download/${VERSION}/astonish-linux-amd64"
                 sha256 "${LINUX_AMD64_SHA}"
               end
 
               on_arm do
-                url "https://github.com/schardosin/astonish/releases/download/${VERSION}/astonish-linux-arm64"
+                url "https://github.com/SAP/astonish/releases/download/${VERSION}/astonish-linux-arm64"
                 sha256 "${LINUX_ARM64_SHA}"
               end
             end

@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/skills"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/skills"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

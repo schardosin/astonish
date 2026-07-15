@@ -28,7 +28,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // MockBackend is an in-memory sandbox.Backend. The zero value is NOT

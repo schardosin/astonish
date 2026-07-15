@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 )
 
 // openShellSandboxHelper implements SandboxTestHelper for the OpenShell backend.

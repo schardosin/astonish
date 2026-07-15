@@ -9,9 +9,9 @@ import (
 
 	"github.com/google/uuid"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/memory"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/memory"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // personalMemoryStore implements store.MemoryStore for personal scope.

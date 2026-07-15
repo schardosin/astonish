@@ -15,11 +15,11 @@ import (
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/daemon"
-	emailPkg "github.com/schardosin/astonish/pkg/email"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/daemon"
+	emailPkg "github.com/SAP/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/store/entstore"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	slackPkg "github.com/slack-go/slack"

@@ -3,8 +3,8 @@ package api
 import (
 	"context"
 
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // FleetStores bundles all tenant-scoped stores that a fleet session needs

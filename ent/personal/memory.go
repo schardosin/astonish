@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/personal/memory"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/personal/memory"
 )
 
 // Memory is the model entity for the Memory schema.

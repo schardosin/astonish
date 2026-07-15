@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/tools"
 )
 
 // NodeRequest is a tool execution request received over stdin (NDJSON).

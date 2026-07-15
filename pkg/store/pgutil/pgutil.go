@@ -16,7 +16,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // BuildDSN constructs a PostgreSQL connection string from individual components.

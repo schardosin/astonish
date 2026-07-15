@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
 )
 
 const tokenFileName = "remote_tokens.enc"

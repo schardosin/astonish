@@ -6,9 +6,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/flow"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/flow"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // personalFlowStore implements store.FlowStore for personal scope.

@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/fleetrunstate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetrunstate"
 )
 
 // FleetRunState is the model entity for the FleetRunState schema.

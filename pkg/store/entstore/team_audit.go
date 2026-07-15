@@ -7,9 +7,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/teamauditlog"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/teamauditlog"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // teamAuditStore implements store.AuditStore using the Ent team client.

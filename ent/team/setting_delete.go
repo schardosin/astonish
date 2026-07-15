@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/predicate"
-	"github.com/schardosin/astonish/ent/team/setting"
+	"github.com/SAP/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/setting"
 )
 
 // SettingDelete is the builder for deleting a Setting entity.

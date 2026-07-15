@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/agent"
 	"google.golang.org/adk/tool"
 )
 

@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/agent"
 )
 
 // registerFleetCommands adds fleet-related commands to the ChannelManager's

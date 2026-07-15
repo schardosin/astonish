@@ -14,7 +14,7 @@ hero:
       link: /docs/
     - theme: alt
       text: View on GitHub
-      link: https://github.com/schardosin/astonish
+      link: https://github.com/SAP/astonish
   image:
     src: /logo_icon_background.svg
     alt: Astonish

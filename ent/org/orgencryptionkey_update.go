@@ -10,8 +10,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
-	"github.com/schardosin/astonish/ent/org/predicate"
+	"github.com/SAP/astonish/ent/org/orgencryptionkey"
+	"github.com/SAP/astonish/ent/org/predicate"
 )
 
 // OrgEncryptionKeyUpdate is the builder for updating OrgEncryptionKey entities.

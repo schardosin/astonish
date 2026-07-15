@@ -1,8 +1,8 @@
 package api
 
 import (
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // mcpServerToConfig converts a store.MCPServer to config.MCPServerConfig

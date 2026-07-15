@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // fakeTemplateStore is an in-memory SandboxTemplateStore for resolver tests.

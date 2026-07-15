@@ -6,9 +6,9 @@ import (
 
 	"github.com/google/uuid"
 
-	orgent "github.com/schardosin/astonish/ent/org"
-	"github.com/schardosin/astonish/ent/org/orgauditlog"
-	"github.com/schardosin/astonish/pkg/store"
+	orgent "github.com/SAP/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org/orgauditlog"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgAuditStore implements store.AuditStore for org-level audit logs.

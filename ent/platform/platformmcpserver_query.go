@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/platformmcpserver"
+	"github.com/SAP/astonish/ent/platform/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
-	"github.com/schardosin/astonish/ent/platform/predicate"
 )
 
 // PlatformMCPServerQuery is the builder for querying PlatformMCPServer entities.

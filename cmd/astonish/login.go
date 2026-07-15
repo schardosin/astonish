@@ -8,7 +8,7 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/huh"
-	"github.com/schardosin/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/client"
 	"golang.org/x/term"
 )
 

@@ -116,7 +116,7 @@ func buildSummaryComment(messages []Message, sessionID string) string {
 	}
 
 	sb.WriteString("---\n")
-	sb.WriteString(fmt.Sprintf("*Processed by [Astonish Fleet](https://github.com/schardosin/astonish) (session: `%s`)*\n", truncateID(sessionID)))
+	sb.WriteString(fmt.Sprintf("*Processed by [Astonish Fleet](https://github.com/SAP/astonish) (session: `%s`)*\n", truncateID(sessionID)))
 
 	return sb.String()
 }

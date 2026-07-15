@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/email"
 )
 
 // ErrNotConfigured is returned when Send is called before Init or when no

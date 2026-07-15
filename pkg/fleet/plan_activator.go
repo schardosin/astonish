@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlanAccess abstracts read/write access to fleet plans for the PlanActivator.

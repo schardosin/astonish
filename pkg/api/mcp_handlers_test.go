@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
+	"github.com/SAP/astonish/pkg/cache"
 )
 
 func testSetup(t *testing.T) func() {

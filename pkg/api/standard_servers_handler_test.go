@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/cache"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --- Mock MCPServerStore ---

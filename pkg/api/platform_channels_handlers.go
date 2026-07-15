@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/email"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --- Channel Configuration Types ---

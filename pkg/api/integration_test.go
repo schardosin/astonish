@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/common"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"

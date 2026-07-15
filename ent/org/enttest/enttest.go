@@ -5,12 +5,12 @@ package enttest
 import (
 	"context"
 
-	"github.com/schardosin/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org"
 	// required by schema hooks.
-	_ "github.com/schardosin/astonish/ent/org/runtime"
+	_ "github.com/SAP/astonish/ent/org/runtime"
 
 	"entgo.io/ent/dialect/sql/schema"
-	"github.com/schardosin/astonish/ent/org/migrate"
+	"github.com/SAP/astonish/ent/org/migrate"
 )
 
 type (

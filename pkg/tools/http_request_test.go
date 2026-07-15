@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/credentials"
 )
 
 // --- URL validation tests ---

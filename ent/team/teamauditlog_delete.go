@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/team/predicate"
-	"github.com/schardosin/astonish/ent/team/teamauditlog"
+	"github.com/SAP/astonish/ent/team/predicate"
+	"github.com/SAP/astonish/ent/team/teamauditlog"
 )
 
 // TeamAuditLogDelete is the builder for deleting a TeamAuditLog entity.

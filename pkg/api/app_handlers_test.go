@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestPatchAppModel_Happy(t *testing.T) {

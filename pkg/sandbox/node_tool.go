@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/common"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"

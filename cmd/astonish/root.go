@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/version"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/version"
 )
 
 // Execute is the main entry point for the CLI
@@ -193,7 +193,7 @@ func checkForUpdates() {
 	}
 
 	// Perform update check
-	resp, err := http.Get("https://api.github.com/repos/schardosin/astonish/releases/latest")
+	resp, err := http.Get("https://api.github.com/repos/SAP/astonish/releases/latest")
 	if err != nil {
 		return
 	}
@@ -240,7 +240,7 @@ func checkForUpdates() {
 	if !versionsEqual(current, latest) {
 		fmt.Fprintln(os.Stderr)
 		fmt.Fprintf(os.Stderr, "\033[93mA new version of Astonish is available: %s\033[0m\n", result.TagName)
-		fmt.Fprintf(os.Stderr, "\033[93mRun \033[1mbrew upgrade schardosin/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
+		fmt.Fprintf(os.Stderr, "\033[93mRun \033[1mbrew upgrade SAP/astonish/astonish\033[0m\033[93m to update.\033[0m\n")
 		fmt.Fprintln(os.Stderr)
 	}
 }

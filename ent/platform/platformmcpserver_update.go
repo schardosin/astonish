@@ -12,8 +12,8 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/platformmcpserver"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // PlatformMCPServerUpdate is the builder for updating PlatformMCPServer entities.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // ToolExecutor abstracts deterministic tool dispatch for the test runner.

@@ -40,7 +40,7 @@ export default function UpgradeDialog({ info, onClose }: UpgradeDialogProps) {
               <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Homebrew (Recommended)</span>
             </div>
             <code className="block px-3 py-2 rounded font-mono text-sm" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-              brew upgrade schardosin/astonish/astonish
+              brew upgrade SAP/astonish/astonish
             </code>
           </div>
 
@@ -51,7 +51,7 @@ export default function UpgradeDialog({ info, onClose }: UpgradeDialogProps) {
               <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Install Script</span>
             </div>
             <code className="block px-3 py-2 rounded font-mono text-sm" style={{ background: 'var(--bg-primary)', color: 'var(--text-secondary)' }}>
-              curl -sSL https://schardosin.github.io/astonish/install.sh | bash
+              curl -sSL https://sap.github.io/astonish/install.sh | bash
             </code>
           </div>
 

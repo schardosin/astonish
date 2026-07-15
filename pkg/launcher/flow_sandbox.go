@@ -1,8 +1,8 @@
 package launcher
 
 import (
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
 	"google.golang.org/adk/tool"
 )
 

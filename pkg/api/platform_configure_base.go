@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/sandbox/baseconfig"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/baseconfig"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlatformBaseConfigGetHandler returns the current @base template configuration.

@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestKasmvncConfigYAML_LocksViewportResolution(t *testing.T) {
+	yaml := kasmvncConfigYAML(1920, 1080)
+	for _, want := range []string{
+		"allow_resize: false",
+		"width: 1920",
+		"height: 1080",
+		"require_ssl: false",
+	} {
+		if !strings.Contains(yaml, want) {
+			t.Errorf("kasmvncConfigYAML missing %q", want)
+		}
+	}
+	// Zero dims must not fall through to KasmVNC package defaults (1024×768).
+	def := kasmvncConfigYAML(0, 0)
+	if !strings.Contains(def, "width: 1920") || !strings.Contains(def, "height: 1080") {
+		t.Fatalf("zero viewport should default to 1920x1080, got:\n%s", def)
+	}
+	if strings.Contains(def, "width: 1024") || strings.Contains(def, "height: 768") {
+		t.Fatal("must not use KasmVNC package default 1024x768")
+	}
+}
+
 func TestDetectBrowserEngine(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -96,6 +118,8 @@ func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 			assertContainsStr(t, flat, "require_ssl: false", "SSL disabled in KasmVNC config")
 			assertContainsStr(t, flat, "use_ipv6: false", "IPv6 disabled in KasmVNC config")
 			assertContainsStr(t, flat, "allow_resize: false", "client desktop resize disabled")
+			assertContainsStr(t, flat, "width: 1920", "locked resolution width matches viewport default")
+			assertContainsStr(t, flat, "height: 1080", "locked resolution height matches viewport default")
 			assertContainsStr(t, flat, "x11-utils", "x11-utils for xdpyinfo recording probe")
 
 			// SSL cert is now generated with openssl directly into the browser

@@ -23,6 +23,41 @@ import (
 	"time"
 )
 
+// kasmvncConfigYAML returns the user overlay for KasmVNC. With allow_resize
+// false, KasmVNC locks to desktop.resolution (package default 1024×768), so
+// width/height must match the viewport / -geometry.
+func kasmvncConfigYAML(width, height int) string {
+	if width <= 0 {
+		width = 1920
+	}
+	if height <= 0 {
+		height = 1080
+	}
+	return fmt.Sprintf(`network:
+  protocol: http
+  interface: 0.0.0.0
+  use_ipv4: true
+  use_ipv6: false
+  ssl:
+    require_ssl: false
+    pem_certificate: /home/browser/.vnc/snakeoil.pem
+    pem_key: /home/browser/.vnc/snakeoil.key
+desktop:
+  allow_resize: false
+  resolution:
+    width: %d
+    height: %d
+user_session:
+  concurrent_connections_prompt: false
+logging:
+  log_writer_name: all
+  log_dest: logfile
+  level: 30
+command_line:
+  prompt: false
+`, width, height)
+}
+
 // ---------------------------------------------------------------------------
 // Constants (same values as pkg/sandbox/incus/browser_container.go)
 // ---------------------------------------------------------------------------
@@ -249,17 +284,20 @@ echo "STEP 1: KasmVNC" >&2
 # with root ownership at runtime).
 # Skip if already running (idempotent).
 #
-# The system-level /etc/kasmvnc/kasmvnc.yaml (baked into the sandbox image)
-# sets require_ssl: false. HOME=/home/browser is passed inline as a fallback
-# so Xkasmvnc also finds the user-level ~/.vnc/kasmvnc.yaml. HOME is NOT
-# exported globally because Chrome/crashpad needs a writable HOME (the
-# sandbox user can't write to /home/browser).
+# System /etc/kasmvnc/kasmvnc.yaml (image) sets require_ssl: false. Xkasmvnc
+# HOME is a writable /tmp overlay (sandbox user cannot write /home/browser)
+# so desktop.resolution can match the viewport when allow_resize is false.
+# HOME is NOT exported globally — Chrome/crashpad needs its own writable HOME.
 export XAUTHORITY=/tmp/.Xauthority
 touch /tmp/.Xauthority
 mkdir -p /tmp/.X11-unix
 if ! proc_running 'Xkasmvnc.*:%s'; then
+  mkdir -p /tmp/astonish-kasmvnc/.vnc
+  cat > /tmp/astonish-kasmvnc/.vnc/kasmvnc.yaml << 'KASMCFG'
+%s
+KASMCFG
   VNC_LOG=/tmp/kasmvnc_start.log
-  HOME=/home/browser setsid Xkasmvnc :%s \
+  HOME=/tmp/astonish-kasmvnc setsid Xkasmvnc :%s \
     -geometry %dx%d \
     -depth 24 \
     -rfbport 5900 \
@@ -407,8 +445,9 @@ echo "DONE: browser ready"
 # and the supervisor reaps KasmVNC + Chrome + socat.
 exec sleep infinity
 `,
-		// KasmVNC proc_running pattern + start + verify
+		// KasmVNC proc_running + writable yaml overlay + start + verify
 		kasmVNCDisplay,
+		kasmvncConfigYAML(width, height),
 		kasmVNCDisplay, width, height, kasmPort,
 		kasmVNCDisplay,
 		// DISPLAY export

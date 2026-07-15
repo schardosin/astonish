@@ -8,6 +8,43 @@ import (
 	"time"
 )
 
+// kasmvncConfigYAML returns the KasmVNC config written into browsersandboxes.
+//
+// When desktop.allow_resize is false (and -AcceptSetDesktopSize 0), KasmVNC
+// locks to desktop.resolution — package defaults are 1024×768. Width/height
+// must match the intended viewport (and -geometry), not those defaults.
+func kasmvncConfigYAML(width, height int) string {
+	if width <= 0 {
+		width = 1920
+	}
+	if height <= 0 {
+		height = 1080
+	}
+	return fmt.Sprintf(`network:
+  protocol: http
+  interface: 0.0.0.0
+  use_ipv4: true
+  use_ipv6: false
+  ssl:
+    require_ssl: false
+    pem_certificate: /home/browser/.vnc/snakeoil.pem
+    pem_key: /home/browser/.vnc/snakeoil.key
+desktop:
+  allow_resize: false
+  resolution:
+    width: %d
+    height: %d
+user_session:
+  concurrent_connections_prompt: false
+logging:
+  log_writer_name: all
+  log_dest: logfile
+  level: 30
+command_line:
+  prompt: false
+`, width, height)
+}
+
 // Browser container constants.
 const (
 	// DefaultKasmVNCPort is the default port KasmVNC listens on inside the container.
@@ -357,31 +394,10 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 		// astonish exec tunnel) and explicit paths to the user-owned cert
 		// we just generated. This is the key change that makes base template
 		// builds succeed on unprivileged Incus (Apple Silicon + Docker).
-		[]string{"sh", "-c", `cat > /home/browser/.vnc/kasmvnc.yaml << 'KASMCFG'
-network:
-  protocol: http
-  interface: 0.0.0.0
-  use_ipv4: true
-  use_ipv6: false
-  ssl:
-    require_ssl: false
-    pem_certificate: /home/browser/.vnc/snakeoil.pem
-    pem_key: /home/browser/.vnc/snakeoil.key
-desktop:
-  allow_resize: false
-  resolution:
-    width: 1920
-    height: 1080
-user_session:
-  concurrent_connections_prompt: false
-logging:
-  log_writer_name: all
-  log_dest: logfile
-  level: 30
-command_line:
-  prompt: false
+		[]string{"sh", "-c", fmt.Sprintf(`cat > /home/browser/.vnc/kasmvnc.yaml << 'KASMCFG'
+%s
 KASMCFG
-chown browser:browser /home/browser/.vnc/kasmvnc.yaml`},
+chown browser:browser /home/browser/.vnc/kasmvnc.yaml`, kasmvncConfigYAML(1920, 1080))},
 		// Create a minimal xstartup that just keeps the X session alive.
 		// We don't need a desktop environment — KasmVNC's X server provides
 		// the display, and the browser is already running headless via CDP.
@@ -559,6 +575,18 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 	height := cfg.ViewportHeight
 	if height == 0 {
 		height = 1080
+	}
+
+	// Rewrite user yaml on every start so old session templates (and the
+	// package default of 1024×768) cannot win when allow_resize is false.
+	writeYAML := []string{"sh", "-c", fmt.Sprintf(`mkdir -p /home/browser/.vnc && cat > /home/browser/.vnc/kasmvnc.yaml << 'KASMCFG'
+%s
+KASMCFG
+chown browser:browser /home/browser/.vnc/kasmvnc.yaml`, kasmvncConfigYAML(width, height))}
+	if exitCode, output, err := ExecWithOutput(client, containerName, writeYAML); err != nil {
+		return fmt.Errorf("failed to write KasmVNC config: %w (output: %s)", err, output)
+	} else if exitCode != 0 {
+		return fmt.Errorf("failed to write KasmVNC config (exit %d): %s", exitCode, strings.TrimSpace(output))
 	}
 
 	// Use runuser instead of su — in unprivileged LXC containers on

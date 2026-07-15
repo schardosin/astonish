@@ -130,7 +130,8 @@ Browser display recording uses **ffmpeg `x11grab`** of the real X display (KasmV
 Invariants:
 - Capture size is the **live X root window** (probed via `xdpyinfo` at record start), not config/`browser_resize`. The start tool returns the actual `width`/`height`.
 - KasmVNC must **not** client-resize the desktop: `desktop.allow_resize: false` in `kasmvnc.yaml` and `-AcceptSetDesktopSize 0` on launch. Otherwise Studio’s noVNC iframe shrinks the framebuffer to the host canvas (e.g. ~1728×996 on a Mac) and a 1920×1080 capture request fails.
-- Launch geometry stays at the configured viewport (default **1920×1080**): KasmVNC `-geometry`, Chrome `--window-size`, and CDP `SetViewport` should match. `browser_resize` only changes CDP metrics.
+- When resize is locked, KasmVNC uses `desktop.resolution` (package default **1024×768**). That yaml must be rewritten at VNC start to the configured viewport (default **1920×1080**), matching `-geometry`. Leaving only `-AcceptSetDesktopSize 0` without a matching resolution freezes sessions at 1024×768.
+- Launch geometry stays at the configured viewport: KasmVNC `-geometry`, yaml `desktop.resolution`, Chrome `--window-size`, and CDP `SetViewport` should match. `browser_resize` only changes CDP metrics. The KasmVNC web UI may show a smaller client canvas (e.g. ~960×540 under HiDPI scaling); `xdpyinfo` / recording probe is authoritative.
 - Only one recording at a time; `Cleanup` / reconnect finalize an orphan recording.
 - Sandbox recordings write to `/tmp/astonish-recordings/*.mp4` (downloadable via sandbox PullFile). Local recordings write under `recordings/`.
 - Local Linux requires `ffmpeg` + `xdpyinfo` (`x11-utils`) (+ Xvfb when headed without a physical display). Sandbox images install those with the browser stack.

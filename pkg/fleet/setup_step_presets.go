@@ -47,7 +47,7 @@ func StepPresetDefaults(step *SetupStep, collected SetupCollected) (groups []str
 		return []string{"credentials"}, []string{"list_credentials", "save_credential", "test_credential"}
 	case "provision":
 		g := []string{"sandbox_templates", "drill", "core", "process"}
-		t := []string{"save_sandbox_template", "list_sandbox_templates", "run_drill", "shell_command"}
+		t := []string{"save_sandbox_template", "list_sandbox_templates", "inject_drill_credentials", "run_drill", "shell_command"}
 		return g, t
 	case "review":
 		return []string{"fleet"}, []string{"validate_fleet_plan", "save_fleet_plan", "update_setup_draft", "get_setup_profile"}

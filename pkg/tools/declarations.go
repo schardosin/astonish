@@ -179,6 +179,7 @@ func drillToolDeclarations() []ToolDeclaration {
 		{Name: "read_drill", Description: "Read drill YAML content", Category: "drill"},
 		{Name: "edit_drill", Description: "Edit an existing drill file", Category: "drill"},
 		{Name: "run_drill", Description: "Run a drill suite and return the test report", Category: "drill"},
+		{Name: "inject_drill_credentials", Description: "Inject suite credentials into the sandbox before start-services", Category: "drill"},
 	}
 }
 

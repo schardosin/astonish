@@ -44,6 +44,13 @@ export function generateRunInstructions(
     step++
   }
 
+  if (suiteDeclaresCredentials(sc)) {
+    lines.push(
+      `${step}. Call inject_drill_credentials(suite_name: "${name}") BEFORE start-services so apps that read secrets at boot see them. Do not write secret files with write_file.`
+    )
+    step++
+  }
+
   const configure = Array.isArray(sc.configure) ? (sc.configure as string[]) : []
   for (const cmd of configure) {
     const c = String(cmd || '').trim()
@@ -84,9 +91,21 @@ export function generateRunInstructions(
   }
 
   lines.push(
-    `${step}. Call run_drill(suite_name: "${name}"). Do not write credential files manually — run_drill injects them.`
+    `${step}. Call run_drill(suite_name: "${name}"). Do not write credential files manually — run_drill also injects credentials before tests (idempotent).`
   )
   return lines.join('\n')
+}
+
+function suiteDeclaresCredentials(sc: Record<string, unknown>): boolean {
+  const creds = sc.credentials
+  if (creds && typeof creds === 'object' && Object.keys(creds as object).length > 0) {
+    return true
+  }
+  const inj = sc.credential_injection as Record<string, unknown> | undefined
+  if (!inj || typeof inj !== 'object') return false
+  const env = Array.isArray(inj.env) ? inj.env : []
+  const files = Array.isArray(inj.files) ? inj.files : []
+  return env.length > 0 || files.length > 0
 }
 
 function readyCheckHint(rc?: Record<string, unknown>): string {

@@ -4,7 +4,7 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 
 ## Scope
 - `runner.go` — `SuiteRunner`, `ToolExecutor`, `LLMProvider` (tests only; no setup/ready_check/teardown).
-- `run_instructions.go` — Studio chat prep text from suite_config (template, git, start script).
+- `run_instructions.go` — Studio chat prep text from suite_config (template, git, inject credentials, start script).
 - `triage.go` — `TriageAgent`.
 - `artifacts.go` — `ArtifactManager`.
 - `report.go` — `SuiteReport`, `TestReport`, `StepResult`.
@@ -12,7 +12,9 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 ## Key ideas
 - The **runner** is deterministic given the same inputs — flaky external dependencies belong behind an interface (`LLMProvider`, `ToolExecutor`) that can be mocked in unit tests.
 - **`run_drill` is thin**: inject credentials, then execute drills. It does **not** switch templates, git-pull, start services, ready_check, or teardown. Studio Run pastes `GenerateRunInstructions`; the agent prep’s the sandbox, then calls `run_drill`. Fleet assumes the stack is already live and calls `run_drill` only.
+- **Credential order**: when the suite declares `credentials` / `credential_injection`, Studio prep calls `inject_drill_credentials` **before** start-services. Never start → inject. `run_drill` still injects before tests (idempotent). Apps that cache secrets at process boot depend on this order.
 - Suite `setup` / `ready_check` / `workspace` / `branch` / `template` are **instruction sources** for agents, not SuiteRunner side effects.
+- **Ready checks**: `/health` is liveness; for setup/onboarding gates, author a functional `ready_check` (setup-status endpoint + expected payload), not only health.
 - **LLM-based assertions** call the injected `LLMProvider`. Keep them opt-in per step; the default should be strict/programmatic assertion.
 - The **triage agent** is invoked on failure to produce a human-readable diagnosis. It is a helper, not a substitute for the failing test signal.
 - Artifacts (logs, screenshots, outputs) go through `ArtifactManager` — do not write files directly from step handlers.

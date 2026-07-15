@@ -499,17 +499,21 @@ Each service has its own setup command, optional ready check, and teardown.
 
 - **Servers, APIs, daemons** (anything started with & that listens on
   a port or URL): INCLUDE ready_check. Use type: http with a health endpoint,
-  or type: port with the listen port.
+  or type: port with the listen port. Prefer **functional** readiness when the
+  app has setup/onboarding (poll setup-status or a page that only succeeds when
+  configured) — /health is process liveness, not "usable for browser E2E."
 - **CLI tools, build checks, library tests, file operations**: OMIT
   ready_check entirely. There is no long-running process to wait for.
   Do NOT generate a placeholder ready_check with port: 0 or empty values —
   that will cause the test runner to fail.
 
 IMPORTANT: Ready check URLs should use localhost (e.g., http://localhost:8080/health).
-The test runner executes ready checks through the same tool executor as setup
-commands, so they run inside the container where localhost reaches the service.
-Browser steps also run inside the container (Chromium+KasmVNC), so use localhost
-in browser_navigate URLs the same way.
+health/liveness is not the same as ready for E2E when setup gates exist — use a
+setup-complete (or equivalent) check in that case. The agent polls ready_check
+during Studio prep (run_drill does not auto-poll). Ready checks run via shell
+inside the container where localhost reaches the service. Browser steps also
+run inside the container (Chromium+KasmVNC), so use localhost in browser_navigate
+URLs.
 
 ### When to include base_url:
 
@@ -578,11 +582,14 @@ in browser_navigate URLs the same way.
           teardown: "pkill -f 'npx serve' || true"
 
 Guidelines:
-- Setup commands run IN ORDER before any tests.
-- Runtime: agents prepare (template / git / setup / ready), then run_drill injects
-  credentials and runs tests. setup/ready_check fields are instruction sources.
+- Setup commands run IN ORDER before any tests (after credential inject).
+- Runtime: agents prepare (template / git / inject_drill_credentials /
+  configure / setup / ready), then run_drill injects credentials again
+  (idempotent) and runs tests. setup/ready_check fields are instruction sources.
+  NEVER start-services before inject_drill_credentials when the suite declares
+  credentials — apps that read secrets only at process boot will stay empty.
   Copy plan credentials + credential_injection onto the suite so standalone
-  run_drill (outside a fleet session) still gets secrets/config files.
+  Studio prep and run_drill still get secrets/config files.
 - configure: is the appendix for offline/API/file/cmd steps that make the app
   usable (after secrets exist, before start). For APIs that need a live server,
   put them in start-services.sh after the ready poll (or a setup line after start).
@@ -932,11 +939,14 @@ Report the saved file paths.
 After saving, ask: "Would you like me to run the tests now?"
 
 If yes, follow the suite's run instructions (or generate them from suite_config):
-use_sandbox_template if needed, git-sync workspace when configured, run
-start-services / setup and wait for ready, THEN call run_drill.
-run_drill only injects suite credential_injection and executes tests — it does
-NOT switch templates, start services, or run ready_check/teardown.
+use_sandbox_template if needed, git-sync workspace when configured,
+call inject_drill_credentials when the suite declares credentials (BEFORE
+start-services), run configure / start-services / setup and wait for ready,
+THEN call run_drill.
+run_drill also injects suite credential_injection before tests (idempotent) —
+it does NOT switch templates, start services, or run ready_check/teardown.
 Do NOT manually write credential or provider config files.
+Never start services first and inject afterward.
 This tool runs the tests and automatically routes shell/file/browser tool
 steps into the current sandbox container (if sandbox is active). Browser
 steps use Chromium+KasmVNC in the session — same as chat. Use localhost in URLs.
@@ -985,11 +995,13 @@ commands). Use browser_* tools when testing web UIs that require interaction
 To run a test suite, use the run_drill tool (NOT shell_command with
 "astonish drill run"). The run_drill tool:
 
-- Assumes the sandbox is already on the right template, code is updated, and
-  services are ready (Studio prep / fleet live stack). It does NOT switch
-  templates, git-pull, start services, or run ready_check/teardown.
-- Injects suite credentials/credential_injection before tests — do NOT
-  write_file secret provider configs yourself.
+- Assumes the sandbox is already on the right template, credentials are on
+  disk (via inject_drill_credentials in Studio prep), code is updated, and
+  services are ready. It does NOT switch templates, git-pull, start services,
+  or run ready_check/teardown.
+- Injects suite credentials/credential_injection before tests (idempotent) —
+  do NOT write_file secret provider configs yourself. In Studio prep, call
+  inject_drill_credentials BEFORE start-services when credentials are declared.
 - Automatically routes shell_command, file, and browser tool steps into the
   current sandbox container (if sandbox is active). Browser uses the same
   in-container Chromium+KasmVNC path as Studio chat.
@@ -1001,8 +1013,9 @@ To run a test suite, use the run_drill tool (NOT shell_command with
 
 This means tests run in the SAME environment as your current session — the
 same container with the same code and dependencies. In Studio, follow
-suite run_instructions first (use_sandbox_template, git sync, start
-services). In fleet, call run_drill alone when the stack is already live.
+suite run_instructions first (use_sandbox_template, git sync,
+inject_drill_credentials, start services). In fleet, call run_drill alone
+when the stack is already live.
 
 ## Browser Access to Container Services (sandbox mode)
 
@@ -1175,8 +1188,9 @@ or modify existing drills. Only create new drill YAML files.
    the new drill files (pass an empty suite_yaml and the existing suite_name
    so save_drill appends the new drills without overwriting the suite).
 7. After saving, offer to run the full suite: prepare the stack (template /
-   git sync / start services per suite_config), then run_drill to verify
-   everything works together. run_drill does not start services itself.
+   git sync / inject_drill_credentials / start services per suite_config),
+   then run_drill to verify everything works together. run_drill does not
+   start services itself; inject credentials before start-services.
 
 ## BROWSER DRILL RULES (for web app suites)
 

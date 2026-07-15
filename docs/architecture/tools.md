@@ -73,7 +73,7 @@ Both `http_request` and `web_fetch` check resolved DNS addresses against private
 | **Scheduler** | `schedule_job`, `list_scheduled_jobs`, `remove_scheduled_job`, `update_scheduled_job` | `pkg/tools/scheduler_tool.go` |
 | **Browser** (35+ tools) | `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_take_screenshot`, etc. | `pkg/tools/browser_*.go` |
 | **Email** | `email_list`, `email_read`, `email_search`, `email_send`, `email_reply`, `email_mark_read`, `email_delete`, `email_wait` | `pkg/tools/email_*.go` |
-| **Drills** | `save_drill`, `validate_drill`, `delete_drill`, `list_drills`, `read_drill`, `edit_drill`, `run_drill` | `pkg/tools/drill_tool.go`, `run_drill_tool.go` |
+| **Drills** | `save_drill`, `validate_drill`, `delete_drill`, `list_drills`, `read_drill`, `edit_drill`, `inject_drill_credentials`, `run_drill` | `pkg/tools/drill_tool.go`, `inject_drill_credentials_tool.go`, `run_drill_tool.go` |
 | **Fleet** | Fleet plan tools, OpenCode delegation | `pkg/tools/fleet_*.go`, `opencode_tool.go` |
 | **Templates** | `save_sandbox_template`, `list_sandbox_templates`, `use_sandbox_template` | `pkg/tools/` |
 | **Discovery** | `search_tools`, `skill_lookup` | `pkg/tools/` |

@@ -22,6 +22,7 @@ func SetupToolCatalog() []SetupToolRef {
 		{Name: "list_sandbox_templates", Group: "sandbox_templates", Label: "List templates", Description: "List available sandbox templates"},
 		{Name: "use_sandbox_template", Group: "sandbox_templates", Label: "Use template", Description: "Activate a sandbox template in session"},
 		{Name: "run_drill", Group: "drill", Label: "Run drill", Description: "Execute a drill test suite"},
+		{Name: "inject_drill_credentials", Group: "drill", Label: "Inject drill credentials", Description: "Materialize suite credentials before start-services"},
 		{Name: "shell_command", Group: "core", Label: "Shell", Description: "Run shell commands in sandbox"},
 	}
 }

@@ -21,7 +21,7 @@ The only exception is `semantic` assertions and `triage` mode, which use targete
 
 Real applications often require multiple services (database, backend, frontend). Drill suites support:
 
-- **HTTP ready checks**: Poll a URL until it returns 200 (e.g., `http://localhost:3000/health`).
+- **HTTP ready checks**: Poll a URL until it returns success (e.g., `http://localhost:3000/health`). Prefer a **functional** readiness URL when the app has setup/onboarding (e.g. setup-complete status), not only process liveness — health ≠ usable for browser E2E.
 - **Port ready checks**: Wait for a TCP port to accept connections.
 - **Output ready checks**: Wait for a specific string in the service's stdout (e.g., "Server started on port").
 
@@ -31,16 +31,17 @@ Services are started in declaration order and stopped in reverse order. Each ser
 
 For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed.
 
-**`run_drill` is test-only.** It injects suite credentials and executes drills. It does **not** switch templates, git-pull, run `configure`/`setup`/`ready_check`/`teardown`.
+**`run_drill` is test-only.** It injects suite credentials (idempotent) and executes drills. It does **not** switch templates, git-pull, run `configure`/`setup`/`ready_check`/`teardown`.
 
-Studio "Run" pastes suite **run instructions** (from `run_instructions` or auto-generated from `template` / `workspace` / `branch` / `setup` / `ready_check`). The chat agent:
+Studio "Run" pastes suite **run instructions** (from `run_instructions` or auto-generated from `template` / `workspace` / `branch` / credentials / `setup` / `ready_check`). The chat agent:
 
 1. `use_sandbox_template` when needed
 2. `git fetch && git checkout <branch|main> && git pull --ff-only` when `workspace` is set
-3. Run `setup` / start-services.sh and wait for readiness
-4. Call `run_drill` (credentials injected mechanically; do not write secret files by hand)
+3. `inject_drill_credentials(suite_name)` when the suite declares `credentials` / `credential_injection` — **before** start-services (apps that read secrets only at process boot)
+4. Run `configure` / `setup` / start-services.sh and wait for readiness
+5. Call `run_drill` (also injects before tests; do not write secret files by hand)
 
-Fleet sessions call `run_drill` alone when the stack is already live.
+Never start services first and inject afterward. Fleet sessions call `run_drill` alone when the stack is already live (fleet wiring injects credentials early).
 
 ```yaml
 suite_config:
@@ -61,6 +62,8 @@ suite_config:
     - "bash /root/myapp/.astonish/start-services.sh"
   ready_check:
     type: http
+    # Prefer functional readiness over bare /health when the app has a setup gate:
+    # url: "http://localhost:3000/api/setup/status"  # then assert output includes is_setup_complete
     url: "http://localhost:3000/"
     timeout: 60
     interval: 2
@@ -68,7 +71,9 @@ suite_config:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
 
-Put offline / file / env configuration in `configure:` (agent prep). If an API must run **after** services are up, put it in `start-services.sh` after the ready poll.
+Put offline / file / env configuration in `configure:` (agent prep, after inject). If an API must run **after** services are up, put it in `start-services.sh` after the ready poll.
+
+**Ready check tip:** `/health` (or similar) is process **liveness**. For apps with onboarding/setup that must complete before UI E2E, poll a **functional** endpoint (setup status, authenticated ping, homepage that only renders when configured) and require the expected payload — e.g. curl + `output_contains`/`is_setup_complete`. Do not assume liveness implies browser-test readiness.
 
 Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. Always run a newly written start script once before `save_sandbox_template`; use `overwrite: true` to replace an existing named template after fixing bootstrap files. Self-overwrite (session based on the same template name) flattens onto the parent and must not delete-first — see `pkg/sandbox/AGENTS.md`.
 
@@ -111,11 +116,12 @@ This automated triage reduces the human effort needed to process test failures.
 0. Prep (agent / Studio run_instructions — not run_drill):
    - use_sandbox_template when needed
    - git sync workspace to branch (default main)
+   - inject_drill_credentials (when suite declares credentials)
    - configure + start-services.sh + readiness poll
     |
     v
 1. run_drill:
-   - Inject credentials
+   - Inject credentials (idempotent final pass)
    - Execute drills (assertions, artifacts, optional triage)
    - Generate JSON report
 ```
@@ -240,6 +246,8 @@ The drill runner collects:
 | `pkg/config/yaml_loader.go` | Drill YAML schema: DrillSuiteConfig, DrillConfig, AssertConfig |
 | `pkg/tools/drill_tool.go` | Drill management tools (save, validate, delete, list) |
 | `pkg/tools/run_drill_tool.go` | Drill execution tool with the 1000-line creation wizard prompt |
+| `pkg/tools/inject_drill_credentials_tool.go` | Prep-time credential injection (before start-services) |
+| `pkg/drill/run_instructions.go` | Studio Run prep text (Go); mirrored by `web/src/utils/generateRunInstructions.ts` |
 
 ## Interactions
 

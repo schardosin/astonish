@@ -1130,6 +1130,15 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		drillToolsSlice = append(drillToolsSlice, runDrillTool)
 	}
 
+	injectCredsTool, injectCredsErr := tools.NewInjectDrillCredentialsTool(sandboxNodePool, sandboxTplRegistry, browserMgr)
+	if injectCredsErr != nil {
+		if cfg.DebugMode {
+			slog.Warn("failed to create inject_drill_credentials tool", "error", injectCredsErr)
+		}
+	} else {
+		drillToolsSlice = append(drillToolsSlice, injectCredsTool)
+	}
+
 	if len(drillToolsSlice) > 0 {
 		toolGroups["drill"] = &agent.ToolGroup{
 			Name:        "drill",

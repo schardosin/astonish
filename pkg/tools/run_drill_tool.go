@@ -1001,7 +1001,8 @@ func normalizeSandboxTemplateName(t string) string {
 }
 
 // injectDrillCredentials materializes suite credential_injection (or a fleet-plan
-// fallback) into the active sandbox before configure/setup runs.
+// fallback) into the active sandbox. Called from inject_drill_credentials (Studio
+// prep, before start-services) and again from run_drill before tests.
 func injectDrillCredentials(ctx tool.Context, deps *runDrillDeps, suiteName string, suite *adrill.LoadedSuite) error {
 	if suite == nil || suite.Config == nil {
 		return nil

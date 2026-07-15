@@ -58,6 +58,11 @@ func GenerateRunInstructions(suiteName string, sc *config.DrillSuiteConfig) stri
 		step++
 	}
 
+	if SuiteDeclaresCredentials(sc) {
+		fmt.Fprintf(&b, "%d. Call inject_drill_credentials(suite_name: %q) BEFORE start-services so apps that read secrets at boot see them. Do not write secret files with write_file.\n", step, suiteName)
+		step++
+	}
+
 	if sc != nil {
 		for _, cmd := range sc.Configure {
 			cmd = strings.TrimSpace(cmd)
@@ -111,8 +116,23 @@ func GenerateRunInstructions(suiteName string, sc *config.DrillSuiteConfig) stri
 		}
 	}
 
-	fmt.Fprintf(&b, "%d. Call run_drill(suite_name: %q). Do not write credential files manually — run_drill injects them.\n", step, suiteName)
+	fmt.Fprintf(&b, "%d. Call run_drill(suite_name: %q). Do not write credential files manually — run_drill also injects credentials before tests (idempotent).\n", step, suiteName)
 	return b.String()
+}
+
+// SuiteDeclaresCredentials reports whether suite_config lists credentials or
+// credential_injection that Studio prep should materialize before start-services.
+func SuiteDeclaresCredentials(sc *config.DrillSuiteConfig) bool {
+	if sc == nil {
+		return false
+	}
+	if len(sc.Credentials) > 0 {
+		return true
+	}
+	if sc.CredentialInjection == nil {
+		return false
+	}
+	return len(sc.CredentialInjection.Env) > 0 || len(sc.CredentialInjection.Files) > 0
 }
 
 func readyCheckInstruction(rc *config.ReadyCheck) string {

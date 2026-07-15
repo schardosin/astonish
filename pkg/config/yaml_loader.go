@@ -102,7 +102,7 @@ type DrillSuiteConfig struct {
 	Environment         map[string]string         `yaml:"environment,omitempty" json:"environment,omitempty"`                   // Shared environment variables
 	BaseURL             string                    `yaml:"base_url,omitempty" json:"base_url,omitempty"`                         // Base URL for browser tests (e.g., "http://localhost:3000")
 	Credentials         map[string]string         `yaml:"credentials,omitempty" json:"credentials,omitempty"`                   // logical name → credential store entry
-	CredentialInjection *SuiteCredentialInjection `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"` // materialized by run_drill before tests
+	CredentialInjection *SuiteCredentialInjection `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"` // inject_drill_credentials before start; run_drill also injects before tests
 }
 
 // SuiteCredentialInjection mirrors fleet credential_injection for drill suites.

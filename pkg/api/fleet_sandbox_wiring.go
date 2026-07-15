@@ -330,11 +330,19 @@ func wrapFleetTools(subAgentMgr *agent.SubAgentManager, lazyNode *sandbox.LazyNo
 		if runDrillErr == nil {
 			wrappedTools = replaceOrAppendTool(wrappedTools, runDrillTool)
 		}
+		injectCredsTool, injectCredsErr := tools.NewInjectDrillCredentialsToolWithClient(lazyNode, fleetSessionID, browserMgr)
+		if injectCredsErr == nil {
+			wrappedTools = replaceOrAppendTool(wrappedTools, injectCredsTool)
+		}
 	} else if toolPool != nil {
 		client := toolPool.GetOrCreate(fleetSessionID)
 		runDrillTool, runDrillErr := tools.NewRunDrillToolWithToolClient(client, fleetSessionID, browserMgr, nil)
 		if runDrillErr == nil {
 			wrappedTools = replaceOrAppendTool(wrappedTools, runDrillTool)
+		}
+		injectCredsTool, injectCredsErr := tools.NewInjectDrillCredentialsToolWithToolClient(client, fleetSessionID, browserMgr)
+		if injectCredsErr == nil {
+			wrappedTools = replaceOrAppendTool(wrappedTools, injectCredsTool)
 		}
 	}
 

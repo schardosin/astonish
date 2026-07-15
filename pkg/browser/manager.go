@@ -789,6 +789,12 @@ func (m *Manager) launchInContainer() (*rod.Browser, error) {
 }
 
 func (m *Manager) launchInContainerInner() (*rod.Browser, error) {
+	// Touch sandbox activity before a potentially multi-second Chromium/Xvnc
+	// launch so the idle watchdog cannot StopForIdle mid-start.
+	if m.ActivityTouchFunc != nil && m.sessionID != "" {
+		m.ActivityTouchFunc(m.sessionID)
+	}
+
 	// If RemoteCDPURL is already set (by a previous call or external setup),
 	// resolve it to the full debugger URL if it's a bare host:port.
 	if m.config.RemoteCDPURL != "" {

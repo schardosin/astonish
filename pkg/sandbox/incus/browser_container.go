@@ -586,7 +586,7 @@ func StopKasmVNC(_ *IncusClient, _ string, _ int) error {
 // idempotent StartChromiumInContainer and script-level skip-if-running.
 func browserStackHealthyScript() string {
 	return fmt.Sprintf(
-		`pgrep -u browser -f 'remote-debugging-port|chrome|chromium' >/dev/null 2>&1 && `+
+		`pgrep -u browser -f -- '--remote-debugging-port=' >/dev/null 2>&1 && `+
 			`{ ss -tln 2>/dev/null | grep -q ':%d ' || grep -qi ':%04X ' /proc/net/tcp 2>/dev/null; } && `+
 			`{ ss -tln 2>/dev/null | grep -q ':%d ' || grep -qi ':%04X ' /proc/net/tcp 2>/dev/null; }`,
 		internalCDPPort, internalCDPPort,
@@ -595,10 +595,13 @@ func browserStackHealthyScript() string {
 }
 
 // killStaleBrowserStackScript clears half-dead Chromium/socat remnants so a
-// relaunch can rebind CDP ports cleanly.
+// relaunch can rebind CDP ports cleanly. Match by --remote-debugging-port=
+// (not bare chrome|chromium) so pkill cannot hit a launcher shell whose
+// cmdline embeds those words.
 func killStaleBrowserStackScript() string {
 	return fmt.Sprintf(
-		`pkill -u browser -f 'remote-debugging-port|chrome|chromium' 2>/dev/null || true
+		`pkill -u browser -f -- '--remote-debugging-port=' 2>/dev/null || true
+pkill -u browser -f -- '/home/browser/.cloakbrowser/' 2>/dev/null || true
 pkill -f 'socat.*TCP-LISTEN:%d' 2>/dev/null || true
 sleep 0.5
 `, DefaultCDPPort)
@@ -842,17 +845,91 @@ func StartChromiumInContainer(client *IncusClient, containerName string, cfg Bro
 	// Use ExecWithOutput to capture stdout+stderr for diagnostic error messages.
 	// The launch script runs background processes (chromium &, socat &) so we
 	// wrap it in sh -c ourselves rather than using ExecWithOutput's wrapper.
-	cmd := []string{"sh", "-c", launchScript + "\n"}
-	exitCode, output, err := ExecWithOutput(client, containerName, cmd)
-	if err != nil {
-		return fmt.Errorf("failed to launch browser: %w (output: %s)", err, output)
-	}
-	if exitCode != 0 {
-		return fmt.Errorf("browser launch exited with code %d: %s", exitCode, strings.TrimSpace(output))
+	if err := runBrowserLaunchScript(client, containerName, launchScript); err != nil {
+		// Transient SIGTERM (exit 143) often races idle stop / exec teardown.
+		// Retry once after a short pause; launch script itself killStales first.
+		if isLaunchExit143(err) {
+			slog.Warn("browser launch interrupted by SIGTERM; retrying once",
+				"component", "incus-browser", "container", containerName, "error", err)
+			time.Sleep(1 * time.Second)
+			if retryErr := runBrowserLaunchScript(client, containerName, launchScript); retryErr != nil {
+				return retryErr
+			}
+		} else {
+			return err
+		}
 	}
 
 	// Wait briefly for Chromium + socat to settle after launch.
 	time.Sleep(1 * time.Second)
 
 	return nil
+}
+
+// runBrowserLaunchScript executes the generated launch script once and returns
+// a diagnostic error on non-zero exit (including SIGTERM enrichment).
+func runBrowserLaunchScript(client *IncusClient, containerName, launchScript string) error {
+	cmd := []string{"sh", "-c", launchScript + "\n"}
+	exitCode, output, err := ExecWithOutput(client, containerName, cmd)
+	if err != nil {
+		return fmt.Errorf("failed to launch browser: %w (output: %s)", err, strings.TrimSpace(output))
+	}
+	if exitCode == 0 {
+		return nil
+	}
+	return formatBrowserLaunchExitError(client, containerName, exitCode, output)
+}
+
+// formatBrowserLaunchExitError builds a launch failure error. Exit 143 is
+// labeled as SIGTERM. When stdout/stderr is empty, pull browser logs from the
+// container so agents see a real diagnostic instead of inventing causes.
+func formatBrowserLaunchExitError(client *IncusClient, containerName string, exitCode int, output string) error {
+	out := strings.TrimSpace(output)
+	if out == "" || exitCode == 143 {
+		if logTail := readBrowserLaunchLog(client, containerName); logTail != "" {
+			if out == "" {
+				out = logTail
+			} else {
+				out = out + "\n" + logTail
+			}
+		}
+	}
+	if exitCode == 143 {
+		if out == "" {
+			return fmt.Errorf("browser launch exited with code 143 (interrupted by SIGTERM)")
+		}
+		return fmt.Errorf("browser launch exited with code 143 (interrupted by SIGTERM): %s", out)
+	}
+	if out == "" {
+		return fmt.Errorf("browser launch exited with code %d", exitCode)
+	}
+	return fmt.Errorf("browser launch exited with code %d: %s", exitCode, out)
+}
+
+func isLaunchExit143(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "exited with code 143") || strings.Contains(s, "interrupted by SIGTERM")
+}
+
+func readBrowserLaunchLog(client *IncusClient, containerName string) string {
+	if client == nil || containerName == "" {
+		return ""
+	}
+	cmd := []string{"sh", "-c",
+		`for f in /tmp/cloakbrowser.log /tmp/chromium.log; do
+  if [ -f "$f" ]; then
+    echo "--- $f ---"
+    tail -n 80 "$f" 2>/dev/null || cat "$f" 2>/dev/null
+    echo "--- end $f ---"
+  fi
+done`,
+	}
+	_, out, err := ExecWithOutput(client, containerName, cmd)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
 }

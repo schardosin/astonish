@@ -33,6 +33,39 @@ func TestSandboxBrowserErrorTip_UnboundCDP(t *testing.T) {
 	}
 }
 
+func TestSandboxBrowserErrorTip_LaunchExit143_NoRestartStudioTip(t *testing.T) {
+	mgr := browser.NewManager(browser.BrowserConfig{})
+	mgr.SandboxEnabled = true
+	mgr.EnsureSessionID("aa4a9422-75d1-4073-b238-b0e9f4e94462")
+	// Container cleared after failed StartChromiumInContainer — previously caused
+	// a false "CDP not bound / restart Studio" tip on top of exit 143.
+	err := fmt.Errorf(
+		`failed to get browser page: failed to start browser in container "astn-sess-aa4a9422-75d1-4073-b238-b0e9f4e94462": ` +
+			`browser launch exited with code 143 (interrupted by SIGTERM)`,
+	)
+	tip := sandboxBrowserErrorTip(mgr, err, "")
+	if tip != "" && strings.Contains(tip, "restart Studio") {
+		t.Fatalf("launch-143 must not get restart-Studio tip: %q", tip)
+	}
+	if tip != "" && strings.Contains(tip, "CDP is not bound") {
+		t.Fatalf("launch-143 must not get CDP-unbound tip: %q", tip)
+	}
+	if tip == "" || !strings.Contains(tip, "SIGTERM") {
+		t.Fatalf("launch-143 tip = %q, want SIGTERM guidance", tip)
+	}
+}
+
+func TestSandboxBrowserErrorTip_LaunchFailedConcrete_NoTip(t *testing.T) {
+	mgr := browser.NewManager(browser.BrowserConfig{})
+	mgr.SandboxEnabled = true
+	mgr.EnsureSessionID("sess-x")
+	err := fmt.Errorf(`failed to start browser in container "astn-sess-x": browser launch exited with code 1: CloakBrowser process died on startup`)
+	tip := sandboxBrowserErrorTip(mgr, err, "")
+	if tip != "" {
+		t.Fatalf("concrete launch failure should not get extra tip: %q", tip)
+	}
+}
+
 func TestSandboxBrowserErrorTip_WrongSessionContainer(t *testing.T) {
 	mgr := browser.NewManager(browser.BrowserConfig{})
 	mgr.SandboxEnabled = true

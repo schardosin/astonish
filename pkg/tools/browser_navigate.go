@@ -93,10 +93,20 @@ func looksLikeLoopbackURL(rawURL string) bool {
 // sandboxBrowserErrorTip returns a context-aware hint for navigate/page failures.
 // It never claims in-container Chromium when SandboxEnabled is false or when
 // CDP is bound to a container that does not match the current session.
+// Concrete launch/start failures already carry their own diagnostics — do not
+// append the generic "CDP not bound / restart Studio" tip on top of them.
 func sandboxBrowserErrorTip(mgr *browser.Manager, err error, navURL string) string {
 	if mgr == nil {
 		return ""
 	}
+	if hasConcreteBrowserLaunchFailure(err) {
+		if isBrowserLaunchSIGTERM(err) {
+			return "in-container browser launch was interrupted by SIGTERM — retry browser_navigate; " +
+				"if it persists check CloakBrowser/Chromium logs in the session container"
+		}
+		return ""
+	}
+
 	sessionID := mgr.SessionID()
 	container := mgr.ContainerName()
 
@@ -137,6 +147,38 @@ func sandboxBrowserErrorTip(mgr *browser.Manager, err error, navURL string) stri
 		)
 	}
 	return ""
+}
+
+func hasConcreteBrowserLaunchFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	needles := []string{
+		"failed to start browser",
+		"browser launch exited",
+		"failed to launch browser",
+		"interrupted by sigterm",
+		"cloakbrowser",
+		"devtools port",
+		"failed to start xvnc",
+		"browser stack",
+	}
+	for _, n := range needles {
+		if strings.Contains(s, n) {
+			return true
+		}
+	}
+	return false
+}
+
+func isBrowserLaunchSIGTERM(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "exited with code 143") ||
+		strings.Contains(s, "interrupted by sigterm")
 }
 
 func containerMatchesSession(containerName, sessionID string) bool {

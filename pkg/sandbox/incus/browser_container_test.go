@@ -330,6 +330,9 @@ func TestLaunchScript_IdempotentPreamble(t *testing.T) {
 			if !strings.Contains(script, "pkill -u browser") {
 				t.Error("missing stale browser cleanup")
 			}
+			if !strings.Contains(script, "--remote-debugging-port=") {
+				t.Error("stale cleanup should match --remote-debugging-port=")
+			}
 			if !strings.Contains(script, fmt.Sprintf("socat.*TCP-LISTEN:%d", DefaultCDPPort)) &&
 				!strings.Contains(script, fmt.Sprintf("TCP-LISTEN:%d", DefaultCDPPort)) {
 				t.Error("missing socat bridge")
@@ -345,6 +348,46 @@ func TestBrowserStackHealthyScript_MentionsPorts(t *testing.T) {
 	}
 	if !strings.Contains(s, fmt.Sprintf(":%d ", DefaultCDPPort)) {
 		t.Errorf("healthy script missing bridge CDP port %d", DefaultCDPPort)
+	}
+	if !strings.Contains(s, "--remote-debugging-port=") {
+		t.Error("healthy script should match CDP flag, not bare chrome|chromium")
+	}
+}
+
+func TestKillStaleBrowserStackScript_MatchesCDPFlag(t *testing.T) {
+	s := killStaleBrowserStackScript()
+	if !strings.Contains(s, "--remote-debugging-port=") {
+		t.Error("killStale should match --remote-debugging-port=")
+	}
+	if strings.Contains(s, "chrome|chromium") {
+		t.Error("killStale must not use bare chrome|chromium pattern")
+	}
+	if !strings.Contains(s, "/home/browser/.cloakbrowser/") {
+		t.Error("killStale should also match CloakBrowser install path")
+	}
+}
+
+func TestFormatBrowserLaunchExitError_SIGTERM(t *testing.T) {
+	err := formatBrowserLaunchExitError(nil, "astn-sess-x", 143, "")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "code 143") || !strings.Contains(msg, "SIGTERM") {
+		t.Fatalf("got %q, want code 143 + SIGTERM", msg)
+	}
+	if !isLaunchExit143(err) {
+		t.Fatal("isLaunchExit143 should be true")
+	}
+}
+
+func TestFormatBrowserLaunchExitError_NonZeroWithOutput(t *testing.T) {
+	err := formatBrowserLaunchExitError(nil, "astn-sess-x", 1, "CloakBrowser process died on startup")
+	if err == nil || !strings.Contains(err.Error(), "CloakBrowser process died") {
+		t.Fatalf("got %v", err)
+	}
+	if isLaunchExit143(err) {
+		t.Fatal("exit 1 must not be classified as 143")
 	}
 }
 

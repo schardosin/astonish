@@ -9,9 +9,8 @@ browser:
   headless: true
   stealth: true
   timeout: 30
-  viewport:
-    width: 1280
-    height: 720
+  viewport_width: 1920
+  viewport_height: 1080
 ```
 
 Configure browser settings via `astonish config edit` or Studio Settings.
@@ -87,6 +86,16 @@ Configure browser settings via `astonish config edit` or Studio Settings.
 |------|-------------|
 | `browser_request_human` | Request human intervention for CAPTCHAs, etc. |
 
+### Session Recording
+
+| Tool | Description |
+|------|-------------|
+| `browser_start_recording` | Start recording the browser display to an MP4 (ffmpeg x11grab) |
+| `browser_stop_recording` | Stop recording and finalize the MP4 (emitted as a session artifact) |
+| `browser_recording_status` | Check whether a recording is in progress |
+
+Recording uses the real display at the configured viewport (default **1920×1080**). Call `browser_start_recording` before a scripted demo, then `browser_stop_recording` when finished. Local mode needs `ffmpeg` installed; sandboxes include it with the browser image.
+
 ## Example Workflow
 
 ```
@@ -97,6 +106,16 @@ Configure browser settings via `astonish config edit` or Studio Settings.
 5. browser_wait_for: selector=".dashboard"
 6. browser_take_screenshot
 7. browser_close
+```
+
+### Recording example
+
+```
+1. browser_start_recording: filename="portal-demo.mp4"
+2. browser_navigate: "https://portal.example.com"
+3. browser_wait_for: timeout=7000, state="networkidle"
+4. browser_click: ref=…
+5. browser_stop_recording
 ```
 
 ## Stealth Mode

@@ -47,8 +47,8 @@ func timestampToTime(ts float64) time.Time {
 type BrowserConfig struct {
 	Headless          bool          // Default: false (headed with Xvfb for stealth)
 	ChromePath        string        // Empty = auto-download via rod launcher
-	ViewportWidth     int           // Default: 1280
-	ViewportHeight    int           // Default: 720
+	ViewportWidth     int           // Default: 1920
+	ViewportHeight    int           // Default: 1080
 	NoSandbox         bool          // For running as root in containers
 	UserDataDir       string        // Browser profile dir. Default: ~/.config/astonish/browser/
 	NavigationTimeout time.Duration // Max time to wait for page load (default: 30s)
@@ -83,8 +83,8 @@ type HandoffCfg struct {
 func DefaultConfig() BrowserConfig {
 	return BrowserConfig{
 		Headless:          false,
-		ViewportWidth:     1280,
-		ViewportHeight:    720,
+		ViewportWidth:     1920,
+		ViewportHeight:    1080,
 		NoSandbox:         os.Getuid() == 0,
 		UserDataDir:       defaultProfileDir(),
 		NavigationTimeout: 30 * time.Second,
@@ -249,19 +249,26 @@ type Manager struct {
 	// never triggers Call()-based activity tracking).
 	ActivityTouchFunc func(sessionID string)
 
+	// ContainerStartRecordingFunc starts ffmpeg x11grab inside the session
+	// container. Wired by the sandbox package when SandboxEnabled is true.
+	ContainerStartRecordingFunc ContainerStartRecordingFunc
+
 	// SandboxEnabled is set to true by the launcher when sandbox is available.
 	// When true, the browser runs inside the session container instead of locally.
 	SandboxEnabled bool
+
+	// recording tracks an in-progress session capture (nil when idle).
+	recording *activeRecording
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT
 // launched until GetOrLaunch is called.
 func NewManager(cfg BrowserConfig) *Manager {
 	if cfg.ViewportWidth == 0 {
-		cfg.ViewportWidth = 1280
+		cfg.ViewportWidth = 1920
 	}
 	if cfg.ViewportHeight == 0 {
-		cfg.ViewportHeight = 720
+		cfg.ViewportHeight = 1080
 	}
 	if cfg.NavigationTimeout == 0 {
 		cfg.NavigationTimeout = 30 * time.Second
@@ -498,6 +505,8 @@ func (m *Manager) EnsureCDPReady() error {
 // crashed, the container was destroyed, or the CDP tunnel pipe broke.
 // Must be called with m.mu held.
 func (m *Manager) resetBrowserLocked() {
+	m.stopRecordingLocked()
+
 	m.activePg = nil
 	m.cdpURL = ""
 
@@ -1394,6 +1403,9 @@ func (m *Manager) NavigationTimeout() time.Duration {
 func (m *Manager) Cleanup() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Finalize any in-progress recording before tearing down the display.
+	m.stopRecordingLocked()
 
 	// Stop any active handoff session
 	if m.handoff != nil {

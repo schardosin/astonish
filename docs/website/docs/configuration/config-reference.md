@@ -145,8 +145,8 @@ memory:
 # Browser automation
 browser:
   headless: false
-  viewport_width: 1280
-  viewport_height: 720
+  viewport_width: 1920
+  viewport_height: 1080
   no_sandbox: null
   chrome_path: ""              # Custom Chromium binary
   user_data_dir: ""

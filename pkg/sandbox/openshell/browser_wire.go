@@ -44,6 +44,9 @@ func WireBrowserManager(
 	mgr.ContainerDialFunc = func(podName string, port int) (net.Conn, error) {
 		return DialSandboxPort(context.Background(), gw, podName, port)
 	}
+	mgr.ContainerStartRecordingFunc = func(podName, display string, width, height int, outPath string) (func() error, error) {
+		return StartRecordingInSandbox(context.Background(), gw, podName, display, width, height, outPath)
+	}
 	if touchActivity != nil {
 		mgr.ActivityTouchFunc = touchActivity
 	}

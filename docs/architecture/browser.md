@@ -121,6 +121,17 @@ Browser tools are organized into functional groups:
 | **Advanced** | `browser_evaluate`, `browser_run_code`, `browser_pdf`, `browser_response_body` |
 | **State/Emulation** | `browser_cookies`, `browser_storage`, `browser_set_offline`, `browser_set_headers`, `browser_set_credentials`, `browser_set_geolocation`, `browser_set_media`, `browser_set_timezone`, `browser_set_locale`, `browser_set_device` |
 | **Human Handoff** | `browser_request_human`, `browser_handoff_complete` |
+| **Recording** | `browser_start_recording`, `browser_stop_recording`, `browser_recording_status` |
+
+### Session recording
+
+Browser display recording uses **ffmpeg `x11grab`** of the real X display (KasmVNC `:0` in sandbox, Xvfb/`DISPLAY` locally) — not CDP screencast.
+
+Invariants:
+- Capture size is the **launch-time** viewport (default **1920×1080**): KasmVNC `-geometry`, Chrome `--window-size`, and CDP `SetViewport` must match. `browser_resize` only changes CDP metrics and does **not** resize the recorded display.
+- Only one recording at a time; `Cleanup` / reconnect finalize an orphan recording.
+- Sandbox recordings write to `/tmp/astonish-recordings/*.mp4` (downloadable via sandbox PullFile). Local recordings write under `recordings/`.
+- Local Linux requires `ffmpeg` (+ Xvfb when headed without a physical display). Sandbox images install ffmpeg with the browser stack.
 
 ### Screenshot Handling
 
@@ -132,6 +143,7 @@ Browser tools are organized into functional groups:
 | File | Purpose |
 |---|---|
 | `pkg/browser/manager.go` | Singleton browser management, page state tracking, launch logic |
+| `pkg/browser/recording.go` | ffmpeg x11grab session recording (start/stop/status) |
 | `pkg/browser/stealth.go` | Anti-detection: go-rod/stealth evasions, automation flag removal, UA/Client Hints |
 | `pkg/browser/stealth_webgl.go` | WebGL fingerprint patching (Intel Iris GPU profile) |
 | `pkg/browser/xvfb.go` | Virtual display management for headed Chrome on Linux |

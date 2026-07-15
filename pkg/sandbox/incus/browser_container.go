@@ -83,9 +83,9 @@ func depsFor(distro LinuxDistro) browserDeps {
 
 // BrowserContainerConfig controls browser runtime configuration inside a container.
 type BrowserContainerConfig struct {
-	// ViewportWidth is the browser viewport width in pixels. Default: 1280.
+	// ViewportWidth is the browser viewport width in pixels. Default: 1920.
 	ViewportWidth int
-	// ViewportHeight is the browser viewport height in pixels. Default: 720.
+	// ViewportHeight is the browser viewport height in pixels. Default: 1080.
 	ViewportHeight int
 	// KasmVNCPort is the port KasmVNC listens on. Default: 6901.
 	KasmVNCPort int
@@ -198,6 +198,8 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 			"openssl",
 			// CDP port forwarding (Chromium binds DevTools to loopback only)
 			"socat",
+			// Session recording (ffmpeg x11grab of the KasmVNC display)
+			"ffmpeg",
 			// Utilities
 			"wget", "ca-certificates",
 		})
@@ -236,6 +238,8 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					"openssl",
 					// CDP port forwarding (Chromium binds DevTools to loopback only)
 					"socat",
+					// Session recording (ffmpeg x11grab of the KasmVNC display)
+					"ffmpeg",
 					// Utilities
 					"wget", "ca-certificates",
 				},
@@ -272,6 +276,8 @@ func BrowserContainerInstallCommands(engine, arch string, distro LinuxDistro) []
 					"openssl",
 					// CDP port forwarding (Chromium binds DevTools to loopback only)
 					"socat",
+					// Session recording (ffmpeg x11grab of the KasmVNC display)
+					"ffmpeg",
 					// Utilities
 					"wget", "ca-certificates",
 				},
@@ -540,11 +546,11 @@ func StartKasmVNC(client *IncusClient, containerName string, cfg BrowserContaine
 
 	width := cfg.ViewportWidth
 	if width == 0 {
-		width = 1280
+		width = 1920
 	}
 	height := cfg.ViewportHeight
 	if height == 0 {
-		height = 720
+		height = 1080
 	}
 
 	// Use runuser instead of su — in unprivileged LXC containers on
@@ -817,11 +823,11 @@ func isBrowserStackHealthy(client *IncusClient, containerName string) bool {
 func StartChromiumInContainer(client *IncusClient, containerName string, cfg BrowserContainerConfig) error {
 	width := cfg.ViewportWidth
 	if width == 0 {
-		width = 1280
+		width = 1920
 	}
 	height := cfg.ViewportHeight
 	if height == 0 {
-		height = 720
+		height = 1080
 	}
 
 	// Start KasmVNC (Xvnc) as the X server for display :0. This provides

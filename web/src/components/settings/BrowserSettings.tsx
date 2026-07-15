@@ -26,8 +26,8 @@ interface BrowserSettingsProps {
 export default function BrowserSettings({ config, onSaved }: BrowserSettingsProps) {
   const [form, setForm] = useState<BrowserForm>({
     headless: null,
-    viewport_width: 1280,
-    viewport_height: 720,
+    viewport_width: 1920,
+    viewport_height: 1080,
     no_sandbox: null,
     chrome_path: '',
     user_data_dir: '',
@@ -57,8 +57,8 @@ export default function BrowserSettings({ config, onSaved }: BrowserSettingsProp
     if (config) {
       const f: BrowserForm = {
         headless: config.headless ?? null,
-        viewport_width: config.viewport_width || 1280,
-        viewport_height: config.viewport_height || 720,
+        viewport_width: config.viewport_width || 1920,
+        viewport_height: config.viewport_height || 1080,
         no_sandbox: config.no_sandbox ?? null,
         chrome_path: config.chrome_path || '',
         user_data_dir: config.user_data_dir || '',
@@ -262,7 +262,7 @@ export default function BrowserSettings({ config, onSaved }: BrowserSettingsProp
               <input
                 type="number"
                 value={form.viewport_width}
-                onChange={(e) => setForm({ ...form, viewport_width: parseInt(e.target.value) || 1280 })}
+                onChange={(e) => setForm({ ...form, viewport_width: parseInt(e.target.value) || 1920 })}
                 min="320"
                 max="3840"
                 className={inputClass}
@@ -276,7 +276,7 @@ export default function BrowserSettings({ config, onSaved }: BrowserSettingsProp
               <input
                 type="number"
                 value={form.viewport_height}
-                onChange={(e) => setForm({ ...form, viewport_height: parseInt(e.target.value) || 720 })}
+                onChange={(e) => setForm({ ...form, viewport_height: parseInt(e.target.value) || 1080 })}
                 min="240"
                 max="2160"
                 className={inputClass}

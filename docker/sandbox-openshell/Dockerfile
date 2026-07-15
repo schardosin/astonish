@@ -68,6 +68,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       # CloakBrowser is a standalone binary (not apt-installed), so all shared
       # libraries it links against must be explicitly listed.
       xvfb \
+      ffmpeg \
       fonts-liberation fonts-noto-color-emoji \
       fonts-freefont-ttf fonts-wqy-zenhei fonts-ipafont-gothic \
       xdg-utils libnss3 libnss3-tools libatk-bridge2.0-0 \

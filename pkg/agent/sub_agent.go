@@ -143,16 +143,16 @@ type ToolGroup struct {
 // SubAgentManager orchestrates the execution of sub-agent tasks.
 type SubAgentManager struct {
 	// Parent context
-	LLM             model.LLM                    // Parent's LLM (used for children unless overridden)
-	ToolGroups      map[string]*ToolGroup        // Named tool groups for sub-agent tool resolution
-	FleetTools      []tool.Tool                  // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
-	SessionService  adksession.Service           // Session persistence
-	Compactor       *persistentsession.Compactor // Context window compactor for sub-agents (nil = disabled)
+	LLM             model.LLM                      // Parent's LLM (used for children unless overridden)
+	ToolGroups      map[string]*ToolGroup          // Named tool groups for sub-agent tool resolution
+	FleetTools      []tool.Tool                    // Fleet-only tools (e.g., run_fleet_phase) not in main agent's tool list
+	SessionService  adksession.Service             // Session persistence
+	Compactor       *persistentsession.Compactor   // Context window compactor for sub-agents (nil = disabled)
 	Redactor        *credentials.Redactor          // Redacts credential values from tool outputs (nil = disabled)
 	CredentialStore credentials.CredentialResolver // Credential store for placeholder substitution (nil = disabled)
 	PendingSecrets  *credentials.PendingVault      // Per-session vault for <<<SECRET_N>>> token resolution (nil = disabled)
-	AppName         string                       // Application name for sessions
-	UserID          string                       // User ID for sessions
+	AppName         string                         // Application name for sessions
+	UserID          string                         // User ID for sessions
 
 	// Configuration
 	Config SubAgentConfig
@@ -753,6 +753,9 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 	if m.FileArtifactCapture != nil {
 		capture := m.FileArtifactCapture
 		afterToolCallbacks = append(afterToolCallbacks, func(ctx tool.Context, t tool.Tool, input, output map[string]any, err error) (map[string]any, error) {
+			if err != nil {
+				return output, err
+			}
 			switch t.Name() {
 			case "write_file":
 				if path, ok := input["file_path"].(string); ok && path != "" {
@@ -760,6 +763,10 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				}
 			case "edit_file":
 				if path, ok := input["path"].(string); ok && path != "" {
+					capture(path, t.Name())
+				}
+			case "browser_stop_recording":
+				if path, ok := output["path"].(string); ok && path != "" {
 					capture(path, t.Name())
 				}
 			}

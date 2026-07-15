@@ -90,11 +90,11 @@ type BrowserLaunchConfig struct {
 func StartBrowserInSandbox(ctx context.Context, gateway GatewayClient, podName string, cfg BrowserLaunchConfig) (io.Closer, error) {
 	width := cfg.ViewportWidth
 	if width == 0 {
-		width = 1280
+		width = 1920
 	}
 	height := cfg.ViewportHeight
 	if height == 0 {
-		height = 720
+		height = 1080
 	}
 	kasmPort := cfg.KasmVNCPort
 	if kasmPort == 0 {

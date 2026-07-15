@@ -107,6 +107,9 @@ func TestBrowserContainerInstallCommands_SharedCommands(t *testing.T) {
 			// socat installed (for CDP port forwarding)
 			assertContainsStr(t, flat, "socat", "socat package for CDP bridge")
 
+			// ffmpeg for browser session recording (x11grab of KasmVNC display)
+			assertContainsStr(t, flat, "ffmpeg", "ffmpeg package for session recording")
+
 			// Uses runuser (NOT su) for unprivileged container compatibility
 			assertContainsStr(t, flat, "runuser", "must use runuser, not su")
 

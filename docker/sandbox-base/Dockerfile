@@ -72,8 +72,17 @@
 #     entrypoint bind-mounts this binary into the overlay so BOTH the
 #     PID-1 chroot handoff AND Backend.Exec tool calls resolve to the
 #     same trusted build.
+#
+# IMPORTANT: run the Go toolchain on $BUILDPLATFORM (the native host), then
+# cross-compile for $TARGETOS/$TARGETARCH. Running `go mod download` under
+# QEMU user-mode emulation (buildx linux/amd64 on Apple Silicon) panics in
+# Go 1.26 with "growslice: len out of range" / segfaults — same fix used by
+# docker/sandbox-openshell and docker/astonish (host-side cross-compile).
 # ---------------------------------------------------------------------------
-FROM golang:1.26-alpine AS entrypoint-builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS entrypoint-builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -98,12 +107,12 @@ RUN CGO_ENABLED=0 go run ./cmd/astonish-sandbox-entrypoint-script \
     # runtime surprise in the cluster.
     head -1 /tmp/astonish-sandbox-entrypoint | grep -q '^#!/bin/sh'
 
-# Build the astonish binary. CGO is disabled so the resulting binary is
-# statically linked against musl and runs in the minimal base image
-# without libc surprises. The -s -w strip flags mirror the main
-# Dockerfile; version is left as "dev" because the sandbox base is an
+# Build the astonish binary for the *target* platform. CGO is disabled so
+# the resulting binary is statically linked and runs in the minimal base
+# image without libc surprises. The -s -w strip flags mirror the main
+# Dockerfile; version is left as "sandbox-base" because this is an
 # infrastructure image, not a shippable daemon build.
-RUN CGO_ENABLED=0 go build \
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
       -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=sandbox-base" \
       -o /tmp/astonish \
       .

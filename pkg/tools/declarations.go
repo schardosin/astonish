@@ -148,6 +148,9 @@ func browserToolDeclarations() []ToolDeclaration {
 		{Name: "browser_set_locale", Description: "Override browser locale", Category: "browser"},
 		{Name: "browser_set_device", Description: "Emulate a mobile device", Category: "browser"},
 		{Name: "browser_request_human", Description: "Request human-in-the-loop browser interaction", Category: "browser"},
+		{Name: "browser_start_recording", Description: "Start recording the browser display to an MP4", Category: "browser"},
+		{Name: "browser_stop_recording", Description: "Stop browser display recording and finalize the MP4", Category: "browser"},
+		{Name: "browser_recording_status", Description: "Check whether a browser display recording is in progress", Category: "browser"},
 	}
 }
 

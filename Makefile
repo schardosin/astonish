@@ -668,8 +668,9 @@ push-incus-dev: ensure-builder build-linux build-linux-arm64
 		--push .
 	@echo "Pushed: $(DOCKER_REGISTRY)/astonish-incus:$(DEV_TAG)"
 
-# Build and push the sandbox base image (multi-arch)
-# Requires web/dist/ to exist (run `cd web && npm ci && npm run build` first)
+# Build and push the sandbox base image (multi-arch).
+# Cross-compiles Go inside the Dockerfile on $BUILDPLATFORM (avoids QEMU Go 1.26 panics).
+# Requires web/dist/ for go:embed (run `make build-ui` first if missing).
 push-sandbox-base-dev: ensure-builder
 	@echo "Building and pushing $(DOCKER_REGISTRY)/astonish-sandbox-base:$(DEV_TAG) (linux/amd64,linux/arm64)..."
 	docker buildx build --platform linux/amd64,linux/arm64 \

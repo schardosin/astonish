@@ -295,22 +295,27 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
 
-		// Capture file artifacts from write_file and edit_file tool calls.
-		// The file path is extracted from input args and stashed for UI delivery.
-		// Only capture on success — failed writes must not emit artifact events,
-		// otherwise the live SSE pipeline and session-detail reconstruction diverge.
-		if err == nil {
-			switch t.Name() {
-			case "write_file":
-				if path, ok := input["file_path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
-				}
-			case "edit_file":
-				if path, ok := input["path"].(string); ok && path != "" {
-					c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+			// Capture file artifacts from write_file, edit_file, and
+			// browser_stop_recording tool calls. Paths are stashed for UI delivery.
+			// Only capture on success — failed writes must not emit artifact events,
+			// otherwise the live SSE pipeline and session-detail reconstruction diverge.
+			if err == nil {
+				switch t.Name() {
+				case "write_file":
+					if path, ok := input["file_path"].(string); ok && path != "" {
+						c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+					}
+				case "edit_file":
+					if path, ok := input["path"].(string); ok && path != "" {
+						c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+					}
+				case "browser_stop_recording":
+					// Path comes from the tool response (Manager chose the output file).
+					if path, ok := redactedOutput["path"].(string); ok && path != "" {
+						c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
+					}
 				}
 			}
-		}
 
 			// Strip large flow output from run_flow results. The full output
 			// is stashed for direct delivery to the user (via SSE or channel),

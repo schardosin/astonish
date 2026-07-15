@@ -314,6 +314,36 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		return nil, err
 	}
 
+	// --- Session recording ---
+
+	startRecordingTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_start_recording",
+		Description: "Start recording the browser display to an MP4 file (ffmpeg x11grab of the " +
+			"real display at the configured viewport size, default 1920x1080). Call this before a " +
+			"scripted demo sequence. Only one recording at a time. Video is written under " +
+			"recordings/ (local) or /tmp/astonish-recordings/ (sandbox).",
+	}, safeBrowserFunc(BrowserStartRecording(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	stopRecordingTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_stop_recording",
+		Description: "Stop the active browser display recording and finalize the MP4. Returns path, " +
+			"duration_seconds, and size_bytes. The file appears as a session artifact for download.",
+	}, safeBrowserFunc(BrowserStopRecording(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	recordingStatusTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_recording_status",
+		Description: "Check whether a browser display recording is in progress and how long it has been running.",
+	}, safeBrowserFunc(BrowserRecordingStatus(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
 	return []tool.Tool{
 		// Navigation
 		navigateTool, navigateBackTool,
@@ -331,5 +361,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
 		// Human-in-the-loop
 		requestHumanTool,
+		// Session recording
+		startRecordingTool, stopRecordingTool, recordingStatusTool,
 	}, nil
 }

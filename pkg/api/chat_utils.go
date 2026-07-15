@@ -548,6 +548,13 @@ func collectArtifacts(events session.Events) []ArtifactInfo {
 						}
 					}
 				}
+				if name == "browser_stop_recording" {
+					// Path is only known after the tool responds; mark pending
+					// and fill from FunctionResponse.
+					pending[part.FunctionCall.ID] = pendingWrite{
+						toolName: name,
+					}
+				}
 			}
 			if part.FunctionResponse != nil {
 				pw, ok := pending[part.FunctionResponse.ID]
@@ -561,6 +568,14 @@ func collectArtifacts(events session.Events) []ArtifactInfo {
 					if _, hasErr := resp["error"]; hasErr {
 						continue
 					}
+					if pw.toolName == "browser_stop_recording" {
+						if path, ok := resp["path"].(string); ok && path != "" {
+							pw.path = path
+						}
+					}
+				}
+				if pw.path == "" {
+					continue
 				}
 
 				// Deduplicate by path
@@ -664,6 +679,8 @@ func fileTypeFromExt(ext string) string {
 		return "Dockerfile"
 	case ".env":
 		return "Environment"
+	case ".mp4", ".webm", ".mov":
+		return "Video"
 	default:
 		if ext == "" {
 			return "File"

@@ -1,0 +1,48 @@
+# Keep docker build context small. Without this, buildx transfers ~1GB
+# (web/node_modules, .git, local artifacts) on every push-*-dev build.
+
+.git
+.gitattributes
+.github
+.cursor
+.claude
+.vscode
+.idea
+.opencode
+
+# Dependencies / build outputs not needed in most images
+**/node_modules
+web/node_modules
+# web/dist IS required: go:embed in web/embed.go for the astonish binary
+docs/website/node_modules
+docs/website/build
+docs/website/.docusaurus
+
+# Local binaries and test artifacts
+astonish
+astonish-linux-*
+astonish_bin
+test_bin
+e2e-inspector
+bin/
+*.test
+*.out
+coverage.html
+recordings/
+
+# Env / secrets / local state
+.env
+.env.*
+!.env.example
+.mcp.json
+deploy/helm/astonish/values-dev.yaml
+
+# Logs and caches
+*.log
+*.tmp
+**/.cache
+**/__pycache__
+**/*.pyc
+
+# E2E / scenario runtime state
+tests/scenarios/.last-run.json

@@ -1060,9 +1060,9 @@ type BrowserAppConfig struct {
 	// detection by strict anti-bot systems. If Xvfb is not available, Astonish
 	// falls back to headless mode automatically.
 	Headless *bool `yaml:"headless,omitempty" json:"headless,omitempty"`
-	// ViewportWidth is the default viewport width in pixels. Default: 1280.
+	// ViewportWidth is the default viewport width in pixels. Default: 1920.
 	ViewportWidth int `yaml:"viewport_width,omitempty" json:"viewport_width,omitempty"`
-	// ViewportHeight is the default viewport height in pixels. Default: 720.
+	// ViewportHeight is the default viewport height in pixels. Default: 1080.
 	ViewportHeight int `yaml:"viewport_height,omitempty" json:"viewport_height,omitempty"`
 	// NoSandbox disables Chrome's sandbox. Auto-detected (true when running as root).
 	NoSandbox *bool `yaml:"no_sandbox,omitempty" json:"no_sandbox,omitempty"`

@@ -9,8 +9,9 @@ import {
 } from '../../api/fleetChat'
 import { buildPath } from '../../hooks/useHashRouter'
 import type { CommFlowNode, FleetAgentDef, FleetArtifactDef, FleetPlanData, FleetPlanStatusExt, FleetSettings } from './fleetUtils'
-import { addAgentToFleetConfig, formatTimeAgo, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig } from './fleetUtils'
-import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
+import { addAgentToFleetConfig, formatTimeAgo, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig, updateFleetSettings } from './fleetUtils'
+import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor } from './FleetConfigEditor'
+import { useFleetDetailTab } from './fleetHooks'
 
 interface PlanDetailProps {
   planKey: string

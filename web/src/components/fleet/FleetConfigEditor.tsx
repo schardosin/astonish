@@ -4,6 +4,7 @@ import { Check, Loader, Plus, Settings, Trash2, Users, X } from 'lucide-react'
 import type { SetupProfileSummary } from '../../api/fleetChat'
 import type { FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
 import { getAgentColor, slugifyAgentKey, createDefaultFleetAgent } from './fleetUtils'
+import type { FleetDetailTab } from './fleetHooks'
 import {
   capabilityMapFromKeys,
   enabledCapabilityKeys,
@@ -16,33 +17,7 @@ import {
   normalizeCapabilityKey,
 } from './fleetConstants'
 
-export type FleetDetailTab = 'overview' | 'settings' | 'agents'
-
 const TABS: FleetDetailTab[] = ['overview', 'settings', 'agents']
-
-export function useFleetDetailTab(kind: 'template' | 'plan', key: string): [FleetDetailTab, (tab: FleetDetailTab) => void] {
-  const readTab = () => {
-    const parts = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean)
-    const maybeTab = parts[0] === 'fleet' && parts[1] === kind && decodeURIComponent(parts[2] || '') === key ? parts[3] : ''
-    return TABS.includes(maybeTab as FleetDetailTab) ? maybeTab as FleetDetailTab : 'overview'
-  }
-
-  const [tab, setTabState] = useState<FleetDetailTab>(readTab)
-
-  useEffect(() => {
-    const onHashChange = () => setTabState(readTab())
-    window.addEventListener('hashchange', onHashChange)
-    onHashChange()
-    return () => window.removeEventListener('hashchange', onHashChange)
-  }, [kind, key])
-
-  const setTab = (next: FleetDetailTab) => {
-    window.location.hash = `/fleet/${kind}/${encodeURIComponent(key)}/${next}`
-    setTabState(next)
-  }
-
-  return [tab, setTab]
-}
 
 export function FleetDetailTabs({ activeTab, onChange }: { activeTab: FleetDetailTab; onChange: (tab: FleetDetailTab) => void }) {
   return (
@@ -962,12 +937,4 @@ function TextareaField({ label, value, rows, onChange, disabled }: { label: stri
       />
     </label>
   )
-}
-
-export function updateFleetSettings(config: FleetPlanData, settings: FleetSettings, setupProfileKey?: string): FleetPlanData {
-  const next: FleetPlanData = { ...config, settings }
-  if (setupProfileKey !== undefined) {
-    next.setup_profile = setupProfileKey
-  }
-  return next
 }

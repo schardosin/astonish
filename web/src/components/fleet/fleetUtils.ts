@@ -327,3 +327,11 @@ export function renameAgentInFleetConfig(
     communication: { ...(config.communication || {}), flow },
   }
 }
+
+export function updateFleetSettings(config: FleetPlanData, settings: FleetSettings, setupProfileKey?: string): FleetPlanData {
+  const next: FleetPlanData = { ...config, settings }
+  if (setupProfileKey !== undefined) {
+    next.setup_profile = setupProfileKey
+  }
+  return next
+}

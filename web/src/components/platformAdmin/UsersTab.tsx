@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } fr
 import { Trash2, Loader2, Crown, UserPlus, Search, Edit2, CheckCircle2, Ban } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { AdminUser } from '../../api/platformAdmin'
-import { InlineError, InlineSuccess, StatusBadge, RoleBadge, gradientAmber, inputStyle } from './shared'
+import { InlineError, InlineSuccess, StatusBadge, RoleBadge } from './shared'
+import { gradientAmber, inputStyle } from './sharedStyles'
 
 // ---------------------------------------------------------------------------
 // Users Tab

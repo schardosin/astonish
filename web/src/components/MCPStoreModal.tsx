@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { X, Search, Star, ExternalLink, Download, Check, AlertCircle, Loader2, Tag, Package } from 'lucide-react'
 import { teamFetch } from '../api/teamContext'
 
@@ -63,33 +63,13 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug, sc
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [searchDebounce, setSearchDebounce] = useState<ReturnType<typeof setTimeout> | null>(null)
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [selectedServer, setSelectedServer] = useState<MCPServer | null>(null)
   const [installing, setInstalling] = useState<string | null>(null)
   const [installSuccess, setInstallSuccess] = useState<string | null>(null)
   const [envOverrides, setEnvOverrides] = useState<Record<string, string>>({})
 
-  useEffect(() => {
-    if (isOpen) {
-      // Reset filters to defaults when modal opens
-      setSearchQuery('')
-      setSelectedSource('all')
-      loadServers()
-    }
-  }, [isOpen])
-
-  useEffect(() => {
-    if (searchDebounce) {
-      clearTimeout(searchDebounce)
-    }
-    const timeout = setTimeout(() => {
-      loadServers(searchQuery, selectedSource)
-    }, 300)
-    setSearchDebounce(timeout)
-    return () => clearTimeout(timeout)
-  }, [searchQuery, selectedSource])
-
-  const loadServers = async (query = '', source = 'all') => {
+  const loadServers = useCallback(async (query = '', source = 'all') => {
     setLoading(true)
     setError(null)
     try {
@@ -110,7 +90,27 @@ export default function MCPStoreModal({ isOpen, onClose, onInstall, teamSlug, sc
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen) {
+      // Reset filters to defaults when modal opens
+      setSearchQuery('')
+      setSelectedSource('all')
+      loadServers()
+    }
+  }, [isOpen, loadServers])
+
+  useEffect(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+    }
+    const timeout = setTimeout(() => {
+      loadServers(searchQuery, selectedSource)
+    }, 300)
+    searchDebounceRef.current = timeout
+    return () => clearTimeout(timeout)
+  }, [searchQuery, selectedSource, loadServers])
 
   const handleInstall = async (server: MCPServer) => {
     setInstalling(server.mcpId)

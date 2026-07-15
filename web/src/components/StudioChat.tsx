@@ -572,7 +572,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
   }
 
-  const loadSessionHistory = async (sessionId: string) => {
+  const loadSessionHistory = useCallback(async (sessionId: string) => {
     // Ensure the toolbar model picker has status whenever history is loaded
     // (including hard refresh on /#/chat/:id, which never goes through changeSession).
     fetchSessionModelStatus(sessionId).then(setModelStatus).catch(() => setModelStatus(null))
@@ -682,7 +682,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
         }
       })
       .catch(() => { /* ignore */ })
-  }
+  }, [changeSession])
 
   // Reconnect to an active background chat runner. The runner streams all
   // buffered events (catch-up) followed by live events. This uses the same
@@ -1163,7 +1163,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
 
     await loadSessionHistory(sessionId)
-  }, [sessions, isFleetMode, connectToFleetStream, changeSession, reconnectToChatRunner])
+  }, [sessions, isFleetMode, connectToFleetStream, changeSession, reconnectToChatRunner, loadSessionHistory])
 
   const handleNewSession = useCallback(() => {
     if (abortRef.current) {
@@ -1221,7 +1221,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     } catch (err: any) {
       console.error('Failed to delete session:', err)
     }
-  }, [activeSessionId, sessions, isFleetMode])
+  }, [activeSessionId, sessions, isFleetMode, changeSession])
 
   const handleStop = useCallback(() => {
     // Disconnect the SSE viewer

@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } fr
 import { ArrowLeft, Plus, Trash2, Loader2, Users, ChevronDown, ChevronRight } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { AdminOrgDetail, AdminTeam, AdminUserWithRole, TeamMemberDetail } from '../../api/platformAdmin'
-import { InlineError, InlineSuccess, StatusBadge, RoleBadge, gradientAmber, inputStyle } from './shared'
+import { InlineError, InlineSuccess, StatusBadge, RoleBadge } from './shared'
+import { gradientAmber, inputStyle } from './sharedStyles'
 
 // ---------------------------------------------------------------------------
 // Org Detail View — Platform Admin

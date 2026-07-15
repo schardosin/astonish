@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { X, Brain, Trash2, Edit3, Check, RotateCcw, Sparkles, Loader } from 'lucide-react'
 import { listSessionMemories, extractSessionMemories, updateMemory, deleteTeamMemory, deletePersonalMemory } from '../api/platform'
 import type { ExtractionEntry } from '../api/platform'
@@ -30,9 +30,21 @@ export default function SessionMemoryPanel({ sessionId, isConsolidating = false,
   const [applyingExtraction, setApplyingExtraction] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const loadMemories = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await listSessionMemories(sessionId)
+      setMemories(res.memories || [])
+    } catch (err) {
+      console.error('Failed to load session memories:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId])
+
   useEffect(() => {
     loadMemories()
-  }, [sessionId])
+  }, [sessionId, loadMemories])
 
   // Poll while consolidating — auto-refresh every 3s until done
   useEffect(() => {
@@ -54,19 +66,7 @@ export default function SessionMemoryPanel({ sessionId, isConsolidating = false,
         pollRef.current = null
       }
     }
-  }, [isConsolidating])
-
-  async function loadMemories() {
-    setLoading(true)
-    try {
-      const res = await listSessionMemories(sessionId)
-      setMemories(res.memories || [])
-    } catch (err) {
-      console.error('Failed to load session memories:', err)
-    } finally {
-      setLoading(false)
-    }
-  }
+  }, [isConsolidating, loadMemories])
 
   async function handleDelete(memory: MemoryEntry) {
     try {

@@ -59,6 +59,9 @@ const AppsView = lazy(() => import('./components/AppsView'))
 function App() {
   const { theme, toggleTheme } = useTheme()
   const { path, navigate, replaceHash } = useHashRouter()
+  const pathRef = useRef(path)
+  useEffect(() => { pathRef.current = path }, [path])
+  const handleAgentSelectInternalRef = useRef<(agent: Agent, updateUrl?: boolean) => Promise<void>>(async () => {})
 
   // Platform mode detection: check if the platform auth endpoint exists.
   // In personal mode (file backend), this endpoint doesn't exist (404).
@@ -114,7 +117,7 @@ function App() {
         }
       }).catch(() => {})
     })
-  }, [isPlatformMode, auth.isAuthenticated, auth.team])
+  }, [isPlatformMode, auth.isAuthenticated, auth.team, activeTeam])
 
   const handleTeamChange = useCallback((teamSlug: string) => {
     setActiveTeam(teamSlug)
@@ -329,7 +332,7 @@ function App() {
   }
 
   // Check for updates (once per 4 hours)
-  const checkForUpdates = async () => {
+  const checkForUpdates = useCallback(async () => {
     const lastCheck = localStorage.getItem('astonish_update_check')
     const now = Date.now()
 
@@ -390,7 +393,7 @@ function App() {
     } catch (err: any) {
       console.error('Failed to check for updates:', err)
     }
-  }
+  }, [])
 
   // In platform mode, wait until the team context is resolved before making
   // API calls. Without this gate, the effect fires as soon as isCheckingSetup
@@ -399,15 +402,6 @@ function App() {
   // without the X-Astonish-Team header, which may return empty/wrong data
   // and overwrite the correct results that arrive later.
   const teamReady = isPlatformChecked && (!isPlatformMode || !!activeTeam)
-
-  // Load agents, tools, and settings from API on mount and when team changes
-  useEffect(() => {
-    if (!showSetupWizard && !isCheckingSetup && teamReady) {
-      loadAgents()
-      loadTools()
-      loadSettings()
-    }
-  }, [showSetupWizard, isCheckingSetup, teamReady, activeTeam])
 
   // Check for updates (wait for platform detection + auth in platform mode)
   const versionAuthReady = isPlatformChecked && (!isPlatformMode || auth.isAuthenticated)
@@ -440,7 +434,7 @@ function App() {
     }
 
     initUpdateCheck()
-  }, [versionAuthReady])
+  }, [versionAuthReady, checkForUpdates])
 
   // Auto-dismiss toast after 3 seconds (except for persistent toasts like updates)
   useEffect(() => {
@@ -473,7 +467,7 @@ function App() {
     }
   }
 
-  const loadAgents = async () => {
+  const loadAgents = useCallback(async () => {
     try {
       setIsLoadingAgents(true)
       const data = await fetchAgents()
@@ -481,17 +475,18 @@ function App() {
       setAgents(agentsList)
       
       // Check if URL specifies an agent
-      const urlAgentName = path.view === 'agent' ? path.params.agentName : null
+      const currentPath = pathRef.current
+      const urlAgentName = currentPath.view === 'agent' ? currentPath.params.agentName : null
       
       if (urlAgentName && agentsList.length > 0) {
         // Try to find the agent from URL - prioritize exact ID match
         const urlAgent = agentsList.find(a => a.id === urlAgentName) || agentsList.find(a => a.name === urlAgentName)
         if (urlAgent) {
-          handleAgentSelectInternal(urlAgent, false) // Don't update URL, already there
+          handleAgentSelectInternalRef.current(urlAgent, false) // Don't update URL, already there
           setView('canvas')
         } else if (agentsList.length > 0) {
           // Agent not found, select first and update URL
-          handleAgentSelectInternal(agentsList[0], true)
+          handleAgentSelectInternalRef.current(agentsList[0], true)
           setView('canvas')
         }
       }
@@ -501,7 +496,7 @@ function App() {
     } finally {
       setIsLoadingAgents(false)
     }
-  }
+  }, [])
 
   const loadTools = async () => {
     try {
@@ -513,12 +508,21 @@ function App() {
     }
   }
 
+  // Load agents, tools, and settings from API on mount and when team changes
+  useEffect(() => {
+    if (!showSetupWizard && !isCheckingSetup && teamReady) {
+      loadAgents()
+      loadTools()
+      loadSettings()
+    }
+  }, [showSetupWizard, isCheckingSetup, teamReady, activeTeam, loadAgents])
+
   // Refresh agents/flows list when a flow is saved via distillation
   useEffect(() => {
     const handleFlowsUpdated = () => { loadAgents() }
     window.addEventListener('astonish:flows-updated', handleFlowsUpdated)
     return () => window.removeEventListener('astonish:flows-updated', handleFlowsUpdated)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadAgents])
 
   // Push new YAML to history (called after applying changes)
   const pushToHistory = useCallback((newYaml: string) => {
@@ -632,35 +636,6 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [handleUndo, handleRedo])
 
-  // React to URL path changes (hash navigation)
-  useEffect(() => {
-    if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
-      // Prioritize exact ID match over name match
-      const targetAgent = agents.find(a => a.id === path.params.agentName) || agents.find(a => a.name === path.params.agentName)
-      // Only switch if it's a different agent than currently selected
-      if (targetAgent && targetAgent.id !== selectedAgent?.id) {
-        handleAgentSelectInternal(targetAgent, false)
-      }
-      setView('canvas')
-    } else if (path.view === 'chat') {
-      setView('chat')
-    } else if (path.view === 'canvas') {
-      setView('canvas')
-    } else if (path.view === 'fleet') {
-      setView('fleet')
-    } else if (path.view === 'drill') {
-      setView('drill')
-    } else if (path.view === 'apps') {
-      setView('apps')
-    } else if (path.view === 'settings') {
-      setView('settings')
-    } else if (path.view === 'credentials') {
-      // Redirect legacy credentials route to settings/credentials
-      setView('settings')
-      replaceHash('/settings/credentials')
-    }
-  }, [path, agents]) // Re-run when path or agents list changes
-
   // Parse YAML and generate flow (async with ELKjs)
   useEffect(() => {
     const layoutFlow = async () => {
@@ -743,6 +718,36 @@ function App() {
       setMcpDependencies(null)
     }
   }, [navigate])
+  useEffect(() => { handleAgentSelectInternalRef.current = handleAgentSelectInternal }, [handleAgentSelectInternal])
+
+  // React to URL path changes (hash navigation)
+  useEffect(() => {
+    if (path.view === 'agent' && path.params.agentName && agents.length > 0) {
+      // Prioritize exact ID match over name match
+      const targetAgent = agents.find(a => a.id === path.params.agentName) || agents.find(a => a.name === path.params.agentName)
+      // Only switch if it's a different agent than currently selected
+      if (targetAgent && targetAgent.id !== selectedAgent?.id) {
+        handleAgentSelectInternal(targetAgent, false)
+      }
+      setView('canvas')
+    } else if (path.view === 'chat') {
+      setView('chat')
+    } else if (path.view === 'canvas') {
+      setView('canvas')
+    } else if (path.view === 'fleet') {
+      setView('fleet')
+    } else if (path.view === 'drill') {
+      setView('drill')
+    } else if (path.view === 'apps') {
+      setView('apps')
+    } else if (path.view === 'settings') {
+      setView('settings')
+    } else if (path.view === 'credentials') {
+      // Redirect legacy credentials route to settings/credentials
+      setView('settings')
+      replaceHash('/settings/credentials')
+    }
+  }, [path, agents, handleAgentSelectInternal, replaceHash, selectedAgent?.id]) // Re-run when path or agents list changes
 
   // Public agent select (always updates URL)
   const handleAgentSelect = useCallback(async (agent: Agent) => {

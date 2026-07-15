@@ -1,6 +1,6 @@
 import { useState, lazy, Suspense } from 'react'
 import { Building2, Users, Crown, Shield, Globe, Box, Loader2 } from 'lucide-react'
-import { gradientAmber } from './platformAdmin/shared'
+import { gradientAmber } from './platformAdmin/sharedStyles'
 
 const OrgsTab = lazy(() => import('./platformAdmin/OrgsTab'))
 const UsersTab = lazy(() => import('./platformAdmin/UsersTab'))

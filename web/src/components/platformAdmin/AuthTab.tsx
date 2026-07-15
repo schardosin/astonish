@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, type FormEvent, type ChangeEvent } fr
 import { Plus, Trash2, Loader2, Edit2, Shield, ToggleLeft, ToggleRight, Globe, Eye, EyeOff, UserPlus, Mail } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { OIDCProvider, PlatformAuthSettings } from '../../api/platformAdmin'
-import { InlineError, InlineSuccess, gradientAmber, inputStyle } from './shared'
+import { InlineError, InlineSuccess } from './shared'
+import { gradientAmber, inputStyle } from './sharedStyles'
 
 // ---------------------------------------------------------------------------
 // Authentication Tab

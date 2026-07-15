@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, lazy, Suspense, type FormEvent, type 
 import { Plus, Trash2, Loader2, Pause, Play, Search } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { AdminOrg } from '../../api/platformAdmin'
-import { InlineError, InlineSuccess, StatusBadge, gradientAmber, inputStyle } from './shared'
+import { InlineError, InlineSuccess, StatusBadge } from './shared'
+import { gradientAmber, inputStyle } from './sharedStyles'
 
 const OrgDetailView = lazy(() => import('./OrgDetailView'))
 

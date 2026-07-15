@@ -1,5 +1,3 @@
-import { CheckCircle2, XCircle, AlertCircle, MinusCircle } from 'lucide-react'
-
 // ─── Helpers ───
 
 export function formatTimeAgo(dateStr: string): string {
@@ -40,33 +38,6 @@ export function statusColor(status: string): StatusColors {
     case 'error':  return { dot: '#f59e0b', bg: 'rgba(245, 158, 11, 0.1)', border: 'rgba(245, 158, 11, 0.3)', text: '#fbbf24' }
     default:       return { dot: '#6b7280', bg: 'rgba(107, 114, 128, 0.1)', border: 'rgba(107, 114, 128, 0.3)', text: '#9ca3af' }
   }
-}
-
-export function StatusDot({ status, size = 8 }: { status: string; size?: number }) {
-  const color = statusColor(status)
-  return (
-    <span
-      className="inline-block rounded-full flex-shrink-0"
-      style={{ width: size, height: size, background: color.dot }}
-      title={status || 'unknown'}
-    />
-  )
-}
-
-export function StatusBadge({ status }: { status: string }) {
-  const color = statusColor(status)
-  return (
-    <span
-      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium"
-      style={{ background: color.bg, border: `1px solid ${color.border}`, color: color.text }}
-    >
-      {status === 'passed' && <CheckCircle2 size={10} />}
-      {status === 'failed' && <XCircle size={10} />}
-      {status === 'error' && <AlertCircle size={10} />}
-      {!['passed', 'failed', 'error'].includes(status) && <MinusCircle size={10} />}
-      {status || 'unknown'}
-    </span>
-  )
 }
 
 export interface SelectedItem {

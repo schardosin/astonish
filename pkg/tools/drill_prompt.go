@@ -417,6 +417,8 @@ application, and how to verify it is ready.
     type: drill_suite
     suite_config:
       template: "<template-name>"        # Sandbox template (from Step 1i). Omit if no sandbox.
+      workspace: /root/myapp             # Absolute path in container — Studio Run git-pulls here
+      branch: main                       # Optional; default main when workspace is set
       base_url: "http://localhost:3000"  # OPTIONAL — for browser tests (same localhost as shell)
       credentials:                       # OPTIONAL — logical → store entry (copy from fleet plan)
         providers: myapp-providers

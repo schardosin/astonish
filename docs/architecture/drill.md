@@ -70,7 +70,17 @@ suite_config:
 
 Put offline / file / env configuration in `configure:` (agent prep). If an API must run **after** services are up, put it in `start-services.sh` after the ready poll.
 
-Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. Always run a newly written start script once before `save_sandbox_template`; use `overwrite: true` to replace an existing named template after fixing bootstrap files.
+Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. Always run a newly written start script once before `save_sandbox_template`; use `overwrite: true` to replace an existing named template after fixing bootstrap files. Self-overwrite (session based on the same template name) flattens onto the parent and must not delete-first — see `pkg/sandbox/AGENTS.md`.
+
+### Recovering a deleted template
+
+If a failed overwrite removed the named template from the registry while the chat session still has the app filesystem:
+
+1. Do **not** switch templates or reboot the session.
+2. Restart Studio on a binary with the flatten/materialize fix.
+3. `save_sandbox_template(template_name: "…", overwrite: true, bootstrap_files: …)` — recreates the template (materializes live rootfs onto `@base` if the source is already gone).
+4. Add `workspace` + `branch` on the suite YAML so Studio Run git-pulls next time.
+
 
 ### Why Visual Regression Testing
 

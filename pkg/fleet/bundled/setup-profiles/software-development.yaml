@@ -338,7 +338,7 @@ steps:
     \     (optional prior build step if needed). Do NOT reinvent one-liner start\
     \     commands — use the script proven in 3h-v.\n   - `ready_check:` — the verification method (type: http, port, or\
     \     output_contains) with the same endpoint/port you tested.\
-    \     Prefer timeout >= 60; stable_count defaults to 3 consecutive successes.\n   - `teardown:` — `bash <workspace>/.astonish/stop-services.sh || true`\n   - `template:` — the template name (same as what you will save in 3j).\n   - For multi-service projects, use the `services:` format instead.\n\n   The suite handles building and starting. The drills (sub-step 3) test\n  \
+    \     Prefer timeout >= 60; stable_count defaults to 3 consecutive successes.\n   - `teardown:` — `bash <workspace>/.astonish/stop-services.sh || true`\n   - `template:` — the template name (same as what you will save in 3j).\n   - `workspace:` — absolute path inside the container (e.g. `/root/<repo-name>`) so Studio Run includes `git pull`.\n   - `branch:` — defaults to `main` when workspace is set.\n   - For multi-service projects, use the `services:` format instead.\n\n   The suite handles building and starting. The drills (sub-step 3) test\n  \
     \ the RUNNING service.\n\n3. **Design 2-3 smoke drill YAMLs that test runtime behavior.**\n\n   Before writing any drill\
     \ YAML, use `shell_command` to manually run\n   each operation you plan to test against the live service started in\n\
     \   sub-step 1. Observe the actual response, then write the assertion\n   based on what you saw. NEVER guess what the\

@@ -964,61 +964,66 @@ func ComputeBinaryHash() (string, error) {
 //
 // sourceTemplate is the template that the session container was created from
 // (e.g., "juicytrade" if the session used use_sandbox_template to switch).
-// The new template's BasedOn field is set to this value so that the overlay
-// chain correctly includes the source template's layers. If empty, defaults
+// The new template's BasedOn field is normally set to this value so that the
+// overlay chain includes the source template's layers. If empty, defaults
 // to BaseTemplate ("base").
 //
-// Steps:
-//  1. Stop the session container
-//  2. Create overlay container for the new template (from tiny image)
-//  3. Copy the session's overlay upper layer to the template's overlay upper
-//  4. Register the template (stacked overlay, no Incus snapshot needed)
-//  5. Restart the session container
-func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description, sourceTemplate string, overwrite bool) error {
-	if templateName == BaseTemplate {
-		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
+// When overwrite is true and templateName equals sourceTemplate (self-
+// overwrite), the existing template upper is flattened with the session upper
+// and BasedOn becomes the previous parent (usually base). This avoids
+// deleting the source lower layer before ResolveLowerLayers.
+//
+// Returns flattened=true when a self-overwrite flatten was performed.
+func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description, sourceTemplate string, overwrite bool) (flattened bool, err error) {
+	if normalizeTemplateRef(templateName) == BaseTemplate {
+		return false, fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
 	}
 
-	tplContainerName := TemplateName(templateName)
-	if client.InstanceExists(tplContainerName) {
-		if !overwrite {
-			return fmt.Errorf("template %q already exists", templateName)
-		}
-		slog.Info("overwriting existing template", "component", "sandbox", "template", templateName)
-		if err := DeleteTemplate(client, registry, templateName); err != nil {
-			return fmt.Errorf("failed to remove existing template %q for overwrite: %w", templateName, err)
-		}
-	}
-
-	// Default to @base if source template not specified
 	if sourceTemplate == "" {
 		sourceTemplate = BaseTemplate
 	}
 
-	// Resolve pool paths
+	tplName := normalizeTemplateRef(templateName)
+	srcName := normalizeTemplateRef(sourceTemplate)
+	tplContainerName := TemplateName(tplName)
+	instanceExists := client.InstanceExists(tplContainerName)
+	existing := registry.Get(tplName)
+
+	sourceExists := srcName == BaseTemplate || registry.Get(srcName) != nil
+	plan, err := planTemplateOverwrite(tplName, srcName, existing, instanceExists, overwrite, sourceExists)
+	if err != nil {
+		return false, err
+	}
+
+	// Snapshot metadata before DeleteTemplate invalidates the registry entry.
+	var retainedCreatedAt time.Time
+	var retainedFleetPlans []string
+	var retainedNesting bool
+	var retainedBootstrap []BootstrapFileMeta
+	if existing != nil {
+		retainedCreatedAt = existing.CreatedAt
+		retainedFleetPlans = append([]string(nil), existing.FleetPlans...)
+		retainedNesting = existing.Nesting
+		retainedBootstrap = append([]BootstrapFileMeta(nil), existing.BootstrapFiles...)
+	}
+
+	// Resolve pool paths up front (needed for flatten staging and create).
 	poolName, err := GetPoolForProfile(client)
 	if err != nil {
-		return fmt.Errorf("failed to determine storage pool: %w", err)
+		return false, fmt.Errorf("failed to determine storage pool: %w", err)
 	}
-
 	poolPath, err := GetPoolSourcePath(client, poolName)
 	if err != nil {
-		return fmt.Errorf("failed to get pool path: %w", err)
+		return false, fmt.Errorf("failed to get pool path: %w", err)
 	}
 
-	// Stop the session container for a consistent view.
-	// We track whether we stopped it so we can restart it on ANY exit path.
+	sessionUpperDir := OverlayUpperDir(containerName)
+	var upperSourceDir string
+	stagingDir := ""
+
+	// Stop the session container early when materializing the merged rootfs so
+	// the copy is consistent; otherwise stop just before Incus create as before.
 	stoppedContainer := false
-	if client.IsRunning(containerName) {
-		slog.Info("stopping container for template creation", "component", "sandbox", "container", containerName)
-		if err := client.StopInstance(containerName, false); err != nil {
-			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
-		}
-		stoppedContainer = true
-	}
-
-	// Ensure the session container is restarted on any failure or success.
-	// This is critical — if we leave it stopped, the wizard session is dead.
 	restartSession := func() {
 		if !stoppedContainer {
 			return
@@ -1028,13 +1033,72 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 			slog.Error("failed to restart session container", "component", "sandbox", "container", containerName, "error", startErr)
 		}
 	}
+	stopSession := func() error {
+		if stoppedContainer || !client.IsRunning(containerName) {
+			return nil
+		}
+		slog.Info("stopping container for template creation", "component", "sandbox", "container", containerName)
+		if err := client.StopInstance(containerName, false); err != nil {
+			return fmt.Errorf("failed to stop container %q: %w", containerName, err)
+		}
+		stoppedContainer = true
+		return nil
+	}
+
+	if plan.MaterializeRootfs {
+		if err := stopSession(); err != nil {
+			return false, err
+		}
+		rootfs := ContainerRootfsPath(poolPath, containerName)
+		if err := statOnSandboxHost(rootfs); err != nil {
+			return false, fmt.Errorf("cannot recover template %q: source %q is missing and session rootfs is unavailable (%v). "+
+				"Recreate from @base: clone the repo, install deps, build binaries, then save_sandbox_template without relying on the deleted source",
+				tplName, srcName, err)
+		}
+		upperSourceDir = rootfs
+		flattened = true
+		slog.Info("materializing session rootfs onto base (orphaned source template)",
+			"component", "sandbox", "template", tplName, "missing_source", srcName)
+	} else if plan.Flatten {
+		stagingDir = "/tmp/astonish-tpl-flatten-" + tplName
+		_ = removeAllOnSandboxHost(stagingDir)
+		oldUpper := OverlayUpperDir(tplContainerName)
+		if err := mergeOverlayUppersInto(oldUpper, sessionUpperDir, stagingDir); err != nil {
+			_ = removeAllOnSandboxHost(stagingDir)
+			return false, fmt.Errorf("failed to flatten template+session overlays for overwrite: %w", err)
+		}
+		upperSourceDir = stagingDir
+		flattened = true
+		slog.Info("self-overwrite flatten ready", "component", "sandbox", "template", templateName, "based_on", plan.BasedOn)
+	} else {
+		upperSourceDir = sessionUpperDir
+	}
+	if stagingDir != "" {
+		defer removeAllOnSandboxHost(stagingDir)
+	}
+
+	// Delete existing target only when safe (not needed as a live lower), or
+	// after flatten staging for self-overwrite.
+	if instanceExists {
+		if plan.DeleteFirst || plan.Flatten {
+			slog.Info("removing existing template before create", "component", "sandbox", "template", templateName, "self_overwrite", plan.SelfOverwrite)
+			if err := DeleteTemplate(client, registry, tplName); err != nil {
+				restartSession()
+				return flattened, fmt.Errorf("failed to remove existing template %q for overwrite: %w", templateName, err)
+			}
+		}
+	}
+
+	if err := stopSession(); err != nil {
+		return flattened, err
+	}
 
 	// Create the template container from the tiny overlay image
 	slog.Info("creating template container", "component", "sandbox", "container", tplContainerName)
 	arch, err := client.ServerArchitecture()
 	if err != nil {
 		restartSession()
-		return fmt.Errorf("failed to detect server architecture: %w", err)
+		return flattened, fmt.Errorf("failed to detect server architecture: %w", err)
 	}
 
 	tplCfg := containerSecurityConfig()
@@ -1056,17 +1120,13 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 	op, err := client.Server().CreateInstance(req)
 	if err != nil {
 		restartSession()
-		return fmt.Errorf("failed to create template container: %w", err)
+		return flattened, fmt.Errorf("failed to create template container: %w", err)
 	}
 	if err := op.Wait(); err != nil {
 		restartSession()
-		return fmt.Errorf("failed to wait for template container creation: %w", err)
+		return flattened, fmt.Errorf("failed to wait for template container creation: %w", err)
 	}
 
-	// Copy the session's overlay upper layer to the template's overlay dir.
-	// This captures just the session's customizations (typically a few MB — repos,
-	// configs, installed packages), not the full 900MB+ base filesystem.
-	sessionUpperDir := OverlayUpperDir(containerName)
 	tplUpperDir := OverlayUpperDir(tplContainerName)
 
 	if err := mkdirAllOnSandboxHost(filepath.Dir(tplUpperDir), 0755); err != nil {
@@ -1074,76 +1134,99 @@ func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}
 		restartSession()
-		return fmt.Errorf("failed to create template overlay dir: %w", err)
+		return flattened, fmt.Errorf("failed to create template overlay dir: %w", err)
 	}
 
-	slog.Info("copying session overlay to template", "component", "sandbox", "template", tplContainerName)
-	if err := cpOnSandboxHost(sessionUpperDir, tplUpperDir); err != nil {
+	slog.Info("copying overlay upper to template", "component", "sandbox", "template", tplContainerName, "source", upperSourceDir)
+	if err := cpOnSandboxHost(upperSourceDir, tplUpperDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}
 		restartSession()
-		return fmt.Errorf("failed to copy session overlay: %w", err)
+		return flattened, fmt.Errorf("failed to copy session overlay: %w", err)
 	}
 
-	// Also create the work dir for the template's overlay
 	tplWorkDir := filepath.Join(OverlayBaseDir, tplContainerName, "work")
 	if err := mkdirAllOnSandboxHost(tplWorkDir, 0755); err != nil {
 		slog.Warn("failed to create template work dir", "component", "sandbox", "error", err)
 	}
 
-	// Mount overlay on the template container so it can be started/shelled into.
-	// The lower layers come from the source template that the session was based on.
-	// For @base sessions, this is just the @base snapshot rootfs.
-	// For custom template sessions (e.g., juicytrade), this includes the custom
-	// template's upper dir stacked on top of @base — preserving all the files
-	// from the parent template that the session inherited.
-	lowerDir, err := ResolveLowerLayers(poolPath, sourceTemplate, registry)
+	// Resolve lowers from plan.BasedOn (parent after self-overwrite flatten).
+	lowerDir, err := ResolveLowerLayers(poolPath, plan.BasedOn, registry)
 	if err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}
 		restartSession()
-		return fmt.Errorf("failed to resolve lower layers for source template %q: %w", sourceTemplate, err)
+		return flattened, fmt.Errorf("failed to resolve lower layers for source template %q: %w", plan.BasedOn, err)
 	}
-	// Mount overlay on the template container's rootfs.
-	// For unprivileged containers, this mounts a plain overlay and pre-seeds
-	// Incus's idmap state (template rootfs is already shifted at snapshot time).
+
 	tplRootfs := ContainerRootfsPath(poolPath, tplContainerName)
 	if err := SetupUnprivilegedOverlay(client, tplContainerName, tplRootfs, lowerDir); err != nil {
 		if delErr := client.DeleteInstance(tplContainerName); delErr != nil {
 			slog.Warn("failed to delete template instance during rollback", "component", "sandbox", "container", tplContainerName, "error", delErr)
 		}
 		restartSession()
-		return fmt.Errorf("failed to mount overlay on template: %w", err)
+		return flattened, fmt.Errorf("failed to mount overlay on template: %w", err)
 	}
 
-	// Compute binary hash
 	hash, hashErr := ComputeBinaryHash()
 	if hashErr != nil {
 		slog.Warn("failed to compute binary hash for template metadata", "component", "sandbox", "error", hashErr)
 	}
 
-	// Register in the template registry (overlay-based, no Incus snapshot)
 	now := time.Now()
+	createdAt := now
+	if !retainedCreatedAt.IsZero() {
+		createdAt = retainedCreatedAt
+	}
 	meta := &TemplateMeta{
-		Name:        templateName,
-		Description: description,
-		CreatedAt:   now,
-		SnapshotAt:  now,
-		BasedOn:     sourceTemplate,
-		BinaryHash:  hash,
+		Name:           tplName,
+		Description:    description,
+		CreatedAt:      createdAt,
+		SnapshotAt:     now,
+		BasedOn:        plan.BasedOn,
+		BinaryHash:     hash,
+		FleetPlans:     retainedFleetPlans,
+		Nesting:        retainedNesting,
+		BootstrapFiles: retainedBootstrap,
 	}
 
 	if err := registry.Add(meta); err != nil {
 		restartSession()
-		return fmt.Errorf("failed to register template: %w", err)
+		return flattened, fmt.Errorf("failed to register template: %w", err)
 	}
 
-	// Success path — restart session container
 	restartSession()
 
-	slog.Info("template created from container", "component", "sandbox", "template", templateName, "container", containerName)
+	slog.Info("template created from container", "component", "sandbox", "template", templateName, "container", containerName, "based_on", plan.BasedOn, "flattened", flattened)
+	return flattened, nil
+}
+
+// mergeOverlayUppersInto copies templateUpper (if present) into stagingDir, then
+// merges sessionUpper on top (session wins on conflicts). Does not use rsync
+// --delete so template-only files are preserved until session overwrites them.
+func mergeOverlayUppersInto(templateUpper, sessionUpper, stagingDir string) error {
+	_ = removeAllOnSandboxHost(stagingDir)
+	if err := mkdirAllOnSandboxHost(stagingDir, 0755); err != nil {
+		return fmt.Errorf("create staging dir: %w", err)
+	}
+
+	if err := statOnSandboxHost(templateUpper); err == nil {
+		if err := cpOnSandboxHost(templateUpper+"/.", stagingDir+"/"); err != nil {
+			return fmt.Errorf("copy template upper %s: %w", templateUpper, err)
+		}
+	} else {
+		slog.Warn("template upper missing during flatten; using session upper only",
+			"component", "sandbox", "path", templateUpper, "error", err)
+	}
+
+	if err := statOnSandboxHost(sessionUpper); err != nil {
+		return fmt.Errorf("session overlay upper not found at %s: %w", sessionUpper, err)
+	}
+	if err := cpOnSandboxHost(sessionUpper+"/.", stagingDir+"/"); err != nil {
+		return fmt.Errorf("merge session upper %s: %w", sessionUpper, err)
+	}
 	return nil
 }
 

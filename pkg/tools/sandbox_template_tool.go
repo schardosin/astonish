@@ -78,7 +78,9 @@ func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *i
 			"Pass bootstrap_files with absolute-path start/stop scripts (e.g. .astonish/start-services.sh) " +
 			"so every future container from this template gets those files injected (not auto-run). " +
 			"Pass overwrite=true to replace an existing template with the same name (e.g. after fixing " +
-			"start-services.sh). Cannot overwrite the reserved name 'base'. " +
+			"start-services.sh). Self-overwrite (saving the template this session is based on) flattens " +
+			"onto the parent (usually @base) and never deletes the source before the new layer is ready. " +
+			"Cannot overwrite the reserved name 'base'. " +
 			"The returned template_name should be passed to save_fleet_plan's template field. " +
 			"IMPORTANT: This tool stops the container node process, snapshots the container, " +
 			"and restarts the node. Tool calls will be temporarily unavailable during the snapshot.",
@@ -157,7 +159,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 
 	// 2. Create the template from the container
 	slog.Info("creating template from container", "component", "sandbox-template", "template", name, "container", containerName)
-	if err := sandbox.CreateTemplateFromContainer(
+	flattened, err := sandbox.CreateTemplateFromContainer(
 		deps.incusClient,
 		deps.templateRegistry,
 		containerName,
@@ -165,14 +167,21 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		strings.TrimSpace(args.Description),
 		sourceTemplate,
 		args.Overwrite,
-	); err != nil {
+	)
+	if err != nil {
 		// Try to restart node even on failure
 		if restartErr := deps.nodePool.RestartNode(sessionID); restartErr != nil {
 			slog.Warn("failed to restart node after template creation failure", "component", "sandbox-template", "error", restartErr)
 		}
+		msg := fmt.Sprintf("Failed to create template: %v", err)
+		if args.Overwrite && strings.Contains(err.Error(), "not found in registry") {
+			msg += " Self-overwrite must keep the source template until flatten completes; " +
+				"restart Studio with the latest binary and retry save_sandbox_template(overwrite: true). " +
+				"If the template was already deleted, stay on this session and save again (recovery materializes the live rootfs onto @base)."
+		}
 		return SaveSandboxTemplateResult{
 			Status:  "error",
-			Message: fmt.Sprintf("Failed to create template: %v", err),
+			Message: msg,
 		}, nil
 	}
 
@@ -204,6 +213,9 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 	action := "created"
 	if args.Overwrite {
 		action = "updated"
+	}
+	if flattened {
+		action = "updated (flattened onto parent template)"
 	}
 	return SaveSandboxTemplateResult{
 		Status:       "saved",

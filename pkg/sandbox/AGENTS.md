@@ -70,6 +70,8 @@ If you change the entrypoint, update the generator in `cmd/astonish-sandbox-entr
   - Incus: per-org bridge networks + profiles.
 - **Filesystem**: per-session overlay; template snapshots are content-addressed (Incus) or image-tagged (K8s/OpenShell).
 - **Bootstrap files**: template `bootstrap_files` (e.g. `.astonish/start-services.sh`) are injected at session start and never auto-executed — drills/fleet/chat call them after credentials.
+- **Template overwrite**: `CreateTemplateFromContainer(..., overwrite=true)` when saving the **same** name the session is based on **flattens** (template upper ∪ session upper) onto the parent `BasedOn` (usually `base`). Never delete the source template before that flatten finishes — delete-first self-overwrite leaves the registry empty and breaks `ResolveLowerLayers`. Overwriting a *different* name may still delete-first.
+- **Recovery if a template was deleted mid-overwrite**: Keep the live session (do not `use_sandbox_template` / reboot). Restart Studio with a build that has the flatten fix, then `save_sandbox_template(name, overwrite: true, bootstrap_files: …)` again. If the source is already gone from the registry, create materializes the session rootfs onto `@base`. If the session is already dead: recreate from `@base` (clone, deps, build, scripts) and save without overwrite.
 - **Identity**: `IssueSandboxToken` binds the in-pod supervisor's identity to the sandbox UUID via a gateway-issued JWT.
 - **Ops**: `tplStore.AcquireTemplateBuildLock` prevents concurrent Kaniko builds for the same template.
 

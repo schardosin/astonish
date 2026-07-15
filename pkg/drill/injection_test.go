@@ -187,54 +187,25 @@ func TestApplyCredentialInjectionWritesFileViaIncusExec(t *testing.T) {
 
 func TestRunSuiteConfigureRunsBeforeSetup(t *testing.T) {
 	t.Parallel()
-	mock := newMockExecutor()
-	mock.SetResult("shell_command", map[string]interface{}{"stdout": "ok", "exit_code": 0}, nil)
-	runner := NewSuiteRunner(mock, nil, false)
+	// Thin runner does not execute configure/setup — they are instruction sources only.
+	executor := newMockExecutor()
+	runner := NewSuiteRunner(executor, nil, false)
 	suite := &LoadedSuite{
-		Name: "cfg-order",
+		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
-				Configure: []string{"echo configure-step"},
-				Setup:     []string{"echo setup-step"},
+				Configure: []string{"echo configure"},
+				Setup:     []string{"echo setup"},
 			},
 		},
 	}
-	tests := []LoadedTest{{
-		Name: "t1",
-		Config: &config.AgentConfig{
-			Type:  "drill",
-			Suite: "cfg-order",
-			Nodes: []config.Node{{
-				Name: "n1",
-				Type: "tool",
-				Args: map[string]interface{}{
-					"tool":    "shell_command",
-					"command": "echo test",
-				},
-			}},
-		},
-	}}
-	_, err := runner.RunSuite(context.Background(), suite, tests)
-	if err != nil {
-		t.Fatal(err)
+	report, _ := runner.RunSuite(context.Background(), suite, nil)
+	if report.Status != "passed" {
+		t.Fatalf("got %q", report.Status)
 	}
-	var order []string
-	for _, c := range mock.calls {
-		if c.name != "shell_command" {
-			continue
-		}
-		cmd, _ := c.args["command"].(string)
-		order = append(order, cmd)
-	}
-	if len(order) < 2 {
-		t.Fatalf("order = %#v", order)
-	}
-	if order[0] != "echo configure-step" {
-		t.Fatalf("first = %q, want configure", order[0])
-	}
-	if order[1] != "echo setup-step" {
-		t.Fatalf("second = %q, want setup", order[1])
+	if len(executor.calls) != 0 {
+		t.Fatalf("expected no configure/setup execution, got %+v", executor.calls)
 	}
 }
 

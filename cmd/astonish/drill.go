@@ -756,7 +756,8 @@ func initSandboxForTest(template string) (*sandbox.LazyNodeClient, string, bool)
 }
 
 // injectCLIDrillBootstrapAndCredentials injects template bootstrap_files and suite
-// credential_injection into the CLI drill sandbox before configure/setup.
+// credential_injection into the CLI drill sandbox before tests.
+// Caller must ensure services are already running (CLI does not run suite setup).
 func injectCLIDrillBootstrapAndCredentials(lazyNode *sandbox.LazyNodeClient, sessionID, template, suiteName string, sc *config.DrillSuiteConfig) error {
 	ctx := context.Background()
 	tplRegistry, err := sandbox.NewTemplateRegistry()

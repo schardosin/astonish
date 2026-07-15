@@ -31,17 +31,22 @@ Services are started in declaration order and stopped in reverse order. Each ser
 
 For multi-service apps, prefer a single start script stored on the **sandbox template** as `bootstrap_files` (e.g. `.astonish/start-services.sh`). Every container from that template gets the file injected at session start; it is **not** auto-executed.
 
-Standalone `run_drill` and CLI drills apply a **runtime readiness pipeline** before tests:
+**`run_drill` is test-only.** It injects suite credentials and executes drills. It does **not** switch templates, git-pull, run `configure`/`setup`/`ready_check`/`teardown`.
 
-1. Template switch + non-secret `bootstrap_files`
-2. Suite `credentials` / `credential_injection` (or fleet-plan fallback by suite name/template)
-3. Suite `configure:` appendix (ordered shell: APIs, files, one-off cmds)
-4. Suite `setup:` / `start-services.sh`
-5. `ready_check` (`stable_count` consecutive successes)
+Studio "Run" pastes suite **run instructions** (from `run_instructions` or auto-generated from `template` / `workspace` / `branch` / `setup` / `ready_check`). The chat agent:
+
+1. `use_sandbox_template` when needed
+2. `git fetch && git checkout <branch|main> && git pull --ff-only` when `workspace` is set
+3. Run `setup` / start-services.sh and wait for readiness
+4. Call `run_drill` (credentials injected mechanically; do not write secret files by hand)
+
+Fleet sessions call `run_drill` alone when the stack is already live.
 
 ```yaml
 suite_config:
   template: "@myapp"
+  workspace: /root/myapp
+  branch: main
   credentials:
     providers: myapp-providers
   credential_injection:
@@ -59,16 +64,13 @@ suite_config:
     url: "http://localhost:3000/"
     timeout: 60
     interval: 2
-    # stable_count: 3  # default; consecutive successes required
   teardown:
     - "bash /root/myapp/.astonish/stop-services.sh || true"
 ```
 
-Put offline / file / env configuration in `configure:`. If an API must run **after** services are up, call it from `start-services.sh` after the ready poll (or add a `configure-after-start.sh` as the last `setup` line).
+Put offline / file / env configuration in `configure:` (agent prep). If an API must run **after** services are up, put it in `start-services.sh` after the ready poll.
 
-The runner runs `start-services.sh` in the **foreground** and waits for it to exit. Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop — Vite/npm often exit shortly after the first successful curl. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. `stop-services.sh` should kill the supervisor process group (`kill -- -$pid`) with `pkill` fallbacks.
-
-`ready_check` then polls again and requires **`stable_count` consecutive successes** (default 3, spaced by `interval`) so a one-shot curl that succeeds just before a process dies cannot green the suite.
+Canonical scripts start each daemon under a **detached restart supervisor** (`setsid` + `nohup` + `while true` restart loop + supervisor PID file), poll until ready and briefly stable, then **exit 0**. Do **not** end with `wait`, and do **not** use bare `npm run dev &` or one-shot `setsid` without a restart loop. Prefer `npx vite --host 0.0.0.0` over `npm run dev`. Always run a newly written start script once before `save_sandbox_template`; use `overwrite: true` to replace an existing named template after fixing bootstrap files.
 
 ### Why Visual Regression Testing
 
@@ -96,24 +98,15 @@ This automated triage reduces the human effort needed to process test failures.
 ### Suite Lifecycle
 
 ```
-1. Setup Phase:
-   - Create sandbox container from template
-   - Start services in order (setup commands)
-   - Wait for each service's ready check
-   - Resolve container IP for browser access
+0. Prep (agent / Studio run_instructions — not run_drill):
+   - use_sandbox_template when needed
+   - git sync workspace to branch (default main)
+   - configure + start-services.sh + readiness poll
     |
     v
-2. Test Execution Phase:
-   For each drill in the suite:
-     - Run test steps (shell commands or browser interactions)
-     - Evaluate assertions after each step
-     - On failure: stop, continue, or triage (configurable)
-     - Collect artifacts (logs, screenshots, diff images)
-    |
-    v
-3. Teardown Phase:
-   - Stop services in reverse order (teardown commands)
-   - Collect final artifacts
+1. run_drill:
+   - Inject credentials
+   - Execute drills (assertions, artifacts, optional triage)
    - Generate JSON report
 ```
 

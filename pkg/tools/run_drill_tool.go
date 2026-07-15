@@ -25,8 +25,7 @@ type RunDrillArgs struct {
 	SuiteName string `json:"suite_name" jsonschema:"Name of the drill suite to run (without .yaml extension)"`
 	TestName  string `json:"test_name,omitempty" jsonschema:"Run a single drill by name instead of the full suite. The drill must belong to the specified suite."`
 	Tag       string `json:"tag,omitempty" jsonschema:"Filter drills by tag (comma-separated)"`
-	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including setup logs"`
-	Force     bool   `json:"force,omitempty" jsonschema:"Stay on the current sandbox even when the suite template name differs. Preferred when a prepared workspace already has start-services.sh; do not use force to recover a missing script (rewrite/restore the script instead)."`
+	Verbose   bool   `json:"verbose,omitempty" jsonschema:"Show verbose output including step details"`
 }
 
 // RunDrillResult is the result of the run_drill tool.
@@ -41,7 +40,7 @@ type RunDrillResult struct {
 // For fleet sessions, lazyClient and sessionID are set directly.
 type runDrillDeps struct {
 	nodePool         *sandbox.NodeClientPool   // Chat/Studio sessions (nil when no sandbox)
-	templateRegistry *sandbox.TemplateRegistry // Optional; used to inject bootstrap_files after auto-switch
+	templateRegistry *sandbox.TemplateRegistry // Optional; retained for wiring compatibility
 	browserMgr       *browser.Manager          // Shared in-container browser (chat/fleet); never host Chrome
 	lazyClient       *sandbox.LazyNodeClient   // Fleet Incus sessions
 	toolClient       sandbox.ToolNodeClient    // Fleet backend-agnostic sessions
@@ -51,8 +50,7 @@ type runDrillDeps struct {
 
 // NewRunDrillTool creates the run_drill tool for chat/Studio sessions.
 // nodePool may be nil when sandbox is not enabled; the tool will use local execution.
-// tplRegistry is optional — when set, auto-switching to the suite template also
-// injects that template's bootstrap_files.
+// tplRegistry is optional (legacy wiring); run_drill does not auto-switch templates.
 // browserMgr should be the chat-wired Manager (SandboxEnabled + container callbacks).
 // Browser steps refuse to launch host Chromium when browserMgr is nil or unwired.
 // llmProvider is optional — when set, semantic assertions (assert.type: "semantic")
@@ -102,15 +100,12 @@ func newRunDrillToolFromDeps(deps *runDrillDeps) (tool.Tool, error) {
 	return functiontool.New(functiontool.Config{
 		Name: "run_drill",
 		Description: "Run a deterministic drill suite (or a single drill with test_name). " +
-			"Automatically handles setup, ready_check, and teardown from the suite config — " +
-			"do NOT manually start services before calling this tool. " +
-			"Preserves a prepared sandbox that already has the suite's start-services.sh. " +
-			"Only auto-switches from @base when the suite template is registered and the start " +
-			"script is missing on the current container. Pass force=true to stay on the current " +
-			"sandbox when the suite template name differs. If start-services.sh is missing, restore " +
-			"or rewrite it (and ensure template bootstrap_files) — do not switch templates to fix it. " +
-			"Shell, file, and browser tool steps all run inside the sandbox container " +
-			"(browser via Chromium+KasmVNC in the session — same as chat). Use localhost in URLs. " +
+			"Assumes the sandbox is already on the right template, code is updated, and services " +
+			"are ready — it does NOT switch templates, git-pull, start services, or run ready_check/teardown. " +
+			"In Studio, follow the suite run_instructions (template switch, git sync, start script) first. " +
+			"In fleet, call run_drill alone when the stack is already live. " +
+			"Injects suite credentials, then executes drill steps. Shell, file, and browser tool steps " +
+			"run inside the sandbox (browser via Chromium+KasmVNC). Use localhost in URLs. " +
 			"Returns the full report with pass/fail status for each drill and step.",
 	}, fn)
 }
@@ -155,35 +150,7 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
-	// Template auto-switch (chat mode with sandbox only).
-	// Fleet sessions skip this — the container is already provisioned for the fleet.
-	// No-sandbox sessions skip this — template is irrelevant for local execution.
-	// Prefer preserving a prepared workspace; only switch from @base when needed.
-	suiteTemplate := ""
-	var suiteCfg *config.DrillSuiteConfig
-	if suite.Config != nil && suite.Config.SuiteConfig != nil {
-		suiteCfg = suite.Config.SuiteConfig
-		suiteTemplate = suiteCfg.Template
-	}
-	if suiteTemplate == "" && suite.Config != nil {
-		suiteTemplate = suite.Config.Template
-	}
-	if err := ensureDrillSandboxTemplate(ctx, deps, suiteName, suiteTemplate, suiteCfg, args.Force); err != nil {
-		return RunDrillResult{
-			Status:  "error",
-			Summary: err.Error(),
-		}, nil
-	}
-
-	// Ensure setup will find start-services.sh (inject bootstrap or clear error).
-	if err := preflightDrillStartServices(ctx, deps, suiteName, suiteTemplate, suiteCfg); err != nil {
-		return RunDrillResult{
-			Status:  "error",
-			Summary: err.Error(),
-		}, nil
-	}
-
-	// Inject suite (or fleet-plan fallback) credentials before configure/setup.
+	// Inject suite (or fleet-plan fallback) credentials before tests.
 	if err := injectDrillCredentials(ctx, deps, suiteName, suite); err != nil {
 		return RunDrillResult{
 			Status:  "error",
@@ -233,7 +200,7 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	executor := buildTestExecutor(ctx, deps)
 	defer executor.Close()
 
-	// Fail closed before suite setup if sandbox is active but the shared
+	// Fail closed before tests if sandbox is active but the shared
 	// browser Manager was never wired for in-container Chromium.
 	if executor.hasSandbox() && (deps.browserMgr == nil || !deps.browserMgr.SandboxEnabled) {
 		return RunDrillResult{
@@ -244,8 +211,8 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 		}, nil
 	}
 
-	// Warm Chromium/CDP before suite setup when drills use browser_* tools so
-	// the cold start does not race the first navigate after ready_check.
+	// Warm Chromium/CDP before tests when drills use browser_* tools so
+	// the cold start does not race the first navigate.
 	if suiteUsesBrowserTools(tests) {
 		if err := warmBrowserForDrill(executor); err != nil {
 			return RunDrillResult{

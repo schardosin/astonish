@@ -50,8 +50,8 @@ func NewUseSandboxTemplateTool(nodePool *sandbox.NodeClientPool, templateRegistr
 			"project code. Call this after the user selects a template from list_sandbox_templates. " +
 			"After this call, all file and shell tools will operate inside the new container. " +
 			"Browser tools use in-container Chromium — use localhost/127.0.0.1 in " +
-			"browser_navigate URLs, not the bridge IP. For running a drill suite, prefer " +
-			"run_drill alone (it auto-switches to the suite template). " +
+			"browser_navigate URLs, not the bridge IP. Before run_drill in Studio, " +
+			"use this tool when the suite template differs from the current sandbox. " +
 			"IMPORTANT: This operation takes a few seconds as it recreates the container.",
 	}, useSandboxTemplate)
 	if err != nil {

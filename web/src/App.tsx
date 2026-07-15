@@ -1625,13 +1625,10 @@ layout:
               theme={theme}
               path={path}
               onNavigate={(hashPath: string) => navigate(hashPath)}
-              onRunSuite={(suiteName: string, _template?: unknown) => {
-                // run_drill auto-switches to the suite template and injects
-                // credentials/bootstrap — do not ask for use_sandbox_template
-                // first (that leads the agent to manually rewrite provider files
-                // and delay/skip a clean suite setup).
+              onRunSuite={(suiteName: string, instructions?: string) => {
                 setPendingChatMessage({
-                  message: `Run the drill suite "${suiteName}" with run_drill. Do not call use_sandbox_template, write credential files, or start services manually — run_drill handles template switch, injection, setup, and ready_check.`,
+                  message: instructions?.trim()
+                    || `Prepare then run the drill suite "${suiteName}". Follow its suite_config prep (template, git sync, start services), then call run_drill. run_drill only injects credentials and runs tests.`,
                 })
                 navigate(buildPath('chat'))
               }}

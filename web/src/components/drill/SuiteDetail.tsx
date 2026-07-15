@@ -14,13 +14,14 @@ import { buildPath } from '../../hooks/useHashRouter'
 import YamlDrawer from '../YamlDrawer'
 import { formatTimeAgo, formatDuration, StatusDot, StatusBadge } from './drillUtils'
 import { ReportStepCard } from './DrillCards'
+import { generateRunInstructions } from '../../utils/generateRunInstructions'
 
 // ─── Suite Detail ───
 
 interface SuiteDetailProps {
   suiteKey: string
   onNavigate: (path: string) => void
-  onRunSuite: (suiteKey: string, template?: unknown) => void
+  onRunSuite: (suiteKey: string, instructions?: string) => void
   onAddDrills: (suiteKey: string) => void
   onRefresh?: () => void
   theme: 'dark' | 'light'
@@ -146,8 +147,7 @@ export default function SuiteDetail({ suiteKey, onNavigate, onRunSuite, onAddDri
             <button
               onClick={() => {
                 const cfg = suite?.suite_config as Record<string, unknown> | undefined
-                const template = suite?.template || (typeof cfg?.template === 'string' ? cfg.template : undefined)
-                onRunSuite(suiteKey, template)
+                onRunSuite(suiteKey, generateRunInstructions(suiteKey, cfg))
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors hover:opacity-90"
               style={{ background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' }}

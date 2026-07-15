@@ -86,22 +86,23 @@ func (c *AgentConfig) UnmarshalYAML(value *yaml.Node) error {
 // DrillSuiteConfig defines infrastructure for running drills.
 // Used by type: drill_suite flows.
 //
-// Runtime readiness order (runner + run_drill):
-//  1. credentials / credential_injection (materialized before configure)
-//  2. configure[] (offline / file / env appendix)
-//  3. setup[] / services (start processes)
-//  4. ready_check
+// run_drill only injects credentials and executes tests. Prep fields below are
+// instruction sources for Studio chat / agents (template switch, git sync,
+// start services, ready poll) — they are NOT executed by SuiteRunner.
 type DrillSuiteConfig struct {
-	Template             string                     `yaml:"template,omitempty" json:"template,omitempty"`                             // Container template name (e.g., "@myapp")
-	Services             []ServiceConfig            `yaml:"services,omitempty" json:"services,omitempty"`                             // Multi-service definitions (started in order, stopped in reverse)
-	Configure            []string                   `yaml:"configure,omitempty" json:"configure,omitempty"`                           // Shell appendix after credential injection, before setup
-	Setup                []string                   `yaml:"setup,omitempty" json:"setup,omitempty"`                                   // Shell commands to start services (legacy single-service)
-	ReadyCheck           *ReadyCheck                `yaml:"ready_check,omitempty" json:"ready_check,omitempty"`                     // Wait for application readiness (legacy single-service)
-	Teardown             []string                   `yaml:"teardown,omitempty" json:"teardown,omitempty"`                             // Shell commands after all tests (legacy single-service)
-	Environment          map[string]string          `yaml:"environment,omitempty" json:"environment,omitempty"`                     // Shared environment variables
-	BaseURL              string                     `yaml:"base_url,omitempty" json:"base_url,omitempty"`                             // Base URL for browser tests (e.g., "http://localhost:3000")
-	Credentials          map[string]string          `yaml:"credentials,omitempty" json:"credentials,omitempty"`                     // logical name → credential store entry
-	CredentialInjection  *SuiteCredentialInjection  `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"` // how credentials reach the sandbox
+	Template            string                    `yaml:"template,omitempty" json:"template,omitempty"`                         // Container template name (e.g., "@myapp")
+	Workspace           string                    `yaml:"workspace,omitempty" json:"workspace,omitempty"`                       // Absolute path to the app workspace inside the sandbox
+	Branch              string                    `yaml:"branch,omitempty" json:"branch,omitempty"`                             // Git branch to sync before Studio runs (default main when workspace set)
+	RunInstructions     string                    `yaml:"run_instructions,omitempty" json:"run_instructions,omitempty"`         // Optional full chat prep override; else auto-generated
+	Services            []ServiceConfig           `yaml:"services,omitempty" json:"services,omitempty"`                         // Multi-service defs (instruction source; not auto-started by runner)
+	Configure           []string                  `yaml:"configure,omitempty" json:"configure,omitempty"`                       // Offline/file prep steps (instruction source)
+	Setup               []string                  `yaml:"setup,omitempty" json:"setup,omitempty"`                               // Start-service commands (instruction source)
+	ReadyCheck          *ReadyCheck               `yaml:"ready_check,omitempty" json:"ready_check,omitempty"`                   // Readiness hint for agent prep (not auto-polled by runner)
+	Teardown            []string                  `yaml:"teardown,omitempty" json:"teardown,omitempty"`                         // Cleanup hint for agents (not auto-run by runner)
+	Environment         map[string]string         `yaml:"environment,omitempty" json:"environment,omitempty"`                   // Shared environment variables
+	BaseURL             string                    `yaml:"base_url,omitempty" json:"base_url,omitempty"`                         // Base URL for browser tests (e.g., "http://localhost:3000")
+	Credentials         map[string]string         `yaml:"credentials,omitempty" json:"credentials,omitempty"`                   // logical name → credential store entry
+	CredentialInjection *SuiteCredentialInjection `yaml:"credential_injection,omitempty" json:"credential_injection,omitempty"` // materialized by run_drill before tests
 }
 
 // SuiteCredentialInjection mirrors fleet credential_injection for drill suites.

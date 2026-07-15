@@ -35,7 +35,7 @@ function EmptyState() {
 interface DrillViewProps {
   path: RouterPath | null
   onNavigate: (path: string) => void
-  onRunSuite: (suiteKey: string, template?: unknown) => void
+  onRunSuite: (suiteKey: string, instructions?: string) => void
   onAddDrills: (suiteKey: string) => void
   theme: 'dark' | 'light'
 }

@@ -23,6 +23,9 @@ type SaveSandboxTemplateArgs struct {
 	// this template at session start (mount only — not auto-executed). Include
 	// .astonish/start-services.sh (and optionally stop-services.sh) with absolute paths.
 	BootstrapFiles []BootstrapFileArg `json:"bootstrap_files,omitempty" jsonschema:"Non-secret bootstrap files to inject on every container launch (e.g. start-services.sh). Absolute paths required."`
+	// Overwrite replaces an existing template with the same name (delete then re-snapshot).
+	// Required to update a named template after fixing bootstrap scripts or rebuilding deps.
+	Overwrite bool `json:"overwrite,omitempty" jsonschema:"If true, replace an existing template with the same name. Refused for the reserved name 'base'."`
 }
 
 // BootstrapFileArg is one bootstrap file passed to save_sandbox_template.
@@ -74,6 +77,8 @@ func NewSaveSandboxTemplateTool(nodePool *sandbox.NodeClientPool, incusClient *i
 			"state so future fleet sessions start with everything pre-installed. " +
 			"Pass bootstrap_files with absolute-path start/stop scripts (e.g. .astonish/start-services.sh) " +
 			"so every future container from this template gets those files injected (not auto-run). " +
+			"Pass overwrite=true to replace an existing template with the same name (e.g. after fixing " +
+			"start-services.sh). Cannot overwrite the reserved name 'base'. " +
 			"The returned template_name should be passed to save_fleet_plan's template field. " +
 			"IMPORTANT: This tool stops the container node process, snapshots the container, " +
 			"and restarts the node. Tool calls will be temporarily unavailable during the snapshot.",
@@ -159,6 +164,7 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		name,
 		strings.TrimSpace(args.Description),
 		sourceTemplate,
+		args.Overwrite,
 	); err != nil {
 		// Try to restart node even on failure
 		if restartErr := deps.nodePool.RestartNode(sessionID); restartErr != nil {
@@ -195,10 +201,14 @@ func saveSandboxTemplate(ctx tool.Context, args SaveSandboxTemplateArgs) (SaveSa
 		}
 	}
 
+	action := "created"
+	if args.Overwrite {
+		action = "updated"
+	}
 	return SaveSandboxTemplateResult{
 		Status:       "saved",
 		TemplateName: name,
-		Message: fmt.Sprintf("Template %q created and ready for cloning. "+
-			"Pass template: %q to save_fleet_plan to bind fleet sessions to this template.%s", name, name, bootstrapNote),
+		Message: fmt.Sprintf("Template %q %s and ready for cloning. "+
+			"Pass template: %q to save_fleet_plan to bind fleet sessions to this template.%s", name, action, name, bootstrapNote),
 	}, nil
 }

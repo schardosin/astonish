@@ -1147,7 +1147,7 @@ func handleSandboxSave(identifier, templateName, description string) error {
 
 		// Step 1: Save session as temp template
 		if err := sandbox.CreateTemplateFromContainer(
-			client, tplRegistry, containerName, tmpName, "temporary promote", sourceTemplate,
+			client, tplRegistry, containerName, tmpName, "temporary promote", sourceTemplate, false,
 		); err != nil {
 			return fmt.Errorf("failed to save session as template: %w", err)
 		}
@@ -1172,7 +1172,7 @@ func handleSandboxSave(identifier, templateName, description string) error {
 			sessionID[:min(8, len(sessionID))], containerName, templateName)
 
 		if err := sandbox.CreateTemplateFromContainer(
-			client, tplRegistry, containerName, templateName, description, sourceTemplate,
+			client, tplRegistry, containerName, templateName, description, sourceTemplate, false,
 		); err != nil {
 			return fmt.Errorf("failed to save session as template: %w", err)
 		}

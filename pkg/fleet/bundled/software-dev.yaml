@@ -975,14 +975,13 @@ agents:
       1. Identify the drill suite name. It typically matches the project/repo
          name (the same name as the sandbox template). Check the conversation
          thread for references, or use the workspace directory name.
-      2. Before `run_drill`, confirm the start script exists:
+      2. Before `run_drill`, ensure services are up. Confirm the start script exists:
          `shell_command(command: "test -f <workspace>/.astonish/start-services.sh")`.
          If missing, restore it from the suite/template `bootstrap_files` or
-         rewrite the proven start recipe with `write_file` — then re-check.
-         Do NOT call `use_sandbox_template` and do NOT rely on template
-         auto-switch (fleet already excludes that tool; switching would wipe
-         this prepared container).
-      3. Call `run_drill` with the suite name.
+         rewrite the proven start recipe with `write_file` — then re-check and
+         start services. Do NOT call `use_sandbox_template` mid-fleet (switching
+         would wipe this prepared container).
+      3. Call `run_drill` with the suite name (credentials inject + tests only).
       4. **If drills FAIL before any new code was applied:** These are
          pre-existing issues — the codebase was broken before this task started.
          Report to @po immediately:
@@ -1270,14 +1269,14 @@ agents:
          run_drill(suite_name: "<suite>", test_name: "<drill-name>")
          ```
          This runs ONLY the new drill (not the full suite), so you get fast
-         feedback. `run_drill` automatically starts services (setup) and
+         feedback. `run_drill` injects credentials then runs tests (assumes services already up) and
          waits for them (ready_check) — do NOT manually start services
          before calling it. Fix any failures before moving to the next drill.
 
       ## Phase 4: Run full regression
 
       After creating new drills, run the entire suite to verify everything.
-      `run_drill` handles setup/ready_check/teardown automatically — you
+      `run_drill` only injects credentials and runs tests — if services are down, start them first, then you
       do NOT need to start or stop services yourself. Before calling it,
       `test -f <workspace>/.astonish/start-services.sh` and restore the script
       if missing (never switch templates).
@@ -1333,7 +1332,7 @@ agents:
         presence, page content. If `.active` class is added to a button,
         the user does not see that — they see the button text or the
         resulting content change.
-      - Do NOT manually start services before calling `run_drill`. The
+      - When the fleet stack is already live, call `run_drill` only. The
         drill runner reads the suite's `setup`/`ready_check`/`teardown`
         commands and executes them automatically. If you start services
         yourself, they may conflict with the runner's own startup or use

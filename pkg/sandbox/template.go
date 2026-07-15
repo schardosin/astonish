@@ -974,14 +974,20 @@ func ComputeBinaryHash() (string, error) {
 //  3. Copy the session's overlay upper layer to the template's overlay upper
 //  4. Register the template (stacked overlay, no Incus snapshot needed)
 //  5. Restart the session container
-func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description, sourceTemplate string) error {
+func CreateTemplateFromContainer(client *IncusClient, registry *TemplateRegistry, containerName, templateName, description, sourceTemplate string, overwrite bool) error {
 	if templateName == BaseTemplate {
 		return fmt.Errorf("cannot create a template named %q (reserved)", BaseTemplate)
 	}
 
 	tplContainerName := TemplateName(templateName)
 	if client.InstanceExists(tplContainerName) {
-		return fmt.Errorf("template %q already exists", templateName)
+		if !overwrite {
+			return fmt.Errorf("template %q already exists", templateName)
+		}
+		slog.Info("overwriting existing template", "component", "sandbox", "template", templateName)
+		if err := DeleteTemplate(client, registry, templateName); err != nil {
+			return fmt.Errorf("failed to remove existing template %q for overwrite: %w", templateName, err)
+		}
 	}
 
 	// Default to @base if source template not specified

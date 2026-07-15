@@ -201,6 +201,7 @@ func TestRunSuiteToolError(t *testing.T) {
 
 func TestRunSuiteSetupFailure(t *testing.T) {
 	t.Parallel()
+	// Thin runner ignores suite setup — prep is the caller's job.
 	executor := newMockExecutor()
 	executor.SetResult("shell_command", nil, fmt.Errorf("setup failed"))
 
@@ -217,13 +218,14 @@ func TestRunSuiteSetupFailure(t *testing.T) {
 	}
 
 	report, _ := runner.RunSuite(context.Background(), suite, nil)
-	if report.Status != "error" {
-		t.Errorf("Status = %q, want %q", report.Status, "error")
+	if report.Status != "passed" {
+		t.Errorf("Status = %q, want passed (setup not executed by thin runner)", report.Status)
 	}
-	if report.Summary == "" {
-		t.Error("expected summary with setup failure")
+	if len(executor.calls) != 0 {
+		t.Errorf("expected no shell calls from ignored setup, got %+v", executor.calls)
 	}
 }
+
 
 func TestRunSuiteMultipleTests(t *testing.T) {
 	t.Parallel()
@@ -392,274 +394,185 @@ func TestRunSuiteNoAssertionPass(t *testing.T) {
 
 func TestRunSuiteTeardownAlwaysRuns(t *testing.T) {
 	t.Parallel()
-	// First call (setup) succeeds, test tool fails
-	customExec := &countingExecutor{
-		results: []mockResult{
-			{result: map[string]interface{}{"stdout": "setup ok"}, err: nil},    // setup
-			{result: nil, err: fmt.Errorf("tool failed")},                       // test step
-			{result: map[string]interface{}{"stdout": "teardown ok"}, err: nil}, // teardown
-		},
-	}
+	// Thin runner does not run suite teardown.
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ok"}, nil)
 
-	runner := NewSuiteRunner(customExec, nil, false)
+	runner := NewSuiteRunner(executor, nil, false)
 
 	suite := &LoadedSuite{
 		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
-				Setup:    []string{"setup_cmd"},
-				Teardown: []string{"teardown_cmd"},
+				Setup:    []string{"echo setup"},
+				Teardown: []string{"echo teardown"},
 			},
 		},
 	}
 
-	tests := []LoadedTest{
-		{
-			Name: "test_err",
-			Config: &config.AgentConfig{
-				Type:  "drill",
-				Suite: "myapp",
-				Nodes: []config.Node{
-					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command"}},
-				},
-			},
+	tests := []LoadedTest{{
+		Name: "t1",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "myapp",
+			Nodes: []config.Node{{
+				Name: "step1",
+				Type: "tool",
+				Args: map[string]interface{}{"tool": "shell_command", "command": "echo hi"},
+				Assert: &config.AssertConfig{Type: "contains", Expected: "nope"},
+			}},
 		},
+	}}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+	if report.Status != "failed" {
+		t.Fatalf("Status = %q, want failed", report.Status)
 	}
-
-	runner.RunSuite(context.Background(), suite, tests)
-
-	// Verify teardown was called (3 total: setup + test step + teardown)
-	if customExec.callCount != 3 {
-		t.Errorf("expected 3 calls (setup + test + teardown), got %d", customExec.callCount)
-	}
-}
-
-// countingExecutor tracks call count and returns pre-defined results.
-type countingExecutor struct {
-	callCount int
-	results   []mockResult
-}
-
-func (ce *countingExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	idx := ce.callCount
-	ce.callCount++
-	if idx < len(ce.results) {
-		return ce.results[idx].result, ce.results[idx].err
-	}
-	return map[string]interface{}{"stdout": "default"}, nil
-}
-
-// commandTrackingExecutor tracks commands in order and returns per-command results.
-type commandTrackingExecutor struct {
-	commands []string
-	results  map[string]mockResult
-}
-
-func newCommandTrackingExecutor() *commandTrackingExecutor {
-	return &commandTrackingExecutor{
-		results: make(map[string]mockResult),
-	}
-}
-
-func (ct *commandTrackingExecutor) SetCommandResult(command string, result any, err error) {
-	ct.results[command] = mockResult{result: result, err: err}
-}
-
-func (ct *commandTrackingExecutor) Execute(_ context.Context, name string, args map[string]interface{}) (any, error) {
-	if cmd, ok := args["command"]; ok {
-		ct.commands = append(ct.commands, fmt.Sprintf("%v", cmd))
-		if r, found := ct.results[fmt.Sprintf("%v", cmd)]; found {
-			return r.result, r.err
+	for _, c := range executor.calls {
+		cmd, _ := c.args["command"].(string)
+		if strings.Contains(cmd, "teardown") || strings.Contains(cmd, "setup") {
+			t.Fatalf("thin runner must not run suite setup/teardown, got %q", cmd)
 		}
 	}
-	return map[string]interface{}{"stdout": "ok"}, nil
 }
+
 
 func TestRunSuiteMultiServiceBasic(t *testing.T) {
 	t.Parallel()
-	exec := newCommandTrackingExecutor()
-	runner := NewSuiteRunner(exec, nil, false)
+	// Thin runner ignores services setup/teardown and only runs tests.
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "ping", "exit_code": 0}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
 
 	suite := &LoadedSuite{
-		Name: "fullstack",
+		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
-					{Name: "database", Setup: "start_db", Teardown: "stop_db"},
-					{Name: "backend", Setup: "start_api", Teardown: "stop_api"},
-					{Name: "frontend", Setup: "start_web", Teardown: "stop_web"},
+					{Name: "db", Setup: "start-db", Teardown: "stop-db"},
+					{Name: "api", Setup: "start-api", Teardown: "stop-api"},
 				},
 			},
 		},
 	}
 
-	tests := []LoadedTest{
-		{
-			Name: "test_basic",
-			Config: &config.AgentConfig{
-				Type:  "drill",
-				Suite: "fullstack",
-				Nodes: []config.Node{
-					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command", "command": "echo test"}},
-				},
-			},
+	tests := []LoadedTest{{
+		Name: "health",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "myapp",
+			Nodes: []config.Node{{
+				Name: "ping",
+				Type: "tool",
+				Args: map[string]interface{}{"tool": "shell_command", "command": "echo ping"},
+				Assert: &config.AssertConfig{Type: "contains", Expected: "ping"},
+			}},
 		},
-	}
+	}}
 
-	report, err := runner.RunSuite(context.Background(), suite, tests)
-	if err != nil {
-		t.Fatalf("RunSuite: %v", err)
-	}
-
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
 	if report.Status != "passed" {
-		t.Errorf("Status = %q, want %q", report.Status, "passed")
+		t.Fatalf("Status = %q summary=%q", report.Status, report.Summary)
 	}
-
-	// Verify order: setup db → setup api → setup web → test → teardown web → teardown api → teardown db
-	expected := []string{"start_db", "start_api", "start_web", "echo test", "stop_web", "stop_api", "stop_db"}
-	if len(exec.commands) != len(expected) {
-		t.Fatalf("commands = %v, want %v", exec.commands, expected)
-	}
-	for i, cmd := range expected {
-		if exec.commands[i] != cmd {
-			t.Errorf("command[%d] = %q, want %q", i, exec.commands[i], cmd)
+	for _, c := range executor.calls {
+		cmd, _ := c.args["command"].(string)
+		if cmd == "start-db" || cmd == "start-api" || cmd == "stop-db" || cmd == "stop-api" {
+			t.Fatalf("thin runner must not start/stop services, got %q", cmd)
 		}
 	}
 }
+
 
 func TestRunSuiteMultiServiceSetupFailure(t *testing.T) {
 	t.Parallel()
-	exec := newCommandTrackingExecutor()
-	exec.SetCommandResult("start_api", nil, fmt.Errorf("api failed to start"))
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", nil, fmt.Errorf("boom"))
 
-	runner := NewSuiteRunner(exec, nil, false)
-
+	runner := NewSuiteRunner(executor, nil, false)
 	suite := &LoadedSuite{
-		Name: "fullstack",
+		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
-				Services: []config.ServiceConfig{
-					{Name: "database", Setup: "start_db", Teardown: "stop_db"},
-					{Name: "backend", Setup: "start_api", Teardown: "stop_api"},
-					{Name: "frontend", Setup: "start_web", Teardown: "stop_web"},
-				},
+				Services: []config.ServiceConfig{{Name: "api", Setup: "start-api"}},
 			},
 		},
 	}
-
 	report, _ := runner.RunSuite(context.Background(), suite, nil)
-
-	if report.Status != "error" {
-		t.Errorf("Status = %q, want %q", report.Status, "error")
-	}
-	if report.Summary != `service "backend" setup failed: api failed to start` {
-		t.Errorf("Summary = %q, unexpected", report.Summary)
-	}
-
-	// Should have: start_db (ok) → start_api (fail) → stop_db (reverse teardown of started)
-	// "stop_api" should NOT be called because backend never finished starting
-	// Only database was fully started, so only "stop_db" should be torn down
-	expected := []string{"start_db", "start_api", "stop_db"}
-	if len(exec.commands) != len(expected) {
-		t.Fatalf("commands = %v, want %v", exec.commands, expected)
-	}
-	for i, cmd := range expected {
-		if exec.commands[i] != cmd {
-			t.Errorf("command[%d] = %q, want %q", i, exec.commands[i], cmd)
-		}
+	if report.Status != "passed" {
+		t.Errorf("Status = %q, want passed when ignoring service setup", report.Status)
 	}
 }
+
 
 func TestRunSuiteMultiServiceTeardownReverse(t *testing.T) {
 	t.Parallel()
-	exec := newCommandTrackingExecutor()
-	runner := NewSuiteRunner(exec, nil, false)
-
+	executor := newMockExecutor()
+	runner := NewSuiteRunner(executor, nil, false)
 	suite := &LoadedSuite{
-		Name: "trio",
+		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
 				Services: []config.ServiceConfig{
-					{Name: "a", Setup: "start_a", Teardown: "stop_a"},
-					{Name: "b", Setup: "start_b", Teardown: "stop_b"},
-					{Name: "c", Setup: "start_c"}, // no teardown
+					{Name: "a", Setup: "start-a", Teardown: "stop-a"},
+					{Name: "b", Setup: "start-b", Teardown: "stop-b"},
 				},
 			},
 		},
 	}
-
 	report, _ := runner.RunSuite(context.Background(), suite, nil)
 	if report.Status != "passed" {
-		t.Errorf("Status = %q, want %q (no tests = passed)", report.Status, "passed")
+		t.Fatalf("got %q", report.Status)
 	}
-
-	// Services with no teardown should be skipped in teardown phase
-	expected := []string{"start_a", "start_b", "start_c", "stop_b", "stop_a"}
-	if len(exec.commands) != len(expected) {
-		t.Fatalf("commands = %v, want %v", exec.commands, expected)
-	}
-	for i, cmd := range expected {
-		if exec.commands[i] != cmd {
-			t.Errorf("command[%d] = %q, want %q", i, exec.commands[i], cmd)
-		}
+	if len(executor.calls) != 0 {
+		t.Fatalf("expected no teardown calls, got %+v", executor.calls)
 	}
 }
+
 
 func TestRunSuiteMultiServiceAlwaysTeardownOnTestFailure(t *testing.T) {
 	t.Parallel()
-	exec := newCommandTrackingExecutor()
-	exec.SetCommandResult("echo failing", map[string]interface{}{"stdout": "wrong output"}, nil)
-
-	runner := NewSuiteRunner(exec, nil, false)
-
+	executor := newMockExecutor()
+	executor.SetResult("shell_command", map[string]interface{}{"stdout": "bad"}, nil)
+	runner := NewSuiteRunner(executor, nil, false)
 	suite := &LoadedSuite{
-		Name: "svc",
+		Name: "myapp",
 		Config: &config.AgentConfig{
 			Type: "drill_suite",
 			SuiteConfig: &config.DrillSuiteConfig{
-				Services: []config.ServiceConfig{
-					{Name: "db", Setup: "start_db", Teardown: "stop_db"},
-					{Name: "app", Setup: "start_app", Teardown: "stop_app"},
-				},
+				Services: []config.ServiceConfig{{Name: "api", Setup: "start-api", Teardown: "stop-api"}},
 			},
 		},
 	}
-
-	tests := []LoadedTest{
-		{
-			Name: "test_fail",
-			Config: &config.AgentConfig{
-				Type:  "drill",
-				Suite: "svc",
-				Nodes: []config.Node{
-					{Name: "step1", Type: "tool", Args: map[string]interface{}{"tool": "shell_command", "command": "echo failing"},
-						Assert: &config.AssertConfig{Type: "contains", Expected: "success"}},
-				},
-			},
+	tests := []LoadedTest{{
+		Name: "t",
+		Config: &config.AgentConfig{
+			Type:  "drill",
+			Suite: "myapp",
+			Nodes: []config.Node{{
+				Name: "s",
+				Type: "tool",
+				Args: map[string]interface{}{"tool": "shell_command", "command": "echo bad"},
+				Assert: &config.AssertConfig{Type: "contains", Expected: "good"},
+			}},
 		},
-	}
-
+	}}
 	report, _ := runner.RunSuite(context.Background(), suite, tests)
-
 	if report.Status != "failed" {
-		t.Errorf("Status = %q, want %q", report.Status, "failed")
+		t.Fatalf("got %q", report.Status)
 	}
-
-	// Teardown must still happen even when tests fail
-	expected := []string{"start_db", "start_app", "echo failing", "stop_app", "stop_db"}
-	if len(exec.commands) != len(expected) {
-		t.Fatalf("commands = %v, want %v", exec.commands, expected)
-	}
-	for i, cmd := range expected {
-		if exec.commands[i] != cmd {
-			t.Errorf("command[%d] = %q, want %q", i, exec.commands[i], cmd)
+	for _, c := range executor.calls {
+		cmd, _ := c.args["command"].(string)
+		if cmd == "stop-api" || cmd == "start-api" {
+			t.Fatalf("thin runner must not run service lifecycle: %q", cmd)
 		}
 	}
 }
+
 
 func TestResolveExecutionOrder(t *testing.T) {
 	t.Parallel()

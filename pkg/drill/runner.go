@@ -24,17 +24,19 @@ type LLMProvider interface {
 	EvaluateText(ctx context.Context, prompt string) (string, error)
 }
 
-// SuiteRunner manages the full suite lifecycle: setup → ready check → tests → teardown.
+// SuiteRunner executes drill tests. Prep (template switch, git sync, start
+// services, ready_check, teardown) is the caller's / agent's job — see
+// GenerateRunInstructions. run_drill injects credentials then calls RunSuite.
 type SuiteRunner struct {
 	toolExecutor  ToolExecutor
 	artifactMgr   *ArtifactManager
 	verbose       bool
-	bgSessions    []string          // session IDs from background setup commands
+	bgSessions    []string          // session IDs from background tool steps during tests
 	vars          map[string]string // runtime variables for placeholder substitution (e.g., CONTAINER_IP)
 	baseURL       string            // resolved base_url from suite config (after placeholder substitution)
 	triageAgent   *TriageAgent      // optional AI triage agent for failure analysis
 	triageEnabled bool              // when true, all on_fail defaults become "triage"
-	setupLog      string            // captured setup log for triage context
+	setupLog      string            // retained for triage context (unused by thin runner)
 	llmProvider   LLMProvider       // optional LLM for semantic assertions
 }
 
@@ -69,7 +71,9 @@ func (sr *SuiteRunner) SetLLMProvider(provider LLMProvider) {
 	sr.llmProvider = provider
 }
 
-// RunSuite executes all tests in a suite with shared setup/teardown.
+// RunSuite executes all tests in a suite. It does not run configure/setup/
+// ready_check/teardown — callers (Studio agent prep or fleet) must prepare
+// the environment first.
 func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
 	report := &SuiteReport{
 		Suite:     suite.Name,
@@ -77,8 +81,6 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 	}
 
 	sc := suite.Config.SuiteConfig
-
-	// TODO: apply sc.Environment to container in Phase 2
 
 	// Resolve base_url from suite config (apply placeholder substitution).
 	// Shell and browser both run in the sandbox when sandboxed, so localhost
@@ -88,224 +90,11 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 		sr.baseURL = browser.NormalizeLoopbackURL(substituteVarsInString(sc.BaseURL, sr.vars))
 	}
 
-	// Dispatch to multi-service or legacy single-service lifecycle
-	if sc != nil && len(sc.Services) > 0 {
-		return sr.runMultiServiceSuite(ctx, report, sc, suite, tests)
-	}
-
-	return sr.runLegacySuite(ctx, report, sc, suite, tests)
-}
-
-// runLegacySuite handles the original single-service setup/readycheck/teardown lifecycle.
-func (sr *SuiteRunner) runLegacySuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
-	// 1. Configure appendix (after credential injection by run_drill/CLI; before start)
-	var setupLog strings.Builder
-	if sc != nil {
-		for _, cmd := range sc.Configure {
-			result, err := sr.runShellCommand(ctx, cmd, 120)
-			if result != "" {
-				setupLog.WriteString(result)
-				setupLog.WriteString("\n")
-			}
-			if err != nil {
-				report.Status = "error"
-				report.SetupLog = setupLog.String()
-				report.Summary = fmt.Sprintf("configure failed: %v", err)
-				report.FinishedAt = time.Now()
-				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-				if sr.artifactMgr != nil {
-					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
-				}
-				sr.killBackgroundSessions(ctx)
-				return report, nil
-			}
-		}
-	}
-
-	// 2. Run setup commands (start services)
-	if sc != nil {
-		for _, cmd := range sc.Setup {
-			result, err := sr.runShellCommand(ctx, cmd, 120)
-			if result != "" {
-				setupLog.WriteString(result)
-				setupLog.WriteString("\n")
-			}
-			if err != nil {
-				report.Status = "error"
-				report.SetupLog = setupLog.String()
-				report.Summary = fmt.Sprintf("setup failed: %v", err)
-				report.FinishedAt = time.Now()
-				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-				if sr.artifactMgr != nil {
-					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
-				}
-				sr.killBackgroundSessions(ctx)
-				return report, nil
-			}
-		}
-	}
-	report.SetupLog = setupLog.String()
-	sr.setupLog = setupLog.String()
-	if sr.artifactMgr != nil && setupLog.Len() > 0 {
-		_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
-	}
-
-	// 3. Run ready check (skip if not configured or empty)
-	if sc != nil && sc.ReadyCheck != nil && isReadyCheckConfigured(sc.ReadyCheck) {
-		if sc.ReadyCheck.Type == "output_contains" {
-			// Check the setup output for the pattern
-			if !CheckOutputContains(setupLog.String(), sc.ReadyCheck.Pattern) {
-				report.Status = "error"
-				report.Summary = fmt.Sprintf("ready check failed: setup output does not contain %q", sc.ReadyCheck.Pattern)
-				report.FinishedAt = time.Now()
-				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-				sr.killBackgroundSessions(ctx)
-				return report, nil
-			}
-		} else {
-			if err := sr.runReadyCheckViaExecutor(ctx, sc.ReadyCheck); err != nil {
-				report.Status = "error"
-				report.Summary = fmt.Sprintf("ready check failed: %v", err)
-				report.FinishedAt = time.Now()
-				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-				sr.killBackgroundSessions(ctx)
-				return report, nil
-			}
-		}
-	}
-
-	// 4. Execute each test
 	sr.executeTests(ctx, report, suite, tests)
 
-	// 5. Run teardown commands (always, even on failure)
-	if sc != nil {
-		for _, cmd := range sc.Teardown {
-			_, _ = sr.runShellCommand(ctx, cmd, 30) // best-effort teardown
-		}
-	}
-
-	// 5b. Kill any background sessions started during setup
+	// Best-effort: kill background sessions started by test steps.
 	sr.killBackgroundSessions(ctx)
 
-	// 6. Compute status and summary
-	report.FinishedAt = time.Now()
-	report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-	report.ComputeStatus()
-	report.ComputeSummary()
-
-	return report, nil
-}
-
-// runMultiServiceSuite handles multi-service lifecycle:
-// start services in declaration order → per-service ready checks → run tests → teardown in reverse order.
-func (sr *SuiteRunner) runMultiServiceSuite(ctx context.Context, report *SuiteReport, sc *config.DrillSuiteConfig, suite *LoadedSuite, tests []LoadedTest) (*SuiteReport, error) {
-	var setupLog strings.Builder
-	var startedServices []config.ServiceConfig // track which services started (for reverse teardown)
-
-	// Configure appendix before starting services
-	if sc != nil {
-		for _, cmd := range sc.Configure {
-			if sr.verbose {
-				setupLog.WriteString(fmt.Sprintf("--- Configure: %s ---\n", cmd))
-			}
-			result, err := sr.runShellCommand(ctx, cmd, 120)
-			if result != "" {
-				setupLog.WriteString(result)
-				setupLog.WriteString("\n")
-			}
-			if err != nil {
-				sr.killBackgroundSessions(ctx)
-				report.Status = "error"
-				report.SetupLog = setupLog.String()
-				report.Summary = fmt.Sprintf("configure failed: %v", err)
-				report.FinishedAt = time.Now()
-				report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-				if sr.artifactMgr != nil {
-					_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String())
-				}
-				return report, nil
-			}
-		}
-	}
-
-	// Start each service in declaration order
-	for _, svc := range sc.Services {
-		if sr.verbose {
-			setupLog.WriteString(fmt.Sprintf("--- Starting service: %s ---\n", svc.Name))
-		}
-
-		// Run the service setup command
-		result, err := sr.runShellCommand(ctx, svc.Setup, 120)
-		if result != "" {
-			setupLog.WriteString(result)
-			setupLog.WriteString("\n")
-		}
-		if err != nil {
-			// Teardown already-started services in reverse order
-			sr.teardownServices(ctx, startedServices)
-			sr.killBackgroundSessions(ctx)
-
-			report.Status = "error"
-			report.SetupLog = setupLog.String()
-			report.Summary = fmt.Sprintf("service %q setup failed: %v", svc.Name, err)
-			report.FinishedAt = time.Now()
-			report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-			if sr.artifactMgr != nil {
-				_, _ = sr.artifactMgr.SaveSetupLog(setupLog.String()) // best-effort
-			}
-			return report, nil
-		}
-
-		startedServices = append(startedServices, svc)
-
-		// Run per-service ready check
-		if svc.ReadyCheck != nil && isReadyCheckConfigured(svc.ReadyCheck) {
-			if svc.ReadyCheck.Type == "output_contains" {
-				if !CheckOutputContains(setupLog.String(), svc.ReadyCheck.Pattern) {
-					sr.teardownServices(ctx, startedServices)
-					sr.killBackgroundSessions(ctx)
-					report.Status = "error"
-					report.SetupLog = setupLog.String()
-					report.Summary = fmt.Sprintf("service %q ready check failed: output does not contain %q", svc.Name, svc.ReadyCheck.Pattern)
-					report.FinishedAt = time.Now()
-					report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-					return report, nil
-				}
-			} else {
-				if err := sr.runReadyCheckViaExecutor(ctx, svc.ReadyCheck); err != nil {
-					sr.teardownServices(ctx, startedServices)
-					sr.killBackgroundSessions(ctx)
-					report.Status = "error"
-					report.SetupLog = setupLog.String()
-					report.Summary = fmt.Sprintf("service %q ready check failed: %v", svc.Name, err)
-					report.FinishedAt = time.Now()
-					report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
-					return report, nil
-				}
-			}
-		}
-
-		if sr.verbose {
-			setupLog.WriteString(fmt.Sprintf("--- Service %s: ready ---\n", svc.Name))
-		}
-	}
-
-	report.SetupLog = setupLog.String()
-	sr.setupLog = setupLog.String()
-	if sr.artifactMgr != nil && setupLog.Len() > 0 {
-		sr.artifactMgr.SaveSetupLog(setupLog.String())
-	}
-
-	// Execute tests
-	sr.executeTests(ctx, report, suite, tests)
-
-	// Teardown all services in reverse order (always, even on failure)
-	sr.teardownServices(ctx, startedServices)
-
-	// Kill any background sessions started during setup
-	sr.killBackgroundSessions(ctx)
-
-	// Compute status and summary
 	report.FinishedAt = time.Now()
 	report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
 	report.ComputeStatus()
@@ -344,16 +133,6 @@ func (sr *SuiteRunner) executeTests(ctx context.Context, report *SuiteReport, su
 	// Build overall analysis summary from individual triage verdicts
 	if sr.triageAgent != nil {
 		sr.buildAnalysisSummary(report)
-	}
-}
-
-// teardownServices tears down services in reverse declaration order (best-effort).
-func (sr *SuiteRunner) teardownServices(ctx context.Context, services []config.ServiceConfig) {
-	for i := len(services) - 1; i >= 0; i-- {
-		svc := services[i]
-		if svc.Teardown != "" {
-			sr.runShellCommand(ctx, svc.Teardown, 30) // best-effort
-		}
 	}
 }
 

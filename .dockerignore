@@ -18,9 +18,10 @@ docs/website/node_modules
 docs/website/build
 docs/website/.docusaurus
 
-# Local binaries and test artifacts
+# Local binaries and test artifacts.
+# Keep astonish-linux-* in context: docker/incus, docker/astonish, and
+# docker/sandbox-openshell COPY the host-cross-compiled binaries.
 astonish
-astonish-linux-*
 astonish_bin
 test_bin
 e2e-inspector

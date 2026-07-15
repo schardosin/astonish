@@ -18,10 +18,15 @@ import (
 // hash must be recomputed:
 //
 //	printf '%s' '<script content>' | openssl dgst -sha256 -binary | base64
+//
+// media-src allows blob: so Studio can play video/audio artifacts (e.g.
+// browser session recordings) loaded via createObjectURL after a credentialed
+// fetch — a bare <video src="/api/..."> cannot send team auth headers.
 const cspPolicy = "default-src 'self'; " +
 	"script-src 'self' 'sha256-QPIelXUbpkDESZsTgggSaMGNOA/Le9qMm+4Wa+lXIvs='; " +
 	"style-src 'self' 'unsafe-inline'; " +
 	"img-src 'self' data: blob:; " +
+	"media-src 'self' blob:; " +
 	"font-src 'self'; " +
 	"connect-src 'self' ws: wss:; " +
 	"frame-src 'self'; " +

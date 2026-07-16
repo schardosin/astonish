@@ -62,6 +62,7 @@ func TestHandleTutorialBlueprintIntent_ApproveContinues(t *testing.T) {
 		"REFINE CHECKLIST",
 		"Dry-run",
 		"source: snapshot",
+		"browser_take_screenshot",
 	} {
 		if !strings.Contains(rewrite, want) {
 			t.Fatalf("rewriteMsg missing %q:\n%s", want, rewrite)

@@ -84,7 +84,9 @@ produce a full mixed blueprint afterward from explore notes.
      inject_drill_credentials → run suite start script.
    - Open the app (suite_config.base_url / home) once with browser_navigate.
    - For each must-show beat: reach it via sidebar/nav **clicks** (not cold
-     browser_navigate between pages). browser_snapshot each view.
+     browser_navigate between pages). Then browser_snapshot AND
+     browser_take_screenshot each view. Snapshot = elements/asserts for you;
+     screenshot = visual for the creator in chat so they see what you see.
    - Note: route/label reached, key elements (refs/selectors), content that is
      actually visible (or failure: "Failed to load", blank table, error banner),
      and any interaction needed to **reveal** content (e.g. click an expiration
@@ -119,8 +121,10 @@ Recording starts before each step's tool when record:segment / narration is set.
 Never put the first recorded step on a blank tab.
 
 1. Dry-run (no recording): for each screen scene — click to the view, perform
-   the reveal interaction, browser_snapshot / assert key text or elements,
-   confirm data loaded (not error/empty). Fix selectors before run_drill.
+   the reveal interaction, browser_snapshot + browser_take_screenshot, assert
+   key text from the snapshot, confirm data loaded (not error/empty). The
+   screenshot is for the creator; asserts stay on snapshot. Fix selectors
+   before run_drill.
 2. Warm-up nodes (unrecorded): open suite_config.base_url (or home),
    browser_fullscreen(enabled:true), wait until stable — NO narration/record.
    Generated drills prepend open_app + enter_fullscreen for this.
@@ -178,8 +182,9 @@ rebuilding the stack.
    start script unless they explicitly opt out.
 2. Interview briefly (goal, audience, must-show UI steps, avatar density).
 3. REQUIRED explore pass before drafting: open the app, click through each
-   must-show beat, snapshot content, note reveal interactions and any broken
-   pages. Ground voiceovers in what you saw.
+   must-show beat, browser_snapshot + browser_take_screenshot each view
+   (snapshot for asserts; screenshot so the creator sees what you see), note
+   reveal interactions and any broken pages. Ground voiceovers in what you saw.
 4. Draft a tutorial_blueprint with mixed avatar/broll/screen scenes.
 5. validate_tutorial_blueprint → present_tutorial_blueprint (REQUIRED for the
    approval card). NEVER paste Scene|Voiceover|Visual as markdown/emoji tables.

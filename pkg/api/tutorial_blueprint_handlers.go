@@ -64,8 +64,10 @@ func handleTutorialBlueprintIntent(
 				"REFINE CHECKLIST (do in order — do NOT run_drill until dry-run is green):\n"+
 				"1. Dry-run each screen scene in chat: reach via sidebar/nav clicks (not cold "+
 				"browser_navigate except warm-up open_app), perform any reveal interaction "+
-				"(e.g. click an options expiration so strikes appear), browser_snapshot, "+
-				"confirm key content is loaded — not \"Failed to load\" / empty / error banners.\n"+
+				"(e.g. click an options expiration so strikes appear), browser_snapshot + "+
+				"browser_take_screenshot (snapshot for asserts; screenshot so the creator sees "+
+				"what you see), confirm key content is loaded — not \"Failed to load\" / empty / "+
+				"error banners.\n"+
 				"2. Replace browser_run_code TODOs with multi-step UI: browser_highlight → "+
 				"browser_click(animate_cursor:true) → wait for reveal → optional second click. "+
 				"Landing on a URL alone is NOT enough when the visual implies interaction.\n"+

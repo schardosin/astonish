@@ -108,7 +108,7 @@ Drill includes pixel-level visual comparison:
 
 Tutorial defaults: `on_fail: continue`, no triage/retries unless YAML sets them. Always honor `hold_ms > 0` (sleep after a successful step) in any mode.
 
-**Explore-first authoring:** `/tutorial` must explore the live UI (click nav, snapshot each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat before `run_drill`.
+**Explore-first authoring:** `/tutorial` must explore the live UI (click nav, `browser_snapshot` + `browser_take_screenshot` each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. Snapshot drives selectors/asserts; screenshot gives the creator a visual of what the agent sees. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat (same snapshot + screenshot pairing) before `run_drill`.
 
 Example:
 

@@ -11,7 +11,11 @@ import (
 )
 
 // handleTutorialBlueprintIntent processes Approve / Cancel / Request-changes for
-// a pending tutorial blueprint. Returns true if the request was fully handled.
+// a pending tutorial blueprint.
+//
+// Returns handled=true when the HTTP/SSE request is fully finished (cancel,
+// errors). On successful Approve it returns handled=false and a rewriteMsg so
+// the chat handler can fall through into ChatRunner with the converted drill.
 func handleTutorialBlueprintIntent(
 	r *http.Request,
 	w http.ResponseWriter,
@@ -19,17 +23,16 @@ func handleTutorialBlueprintIntent(
 	chatAgent *agent.ChatAgent,
 	sessionService session.Service,
 	userID, sessionID, msg string,
-) bool {
+) (handled bool, rewriteMsg string) {
 	trimmed := strings.TrimSpace(msg)
 
 	switch {
 	case trimmed == "__tutorial_blueprint_approve__":
-		persistSessionMessage(r.Context(), sessionService, userID, sessionID, "user", "Approve & generate")
 		pending := chatAgent.GetPendingTutorialBlueprint(sessionID)
 		if pending == nil {
 			SendSSE(w, flusher, "error", map[string]interface{}{"error": "No pending tutorial blueprint"})
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-			return true
+			return true, ""
 		}
 		result, err := tools.BlueprintToTutorialDrillFromYAML(pending.YAML, "")
 		chatAgent.CancelPendingTutorialBlueprint(sessionID)
@@ -38,7 +41,7 @@ func handleTutorialBlueprintIntent(
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
 			persistSessionMessage(r.Context(), sessionService, userID, sessionID, "model", errText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-			return true
+			return true, ""
 		}
 		payload := map[string]any{
 			"title":          pending.Title,
@@ -51,13 +54,19 @@ func handleTutorialBlueprintIntent(
 		}
 		SendSSE(w, flusher, "tutorial_blueprint_approved", payload)
 		persistTutorialBlueprintApproved(r.Context(), sessionService, userID, sessionID, payload)
-		// Also surface drill YAML as agent text so the model can continue the turn after reload.
-		guide := fmt.Sprintf("Blueprint approved. Generated tutorial drill %q (%d screen scene(s)).\n\n```yaml\n%s\n```\n\n%s",
-			result.DrillName, result.ScreenCount, result.DrillYAML, payload["message"])
-		SendSSE(w, flusher, "text", map[string]interface{}{"text": guide})
-		persistSessionMessage(r.Context(), sessionService, userID, sessionID, "model", guide)
-		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-		return true
+
+		// Fall through into ChatRunner: one user turn carries the drill YAML +
+		// continue instructions (no giant model dump, no early done).
+		rewriteMsg = fmt.Sprintf(
+			"Approve & generate\n\n"+
+				"Blueprint approved. Generated tutorial drill %q (%d screen scene(s)).\n"+
+				"Replace browser_run_code TODOs with real UI actions (browser_highlight + "+
+				"browser_click with animate_cursor:true; prefer nav clicks over navigate). "+
+				"Keep warm-up open_app / enter_fullscreen unrecorded. Then validate_drill "+
+				"and save_drill into suite %q.\n\n```yaml\n%s\n```",
+			result.DrillName, result.ScreenCount, pending.Suite, result.DrillYAML,
+		)
+		return false, rewriteMsg
 
 	case trimmed == "__tutorial_blueprint_cancel__":
 		persistSessionMessage(r.Context(), sessionService, userID, sessionID, "user", "Cancel blueprint")
@@ -66,15 +75,15 @@ func handleTutorialBlueprintIntent(
 		SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})
 		persistSessionMessage(r.Context(), sessionService, userID, sessionID, "model", responseText)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-		return true
+		return true, ""
 
 	case trimmed == "__tutorial_blueprint_revise__":
 		// Fall through to the agent with a clear revise prompt (keep pending).
-		return false
+		return false, ""
 
 	default:
 		// Natural language while a blueprint is pending: treat as revise feedback
 		// unless it looks like an unrelated new request — keep pending and let agent run.
-		return false
+		return false, ""
 	}
 }

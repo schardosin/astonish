@@ -82,8 +82,9 @@ only to discover screen steps — still produce a full mixed blueprint afterward
    After this tool, produce NO further tool calls and NO further prose.
    Do NOT call blueprint_to_tutorial_drill, validate_drill, save_drill, or
    run_drill until the creator clicks Approve & generate.
-6. Creator clicks Approve & generate → you receive the converted drill YAML
-   (or they type revise feedback — update blueprint and present again).
+6. Creator clicks Approve & generate → the same chat turn resumes with the
+   converted drill YAML (no need for them to send another message). If they
+   type revise feedback instead, update the blueprint and present again.
 7. Replace browser_run_code TODOs with real UI actions for screen nodes.
    Follow the RECORDING PLAYBOOK below (dry-run → warm-up → human clicks).
 8. validate_drill → save_drill:
@@ -161,9 +162,10 @@ rebuilding the stack.
 4. validate_tutorial_blueprint → present_tutorial_blueprint (REQUIRED for the
    approval card). NEVER paste Scene|Voiceover|Visual as markdown/emoji tables.
    Stop and wait for Approve / Request changes / Cancel on the card.
-5. On approve, refine screen drill YAML, validate_drill, save_drill with
-   EMPTY suite_yaml so the suite is not overwritten. Tags must include
-   tutorial; mode must be tutorial.
+5. On Approve the same chat turn resumes with the converted drill YAML —
+   refine screen steps, then validate_drill and save_drill with EMPTY
+   suite_yaml so the suite is not overwritten. Tags must include tutorial;
+   mode must be tutorial.
 6. Follow the RECORDING PLAYBOOK: dry-run selectors/content first, keep
    warm-up (open app + fullscreen) unrecorded, then record with highlight +
    animated cursor clicks (prefer clicks over cold navigates).

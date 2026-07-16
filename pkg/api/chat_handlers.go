@@ -655,9 +655,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Intercept tutorial blueprint approval / cancel / revise intents.
+	// Approve emits the approved card then rewrites msg so ChatRunner continues
+	// refine → validate_drill → save_drill in the same SSE stream.
 	if req.SessionID != "" && chatAgent.HasPendingTutorialBlueprint(req.SessionID) {
-		if handleTutorialBlueprintIntent(r, w, flusher, chatAgent, sessionService, userID, req.SessionID, msg) {
+		handled, rewrite := handleTutorialBlueprintIntent(r, w, flusher, chatAgent, sessionService, userID, req.SessionID, msg)
+		if handled {
 			return
+		}
+		if rewrite != "" {
+			msg = rewrite
 		}
 	}
 

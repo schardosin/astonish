@@ -576,6 +576,165 @@ func TestValidateDrill_TestNoAssertions(t *testing.T) {
 	}
 }
 
+func TestValidateDrill_TutorialRejectsTODOStub(t *testing.T) {
+	suiteYAML := "type: drill_suite\ndescription: s\nsuite_config:\n  setup: []\n"
+	testYAML := `type: drill
+suite: s
+drill_config:
+  mode: tutorial
+  tags: [tutorial]
+nodes:
+  - name: open_app
+    type: tool
+    args:
+      tool: browser_navigate
+      url: http://localhost/
+  - name: scene1
+    narration: Show dashboard
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_run_code
+      code: "(() => { /* TODO: scene */ return 'todo'; })()"
+    assert:
+      type: contains
+      source: snapshot
+      expected: Dashboard
+`
+	result, err := validateDrill(nil, ValidateDrillArgs{SuiteYAML: suiteYAML, TestYAMLs: []string{testYAML}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("Status = %q, want failed for TODO stub", result.Status)
+	}
+	found := false
+	for _, c := range result.Checks {
+		if strings.Contains(c.Name, "todo_stub") && c.Status == "failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected todo_stub failure, checks=%+v", result.Checks)
+	}
+}
+
+func TestValidateDrill_TutorialRejectsNavigateOnlyRecorded(t *testing.T) {
+	suiteYAML := "type: drill_suite\ndescription: s\nsuite_config:\n  setup: []\n"
+	testYAML := `type: drill
+suite: s
+drill_config:
+  mode: tutorial
+nodes:
+  - name: open_app
+    type: tool
+    args:
+      tool: browser_navigate
+      url: http://localhost/
+  - name: options_chain
+    narration: Show chain
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_navigate
+      url: http://localhost/trade
+    assert:
+      type: contains
+      source: snapshot
+      expected: Strikes
+`
+	result, err := validateDrill(nil, ValidateDrillArgs{SuiteYAML: suiteYAML, TestYAMLs: []string{testYAML}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("Status = %q, want failed for navigate-only recorded scene", result.Status)
+	}
+	found := false
+	for _, c := range result.Checks {
+		if strings.Contains(c.Name, "navigate_only") && c.Status == "failed" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected navigate_only failure, checks=%+v", result.Checks)
+	}
+}
+
+func TestValidateDrill_TutorialRequiresContentAssert(t *testing.T) {
+	suiteYAML := "type: drill_suite\ndescription: s\nsuite_config:\n  setup: []\n"
+	testYAML := `type: drill
+suite: s
+drill_config:
+  mode: tutorial
+nodes:
+  - name: open_app
+    type: tool
+    args:
+      tool: browser_navigate
+      url: http://localhost/
+  - name: dashboard
+    narration: Show dashboard
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_click
+      ref: ref1
+      animate_cursor: true
+`
+	result, err := validateDrill(nil, ValidateDrillArgs{SuiteYAML: suiteYAML, TestYAMLs: []string{testYAML}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("Status = %q, want failed when recorded scene lacks content assert", result.Status)
+	}
+}
+
+func TestValidateDrill_TutorialHappyPath(t *testing.T) {
+	suiteYAML := "type: drill_suite\ndescription: s\nsuite_config:\n  setup: []\n"
+	testYAML := `type: drill
+suite: s
+drill_config:
+  mode: tutorial
+  tags: [tutorial]
+nodes:
+  - name: open_app
+    type: tool
+    args:
+      tool: browser_navigate
+      url: http://localhost/
+  - name: enter_fullscreen
+    type: tool
+    args:
+      tool: browser_fullscreen
+      enabled: true
+  - name: dashboard
+    narration: Show dashboard
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_click
+      ref: ref1
+      animate_cursor: true
+    assert:
+      type: contains
+      source: snapshot
+      expected: Net Liquidation
+`
+	result, err := validateDrill(nil, ValidateDrillArgs{SuiteYAML: suiteYAML, TestYAMLs: []string{testYAML}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Status != "passed" {
+		t.Fatalf("Status = %q, want passed; checks=%+v", result.Status, result.Checks)
+	}
+}
+
 func TestValidateDrill_NodeWrongType(t *testing.T) {
 	suiteYAML := "type: drill_suite\ndescription: s\nsuite_config:\n  setup: []\n"
 	testYAML := "type: drill\nsuite: s\nnodes:\n  - name: step1\n    type: shell\n    args:\n      command: echo hi\n    assert:\n      type: contains\n      expected: hi"

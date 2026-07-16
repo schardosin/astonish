@@ -175,8 +175,8 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 		onFail = "continue"
 	}
 
-	// When --analyze is active, override defaults (but not soft tutorial defaults
-	// unless the YAML explicitly set on_fail).
+	// When --analyze is active, override defaults (tutorials keep continue-on-fail
+	// unless YAML explicitly set on_fail — content asserts still mark steps failed).
 	if sr.triageEnabled {
 		if !tutorial || explicitOnFail {
 			if onFail == "stop" {
@@ -503,15 +503,8 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 		if result.Assertion.Passed {
 			result.Status = "passed"
-		} else if tutorial {
-			// Soft assertions: do not fail the tutorial drill.
-			result.Status = "warning"
-			if len(output) > 10240 {
-				result.Output = output[:10240] + "\n... (truncated)"
-			} else {
-				result.Output = output
-			}
 		} else {
+			// Tutorials fail content asserts (broken/empty pages must not film green).
 			result.Status = "failed"
 			if len(output) > 10240 {
 				result.Output = output[:10240] + "\n... (truncated)"

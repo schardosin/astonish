@@ -104,9 +104,11 @@ Drill includes pixel-level visual comparison:
 | Mode | Purpose | Assertions | Recording / pacing |
 |---|---|---|---|
 | `test` (default / empty) | Deterministic smoke/CI | Required for useful drills; failures fail the test; triage/retries per config | Not auto-managed |
-| `tutorial` | Regenerable UI training scripts | Soft: failures become step `warning` and do **not** fail the test; tool errors still fail | `narration`, `hold_ms`, `record` (`start`/`stop`/`segment`); auto-segment when narration is set; writes `scene_manifest.json` |
+| `tutorial` | Regenerable UI training scripts | Content asserts **fail** the run (broken/empty pages must not film green); tool errors still fail | `narration`, `hold_ms`, `record` (`start`/`stop`/`segment`); auto-segment when narration is set; writes `scene_manifest.json` |
 
 Tutorial defaults: `on_fail: continue`, no triage/retries unless YAML sets them. Always honor `hold_ms > 0` (sleep after a successful step) in any mode.
+
+**Explore-first authoring:** `/tutorial` must explore the live UI (click nav, snapshot each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat before `run_drill`.
 
 Example:
 
@@ -151,9 +153,9 @@ drill_config:
       hold_ms: 9000
 ```
 
-Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
+Authoring: `/tutorial` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)`. Product training videos use `mode: tutorial`; re-run after UI changes.
 
-**Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run selectors in chat → then `browser_highlight` → `browser_move_cursor` / `browser_click(animate_cursor: true)` → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
+**Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run with content asserts → `browser_highlight` → `browser_click(animate_cursor: true)` → reveal interaction (e.g. click expiration) → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
 
 ### Why LLM-Powered Triage
 

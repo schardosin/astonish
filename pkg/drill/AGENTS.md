@@ -4,17 +4,17 @@ Deterministic test/drill suite runner. Drills exercise tools, run assertions (in
 
 ## Scope
 - `suite.go` — suite discovery/load; `BuildSuiteContext` / `IsTutorialSuite` for add wizards (template, setup, credentials; tutorial vs regular).
-- `runner.go` — `SuiteRunner`, `ToolExecutor`, `LLMProvider` (tests only; no setup/ready_check/teardown). Tutorial mode: soft asserts, hold_ms, record segments, `scene_manifest.json`.
+- `runner.go` — `SuiteRunner`, `ToolExecutor`, `LLMProvider` (tests only; no setup/ready_check/teardown). Tutorial mode: content asserts fail the run, hold_ms, record segments, `scene_manifest.json`.
 - `scene_manifest.go` — tutorial scene clip index written under the artifact dir; merges `drill_config.scenes` with recorded MP4s.
 - `run_instructions.go` — Studio chat prep text from suite_config (template, git, inject credentials, start script).
 - `triage.go` — `TriageAgent`.
 - `artifacts.go` — `ArtifactManager`.
-- `report.go` — `SuiteReport`, `TestReport`, `StepResult` (includes `warning` for soft tutorial asserts; `ManifestPath`).
+- `report.go` — `SuiteReport`, `TestReport`, `StepResult` (`warning` may still appear from other paths; tutorial assert failures are `failed`; `ManifestPath`).
 
 ## Key ideas
 - The **runner** is deterministic given the same inputs — flaky external dependencies belong behind an interface (`LLMProvider`, `ToolExecutor`) that can be mocked in unit tests.
 - **`run_drill` is thin**: inject credentials, then execute drills. It does **not** switch templates, git-pull, start services, ready_check, or teardown. Studio Run pastes `GenerateRunInstructions`; the agent prep’s the sandbox, then calls `run_drill`. Fleet assumes the stack is already live and calls `run_drill` only.
-- **Tutorial vs test**: `drill_config.mode: tutorial` enables narration/hold/record + soft assertions (tool errors still fail). Authoring is blueprint-first (Scene|Voiceover|Visual with avatar/broll/screen); only screen rows record MP4s. `drill_config.scenes` holds the full cut list; `scene_manifest.json` merges it with recorded paths (avatar/broll keep empty `path`). Tutorial drills belong in **dedicated tutorial suites** — copy infra from a regular suite into a sibling (e.g. `{app}-tutorial`); never append tutorials into smoke/CI suites. `/tutorial-add` is gated by `IsTutorialSuite`. Do **not** mix tutorial tags into default fleet smoke without filtering `mode!=tutorial`. Product training videos re-run tutorial drills after UI changes.
+- **Tutorial vs test**: `drill_config.mode: tutorial` enables narration/hold/record; **content assertions fail the run** (no soft-pass on empty/broken UI). Authoring is explore-first then blueprint (Scene|Voiceover|Visual); only screen rows record MP4s. `validate_drill` rejects TODO stubs, navigate-only recorded scenes, and missing content asserts. Tutorial drills belong in **dedicated tutorial suites**. `/tutorial-add` is gated by `IsTutorialSuite`. Do **not** mix tutorial tags into default fleet smoke without filtering `mode!=tutorial`.
 - **Credential order**: when the suite declares `credentials` / `credential_injection`, Studio prep calls `inject_drill_credentials` **before** start-services. Never start → inject. `run_drill` still injects before tests (idempotent). Apps that cache secrets at process boot depend on this order.
 - Suite `setup` / `ready_check` / `workspace` / `branch` / `template` are **instruction sources** for agents, not SuiteRunner side effects.
 - **Ready checks**: `/health` is liveness; for setup/onboarding gates, author a functional `ready_check` (setup-status endpoint + expected payload), not only health.

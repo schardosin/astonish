@@ -59,6 +59,9 @@ func TestHandleTutorialBlueprintIntent_ApproveContinues(t *testing.T) {
 		"mode: tutorial",
 		"browser_highlight",
 		"animate_cursor",
+		"REFINE CHECKLIST",
+		"Dry-run",
+		"source: snapshot",
 	} {
 		if !strings.Contains(rewrite, want) {
 			t.Fatalf("rewriteMsg missing %q:\n%s", want, rewrite)

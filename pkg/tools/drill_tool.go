@@ -561,12 +561,49 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 					allPassed = false
 				}
 			}
+
+			if tutorial {
+				toolName, _ := node.Args["tool"].(string)
+				if tutorialNodeIsStubTODO(node) {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_todo_stub",
+						Status:  "failed",
+						Message: fmt.Sprintf("Tutorial node %q still has a browser_run_code TODO stub — replace with real UI actions before save_drill", node.Name),
+					})
+					allPassed = false
+				}
+				recorded := node.Record != "" || node.Narration != ""
+				if recorded && toolName == "browser_navigate" && !tutorialWarmupNode(node.Name) {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_navigate_only",
+						Status:  "failed",
+						Message: fmt.Sprintf("Tutorial recorded node %q uses browser_navigate — prefer sidebar/nav clicks (animate_cursor). Only warm-up open_app may navigate", node.Name),
+					})
+					allPassed = false
+				}
+				if recorded && !tutorialWarmupNode(node.Name) {
+					if node.Assert == nil {
+						checks = append(checks, ValidationCheck{
+							Name:    nodeLabel + "_content_assert",
+							Status:  "failed",
+							Message: fmt.Sprintf("Tutorial recorded node %q needs a content assert (e.g. assert: { type: contains, source: snapshot, expected: \"...\" }) so broken/empty pages fail", node.Name),
+						})
+						allPassed = false
+					} else if !tutorialContentAssert(node.Assert) {
+						checks = append(checks, ValidationCheck{
+							Name:    nodeLabel + "_content_assert",
+							Status:  "failed",
+							Message: fmt.Sprintf("Tutorial recorded node %q assert must prove UI content (type contains/element_exists/not_contains/regex, preferably source: snapshot)", node.Name),
+						})
+						allPassed = false
+					}
+				}
+			}
 		}
 
-		// Warn if no nodes have assertions — drills without assertions always
-		// pass regardless of output, which is almost certainly unintended for
-		// test-mode drills. Tutorial mode intentionally allows soft/no asserts.
-		if len(testCfg.Nodes) > 0 && nodesWithAssert == 0 && !tutorial {
+		// Drills without assertions always pass on tool success alone — unintended
+		// for both test and tutorial (tutorials must prove page content).
+		if len(testCfg.Nodes) > 0 && nodesWithAssert == 0 {
 			checks = append(checks, ValidationCheck{
 				Name:    label + "_no_assertions",
 				Status:  "failed",
@@ -604,6 +641,43 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 		Status: status,
 		Checks: checks,
 	}, nil
+}
+
+func tutorialWarmupNode(name string) bool {
+	switch name {
+	case "open_app", "enter_fullscreen":
+		return true
+	default:
+		return false
+	}
+}
+
+func tutorialNodeIsStubTODO(node config.Node) bool {
+	toolName, _ := node.Args["tool"].(string)
+	if toolName != "browser_run_code" {
+		return false
+	}
+	code, _ := node.Args["code"].(string)
+	if code == "" {
+		return false
+	}
+	lower := strings.ToLower(code)
+	return strings.Contains(code, "TODO:") ||
+		strings.Contains(lower, "return 'todo'") ||
+		strings.Contains(lower, `return "todo"`)
+}
+
+func tutorialContentAssert(a *config.AssertConfig) bool {
+	if a == nil {
+		return false
+	}
+	switch a.Type {
+	case "contains", "not_contains", "regex", "element_exists":
+		return true
+	default:
+		// semantic/visual_match also prove content, but prefer snapshot string checks
+		return a.Source == "snapshot" || a.Type == "semantic" || a.Type == "visual_match"
+	}
 }
 
 // DeleteDrillArgs are the arguments for the delete_drill tool.

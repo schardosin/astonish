@@ -49,7 +49,8 @@ func handleTutorialBlueprintIntent(
 			"blueprint_yaml": result.BlueprintYAML,
 			"drill_yaml":     result.DrillYAML,
 			"drill_name":     result.DrillName,
-			"message": result.Message + "\n\nNext: refine screen-step selectors, then validate_drill and save_drill. " +
+			"message": result.Message + "\n\nNext: dry-run each screen (clicks + snapshot asserts), " +
+				"replace TODOs with multi-step UI, validate_drill, then save_drill. " +
 				"Avatar/broll rows remain in the blueprint for a later avatar provider step.",
 		}
 		SendSSE(w, flusher, "tutorial_blueprint_approved", payload)
@@ -59,11 +60,23 @@ func handleTutorialBlueprintIntent(
 		// continue instructions (no giant model dump, no early done).
 		rewriteMsg = fmt.Sprintf(
 			"Approve & generate\n\n"+
-				"Blueprint approved. Generated tutorial drill %q (%d screen scene(s)).\n"+
-				"Replace browser_run_code TODOs with real UI actions (browser_highlight + "+
-				"browser_click with animate_cursor:true; prefer nav clicks over navigate). "+
-				"Keep warm-up open_app / enter_fullscreen unrecorded. Then validate_drill "+
-				"and save_drill into suite %q.\n\n```yaml\n%s\n```",
+				"Blueprint approved. Generated tutorial drill %q (%d screen scene(s)).\n\n"+
+				"REFINE CHECKLIST (do in order — do NOT run_drill until dry-run is green):\n"+
+				"1. Dry-run each screen scene in chat: reach via sidebar/nav clicks (not cold "+
+				"browser_navigate except warm-up open_app), perform any reveal interaction "+
+				"(e.g. click an options expiration so strikes appear), browser_snapshot, "+
+				"confirm key content is loaded — not \"Failed to load\" / empty / error banners.\n"+
+				"2. Replace browser_run_code TODOs with multi-step UI: browser_highlight → "+
+				"browser_click(animate_cursor:true) → wait for reveal → optional second click. "+
+				"Landing on a URL alone is NOT enough when the visual implies interaction.\n"+
+				"3. Forbid inter-scene browser_navigate except warm-up open_app (or a justified deep link).\n"+
+				"4. Each recorded screen node MUST have an assert (source: snapshot + contains or "+
+				"element_exists) for key content. If the page is broken/empty, fix the stack or "+
+				"rewrite the scene — do not save a green drill for a failure state.\n"+
+				"5. Keep open_app / enter_fullscreen unrecorded (no narration/record).\n"+
+				"6. validate_drill (must pass — rejects TODOs, navigate-only recorded scenes, "+
+				"missing asserts) → save_drill into suite %q → then run_drill.\n\n"+
+				"```yaml\n%s\n```",
 			result.DrillName, result.ScreenCount, pending.Suite, result.DrillYAML,
 		)
 		return false, rewriteMsg

@@ -197,9 +197,9 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 			}
 			nodeName = sanitizeBlueprintName(nodeName)
 			entry.DrillNode = nodeName
-			// Placeholder — agent should replace with highlight → animated click path.
+			// Placeholder — agent replaces with highlight → animated click → reveal + content assert.
 			code := fmt.Sprintf(
-				`(() => { /* TODO: %q — %s; use browser_highlight + browser_click(animate_cursor:true); prefer nav clicks over navigate */ return 'todo'; })()`,
+				`(() => { /* TODO: %q — %s; browser_highlight + browser_click(animate_cursor:true); reveal interaction; assert snapshot content */ return 'todo'; })()`,
 				nodeName, sc.Visual.Description,
 			)
 			nodes = append(nodes, nodeOut{

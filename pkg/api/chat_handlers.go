@@ -21,8 +21,8 @@ import (
 	"github.com/schardosin/astonish/pkg/provider"
 	"github.com/schardosin/astonish/pkg/sandbox/openshell"
 	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/skills"
 	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/schardosin/astonish/pkg/skills"
 	"github.com/schardosin/astonish/pkg/store"
 	"github.com/schardosin/astonish/pkg/tools"
 	"google.golang.org/adk/model"
@@ -41,7 +41,7 @@ type ChatAttachment struct {
 type StudioChatRequest struct {
 	SessionID        string           `json:"sessionId,omitempty"`
 	Message          string           `json:"message"`
-	Attachments      []ChatAttachment `json:"attachments,omitempty"`      // file attachments (base64)
+	Attachments      []ChatAttachment `json:"attachments,omitempty"` // file attachments (base64)
 	AutoApprove      bool             `json:"autoApprove,omitempty"`
 	Debug            bool             `json:"debug,omitempty"`            // reserved for future debug streaming
 	SystemContext    string           `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
@@ -152,8 +152,8 @@ type StudioMessage struct {
 type AttachmentInfo struct {
 	Filename string `json:"filename"`
 	MimeType string `json:"mimeType"`
-	Size     int    `json:"size"`            // byte count of the decoded file
-	Data     string `json:"data,omitempty"`  // base64 data (included for images to render thumbnails)
+	Size     int    `json:"size"`           // byte count of the decoded file
+	Data     string `json:"data,omitempty"` // base64 data (included for images to render thumbnails)
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -532,6 +532,19 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// /tutorial: start a tutorial drill creation conversation
+	if msg == "/tutorial" || strings.HasPrefix(msg, "/tutorial ") {
+		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial"))
+		eventData := map[string]interface{}{
+			"hint":                 hint,
+			"wizard_kind":          "tutorial",
+			"wizard_system_prompt": tools.GetTutorialWizardPrompt(),
+		}
+		SendSSE(w, flusher, "drill_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
 	// /drill-add <suite>: add new drills to an existing suite
 	if strings.HasPrefix(msg, "/drill-add ") {
 		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/drill-add"))
@@ -544,6 +557,25 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
 			"wizard_system_prompt": wizardPrompt,
+		}
+		SendSSE(w, flusher, "drill_add_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /tutorial-add <suite>: add tutorial drills to an existing suite
+	if strings.HasPrefix(msg, "/tutorial-add ") {
+		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial-add"))
+		suiteName, suiteContext, err := resolveTutorialAddContext(r.Context(), flowStoreFromRequest(r), suiteName)
+		if err != nil {
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		eventData := map[string]interface{}{
+			"suite_name":           suiteName,
+			"wizard_kind":          "tutorial",
+			"wizard_system_prompt": tools.GetTutorialAddPrompt(suiteName, suiteContext),
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -616,12 +648,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 
-		// Enrich context with composite FlowStore (personal-first) so
-		// SaveDistillReview persists to the user's personal store.
-		saveCtx := r.Context()
-		if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
-			saveCtx = store.WithFlowStore(saveCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
-		}
+			// Enrich context with composite FlowStore (personal-first) so
+			// SaveDistillReview persists to the user's personal store.
+			saveCtx := r.Context()
+			if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+				saveCtx = store.WithFlowStore(saveCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+			}
 
 			filePath, runCmd, err := chatAgent.SaveDistillReview(saveCtx, req.SessionID)
 			if err != nil {
@@ -1288,6 +1320,8 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
 				"- `/drill [hint]` — Create a drill suite with guided wizard\n" +
 				"- `/drill-add <suite>` — Add new drills to an existing suite\n" +
+				"- `/tutorial [hint]` — Create a tutorial (narrated) drill with guided wizard\n" +
+				"- `/tutorial-add <suite>` — Add tutorial drills to an existing suite\n" +
 				"- `/help` — Show this help message",
 		})
 
@@ -1379,9 +1413,9 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				if svc.PersonalSessions != nil {
 					distillCtx = store.WithSessionService(distillCtx, svc.PersonalSessions)
 				}
-			if svc.PersonalFlows != nil || svc.Flows != nil {
-				distillCtx = store.WithFlowStore(distillCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
-			}
+				if svc.PersonalFlows != nil || svc.Flows != nil {
+					distillCtx = store.WithFlowStore(distillCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+				}
 			}
 
 			ds := agent.DistillSession{

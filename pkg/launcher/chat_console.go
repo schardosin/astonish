@@ -244,6 +244,40 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			break
 		}
 
+		// /tutorial-add <suite>
+		if strings.HasPrefix(input, "/tutorial-add") {
+			suiteName := strings.TrimSpace(strings.TrimPrefix(input, "/tutorial-add"))
+			if suiteName == "" {
+				fmt.Printf("%sUsage: /tutorial-add <suite_name>%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			dirs := adrill.DefaultDrillDirs()
+			suite, err := adrill.FindSuite(dirs, suiteName)
+			if err != nil {
+				fmt.Printf("%sSuite %q not found: %v%s\n", ColorYellow, suiteName, err, ColorReset)
+				continue
+			}
+			suiteContext := adrill.BuildSuiteContext(suite)
+			addPrompt := tools.GetTutorialAddPrompt(suiteName, suiteContext)
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(addPrompt)
+			fmt.Printf("%sStarting tutorial-add wizard for suite %q (%d existing drills)...%s\n\n",
+				ColorCyan, suiteName, len(suite.Tests), ColorReset)
+			input = fmt.Sprintf("I'd like to add new tutorial drills to the %q suite.", suiteName)
+		}
+
+		// /tutorial: inject tutorial wizard prompt
+		if strings.HasPrefix(input, "/tutorial") && !strings.HasPrefix(input, "/tutorial-add") {
+			hint := strings.TrimSpace(strings.TrimPrefix(input, "/tutorial"))
+			wizardPrompt := tools.GetTutorialWizardPrompt()
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(wizardPrompt)
+			fmt.Printf("%sStarting tutorial drill creation wizard...%s\n\n", ColorCyan, ColorReset)
+			if hint != "" {
+				input = fmt.Sprintf("I'd like to create a tutorial drill. Here's the flow to teach: %s", hint)
+			} else {
+				input = "I'd like to create a tutorial drill for my product UI."
+			}
+		}
+
 		// /drill-add <suite>: add new drills to an existing suite
 		if strings.HasPrefix(input, "/drill-add") {
 			suiteName := strings.TrimSpace(strings.TrimPrefix(input, "/drill-add"))
@@ -497,6 +531,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /distill     - Distill the last task into a reusable flow")
 				fmt.Println("  /drill       - Create a drill suite with guided wizard")
 				fmt.Println("  /drill-add   - Add new drills to an existing suite")
+				fmt.Println("  /tutorial    - Create a tutorial (narrated) drill with guided wizard")
+				fmt.Println("  /tutorial-add - Add tutorial drills to an existing suite")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /authorize   - Authorize a device to access Studio (usage: /authorize CODE)")

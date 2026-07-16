@@ -17,7 +17,8 @@ const defaultKasmVNCPort = 6901
 
 // BrowserRequestHumanArgs is the input for browser_request_human.
 type BrowserRequestHumanArgs struct {
-	Reason string `json:"reason" jsonschema:"required,Why you need human help. Shown to the user. Be specific about what they should do (e.g. 'solve the CAPTCHA and click Submit')."`
+	Reason         string `json:"reason" jsonschema:"required,Why you need human help. Shown to the user. Be specific about what they should do (e.g. 'solve the CAPTCHA and click Submit')."`
+	CaptureActions bool   `json:"capture_actions,omitempty" jsonschema:"When true, start DOM action capture for the handoff window so clicks/typing can be turned into a tutorial drill. Capture stops when the user clicks Done."`
 }
 
 // BrowserRequestHumanResult is the output of browser_request_human.
@@ -76,11 +77,33 @@ func BrowserRequestHuman(mgr *browser.Manager) func(tool.Context, BrowserRequest
 
 		// Container mode: start KasmVNC for visual access
 		if mgr.IsContainerMode() {
-			return startKasmVNCHandoff(mgr, args.Reason, pageURL, pageTitle)
+			res, err := startKasmVNCHandoff(mgr, args.Reason, pageURL, pageTitle)
+			if err != nil {
+				return res, err
+			}
+			if args.CaptureActions {
+				if capErr := mgr.StartActionCapture(true); capErr != nil {
+					res.Message += fmt.Sprintf("\n\nWARNING: action capture failed to start: %v", capErr)
+				} else {
+					res.Message += "\n\nAction capture is ON — clicks and typing will be logged for tutorial drafting. Capture stops when Done is clicked."
+				}
+			}
+			return res, nil
 		}
 
 		// Host mode: start CDP proxy (existing behavior)
-		return startCDPHandoff(mgr, args.Reason, cdpURL, pageURL, pageTitle)
+		res, err := startCDPHandoff(mgr, args.Reason, cdpURL, pageURL, pageTitle)
+		if err != nil {
+			return res, err
+		}
+		if args.CaptureActions {
+			if capErr := mgr.StartActionCapture(true); capErr != nil {
+				res.Message += fmt.Sprintf("\n\nWARNING: action capture failed to start: %v", capErr)
+			} else {
+				res.Message += "\n\nAction capture is ON — clicks and typing will be logged for tutorial drafting. Capture stops when Done is clicked."
+			}
+		}
+		return res, nil
 	}
 }
 

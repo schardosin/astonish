@@ -131,6 +131,7 @@ func browserToolDeclarations() []ToolDeclaration {
 		{Name: "browser_close", Description: "Close the current page or tab", Category: "browser"},
 		{Name: "browser_resize", Description: "Resize the browser viewport", Category: "browser"},
 		{Name: "browser_wait_for", Description: "Wait for a condition (element, network idle, timeout)", Category: "browser"},
+		{Name: "browser_pause", Description: "Pause for a fixed duration (tutorial pacing)", Category: "browser"},
 		{Name: "browser_file_upload", Description: "Upload files to a file input element", Category: "browser"},
 		{Name: "browser_handle_dialog", Description: "Handle a native browser dialog (alert, confirm, prompt)", Category: "browser"},
 		{Name: "browser_evaluate", Description: "Evaluate a JavaScript expression in the page", Category: "browser"},
@@ -148,6 +149,10 @@ func browserToolDeclarations() []ToolDeclaration {
 		{Name: "browser_set_locale", Description: "Override browser locale", Category: "browser"},
 		{Name: "browser_set_device", Description: "Emulate a mobile device", Category: "browser"},
 		{Name: "browser_request_human", Description: "Request human-in-the-loop browser interaction", Category: "browser"},
+		{Name: "browser_start_action_capture", Description: "Start DOM action capture for tutorial authoring", Category: "browser"},
+		{Name: "browser_stop_action_capture", Description: "Stop DOM action capture", Category: "browser"},
+		{Name: "browser_get_action_log", Description: "Get captured DOM action log JSON", Category: "browser"},
+		{Name: "browser_clear_action_log", Description: "Clear the DOM action capture log", Category: "browser"},
 		{Name: "browser_start_recording", Description: "Start recording the browser display to an MP4", Category: "browser"},
 		{Name: "browser_stop_recording", Description: "Stop browser display recording and finalize the MP4", Category: "browser"},
 		{Name: "browser_recording_status", Description: "Check whether a browser display recording is in progress", Category: "browser"},
@@ -183,6 +188,7 @@ func drillToolDeclarations() []ToolDeclaration {
 		{Name: "edit_drill", Description: "Edit an existing drill file", Category: "drill"},
 		{Name: "run_drill", Description: "Run a drill suite and return the test report", Category: "drill"},
 		{Name: "inject_drill_credentials", Description: "Inject suite credentials into the sandbox before start-services", Category: "drill"},
+		{Name: "draft_drill_from_action_log", Description: "Convert a browser action capture log into draft tutorial drill YAML", Category: "drill"},
 	}
 }
 

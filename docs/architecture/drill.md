@@ -97,6 +97,40 @@ Drill includes pixel-level visual comparison:
 4. Red-highlighted diff images are generated for visual inspection.
 5. Baselines are stored as artifacts and can be manually updated.
 
+### Tutorial mode vs test mode
+
+`drill_config.mode` selects runner semantics:
+
+| Mode | Purpose | Assertions | Recording / pacing |
+|---|---|---|---|
+| `test` (default / empty) | Deterministic smoke/CI | Required for useful drills; failures fail the test; triage/retries per config | Not auto-managed |
+| `tutorial` | Regenerable UI training scripts | Soft: failures become step `warning` and do **not** fail the test; tool errors still fail | `narration`, `hold_ms`, `record` (`start`/`stop`/`segment`); auto-segment when narration is set; writes `scene_manifest.json` |
+
+Tutorial defaults: `on_fail: continue`, no triage/retries unless YAML sets them. Always honor `hold_ms > 0` (sleep after a successful step) in any mode.
+
+Example:
+
+```yaml
+type: drill
+suite: astonish-product
+drill_config:
+  mode: tutorial
+  tags: [tutorial]
+nodes:
+  - name: open_studio
+    narration: "Open Astonish Studio from the home screen."
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_click
+      ref: "studio-link"
+```
+
+After a tutorial `run_drill`, artifacts include per-scene MP4s and `scene_manifest.json` (path surfaced on the run result). **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+
+Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
+
 ### Why LLM-Powered Triage
 
 When a drill fails in `triage` mode, an LLM analyzes the failure context and classifies it as:
@@ -248,6 +282,10 @@ The drill runner collects:
 | `pkg/tools/run_drill_tool.go` | Drill execution tool with the 1000-line creation wizard prompt |
 | `pkg/tools/inject_drill_credentials_tool.go` | Prep-time credential injection (before start-services) |
 | `pkg/drill/run_instructions.go` | Studio Run prep text (Go); mirrored by `web/src/utils/generateRunInstructions.ts` |
+| `pkg/drill/scene_manifest.go` | Tutorial `scene_manifest.json` writer |
+| `pkg/tools/tutorial_prompt.go` | `/tutorial` and `/tutorial-add` wizard prompts |
+| `pkg/browser/action_recorder.go` | DOM action capture for human demo → draft YAML |
+| `pkg/tools/draft_drill_from_action_log.go` | Action log → draft tutorial drill YAML |
 
 ## Interactions
 

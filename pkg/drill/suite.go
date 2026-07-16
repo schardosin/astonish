@@ -134,12 +134,26 @@ func ValidateTest(test *LoadedTest) error {
 	if len(test.Config.Nodes) == 0 {
 		return fmt.Errorf("test %q: no nodes defined", test.Name)
 	}
-	// Validate assertions
+	if dc := test.Config.DrillConfig; dc != nil {
+		switch dc.Mode {
+		case "", "test", "tutorial":
+		default:
+			return fmt.Errorf("test %q: unknown drill_config.mode %q (want \"\", \"test\", or \"tutorial\")", test.Name, dc.Mode)
+		}
+	}
 	for _, node := range test.Config.Nodes {
 		if node.Assert != nil {
 			if err := validateAssert(node.Name, node.Assert); err != nil {
 				return fmt.Errorf("test %q: %w", test.Name, err)
 			}
+		}
+		switch node.Record {
+		case "", "start", "stop", "segment":
+		default:
+			return fmt.Errorf("test %q: node %q: unknown record %q (want \"\", \"start\", \"stop\", or \"segment\")", test.Name, node.Name, node.Record)
+		}
+		if node.HoldMs < 0 {
+			return fmt.Errorf("test %q: node %q: hold_ms must be >= 0", test.Name, node.Name)
 		}
 	}
 	return nil

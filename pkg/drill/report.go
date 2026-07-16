@@ -12,15 +12,16 @@ import (
 
 // SuiteReport holds results of running an entire test suite.
 type SuiteReport struct {
-	Suite      string       `json:"suite"`
-	Status     string       `json:"status"` // "passed", "failed", "error"
-	Duration   int64        `json:"duration_ms"`
-	StartedAt  time.Time    `json:"started_at"`
-	FinishedAt time.Time    `json:"finished_at"`
-	SetupLog   string       `json:"setup_log,omitempty"`
-	Tests      []TestReport `json:"tests"`
-	Summary    string       `json:"summary"`
-	Analysis   string       `json:"analysis,omitempty"` // AI triage summary (from --analyze or on_fail: triage)
+	Suite        string       `json:"suite"`
+	Status       string       `json:"status"` // "passed", "failed", "error"
+	Duration     int64        `json:"duration_ms"`
+	StartedAt    time.Time    `json:"started_at"`
+	FinishedAt   time.Time    `json:"finished_at"`
+	SetupLog     string       `json:"setup_log,omitempty"`
+	Tests        []TestReport `json:"tests"`
+	Summary      string       `json:"summary"`
+	Analysis     string       `json:"analysis,omitempty"`      // AI triage summary (from --analyze or on_fail: triage)
+	ManifestPath string       `json:"manifest_path,omitempty"` // tutorial scene_manifest.json when present
 }
 
 // TestReport holds results of a single test.
@@ -41,13 +42,15 @@ type TestReport struct {
 type StepResult struct {
 	Name      string           `json:"name"`
 	Tool      string           `json:"tool"`
-	Status    string           `json:"status"` // "passed", "failed", "error", "skipped"
+	Status    string           `json:"status"` // "passed", "failed", "error", "skipped", "warning"
 	Duration  int64            `json:"duration_ms"`
 	Assertion *AssertionResult `json:"assertion,omitempty"`
 	Artifacts []string         `json:"artifacts,omitempty"`
 	Error     string           `json:"error,omitempty"`
 	Output    string           `json:"output,omitempty"` // raw tool output for failed/errored steps (capped at 10KB)
 	Triage    *TriageVerdict   `json:"triage,omitempty"` // AI diagnosis (when on_fail: triage or --analyze)
+	Narration string           `json:"narration,omitempty"`
+	HoldMs    int              `json:"hold_ms,omitempty"`
 }
 
 // TriageVerdict is the structured output from the L1 triage agent.

@@ -278,6 +278,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
     { cmd: '/drill', desc: 'Create a drill suite with guided wizard' },
     { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
+    { cmd: '/tutorial', desc: 'Create a tutorial (narrated) drill with guided wizard' },
+    { cmd: '/tutorial-add', desc: 'Add tutorial drills to an existing suite' },
   ], [])
 
   // Pre-compute which artifact paths should be rendered as embedded file viewers
@@ -1770,32 +1772,43 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'drill_redirect':
-            // /drill [hint] command: start drill suite creation wizard
+            // /drill or /tutorial [hint]: start drill/tutorial suite creation wizard
             setIsStreaming(false)
             {
               const hint = (data.hint as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
+              const wizardKind = (data.wizard_kind as string) || 'drill'
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
-                const kickoff = hint
-                  ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
-                  : 'I\'d like to create a drill suite for my project.'
+                let kickoff: string
+                if (wizardKind === 'tutorial') {
+                  kickoff = hint
+                    ? `I'd like to create a tutorial drill. Here's the flow to teach: ${hint}`
+                    : 'I\'d like to create a tutorial drill for my product UI.'
+                } else {
+                  kickoff = hint
+                    ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
+                    : 'I\'d like to create a drill suite for my project.'
+                }
                 setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
               }
             }
             break
 
           case 'drill_add_redirect':
-            // /drill-add <suite> command: start drill-add wizard for existing suite
+            // /drill-add or /tutorial-add <suite>: add drills to an existing suite
             setIsStreaming(false)
             {
               const suiteName = (data.suite_name as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
+              const wizardKind = (data.wizard_kind as string) || 'drill'
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
-                const kickoff = `I'd like to add new drills to the "${suiteName}" suite.`
+                const kickoff = wizardKind === 'tutorial'
+                  ? `I'd like to add new tutorial drills to the "${suiteName}" suite.`
+                  : `I'd like to add new drills to the "${suiteName}" suite.`
                 setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
               }
             }

@@ -38,6 +38,7 @@ type SuiteRunner struct {
 	triageEnabled bool              // when true, all on_fail defaults become "triage"
 	setupLog      string            // retained for triage context (unused by thin runner)
 	llmProvider   LLMProvider       // optional LLM for semantic assertions
+	manifestPath  string            // last tutorial scene_manifest.json written this suite run
 }
 
 // NewSuiteRunner creates a runner with the given tool executor and artifact manager.
@@ -97,6 +98,7 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 
 	report.FinishedAt = time.Now()
 	report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
+	report.ManifestPath = sr.manifestPath
 	report.ComputeStatus()
 	report.ComputeSummary()
 
@@ -146,6 +148,8 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 	onFail := "stop"
 	maxRetries := 0
 	var tags []string
+	tutorial := IsTutorialMode(tc)
+	explicitOnFail := false
 
 	if tc != nil {
 		if tc.Timeout > 0 {
@@ -156,6 +160,7 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 		}
 		if tc.OnFail != "" {
 			onFail = tc.OnFail
+			explicitOnFail = true
 		}
 		if tc.MaxRetries > 0 {
 			maxRetries = tc.MaxRetries
@@ -163,21 +168,27 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 		tags = tc.Tags
 	}
 
-	// When --analyze is active, override defaults
+	// Tutorial drills default to continue-on-assert and no retries/triage.
+	if tutorial && !explicitOnFail {
+		onFail = "continue"
+	}
+
+	// When --analyze is active, override defaults (but not soft tutorial defaults
+	// unless the YAML explicitly set on_fail).
 	if sr.triageEnabled {
-		if onFail == "stop" {
-			onFail = "triage"
-		}
-		if maxRetries == 0 {
-			maxRetries = 1
+		if !tutorial || explicitOnFail {
+			if onFail == "stop" {
+				onFail = "triage"
+			}
+			if maxRetries == 0 {
+				maxRetries = 1
+			}
 		}
 	}
 
-	report := sr.runTestAttempt(ctx, test, suite, timeout, stepTimeout, onFail, tags)
+	report := sr.runTestAttempt(ctx, test, suite, timeout, stepTimeout, onFail, tags, tutorial)
 	report.Tags = tags
 
-	// Handle retries: if any step got a triage verdict recommending retry,
-	// re-run the entire test from scratch (deterministic re-run, no AI).
 	retriesLeft := maxRetries
 	for retriesLeft > 0 && report.Status == "failed" && sr.shouldRetry(report) {
 		retriesLeft--
@@ -185,7 +196,7 @@ func (sr *SuiteRunner) runTest(ctx context.Context, test *LoadedTest, suite *Loa
 		if sr.verbose {
 			fmt.Printf("  Retrying test %q (attempt %d)...\n", test.Config.Description, report.Retries+1)
 		}
-		report = sr.runTestAttempt(ctx, test, suite, timeout, stepTimeout, onFail, tags)
+		report = sr.runTestAttempt(ctx, test, suite, timeout, stepTimeout, onFail, tags, tutorial)
 		report.Retries = maxRetries - retriesLeft
 		report.Tags = tags
 	}
@@ -222,7 +233,7 @@ func (sr *SuiteRunner) runParameterizedTest(ctx context.Context, test *LoadedTes
 }
 
 // runTestAttempt executes a single attempt of a test.
-func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, suite *LoadedSuite, timeout, stepTimeout int, onFail string, _ []string) TestReport {
+func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, suite *LoadedSuite, timeout, stepTimeout int, onFail string, _ []string, tutorial bool) TestReport {
 	testCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
@@ -232,9 +243,8 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 		StartedAt: time.Now(),
 	}
 
-	// Resolve auto-wait settings from drill config
 	autoWait := false
-	autoWaitTimeout := 5000 // default 5s in milliseconds
+	autoWaitTimeout := 5000
 	if tc := test.Config.DrillConfig; tc != nil {
 		autoWait = tc.AutoWait
 		if tc.AutoWaitTimeout > 0 {
@@ -244,19 +254,18 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 
 	nodes := resolveExecutionOrder(test.Config)
 	allPassed := true
+	ts := &tutorialRunState{}
 
 	for _, node := range nodes {
-		stepResult := sr.executeStep(testCtx, node, stepTimeout, autoWait, autoWaitTimeout)
+		stepResult := sr.executeStep(testCtx, node, stepTimeout, autoWait, autoWaitTimeout, tutorial, ts)
 		report.Steps = append(report.Steps, stepResult)
 
 		if stepResult.Status == "failed" || stepResult.Status == "error" {
 			allPassed = false
-			// Determine on_fail behavior
 			stepOnFail := onFail
 			if node.Assert != nil && node.Assert.OnFail != "" {
 				stepOnFail = node.Assert.OnFail
 			}
-			// Override to triage when --analyze is active
 			if sr.triageEnabled && stepOnFail == "stop" {
 				stepOnFail = "triage"
 			}
@@ -278,18 +287,39 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 				if verdict != nil {
 					report.Steps[len(report.Steps)-1].Triage = verdict
 				}
-				// Triage mode implies stop-after-triage (we've diagnosed the problem)
 				break
 			}
-			// Even without triage mode, attach known transient browser verdicts so
-			// shouldRetry can re-run when MaxRetries > 0.
 			if known := ClassifyKnownFailure(stepResult); known != nil && known.Retry {
 				report.Steps[len(report.Steps)-1].Triage = known
 			}
 			if stepOnFail == "stop" || stepOnFail == "triage" {
 				break
 			}
-			// "continue" — keep going
+		}
+	}
+
+	if tutorial {
+		sr.finalizeTutorialRecording(testCtx, ts)
+		if sr.artifactMgr != nil {
+			suiteName := ""
+			if suite != nil {
+				suiteName = suite.Name
+			}
+			path, err := WriteSceneManifest(sr.artifactMgr.Dir(), SceneManifest{
+				Mode:   "tutorial",
+				Suite:  suiteName,
+				Drill:  test.Name,
+				Scenes: ts.scenes,
+			})
+			if err == nil && path != "" {
+				sr.manifestPath = path
+				report.Steps = append(report.Steps, StepResult{
+					Name:      "_scene_manifest",
+					Tool:      "scene_manifest",
+					Status:    "passed",
+					Artifacts: []string{path},
+				})
+			}
 		}
 	}
 
@@ -303,6 +333,15 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 	}
 
 	return report
+}
+
+// tutorialRunState tracks open recordings and completed scenes during a tutorial drill.
+type tutorialRunState struct {
+	recording     bool
+	pendingID     string
+	pendingNarr   string
+	pendingHoldMs int
+	scenes        []SceneClip
 }
 
 // shouldRetry checks if any step in the report has a triage verdict recommending retry.
@@ -340,15 +379,17 @@ func (sr *SuiteRunner) buildAnalysisSummary(report *SuiteReport) {
 // When autoWait is true and the tool is an interactive browser tool,
 // a browser_wait_for call is injected before the actual tool execution
 // to wait for the target element to appear.
-func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTimeout int, autoWait bool, autoWaitTimeout int) StepResult {
+func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTimeout int, autoWait bool, autoWaitTimeout int, tutorial bool, ts *tutorialRunState) StepResult {
 	stepCtx, cancel := context.WithTimeout(ctx, time.Duration(stepTimeout)*time.Second)
 	defer cancel()
 
 	toolName := extractToolName(node)
 
 	result := StepResult{
-		Name: node.Name,
-		Tool: toolName,
+		Name:      node.Name,
+		Tool:      toolName,
+		Narration: node.Narration,
+		HoldMs:    node.HoldMs,
 	}
 
 	if toolName == "" {
@@ -357,7 +398,6 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 		return result
 	}
 
-	// Build tool args (excluding the "tool" key itself)
 	toolArgs := make(map[string]interface{})
 	for k, v := range node.Args {
 		if k != "tool" {
@@ -365,28 +405,29 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 		}
 	}
 
-	// Apply runtime variable substitution (e.g., {{CONTAINER_IP}})
 	if len(sr.vars) > 0 {
 		toolArgs = substituteVarsInArgs(toolArgs, sr.vars)
 	}
 
-	// Apply base_url resolution for browser_navigate with relative URLs
 	if sr.baseURL != "" && toolName == "browser_navigate" {
 		if urlStr, ok := toolArgs["url"].(string); ok && strings.HasPrefix(urlStr, "/") {
 			toolArgs["url"] = strings.TrimRight(sr.baseURL, "/") + urlStr
 		}
 	}
-	// Prefer 127.0.0.1 over localhost/::1 for browser URLs (IPv6-first Chromium
-	// vs IPv4-only listeners). BrowserNavigate also normalizes; do it here so
-	// relative+base_url joins and {{CONTAINER_IP}}=localhost cases are covered
-	// before the tool runs.
 	if strings.HasPrefix(toolName, "browser_") {
 		if urlStr, ok := toolArgs["url"].(string); ok && urlStr != "" {
 			toolArgs["url"] = browser.NormalizeLoopbackURL(urlStr)
 		}
 	}
 
-	// Auto-wait: inject a browser_wait_for call before interactive browser tools
+	if tutorial && ts != nil {
+		if err := sr.applyTutorialRecording(stepCtx, node, ts); err != nil {
+			result.Status = "error"
+			result.Error = err.Error()
+			return result
+		}
+	}
+
 	if autoWait && isInteractiveBrowserTool(toolName) {
 		if waitTarget := extractWaitTarget(toolName, toolArgs); waitTarget != "" {
 			waitArgs := map[string]interface{}{
@@ -399,14 +440,12 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 	start := time.Now()
 
-	// Execute the tool
 	toolResult, err := sr.toolExecutor.Execute(stepCtx, toolName, toolArgs)
 	result.Duration = time.Since(start).Milliseconds()
 
 	if err != nil {
 		result.Status = "error"
 		result.Error = err.Error()
-		// Preserve raw error context for triage (cap at 10KB)
 		errOutput := err.Error()
 		if len(errOutput) > 10240 {
 			errOutput = errOutput[:10240] + "\n... (truncated)"
@@ -415,10 +454,18 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 		return result
 	}
 
-	// Extract output for assertions and artifacts
+	if node.HoldMs > 0 {
+		select {
+		case <-stepCtx.Done():
+			result.Status = "error"
+			result.Error = "context cancelled during hold_ms"
+			return result
+		case <-time.After(time.Duration(node.HoldMs) * time.Millisecond):
+		}
+	}
+
 	output := ExtractOutput(toolResult)
 
-	// Capture proof artifacts
 	if sr.artifactMgr != nil && output != "" {
 		if isShellTool(toolName) {
 			path, _ := sr.artifactMgr.SaveLog(node.Name, output)
@@ -428,16 +475,13 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 		}
 	}
 
-	// Evaluate assertion
 	if node.Assert != nil {
 		content := getAssertionContent(node.Assert, toolResult, output)
 
-		// Semantic assertions: use LLM if available
 		if node.Assert.Type == "semantic" && sr.llmProvider != nil {
 			assertResult := EvaluateSemantic(stepCtx, node.Assert, content, sr.llmProvider)
 			result.Assertion = assertResult
 		} else if node.Assert.Type == "visual_match" {
-			// Visual regression: compare screenshot against baseline
 			assertResult := sr.evaluateVisual(node, toolResult)
 			result.Assertion = assertResult
 		} else {
@@ -447,9 +491,16 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 
 		if result.Assertion.Passed {
 			result.Status = "passed"
+		} else if tutorial {
+			// Soft assertions: do not fail the tutorial drill.
+			result.Status = "warning"
+			if len(output) > 10240 {
+				result.Output = output[:10240] + "\n... (truncated)"
+			} else {
+				result.Output = output
+			}
 		} else {
 			result.Status = "failed"
-			// Preserve raw output for triage (cap at 10KB)
 			if len(output) > 10240 {
 				result.Output = output[:10240] + "\n... (truncated)"
 			} else {
@@ -461,6 +512,94 @@ func (sr *SuiteRunner) executeStep(ctx context.Context, node config.Node, stepTi
 	}
 
 	return result
+}
+
+func (sr *SuiteRunner) applyTutorialRecording(ctx context.Context, node config.Node, ts *tutorialRunState) error {
+	rec := node.Record
+	if rec == "" && node.Narration != "" {
+		rec = "segment"
+	}
+	switch rec {
+	case "":
+		return nil
+	case "start":
+		return sr.tutorialStartRecording(ctx, node, ts)
+	case "stop":
+		return sr.tutorialStopRecording(ctx, ts)
+	case "segment":
+		if ts.recording {
+			if err := sr.tutorialStopRecording(ctx, ts); err != nil {
+				return err
+			}
+		}
+		return sr.tutorialStartRecording(ctx, node, ts)
+	default:
+		return fmt.Errorf("unknown record %q", rec)
+	}
+}
+
+func (sr *SuiteRunner) tutorialStartRecording(ctx context.Context, node config.Node, ts *tutorialRunState) error {
+	filename := SanitizeSceneFilename(node.Name)
+	_, err := sr.toolExecutor.Execute(ctx, "browser_start_recording", map[string]interface{}{
+		"filename": filename,
+	})
+	if err != nil {
+		return fmt.Errorf("browser_start_recording: %w", err)
+	}
+	ts.recording = true
+	ts.pendingID = node.Name
+	ts.pendingNarr = node.Narration
+	ts.pendingHoldMs = node.HoldMs
+	return nil
+}
+
+func (sr *SuiteRunner) tutorialStopRecording(ctx context.Context, ts *tutorialRunState) error {
+	if !ts.recording {
+		return nil
+	}
+	raw, err := sr.toolExecutor.Execute(ctx, "browser_stop_recording", map[string]interface{}{})
+	ts.recording = false
+	if err != nil {
+		return fmt.Errorf("browser_stop_recording: %w", err)
+	}
+	clip := SceneClip{
+		ID:        ts.pendingID,
+		Narration: ts.pendingNarr,
+		HoldMs:    ts.pendingHoldMs,
+	}
+	if m, ok := raw.(map[string]any); ok {
+		if p, ok := m["path"].(string); ok {
+			clip.Path = p
+		}
+		switch d := m["duration_seconds"].(type) {
+		case float64:
+			clip.DurationSeconds = d
+		case int:
+			clip.DurationSeconds = float64(d)
+		}
+	} else {
+		// Results may be structs from tool handlers — marshal round-trip.
+		data, _ := json.Marshal(raw)
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil {
+			if p, ok := m["path"].(string); ok {
+				clip.Path = p
+			}
+			if d, ok := m["duration_seconds"].(float64); ok {
+				clip.DurationSeconds = d
+			}
+		}
+	}
+	ts.scenes = append(ts.scenes, clip)
+	ts.pendingID, ts.pendingNarr, ts.pendingHoldMs = "", "", 0
+	return nil
+}
+
+func (sr *SuiteRunner) finalizeTutorialRecording(ctx context.Context, ts *tutorialRunState) {
+	if ts == nil || !ts.recording {
+		return
+	}
+	_ = sr.tutorialStopRecording(ctx, ts)
 }
 
 // runShellCommand executes a shell command via the tool executor.

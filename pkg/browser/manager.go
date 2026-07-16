@@ -260,6 +260,9 @@ type Manager struct {
 
 	// recording tracks an in-progress session capture (nil when idle).
 	recording *activeRecording
+
+	// actionCapture tracks DOM action recording for tutorial authoring.
+	actionCapture *actionCaptureState
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT
@@ -1093,8 +1096,10 @@ func (m *Manager) WaitHandoff(ctx context.Context) error {
 }
 
 // StopHandoff stops any active handoff session. Safe to call when no handoff
-// is running.
+// is running. Also stops action capture that was started for the handoff.
 func (m *Manager) StopHandoff() {
+	m.stopActionCaptureIfHandoff()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

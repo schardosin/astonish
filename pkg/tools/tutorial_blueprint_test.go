@@ -44,13 +44,34 @@ func TestBlueprintToTutorialDrillYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"mode: tutorial", "open_studio", "Click the Studio link now", "blueprint: open_studio_blueprint"} {
+	for _, want := range []string{
+		"mode: tutorial",
+		"open_studio",
+		"Click the Studio link now",
+		"blueprint: open_studio_blueprint",
+		"visual_kind: avatar",
+		"visual_kind: broll",
+		"visual_kind: screen",
+		"visual_description: A-roll",
+		"visual_description: montage",
+		"Hi there friend",
+	} {
 		if !strings.Contains(yamlOut, want) {
 			t.Fatalf("missing %q in:\n%s", want, yamlOut)
 		}
 	}
-	if strings.Contains(yamlOut, "Hi there friend") {
-		t.Fatal("avatar voiceover should not become a drill node")
+	// Avatar/broll voiceovers live under drill_config.scenes only — not as executable nodes.
+	// Nodes section should contain exactly one tool name for the screen scene.
+	nodesIdx := strings.Index(yamlOut, "\nnodes:")
+	if nodesIdx < 0 {
+		t.Fatal("missing nodes section")
+	}
+	nodesSection := yamlOut[nodesIdx:]
+	if strings.Count(nodesSection, "browser_run_code") != 1 {
+		t.Fatalf("expected exactly one screen node, got:\n%s", nodesSection)
+	}
+	if strings.Contains(nodesSection, "visual_kind: avatar") {
+		t.Fatal("avatar should not be an executable node")
 	}
 }
 

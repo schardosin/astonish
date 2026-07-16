@@ -226,8 +226,9 @@ func BlueprintToTutorialDrillFromYAML(blueprintYAML, drillName string) (Blueprin
 		DrillName:     drillName,
 		BlueprintName: blueprintRefName(bp, drillName),
 		ScreenCount:   screen,
-		Message: "Screen scenes converted to tutorial drill YAML. Replace TODO browser_run_code " +
-			"with real UI actions, then validate_drill and save_drill. Avatar/broll rows stay in the blueprint only.",
+		Message: "Screen scenes converted to executable nodes; full cut list (avatar/broll/screen) " +
+			"is under drill_config.scenes for scene_manifest.json. Replace TODO browser_run_code " +
+			"with real UI actions, then validate_drill and save_drill.",
 	}, nil
 }
 

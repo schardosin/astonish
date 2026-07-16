@@ -114,7 +114,9 @@ func EstimateHoldMsFromVoiceover(voiceover string) int {
 	return ((ms + 50) / 100) * 100
 }
 
-// BlueprintToTutorialDrillYAML builds mode:tutorial drill YAML for screen scenes only.
+// BlueprintToTutorialDrillYAML builds mode:tutorial drill YAML: executable nodes for
+// screen scenes only, plus drill_config.scenes with the full ordered cut list
+// (avatar / broll / screen) for scene_manifest.json after run_drill.
 func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (string, error) {
 	if errs := ValidateTutorialBlueprint(bp); len(errs) > 0 {
 		return "", fmt.Errorf("invalid blueprint: %s", strings.Join(errs, "; "))
@@ -126,6 +128,15 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 		drillName = sanitizeBlueprintName(bp.Title)
 	}
 
+	type sceneOut struct {
+		ID                string `yaml:"id"`
+		Narration         string `yaml:"narration,omitempty"`
+		Voiceover         string `yaml:"voiceover,omitempty"`
+		HoldMs            int    `yaml:"hold_ms,omitempty"`
+		VisualKind        string `yaml:"visual_kind,omitempty"`
+		VisualDescription string `yaml:"visual_description,omitempty"`
+		DrillNode         string `yaml:"drill_node,omitempty"`
+	}
 	type nodeOut struct {
 		Name      string         `yaml:"name"`
 		Narration string         `yaml:"narration"`
@@ -134,42 +145,56 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 		Type      string         `yaml:"type"`
 		Args      map[string]any `yaml:"args"`
 	}
+	var scenes []sceneOut
 	var nodes []nodeOut
 	var flow []map[string]string
 	var prev string
 	for _, sc := range bp.Scenes {
-		if sc.Visual.Kind != "screen" {
-			continue
-		}
-		nodeName := sc.Visual.DrillNode
-		if nodeName == "" {
-			nodeName = sc.ID
-		}
-		nodeName = sanitizeBlueprintName(nodeName)
 		hold := sc.DurationHintS * 1000
 		if hold <= 0 {
 			hold = EstimateHoldMsFromVoiceover(sc.Voiceover)
 		}
-		// Placeholder tool — agent should replace with real selectors after explore.
-		code := fmt.Sprintf(
-			`(() => { /* TODO: implement UI action for %q — %s */ return 'todo'; })()`,
-			nodeName, sc.Visual.Description,
-		)
-		nodes = append(nodes, nodeOut{
-			Name:      nodeName,
-			Narration: sc.Voiceover,
-			HoldMs:    hold,
-			Record:    "segment",
-			Type:      "tool",
-			Args: map[string]any{
-				"tool": "browser_run_code",
-				"code": code,
-			},
-		})
-		if prev != "" {
-			flow = append(flow, map[string]string{"from": prev, "to": nodeName})
+		sceneID := sc.ID
+		if sceneID == "" {
+			sceneID = sanitizeBlueprintName(sc.Title)
 		}
-		prev = nodeName
+		entry := sceneOut{
+			ID:                sceneID,
+			Narration:         sc.Voiceover,
+			Voiceover:         sc.Voiceover,
+			HoldMs:            hold,
+			VisualKind:        sc.Visual.Kind,
+			VisualDescription: sc.Visual.Description,
+		}
+		if sc.Visual.Kind == "screen" {
+			nodeName := sc.Visual.DrillNode
+			if nodeName == "" {
+				nodeName = sc.ID
+			}
+			nodeName = sanitizeBlueprintName(nodeName)
+			entry.DrillNode = nodeName
+			// Placeholder tool — agent should replace with real selectors after explore.
+			code := fmt.Sprintf(
+				`(() => { /* TODO: implement UI action for %q — %s */ return 'todo'; })()`,
+				nodeName, sc.Visual.Description,
+			)
+			nodes = append(nodes, nodeOut{
+				Name:      nodeName,
+				Narration: sc.Voiceover,
+				HoldMs:    hold,
+				Record:    "segment",
+				Type:      "tool",
+				Args: map[string]any{
+					"tool": "browser_run_code",
+					"code": code,
+				},
+			})
+			if prev != "" {
+				flow = append(flow, map[string]string{"from": prev, "to": nodeName})
+			}
+			prev = nodeName
+		}
+		scenes = append(scenes, entry)
 	}
 	if len(nodes) == 0 {
 		return "", fmt.Errorf("no screen scenes to convert")
@@ -185,6 +210,7 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 			"timeout":      300,
 			"step_timeout": 60,
 			"blueprint":    blueprintRefName(bp, drillName),
+			"scenes":       scenes,
 		},
 		"nodes": nodes,
 	}

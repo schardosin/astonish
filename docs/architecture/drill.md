@@ -127,7 +127,27 @@ nodes:
       ref: "studio-link"
 ```
 
-After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Authoring is **blueprint-first**: `/tutorial` interviews the creator, presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into drill YAML. Avatar/b-roll remain scripted in the blueprint for a later provider step. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Authoring is **blueprint-first**: `/tutorial` interviews the creator, presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+
+Example `drill_config.scenes` (written by Approve):
+
+```yaml
+drill_config:
+  mode: tutorial
+  blueprint: juicytrade_overview_blueprint
+  scenes:
+    - id: intro
+      voiceover: "Meet JuicyTrade."
+      visual_kind: avatar
+      visual_description: "Presenter on branded backdrop"
+      hold_ms: 5000
+    - id: dashboard
+      voiceover: "Here's your dashboard."
+      visual_kind: screen
+      visual_description: "Net Liquidation and account badge"
+      drill_node: dashboard_overview
+      hold_ms: 9000
+```
 
 Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
 

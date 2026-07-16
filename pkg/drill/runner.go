@@ -302,7 +302,12 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 
 	if tutorial {
 		sr.finalizeTutorialRecording(testCtx, ts)
-		for _, clip := range ts.scenes {
+		var cutList []config.TutorialSceneSpec
+		if test.Config.DrillConfig != nil {
+			cutList = test.Config.DrillConfig.Scenes
+		}
+		scenes := MergeSceneManifest(cutList, ts.scenes)
+		for _, clip := range scenes {
 			if clip.Path != "" {
 				sr.scenePaths = append(sr.scenePaths, clip.Path)
 			}
@@ -316,7 +321,7 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 				Mode:   "tutorial",
 				Suite:  suiteName,
 				Drill:  test.Name,
-				Scenes: ts.scenes,
+				Scenes: scenes,
 			})
 			if err == nil && path != "" {
 				sr.manifestPath = path

@@ -150,6 +150,19 @@ type ReadyCheck struct {
 	StableCount int    `yaml:"stable_count,omitempty" json:"stable_count,omitempty"` // Consecutive successes required (default: 3)
 }
 
+// TutorialSceneSpec is one beat in the full blueprint cut list embedded on a
+// tutorial drill. Non-screen rows (avatar / broll) are metadata only; screen
+// rows match recorded clips via DrillNode (or ID) after run_drill.
+type TutorialSceneSpec struct {
+	ID                string `yaml:"id" json:"id"`
+	Narration         string `yaml:"narration,omitempty" json:"narration,omitempty"`
+	Voiceover         string `yaml:"voiceover,omitempty" json:"voiceover,omitempty"`
+	HoldMs            int    `yaml:"hold_ms,omitempty" json:"hold_ms,omitempty"`
+	VisualKind        string `yaml:"visual_kind,omitempty" json:"visual_kind,omitempty"` // avatar | broll | screen
+	VisualDescription string `yaml:"visual_description,omitempty" json:"visual_description,omitempty"`
+	DrillNode         string `yaml:"drill_node,omitempty" json:"drill_node,omitempty"` // screen: node name used when recording
+}
+
 // DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).
 type DrillConfig struct {
 	Tags            []string `yaml:"tags,omitempty"`              // For filtering (e.g., "smoke", "regression")
@@ -164,6 +177,9 @@ type DrillConfig struct {
 	Mode string `yaml:"mode,omitempty"`
 	// Blueprint names the companion tutorial_blueprint flow (HeyGen-style cut list).
 	Blueprint string `yaml:"blueprint,omitempty"`
+	// Scenes is the full ordered cut list (avatar / broll / screen) used to write
+	// scene_manifest.json. Executable nodes remain screen-only.
+	Scenes []TutorialSceneSpec `yaml:"scenes,omitempty" json:"scenes,omitempty"`
 }
 
 // AssertConfig defines what to check after a step executes.

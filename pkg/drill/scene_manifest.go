@@ -73,3 +73,63 @@ func WriteSceneManifest(dir string, m SceneManifest) (string, error) {
 	}
 	return path, nil
 }
+
+// MergeSceneManifest builds the final cut list from drill_config.scenes, overlaying
+// recorded screen clips by drill_node (preferred) or scene id. When cutList is
+// empty, returns recorded as-is (hand-authored tutorials without a blueprint).
+// Extra recorded IDs not present in cutList are omitted.
+func MergeSceneManifest(cutList []config.TutorialSceneSpec, recorded []SceneClip) []SceneClip {
+	if len(cutList) == 0 {
+		return recorded
+	}
+	byID := make(map[string]SceneClip, len(recorded))
+	for _, clip := range recorded {
+		if clip.ID != "" {
+			byID[clip.ID] = clip
+		}
+	}
+	out := make([]SceneClip, 0, len(cutList))
+	for _, spec := range cutList {
+		voice := spec.Voiceover
+		if voice == "" {
+			voice = spec.Narration
+		}
+		narr := spec.Narration
+		if narr == "" {
+			narr = voice
+		}
+		clip := SceneClip{
+			ID:                spec.ID,
+			Narration:         narr,
+			Voiceover:         voice,
+			HoldMs:            spec.HoldMs,
+			VisualKind:        spec.VisualKind,
+			VisualDescription: spec.VisualDescription,
+		}
+		rec, ok := byID[spec.DrillNode]
+		if !ok {
+			rec, ok = byID[spec.ID]
+		}
+		if ok {
+			clip.Path = rec.Path
+			clip.DurationSeconds = rec.DurationSeconds
+			if clip.HoldMs == 0 {
+				clip.HoldMs = rec.HoldMs
+			}
+			if clip.Narration == "" {
+				clip.Narration = rec.Narration
+			}
+			if clip.Voiceover == "" {
+				clip.Voiceover = rec.Voiceover
+			}
+			if clip.VisualKind == "" {
+				clip.VisualKind = rec.VisualKind
+			}
+			if clip.VisualDescription == "" {
+				clip.VisualDescription = rec.VisualDescription
+			}
+		}
+		out = append(out, clip)
+	}
+	return out
+}

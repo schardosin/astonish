@@ -64,7 +64,7 @@ only to discover screen steps — still produce a full mixed blueprint afterward
    (or they type revise feedback — update blueprint and present again).
 7. Replace browser_run_code TODOs with real UI actions for screen nodes.
 8. validate_drill → save_drill (and keep the blueprint YAML with the suite).
-9. Prep stack then run_drill. Report scene_manifest.json + clip artifacts.
+9. Prep stack then run_drill. Report scene_manifest.json (full cut list: avatar/broll + screen paths) + clip artifacts.
 
 ## BLUEPRINT SCENE SHAPE
 
@@ -79,8 +79,10 @@ only to discover screen steps — still produce a full mixed blueprint afterward
 
 ## DRILL YAML (after approve)
 
-Only screen rows become nodes with narration/hold_ms/record: segment.
-drill_config.mode: tutorial and drill_config.blueprint: <blueprint name>.
+Only screen rows become executable nodes with narration/hold_ms/record: segment.
+drill_config.mode: tutorial, drill_config.blueprint: <blueprint name>, and
+drill_config.scenes: the full ordered cut list (avatar/broll/screen) used to
+write scene_manifest.json after run_drill.
 `
 
 const tutorialAddPromptTemplate = `You are adding NEW tutorial video blueprints / drills to suite %q.

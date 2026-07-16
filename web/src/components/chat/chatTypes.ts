@@ -264,6 +264,26 @@ export interface TutorialBlueprintApprovedMessage {
   content?: string
 }
 
+export interface TutorialSceneRow {
+  id: string
+  voiceover?: string
+  narration?: string
+  visual_kind: string
+  visual_description?: string
+  hold_ms?: number
+  path?: string
+  duration_seconds?: number
+}
+
+export interface TutorialSceneSlideshowMessage {
+  type: 'tutorial_scene_slideshow'
+  title: string
+  suite: string
+  drill: string
+  manifestPath: string
+  scenes: TutorialSceneRow[]
+}
+
 export interface AppSavedMessage {
   type: 'app_saved'
   name: string
@@ -319,6 +339,7 @@ export type ChatMsg =
   | DistillSavedMessage
   | TutorialBlueprintPreviewMessage
   | TutorialBlueprintApprovedMessage
+  | TutorialSceneSlideshowMessage
   | AppSavedMessage
   | ReportPreviewMessage
   | ReportMarkerMessage

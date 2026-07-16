@@ -8,7 +8,7 @@ import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, TutorialSceneSlideshowMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -27,6 +27,7 @@ import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
 import TutorialBlueprintCard from './chat/TutorialBlueprintCard'
+import TutorialSceneSlideshowCard from './chat/TutorialSceneSlideshowCard'
 import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
@@ -46,6 +47,31 @@ function normalizeBlueprintScenes(raw: unknown): TutorialBlueprintPreviewMessage
     visual_description: item?.visual_description || item?.visual?.description || '',
     duration_hint_s: item?.duration_hint_s || item?.durationHintS || undefined,
   }))
+}
+
+function normalizeTutorialScenes(raw: unknown): TutorialSceneSlideshowMessage['scenes'] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item: any) => ({
+    id: item?.id || '',
+    voiceover: item?.voiceover || '',
+    narration: item?.narration || '',
+    visual_kind: item?.visual_kind || 'screen',
+    visual_description: item?.visual_description || '',
+    hold_ms: item?.hold_ms || undefined,
+    path: item?.path || '',
+    duration_seconds: item?.duration_seconds || undefined,
+  }))
+}
+
+function slideshowVideoPaths(messages: ChatMsg[]): Set<string> {
+  const paths = new Set<string>()
+  for (const m of messages) {
+    if (m.type !== 'tutorial_scene_slideshow') continue
+    for (const sc of (m as TutorialSceneSlideshowMessage).scenes || []) {
+      if (sc.path) paths.add(sc.path)
+    }
+  }
+  return paths
 }
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
@@ -307,6 +333,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
+    const slideshowPaths = slideshowVideoPaths(messages)
     // Find the last user message index — artifacts before it belong to earlier turns
     let lastUserIdx = -1
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -325,6 +352,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
         for (const a of sessionArtifacts) {
           if (!lastTurnArtifactPaths.has(a.path)) continue
+          if (slideshowPaths.has(a.path)) continue
           if (a.fileType === 'Video') {
             paths.add(a.path)
             continue
@@ -673,6 +701,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               content: m.content || '',
             } as TutorialBlueprintApprovedMessage
           }
+          if (m.type === 'tutorial_scene_slideshow') {
+            return {
+              type: 'tutorial_scene_slideshow',
+              title: m.tutorialTitle || m.title || '',
+              suite: m.tutorialSuite || m.suite || '',
+              drill: m.tutorialDrill || m.drill || '',
+              manifestPath: m.manifestPath || '',
+              scenes: normalizeTutorialScenes(m.tutorialScenes || m.scenes),
+            } as TutorialSceneSlideshowMessage
+          }
           if (m.type === 'app_preview') {
             return {
               type: 'app_preview',
@@ -963,6 +1001,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               drillName: (data.drill_name as string) || '',
               content: (data.message as string) || '',
             } as TutorialBlueprintApprovedMessage])
+            break
+
+          case 'tutorial_scene_slideshow':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_scene_slideshow',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              drill: (data.drill as string) || '',
+              manifestPath: (data.manifest_path as string) || '',
+              scenes: normalizeTutorialScenes(data.scenes),
+            } as TutorialSceneSlideshowMessage])
             break
 
           case 'app_preview':
@@ -2100,6 +2149,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             } as TutorialBlueprintApprovedMessage])
             break
 
+          case 'tutorial_scene_slideshow':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_scene_slideshow',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              drill: (data.drill as string) || '',
+              manifestPath: (data.manifest_path as string) || '',
+              scenes: normalizeTutorialScenes(data.scenes),
+            } as TutorialSceneSlideshowMessage])
+            break
+
           case 'app_preview':
             // Finalize any streaming text first
             if (streamingTextRef.current) {
@@ -2990,6 +3050,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 const artifactMsg = msg as ArtifactMessage
                 // Suppress inline card when this artifact is embedded in the ResultCard
                 if (embeddedArtifactPaths.has(artifactMsg.path)) return null
+                if (slideshowVideoPaths(messages).has(artifactMsg.path)) return null
                 return (
                   <div key={index}>
                     <ArtifactCard
@@ -3107,6 +3168,18 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                     <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
                       {approved.content || 'Screen scenes converted to tutorial drill YAML. Refine selectors, then validate_drill / save_drill.'}
                     </p>
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_scene_slideshow') {
+                const slideshowMsg = msg as TutorialSceneSlideshowMessage
+                return (
+                  <div key={index}>
+                    <TutorialSceneSlideshowCard
+                      data={slideshowMsg}
+                      sessionId={activeSessionId}
+                    />
                   </div>
                 )
               }

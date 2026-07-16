@@ -104,6 +104,7 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 | Event | Data Shape | Frontend Action |
 |-------|-----------|----------------|
 | `artifact` | `{path, toolName, fileName, fileType}` | Add to `sessionArtifacts`, show ArtifactCard |
+| `tutorial_scene_slideshow` | `{title, suite, drill, manifest_path, scenes[]}` | Persistent scene navigator card (`TutorialSceneSlideshowCard`); survives page refresh via `[tutorial_scene_slideshow]` session marker |
 | `image` | `{data, mimeType}` | Render inline `<img>` |
 
 ### App Preview Events
@@ -277,7 +278,9 @@ A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering **iff a
 
 Any markdown artifact failing any of these conditions falls back to the compact `ArtifactCard` download tile.
 
-**Video (separate from the report gate):** last-turn artifacts with `fileType === 'Video'` (e.g. `browser_stop_recording` MP4s) also embed in `EmbeddedFileViewer`. The viewer loads bytes via `fetchArtifactBlob` (team-auth headers) into a blob URL and plays them with `<video controls>`. FilePanel uses the same player. Download labels use "Download Video" — never "Download as Markdown". Do not classify video as Markdown or set `isReport` for it.
+**Video (separate from the report gate):** last-turn artifacts with `fileType === 'Video'` (e.g. `browser_stop_recording` MP4s) also embed in `EmbeddedFileViewer` **unless** a `tutorial_scene_slideshow` message owns that path — tutorial `run_drill` MP4s play inside `TutorialSceneSlideshowCard` instead. The viewer loads bytes via `fetchArtifactBlob` (team-auth headers) into a blob URL and plays them with `<video controls>`. FilePanel uses the same player. Download labels use "Download Video" — never "Download as Markdown". Do not classify video as Markdown or set `isReport` for it.
+
+**Tutorial scene slideshow persistence:** after a successful tutorial `run_drill`, the backend reads `scene_manifest.json`, emits `tutorial_scene_slideshow` over SSE, and persists `[tutorial_scene_slideshow]{...}` in the session transcript (same pattern as `tutorial_blueprint_preview`). On reload, `eventsToMessages` reconstructs the card; sessions recorded before the marker shipped are backfilled by `injectTutorialSceneSlideshows` from persisted `run_drill` tool responses.
 
 ### Fence shape
 

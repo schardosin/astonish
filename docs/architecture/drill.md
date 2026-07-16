@@ -127,7 +127,7 @@ nodes:
       ref: "studio-link"
 ```
 
-After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Authoring is **blueprint-first**: `/tutorial` interviews the creator, presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Studio Chat also renders a **persistent scene slideshow** (`TutorialSceneSlideshowCard`): prev/next navigation through every manifest scene (screen MP4s inline; avatar/b-roll placeholders with narration). The card survives page refresh via the `[tutorial_scene_slideshow]` session marker. Authoring is **blueprint-first**: `/tutorial` interviews the creator, presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
 
 Example `drill_config.scenes` (written by Approve):
 
@@ -306,6 +306,7 @@ The drill runner collects:
 | `pkg/tools/tutorial_prompt.go` | `/tutorial` and `/tutorial-add` wizard prompts (blueprint-first) |
 | `pkg/tools/tutorial_blueprint.go` | HeyGen-style tutorial_blueprint schema + drill conversion |
 | `web/src/components/chat/TutorialBlueprintCard.tsx` | In-chat Scene\|Voiceover\|Visual approval table |
+| `web/src/components/chat/TutorialSceneSlideshowCard.tsx` | Post-run scene navigator (screen video + avatar/b-roll placeholders) |
 | `pkg/browser/action_recorder.go` | DOM action capture for human demo → draft YAML |
 | `pkg/tools/draft_drill_from_action_log.go` | Action log → draft tutorial drill YAML |
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
+	adrill "github.com/SAP/astonish/pkg/drill"
 	persistentsession "github.com/SAP/astonish/pkg/session"
 	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
@@ -114,6 +116,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 					}
 					if bm := tryParseTutorialBlueprintMessage(text); bm != nil {
 						messages = append(messages, *bm)
+						lastInvocationID = eventInvID
+						continue
+					}
+					if sm := tryParseTutorialSceneSlideshowMessage(text); sm != nil {
+						messages = append(messages, *sm)
 						lastInvocationID = eventInvID
 						continue
 					}
@@ -274,7 +281,7 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 	// should reflect their final state. Only "failed" steps stay as-is.
 	finalizePlanSteps(messages)
 
-	return messages
+	return injectTutorialSceneSlideshows(messages, events)
 }
 
 // extractDelegationPlan parses the task plan from a delegate_tasks FunctionCall args map.
@@ -1370,6 +1377,192 @@ func studioMessageFromBlueprintPayload(msgType string, payload map[string]any) *
 		msg.BlueprintScenes = scenes
 	}
 	return msg
+}
+
+// --- Tutorial scene slideshow persistence ---
+
+const tutorialSceneSlideshowPrefix = "[tutorial_scene_slideshow]"
+
+func persistTutorialSceneSlideshow(ctx context.Context, svc session.Service, userID, sessionID string, payload map[string]any) {
+	if svc == nil || sessionID == "" || payload == nil {
+		return
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal tutorial scene slideshow", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", tutorialSceneSlideshowPrefix+string(data))
+}
+
+func tryParseTutorialSceneSlideshowMessage(text string) *StudioMessage {
+	if !strings.HasPrefix(text, tutorialSceneSlideshowPrefix) {
+		return nil
+	}
+	jsonStr := text[len(tutorialSceneSlideshowPrefix):]
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+		return nil
+	}
+	return studioMessageFromSlideshowPayload(payload)
+}
+
+func studioMessageFromSlideshowPayload(payload map[string]any) *StudioMessage {
+	if payload == nil {
+		return nil
+	}
+	msg := &StudioMessage{Type: "tutorial_scene_slideshow"}
+	if v, ok := payload["title"].(string); ok {
+		msg.TutorialTitle = v
+	}
+	if v, ok := payload["suite"].(string); ok {
+		msg.TutorialSuite = v
+	}
+	if v, ok := payload["drill"].(string); ok {
+		msg.TutorialDrill = v
+	}
+	if v, ok := payload["manifest_path"].(string); ok {
+		msg.ManifestPath = v
+	}
+	if scenes, ok := payload["scenes"].([]any); ok {
+		msg.TutorialScenes = scenes
+	}
+	return msg
+}
+
+func buildTutorialSceneSlideshowPayload(manifestPath string) (map[string]any, error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	var manifest adrill.SceneManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, err
+	}
+	title := manifest.Drill
+	if title == "" {
+		title = filepath.Base(strings.TrimSuffix(manifestPath, filepath.Ext(manifestPath)))
+	}
+	scenes := make([]map[string]any, 0, len(manifest.Scenes))
+	for _, sc := range manifest.Scenes {
+		voice := sc.Voiceover
+		if voice == "" {
+			voice = sc.Narration
+		}
+		row := map[string]any{
+			"id":                 sc.ID,
+			"voiceover":          voice,
+			"narration":          sc.Narration,
+			"visual_kind":        sc.VisualKind,
+			"visual_description": sc.VisualDescription,
+			"hold_ms":            sc.HoldMs,
+		}
+		if sc.Path != "" {
+			row["path"] = sc.Path
+		}
+		if sc.DurationSeconds > 0 {
+			row["duration_seconds"] = sc.DurationSeconds
+		}
+		scenes = append(scenes, row)
+	}
+	return map[string]any{
+		"title":          title,
+		"suite":          manifest.Suite,
+		"drill":          manifest.Drill,
+		"manifest_path":  manifestPath,
+		"scenes":         scenes,
+	}, nil
+}
+
+func studioMessageFromManifestPath(manifestPath string) *StudioMessage {
+	payload, err := buildTutorialSceneSlideshowPayload(manifestPath)
+	if err != nil {
+		slog.Warn("failed to build tutorial scene slideshow from manifest", "path", manifestPath, "error", err)
+		return nil
+	}
+	return studioMessageFromSlideshowPayload(payload)
+}
+
+type slideshowInsert struct {
+	afterIdx int
+	msg      StudioMessage
+}
+
+// injectTutorialSceneSlideshows synthesizes slideshow messages for tutorial
+// run_drill results that predate persisted markers (page-refresh recovery).
+func injectTutorialSceneSlideshows(messages []StudioMessage, events session.Events) []StudioMessage {
+	covered := map[string]bool{}
+	for _, m := range messages {
+		if m.Type == "tutorial_scene_slideshow" && m.ManifestPath != "" {
+			covered[m.ManifestPath] = true
+		}
+	}
+
+	var pending []slideshowInsert
+	runDrillIdx := 0
+	for i := range events.Len() {
+		ev := events.At(i)
+		if ev == nil || ev.Content == nil {
+			continue
+		}
+		for _, part := range ev.Content.Parts {
+			if part.FunctionResponse == nil || part.FunctionResponse.Name != "run_drill" {
+				continue
+			}
+			resp := part.FunctionResponse.Response
+			if resp == nil {
+				runDrillIdx++
+				continue
+			}
+			if status, _ := resp["status"].(string); status == "error" {
+				runDrillIdx++
+				continue
+			}
+			manifestPath, _ := resp["manifest_path"].(string)
+			if manifestPath == "" {
+				runDrillIdx++
+				continue
+			}
+			if covered[manifestPath] {
+				runDrillIdx++
+				continue
+			}
+			msg := studioMessageFromManifestPath(manifestPath)
+			if msg == nil {
+				runDrillIdx++
+				continue
+			}
+			afterIdx := findRunDrillToolResultIndex(messages, runDrillIdx)
+			if afterIdx >= 0 {
+				pending = append(pending, slideshowInsert{afterIdx: afterIdx, msg: *msg})
+				covered[manifestPath] = true
+			}
+			runDrillIdx++
+		}
+	}
+	if len(pending) == 0 {
+		return messages
+	}
+	// Insert from highest index downward so indices stay valid.
+	for i := len(pending) - 1; i >= 0; i-- {
+		ins := pending[i]
+		idx := ins.afterIdx + 1
+		messages = append(messages[:idx], append([]StudioMessage{ins.msg}, messages[idx:]...)...)
+	}
+	return messages
+}
+
+func findRunDrillToolResultIndex(messages []StudioMessage, n int) int {
+	count := 0
+	for i, m := range messages {
+		if m.Type == "tool_result" && m.ToolName == "run_drill" {
+			if count == n {
+				return i
+			}
+			count++
+		}
+	}
+	return -1
 }
 
 // --- App preview persistence ---

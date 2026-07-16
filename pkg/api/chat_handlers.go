@@ -146,6 +146,13 @@ type StudioMessage struct {
 	DrillYAML       string `json:"drillYaml,omitempty"`
 	DrillName       string `json:"drillName,omitempty"`
 
+	// tutorial_scene_slideshow fields — post-run scene navigator
+	TutorialTitle  string `json:"tutorialTitle,omitempty"`
+	TutorialSuite  string `json:"tutorialSuite,omitempty"`
+	TutorialDrill  string `json:"tutorialDrill,omitempty"`
+	ManifestPath   string `json:"manifestPath,omitempty"`
+	TutorialScenes any    `json:"tutorialScenes,omitempty"`
+
 	// app_preview fields — populated for generative UI app previews
 	AppCode    string `json:"code,omitempty"`    // JSX source code
 	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)

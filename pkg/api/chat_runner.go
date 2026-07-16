@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -501,6 +502,7 @@ func (cr *ChatRunner) Run(
 				})
 				cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 				cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+				cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 			}
 		}
 	}
@@ -695,6 +697,7 @@ runLoop:
 					})
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 					cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+					cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 
 					// Emit memory_saved SSE event when memory_save tool succeeds
 					if part.FunctionResponse.Name == "memory_save" && resp != nil {
@@ -855,6 +858,7 @@ runLoop:
 						})
 						cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 						cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+						cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 					}
 				}
 			}
@@ -989,6 +993,33 @@ func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, ses
 	}
 	cr.emitEvent("tutorial_blueprint_preview", payload)
 	persistTutorialBlueprintPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
+}
+
+// maybeEmitTutorialSceneSlideshow emits the post-run scene navigator when
+// run_drill produces a tutorial scene_manifest.json.
+func (cr *ChatRunner) maybeEmitTutorialSceneSlideshow(sessionService session.Service, toolName string, resp map[string]any) {
+	if toolName != "run_drill" || resp == nil {
+		return
+	}
+	if status, _ := resp["status"].(string); status == "error" {
+		return
+	}
+	manifestPath, _ := resp["manifest_path"].(string)
+	if manifestPath == "" {
+		return
+	}
+	if !filepath.IsAbs(manifestPath) {
+		if abs, err := filepath.Abs(manifestPath); err == nil {
+			manifestPath = abs
+		}
+	}
+	payload, err := buildTutorialSceneSlideshowPayload(manifestPath)
+	if err != nil {
+		slog.Warn("tutorial scene slideshow: failed to read manifest", "path", manifestPath, "error", err)
+		return
+	}
+	cr.emitEvent("tutorial_scene_slideshow", payload)
+	persistTutorialSceneSlideshow(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
 }
 
 func parseBlueprintScenesFromToolResult(raw any) []agent.TutorialBlueprintSceneView {

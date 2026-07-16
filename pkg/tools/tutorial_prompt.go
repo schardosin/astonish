@@ -59,7 +59,9 @@ only to discover screen steps — still produce a full mixed blueprint afterward
    (or full blueprint_yaml). Mix avatar / broll / screen intentionally.
 4. validate_tutorial_blueprint — fix errors.
 5. present_tutorial_blueprint — this shows the in-chat approval table.
-   STOP and wait. Do not run_drill yet.
+   After this tool, produce NO further tool calls and NO further prose.
+   Do NOT call blueprint_to_tutorial_drill, validate_drill, save_drill, or
+   run_drill until the creator clicks Approve & generate.
 6. Creator clicks Approve & generate → you receive the converted drill YAML
    (or they type revise feedback — update blueprint and present again).
 7. Replace browser_run_code TODOs with real UI actions for screen nodes.
@@ -95,7 +97,8 @@ const tutorialAddPromptTemplate = `You are adding NEW tutorial video blueprints 
 
 1. Interview briefly (goal, audience, must-show UI steps, avatar density).
 2. Draft a tutorial_blueprint with mixed avatar/broll/screen scenes.
-3. validate_tutorial_blueprint → present_tutorial_blueprint → wait for Approve.
+3. validate_tutorial_blueprint → present_tutorial_blueprint → stop; wait for Approve.
+   Do not call further tools until the creator acts on the approval card.
 4. On approve, refine screen drill YAML, validate_drill, save_drill with empty
    suite_yaml so the suite is not overwritten.
 5. Tags must include tutorial; mode must be tutorial.

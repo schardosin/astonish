@@ -696,7 +696,11 @@ runLoop:
 						"result": summarizeToolResult(resp),
 					})
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
-					cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+					if cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp) {
+						// Blueprint card is up; wait for Approve / Request changes / Cancel
+						// (same hard-stop pattern as network_denial_hint).
+						break runLoop
+					}
 					cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 
 					// Emit memory_saved SSE event when memory_save tool succeeds
@@ -805,6 +809,7 @@ runLoop:
 		}
 
 		seenPartialText = false
+	retryLoop:
 		for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -857,7 +862,9 @@ runLoop:
 							"result": summarizeToolResult(resp),
 						})
 						cr.drainImagesAndFlowOutput(chatAgent, sessionService)
-						cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+						if cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp) {
+							break retryLoop
+						}
 						cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 					}
 				}
@@ -947,22 +954,24 @@ func (cr *ChatRunner) processStateDelta(delta map[string]any) {
 
 // maybeEmitTutorialBlueprint emits the Scene|Voiceover|Visual approval card when
 // present_tutorial_blueprint succeeds, and stores pending state for Approve intents.
-func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, sessionService session.Service, toolName string, resp map[string]any) {
+// Returns true when the card was emitted so the caller can end the agent turn.
+func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, sessionService session.Service, toolName string, resp map[string]any) bool {
 	if toolName != "present_tutorial_blueprint" || resp == nil {
-		return
+		return false
 	}
-	if status, _ := resp["status"].(string); status != "ok" {
-		return
+	status, _ := resp["status"].(string)
+	if status != "ok" && status != "awaiting_approval" {
+		return false
 	}
 	present, _ := resp["present_tutorial_blueprint"].(bool)
 	if !present {
-		return
+		return false
 	}
 	yamlStr, _ := resp["blueprint_yaml"].(string)
 	title, _ := resp["title"].(string)
 	suite, _ := resp["suite"].(string)
 	if yamlStr == "" {
-		return
+		return false
 	}
 
 	scenes := parseBlueprintScenesFromToolResult(resp["scenes"])
@@ -993,6 +1002,7 @@ func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, ses
 	}
 	cr.emitEvent("tutorial_blueprint_preview", payload)
 	persistTutorialBlueprintPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
+	return true
 }
 
 // maybeEmitTutorialSceneSlideshow emits the post-run scene navigator when

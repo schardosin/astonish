@@ -165,8 +165,8 @@ func presentTutorialBlueprint(_ tool.Context, args PresentTutorialBlueprintArgs)
 		return PresentTutorialBlueprintResult{}, err
 	}
 	return PresentTutorialBlueprintResult{
-		Status:        "ok",
-		Message:       "Blueprint presented for creator approval. Wait for Approve & generate, Request changes, or Cancel.",
+		Status:        "awaiting_approval",
+		Message:       "Blueprint presented for creator approval. The turn ends here — wait for Approve & generate, Request changes, or Cancel. Do not call blueprint_to_tutorial_drill or run_drill until the creator approves.",
 		Title:         bp.Title,
 		Suite:         bp.Suite,
 		BlueprintYAML: out,
@@ -252,7 +252,8 @@ func GetTutorialBlueprintTools() ([]tool.Tool, error) {
 	presentTool, err := functiontool.New(functiontool.Config{
 		Name: "present_tutorial_blueprint",
 		Description: "Show the blueprint in an in-chat Scene|Voiceover|Visual approval card. " +
-			"Call only after validate_tutorial_blueprint passes. Wait for the creator to Approve, Request changes, or Cancel.",
+			"Call only after validate_tutorial_blueprint passes. The agent turn ends after this tool; " +
+			"do not call further tools until the creator Approves, Requests changes, or Cancels.",
 	}, presentTutorialBlueprint)
 	if err != nil {
 		return nil, err

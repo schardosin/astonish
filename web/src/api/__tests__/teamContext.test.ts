@@ -31,7 +31,7 @@ describe('teamFetch auth refresh', () => {
     onAuthExpired(() => {})
     onTeamRejected(() => {})
     fetchMock = vi.fn()
-    globalThis.fetch = fetchMock
+    globalThis.fetch = fetchMock as typeof globalThis.fetch
     vi.mocked(refreshToken).mockReset()
   })
 

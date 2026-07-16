@@ -541,6 +541,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"hint":                 hint,
 			"wizard_system_prompt": tools.GetDrillWizardPrompt(),
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -554,6 +555,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			"hint":                 hint,
 			"wizard_kind":          "tutorial",
 			"wizard_system_prompt": tools.GetTutorialWizardPrompt(),
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -572,6 +574,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
 			"wizard_system_prompt": wizardPrompt,
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -591,6 +594,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			"suite_name":           suiteName,
 			"wizard_kind":          "tutorial",
 			"wizard_system_prompt": tools.GetTutorialAddPrompt(suiteName, suiteContext),
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})

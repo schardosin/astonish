@@ -1893,9 +1893,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               const hint = (data.hint as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
               const wizardKind = (data.wizard_kind as string) || 'drill'
+              const pinnedGroups = (data.pinned_tool_groups as string[]) || null
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
+                if (pinnedGroups) setActivePinnedToolGroups(pinnedGroups)
                 let kickoff: string
                 if (wizardKind === 'tutorial') {
                   kickoff = hint
@@ -1906,7 +1908,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                     ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
                     : 'I\'d like to create a drill suite for my project.'
                 }
-                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
+                setPendingDrillPrompt({
+                  message: kickoff,
+                  systemContext: wizardSystemPrompt,
+                  pinnedToolGroups: pinnedGroups || undefined,
+                })
               }
             }
             break
@@ -1918,13 +1924,19 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               const suiteName = (data.suite_name as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
               const wizardKind = (data.wizard_kind as string) || 'drill'
+              const pinnedGroups = (data.pinned_tool_groups as string[]) || null
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
+                if (pinnedGroups) setActivePinnedToolGroups(pinnedGroups)
                 const kickoff = wizardKind === 'tutorial'
                   ? `I'd like to add new tutorial drills to the "${suiteName}" suite.`
                   : `I'd like to add new drills to the "${suiteName}" suite.`
-                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
+                setPendingDrillPrompt({
+                  message: kickoff,
+                  systemContext: wizardSystemPrompt,
+                  pinnedToolGroups: pinnedGroups || undefined,
+                })
               }
             }
             break
@@ -2304,9 +2316,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Process deferred drill prompt (set by drill_redirect SSE event)
   useEffect(() => {
     if (pendingDrillPrompt && !isStreaming) {
-      const { message, systemContext } = pendingDrillPrompt
+      const { message, systemContext, pinnedToolGroups } = pendingDrillPrompt
       setPendingDrillPrompt(null)
-      sendMessage(message, { systemContext })
+      sendMessage(message, { systemContext, pinnedToolGroups })
     }
   }, [pendingDrillPrompt, isStreaming, sendMessage])
 

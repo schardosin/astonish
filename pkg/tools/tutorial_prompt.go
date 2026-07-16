@@ -37,8 +37,11 @@ Synthesia) is a later step. Do NOT treat every beat as a screen recording.
 4. Prefer stable selectors (data-testid, roles) when you later fill screen steps.
 5. Estimate duration_hint_s / hold_ms at ~150 wpm when needed.
 6. Call validate_tutorial_blueprint before present_tutorial_blueprint.
-7. After Approve & generate, refine screen TODO selectors → validate_drill → save_drill.
-8. Never mix tutorial tags into default fleet smoke without a mode/tag filter.
+7. The approval UI is ONLY via present_tutorial_blueprint (TutorialBlueprintCard
+   with Approve / Request changes / Cancel). NEVER render Scene|Voiceover|Visual
+   as markdown tables, emoji tables, or prose stand-ins — the card is the UI.
+8. After Approve & generate, refine screen TODO selectors → validate_drill → save_drill.
+9. Never mix tutorial tags into default fleet smoke without a mode/tag filter.
 
 ## INTERVIEW (do these before drafting)
 
@@ -74,7 +77,8 @@ only to discover screen steps — still produce a full mixed blueprint afterward
 3. Call draft_tutorial_blueprint with suite (the NEW tutorial suite name),
    title, audience, tone, and scenes_yaml (or full blueprint_yaml).
 4. validate_tutorial_blueprint — fix errors.
-5. present_tutorial_blueprint — this shows the in-chat approval table.
+5. present_tutorial_blueprint — REQUIRED. This emits the in-chat approval card
+   (not markdown). Do not paste a Scene|Voiceover|Visual table into chat text.
    After this tool, produce NO further tool calls and NO further prose.
    Do NOT call blueprint_to_tutorial_drill, validate_drill, save_drill, or
    run_drill until the creator clicks Approve & generate.
@@ -136,8 +140,9 @@ rebuilding the stack.
    start script unless they explicitly opt out.
 2. Interview briefly (goal, audience, must-show UI steps, avatar density).
 3. Draft a tutorial_blueprint with mixed avatar/broll/screen scenes.
-4. validate_tutorial_blueprint → present_tutorial_blueprint → stop; wait for
-   Approve. Do not call further tools until the creator acts on the card.
+4. validate_tutorial_blueprint → present_tutorial_blueprint (REQUIRED for the
+   approval card). NEVER paste Scene|Voiceover|Visual as markdown/emoji tables.
+   Stop and wait for Approve / Request changes / Cancel on the card.
 5. On approve, refine screen drill YAML, validate_drill, save_drill with
    EMPTY suite_yaml so the suite is not overwritten. Tags must include
    tutorial; mode must be tutorial.

@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/agent"
 )
 
 func TestSearchFlows_NilRegistry(t *testing.T) {

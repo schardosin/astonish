@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 func TestRunReadyCheckNil(t *testing.T) {

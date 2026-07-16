@@ -45,7 +45,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	k8sexec "k8s.io/client-go/util/exec"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // ---------------------------------------------------------------------------

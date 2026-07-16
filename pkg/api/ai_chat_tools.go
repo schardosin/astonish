@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcpstore"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/mcpstore"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )

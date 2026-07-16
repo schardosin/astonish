@@ -27,7 +27,7 @@ export async function patchUserDefaultModel(provider: string, model: string): Pr
       const errorData = await response.json();
       throw new Error(errorData.message || 'Failed to update default model');
     } catch (e) {
-      throw new Error('An unknown error occurred while updating the default model');
+      throw new Error('An unknown error occurred while updating the default model', { cause: e });
     }
   }
 }

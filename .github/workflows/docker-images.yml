@@ -21,7 +21,7 @@ jobs:
     name: Determine build context
     runs-on: ubuntu-latest
     if: >-
-      github.repository == 'schardosin/astonish' &&
+      github.repository == 'SAP/astonish' &&
       (github.event_name == 'workflow_dispatch' ||
        (github.event.workflow_run.conclusion == 'success' &&
         startsWith(github.event.workflow_run.head_branch, 'v')))
@@ -102,7 +102,7 @@ jobs:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+          LDFLAGS="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${VERSION_TAG}"
 
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
@@ -174,7 +174,7 @@ jobs:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+          LDFLAGS="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${VERSION_TAG}"
 
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
@@ -298,7 +298,7 @@ jobs:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+          LDFLAGS="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${VERSION_TAG}"
 
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .

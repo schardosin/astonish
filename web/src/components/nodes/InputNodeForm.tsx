@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import type { InputNodeFormProps } from './nodeEditorTypes'
 
 /**
@@ -11,14 +11,12 @@ export function InputNodeForm({ data, onChange, theme }: InputNodeFormProps) {
   })
   
   // Update local state when data.options changes externally
+  const prevOptionsRef = useRef(data.options)
   useEffect(() => {
-    const newText = data.options ? data.options.join(', ') : ''
-    // Only update if the parsed values are different (to avoid cursor jumping)
-    const currentParsed = optionsText.split(',').map((s: string) => s.trim()).filter(Boolean)
-    const newParsed = data.options || []
-    if (JSON.stringify(currentParsed) !== JSON.stringify(newParsed)) {
-      setOptionsText(newText)
+    if (JSON.stringify(prevOptionsRef.current) !== JSON.stringify(data.options)) {
+      setOptionsText(data.options ? data.options.join(', ') : '')
     }
+    prevOptionsRef.current = data.options
   }, [data.options])
   
   const handleOptionsBlur = () => {

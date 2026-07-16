@@ -3,7 +3,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package
-      value: github.com/schardosin/astonish/pkg/sandbox/openshell/gen/openshellv1
+      value: github.com/SAP/astonish/pkg/sandbox/openshell/gen/openshellv1
 plugins:
   - remote: buf.build/protocolbuffers/go
     out: pkg/sandbox/openshell/gen/openshellv1

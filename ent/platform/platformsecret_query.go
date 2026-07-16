@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/platformsecret"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/platformsecret"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // PlatformSecretQuery is the builder for querying PlatformSecret entities.

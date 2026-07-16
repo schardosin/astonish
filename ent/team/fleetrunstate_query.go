@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleetrunstate"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetrunstate"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // FleetRunStateQuery is the builder for querying FleetRunState entities.

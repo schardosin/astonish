@@ -8,8 +8,8 @@ import (
 	"text/tabwriter"
 
 	"github.com/charmbracelet/huh"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
 )
 
 // printSecretField writes a labeled credential field to stdout.

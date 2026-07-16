@@ -9,10 +9,10 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/user"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/user"
 )
 
 // LoginSession is the model entity for the LoginSession schema.

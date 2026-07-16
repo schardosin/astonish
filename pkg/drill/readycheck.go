@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // DefaultReadyCheckTimeout is the default max wait time in seconds.

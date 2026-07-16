@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/team"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/team"
 )
 
 // Team is the model entity for the Team schema.

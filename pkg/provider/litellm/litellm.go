@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/sashabaranov/go-openai"
-	openai_provider "github.com/schardosin/astonish/pkg/provider/openai"
+	openai_provider "github.com/SAP/astonish/pkg/provider/openai"
 	"google.golang.org/adk/model"
 )
 

@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/orgauditlog"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgauditlog"
 )
 
 // OrgAuditLog is the model entity for the OrgAuditLog schema.

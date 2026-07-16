@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/platformsetting"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/platformsetting"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // PlatformSettingDelete is the builder for deleting a PlatformSetting entity.

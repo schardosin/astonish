@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/provider"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // PlatformProvidersRequest is the request body for saving platform provider settings.

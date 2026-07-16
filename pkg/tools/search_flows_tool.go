@@ -3,8 +3,8 @@ package tools
 import (
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

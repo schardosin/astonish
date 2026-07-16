@@ -9,11 +9,11 @@ import (
 
 	"entgo.io/ent/dialect/sql/schema"
 
-	platformmigrate "github.com/schardosin/astonish/ent/platform/migrate"
-	"github.com/schardosin/astonish/pkg/agent"
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/session"
-	"github.com/schardosin/astonish/pkg/store"
+	platformmigrate "github.com/SAP/astonish/ent/platform/migrate"
+	"github.com/SAP/astonish/pkg/agent"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --- platformDB interface methods (daemon-level) ---

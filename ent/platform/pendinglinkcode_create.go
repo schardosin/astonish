@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/pendinglinkcode"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
 )
 
 // PendingLinkCodeCreate is the builder for creating a PendingLinkCode entity.

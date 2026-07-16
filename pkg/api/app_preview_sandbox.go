@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/schardosin/astonish/web"
+	"github.com/SAP/astonish/web"
 )
 
 // sandboxHTMLHead is the opening portion of the sandbox HTML, before scripts.

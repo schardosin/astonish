@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/platform/devicesession"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/devicesession"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // DeviceSessionDelete is the builder for deleting a DeviceSession entity.

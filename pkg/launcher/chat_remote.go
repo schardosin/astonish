@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/ui"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/ui"
 )
 
 // RemoteChatConfig contains configuration for a remote chat session.

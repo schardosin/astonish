@@ -1,6 +1,6 @@
 package openshell
 
-import "github.com/schardosin/astonish/pkg/config"
+import "github.com/SAP/astonish/pkg/config"
 
 // defaultSandboxPolicy returns the SandboxPolicySpec applied to every sandbox
 // created by the Astonish backend.

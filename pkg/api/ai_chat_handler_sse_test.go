@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 	"google.golang.org/adk/model"
 )
 

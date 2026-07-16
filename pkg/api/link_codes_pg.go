@@ -4,7 +4,7 @@ import (
 	"context"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // dbLinkCodeBackend implements LinkCodeBackend using any store.LinkCodeStore.

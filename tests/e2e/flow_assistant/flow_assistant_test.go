@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/pkg/api"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // COVERS: FLOWS-001

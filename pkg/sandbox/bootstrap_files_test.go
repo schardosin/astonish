@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestValidateBootstrapFile(t *testing.T) {

@@ -9,9 +9,9 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/team"
+	"github.com/SAP/astonish/ent/org/teammembership"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/team"
-	"github.com/schardosin/astonish/ent/org/teammembership"
 )
 
 // TeamMembership is the model entity for the TeamMembership schema.

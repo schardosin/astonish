@@ -14,8 +14,8 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/browser"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/SAP/astonish/pkg/browser"
+	incus "github.com/SAP/astonish/pkg/sandbox/incus"
 )
 
 // vncDialerPort is the KasmVNC websocket port inside the container.

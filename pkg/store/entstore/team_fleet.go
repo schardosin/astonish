@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/fleetplan"
-	"github.com/schardosin/astonish/ent/team/fleettemplate"
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/fleetplan"
+	"github.com/SAP/astonish/ent/team/fleettemplate"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ===========================================================================

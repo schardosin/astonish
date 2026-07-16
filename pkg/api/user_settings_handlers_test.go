@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 type mockPersonalSettingsStore struct {

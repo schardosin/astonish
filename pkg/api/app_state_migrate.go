@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ── Schema Reconciliation ────────────────────────────────────────────

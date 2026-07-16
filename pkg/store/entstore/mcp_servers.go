@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/platformmcpserver"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/platformmcpserver"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // mcpServerStore implements store.MCPServerStore for platform-level MCP servers.

@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/fleetplan"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetplan"
 )
 
 // FleetPlan is the model entity for the FleetPlan schema.

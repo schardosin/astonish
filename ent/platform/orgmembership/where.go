@@ -7,8 +7,8 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"github.com/SAP/astonish/ent/platform/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/predicate"
 )
 
 // UserID applies equality check predicate on the "user_id" field. It's identical to UserIDEQ.

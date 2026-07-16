@@ -328,7 +328,7 @@ function FlowCanvasInner({
         })
       })
     }
-  }, [propNodes, propEdges, selectedNodeId, runningNodeId])
+  }, [propNodes, propEdges, selectedNodeId, runningNodeId, setNodes])
 
   // Sync edges from props
   // Sync edges from props
@@ -402,7 +402,7 @@ function FlowCanvasInner({
   // Recenter flow horizontally when isRunning changes (container size changes)
   // NOTE: We use a ref to access nodes to avoid running this when nodes change
   const nodesRef = useRef(nodes)
-  nodesRef.current = nodes
+  useEffect(() => { nodesRef.current = nodes }, [nodes])
   
   useEffect(() => {
     // Small delay to let the container resize complete
@@ -470,6 +470,9 @@ function FlowCanvasInner({
     setSelectedNodeIds(ids)
   }, [])
 
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+
   const onPaneClick = useCallback(() => {
     // Clicking on empty space deselects
     if (onNodeSelect) {
@@ -481,9 +484,6 @@ function FlowCanvasInner({
     setContextMenu(null)
   }, [onNodeSelect])
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-
   // Handle right-click on pane for context menu
   const onPaneContextMenu = useCallback((event: React.MouseEvent | MouseEvent) => {
     event.preventDefault()
@@ -492,7 +492,7 @@ function FlowCanvasInner({
       x: event.clientX,
       y: event.clientY,
     })
-  }, [isRunning, readOnly])
+  }, [isRunning, readOnly, setContextMenu])
 
   // Handle auto layout
   const handleAutoLayout = useCallback(() => {
@@ -500,14 +500,14 @@ function FlowCanvasInner({
     if (onAutoLayout) {
       onAutoLayout()
     }
-  }, [onAutoLayout])
+  }, [onAutoLayout, setContextMenu])
 
   // Handle reset zoom
   const handleResetZoom = useCallback(() => {
     setContextMenu(null)
     const viewport = getViewport()
     setViewport({ x: viewport.x, y: viewport.y, zoom: 0.9 }, { duration: 300 })
-  }, [getViewport, setViewport])
+  }, [getViewport, setViewport, setContextMenu])
 
   const defaultEdgeOptions = useMemo(() => ({
     style: { stroke: '#805AD5', strokeWidth: 2 },

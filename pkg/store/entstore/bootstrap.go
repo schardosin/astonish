@@ -9,8 +9,8 @@ import (
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
-	platformmigrate "github.com/schardosin/astonish/ent/platform/migrate"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
+	platformmigrate "github.com/SAP/astonish/ent/platform/migrate"
+	"github.com/SAP/astonish/pkg/store/pgutil"
 )
 
 // BootstrapPlatform creates the platform database if it doesn't exist,

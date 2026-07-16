@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 func TestFleetTemplateStore_BundledImmutableAndWins(t *testing.T) {

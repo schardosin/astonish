@@ -7,11 +7,11 @@ import (
 
 	"github.com/google/uuid"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
-	"github.com/schardosin/astonish/ent/team/fleetrunstate"
-	"github.com/schardosin/astonish/ent/team/fleettask"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/fleetmailboxmessage"
+	"github.com/SAP/astonish/ent/team/fleetrunstate"
+	"github.com/SAP/astonish/ent/team/fleettask"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 type teamFleetRunStateStore struct {

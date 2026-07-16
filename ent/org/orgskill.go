@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/orgskill"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgskill"
 )
 
 // OrgSkill is the model entity for the OrgSkill schema.

@@ -3,9 +3,9 @@ package launcher
 import (
 	"log/slog"
 
-	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 )
 
 // WireIncusBrowserManager configures mgr for in-container Chromium (Incus).

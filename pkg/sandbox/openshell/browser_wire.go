@@ -6,8 +6,8 @@ import (
 	"io"
 	"net"
 
-	"github.com/schardosin/astonish/pkg/browser"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // WireBrowserManager configures mgr so CloakBrowser + KasmVNC run inside the

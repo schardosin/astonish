@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sashabaranov/go-openai"
-	"github.com/schardosin/astonish/pkg/provider/llmerror"
+	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"google.golang.org/adk/model"
 	"google.golang.org/genai"
 )

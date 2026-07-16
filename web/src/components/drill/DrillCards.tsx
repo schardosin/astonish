@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight, Check, X, Shield } from 'lucide-react'
-import { formatDuration, statusColor, StatusDot } from './drillUtils'
+import { formatDuration, statusColor } from './drillUtils'
+import { StatusDot } from './drillComponents'
 import { reportDurationMs } from '../../api/drillApi'
 
 // ─── Step Card ───

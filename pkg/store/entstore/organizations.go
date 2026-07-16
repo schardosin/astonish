@@ -6,11 +6,11 @@ import (
 
 	"github.com/google/uuid"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/orgmembership"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/orgmembership"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // orgStore implements store.OrganizationStore using the Ent platform client.

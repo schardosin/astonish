@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Search, X, Loader2, DollarSign, Database, Zap, Check } from 'lucide-react'
 import { teamFetch } from '../api/teamContext'
 
@@ -32,21 +32,7 @@ export default function ProviderModelSelector({ isOpen, onClose, onSelect, curre
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
 
-  useEffect(() => {
-    if (isOpen) {
-      fetchModels()
-      
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') {
-          onClose()
-        }
-      }
-      window.addEventListener('keydown', handleKeyDown)
-      return () => window.removeEventListener('keydown', handleKeyDown)
-    }
-  }, [isOpen, provider, onClose])
-
-  const fetchModels = async () => {
+  const fetchModels = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -59,7 +45,21 @@ export default function ProviderModelSelector({ isOpen, onClose, onSelect, curre
     } finally {
       setLoading(false)
     }
-  }
+  }, [provider])
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchModels()
+      
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          onClose()
+        }
+      }
+      window.addEventListener('keydown', handleKeyDown)
+      return () => window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [isOpen, provider, onClose, fetchModels])
 
   const filteredModels = useMemo(() => {
     if (!searchQuery.trim()) return models

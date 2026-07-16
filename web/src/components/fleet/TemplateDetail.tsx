@@ -4,8 +4,9 @@ import { AlertCircle, ArrowRight, Copy, ExternalLink, Loader, Radio, Settings2, 
 import { cloneFleet, fetchFleet, saveFleet } from '../../api/fleetChat'
 import type { FleetDefinition, SetupProfileSummary } from '../../api/fleetChat'
 import type { CommFlowNode, FleetAgentDef, FleetPlanData, FleetSettings } from './fleetUtils'
-import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig } from './fleetUtils'
-import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor, updateFleetSettings, useFleetDetailTab } from './FleetConfigEditor'
+import { addAgentToFleetConfig, getAgentColor, removeAgentFromFleetConfig, renameAgentInFleetConfig, updateFleetSettings } from './fleetUtils'
+import { FleetAgentsEditor, AgentEditorPanel, FleetDetailTabs, FleetSettingsEditor } from './FleetConfigEditor'
+import { useFleetDetailTab } from './fleetHooks'
 import FleetTemplateDialog from './FleetTemplateDialog'
 import SetupWizard from './SetupWizard'
 

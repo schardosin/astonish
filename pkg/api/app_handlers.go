@@ -7,10 +7,10 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/apps"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/provider"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/apps"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/provider"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ListAppsHandler returns all saved visual apps.

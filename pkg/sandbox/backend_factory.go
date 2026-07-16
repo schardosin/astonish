@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // BackendFactoryFunc constructs a Backend from a BackendFactoryConfig. It

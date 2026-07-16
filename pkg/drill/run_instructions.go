@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // GenerateRunInstructions returns Studio chat prep text for a suite.

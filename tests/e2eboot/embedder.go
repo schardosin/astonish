@@ -5,7 +5,7 @@ package e2eboot
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // initEmbedFunc initializes the local Hugot embedding function and sets it on

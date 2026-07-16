@@ -10,10 +10,10 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/sandboxlayer"
+	"github.com/SAP/astonish/ent/platform/sandboxtemplate"
+	"github.com/SAP/astonish/ent/platform/schema"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
-	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
-	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplate is the model entity for the SandboxTemplate schema.

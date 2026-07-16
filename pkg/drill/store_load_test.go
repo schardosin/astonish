@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // memFlowStore is a minimal in-memory FlowStore for LoadSuiteFromStore tests.

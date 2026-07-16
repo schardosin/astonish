@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 )
 
 // networkGrantApproveRequest is the body for approving a specific draft chunk.

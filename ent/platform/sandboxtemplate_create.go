@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/sandboxlayer"
+	"github.com/SAP/astonish/ent/platform/sandboxtemplate"
+	"github.com/SAP/astonish/ent/platform/schema"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
-	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
-	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplateCreate is the builder for creating a SandboxTemplate entity.

@@ -11,11 +11,11 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/user"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/predicate"
-	"github.com/schardosin/astonish/ent/platform/user"
 )
 
 // LoginSessionUpdate is the builder for updating LoginSession entities.

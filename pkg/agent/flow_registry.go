@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 

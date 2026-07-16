@@ -30,7 +30,7 @@ func TestParseNodeResponse_ANSIBannerPrefix(t *testing.T) {
 	// Exact reproduction of what the sandbox-base binary emitted.
 	stdout := []byte(
 		"\x1b[93mA new version of Astonish is available: v2.9.1\x1b[0m\n" +
-			"\x1b[93mRun \x1b[1mbrew upgrade schardosin/astonish/astonish\x1b[0m\x1b[93m to update.\x1b[0m\n" +
+			"\x1b[93mRun \x1b[1mbrew upgrade SAP/astonish/astonish\x1b[0m\x1b[93m to update.\x1b[0m\n" +
 			"\n" +
 			"{\"ready\":true}\n" +
 			"{\"id\":\"1\",\"result\":{\"content\":\"file contents here\"}}\n",

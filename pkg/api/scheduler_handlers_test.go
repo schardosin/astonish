@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/scheduler"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // testSchedulerStore adapts scheduler.Store to store.SchedulerStore for tests.

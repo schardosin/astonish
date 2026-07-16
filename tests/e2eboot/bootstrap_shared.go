@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store/entstore"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store/pgutil"
 )
 
 // bootstrapShared is invoked when ASTONISH_E2E_KEEP_ALIVE=1. Instead of

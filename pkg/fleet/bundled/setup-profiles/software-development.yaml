@@ -206,7 +206,7 @@ steps:
     \n**Context:** You are already running inside a sandbox container. The shell\ncommands you run execute inside this container.\
     \ When you are done, you will\nsnapshot this container as a reusable template.\n\nIf the user already provided a GitHub\
     \ repo in step 1 (for github_issues\nchannel), use that same repo. Otherwise, ask where the project code lives:\n- **git_repo**:\
-    \ repository in owner/repo format\n\nDerive `<repo-name>` from the repository (e.g., \"juicytrade\" from\n\"schardosin/juicytrade\"\
+    \ repository in owner/repo format\n\nDerive `<repo-name>` from the repository (e.g., \"my-project\" from\n\"acme-corp/my-project\"\
     ). The project will be cloned to `/root/<repo-name>/`.\nUse this path consistently in ALL subsequent commands and tool\
     \ calls.\n\nOnce you know the repository, execute these sub-steps IN ORDER:\n\n**3a. Confirm the project source.**\n\n\
     Tell the user:\n\"I'll clone <owner/repo> into `/root/<repo-name>/` inside the sandbox\ncontainer. This container will\

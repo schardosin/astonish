@@ -3,7 +3,7 @@ package sandbox
 import (
 	"context"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // BuildPGSessionRegistry constructs a PG-backed SessionRegistry for the

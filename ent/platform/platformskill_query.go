@@ -12,10 +12,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/platformskill"
+	"github.com/SAP/astonish/ent/platform/platformskillfile"
+	"github.com/SAP/astonish/ent/platform/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformskill"
-	"github.com/schardosin/astonish/ent/platform/platformskillfile"
-	"github.com/schardosin/astonish/ent/platform/predicate"
 )
 
 // PlatformSkillQuery is the builder for querying PlatformSkill entities.

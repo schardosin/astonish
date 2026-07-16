@@ -12,11 +12,11 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/sandboxlayer"
+	"github.com/SAP/astonish/ent/platform/sandboxtemplate"
+	"github.com/SAP/astonish/ent/platform/schema"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/predicate"
-	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
-	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
-	"github.com/schardosin/astonish/ent/platform/schema"
 )
 
 // SandboxTemplateUpdate is the builder for updating SandboxTemplate entities.

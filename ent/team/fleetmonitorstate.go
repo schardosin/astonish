@@ -10,7 +10,7 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/team/fleetmonitorstate"
+	"github.com/SAP/astonish/ent/team/fleetmonitorstate"
 )
 
 // FleetMonitorState is the model entity for the FleetMonitorState schema.

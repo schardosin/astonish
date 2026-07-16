@@ -301,7 +301,7 @@ import (
     "testing"
     "time"
 
-    "github.com/schardosin/astonish/tests/e2eboot"
+    "github.com/SAP/astonish/tests/e2eboot"
 )
 
 func TestE2E_MyFeature(t *testing.T) {
@@ -371,7 +371,7 @@ package my_feature
 
 import (
     "testing"
-    "github.com/schardosin/astonish/tests/e2eboot"
+    "github.com/SAP/astonish/tests/e2eboot"
 )
 
 // COVERS: CHAT-NNN

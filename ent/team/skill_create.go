@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/skill"
+	"github.com/SAP/astonish/ent/team/skillfile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/skill"
-	"github.com/schardosin/astonish/ent/team/skillfile"
 )
 
 // SkillCreate is the builder for creating a Skill entity.

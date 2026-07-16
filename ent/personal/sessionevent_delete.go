@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/personal/predicate"
-	"github.com/schardosin/astonish/ent/personal/sessionevent"
+	"github.com/SAP/astonish/ent/personal/predicate"
+	"github.com/SAP/astonish/ent/personal/sessionevent"
 )
 
 // SessionEventDelete is the builder for deleting a SessionEvent entity.

@@ -11,11 +11,11 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/ent/platform/organization"
+	"github.com/SAP/astonish/ent/platform/user"
+	"github.com/SAP/astonish/ent/platform/userchannel"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/ent/platform/organization"
-	"github.com/schardosin/astonish/ent/platform/user"
-	"github.com/schardosin/astonish/ent/platform/userchannel"
 )
 
 // UserCreate is the builder for creating a User entity.

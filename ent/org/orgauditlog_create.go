@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgauditlog"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgauditlog"
 )
 
 // OrgAuditLogCreate is the builder for creating a OrgAuditLog entity.

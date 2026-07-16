@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/fleettask"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleettask"
 )
 
 // FleetTask is the model entity for the FleetTask schema.

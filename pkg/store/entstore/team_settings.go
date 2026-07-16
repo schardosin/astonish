@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 const settingsKey = "team_settings"

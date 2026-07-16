@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback, type ChangeEvent } from 'react'
 import { Trash2, Loader2, ToggleLeft, ToggleRight } from 'lucide-react'
 import * as adminApi from '../../api/platformAdmin'
 import type { ChannelFullInfo } from '../../api/platformAdmin'
-import { InlineError, InlineSuccess, inputStyle } from './shared'
+import { InlineError, InlineSuccess } from './shared'
+import { inputStyle } from './sharedStyles'
 
 // ---------------------------------------------------------------------------
 // Channels Tab

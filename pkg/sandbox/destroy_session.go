@@ -15,7 +15,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // DestroySessionEverywhere builds the configured backend from appCfg and

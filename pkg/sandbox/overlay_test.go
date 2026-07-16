@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox/tmplmeta"
+	"github.com/SAP/astonish/pkg/sandbox/tmplmeta"
 )
 
 func TestResolveLowerLayers(t *testing.T) {

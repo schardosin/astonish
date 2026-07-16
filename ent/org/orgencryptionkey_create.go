@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/org/orgencryptionkey"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 )
 
 // OrgEncryptionKeyCreate is the builder for creating a OrgEncryptionKey entity.

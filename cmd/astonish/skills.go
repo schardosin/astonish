@@ -6,8 +6,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/skills"
 )
 
 func handleSkillsCommand(args []string) error {

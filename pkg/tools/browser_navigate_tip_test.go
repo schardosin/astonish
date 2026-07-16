@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/browser"
+	"github.com/SAP/astonish/pkg/browser"
 )
 
 func TestSandboxBrowserErrorTip_HostChromeLoopback(t *testing.T) {

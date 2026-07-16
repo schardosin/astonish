@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // TestE2E_Memory_PersonalIsolation verifies that personal memories are

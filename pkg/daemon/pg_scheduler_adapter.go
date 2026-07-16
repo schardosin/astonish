@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/scheduler"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // pgSchedulerAdapter wraps a store.SchedulerStore (PostgreSQL-backed) and

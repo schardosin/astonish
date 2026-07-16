@@ -12,9 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/schardosin/astonish/pkg/config"
-	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
-	"github.com/schardosin/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/config"
+	k8sbackend "github.com/SAP/astonish/pkg/sandbox/k8s"
+	"github.com/SAP/astonish/pkg/store/entstore"
 )
 
 // handlePlatformSandboxAudit audits both sandbox PVCs for orphaned data by

@@ -11,7 +11,7 @@ keywords:
   - multi-tenant
   - sandbox
 maintainers:
-  - name: schardosin
+  - name: SAP
 
 # Prerequisites (cluster-scoped, NOT managed by this chart):
 #   1. Istio installed; control-plane namespace labeled istio-injection=enabled

@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/email"
 )
 
 // mockEmailClient implements email.Client for testing.

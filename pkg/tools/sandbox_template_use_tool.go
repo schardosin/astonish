@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

@@ -9,8 +9,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/orgencryptionkey"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgencryptionkey"
 )
 
 // OrgEncryptionKey is the model entity for the OrgEncryptionKey schema.

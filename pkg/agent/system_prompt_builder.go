@@ -6,7 +6,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/SAP/astonish/pkg/skills"
 	"google.golang.org/adk/tool"
 )
 

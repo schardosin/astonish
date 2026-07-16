@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/provider/httpool"
+	"github.com/SAP/astonish/pkg/provider/httpool"
 )
 
 // Cache for models metadata

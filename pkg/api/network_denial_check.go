@@ -21,9 +21,9 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/sandbox/openshell"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // NetworkDenialCheckHandler returns pending network denial proposals for a sandbox

@@ -16,7 +16,7 @@ func TestSanitizeInstanceName(t *testing.T) {
 		{"uppercase converted", "ABC123", "abc123"},
 		{"uuid passthrough", "a2a5b479-b03a-4662", "a2a5b479-b03a-4662"},
 		{"colons replaced", "email:direct:user", "email-direct-user"},
-		{"email address", "rafael.schardosin@sap.com", "rafael-schardosin-sap-com"},
+		{"email address", "user@example.com", "user-example-com"},
 		{"consecutive special chars collapsed", "a::b@@c", "a-b-c"},
 		{"leading special chars stripped", "::abc", "abc"},
 		{"trailing special chars stripped", "abc::", "abc"},
@@ -54,9 +54,9 @@ func TestSessionContainerName(t *testing.T) {
 		},
 		{
 			"email channel session",
-			"email:direct:rafael.schardosin@sap.com",
-			// sanitized: email-direct-rafael-schardosin-sap-com (38 chars, fits in 40)
-			"astn-sess-email-direct-rafael-schardosin-sap-com",
+			"email:direct:user@example.com",
+			// sanitized: email-direct-user-example-com (29 chars, fits in 40)
+			"astn-sess-email-direct-user-example-com",
 		},
 		{
 			"telegram channel session",
@@ -106,7 +106,7 @@ func TestSessionContainerName(t *testing.T) {
 
 func TestSessionContainerNameDeterministic(t *testing.T) {
 	t.Parallel()
-	id := "email:direct:rafael.schardosin@sap.com"
+	id := "email:direct:user@example.com"
 	name1 := SessionContainerName(id)
 	name2 := SessionContainerName(id)
 	if name1 != name2 {
@@ -129,7 +129,7 @@ func TestMatchContainerToSession(t *testing.T) {
 
 	sessions := map[string]bool{
 		"a2a5b479-b03a-4662-96aa-40aa8bade469":   true,
-		"email:direct:rafael.schardosin@sap.com": true,
+		"email:direct:user@example.com": true,
 		"telegram:direct:8484406081":             true,
 	}
 
@@ -145,8 +145,8 @@ func TestMatchContainerToSession(t *testing.T) {
 		},
 		{
 			"matches email session",
-			SessionContainerName("email:direct:rafael.schardosin@sap.com"),
-			"email:direct:rafael.schardosin@sap.com",
+			SessionContainerName("email:direct:user@example.com"),
+			"email:direct:user@example.com",
 		},
 		{
 			"matches telegram session",

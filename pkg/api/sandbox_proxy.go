@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	incus "github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/SAP/astonish/pkg/sandbox"
+	incus "github.com/SAP/astonish/pkg/sandbox/incus"
 )
 
 // ipCacheEntry holds a cached container IP with an expiry time.

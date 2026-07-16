@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/common"
-	"github.com/schardosin/astonish/pkg/ui"
+	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/ui"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"

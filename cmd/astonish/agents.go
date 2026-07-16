@@ -13,13 +13,13 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
-	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/launcher"
-	"github.com/schardosin/astonish/pkg/tools"
-	"github.com/schardosin/astonish/pkg/ui"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/flowstore"
+	"github.com/SAP/astonish/pkg/launcher"
+	"github.com/SAP/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/ui"
 	"google.golang.org/adk/session"
 )
 

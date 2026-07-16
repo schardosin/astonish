@@ -11,8 +11,8 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/personal/session"
-	"github.com/schardosin/astonish/ent/personal/sessionevent"
+	"github.com/SAP/astonish/ent/personal/session"
+	"github.com/SAP/astonish/ent/personal/sessionevent"
 )
 
 // SessionEventCreate is the builder for creating a SessionEvent entity.

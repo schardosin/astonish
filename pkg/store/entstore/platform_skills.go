@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	platforment "github.com/schardosin/astonish/ent/platform"
-	"github.com/schardosin/astonish/ent/platform/platformskill"
-	"github.com/schardosin/astonish/ent/platform/platformskillfile"
-	"github.com/schardosin/astonish/pkg/store"
+	platforment "github.com/SAP/astonish/ent/platform"
+	"github.com/SAP/astonish/ent/platform/platformskill"
+	"github.com/SAP/astonish/ent/platform/platformskillfile"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // platformSkillStore implements store.SkillStore for platform-level skills.

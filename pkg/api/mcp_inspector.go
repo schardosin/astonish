@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/common"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcp"
+	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/mcp"
 	"google.golang.org/adk/tool"
 	"google.golang.org/genai"
 )

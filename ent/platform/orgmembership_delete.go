@@ -7,8 +7,8 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
-	"github.com/schardosin/astonish/ent/platform/orgmembership"
-	"github.com/schardosin/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/orgmembership"
+	"github.com/SAP/astonish/ent/platform/predicate"
 )
 
 // OrgMembershipDelete is the builder for deleting a OrgMembership entity.

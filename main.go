@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/schardosin/astonish/cmd/astonish"
+	"github.com/SAP/astonish/cmd/astonish"
 )
 
 func main() {

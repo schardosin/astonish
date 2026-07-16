@@ -9,9 +9,9 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/platformskill"
+	"github.com/SAP/astonish/ent/platform/platformskillfile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/platformskill"
-	"github.com/schardosin/astonish/ent/platform/platformskillfile"
 )
 
 // PlatformSkillFile is the model entity for the PlatformSkillFile schema.

@@ -9,8 +9,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/app"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/app"
 )
 
 // App is the model entity for the App schema.

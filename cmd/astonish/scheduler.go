@@ -9,8 +9,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 func handleSchedulerCommand(args []string) error {

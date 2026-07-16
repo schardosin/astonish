@@ -44,8 +44,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // handleSandboxK8sSmoke is the entry point for `astonish sandbox k8s-smoke`.

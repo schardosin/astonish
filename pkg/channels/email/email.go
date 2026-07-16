@@ -14,10 +14,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/channels"
-	"github.com/schardosin/astonish/pkg/channels/telegram"
-	emailpkg "github.com/schardosin/astonish/pkg/email"
-	"github.com/schardosin/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/channels/telegram"
+	emailpkg "github.com/SAP/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/session"
 )
 
 // Config holds configuration for the Email channel adapter.

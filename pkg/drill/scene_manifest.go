@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // SceneClip is one recorded beat in a tutorial drill.

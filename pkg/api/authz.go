@@ -15,7 +15,7 @@ package api
 import (
 	"net/http"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ---------------------------------------------------------------------------

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox/imagebuilder"
-	k8sbackend "github.com/schardosin/astonish/pkg/sandbox/k8s"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox/imagebuilder"
+	k8sbackend "github.com/SAP/astonish/pkg/sandbox/k8s"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // ---------------------------------------------------------------------------

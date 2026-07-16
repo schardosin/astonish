@@ -9,8 +9,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/pendinglinkcode"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
 )
 
 // PendingLinkCode is the model entity for the PendingLinkCode schema.

@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/flowstore"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/flowstore"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // validTapURL matches GitHub repository URL formats accepted by AddTap:

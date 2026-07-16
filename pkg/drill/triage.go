@@ -15,7 +15,7 @@ import (
 	"google.golang.org/adk/session"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/common"
 	"google.golang.org/genai"
 )
 

@@ -3,7 +3,7 @@ package daemon
 import (
 	"context"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // loadChannelsConfigFromDB returns channel configuration sourced exclusively

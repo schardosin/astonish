@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // drillAddMemFlowStore is a minimal FlowStore for resolveDrillAddWizard tests.

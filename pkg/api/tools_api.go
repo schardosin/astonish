@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 // WebCapableToolsResponse is the response for GET /api/tools/web-capable

@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/cache"
-	"github.com/schardosin/astonish/pkg/common"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/mcp"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/tools"
+	"github.com/SAP/astonish/pkg/cache"
+	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/mcp"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/tools"
 	"google.golang.org/adk/tool/mcptoolset"
 )
 

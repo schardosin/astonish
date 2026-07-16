@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/schardosin/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/common"
 	"google.golang.org/adk/agent"
 	"google.golang.org/adk/memory"
 	"google.golang.org/adk/model"

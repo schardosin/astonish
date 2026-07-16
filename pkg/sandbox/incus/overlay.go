@@ -12,8 +12,8 @@ import (
 
 	incusclient "github.com/lxc/incus/v6/client"
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox/tmplmeta"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox/tmplmeta"
 )
 
 // OverlayImageAlias is the alias for the minimal shell image used for

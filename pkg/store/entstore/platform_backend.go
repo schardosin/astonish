@@ -10,10 +10,10 @@ import (
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/platform/loginsession"
-	"github.com/schardosin/astonish/ent/platform/pendinglinkcode"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/platform/loginsession"
+	"github.com/SAP/astonish/ent/platform/pendinglinkcode"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // cachedSandboxSessionStore holds a cached *sql.DB and Ent client for a

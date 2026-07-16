@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/channels"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // channelPlatformResolver implements channels.PlatformResolver using the

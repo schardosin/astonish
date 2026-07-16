@@ -6,9 +6,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/flow"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/flow"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // teamFlowStore implements store.FlowStore using the Ent team client.

@@ -11,10 +11,10 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/platform/predicate"
+	"github.com/SAP/astonish/ent/platform/sandboxlayer"
+	"github.com/SAP/astonish/ent/platform/sandboxtemplate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/predicate"
-	"github.com/schardosin/astonish/ent/platform/sandboxlayer"
-	"github.com/schardosin/astonish/ent/platform/sandboxtemplate"
 )
 
 // SandboxLayerUpdate is the builder for updating SandboxLayer entities.

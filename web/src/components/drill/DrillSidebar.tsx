@@ -1,8 +1,9 @@
 import { useState, type CSSProperties } from 'react'
 import { Search, ChevronDown, ChevronRight, Loader, ListChecks } from 'lucide-react'
 import type { DrillSuiteSummary } from '../../api/drillApi'
-import { statusColor, StatusDot } from './drillUtils'
+import { statusColor } from './drillUtils'
 import type { SelectedItem } from './drillUtils'
+import { StatusDot } from './drillComponents'
 
 // ─── Drill Sidebar ───
 

@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/platform/organization"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/platform/organization"
 )
 
 // Organization is the model entity for the Organization schema.

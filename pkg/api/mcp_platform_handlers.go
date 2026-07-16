@@ -7,8 +7,8 @@ import (
 	"sort"
 
 	"github.com/gorilla/mux"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // MCPServerListItem represents an MCP server in listing responses.

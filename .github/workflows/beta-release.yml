@@ -103,7 +103,7 @@ jobs:
         run: |
           touch web/embed.go
           go clean -cache
-          go build -ldflags="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${{ needs.prepare.outputs.version_tag }}" -o astonish-${{ matrix.suffix }} .
+          go build -ldflags="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${{ needs.prepare.outputs.version_tag }}" -o astonish-${{ matrix.suffix }} .
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -119,7 +119,7 @@ jobs:
     name: Create Prerelease
     needs: [prepare, build]
     runs-on: ubuntu-latest
-    if: github.repository == 'schardosin/astonish'
+    if: github.repository == 'SAP/astonish'
 
     steps:
       - name: Checkout code
@@ -252,7 +252,7 @@ jobs:
           VERSION_TAG: ${{ needs.prepare.outputs.version_tag }}
         run: |
           touch web/embed.go
-          LDFLAGS="-s -w -X github.com/schardosin/astonish/cmd/astonish.Version=${VERSION_TAG}"
+          LDFLAGS="-s -w -X github.com/SAP/astonish/cmd/astonish.Version=${VERSION_TAG}"
           echo "Building linux/amd64..."
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="$LDFLAGS" -o astonish-linux-amd64 .
           echo "Building linux/arm64..."

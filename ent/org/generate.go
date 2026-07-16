@@ -11,7 +11,7 @@ import (
 
 func main() {
 	if err := entc.Generate("./schema", &gen.Config{
-		Package: "github.com/schardosin/astonish/ent/org",
+		Package: "github.com/SAP/astonish/ent/org",
 		Target:  ".",
 	}); err != nil {
 		log.Fatalf("running ent codegen: %v", err)

@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"sync"
 
-	personalent "github.com/schardosin/astonish/ent/personal"
-	"github.com/schardosin/astonish/ent/personal/credential"
-	"github.com/schardosin/astonish/pkg/store"
+	personalent "github.com/SAP/astonish/ent/personal"
+	"github.com/SAP/astonish/ent/personal/credential"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // personalCredentialStore implements store.CredentialStore for personal scope.

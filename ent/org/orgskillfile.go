@@ -9,9 +9,9 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/orgskill"
+	"github.com/SAP/astonish/ent/org/orgskillfile"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgskill"
-	"github.com/schardosin/astonish/ent/org/orgskillfile"
 )
 
 // OrgSkillFile is the model entity for the OrgSkillFile schema.

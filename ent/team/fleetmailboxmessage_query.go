@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/fleetmailboxmessage"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/fleetmailboxmessage"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // FleetMailboxMessageQuery is the builder for querying FleetMailboxMessage entities.

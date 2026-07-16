@@ -5,7 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schardosin/astonish/pkg/flowstore"
+	"github.com/SAP/astonish/pkg/flowstore"
 )
 
 // handleTapCommand handles the unified tap commands
@@ -42,7 +42,7 @@ func printTapUsage() {
 	fmt.Println("  update                      Update all tap manifests")
 	fmt.Println("")
 	fmt.Println("examples:")
-	fmt.Println("  astonish tap add schardosin/astonish-flows")
+	fmt.Println("  astonish tap add SAP/astonish-flows")
 	fmt.Println("  astonish tap add github.enterprise.com/team/extensions --as team")
 	fmt.Println("  astonish tap list")
 	fmt.Println("  astonish tap remove team")

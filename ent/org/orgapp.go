@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/org/orgapp"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/org/orgapp"
 )
 
 // OrgApp is the model entity for the OrgApp schema.

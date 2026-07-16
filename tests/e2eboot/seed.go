@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/schardosin/astonish/pkg/api"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/api"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // Seed materializes the standard multi-tenant test layout on top of an

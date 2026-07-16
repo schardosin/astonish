@@ -8,8 +8,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
-	"github.com/schardosin/astonish/ent/personal/personalsettings"
-	"github.com/schardosin/astonish/ent/personal/predicate"
+	"github.com/SAP/astonish/ent/personal/personalsettings"
+	"github.com/SAP/astonish/ent/personal/predicate"
 )
 
 // PersonalSettingsDelete is the builder for deleting a PersonalSettings entity.

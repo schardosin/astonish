@@ -8,8 +8,8 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // --- Team Template API ---

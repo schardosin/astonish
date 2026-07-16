@@ -12,9 +12,9 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/team/mcpserver"
+	"github.com/SAP/astonish/ent/team/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/mcpserver"
-	"github.com/schardosin/astonish/ent/team/predicate"
 )
 
 // McpServerUpdate is the builder for updating McpServer entities.

@@ -27,7 +27,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/schardosin/astonish/pkg/sandbox/k8s"
+	"github.com/SAP/astonish/pkg/sandbox/k8s"
 )
 
 func main() {

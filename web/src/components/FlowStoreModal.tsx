@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { X, Search, Download, Check, AlertCircle, Loader2, Tag, Package, Plus, Trash2, RefreshCw, Store } from 'lucide-react'
 import { teamFetch } from '../api/teamContext'
 
@@ -97,13 +97,7 @@ export default function FlowStoreModal({ isOpen, onClose, onInstall }: FlowStore
   const [newTapAlias, setNewTapAlias] = useState('')
   const [addingTap, setAddingTap] = useState(false)
 
-  useEffect(() => {
-    if (isOpen) {
-      loadStore()
-    }
-  }, [isOpen])
-
-  const loadStore = async () => {
+  const loadStore = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -115,7 +109,13 @@ export default function FlowStoreModal({ isOpen, onClose, onInstall }: FlowStore
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen) {
+      loadStore()
+    }
+  }, [isOpen, loadStore])
 
   const handleInstall = async (flow: Flow) => {
     setInstalling(flow.fullName)

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // TestE2E_Session_SameTeamUserDenied verifies that a user in the same team

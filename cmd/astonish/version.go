@@ -4,7 +4,7 @@ import (
 	"fmt"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/schardosin/astonish/pkg/version"
+	"github.com/SAP/astonish/pkg/version"
 )
 
 func init() {
@@ -23,7 +23,7 @@ var Version = "dev"
 const (
 	Name   = "Astonish AI Companion"
 	Author = "Rafael Schardosin Silva"
-	GitHub = "https://github.com/schardosin/astonish"
+	GitHub = "https://github.com/SAP/astonish"
 )
 
 // ASCII Logo with colors using lipgloss

@@ -1,8 +1,8 @@
 package daemon
 
 import (
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/credentials"
 )
 
 // daemonSecretGetter returns a SecretGetter function from the platform backend.

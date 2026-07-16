@@ -5,7 +5,7 @@ Astonish ships as a single binary for macOS and Linux. Choose the installation m
 ## Homebrew (macOS and Linux)
 
 ```bash
-brew install schardosin/astonish/astonish
+brew install SAP/astonish/astonish
 ```
 
 Verify the installation:
@@ -19,7 +19,7 @@ astonish --version
 For quick installation without Homebrew:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/schardosin/astonish/refs/heads/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/SAP/astonish/refs/heads/main/install.sh | sh
 ```
 
 The script detects your OS and architecture, downloads the appropriate binary, and places it in your PATH.
@@ -33,7 +33,7 @@ Requirements:
 - Make
 
 ```bash
-git clone https://github.com/schardosin/astonish.git
+git clone https://github.com/SAP/astonish.git
 cd astonish
 make build-all
 ```

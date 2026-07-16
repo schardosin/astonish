@@ -7,10 +7,10 @@ import (
 	"os"
 	"os/user"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/daemon"
-	"github.com/schardosin/astonish/pkg/fleet"
-	"github.com/schardosin/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/daemon"
+	"github.com/SAP/astonish/pkg/fleet"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 func handleDaemonCommand(args []string) error {

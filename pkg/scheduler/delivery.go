@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/channels"
 )
 
 // maxDeliveryLen is the maximum length of a delivery message.

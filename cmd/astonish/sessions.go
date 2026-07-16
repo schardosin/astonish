@@ -11,10 +11,10 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	persistentsession "github.com/schardosin/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
+	persistentsession "github.com/SAP/astonish/pkg/session"
 )
 
 func handleSessionsCommand(args []string) error {

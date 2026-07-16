@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/scheduler"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // deliveryResolver implements scheduler.DeliveryResolver using the platform

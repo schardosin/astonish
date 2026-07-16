@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // modelStatusResponse mirrors pkg/api.SessionModelStatusResponse and

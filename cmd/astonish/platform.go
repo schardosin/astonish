@@ -16,11 +16,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/term"
 
-	"github.com/schardosin/astonish/pkg/client"
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/store"
-	"github.com/schardosin/astonish/pkg/store/entstore"
-	"github.com/schardosin/astonish/pkg/store/pgutil"
+	"github.com/SAP/astonish/pkg/client"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store/entstore"
+	"github.com/SAP/astonish/pkg/store/pgutil"
 )
 
 // redactDSN replaces the password in a PostgreSQL DSN with "***" for safe logging.

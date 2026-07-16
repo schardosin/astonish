@@ -31,8 +31,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/sandbox/incus"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox/incus"
 )
 
 // ErrUnsupportedInPhaseB2 is returned by backend methods whose semantics

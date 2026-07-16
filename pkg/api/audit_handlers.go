@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // AuditQueryHandler returns audit log entries matching the given filters.

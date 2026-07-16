@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/SAP/astonish/ent/team/sandboxsession"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/team/sandboxsession"
 )
 
 // SandboxSession is the model entity for the SandboxSession schema.

@@ -31,7 +31,7 @@ export default withMermaid(defineConfig({
       },
       {
         text: 'Community',
-        link: 'https://github.com/schardosin/astonish/discussions',
+        link: 'https://github.com/SAP/astonish/discussions',
       },
     ],
     sidebar: {
@@ -175,7 +175,7 @@ export default withMermaid(defineConfig({
       ]
     },
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/schardosin/astonish' },
+      { icon: 'github', link: 'https://github.com/SAP/astonish' },
     ],
     search: {
       provider: 'local',

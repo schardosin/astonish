@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"strings"
 
-	teament "github.com/schardosin/astonish/ent/team"
-	"github.com/schardosin/astonish/ent/team/credential"
-	"github.com/schardosin/astonish/pkg/store"
+	teament "github.com/SAP/astonish/ent/team"
+	"github.com/SAP/astonish/ent/team/credential"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 const secretPrefix = "secret:"

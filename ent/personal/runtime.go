@@ -5,16 +5,16 @@ package personal
 import (
 	"time"
 
+	"github.com/SAP/astonish/ent/personal/app"
+	"github.com/SAP/astonish/ent/personal/appstate"
+	"github.com/SAP/astonish/ent/personal/credential"
+	"github.com/SAP/astonish/ent/personal/flow"
+	"github.com/SAP/astonish/ent/personal/memory"
+	"github.com/SAP/astonish/ent/personal/personalsettings"
+	"github.com/SAP/astonish/ent/personal/schema"
+	"github.com/SAP/astonish/ent/personal/session"
+	"github.com/SAP/astonish/ent/personal/sessionevent"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/personal/app"
-	"github.com/schardosin/astonish/ent/personal/appstate"
-	"github.com/schardosin/astonish/ent/personal/credential"
-	"github.com/schardosin/astonish/ent/personal/flow"
-	"github.com/schardosin/astonish/ent/personal/memory"
-	"github.com/schardosin/astonish/ent/personal/personalsettings"
-	"github.com/schardosin/astonish/ent/personal/schema"
-	"github.com/schardosin/astonish/ent/personal/session"
-	"github.com/schardosin/astonish/ent/personal/sessionevent"
 )
 
 // The init function reads all schema descriptors with runtime code

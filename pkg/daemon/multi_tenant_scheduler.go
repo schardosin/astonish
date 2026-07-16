@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/scheduler"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/scheduler"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // MultiTenantScheduler manages scheduled job execution across all organizations

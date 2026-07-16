@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/channels"
+	"github.com/SAP/astonish/pkg/channels"
 )
 
 // channelManager holds a reference to the active ChannelManager.

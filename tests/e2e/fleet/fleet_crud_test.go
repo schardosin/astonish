@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/schardosin/astonish/tests/e2eboot"
+	"github.com/SAP/astonish/tests/e2eboot"
 )
 
 // Minimal fleet plan payload for CRUD testing (persistence only).

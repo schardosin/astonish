@@ -3,7 +3,7 @@ package tools
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/skills"
+	"github.com/SAP/astonish/pkg/skills"
 )
 
 func TestSkillLookupFound(t *testing.T) {

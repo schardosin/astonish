@@ -11,9 +11,9 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/SAP/astonish/ent/personal/credential"
+	"github.com/SAP/astonish/ent/personal/predicate"
 	"github.com/google/uuid"
-	"github.com/schardosin/astonish/ent/personal/credential"
-	"github.com/schardosin/astonish/ent/personal/predicate"
 )
 
 // CredentialUpdate is the builder for updating Credential entities.

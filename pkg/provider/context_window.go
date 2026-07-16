@@ -6,11 +6,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/schardosin/astonish/pkg/config"
-	"github.com/schardosin/astonish/pkg/provider/google"
-	"github.com/schardosin/astonish/pkg/provider/groq"
-	"github.com/schardosin/astonish/pkg/provider/openrouter"
-	"github.com/schardosin/astonish/pkg/provider/sap"
+	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/provider/google"
+	"github.com/SAP/astonish/pkg/provider/groq"
+	"github.com/SAP/astonish/pkg/provider/openrouter"
+	"github.com/SAP/astonish/pkg/provider/sap"
 )
 
 const DefaultContextWindow = 200_000

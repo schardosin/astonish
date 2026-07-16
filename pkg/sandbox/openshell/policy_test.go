@@ -3,7 +3,7 @@ package openshell
 import (
 	"testing"
 
-	"github.com/schardosin/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/config"
 )
 
 func TestDefaultSandboxPolicy_IncludesPTYDevices(t *testing.T) {

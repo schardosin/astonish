@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

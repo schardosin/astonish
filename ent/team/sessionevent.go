@@ -10,8 +10,8 @@ import (
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
-	"github.com/schardosin/astonish/ent/team/session"
-	"github.com/schardosin/astonish/ent/team/sessionevent"
+	"github.com/SAP/astonish/ent/team/session"
+	"github.com/SAP/astonish/ent/team/sessionevent"
 )
 
 // SessionEvent is the model entity for the SessionEvent schema.

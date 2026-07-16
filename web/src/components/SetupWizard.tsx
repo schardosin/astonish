@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Sparkles, ChevronRight, ChevronLeft, Check, Loader2, Key, Zap, AlertCircle, Plus, Folder, Search, Globe, Monitor, Shield, ShieldAlert, ExternalLink, Server, Database } from 'lucide-react'
 import { fetchStandardServers, installStandardServer, StandardServer, McpInstallResult } from '../api/agents'
 import { fetchSandboxStatus, fetchOptionalTools, initSandbox, SandboxStatus, OptionalTool } from '../api/sandbox'
@@ -129,6 +129,16 @@ const maskValue = (value: string) => {
   return value.slice(0, 2) + '••••' + value.slice(-2)
 }
 
+function StepIndicator({ step, totalSteps }: { step: number; totalSteps: number }) {
+  return (
+    <div className="flex items-center justify-center gap-2 mb-8">
+      {Array.from({ length: totalSteps }, (_, i) => (
+        <div key={i} className={`w-2 h-2 rounded-full transition-all ${i === step ? 'w-8 bg-purple-500' : i < step ? 'bg-purple-400' : 'bg-gray-600'}`} />
+      ))}
+    </div>
+  )
+}
+
 export default function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const [step, setStep] = useState(0)
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -188,7 +198,14 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   const sandboxAbortRef = useRef<(() => void) | null>(null)
   const progressEndRef = useRef<HTMLDivElement | null>(null)
 
-  useEffect(() => { loadSettings() }, [])
+  const loadSettings = useCallback(async () => {
+    try {
+      const data = await fetchSettings()
+      setSettings(data)
+    } catch (err: any) { console.error('Failed to load settings:', err) }
+  }, [])
+
+  useEffect(() => { loadSettings() }, [loadSettings])
 
   // Auto-scroll sandbox progress log
   useEffect(() => {
@@ -196,13 +213,6 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
       progressEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
   }, [sandboxProgress])
-
-  const loadSettings = async () => {
-    try {
-      const data = await fetchSettings()
-      setSettings(data)
-    } catch (err: any) { console.error('Failed to load settings:', err) }
-  }
 
   const getProviderInfo = (providerId: string | null): ProviderDef => PROVIDERS.find(p => p.id === providerId) || { name: providerId || 'unknown', icon: '⚙️', fields: [], id: providerId || '', description: '', defaultModel: '' }
 
@@ -459,14 +469,6 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
     if (nextStep === 8) loadSandboxStatus()
   }
   const goBack = () => { if (step > 0) { setStep(step - 1); setError(null) } }
-
-  const StepIndicator = () => (
-    <div className="flex items-center justify-center gap-2 mb-8">
-      {Array.from({ length: TOTAL_STEPS }, (_, i) => (
-        <div key={i} className={`w-2 h-2 rounded-full transition-all ${i === step ? 'w-8 bg-purple-500' : i < step ? 'bg-purple-400' : 'bg-gray-600'}`} />
-      ))}
-    </div>
-  )
 
   const renderStep = () => {
     switch (step) {
@@ -1195,7 +1197,7 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
   return (
     <div className="fixed inset-0 flex items-center justify-center p-8 z-50" style={{ background: 'var(--bg-primary)' }}>
       <div className="w-full max-w-3xl p-8 rounded-2xl shadow-2xl" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
-        <StepIndicator />
+        <StepIndicator step={step} totalSteps={TOTAL_STEPS} />
         <div className="min-h-[400px] flex flex-col justify-center">{renderStep()}</div>
         <div className="flex justify-between mt-8 pt-6" style={{ borderTop: '1px solid var(--border-color)' }}>
           <button onClick={goBack} disabled={step === 0 || sandboxInitializing} className="flex items-center gap-2 px-4 py-2 rounded-lg transition-all disabled:opacity-30" style={{ color: 'var(--text-secondary)' }}><ChevronLeft size={18} />Back</button>

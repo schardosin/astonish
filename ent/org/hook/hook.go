@@ -6,7 +6,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/schardosin/astonish/ent/org"
+	"github.com/SAP/astonish/ent/org"
 )
 
 // The OrgAppFunc type is an adapter to allow the use of ordinary

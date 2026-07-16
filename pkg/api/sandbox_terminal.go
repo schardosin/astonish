@@ -8,8 +8,8 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
-	"github.com/schardosin/astonish/pkg/sandbox"
-	"github.com/schardosin/astonish/pkg/store"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // terminalUpgrader upgrades HTTP connections to WebSocket for the terminal.

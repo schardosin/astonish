@@ -1,7 +1,7 @@
 package tools
 
 import (
-	"github.com/schardosin/astonish/pkg/email"
+	"github.com/SAP/astonish/pkg/email"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
 )

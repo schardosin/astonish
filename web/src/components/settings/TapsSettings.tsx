@@ -36,7 +36,7 @@ export default function TapsSettings({ teamSlug }: { teamSlug?: string }) {
               type="text"
               value={newTapUrl}
               onChange={(e) => setNewTapUrl(e.target.value)}
-              placeholder="schardosin/astonish-flows"
+              placeholder="SAP/astonish-flows"
               className="w-full px-3 py-2 rounded border"
               style={{ background: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
             />

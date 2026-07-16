@@ -838,6 +838,15 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 		BeforeToolCallbacks:  beforeToolCallbacks,
 		BeforeModelCallbacks: beforeModelCallbacks,
 		AfterToolCallbacks:   afterToolCallbacks,
+		// Same auto-inject-on-miss path as ChatAgent: known-but-unloaded tools
+		// are registered into childSearchToolsResults for the next LLM round.
+		OnToolErrorCallbacks: []llmagent.OnToolErrorCallback{
+			autoInjectMissingToolCallback(m.ToolIndex, func(names []string) {
+				childSearchToolsMu.Lock()
+				childSearchToolsResults = append(childSearchToolsResults, names...)
+				childSearchToolsMu.Unlock()
+			}, excludedChildTools),
+		},
 	})
 	if err != nil {
 		result = TaskResult{

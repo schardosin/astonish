@@ -6,9 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SAP/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
+	"google.golang.org/adk/memory"
 	"google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
+	"google.golang.org/adk/tool/toolconfirmation"
 	"google.golang.org/genai"
 	"gopkg.in/yaml.v3"
 )
@@ -922,3 +925,243 @@ type mockToolset struct {
 
 func (m *mockToolset) Name() string                                          { return m.name }
 func (m *mockToolset) Tools(_ adkagent.ReadonlyContext) ([]tool.Tool, error) { return nil, nil }
+
+// --- Auto-inject missing tool tests ---
+
+// stubToolContext is a minimal agent.ToolContext for unit tests.
+type stubToolContext struct {
+	context.Context
+}
+
+func (s stubToolContext) UserContent() *genai.Content                            { return nil }
+func (s stubToolContext) FunctionCallID() string                                 { return "" }
+func (s stubToolContext) Actions() *session.EventActions                         { return &session.EventActions{} }
+func (s stubToolContext) SearchMemory(context.Context, string) (*memory.SearchResponse, error) {
+	return nil, nil
+}
+func (s stubToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmation { return nil }
+func (s stubToolContext) RequestConfirmation(string, any) error                 { return nil }
+func (s stubToolContext) AgentName() string                                      { return "test" }
+func (s stubToolContext) ReadonlyState() session.ReadonlyState                   { return nil }
+func (s stubToolContext) State() session.State                                   { return nil }
+func (s stubToolContext) Artifacts() adkagent.Artifacts                          { return nil }
+func (s stubToolContext) InvocationID() string                                   { return "inv" }
+func (s stubToolContext) AppName() string                                        { return "app" }
+func (s stubToolContext) UserID() string                                         { return "user" }
+func (s stubToolContext) SessionID() string                                      { return "sess" }
+func (s stubToolContext) Branch() string                                         { return "" }
+
+func TestIsToolNotFoundError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		toolName string
+		want     bool
+	}{
+		{"nil", nil, "run_drill", false},
+		{"adk15 format", fmt.Errorf("tool 'run_drill' not found.\nAvailable tools: read_file"), "run_drill", true},
+		{"adk15 wrong name", fmt.Errorf("tool 'run_drill' not found."), "other", false},
+		{"legacy unknown tool", fmt.Errorf("unknown tool: \"run_drill\""), "run_drill", true},
+		{"unrelated", fmt.Errorf("connection refused"), "run_drill", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isToolNotFoundError(tt.err, tt.toolName); got != tt.want {
+				t.Errorf("isToolNotFoundError(%v, %q) = %v, want %v", tt.err, tt.toolName, got, tt.want)
+			}
+		})
+	}
+}
+
+func syncTestToolIndex(t *testing.T, groups ...*ToolGroup) *ToolIndex {
+	t.Helper()
+	idx := newTestToolIndex(t, testEmbeddingFunc())
+	if err := idx.SyncTools(context.Background(), nil, groups); err != nil {
+		t.Fatalf("SyncTools: %v", err)
+	}
+	return idx
+}
+
+func TestCanAutoInjectTool(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	}, &ToolGroup{
+		Name:  "mcp:custom-server",
+		Tools: mockTools("custom_mcp_tool"),
+	})
+
+	t.Run("known tool", func(t *testing.T) {
+		if !canAutoInjectTool(context.Background(), idx, "run_drill") {
+			t.Fatal("expected run_drill to be injectable")
+		}
+	})
+
+	t.Run("unknown tool", func(t *testing.T) {
+		if canAutoInjectTool(context.Background(), idx, "no_such_tool") {
+			t.Fatal("expected unknown tool to be rejected")
+		}
+	})
+
+	t.Run("disabled tool", func(t *testing.T) {
+		ctx := store.WithDisabledTools(context.Background(), []string{"run_drill"})
+		if canAutoInjectTool(ctx, idx, "run_drill") {
+			t.Fatal("expected disabled tool to be rejected")
+		}
+	})
+
+	t.Run("mcp inaccessible", func(t *testing.T) {
+		// Empty MCPServerStores in context → non-standard MCP tools are inaccessible.
+		ctx := store.WithMCPServerStores(context.Background(), &store.MCPServerStores{})
+		if canAutoInjectTool(ctx, idx, "custom_mcp_tool") {
+			t.Fatal("expected inaccessible MCP tool to be rejected")
+		}
+	})
+}
+
+func TestAutoInjectMissingToolCallback_Injectable(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	})
+
+	var registered []string
+	cb := autoInjectMissingToolCallback(idx, func(names []string) {
+		registered = append(registered, names...)
+	}, nil)
+
+	notFound := fmt.Errorf("tool 'run_drill' not found.\nAvailable tools: read_file")
+	result, err := cb(stubToolContext{Context: context.Background()}, mockTool{name: "run_drill"}, nil, notFound)
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result for injectable tool")
+	}
+	msg, _ := result["error"].(string)
+	if !strings.Contains(msg, "has been injected") {
+		t.Errorf("expected inject message, got: %s", msg)
+	}
+	if len(registered) != 1 || registered[0] != "run_drill" {
+		t.Errorf("registered = %v, want [run_drill]", registered)
+	}
+}
+
+func TestAutoInjectMissingToolCallback_Unknown(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	})
+
+	var registered []string
+	cb := autoInjectMissingToolCallback(idx, func(names []string) {
+		registered = append(registered, names...)
+	}, nil)
+
+	notFound := fmt.Errorf("tool 'hallucinated_tool' not found.\nAvailable tools: read_file")
+	result, err := cb(stubToolContext{Context: context.Background()}, mockTool{name: "hallucinated_tool"}, nil, notFound)
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected nil result for unknown tool, got %v", result)
+	}
+	if len(registered) != 0 {
+		t.Errorf("registered = %v, want empty", registered)
+	}
+}
+
+func TestAutoInjectMissingToolCallback_Disabled(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	})
+
+	var registered []string
+	cb := autoInjectMissingToolCallback(idx, func(names []string) {
+		registered = append(registered, names...)
+	}, nil)
+
+	ctx := store.WithDisabledTools(context.Background(), []string{"run_drill"})
+	notFound := fmt.Errorf("tool 'run_drill' not found.\nAvailable tools: read_file")
+	result, err := cb(stubToolContext{Context: ctx}, mockTool{name: "run_drill"}, nil, notFound)
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected nil result for disabled tool, got %v", result)
+	}
+	if len(registered) != 0 {
+		t.Errorf("registered = %v, want empty", registered)
+	}
+}
+
+func TestAutoInjectMissingToolCallback_Excluded(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "core",
+		Tools: mockTools("delegate_tasks"),
+	})
+
+	var registered []string
+	cb := autoInjectMissingToolCallback(idx, func(names []string) {
+		registered = append(registered, names...)
+	}, map[string]bool{"delegate_tasks": true})
+
+	notFound := fmt.Errorf("tool 'delegate_tasks' not found.\nAvailable tools: read_file")
+	result, err := cb(stubToolContext{Context: context.Background()}, mockTool{name: "delegate_tasks"}, nil, notFound)
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected nil result for excluded tool, got %v", result)
+	}
+	if len(registered) != 0 {
+		t.Errorf("registered = %v, want empty", registered)
+	}
+}
+
+func TestAutoInjectMissingToolCallback_NonNotFoundError(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	})
+
+	var registered []string
+	cb := autoInjectMissingToolCallback(idx, func(names []string) {
+		registered = append(registered, names...)
+	}, nil)
+
+	result, err := cb(stubToolContext{Context: context.Background()}, mockTool{name: "run_drill"}, nil, fmt.Errorf("timeout"))
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result != nil {
+		t.Errorf("expected nil for non-not-found error, got %v", result)
+	}
+	if len(registered) != 0 {
+		t.Errorf("registered = %v, want empty", registered)
+	}
+}
+
+func TestChatAgent_AutoInjectMissingToolCallback(t *testing.T) {
+	idx := syncTestToolIndex(t, &ToolGroup{
+		Name:  "drill",
+		Tools: mockTools("run_drill"),
+	})
+	ca := &ChatAgent{ToolIndex: idx}
+	cb := ca.AutoInjectMissingToolCallback()
+
+	notFound := fmt.Errorf("tool 'run_drill' not found.\nAvailable tools: read_file")
+	result, err := cb(stubToolContext{Context: context.Background()}, mockTool{name: "run_drill"}, nil, notFound)
+	if err != nil {
+		t.Fatalf("callback error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected inject result")
+	}
+	ca.searchToolsMu.Lock()
+	defer ca.searchToolsMu.Unlock()
+	if len(ca.searchToolsResults) != 1 || ca.searchToolsResults[0] != "run_drill" {
+		t.Errorf("searchToolsResults = %v, want [run_drill]", ca.searchToolsResults)
+	}
+}

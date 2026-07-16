@@ -557,6 +557,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			AfterToolCallbacks: []llmagent.AfterToolCallback{
 				afterToolCallback,
 			},
+			// Auto-inject ToolIndex-known tools that the LLM called before they
+			// were loaded this turn (ADK 1.5 surfaces these as FunctionResponse
+			// errors; the next LLM round gets the tool via dynamic injection).
+			OnToolErrorCallbacks: []llmagent.OnToolErrorCallback{
+				c.AutoInjectMissingToolCallback(),
+			},
 		})
 		if err != nil {
 			yield(nil, fmt.Errorf("failed to create chat llmagent: %w", err))
@@ -564,7 +570,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// Run the llmagent with retry for transient errors (429, 502, 503, etc.)
-		// Also handles unknown tool errors (model hallucinated a tool name).
+		// Also handles legacy unknown-tool hard aborts (pre-ADK-1.5). Under ADK 1.5,
+		// missing tools are FunctionResponses handled by OnToolErrorCallbacks
+		// (AutoInjectMissingToolCallback); this branch is a safety net only.
 		const maxRetries = 3
 		const maxUnknownToolRetries = 2 // separate cap for tool name hallucinations
 		toolCallCount := 0
@@ -575,7 +583,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		contextOverflowRetried := false // only retry context overflow once
 
 		// Track the last FunctionCall parts seen so we can build synthetic
-		// error responses when ADK rejects an unknown tool name.
+		// error responses if ADK still hard-aborts on an unknown tool name.
 		var lastFunctionCalls []*genai.FunctionCall
 
 		for attempt := range maxRetries {

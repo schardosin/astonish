@@ -159,9 +159,11 @@ func lastModelResponseTail(events session.Events, maxLen int) string {
 // If multiple flows score above threshold, all are kept as regular knowledge
 // so the LLM can present the options and ask the user which to use.
 // isUnknownToolError checks whether an error from ADK is caused by the LLM
-// calling a tool name that doesn't exist. ADK returns this as a hard error
-// (fmt.Errorf("unknown tool: %q")) rather than a tool error response, which
-// means the LLM never gets feedback about its mistake.
+// calling a tool name that doesn't exist as a hard Run abort
+// (fmt.Errorf("unknown tool: %q")). Under ADK 1.5 this path is largely obsolete:
+// missing tools become FunctionResponse errors handled by OnToolErrorCallbacks
+// (see AutoInjectMissingToolCallback). Retained as a safety net for older ADK
+// behavior or any remaining hard-abort variants.
 func isUnknownToolError(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "unknown tool:")
 }

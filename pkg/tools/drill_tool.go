@@ -1055,5 +1055,12 @@ func GetDrillTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("create draft_drill_from_action_log tool: %w", err)
 	}
 
-	return []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool, editTool, draftFromLogTool}, nil
+	blueprintTools, err := GetTutorialBlueprintTools()
+	if err != nil {
+		return nil, err
+	}
+
+	out := []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool, editTool, draftFromLogTool}
+	out = append(out, blueprintTools...)
+	return out, nil
 }

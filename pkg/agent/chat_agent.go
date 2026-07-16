@@ -108,7 +108,8 @@ type ChatAgent struct {
 	traceHistory         map[string][]*ExecutionTrace // keyed by session ID
 	pendingDistill       map[string]*distillPreview   // keyed by session ID
 	pendingDistillReview map[string]*DistillReview    // keyed by session ID — interactive review state
-	traceMu              sync.Mutex                   // protects traceHistory, pendingDistill, and pendingDistillReview
+	pendingTutorialBP    map[string]*TutorialBlueprintPending
+	traceMu              sync.Mutex // protects traceHistory, pendingDistill, pendingDistillReview, pendingTutorialBP
 
 	// Image side-channel: images stripped from tool results before they
 	// enter session history, available for channels to deliver to users.
@@ -176,15 +177,15 @@ type distillPreview struct {
 // DistillReview holds the state of an interactive distill review session.
 // The user can request modifications until they're satisfied, then save.
 type DistillReview struct {
-	YAML            string            // Current YAML draft
-	FlowName        string            // Suggested flow name
-	Description     string            // Flow description
-	Tags            []string          // Flow tags
-	Explanation     string            // Human-readable explanation
-	Traces          []*ExecutionTrace // Original traces (for context in modifications)
-	Modifications   []string          // History of user change requests
-	LastDryRunOutput string           // Output from last test run (for modification context)
-	LastDryRunError  string           // Error from last test run
+	YAML             string            // Current YAML draft
+	FlowName         string            // Suggested flow name
+	Description      string            // Flow description
+	Tags             []string          // Flow tags
+	Explanation      string            // Human-readable explanation
+	Traces           []*ExecutionTrace // Original traces (for context in modifications)
+	Modifications    []string          // History of user change requests
+	LastDryRunOutput string            // Output from last test run (for modification context)
+	LastDryRunError  string            // Error from last test run
 }
 
 // DistillSession identifies a session for distillation, providing the
@@ -216,6 +217,7 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		traceHistory:         make(map[string][]*ExecutionTrace),
 		pendingDistill:       make(map[string]*distillPreview),
 		pendingDistillReview: make(map[string]*DistillReview),
+		pendingTutorialBP:    make(map[string]*TutorialBlueprintPending),
 		activeApps:           make(map[string]*ActiveApp),
 	}
 }

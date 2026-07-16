@@ -112,6 +112,11 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 						lastInvocationID = eventInvID
 						continue
 					}
+					if bm := tryParseTutorialBlueprintMessage(text); bm != nil {
+						messages = append(messages, *bm)
+						lastInvocationID = eventInvID
+						continue
+					}
 					if am := tryParseAppPreviewMessage(text); am != nil {
 						messages = append(messages, *am)
 						lastInvocationID = eventInvID
@@ -1290,6 +1295,81 @@ func tryParseDistillMessage(text string) *StudioMessage {
 		}
 	}
 	return nil
+}
+
+// --- Tutorial blueprint preview persistence ---
+
+const tutorialBlueprintPreviewPrefix = "[tutorial_blueprint_preview]"
+const tutorialBlueprintApprovedPrefix = "[tutorial_blueprint_approved]"
+
+func persistTutorialBlueprintPreview(ctx context.Context, svc session.Service, userID, sessionID string, payload map[string]any) {
+	if svc == nil || sessionID == "" || payload == nil {
+		return
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal tutorial blueprint preview", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", tutorialBlueprintPreviewPrefix+string(data))
+}
+
+func persistTutorialBlueprintApproved(ctx context.Context, svc session.Service, userID, sessionID string, payload map[string]any) {
+	if svc == nil || sessionID == "" || payload == nil {
+		return
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		slog.Error("failed to marshal tutorial blueprint approved", "error", err)
+		return
+	}
+	persistSessionMessage(ctx, svc, userID, sessionID, "model", tutorialBlueprintApprovedPrefix+string(data))
+}
+
+func tryParseTutorialBlueprintMessage(text string) *StudioMessage {
+	if strings.HasPrefix(text, tutorialBlueprintPreviewPrefix) {
+		jsonStr := text[len(tutorialBlueprintPreviewPrefix):]
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+			return nil
+		}
+		return studioMessageFromBlueprintPayload("tutorial_blueprint_preview", payload)
+	}
+	if strings.HasPrefix(text, tutorialBlueprintApprovedPrefix) {
+		jsonStr := text[len(tutorialBlueprintApprovedPrefix):]
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(jsonStr), &payload); err != nil {
+			return nil
+		}
+		return studioMessageFromBlueprintPayload("tutorial_blueprint_approved", payload)
+	}
+	return nil
+}
+
+func studioMessageFromBlueprintPayload(msgType string, payload map[string]any) *StudioMessage {
+	msg := &StudioMessage{Type: msgType}
+	if v, ok := payload["title"].(string); ok {
+		msg.BlueprintTitle = v
+	}
+	if v, ok := payload["suite"].(string); ok {
+		msg.BlueprintSuite = v
+	}
+	if v, ok := payload["blueprint_yaml"].(string); ok {
+		msg.BlueprintYAML = v
+	}
+	if v, ok := payload["drill_yaml"].(string); ok {
+		msg.DrillYAML = v
+	}
+	if v, ok := payload["drill_name"].(string); ok {
+		msg.DrillName = v
+	}
+	if v, ok := payload["message"].(string); ok {
+		msg.Content = v
+	}
+	if scenes, ok := payload["scenes"].([]any); ok {
+		msg.BlueprintScenes = scenes
+	}
+	return msg
 }
 
 // --- App preview persistence ---

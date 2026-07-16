@@ -10,11 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/google/uuid"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -500,6 +500,7 @@ func (cr *ChatRunner) Run(
 					"result": summarizeToolResult(resp),
 				})
 				cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+				cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
 			}
 		}
 	}
@@ -693,6 +694,7 @@ runLoop:
 						"result": summarizeToolResult(resp),
 					})
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+					cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
 
 					// Emit memory_saved SSE event when memory_save tool succeeds
 					if part.FunctionResponse.Name == "memory_save" && resp != nil {
@@ -852,6 +854,7 @@ runLoop:
 							"result": summarizeToolResult(resp),
 						})
 						cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+						cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
 					}
 				}
 			}
@@ -936,6 +939,94 @@ func (cr *ChatRunner) processStateDelta(delta map[string]any) {
 	if spinnerText, ok := delta["_spinner_text"].(string); ok {
 		cr.emitEvent("thinking", map[string]any{"text": spinnerText})
 	}
+}
+
+// maybeEmitTutorialBlueprint emits the Scene|Voiceover|Visual approval card when
+// present_tutorial_blueprint succeeds, and stores pending state for Approve intents.
+func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, sessionService session.Service, toolName string, resp map[string]any) {
+	if toolName != "present_tutorial_blueprint" || resp == nil {
+		return
+	}
+	if status, _ := resp["status"].(string); status != "ok" {
+		return
+	}
+	present, _ := resp["present_tutorial_blueprint"].(bool)
+	if !present {
+		return
+	}
+	yamlStr, _ := resp["blueprint_yaml"].(string)
+	title, _ := resp["title"].(string)
+	suite, _ := resp["suite"].(string)
+	if yamlStr == "" {
+		return
+	}
+
+	scenes := parseBlueprintScenesFromToolResult(resp["scenes"])
+	pending := &agent.TutorialBlueprintPending{
+		YAML:   yamlStr,
+		Title:  title,
+		Suite:  suite,
+		Scenes: scenes,
+	}
+	chatAgent.SetPendingTutorialBlueprint(cr.SessionID, pending)
+
+	scenePayload := make([]map[string]any, 0, len(scenes))
+	for _, sc := range scenes {
+		scenePayload = append(scenePayload, map[string]any{
+			"id":                 sc.ID,
+			"title":              sc.Title,
+			"voiceover":          sc.Voiceover,
+			"visual_kind":        sc.VisualKind,
+			"visual_description": sc.VisualDesc,
+			"duration_hint_s":    sc.DurationHintS,
+		})
+	}
+	payload := map[string]any{
+		"title":          title,
+		"suite":          suite,
+		"blueprint_yaml": yamlStr,
+		"scenes":         scenePayload,
+	}
+	cr.emitEvent("tutorial_blueprint_preview", payload)
+	persistTutorialBlueprintPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
+}
+
+func parseBlueprintScenesFromToolResult(raw any) []agent.TutorialBlueprintSceneView {
+	var out []agent.TutorialBlueprintSceneView
+	switch scenes := raw.(type) {
+	case []any:
+		for _, item := range scenes {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			sc := agent.TutorialBlueprintSceneView{
+				ID:        strVal(m["id"]),
+				Title:     strVal(m["title"]),
+				Voiceover: strVal(m["voiceover"]),
+			}
+			if d, ok := m["duration_hint_s"].(float64); ok {
+				sc.DurationHintS = int(d)
+			}
+			if d, ok := m["duration_hint_s"].(int); ok {
+				sc.DurationHintS = d
+			}
+			if vis, ok := m["visual"].(map[string]any); ok {
+				sc.VisualKind = strVal(vis["kind"])
+				sc.VisualDesc = strVal(vis["description"])
+			} else {
+				sc.VisualKind = strVal(m["visual_kind"])
+				sc.VisualDesc = strVal(m["visual_description"])
+			}
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+func strVal(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // drainImagesAndFlowOutput drains images, flow output, and file artifacts from the chat agent and emits them as events.

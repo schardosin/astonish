@@ -162,6 +162,8 @@ type DrillConfig struct {
 	// Mode is ""/"test" for deterministic assertion drills (default), or "tutorial"
 	// for paced training-video scripts (narration, hold_ms, scene recording).
 	Mode string `yaml:"mode,omitempty"`
+	// Blueprint names the companion tutorial_blueprint flow (HeyGen-style cut list).
+	Blueprint string `yaml:"blueprint,omitempty"`
 }
 
 // AssertConfig defines what to check after a step executes.

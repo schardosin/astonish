@@ -237,6 +237,33 @@ export interface DistillSavedMessage {
   runCommand: string
 }
 
+export interface TutorialBlueprintSceneRow {
+  id: string
+  title: string
+  voiceover: string
+  visual_kind: string
+  visual_description: string
+  duration_hint_s?: number
+}
+
+export interface TutorialBlueprintPreviewMessage {
+  type: 'tutorial_blueprint_preview'
+  title: string
+  suite: string
+  blueprintYaml: string
+  scenes: TutorialBlueprintSceneRow[]
+}
+
+export interface TutorialBlueprintApprovedMessage {
+  type: 'tutorial_blueprint_approved'
+  title: string
+  suite: string
+  blueprintYaml: string
+  drillYaml?: string
+  drillName?: string
+  content?: string
+}
+
 export interface AppSavedMessage {
   type: 'app_saved'
   name: string
@@ -290,6 +317,8 @@ export type ChatMsg =
   | AppPreviewMessage
   | DistillPreviewMessage
   | DistillSavedMessage
+  | TutorialBlueprintPreviewMessage
+  | TutorialBlueprintApprovedMessage
   | AppSavedMessage
   | ReportPreviewMessage
   | ReportMarkerMessage

@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/apps"
 	"github.com/SAP/astonish/pkg/config"
@@ -25,6 +23,8 @@ import (
 	"github.com/SAP/astonish/pkg/skills"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -137,6 +137,14 @@ type StudioMessage struct {
 	// distill_saved fields
 	FilePath   string `json:"filePath,omitempty"`   // saved file path
 	RunCommand string `json:"runCommand,omitempty"` // suggested run command
+
+	// tutorial_blueprint_preview / approved fields
+	BlueprintTitle  string `json:"blueprintTitle,omitempty"`
+	BlueprintSuite  string `json:"blueprintSuite,omitempty"`
+	BlueprintYAML   string `json:"blueprintYaml,omitempty"`
+	BlueprintScenes any    `json:"blueprintScenes,omitempty"`
+	DrillYAML       string `json:"drillYaml,omitempty"`
+	DrillName       string `json:"drillName,omitempty"`
 
 	// app_preview fields — populated for generative UI app previews
 	AppCode    string `json:"code,omitempty"`    // JSX source code
@@ -633,6 +641,13 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		// Use r.Context() for slash commands since they're lightweight
 		handleSlashCommand(r, w, flusher, cm, sessionService, msg, userID, req.SessionID)
 		return
+	}
+
+	// Intercept tutorial blueprint approval / cancel / revise intents.
+	if req.SessionID != "" && chatAgent.HasPendingTutorialBlueprint(req.SessionID) {
+		if handleTutorialBlueprintIntent(r, w, flusher, chatAgent, sessionService, userID, req.SessionID, msg) {
+			return
+		}
 	}
 
 	// Intercept messages for pending distill review (interactive modification loop).

@@ -127,7 +127,7 @@ nodes:
       ref: "studio-link"
 ```
 
-After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download), in addition to living under the drill reports directory. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Authoring is **blueprint-first**: `/tutorial` interviews the creator, presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into drill YAML. Avatar/b-roll remain scripted in the blueprint for a later provider step. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
 
 Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
 
@@ -283,7 +283,9 @@ The drill runner collects:
 | `pkg/tools/inject_drill_credentials_tool.go` | Prep-time credential injection (before start-services) |
 | `pkg/drill/run_instructions.go` | Studio Run prep text (Go); mirrored by `web/src/utils/generateRunInstructions.ts` |
 | `pkg/drill/scene_manifest.go` | Tutorial `scene_manifest.json` writer |
-| `pkg/tools/tutorial_prompt.go` | `/tutorial` and `/tutorial-add` wizard prompts |
+| `pkg/tools/tutorial_prompt.go` | `/tutorial` and `/tutorial-add` wizard prompts (blueprint-first) |
+| `pkg/tools/tutorial_blueprint.go` | HeyGen-style tutorial_blueprint schema + drill conversion |
+| `web/src/components/chat/TutorialBlueprintCard.tsx` | In-chat Scene\|Voiceover\|Visual approval table |
 | `pkg/browser/action_recorder.go` | DOM action capture for human demo → draft YAML |
 | `pkg/tools/draft_drill_from_action_log.go` | Action log → draft tutorial drill YAML |
 

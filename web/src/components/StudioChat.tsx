@@ -8,7 +8,7 @@ import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -26,6 +26,7 @@ import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
+import TutorialBlueprintCard from './chat/TutorialBlueprintCard'
 import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
@@ -34,6 +35,18 @@ import ModelCredentialBanner from './chat/ModelCredentialBanner'
 import SessionModelPicker from './chat/SessionModelPicker'
 import PreChatModelPicker from './chat/PreChatModelPicker'
 import { fileTypeFromFileName } from '../utils/artifactMedia'
+
+function normalizeBlueprintScenes(raw: unknown): TutorialBlueprintPreviewMessage['scenes'] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item: any) => ({
+    id: item?.id || '',
+    title: item?.title || '',
+    voiceover: item?.voiceover || '',
+    visual_kind: item?.visual_kind || item?.visual?.kind || '',
+    visual_description: item?.visual_description || item?.visual?.description || '',
+    duration_hint_s: item?.duration_hint_s || item?.durationHintS || undefined,
+  }))
+}
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -640,6 +653,26 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               runCommand: m.runCommand || '',
             } as DistillSavedMessage
           }
+          if (m.type === 'tutorial_blueprint_preview') {
+            return {
+              type: 'tutorial_blueprint_preview',
+              title: m.blueprintTitle || m.title || '',
+              suite: m.blueprintSuite || m.suite || '',
+              blueprintYaml: m.blueprintYaml || '',
+              scenes: normalizeBlueprintScenes(m.blueprintScenes || m.scenes),
+            } as TutorialBlueprintPreviewMessage
+          }
+          if (m.type === 'tutorial_blueprint_approved') {
+            return {
+              type: 'tutorial_blueprint_approved',
+              title: m.blueprintTitle || m.title || '',
+              suite: m.blueprintSuite || m.suite || '',
+              blueprintYaml: m.blueprintYaml || '',
+              drillYaml: m.drillYaml || '',
+              drillName: m.drillName || '',
+              content: m.content || '',
+            } as TutorialBlueprintApprovedMessage
+          }
           if (m.type === 'app_preview') {
             return {
               type: 'app_preview',
@@ -897,6 +930,39 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_preview':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_preview',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              scenes: normalizeBlueprintScenes(data.scenes),
+            } as TutorialBlueprintPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_approved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_approved',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              drillYaml: (data.drill_yaml as string) || '',
+              drillName: (data.drill_name as string) || '',
+              content: (data.message as string) || '',
+            } as TutorialBlueprintApprovedMessage])
             break
 
           case 'app_preview':
@@ -1447,7 +1513,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
 
     // Add user message to chat (unless it's a slash command or internal action)
-    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_')) {
+    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_') && !userMsg.startsWith('__tutorial_blueprint_')) {
       const userChatMsg: UserMessage = { type: 'user', content: userMsg }
       if (attachmentInfos.length > 0) {
         userChatMsg.attachments = attachmentInfos
@@ -1999,6 +2065,39 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_preview':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_preview',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              scenes: normalizeBlueprintScenes(data.scenes),
+            } as TutorialBlueprintPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_approved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_approved',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              drillYaml: (data.drill_yaml as string) || '',
+              drillName: (data.drill_name as string) || '',
+              content: (data.message as string) || '',
+            } as TutorialBlueprintApprovedMessage])
             break
 
           case 'app_preview':
@@ -2963,6 +3062,51 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       }}
                       onCancel={() => sendMessage('__distill_cancel__')}
                     />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_blueprint_preview') {
+                const previewMsg = msg as TutorialBlueprintPreviewMessage
+                const isLastPreview = (() => {
+                  for (let j = index + 1; j < messages.length; j++) {
+                    const m = messages[j]
+                    if (m.type === 'tutorial_blueprint_preview' || m.type === 'tutorial_blueprint_approved') return false
+                  }
+                  return true
+                })()
+                return (
+                  <div key={index}>
+                    <TutorialBlueprintCard
+                      data={previewMsg}
+                      isActive={isLastPreview}
+                      onApprove={() => sendMessage('__tutorial_blueprint_approve__')}
+                      onRequestChanges={() => {
+                        if (inputRef.current) {
+                          inputRef.current.focus()
+                          inputRef.current.placeholder = 'Describe how to revise the Scene | Voiceover | Visual blueprint...'
+                        }
+                      }}
+                      onCancel={() => sendMessage('__tutorial_blueprint_cancel__')}
+                    />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_blueprint_approved') {
+                const approved = msg as TutorialBlueprintApprovedMessage
+                return (
+                  <div key={index} className="my-3 rounded-xl overflow-hidden w-full max-w-2xl px-4 py-3"
+                    style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Check size={16} style={{ color: 'var(--success)' }} />
+                      <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
+                        Blueprint approved{approved.drillName ? `: ${approved.drillName}` : ''}
+                      </span>
+                    </div>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {approved.content || 'Screen scenes converted to tutorial drill YAML. Refine selectors, then validate_drill / save_drill.'}
+                    </p>
                   </div>
                 )
               }

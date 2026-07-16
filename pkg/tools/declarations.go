@@ -189,6 +189,10 @@ func drillToolDeclarations() []ToolDeclaration {
 		{Name: "run_drill", Description: "Run a drill suite and return the test report", Category: "drill"},
 		{Name: "inject_drill_credentials", Description: "Inject suite credentials into the sandbox before start-services", Category: "drill"},
 		{Name: "draft_drill_from_action_log", Description: "Convert a browser action capture log into draft tutorial drill YAML", Category: "drill"},
+		{Name: "draft_tutorial_blueprint", Description: "Draft a HeyGen-style Scene|Voiceover|Visual tutorial blueprint", Category: "drill"},
+		{Name: "validate_tutorial_blueprint", Description: "Validate a tutorial video blueprint", Category: "drill"},
+		{Name: "present_tutorial_blueprint", Description: "Present a tutorial blueprint for in-chat approval", Category: "drill"},
+		{Name: "blueprint_to_tutorial_drill", Description: "Convert approved blueprint screen scenes to tutorial drill YAML", Category: "drill"},
 	}
 }
 

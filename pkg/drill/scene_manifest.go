@@ -11,13 +11,16 @@ import (
 	"github.com/SAP/astonish/pkg/config"
 )
 
-// SceneClip is one recorded beat in a tutorial drill.
+// SceneClip is one beat in a tutorial cut list (screen clip and/or scripted visual).
 type SceneClip struct {
-	ID              string  `json:"id"`
-	Narration       string  `json:"narration,omitempty"`
-	HoldMs          int     `json:"hold_ms,omitempty"`
-	Path            string  `json:"path,omitempty"`
-	DurationSeconds float64 `json:"duration_seconds,omitempty"`
+	ID                string  `json:"id"`
+	Narration         string  `json:"narration,omitempty"`
+	Voiceover         string  `json:"voiceover,omitempty"` // alias of narration for blueprint parity
+	HoldMs            int     `json:"hold_ms,omitempty"`
+	Path              string  `json:"path,omitempty"` // MP4 path for screen scenes; empty for avatar/broll until provider phase
+	DurationSeconds   float64 `json:"duration_seconds,omitempty"`
+	VisualKind        string  `json:"visual_kind,omitempty"` // avatar | broll | screen
+	VisualDescription string  `json:"visual_description,omitempty"`
 }
 
 // SceneManifest is written to the artifact directory after a tutorial drill run.

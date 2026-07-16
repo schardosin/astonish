@@ -570,9 +570,12 @@ func (sr *SuiteRunner) tutorialStopRecording(ctx context.Context, ts *tutorialRu
 		return fmt.Errorf("browser_stop_recording: %w", err)
 	}
 	clip := SceneClip{
-		ID:        ts.pendingID,
-		Narration: ts.pendingNarr,
-		HoldMs:    ts.pendingHoldMs,
+		ID:                ts.pendingID,
+		Narration:         ts.pendingNarr,
+		Voiceover:         ts.pendingNarr,
+		HoldMs:            ts.pendingHoldMs,
+		VisualKind:        "screen",
+		VisualDescription: ts.pendingNarr,
 	}
 	if m, ok := raw.(map[string]any); ok {
 		if p, ok := m["path"].(string); ok {

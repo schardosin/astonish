@@ -30,10 +30,11 @@ type RunDrillArgs struct {
 
 // RunDrillResult is the result of the run_drill tool.
 type RunDrillResult struct {
-	Status       string `json:"status"`                  // "passed", "failed", "error"
-	Summary      string `json:"summary"`                 // Human-readable summary line
-	Report       string `json:"report"`                  // Full formatted report text
-	ManifestPath string `json:"manifest_path,omitempty"` // tutorial scene_manifest.json when present
+	Status        string   `json:"status"`                   // "passed", "failed", "error"
+	Summary       string   `json:"summary"`                  // Human-readable summary line
+	Report        string   `json:"report"`                   // Full formatted report text
+	ManifestPath  string   `json:"manifest_path,omitempty"`  // tutorial scene_manifest.json when present
+	ArtifactPaths []string `json:"artifact_paths,omitempty"` // scene MP4s + manifest for Studio Files
 }
 
 // runDrillDeps holds sandbox dependencies for the run_drill tool.
@@ -296,11 +297,39 @@ func executeRunDrill(ctx tool.Context, deps *runDrillDeps, args RunDrillArgs) (R
 	}
 
 	return RunDrillResult{
-		Status:       report.Status,
-		Summary:      report.Summary,
-		Report:       buf.String(),
-		ManifestPath: report.ManifestPath,
+		Status:        report.Status,
+		Summary:       report.Summary,
+		Report:        buf.String(),
+		ManifestPath:  report.ManifestPath,
+		ArtifactPaths: CollectRunDrillArtifactPaths(report),
 	}, nil
+}
+
+// CollectRunDrillArtifactPaths returns absolute paths for Studio session
+// artifacts: each tutorial scene MP4 plus scene_manifest.json when present.
+func CollectRunDrillArtifactPaths(report *adrill.SuiteReport) []string {
+	if report == nil {
+		return nil
+	}
+	seen := make(map[string]bool)
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		if !filepath.IsAbs(p) {
+			if abs, err := filepath.Abs(p); err == nil {
+				p = abs
+			}
+		}
+		out = append(out, p)
+	}
+	for _, p := range report.ScenePaths {
+		add(p)
+	}
+	add(report.ManifestPath)
+	return out
 }
 
 // ---------------------------------------------------------------------------

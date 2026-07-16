@@ -22,6 +22,7 @@ type SuiteReport struct {
 	Summary      string       `json:"summary"`
 	Analysis     string       `json:"analysis,omitempty"`      // AI triage summary (from --analyze or on_fail: triage)
 	ManifestPath string       `json:"manifest_path,omitempty"` // tutorial scene_manifest.json when present
+	ScenePaths   []string     `json:"scene_paths,omitempty"`   // tutorial scene MP4 paths (session artifact registration)
 }
 
 // TestReport holds results of a single test.

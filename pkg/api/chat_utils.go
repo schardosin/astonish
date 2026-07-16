@@ -530,6 +530,19 @@ func collectArtifacts(events session.Events) []ArtifactInfo {
 	seen := make(map[string]bool)
 	var artifacts []ArtifactInfo
 
+	addArtifact := func(path, toolName string) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		artifacts = append(artifacts, ArtifactInfo{
+			Path:     path,
+			FileName: filepath.Base(path),
+			FileType: fileTypeFromExt(filepath.Ext(path)),
+			ToolName: toolName,
+		})
+	}
+
 	for i := range events.Len() {
 		event := events.At(i)
 		if event.LLMResponse.Content == nil {
@@ -548,8 +561,8 @@ func collectArtifacts(events session.Events) []ArtifactInfo {
 						}
 					}
 				}
-				if name == "browser_stop_recording" {
-					// Path is only known after the tool responds; mark pending
+				if name == "browser_stop_recording" || name == "run_drill" {
+					// Path(s) are only known after the tool responds; mark pending
 					// and fill from FunctionResponse.
 					pending[part.FunctionCall.ID] = pendingWrite{
 						toolName: name,
@@ -564,37 +577,65 @@ func collectArtifacts(events session.Events) []ArtifactInfo {
 				delete(pending, part.FunctionResponse.ID)
 
 				// Check if the tool succeeded (no error in response)
-				if resp := part.FunctionResponse.Response; resp != nil {
+				resp := part.FunctionResponse.Response
+				if resp != nil {
 					if _, hasErr := resp["error"]; hasErr {
 						continue
 					}
-					if pw.toolName == "browser_stop_recording" {
+				}
+
+				switch pw.toolName {
+				case "browser_stop_recording":
+					if resp != nil {
 						if path, ok := resp["path"].(string); ok && path != "" {
 							pw.path = path
 						}
 					}
+					addArtifact(pw.path, pw.toolName)
+				case "run_drill":
+					if resp != nil {
+						for _, p := range extractArtifactPathsFromRunDrillResponse(resp) {
+							addArtifact(p, "run_drill")
+						}
+					}
+				default:
+					addArtifact(pw.path, pw.toolName)
 				}
-				if pw.path == "" {
-					continue
-				}
-
-				// Deduplicate by path
-				if seen[pw.path] {
-					continue
-				}
-				seen[pw.path] = true
-
-				artifacts = append(artifacts, ArtifactInfo{
-					Path:     pw.path,
-					FileName: filepath.Base(pw.path),
-					FileType: fileTypeFromExt(filepath.Ext(pw.path)),
-					ToolName: pw.toolName,
-				})
 			}
 		}
 	}
 
 	return artifacts
+}
+
+// extractArtifactPathsFromRunDrillResponse reads artifact_paths / manifest_path
+// from a persisted run_drill FunctionResponse (values may be []any or []string).
+func extractArtifactPathsFromRunDrillResponse(resp map[string]any) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	switch v := resp["artifact_paths"].(type) {
+	case []string:
+		for _, p := range v {
+			add(p)
+		}
+	case []any:
+		for _, item := range v {
+			if p, ok := item.(string); ok {
+				add(p)
+			}
+		}
+	}
+	if p, ok := resp["manifest_path"].(string); ok {
+		add(p)
+	}
+	return out
 }
 
 // extractFilePath gets the file path from a write_file or edit_file tool call args.

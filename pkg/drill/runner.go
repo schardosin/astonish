@@ -39,6 +39,7 @@ type SuiteRunner struct {
 	setupLog      string            // retained for triage context (unused by thin runner)
 	llmProvider   LLMProvider       // optional LLM for semantic assertions
 	manifestPath  string            // last tutorial scene_manifest.json written this suite run
+	scenePaths    []string          // tutorial scene MP4 paths collected this suite run
 }
 
 // NewSuiteRunner creates a runner with the given tool executor and artifact manager.
@@ -99,6 +100,7 @@ func (sr *SuiteRunner) RunSuite(ctx context.Context, suite *LoadedSuite, tests [
 	report.FinishedAt = time.Now()
 	report.Duration = report.FinishedAt.Sub(report.StartedAt).Milliseconds()
 	report.ManifestPath = sr.manifestPath
+	report.ScenePaths = append([]string(nil), sr.scenePaths...)
 	report.ComputeStatus()
 	report.ComputeSummary()
 
@@ -300,6 +302,11 @@ func (sr *SuiteRunner) runTestAttempt(ctx context.Context, test *LoadedTest, sui
 
 	if tutorial {
 		sr.finalizeTutorialRecording(testCtx, ts)
+		for _, clip := range ts.scenes {
+			if clip.Path != "" {
+				sr.scenePaths = append(sr.scenePaths, clip.Path)
+			}
+		}
 		if sr.artifactMgr != nil {
 			suiteName := ""
 			if suite != nil {

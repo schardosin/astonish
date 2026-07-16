@@ -16,11 +16,11 @@ import (
 	adksession "google.golang.org/adk/session"
 	"google.golang.org/adk/tool"
 
-	"github.com/google/uuid"
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/provider/llmerror"
 	persistentsession "github.com/SAP/astonish/pkg/session"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/google/uuid"
 )
 
 // SubAgentConfig holds configuration for the sub-agent system.
@@ -769,6 +769,8 @@ func (m *SubAgentManager) RunTask(ctx context.Context, task SubAgentTask) TaskRe
 				if path, ok := output["path"].(string); ok && path != "" {
 					capture(path, t.Name())
 				}
+			case "run_drill":
+				captureRunDrillArtifacts(capture, output)
 			}
 			return output, err
 		})

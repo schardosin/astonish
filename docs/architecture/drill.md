@@ -127,7 +127,7 @@ nodes:
       ref: "studio-link"
 ```
 
-After a tutorial `run_drill`, artifacts include per-scene MP4s and `scene_manifest.json` (path surfaced on the run result). **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download), in addition to living under the drill reports directory. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
 
 Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
 

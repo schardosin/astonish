@@ -263,6 +263,9 @@ type Manager struct {
 
 	// actionCapture tracks DOM action recording for tutorial authoring.
 	actionCapture *actionCaptureState
+
+	// demoOverlay tracks tutorial highlight boxes and the visible demo cursor.
+	demoOverlay *demoOverlayState
 }
 
 // NewManager creates a Manager with the given config. The browser is NOT

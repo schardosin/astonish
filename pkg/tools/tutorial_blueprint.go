@@ -139,9 +139,9 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 	}
 	type nodeOut struct {
 		Name      string         `yaml:"name"`
-		Narration string         `yaml:"narration"`
-		HoldMs    int            `yaml:"hold_ms"`
-		Record    string         `yaml:"record"`
+		Narration string         `yaml:"narration,omitempty"`
+		HoldMs    int            `yaml:"hold_ms,omitempty"`
+		Record    string         `yaml:"record,omitempty"`
 		Type      string         `yaml:"type"`
 		Args      map[string]any `yaml:"args"`
 	}
@@ -149,6 +149,30 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 	var nodes []nodeOut
 	var flow []map[string]string
 	var prev string
+
+	// Unrecorded warm-up: open the app then fullscreen before any segment.
+	// Recording starts before steps with record/narration — keep these first.
+	nodes = append(nodes,
+		nodeOut{
+			Name: "open_app",
+			Type: "tool",
+			Args: map[string]any{
+				"tool": "browser_navigate",
+				"url":  "{{SUITE_BASE_URL}}", // agent: replace with suite_config.base_url / home
+			},
+		},
+		nodeOut{
+			Name: "enter_fullscreen",
+			Type: "tool",
+			Args: map[string]any{
+				"tool":    "browser_fullscreen",
+				"enabled": true,
+			},
+		},
+	)
+	flow = append(flow, map[string]string{"from": "open_app", "to": "enter_fullscreen"})
+	prev = "enter_fullscreen"
+
 	for _, sc := range bp.Scenes {
 		hold := sc.DurationHintS * 1000
 		if hold <= 0 {
@@ -173,9 +197,9 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 			}
 			nodeName = sanitizeBlueprintName(nodeName)
 			entry.DrillNode = nodeName
-			// Placeholder tool — agent should replace with real selectors after explore.
+			// Placeholder — agent should replace with highlight → animated click path.
 			code := fmt.Sprintf(
-				`(() => { /* TODO: implement UI action for %q — %s */ return 'todo'; })()`,
+				`(() => { /* TODO: %q — %s; use browser_highlight + browser_click(animate_cursor:true); prefer nav clicks over navigate */ return 'todo'; })()`,
 				nodeName, sc.Visual.Description,
 			)
 			nodes = append(nodes, nodeOut{
@@ -196,7 +220,7 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 		}
 		scenes = append(scenes, entry)
 	}
-	if len(nodes) == 0 {
+	if len(nodes) <= 2 {
 		return "", fmt.Errorf("no screen scenes to convert")
 	}
 
@@ -221,7 +245,7 @@ func BlueprintToTutorialDrillYAML(bp *TutorialBlueprint, drillName string) (stri
 	if err != nil {
 		return "", err
 	}
-	header := fmt.Sprintf("# Generated from tutorial blueprint %q — replace browser_run_code TODOs with real UI actions.\n", bp.Title)
+	header := fmt.Sprintf("# Generated from tutorial blueprint %q — warm-up (open_app, enter_fullscreen) is unrecorded; replace screen TODOs with highlight + animated clicks.\n", bp.Title)
 	return header + string(out), nil
 }
 

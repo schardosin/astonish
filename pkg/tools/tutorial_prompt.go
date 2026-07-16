@@ -85,6 +85,7 @@ only to discover screen steps — still produce a full mixed blueprint afterward
 6. Creator clicks Approve & generate → you receive the converted drill YAML
    (or they type revise feedback — update blueprint and present again).
 7. Replace browser_run_code TODOs with real UI actions for screen nodes.
+   Follow the RECORDING PLAYBOOK below (dry-run → warm-up → human clicks).
 8. validate_drill → save_drill:
    - New tutorial suite: pass suite_yaml (copied or greenfield suite_config)
      plus the new mode:tutorial drill files.
@@ -94,6 +95,23 @@ only to discover screen steps — still produce a full mixed blueprint afterward
    inject_drill_credentials → run suite start script → then run_drill.
    Do not invent a second template when copying. Report scene_manifest.json
    (full cut list) + clip artifacts.
+
+## RECORDING PLAYBOOK
+
+Recording starts before each step's tool when record:segment / narration is set.
+Never put the first recorded step on a blank tab.
+
+1. Dry-run (no recording): for each screen scene — navigate/click to the view,
+   browser_snapshot / assert key text or elements, confirm data loaded. Fix
+   selectors before any run_drill recording pass. Prefer an agent-driven browser
+   dry-run in chat; only then run_drill for the recorded pass.
+2. Warm-up nodes (unrecorded): open suite_config.base_url (or home),
+   browser_fullscreen(enabled:true), wait until stable — NO narration/record.
+   Generated drills prepend open_app + enter_fullscreen for this.
+3. Per screen scene: browser_highlight the target → browser_move_cursor or
+   browser_click with animate_cursor:true → interact → hold_ms. Prefer
+   sidebar/nav clicks over cold browser_navigate unless a deep link is required.
+4. Clear highlights between scenes when they would clutter the next shot.
 
 ## BLUEPRINT SCENE SHAPE
 
@@ -146,7 +164,10 @@ rebuilding the stack.
 5. On approve, refine screen drill YAML, validate_drill, save_drill with
    EMPTY suite_yaml so the suite is not overwritten. Tags must include
    tutorial; mode must be tutorial.
-6. Before run_drill, prep in order: use_sandbox_template (if declared) →
+6. Follow the RECORDING PLAYBOOK: dry-run selectors/content first, keep
+   warm-up (open app + fullscreen) unrecorded, then record with highlight +
+   animated cursor clicks (prefer clicks over cold navigates).
+7. Before run_drill, prep in order: use_sandbox_template (if declared) →
    inject_drill_credentials (if credentials declared) → run suite start
    script → then run_drill. Focus effort on scene UI actions and pacing.
 `

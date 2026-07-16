@@ -5,6 +5,7 @@ Managed Chromium via Chrome DevTools Protocol (rod). 35+ browser tools in pure G
 ## Scope
 - `manager.go` — `Manager`, `BrowserConfig`, `HandoffCfg`, `PageState`.
 - `recording.go` — ffmpeg `x11grab` session recording (`StartRecording` / `StopRecording` / `RecordingStatus`); probes live X size via xdpyinfo.
+- `demo_overlay.go` — tutorial highlight overlays, visible demo cursor (`EnableDemoCursor` / `MoveMouseAnimated`), `SetFullscreen`.
 - `action_recorder.go` — DOM action capture (`StartActionCapture` / `StopActionCapture` / `GetActionLog`) for tutorial authoring; works under KasmVNC because listeners run in-page.
 - `handoff.go` — `HandoffServer`, `HandoffOpts`, `HandoffInfo`: human-in-the-loop handoff (user takes over a session in a real browser).
 - `captcha.go` / `captcha_solver.go` — `CAPTCHADetection`, `CAPTCHASolveRequest`, `CAPTCHASolveResult`, `CAPTCHASolverConfig`.

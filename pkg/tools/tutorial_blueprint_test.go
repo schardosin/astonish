@@ -61,7 +61,6 @@ func TestBlueprintToTutorialDrillYAML(t *testing.T) {
 		}
 	}
 	// Avatar/broll voiceovers live under drill_config.scenes only — not as executable nodes.
-	// Nodes section should contain exactly one tool name for the screen scene.
 	nodesIdx := strings.Index(yamlOut, "\nnodes:")
 	if nodesIdx < 0 {
 		t.Fatal("missing nodes section")
@@ -69,6 +68,11 @@ func TestBlueprintToTutorialDrillYAML(t *testing.T) {
 	nodesSection := yamlOut[nodesIdx:]
 	if strings.Count(nodesSection, "browser_run_code") != 1 {
 		t.Fatalf("expected exactly one screen node, got:\n%s", nodesSection)
+	}
+	for _, want := range []string{"open_app", "enter_fullscreen", "browser_navigate", "browser_fullscreen"} {
+		if !strings.Contains(nodesSection, want) {
+			t.Fatalf("missing warm-up %q in:\n%s", want, nodesSection)
+		}
 	}
 	if strings.Contains(nodesSection, "visual_kind: avatar") {
 		t.Fatal("avatar should not be an executable node")

@@ -115,9 +115,9 @@ Browser tools are organized into functional groups:
 | Group | Tools |
 |---|---|
 | **Navigation** | `browser_navigate`, `browser_navigate_back` |
-| **Interaction** | `browser_click`, `browser_type`, `browser_hover`, `browser_drag`, `browser_press_key`, `browser_select_option`, `browser_fill_form` |
+| **Interaction** | `browser_click`, `browser_type`, `browser_hover`, `browser_drag`, `browser_press_key`, `browser_select_option`, `browser_fill_form`, `browser_highlight`, `browser_clear_highlights`, `browser_move_cursor` |
 | **Observation** | `browser_snapshot`, `browser_take_screenshot`, `browser_console_messages`, `browser_network_requests` |
-| **Management** | `browser_tabs`, `browser_close`, `browser_resize`, `browser_wait_for`, `browser_file_upload`, `browser_handle_dialog` |
+| **Management** | `browser_tabs`, `browser_close`, `browser_resize`, `browser_fullscreen`, `browser_wait_for`, `browser_file_upload`, `browser_handle_dialog` |
 | **Advanced** | `browser_evaluate`, `browser_run_code`, `browser_pdf`, `browser_response_body` |
 | **State/Emulation** | `browser_cookies`, `browser_storage`, `browser_set_offline`, `browser_set_headers`, `browser_set_credentials`, `browser_set_geolocation`, `browser_set_media`, `browser_set_timezone`, `browser_set_locale`, `browser_set_device` |
 | **Human Handoff** | `browser_request_human`, `browser_handoff_complete` |
@@ -136,6 +136,17 @@ Invariants:
 - Sandbox recordings write to `/tmp/astonish-recordings/*.mp4` (downloadable via sandbox PullFile). Local recordings write under `recordings/`.
 - Local Linux requires `ffmpeg` + `xdpyinfo` (`x11-utils`) (+ Xvfb when headed without a physical display). Sandbox images install those with the browser stack.
 
+### Tutorial recording polish
+
+| Tool | Role |
+|---|---|
+| `browser_highlight` / `browser_clear_highlights` | DOM overlay box (+ optional label) on a ref or CSS selector |
+| `browser_move_cursor` | Visible demo cursor + real mouse move to ref/selector/x,y (`EvalOnNewDocument` so it survives navigations) |
+| `browser_click` `animate_cursor` | Optional; default false for CI — set true in tutorials to move the demo cursor then click |
+| `browser_fullscreen` | CDP `Browser.setWindowBounds` fullscreen (F11 fallback). Minimizes Chromium chrome; x11grab still captures the display |
+
+Recommended order: open app → fullscreen → start recording / segment → highlight → move/click → hold. See `docs/architecture/drill.md` (tutorial recording order).
+
 ### Screenshot Handling
 
 - Auto-compression for large screenshots: images over 2000px are resized, JPEG quality is reduced progressively until under 5MB.
@@ -147,6 +158,7 @@ Invariants:
 |---|---|
 | `pkg/browser/manager.go` | Singleton browser management, page state tracking, launch logic |
 | `pkg/browser/recording.go` | ffmpeg x11grab session recording (start/stop/status) |
+| `pkg/browser/demo_overlay.go` | Tutorial highlight overlays, demo cursor, fullscreen helper |
 | `pkg/browser/stealth.go` | Anti-detection: go-rod/stealth evasions, automation flag removal, UA/Client Hints |
 | `pkg/browser/stealth_webgl.go` | WebGL fingerprint patching (Intel Iris GPU profile) |
 | `pkg/browser/xvfb.go` | Virtual display management for headed Chrome on Linux |

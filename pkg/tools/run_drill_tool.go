@@ -363,9 +363,10 @@ var testBrowserToolNames = map[string]bool{
 	"browser_navigate": true, "browser_navigate_back": true,
 	"browser_click": true, "browser_type": true, "browser_hover": true,
 	"browser_drag": true, "browser_press_key": true, "browser_select_option": true,
-	"browser_fill_form": true, "browser_snapshot": true, "browser_take_screenshot": true,
+	"browser_fill_form": true, "browser_highlight": true, "browser_clear_highlights": true,
+	"browser_move_cursor": true, "browser_snapshot": true, "browser_take_screenshot": true,
 	"browser_console_messages": true, "browser_network_requests": true,
-	"browser_tabs": true, "browser_close": true, "browser_resize": true,
+	"browser_tabs": true, "browser_close": true, "browser_resize": true, "browser_fullscreen": true,
 	"browser_wait_for": true, "browser_pause": true, "browser_file_upload": true, "browser_handle_dialog": true,
 	"browser_evaluate": true, "browser_run_code": true, "browser_pdf": true,
 	"browser_response_body": true, "browser_cookies": true, "browser_storage": true,
@@ -645,6 +646,27 @@ func (b *testBrowserExecutor) executeOnce(name string, args map[string]interface
 		}
 		return BrowserDrag(b.mgr, b.refs)(nil, a)
 
+	case "browser_highlight":
+		var a BrowserHighlightArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return BrowserHighlight(b.mgr, b.refs)(nil, a)
+
+	case "browser_clear_highlights":
+		var a BrowserClearHighlightsArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return BrowserClearHighlights(b.mgr)(nil, a)
+
+	case "browser_move_cursor":
+		var a BrowserMoveCursorArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return BrowserMoveCursor(b.mgr, b.refs)(nil, a)
+
 	case "browser_press_key":
 		var a BrowserPressKeyArgs
 		if err := json.Unmarshal(argsJSON, &a); err != nil {
@@ -714,6 +736,13 @@ func (b *testBrowserExecutor) executeOnce(name string, args map[string]interface
 			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
 		}
 		return BrowserResize(b.mgr)(nil, a)
+
+	case "browser_fullscreen":
+		var a BrowserFullscreenArgs
+		if err := json.Unmarshal(argsJSON, &a); err != nil {
+			return nil, fmt.Errorf("invalid args for %s: %w", name, err)
+		}
+		return BrowserFullscreen(b.mgr)(nil, a)
 
 	case "browser_wait_for":
 		var a BrowserWaitForArgs

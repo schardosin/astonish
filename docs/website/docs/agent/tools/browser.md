@@ -28,13 +28,16 @@ Configure browser settings via `astonish config edit` or Studio Settings.
 
 | Tool | Description |
 |------|-------------|
-| `browser_click` | Click an element |
+| `browser_click` | Click an element (`animate_cursor=true` moves the demo cursor first) |
 | `browser_type` | Type text into an input |
 | `browser_hover` | Hover over an element |
 | `browser_drag` | Drag and drop |
 | `browser_press_key` | Press a keyboard key |
 | `browser_select_option` | Select a dropdown option |
 | `browser_fill_form` | Fill multiple form fields at once |
+| `browser_highlight` | Draw a visible highlight overlay (ref or CSS selector) |
+| `browser_clear_highlights` | Remove highlight overlays |
+| `browser_move_cursor` | Move the visible demo cursor to a ref, selector, or x/y |
 | `browser_file_upload` | Upload a file to an input |
 | `browser_handle_dialog` | Accept/dismiss browser dialogs |
 
@@ -57,6 +60,7 @@ Configure browser settings via `astonish config edit` or Studio Settings.
 | `browser_tabs` | List all open tabs |
 | `browser_close` | Close browser or tab |
 | `browser_resize` | Resize browser viewport |
+| `browser_fullscreen` | Enter/exit Chromium window fullscreen (recording prep) |
 | `browser_wait_for` | Wait for a selector or condition |
 | `browser_pdf` | Save page as PDF |
 
@@ -111,12 +115,15 @@ Recording captures the **live X display** (probed via `xdpyinfo`). KasmVNC is lo
 ### Recording example
 
 ```
-1. browser_start_recording: filename="portal-demo.mp4"
-2. browser_navigate: "https://portal.example.com"
-3. browser_wait_for: timeout=7000, state="networkidle"
-4. browser_click: ref=…
-5. browser_stop_recording
+1. browser_navigate: "https://portal.example.com"   # warm-up first (avoid blank-tab capture)
+2. browser_fullscreen: enabled=true
+3. browser_start_recording: filename="portal-demo.mp4"
+4. browser_highlight: ref=…, label="Dashboard"
+5. browser_click: ref=…, animate_cursor=true
+6. browser_stop_recording
 ```
+
+For tutorial drills, `run_drill` starts each `record: segment` **before** the step tool — keep open/fullscreen steps without `narration`/`record`.
 
 ## Stealth Mode
 

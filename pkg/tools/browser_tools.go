@@ -49,9 +49,45 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	// --- Interaction ---
 
 	clickTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_click",
-		Description: "Click an element on the page. Use a ref from browser_snapshot.",
+		Name: "browser_click",
+		Description: "Click an element on the page. Use a ref from browser_snapshot. " +
+			"Set animate_cursor=true for tutorial recordings (moves the visible demo cursor first).",
 	}, safeBrowserFunc(BrowserClick(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	highlightTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_highlight",
+		Description: "Draw a visible highlight overlay around an element (ref or CSS selector). " +
+			"Optional label/color/duration_ms. Use for tutorial scene focus boxes.",
+	}, safeBrowserFunc(BrowserHighlight(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	clearHighlightsTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_clear_highlights",
+		Description: "Remove all highlight overlays drawn by browser_highlight.",
+	}, safeBrowserFunc(BrowserClearHighlights(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	moveCursorTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_move_cursor",
+		Description: "Move the visible demo cursor (and real mouse) to a ref, CSS selector, or x/y. " +
+			"Enables the demo cursor overlay for tutorial recordings.",
+	}, safeBrowserFunc(BrowserMoveCursor(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	fullscreenTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_fullscreen",
+		Description: "Enter or exit Chromium window fullscreen (CDP best-effort) before recording. " +
+			"Minimizes browser chrome; X11grab still captures the display.",
+	}, safeBrowserFunc(BrowserFullscreen(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -391,10 +427,11 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		navigateTool, navigateBackTool,
 		// Interaction
 		clickTool, typeTool, hoverTool, dragTool, pressKeyTool, selectOptionTool, fillFormTool,
+		highlightTool, clearHighlightsTool, moveCursorTool,
 		// Observation
 		snapshotTool, screenshotTool, consoleTool, networkTool,
 		// Management
-		tabsTool, closeTool, resizeTool, waitForTool, pauseTool, fileUploadTool, handleDialogTool,
+		tabsTool, closeTool, resizeTool, fullscreenTool, waitForTool, pauseTool, fileUploadTool, handleDialogTool,
 		// Advanced
 		evaluateTool, runCodeTool, pdfTool, responseBodyTool,
 		// State & Emulation

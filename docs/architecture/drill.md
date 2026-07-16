@@ -153,6 +153,8 @@ drill_config:
 
 Authoring: `/tutorial` wizard (Path A: agent explores; Path B: `browser_request_human` with `capture_actions: true` → `browser_get_action_log` → `draft_drill_from_action_log`). Product training videos use `mode: tutorial`; re-run after UI changes.
 
+**Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run selectors in chat → then `browser_highlight` → `browser_move_cursor` / `browser_click(animate_cursor: true)` → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
+
 ### Why LLM-Powered Triage
 
 When a drill fails in `triage` mode, an LLM analyzes the failure context and classifies it as:

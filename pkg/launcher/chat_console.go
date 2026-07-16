@@ -257,6 +257,13 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Printf("%sSuite %q not found: %v%s\n", ColorYellow, suiteName, err, ColorReset)
 				continue
 			}
+			if !adrill.IsTutorialSuite(suite) {
+				fmt.Printf("%sSuite %q is a regular drill suite, not a tutorial suite. "+
+					"Do not mix tutorial drills into smoke/CI suites. "+
+					"Run /tutorial and copy this suite's infra into a new sibling suite (e.g. %s-tutorial).%s\n",
+					ColorYellow, suiteName, suiteName, ColorReset)
+				continue
+			}
 			suiteContext := adrill.BuildSuiteContext(suite)
 			addPrompt := tools.GetTutorialAddPrompt(suiteName, suiteContext)
 			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(addPrompt)
@@ -532,7 +539,7 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /drill       - Create a drill suite with guided wizard")
 				fmt.Println("  /drill-add   - Add new drills to an existing suite")
 				fmt.Println("  /tutorial    - Create a tutorial (narrated) drill with guided wizard")
-				fmt.Println("  /tutorial-add - Add tutorial drills to an existing suite")
+				fmt.Println("  /tutorial-add - Add tutorial drills to an existing tutorial suite")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /authorize   - Authorize a device to access Studio (usage: /authorize CODE)")

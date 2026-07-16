@@ -578,7 +578,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /tutorial-add <suite>: add tutorial drills to an existing suite
+	// /tutorial-add <suite>: add tutorial drills to an existing tutorial suite only
 	if strings.HasPrefix(msg, "/tutorial-add ") {
 		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial-add"))
 		suiteName, suiteContext, err := resolveTutorialAddContext(r.Context(), flowStoreFromRequest(r), suiteName)
@@ -1343,7 +1343,7 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				"- `/drill [hint]` — Create a drill suite with guided wizard\n" +
 				"- `/drill-add <suite>` — Add new drills to an existing suite\n" +
 				"- `/tutorial [hint]` — Create a tutorial (narrated) drill with guided wizard\n" +
-				"- `/tutorial-add <suite>` — Add tutorial drills to an existing suite\n" +
+				"- `/tutorial-add <suite>` — Add tutorial drills to an existing *tutorial* suite\n" +
 				"- `/help` — Show this help message",
 		})
 

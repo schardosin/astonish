@@ -30,6 +30,8 @@ func resolveDrillAddWizard(ctx context.Context, fs store.FlowStore, suiteName st
 }
 
 // resolveTutorialAddContext loads suite context for /tutorial-add.
+// Only suites that already contain tutorial drills are allowed — never append
+// tutorial drills into a regular smoke/CI suite.
 func resolveTutorialAddContext(ctx context.Context, fs store.FlowStore, suiteName string) (name, suiteContext string, err error) {
 	suiteName = strings.TrimSpace(suiteName)
 	if suiteName == "" {
@@ -41,6 +43,15 @@ func resolveTutorialAddContext(ctx context.Context, fs store.FlowStore, suiteNam
 	suite, err := adrill.LoadSuiteFromStore(fs, ctx, suiteName)
 	if err != nil {
 		return "", "", fmt.Errorf("Suite %q not found: %v", suiteName, err)
+	}
+	if !adrill.IsTutorialSuite(suite) {
+		return "", "", fmt.Errorf(
+			"Suite %q is a regular drill suite, not a tutorial suite. "+
+				"Do not mix tutorial drills into smoke/CI suites. "+
+				"Run /tutorial and copy this suite's template/start script/credentials into a new sibling suite (e.g. %s-tutorial), "+
+				"or use /tutorial-add on an existing tutorial suite",
+			suiteName, suiteName,
+		)
 	}
 	return suiteName, adrill.BuildSuiteContext(suite), nil
 }

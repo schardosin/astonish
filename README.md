@@ -5,13 +5,14 @@
 
 ### AI agent platform that makes your whole team smarter
 
-*When one person solves a problem, everyone benefits. Multi-tenant. Three-tier memory. Enterprise-ready. Built in Go.*
+_When one person solves a problem, everyone benefits. Multi-tenant. Three-tier memory. Enterprise-ready. Built in Go._
 
 [![Documentation](https://img.shields.io/badge/Documentation-Astonish-purple.svg)](https://sap.github.io/astonish/)
 [![Lint](https://github.com/SAP/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/SAP/astonish/actions/workflows/lint.yml)
 [![Build Status](https://github.com/SAP/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/SAP/astonish/actions/workflows/build.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Go Report Card](https://goreportcard.com/badge/github.com/SAP/astonish)](https://goreportcard.com/report/github.com/SAP/astonish)
+[![REUSE status](https://api.reuse.software/badge/github.com/SAP/astonish)](https://api.reuse.software/info/github.com/SAP/astonish)
 
 </div>
 
@@ -65,11 +66,11 @@ astonish platform org invite --team backend bob@company.com
 
 **Three-Tier Memory.** Personal, team, and org-level knowledge searched together with intelligent weighting. Hybrid search powered by pgvector + keyword matching. When someone on your team documents a solution, it surfaces automatically for anyone who hits the same problem — no manual knowledge-base maintenance needed.
 
-| Tier | Scope | Weight | Examples |
-|------|-------|--------|----------|
-| Personal | Your sessions only | 1.2x | Your debugging notes, personal preferences |
-| Team | Shared within team | 1.0x | Team runbooks, shared solutions, conventions |
-| Organization | All teams in org | 0.8x | Company-wide policies, architecture decisions |
+| Tier         | Scope              | Weight | Examples                                      |
+| ------------ | ------------------ | ------ | --------------------------------------------- |
+| Personal     | Your sessions only | 1.2x   | Your debugging notes, personal preferences    |
+| Team         | Shared within team | 1.0x   | Team runbooks, shared solutions, conventions  |
+| Organization | All teams in org   | 0.8x   | Company-wide policies, architecture decisions |
 
 **Cascading Defaults.** AI providers, MCP server configurations, skills, and sandbox templates cascade from platform to org to team to personal. Teams get sensible defaults from day one while individuals can override anything. Admins set guardrails without limiting flexibility.
 
@@ -92,10 +93,10 @@ Master Key (KEK)  →  Per-Org DEK  →  Credential Data (AES-256-GCM)
 
 **Per-Team Sandboxes.** Each organization gets network-isolated execution environments. Two backends supported:
 
-| Backend | Isolation | Use Case |
-|---------|-----------|----------|
-| **Incus** | Per-org bridge networks, LXC containers | Self-hosted, bare metal |
-| **Kubernetes** | NetworkPolicies, org/team pod labels | Cloud-native, scalable |
+| Backend        | Isolation                               | Use Case                |
+| -------------- | --------------------------------------- | ----------------------- |
+| **Incus**      | Per-org bridge networks, LXC containers | Self-hosted, bare metal |
+| **Kubernetes** | NetworkPolicies, org/team pod labels    | Cloud-native, scalable  |
 
 Team admins customize container templates and get terminal access for configuration. Sandbox templates cascade: personal > team > org > global.
 
@@ -212,18 +213,18 @@ astonish studio    # Opens at http://localhost:9393
 
 ## Supported AI Providers
 
-| Provider | Type | Notes |
-|----------|------|-------|
-| **OpenRouter** | Cloud | 100+ models with one API key |
-| **OpenAI** | Cloud | GPT-4o, o1, o3 |
-| **Anthropic** | Cloud | Claude Opus, Sonnet, Haiku |
-| **Google Gemini** | Cloud | Gemini Pro, Flash |
-| **Groq** | Cloud | Ultra-fast inference |
-| **xAI** | Cloud | Grok models |
-| **LiteLLM** | Cloud/Local | Unified interface for 100+ providers |
-| **Ollama** | Local | Self-hosted open models |
-| **LM Studio** | Local | Self-hosted with GUI |
-| **SAP AI Core** | Cloud | SAP enterprise AI |
+| Provider          | Type        | Notes                                |
+| ----------------- | ----------- | ------------------------------------ |
+| **OpenRouter**    | Cloud       | 100+ models with one API key         |
+| **OpenAI**        | Cloud       | GPT-4o, o1, o3                       |
+| **Anthropic**     | Cloud       | Claude Opus, Sonnet, Haiku           |
+| **Google Gemini** | Cloud       | Gemini Pro, Flash                    |
+| **Groq**          | Cloud       | Ultra-fast inference                 |
+| **xAI**           | Cloud       | Grok models                          |
+| **LiteLLM**       | Cloud/Local | Unified interface for 100+ providers |
+| **Ollama**        | Local       | Self-hosted open models              |
+| **LM Studio**     | Local       | Self-hosted with GUI                 |
+| **SAP AI Core**   | Cloud       | SAP enterprise AI                    |
 
 Configure via `astonish setup` or Studio Settings. In platform mode, provider defaults cascade from org to team to individual.
 
@@ -304,3 +305,9 @@ Built on [Google's Agent Development Kit (ADK)](https://github.com/google/adk-go
 <div align="center">
 <b><a href="https://github.com/SAP/astonish">Star us on GitHub</a></b>
 </div>
+
+## Licensing
+
+Copyright 2026 SAP SE or an SAP affiliate company and astonish contributors. Please see our [LICENSE](LICENSE) for copyright and license information. Detailed information including third-party components and their licensing/copyright information is available [via the REUSE tool](https://api.reuse.software/info/github.com/SAP/astonish).
+
+This project was originally developed and maintained by [schardosin](https://github.com/schardosin). Since 2026-07-15, Astonish has been maintained by SAP.

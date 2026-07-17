@@ -11,7 +11,6 @@ _When one person solves a problem, everyone benefits. Multi-tenant. Three-tier m
 [![Lint](https://github.com/SAP/astonish/actions/workflows/lint.yml/badge.svg)](https://github.com/SAP/astonish/actions/workflows/lint.yml)
 [![Build Status](https://github.com/SAP/astonish/actions/workflows/build.yml/badge.svg)](https://github.com/SAP/astonish/actions/workflows/build.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/SAP/astonish)](https://goreportcard.com/report/github.com/SAP/astonish)
 [![REUSE status](https://api.reuse.software/badge/github.com/SAP/astonish)](https://api.reuse.software/info/github.com/SAP/astonish)
 
 <br>

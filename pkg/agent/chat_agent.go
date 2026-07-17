@@ -108,7 +108,8 @@ type ChatAgent struct {
 	traceHistory         map[string][]*ExecutionTrace // keyed by session ID
 	pendingDistill       map[string]*distillPreview   // keyed by session ID
 	pendingDistillReview map[string]*DistillReview    // keyed by session ID — interactive review state
-	traceMu              sync.Mutex                   // protects traceHistory, pendingDistill, and pendingDistillReview
+	pendingTutorialBP    map[string]*TutorialBlueprintPending
+	traceMu              sync.Mutex // protects traceHistory, pendingDistill, pendingDistillReview, pendingTutorialBP
 
 	// Image side-channel: images stripped from tool results before they
 	// enter session history, available for channels to deliver to users.
@@ -176,15 +177,15 @@ type distillPreview struct {
 // DistillReview holds the state of an interactive distill review session.
 // The user can request modifications until they're satisfied, then save.
 type DistillReview struct {
-	YAML            string            // Current YAML draft
-	FlowName        string            // Suggested flow name
-	Description     string            // Flow description
-	Tags            []string          // Flow tags
-	Explanation     string            // Human-readable explanation
-	Traces          []*ExecutionTrace // Original traces (for context in modifications)
-	Modifications   []string          // History of user change requests
-	LastDryRunOutput string           // Output from last test run (for modification context)
-	LastDryRunError  string           // Error from last test run
+	YAML             string            // Current YAML draft
+	FlowName         string            // Suggested flow name
+	Description      string            // Flow description
+	Tags             []string          // Flow tags
+	Explanation      string            // Human-readable explanation
+	Traces           []*ExecutionTrace // Original traces (for context in modifications)
+	Modifications    []string          // History of user change requests
+	LastDryRunOutput string            // Output from last test run (for modification context)
+	LastDryRunError  string            // Error from last test run
 }
 
 // DistillSession identifies a session for distillation, providing the
@@ -216,6 +217,7 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		traceHistory:         make(map[string][]*ExecutionTrace),
 		pendingDistill:       make(map[string]*distillPreview),
 		pendingDistillReview: make(map[string]*DistillReview),
+		pendingTutorialBP:    make(map[string]*TutorialBlueprintPending),
 		activeApps:           make(map[string]*ActiveApp),
 	}
 }
@@ -228,6 +230,95 @@ func (c *ChatAgent) RegisterSearchToolsResults(toolNames []string) {
 	c.searchToolsMu.Lock()
 	defer c.searchToolsMu.Unlock()
 	c.searchToolsResults = append(c.searchToolsResults, toolNames...)
+}
+
+// AutoInjectMissingToolCallback returns an OnToolErrorCallback that recovers
+// when the LLM calls a tool that exists in ToolIndex but was not loaded into
+// the current request. Under ADK 1.5, missing tools surface as FunctionResponse
+// errors (not hard Run aborts); this callback registers the tool for injection
+// on the next LLM round and tells the model to retry with the same arguments.
+//
+// The tool is not executed here — that would bypass BeforeTool/AfterTool
+// (credentials, secrets, redaction, tracing). Injection + retry uses the
+// normal callTool path on the next step.
+func (c *ChatAgent) AutoInjectMissingToolCallback() llmagent.OnToolErrorCallback {
+	return autoInjectMissingToolCallback(c.ToolIndex, c.RegisterSearchToolsResults, nil)
+}
+
+// autoInjectMissingToolCallback builds the shared OnToolErrorCallback used by
+// ChatAgent and sub-agents. register records names for DynamicToolInjectionCallback
+// (or the child equivalent). exclude skips tools that must not be injected
+// (e.g. excludedChildTools).
+func autoInjectMissingToolCallback(
+	toolIndex *ToolIndex,
+	register func([]string),
+	exclude map[string]bool,
+) llmagent.OnToolErrorCallback {
+	return func(ctx agent.ToolContext, t tool.Tool, _ map[string]any, err error) (map[string]any, error) {
+		if toolIndex == nil || register == nil || t == nil || !isToolNotFoundError(err, t.Name()) {
+			return nil, nil // let ADK keep its default not-found response
+		}
+
+		name := t.Name()
+		if exclude != nil && exclude[name] {
+			return nil, nil
+		}
+		if !canAutoInjectTool(ctx, toolIndex, name) {
+			return nil, nil
+		}
+
+		register([]string{name})
+		slog.Debug("auto-injected missing tool for next LLM call",
+			"component", "chat", "tool", name)
+
+		return map[string]any{
+			"error": fmt.Sprintf(
+				"Tool %q exists but was not loaded for this turn. "+
+					"It has been injected into the session — call it again with the same arguments.",
+				name,
+			),
+		}, nil
+	}
+}
+
+// isToolNotFoundError reports whether err is ADK's tool-not-found error for toolName.
+// Matches ADK 1.5's "tool 'X' not found" FunctionResponse path and the legacy
+// hard-error form "unknown tool:".
+func isToolNotFoundError(err error, toolName string) bool {
+	if err == nil || toolName == "" {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, fmt.Sprintf("tool '%s' not found", toolName)) {
+		return true
+	}
+	if strings.Contains(msg, "unknown tool:") && strings.Contains(msg, toolName) {
+		return true
+	}
+	return false
+}
+
+// canAutoInjectTool reports whether toolName may be injected from ToolIndex
+// for the current request context (MCP access + team disabled-tool list).
+func canAutoInjectTool(ctx context.Context, toolIndex *ToolIndex, toolName string) bool {
+	if toolIndex == nil || toolName == "" {
+		return false
+	}
+	entry := toolIndex.GetToolEntry(toolName)
+	if entry == nil || entry.Tool == nil {
+		return false
+	}
+	for _, disabled := range store.DisabledToolsFromContext(ctx) {
+		if disabled == toolName {
+			return false
+		}
+	}
+	if serverName, isMCP := mcpServerNameFromGroup(entry.GroupName); isMCP {
+		if !isMCPServerAccessible(ctx, serverName) {
+			return false
+		}
+	}
+	return true
 }
 
 // DynamicToolInjectionCallback returns a BeforeModelCallback that injects

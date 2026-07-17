@@ -244,6 +244,60 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 			break
 		}
 
+		// /tutorial-drill-add <suite> (alias: /tutorial-add)
+		if strings.HasPrefix(input, "/tutorial-drill-add") || strings.HasPrefix(input, "/tutorial-add") {
+			prefix := "/tutorial-drill-add"
+			if strings.HasPrefix(input, "/tutorial-add") && !strings.HasPrefix(input, "/tutorial-drill-add") {
+				prefix = "/tutorial-add"
+			}
+			suiteName := strings.TrimSpace(strings.TrimPrefix(input, prefix))
+			if suiteName == "" {
+				fmt.Printf("%sUsage: /tutorial-drill-add <suite_name>%s\n", ColorYellow, ColorReset)
+				continue
+			}
+			dirs := adrill.DefaultDrillDirs()
+			suite, err := adrill.FindSuite(dirs, suiteName)
+			if err != nil {
+				fmt.Printf("%sSuite %q not found: %v%s\n", ColorYellow, suiteName, err, ColorReset)
+				continue
+			}
+			if !adrill.IsTutorialSuite(suite) {
+				fmt.Printf("%sSuite %q is a regular drill suite, not a tutorial suite. "+
+					"Do not mix tutorial drills into smoke/CI suites. "+
+					"Run /tutorial-drill and copy this suite's infra into a new sibling suite (e.g. %s-tutorial).%s\n",
+					ColorYellow, suiteName, suiteName, ColorReset)
+				continue
+			}
+			suiteContext := adrill.BuildSuiteContext(suite)
+			addPrompt := tools.GetTutorialAddPrompt(suiteName, suiteContext)
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(addPrompt)
+			fmt.Printf("%sStarting tutorial-drill-add wizard for suite %q (%d existing drills)...%s\n\n",
+				ColorCyan, suiteName, len(suite.Tests), ColorReset)
+			input = fmt.Sprintf("I'd like to add new tutorial drills to the %q suite.", suiteName)
+		}
+
+		// /tutorial-drill [hint] (alias: /tutorial) — exclude *-add variants
+		if (input == "/tutorial-drill" || strings.HasPrefix(input, "/tutorial-drill ") ||
+			input == "/tutorial" || strings.HasPrefix(input, "/tutorial ")) &&
+			!strings.HasPrefix(input, "/tutorial-drill-add") &&
+			!strings.HasPrefix(input, "/tutorial-add") {
+			hint := ""
+			switch {
+			case strings.HasPrefix(input, "/tutorial-drill"):
+				hint = strings.TrimSpace(strings.TrimPrefix(input, "/tutorial-drill"))
+			default:
+				hint = strings.TrimSpace(strings.TrimPrefix(input, "/tutorial"))
+			}
+			wizardPrompt := tools.GetTutorialWizardPrompt()
+			chatAgent.SystemPrompt.SessionContext = agent.EscapeCurlyPlaceholders(wizardPrompt)
+			fmt.Printf("%sStarting tutorial drill creation wizard...%s\n\n", ColorCyan, ColorReset)
+			if hint != "" {
+				input = fmt.Sprintf("I'd like to create a tutorial drill. Here's the flow to teach: %s", hint)
+			} else {
+				input = "I'd like to create a tutorial drill for my product UI."
+			}
+		}
+
 		// /drill-add <suite>: add new drills to an existing suite
 		if strings.HasPrefix(input, "/drill-add") {
 			suiteName := strings.TrimSpace(strings.TrimPrefix(input, "/drill-add"))
@@ -497,6 +551,8 @@ func RunChatConsole(ctx context.Context, cfg *ChatConsoleConfig) error {
 				fmt.Println("  /distill     - Distill the last task into a reusable flow")
 				fmt.Println("  /drill       - Create a drill suite with guided wizard")
 				fmt.Println("  /drill-add   - Add new drills to an existing suite")
+				fmt.Println("  /tutorial-drill     - Create a tutorial (narrated) drill with guided wizard")
+				fmt.Println("  /tutorial-drill-add - Add tutorial drills to an existing tutorial suite")
 				fmt.Println("  /fleet       - Show available fleets and CLI commands")
 				fmt.Println("  /fleet-plan  - Create a fleet plan (use Studio UI for guided conversation)")
 				fmt.Println("  /authorize   - Authorize a device to access Studio (usage: /authorize CODE)")

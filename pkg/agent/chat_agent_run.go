@@ -295,8 +295,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			// stashed in the ChatAgent's image queue for channel delivery.
 			redactedOutput = c.extractAndStripImages(redactedOutput)
 
-			// Capture file artifacts from write_file, edit_file, and
-			// browser_stop_recording tool calls. Paths are stashed for UI delivery.
+			// Capture file artifacts from write_file, edit_file,
+			// browser_stop_recording, and run_drill (tutorial scene clips).
+			// Paths are stashed for UI delivery.
 			// Only capture on success — failed writes must not emit artifact events,
 			// otherwise the live SSE pipeline and session-detail reconstruction diverge.
 			if err == nil {
@@ -314,6 +315,8 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 					if path, ok := redactedOutput["path"].(string); ok && path != "" {
 						c.CaptureFileArtifact(resolveAbsPath(path), t.Name())
 					}
+				case "run_drill":
+					captureRunDrillArtifacts(c.CaptureFileArtifact, redactedOutput)
 				}
 			}
 
@@ -554,6 +557,12 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			AfterToolCallbacks: []llmagent.AfterToolCallback{
 				afterToolCallback,
 			},
+			// Auto-inject ToolIndex-known tools that the LLM called before they
+			// were loaded this turn (ADK 1.5 surfaces these as FunctionResponse
+			// errors; the next LLM round gets the tool via dynamic injection).
+			OnToolErrorCallbacks: []llmagent.OnToolErrorCallback{
+				c.AutoInjectMissingToolCallback(),
+			},
 		})
 		if err != nil {
 			yield(nil, fmt.Errorf("failed to create chat llmagent: %w", err))
@@ -561,7 +570,9 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		}
 
 		// Run the llmagent with retry for transient errors (429, 502, 503, etc.)
-		// Also handles unknown tool errors (model hallucinated a tool name).
+		// Also handles legacy unknown-tool hard aborts (pre-ADK-1.5). Under ADK 1.5,
+		// missing tools are FunctionResponses handled by OnToolErrorCallbacks
+		// (AutoInjectMissingToolCallback); this branch is a safety net only.
 		const maxRetries = 3
 		const maxUnknownToolRetries = 2 // separate cap for tool name hallucinations
 		toolCallCount := 0
@@ -572,7 +583,7 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 		contextOverflowRetried := false // only retry context overflow once
 
 		// Track the last FunctionCall parts seen so we can build synthetic
-		// error responses when ADK rejects an unknown tool name.
+		// error responses if ADK still hard-aborts on an unknown tool name.
 		var lastFunctionCalls []*genai.FunctionCall
 
 		for attempt := range maxRetries {
@@ -807,4 +818,45 @@ func resolveAbsPath(path string) string {
 		return abs
 	}
 	return path
+}
+
+// captureRunDrillArtifacts registers tutorial scene MP4s and scene_manifest.json
+// from a successful run_drill tool response onto the session Files list.
+func captureRunDrillArtifacts(capture func(path, toolName string), output map[string]any) {
+	if capture == nil || output == nil {
+		return
+	}
+	for _, p := range extractRunDrillArtifactPaths(output) {
+		capture(resolveAbsPath(p), "run_drill")
+	}
+}
+
+// extractRunDrillArtifactPaths reads artifact_paths and/or manifest_path from
+// a run_drill tool response map (JSON-decoded values may be []any or []string).
+func extractRunDrillArtifactPaths(output map[string]any) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	switch v := output["artifact_paths"].(type) {
+	case []string:
+		for _, p := range v {
+			add(p)
+		}
+	case []any:
+		for _, item := range v {
+			if p, ok := item.(string); ok {
+				add(p)
+			}
+		}
+	}
+	if p, ok := output["manifest_path"].(string); ok {
+		add(p)
+	}
+	return out
 }

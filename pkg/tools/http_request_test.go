@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -612,5 +615,94 @@ func TestHttpRequest_PostWithBody(t *testing.T) {
 	}
 	if receivedBody != `{"name": "test"}` {
 		t.Errorf("expected JSON body, got %q", receivedBody)
+	}
+}
+
+func TestHttpRequest_BodyPath(t *testing.T) {
+	httpReqSkipSSRF = true
+	defer func() { httpReqSkipSSRF = false }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "payload.bin")
+	if err := os.WriteFile(path, []byte("raw-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotBody []byte
+	var gotCT string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	_, err := HttpRequest(nil, HttpRequestArgs{
+		URL:         srv.URL,
+		Method:      "POST",
+		BodyPath:    path,
+		ContentType: "application/octet-stream",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(gotBody) != "raw-bytes" {
+		t.Fatalf("body = %q", gotBody)
+	}
+	if gotCT != "application/octet-stream" {
+		t.Fatalf("Content-Type = %q", gotCT)
+	}
+}
+
+func TestHttpRequest_Multipart(t *testing.T) {
+	httpReqSkipSSRF = true
+	defer func() { httpReqSkipSSRF = false }()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "clip.mp4")
+	if err := os.WriteFile(path, []byte("fake-mp4"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotCT string
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotCT = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"asset-1"}`))
+	}))
+	defer srv.Close()
+
+	res, err := HttpRequest(nil, HttpRequestArgs{
+		URL:    srv.URL,
+		Method: "POST",
+		Multipart: []HttpMultipartPart{
+			{Name: "title", Value: "demo"},
+			{Name: "file", FilePath: path, Filename: "demo.mp4", ContentType: "video/mp4"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(gotCT, "multipart/form-data") {
+		t.Fatalf("Content-Type = %q", gotCT)
+	}
+	if !bytes.Contains(gotBody, []byte("fake-mp4")) || !bytes.Contains(gotBody, []byte("demo")) {
+		t.Fatalf("multipart body missing parts: %q", gotBody)
+	}
+	if res.StatusCode != 200 {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+}
+
+func TestHttpRequest_MutuallyExclusiveBody(t *testing.T) {
+	_, err := HttpRequest(nil, HttpRequestArgs{
+		URL:      "https://example.com",
+		Body:     "{}",
+		BodyPath: "/tmp/x",
+	})
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("expected mutual exclusion error, got %v", err)
 	}
 }

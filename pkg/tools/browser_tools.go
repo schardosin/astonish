@@ -49,9 +49,45 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 	// --- Interaction ---
 
 	clickTool, err := functiontool.New(functiontool.Config{
-		Name:        "browser_click",
-		Description: "Click an element on the page. Use a ref from browser_snapshot.",
+		Name: "browser_click",
+		Description: "Click an element on the page. Use a ref from browser_snapshot. " +
+			"Set animate_cursor=true for tutorial recordings (moves the visible demo cursor first).",
 	}, safeBrowserFunc(BrowserClick(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	highlightTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_highlight",
+		Description: "Draw a visible highlight overlay around an element (ref or CSS selector). " +
+			"Optional label/color/duration_ms. Use for tutorial scene focus boxes.",
+	}, safeBrowserFunc(BrowserHighlight(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	clearHighlightsTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_clear_highlights",
+		Description: "Remove all highlight overlays drawn by browser_highlight.",
+	}, safeBrowserFunc(BrowserClearHighlights(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	moveCursorTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_move_cursor",
+		Description: "Move the visible demo cursor (and real mouse) to a ref, CSS selector, or x/y. " +
+			"Enables the demo cursor overlay for tutorial recordings.",
+	}, safeBrowserFunc(BrowserMoveCursor(mgr, refs)))
+	if err != nil {
+		return nil, err
+	}
+
+	fullscreenTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_fullscreen",
+		Description: "Enter or exit Chromium window fullscreen (CDP best-effort) before recording. " +
+			"Minimizes browser chrome; X11grab still captures the display.",
+	}, safeBrowserFunc(BrowserFullscreen(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -168,6 +204,16 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		Name:        "browser_wait_for",
 		Description: "Wait for a condition: text to appear/disappear, CSS selector visible, URL match, page load state, or JS expression truthy. Avoid state=\"networkidle\" on SPAs (persistent WebSocket connections cause full timeout).",
 	}, safeBrowserFunc(BrowserWaitFor(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	pauseTool, err := functiontool.New(functiontool.Config{
+		Name: "browser_pause",
+		Description: "Pause for a fixed duration in milliseconds (max 120000). Use for tutorial " +
+			"pacing so narration can finish before the next UI action. Prefer browser_wait_for " +
+			"when waiting for page state.",
+	}, safeBrowserFunc(BrowserPause(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -308,8 +354,40 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 
 	requestHumanTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_request_human",
-		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms). Returns immediately — the chat stays interactive so the user can give you instructions while watching the browser. The user clicks Done when they no longer need visual access.",
+		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms, or demonstrating a UI flow to capture). Returns immediately — the chat stays interactive. Set capture_actions=true to record DOM clicks/typing for draft_drill_from_action_log. The user clicks Done when finished (stops capture if started for handoff).",
 	}, safeBrowserFunc(BrowserRequestHuman(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	startActionCaptureTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_start_action_capture",
+		Description: "Inject a DOM action recorder that logs clicks, form changes, Enter/Tab, and navigations to an in-page log (for tutorial authoring).",
+	}, safeBrowserFunc(BrowserStartActionCapture(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	stopActionCaptureTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_stop_action_capture",
+		Description: "Stop DOM action capture. The action log is retained until browser_clear_action_log.",
+	}, safeBrowserFunc(BrowserStopActionCapture(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	getActionLogTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_get_action_log",
+		Description: "Return the captured DOM action log as JSON events. Optionally clear after reading.",
+	}, safeBrowserFunc(BrowserGetActionLog(mgr)))
+	if err != nil {
+		return nil, err
+	}
+
+	clearActionLogTool, err := functiontool.New(functiontool.Config{
+		Name:        "browser_clear_action_log",
+		Description: "Clear the in-page DOM action capture log.",
+	}, safeBrowserFunc(BrowserClearActionLog(mgr)))
 	if err != nil {
 		return nil, err
 	}
@@ -349,18 +427,20 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 		navigateTool, navigateBackTool,
 		// Interaction
 		clickTool, typeTool, hoverTool, dragTool, pressKeyTool, selectOptionTool, fillFormTool,
+		highlightTool, clearHighlightsTool, moveCursorTool,
 		// Observation
 		snapshotTool, screenshotTool, consoleTool, networkTool,
 		// Management
-		tabsTool, closeTool, resizeTool, waitForTool, fileUploadTool, handleDialogTool,
+		tabsTool, closeTool, resizeTool, fullscreenTool, waitForTool, pauseTool, fileUploadTool, handleDialogTool,
 		// Advanced
 		evaluateTool, runCodeTool, pdfTool, responseBodyTool,
 		// State & Emulation
 		cookiesTool, storageTool,
 		setOfflineTool, setHeadersTool, setCredentialsTool,
 		setGeolocationTool, setMediaTool, setTimezoneTool, setLocaleTool, setDeviceTool,
-		// Human-in-the-loop
+		// Human-in-the-loop + action capture
 		requestHumanTool,
+		startActionCaptureTool, stopActionCaptureTool, getActionLogTool, clearActionLogTool,
 		// Session recording
 		startRecordingTool, stopRecordingTool, recordingStatusTool,
 	}, nil

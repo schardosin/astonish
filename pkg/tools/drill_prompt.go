@@ -624,6 +624,30 @@ Show the suite YAML to the user and ask for confirmation before proceeding.
 
 For each test scenario from Step 2, generate a test YAML.
 
+### Path: Human capture (recommended for UI navigation flows)
+
+When a drill is mostly "click through the app and verify what I see", offer
+to capture the user's clicks instead of inventing steps yourself:
+
+1. Prep the stack and open the app (suite base_url / home) with browser_navigate.
+2. Tell the user: "I can share the browser (KasmVNC); you click the flow;
+   I'll capture the steps."
+3. Call browser_request_human(capture_actions: true). Wait until they click Done.
+4. Call browser_get_action_log, then draft_drill_from_action_log with the
+   actions JSON. That tool returns a MODE-NEUTRAL skeleton (steps only —
+   no mode, narration, record, or asserts).
+5. Specialize the skeleton into a TEST drill:
+   - Drop noise / accidental clicks; keep the path that proves the scenario.
+   - Prefer stable CSS selectors (data-testid, roles) already in the capture.
+   - Add assert (contains / element_exists, preferably source: snapshot) only
+     for content you have verified with browser_snapshot. NEVER invent asserts.
+   - Add drill_config tags/timeouts as for any other test drill.
+6. Show the finished YAML, get confirmation, then validate_drill / save_drill.
+
+You may still author steps yourself with browser tools when capture is a poor
+fit (API-only drills, purely scripted setup). Prefer capture when the user
+already knows the click path.
+
 ### Test YAML Format:
 
     description: "Human-readable drill description"
@@ -1195,6 +1219,10 @@ or modify existing drills. Only create new drill YAML files.
 ## BROWSER DRILL RULES (for web app suites)
 
 If the suite tests a web application:
+- Prefer Path: Human capture for UI navigation scenarios: offer
+  browser_request_human(capture_actions: true), then browser_get_action_log →
+  draft_drill_from_action_log. The draft is a MODE-NEUTRAL step skeleton —
+  you must add asserts from verified snapshots and drop noise before save.
 - For interaction (clicking, typing): use browser_run_code with CSS selectors
   for deterministic DOM manipulation. Keep JS minimal: one DOM action, return
   a status string.

@@ -21,9 +21,10 @@ const elementInteractionTimeout = 30 * time.Second
 // --- browser_click ---
 
 type BrowserClickArgs struct {
-	Ref         string `json:"ref" jsonschema:"Element ref from a snapshot (e.g. ref5)"`
-	Button      string `json:"button,omitempty" jsonschema:"Mouse button: left (default), right, or middle"`
-	DoubleClick bool   `json:"doubleClick,omitempty" jsonschema:"Double-click instead of single click"`
+	Ref           string `json:"ref" jsonschema:"Element ref from a snapshot (e.g. ref5)"`
+	Button        string `json:"button,omitempty" jsonschema:"Mouse button: left (default), right, or middle"`
+	DoubleClick   bool   `json:"doubleClick,omitempty" jsonschema:"Double-click instead of single click"`
+	AnimateCursor bool   `json:"animate_cursor,omitempty" jsonschema:"Move the visible demo cursor to the element before clicking (tutorial recordings)"`
 }
 
 type BrowserClickResult struct {
@@ -67,7 +68,19 @@ func BrowserClick(mgr *browser.Manager, refs *browser.RefMap) func(tool.Context,
 		// Subtle random delay before clicking to break robotic timing patterns.
 		browser.HumanDelay(50, 200)
 
-		if err := el.Click(button, clickCount); err != nil {
+		if args.AnimateCursor {
+			center, err := el.Interactable()
+			if err != nil {
+				return BrowserClickResult{}, fmt.Errorf("element not interactable: %w", err)
+			}
+			if err := mgr.MoveMouseAnimated(pg, *center, 12); err != nil {
+				return BrowserClickResult{}, fmt.Errorf("animate cursor: %w", err)
+			}
+			browser.HumanDelay(80, 220)
+			if err := pg.Mouse.Click(button, clickCount); err != nil {
+				return BrowserClickResult{}, fmt.Errorf("click failed: %w", err)
+			}
+		} else if err := el.Click(button, clickCount); err != nil {
 			return BrowserClickResult{}, fmt.Errorf("click failed: %w", err)
 		}
 

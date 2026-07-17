@@ -81,6 +81,20 @@ export function useAuth(isPlatformMode: boolean) {
     return () => { cancelled = true }
   }, [isPlatformMode])
 
+  // Clear local auth state without calling logout (e.g. refresh cookie gone).
+  const markSessionExpired = useCallback(() => {
+    setState(prev => ({
+      ...prev,
+      isAuthenticated: false,
+      user: null,
+      org: null,
+      orgs: null,
+      team: null,
+      pendingVerificationEmail: null,
+      noTeamMembership: false,
+    }))
+  }, [])
+
   // Set up periodic token refresh (every 12 minutes for 15-min tokens)
   useEffect(() => {
     if (!isPlatformMode || !state.isAuthenticated) return
@@ -90,11 +104,26 @@ export function useAuth(isPlatformMode: boolean) {
         await refreshToken()
       } catch {
         // Refresh failed — user needs to re-login
-        setState(prev => ({ ...prev, isAuthenticated: false, user: null, org: null, orgs: null, team: null, pendingVerificationEmail: null, noTeamMembership: false }))
+        markSessionExpired()
       }
     }, 12 * 60 * 1000) // 12 minutes
 
     return () => clearInterval(interval)
+  }, [isPlatformMode, state.isAuthenticated, markSessionExpired])
+
+  // Refresh when a backgrounded tab becomes visible again. Browsers often
+  // throttle setInterval, so the 12-minute timer may miss a 15-minute expiry.
+  useEffect(() => {
+    if (!isPlatformMode || !state.isAuthenticated) return
+
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      refreshToken().catch(() => {
+        // Benign: teamFetch's 401→refresh path is the hard fallback.
+      })
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => document.removeEventListener('visibilitychange', onVisibility)
   }, [isPlatformMode, state.isAuthenticated])
 
   const login = useCallback(async (email: string, password: string) => {
@@ -301,5 +330,6 @@ export function useAuth(isPlatformMode: boolean) {
     logout,
     refresh,
     switchOrg,
+    markSessionExpired,
   }
 }

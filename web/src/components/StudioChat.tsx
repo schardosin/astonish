@@ -8,7 +8,7 @@ import type { ChatSession, AttachmentPayload, SessionModelStatus } from '../api/
 import { startFleetSession, connectFleetStream, sendFleetMessage, stopFleetSession, fetchFleetSessions } from '../api/fleetChat'
 import type { FleetSession } from '../api/fleetChat'
 import HomePage from './HomePage'
-import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
+import type { FleetMessageItem, ChatMsg, FleetInfo, FleetStateInfo, DeferredPrompt, FleetExecutionMessage, FleetEvent, AgentMessage, ToolCallMessage, ToolResultMessage, BrowserHandoffMessage, SubTaskExecutionMessage, SubTaskEvent, SubTaskInfo, PlanMessage, PlanStepInfo, SessionArtifact, ArtifactMessage, AppPreviewMessage, AppSavedMessage, DistillPreviewMessage, DistillSavedMessage, TutorialBlueprintPreviewMessage, TutorialBlueprintApprovedMessage, TutorialSceneSlideshowMessage, UserMessage, AttachmentInfo, NetworkDenialMessage } from './chat/chatTypes'
 import { getAgentColor } from './chat/chatTypes'
 import FleetStartDialog from './chat/FleetStartDialog'
 import FleetTemplatePicker from './chat/FleetTemplatePicker'
@@ -26,6 +26,8 @@ import type { TokenUsage } from './chat/UsagePopover'
 import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
 import DistillPreviewCard from './chat/DistillPreviewCard'
+import TutorialBlueprintCard from './chat/TutorialBlueprintCard'
+import TutorialSceneSlideshowCard from './chat/TutorialSceneSlideshowCard'
 import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
 import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
@@ -34,6 +36,43 @@ import ModelCredentialBanner from './chat/ModelCredentialBanner'
 import SessionModelPicker from './chat/SessionModelPicker'
 import PreChatModelPicker from './chat/PreChatModelPicker'
 import { fileTypeFromFileName } from '../utils/artifactMedia'
+
+function normalizeBlueprintScenes(raw: unknown): TutorialBlueprintPreviewMessage['scenes'] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item: any) => ({
+    id: item?.id || '',
+    title: item?.title || '',
+    voiceover: item?.voiceover || '',
+    visual_kind: item?.visual_kind || item?.visual?.kind || '',
+    visual_description: item?.visual_description || item?.visual?.description || '',
+    duration_hint_s: item?.duration_hint_s || item?.durationHintS || undefined,
+  }))
+}
+
+function normalizeTutorialScenes(raw: unknown): TutorialSceneSlideshowMessage['scenes'] {
+  if (!Array.isArray(raw)) return []
+  return raw.map((item: any) => ({
+    id: item?.id || '',
+    voiceover: item?.voiceover || '',
+    narration: item?.narration || '',
+    visual_kind: item?.visual_kind || 'screen',
+    visual_description: item?.visual_description || '',
+    hold_ms: item?.hold_ms || undefined,
+    path: item?.path || '',
+    duration_seconds: item?.duration_seconds || undefined,
+  }))
+}
+
+function slideshowVideoPaths(messages: ChatMsg[]): Set<string> {
+  const paths = new Set<string>()
+  for (const m of messages) {
+    if (m.type !== 'tutorial_scene_slideshow') continue
+    for (const sc of (m as TutorialSceneSlideshowMessage).scenes || []) {
+      if (sc.path) paths.add(sc.path)
+    }
+  }
+  return paths
+}
 
 // Extended ChatSession with optional fleet fields coming from the sidebar
 interface SidebarSession extends ChatSession {
@@ -278,6 +317,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
     { cmd: '/drill', desc: 'Create a drill suite with guided wizard' },
     { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
+    { cmd: '/tutorial-drill', desc: 'Create a tutorial (narrated) drill with guided wizard' },
+    { cmd: '/tutorial-drill-add', desc: 'Add tutorial drills to an existing tutorial suite' },
   ], [])
 
   // Pre-compute which artifact paths should be rendered as embedded file viewers
@@ -292,6 +333,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   const embeddedArtifactPaths = useMemo(() => {
     const paths = new Set<string>()
     if (isStreaming || sessionArtifacts.length === 0) return paths
+    const slideshowPaths = slideshowVideoPaths(messages)
     // Find the last user message index — artifacts before it belong to earlier turns
     let lastUserIdx = -1
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -310,6 +352,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
       if (messages[i].type === 'agent' && !(messages[i] as AgentMessage)._streaming) {
         for (const a of sessionArtifacts) {
           if (!lastTurnArtifactPaths.has(a.path)) continue
+          if (slideshowPaths.has(a.path)) continue
           if (a.fileType === 'Video') {
             paths.add(a.path)
             continue
@@ -638,6 +681,36 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               runCommand: m.runCommand || '',
             } as DistillSavedMessage
           }
+          if (m.type === 'tutorial_blueprint_preview') {
+            return {
+              type: 'tutorial_blueprint_preview',
+              title: m.blueprintTitle || m.title || '',
+              suite: m.blueprintSuite || m.suite || '',
+              blueprintYaml: m.blueprintYaml || '',
+              scenes: normalizeBlueprintScenes(m.blueprintScenes || m.scenes),
+            } as TutorialBlueprintPreviewMessage
+          }
+          if (m.type === 'tutorial_blueprint_approved') {
+            return {
+              type: 'tutorial_blueprint_approved',
+              title: m.blueprintTitle || m.title || '',
+              suite: m.blueprintSuite || m.suite || '',
+              blueprintYaml: m.blueprintYaml || '',
+              drillYaml: m.drillYaml || '',
+              drillName: m.drillName || '',
+              content: m.content || '',
+            } as TutorialBlueprintApprovedMessage
+          }
+          if (m.type === 'tutorial_scene_slideshow') {
+            return {
+              type: 'tutorial_scene_slideshow',
+              title: m.tutorialTitle || m.title || '',
+              suite: m.tutorialSuite || m.suite || '',
+              drill: m.tutorialDrill || m.drill || '',
+              manifestPath: m.manifestPath || '',
+              scenes: normalizeTutorialScenes(m.tutorialScenes || m.scenes),
+            } as TutorialSceneSlideshowMessage
+          }
           if (m.type === 'app_preview') {
             return {
               type: 'app_preview',
@@ -895,6 +968,50 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
               tags: (data.tags as string[]) || [],
               explanation: data.explanation as string || '',
             } as DistillPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_preview':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_preview',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              scenes: normalizeBlueprintScenes(data.scenes),
+            } as TutorialBlueprintPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_approved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_approved',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              drillYaml: (data.drill_yaml as string) || '',
+              drillName: (data.drill_name as string) || '',
+              content: (data.message as string) || '',
+            } as TutorialBlueprintApprovedMessage])
+            break
+
+          case 'tutorial_scene_slideshow':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_scene_slideshow',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              drill: (data.drill as string) || '',
+              manifestPath: (data.manifest_path as string) || '',
+              scenes: normalizeTutorialScenes(data.scenes),
+            } as TutorialSceneSlideshowMessage])
             break
 
           case 'app_preview':
@@ -1445,7 +1562,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
 
     // Add user message to chat (unless it's a slash command or internal action)
-    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_')) {
+    if (!userMsg.startsWith('/') && !userMsg.startsWith('__distill_') && !userMsg.startsWith('__app_') && !userMsg.startsWith('__tutorial_blueprint_')) {
       const userChatMsg: UserMessage = { type: 'user', content: userMsg }
       if (attachmentInfos.length > 0) {
         userChatMsg.attachments = attachmentInfos
@@ -1770,33 +1887,56 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'drill_redirect':
-            // /drill [hint] command: start drill suite creation wizard
+            // /drill or /tutorial-drill [hint]: start drill/tutorial suite creation wizard
             setIsStreaming(false)
             {
               const hint = (data.hint as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
+              const wizardKind = (data.wizard_kind as string) || 'drill'
+              const pinnedGroups = (data.pinned_tool_groups as string[]) || null
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
-                const kickoff = hint
-                  ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
-                  : 'I\'d like to create a drill suite for my project.'
-                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
+                if (pinnedGroups) setActivePinnedToolGroups(pinnedGroups)
+                let kickoff: string
+                if (wizardKind === 'tutorial') {
+                  kickoff = hint
+                    ? `I'd like to create a tutorial drill. Here's the flow to teach: ${hint}`
+                    : 'I\'d like to create a tutorial drill for my product UI.'
+                } else {
+                  kickoff = hint
+                    ? `I'd like to create a drill suite. Here's what I want to test: ${hint}`
+                    : 'I\'d like to create a drill suite for my project.'
+                }
+                setPendingDrillPrompt({
+                  message: kickoff,
+                  systemContext: wizardSystemPrompt,
+                  pinnedToolGroups: pinnedGroups || undefined,
+                })
               }
             }
             break
 
           case 'drill_add_redirect':
-            // /drill-add <suite> command: start drill-add wizard for existing suite
+            // /drill-add or /tutorial-drill-add <suite>: add drills to an existing suite
             setIsStreaming(false)
             {
               const suiteName = (data.suite_name as string) || ''
               const wizardSystemPrompt = (data.wizard_system_prompt as string) || ''
+              const wizardKind = (data.wizard_kind as string) || 'drill'
+              const pinnedGroups = (data.pinned_tool_groups as string[]) || null
 
               if (wizardSystemPrompt) {
                 setActiveWizardContext(wizardSystemPrompt)
-                const kickoff = `I'd like to add new drills to the "${suiteName}" suite.`
-                setPendingDrillPrompt({ message: kickoff, systemContext: wizardSystemPrompt })
+                if (pinnedGroups) setActivePinnedToolGroups(pinnedGroups)
+                const kickoff = wizardKind === 'tutorial'
+                  ? `I'd like to add new tutorial drills to the "${suiteName}" suite.`
+                  : `I'd like to add new drills to the "${suiteName}" suite.`
+                setPendingDrillPrompt({
+                  message: kickoff,
+                  systemContext: wizardSystemPrompt,
+                  pinnedToolGroups: pinnedGroups || undefined,
+                })
               }
             }
             break
@@ -1988,6 +2128,50 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             } as DistillPreviewMessage])
             break
 
+          case 'tutorial_blueprint_preview':
+            if (streamingTextRef.current) {
+              const finalText = streamingTextRef.current
+              streamingTextRef.current = ''
+              setMessages((prev: ChatMsg[]) => {
+                const last = prev[prev.length - 1]
+                if (last && last.type === 'agent' && (last as AgentMessage)._streaming) {
+                  return [...prev.slice(0, -1), { type: 'agent', content: finalText }]
+                }
+                return prev
+              })
+            }
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_preview',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              scenes: normalizeBlueprintScenes(data.scenes),
+            } as TutorialBlueprintPreviewMessage])
+            break
+
+          case 'tutorial_blueprint_approved':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_blueprint_approved',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              blueprintYaml: (data.blueprint_yaml as string) || '',
+              drillYaml: (data.drill_yaml as string) || '',
+              drillName: (data.drill_name as string) || '',
+              content: (data.message as string) || '',
+            } as TutorialBlueprintApprovedMessage])
+            break
+
+          case 'tutorial_scene_slideshow':
+            setMessages((prev: ChatMsg[]) => [...prev, {
+              type: 'tutorial_scene_slideshow',
+              title: (data.title as string) || '',
+              suite: (data.suite as string) || '',
+              drill: (data.drill as string) || '',
+              manifestPath: (data.manifest_path as string) || '',
+              scenes: normalizeTutorialScenes(data.scenes),
+            } as TutorialSceneSlideshowMessage])
+            break
+
           case 'app_preview':
             // Finalize any streaming text first
             if (streamingTextRef.current) {
@@ -2132,9 +2316,9 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Process deferred drill prompt (set by drill_redirect SSE event)
   useEffect(() => {
     if (pendingDrillPrompt && !isStreaming) {
-      const { message, systemContext } = pendingDrillPrompt
+      const { message, systemContext, pinnedToolGroups } = pendingDrillPrompt
       setPendingDrillPrompt(null)
-      sendMessage(message, { systemContext })
+      sendMessage(message, { systemContext, pinnedToolGroups })
     }
   }, [pendingDrillPrompt, isStreaming, sendMessage])
 
@@ -2878,6 +3062,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                 const artifactMsg = msg as ArtifactMessage
                 // Suppress inline card when this artifact is embedded in the ResultCard
                 if (embeddedArtifactPaths.has(artifactMsg.path)) return null
+                if (slideshowVideoPaths(messages).has(artifactMsg.path)) return null
                 return (
                   <div key={index}>
                     <ArtifactCard
@@ -2949,6 +3134,63 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         }
                       }}
                       onCancel={() => sendMessage('__distill_cancel__')}
+                    />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_blueprint_preview') {
+                const previewMsg = msg as TutorialBlueprintPreviewMessage
+                const isLastPreview = (() => {
+                  for (let j = index + 1; j < messages.length; j++) {
+                    const m = messages[j]
+                    if (m.type === 'tutorial_blueprint_preview' || m.type === 'tutorial_blueprint_approved') return false
+                  }
+                  return true
+                })()
+                return (
+                  <div key={index}>
+                    <TutorialBlueprintCard
+                      data={previewMsg}
+                      isActive={isLastPreview}
+                      onApprove={() => sendMessage('__tutorial_blueprint_approve__')}
+                      onRequestChanges={() => {
+                        if (inputRef.current) {
+                          inputRef.current.focus()
+                          inputRef.current.placeholder = 'Describe how to revise the Scene | Voiceover | Visual blueprint...'
+                        }
+                      }}
+                      onCancel={() => sendMessage('__tutorial_blueprint_cancel__')}
+                    />
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_blueprint_approved') {
+                const approved = msg as TutorialBlueprintApprovedMessage
+                return (
+                  <div key={index} className="my-3 rounded-xl overflow-hidden w-full max-w-2xl px-4 py-3"
+                    style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)' }}>
+                    <div className="flex items-center gap-2 mb-1">
+                      <Check size={16} style={{ color: 'var(--success)' }} />
+                      <span className="text-sm font-semibold" style={{ color: 'var(--success)' }}>
+                        Blueprint approved{approved.drillName ? `: ${approved.drillName}` : ''}
+                      </span>
+                    </div>
+                    <p className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {approved.content || 'Screen scenes converted to tutorial drill YAML. Refine selectors, then validate_drill / save_drill.'}
+                    </p>
+                  </div>
+                )
+              }
+
+              if (msg.type === 'tutorial_scene_slideshow') {
+                const slideshowMsg = msg as TutorialSceneSlideshowMessage
+                return (
+                  <div key={index}>
+                    <TutorialSceneSlideshowCard
+                      data={slideshowMsg}
+                      sessionId={activeSessionId}
                     />
                   </div>
                 )

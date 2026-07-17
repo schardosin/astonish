@@ -134,12 +134,26 @@ func ValidateTest(test *LoadedTest) error {
 	if len(test.Config.Nodes) == 0 {
 		return fmt.Errorf("test %q: no nodes defined", test.Name)
 	}
-	// Validate assertions
+	if dc := test.Config.DrillConfig; dc != nil {
+		switch dc.Mode {
+		case "", "test", "tutorial":
+		default:
+			return fmt.Errorf("test %q: unknown drill_config.mode %q (want \"\", \"test\", or \"tutorial\")", test.Name, dc.Mode)
+		}
+	}
 	for _, node := range test.Config.Nodes {
 		if node.Assert != nil {
 			if err := validateAssert(node.Name, node.Assert); err != nil {
 				return fmt.Errorf("test %q: %w", test.Name, err)
 			}
+		}
+		switch node.Record {
+		case "", "start", "stop", "segment":
+		default:
+			return fmt.Errorf("test %q: node %q: unknown record %q (want \"\", \"start\", \"stop\", or \"segment\")", test.Name, node.Name, node.Record)
+		}
+		if node.HoldMs < 0 {
+			return fmt.Errorf("test %q: node %q: hold_ms must be >= 0", test.Name, node.Name)
 		}
 	}
 	return nil
@@ -338,22 +352,69 @@ func DefaultDrillDirs() []string {
 	return dirs
 }
 
+// IsTutorialSuite reports whether the suite already contains tutorial drills.
+// A suite is a tutorial suite if any drill has drill_config.mode == "tutorial"
+// or a "tutorial" tag. Regular smoke/CI suites must not receive tutorial drills.
+func IsTutorialSuite(suite *LoadedSuite) bool {
+	if suite == nil {
+		return false
+	}
+	for _, test := range suite.Tests {
+		if test.Config == nil || test.Config.DrillConfig == nil {
+			continue
+		}
+		dc := test.Config.DrillConfig
+		if dc.Mode == "tutorial" {
+			return true
+		}
+		for _, tag := range dc.Tags {
+			if strings.EqualFold(tag, "tutorial") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // BuildSuiteContext returns a formatted string describing the suite and its
-// existing drills. This is used by the /drill-add prompt to give the LLM
-// context about what already exists.
+// existing drills. This is used by the /drill-add and /tutorial-drill-add prompts
+// to give the LLM context about what already exists.
 func BuildSuiteContext(suite *LoadedSuite) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Suite: %s\n", suite.Name))
 	b.WriteString(fmt.Sprintf("Description: %s\n", suite.Config.Description))
 	b.WriteString(fmt.Sprintf("File: %s\n", suite.File))
+	if IsTutorialSuite(suite) {
+		b.WriteString("TutorialSuite: yes\n")
+	} else {
+		b.WriteString("TutorialSuite: no\n")
+	}
 
 	if suite.Config.SuiteConfig != nil {
 		sc := suite.Config.SuiteConfig
 		if sc.Template != "" {
 			b.WriteString(fmt.Sprintf("Template: %s\n", sc.Template))
 		}
+		if sc.Workspace != "" {
+			b.WriteString(fmt.Sprintf("Workspace: %s\n", sc.Workspace))
+		}
+		if sc.Branch != "" {
+			b.WriteString(fmt.Sprintf("Branch: %s\n", sc.Branch))
+		}
 		if sc.BaseURL != "" {
 			b.WriteString(fmt.Sprintf("Base URL: %s\n", sc.BaseURL))
+		}
+		if len(sc.Setup) > 0 {
+			b.WriteString("Setup:\n")
+			for _, cmd := range sc.Setup {
+				b.WriteString(fmt.Sprintf("  - %s\n", cmd))
+			}
+		}
+		if len(sc.Configure) > 0 {
+			b.WriteString("Configure:\n")
+			for _, cmd := range sc.Configure {
+				b.WriteString(fmt.Sprintf("  - %s\n", cmd))
+			}
 		}
 		if len(sc.Services) > 0 {
 			b.WriteString("Services:\n")
@@ -361,13 +422,41 @@ func BuildSuiteContext(suite *LoadedSuite) string {
 				b.WriteString(fmt.Sprintf("  - %s: %s\n", svc.Name, svc.Setup))
 			}
 		}
+		if sc.ReadyCheck != nil {
+			b.WriteString(fmt.Sprintf("ReadyCheck: %s\n", formatReadyCheck(sc.ReadyCheck)))
+		}
+		if len(sc.Credentials) > 0 {
+			b.WriteString("Credentials (logical → store entry):\n")
+			for logical, entry := range sc.Credentials {
+				b.WriteString(fmt.Sprintf("  - %s → %s\n", logical, entry))
+			}
+		}
+		if sc.CredentialInjection != nil {
+			if len(sc.CredentialInjection.Env) > 0 {
+				b.WriteString("CredentialInjection.env:\n")
+				for _, e := range sc.CredentialInjection.Env {
+					b.WriteString(fmt.Sprintf("  - %s → $%s (field %s)\n", e.Credential, e.Var, e.Field))
+				}
+			}
+			if len(sc.CredentialInjection.Files) > 0 {
+				b.WriteString("CredentialInjection.files:\n")
+				for _, f := range sc.CredentialInjection.Files {
+					b.WriteString(fmt.Sprintf("  - %s → %s (field %s)\n", f.Credential, f.Path, f.Field))
+				}
+			}
+		}
 	}
 
 	b.WriteString(fmt.Sprintf("\nExisting drills (%d):\n", len(suite.Tests)))
 	for _, test := range suite.Tests {
 		b.WriteString(fmt.Sprintf("  - %s: %s\n", test.Name, test.Config.Description))
-		if test.Config.DrillConfig != nil && len(test.Config.DrillConfig.Tags) > 0 {
-			b.WriteString(fmt.Sprintf("    Tags: %s\n", strings.Join(test.Config.DrillConfig.Tags, ", ")))
+		if test.Config.DrillConfig != nil {
+			if test.Config.DrillConfig.Mode != "" {
+				b.WriteString(fmt.Sprintf("    Mode: %s\n", test.Config.DrillConfig.Mode))
+			}
+			if len(test.Config.DrillConfig.Tags) > 0 {
+				b.WriteString(fmt.Sprintf("    Tags: %s\n", strings.Join(test.Config.DrillConfig.Tags, ", ")))
+			}
 		}
 		if len(test.Config.Nodes) > 0 {
 			b.WriteString("    Steps:\n")
@@ -385,5 +474,32 @@ func BuildSuiteContext(suite *LoadedSuite) string {
 		}
 	}
 
+	if IsTutorialSuite(suite) {
+		b.WriteString("\nREUSE: Do not change template/setup/credentials unless the creator opts out.\n")
+	}
+
 	return b.String()
+}
+
+func formatReadyCheck(rc *config.ReadyCheck) string {
+	if rc == nil {
+		return ""
+	}
+	switch rc.Type {
+	case "http":
+		return fmt.Sprintf("http %s", rc.URL)
+	case "port":
+		host := rc.Host
+		if host == "" {
+			host = "localhost"
+		}
+		return fmt.Sprintf("port %s:%d", host, rc.Port)
+	case "output_contains":
+		return fmt.Sprintf("output_contains %q", rc.Pattern)
+	default:
+		if rc.Type != "" {
+			return rc.Type
+		}
+		return "configured"
+	}
 }

@@ -50,8 +50,11 @@ http_request:
 Features:
 - All HTTP methods (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS)
 - Custom headers and body
+- `body_path` — send a sandbox file as the raw request body (binary-safe; use for MP4/asset uploads)
+- `multipart` — build `multipart/form-data` with text fields and file parts (prefer this over `curl` for Synthesia-style uploads)
+- `body`, `body_path`, and `multipart` are mutually exclusive
 - Response includes status code, headers, and body
-- JSON Content-Type set automatically when body starts with `{` or `[`
+- JSON Content-Type set automatically when string `body` starts with `{` or `[`
 
 ### Credential Injection
 

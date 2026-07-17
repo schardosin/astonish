@@ -158,6 +158,60 @@ func TestRunSuiteAssertionFail(t *testing.T) {
 	}
 }
 
+func TestRunSuiteTutorialAssertionFail(t *testing.T) {
+	t.Parallel()
+	executor := newMockExecutor()
+	executor.SetResult("browser_snapshot", map[string]interface{}{"snapshot": "Failed to load the content"}, nil)
+
+	runner := NewSuiteRunner(executor, nil, false)
+
+	suite := &LoadedSuite{
+		Name: "myapp-tutorial",
+		Config: &config.AgentConfig{
+			Type:        "drill_suite",
+			SuiteConfig: &config.DrillSuiteConfig{},
+		},
+	}
+
+	tests := []LoadedTest{
+		{
+			Name: "tutorial_fail",
+			Config: &config.AgentConfig{
+				Type:  "drill",
+				Suite: "myapp-tutorial",
+				DrillConfig: &config.DrillConfig{
+					Mode: "tutorial",
+					Tags: []string{"tutorial"},
+				},
+				Nodes: []config.Node{
+					{
+						Name:      "strategies",
+						Type:      "tool",
+						Narration: "Show strategies.",
+						HoldMs:    1,
+						Record:    "segment",
+						Args:      map[string]interface{}{"tool": "browser_snapshot"},
+						Assert: &config.AssertConfig{
+							Type:     "contains",
+							Source:   "snapshot",
+							Expected: "Strategy Dashboard",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report, _ := runner.RunSuite(context.Background(), suite, tests)
+
+	if report.Status != "failed" {
+		t.Errorf("Status = %q, want failed (tutorial content asserts must fail the run)", report.Status)
+	}
+	if report.Tests[0].Steps[0].Status != "failed" {
+		t.Errorf("Step status = %q, want failed (not warning)", report.Tests[0].Steps[0].Status)
+	}
+}
+
 func TestRunSuiteToolError(t *testing.T) {
 	t.Parallel()
 	executor := newMockExecutor()

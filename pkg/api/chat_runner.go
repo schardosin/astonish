@@ -5,16 +5,17 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
+	"github.com/google/uuid"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/runner"
@@ -500,6 +501,8 @@ func (cr *ChatRunner) Run(
 					"result": summarizeToolResult(resp),
 				})
 				cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+				cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
+				cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 			}
 		}
 	}
@@ -693,6 +696,12 @@ runLoop:
 						"result": summarizeToolResult(resp),
 					})
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+					if cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp) {
+						// Blueprint card is up; wait for Approve / Request changes / Cancel
+						// (same hard-stop pattern as network_denial_hint).
+						break runLoop
+					}
+					cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 
 					// Emit memory_saved SSE event when memory_save tool succeeds
 					if part.FunctionResponse.Name == "memory_save" && resp != nil {
@@ -800,6 +809,7 @@ runLoop:
 		}
 
 		seenPartialText = false
+	retryLoop:
 		for event, runErr := range rnr.Run(cr.ctx, cr.UserID, cr.SessionID, nudgeMsg, adkagent.RunConfig{
 			StreamingMode: adkagent.StreamingModeSSE,
 		}) {
@@ -852,6 +862,10 @@ runLoop:
 							"result": summarizeToolResult(resp),
 						})
 						cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+						if cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp) {
+							break retryLoop
+						}
+						cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 					}
 				}
 			}
@@ -936,6 +950,124 @@ func (cr *ChatRunner) processStateDelta(delta map[string]any) {
 	if spinnerText, ok := delta["_spinner_text"].(string); ok {
 		cr.emitEvent("thinking", map[string]any{"text": spinnerText})
 	}
+}
+
+// maybeEmitTutorialBlueprint emits the Scene|Voiceover|Visual approval card when
+// present_tutorial_blueprint succeeds, and stores pending state for Approve intents.
+// Returns true when the card was emitted so the caller can end the agent turn.
+func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, sessionService session.Service, toolName string, resp map[string]any) bool {
+	if toolName != "present_tutorial_blueprint" || resp == nil {
+		return false
+	}
+	status, _ := resp["status"].(string)
+	if status != "ok" && status != "awaiting_approval" {
+		return false
+	}
+	present, _ := resp["present_tutorial_blueprint"].(bool)
+	if !present {
+		return false
+	}
+	yamlStr, _ := resp["blueprint_yaml"].(string)
+	title, _ := resp["title"].(string)
+	suite, _ := resp["suite"].(string)
+	if yamlStr == "" {
+		return false
+	}
+
+	scenes := parseBlueprintScenesFromToolResult(resp["scenes"])
+	pending := &agent.TutorialBlueprintPending{
+		YAML:   yamlStr,
+		Title:  title,
+		Suite:  suite,
+		Scenes: scenes,
+	}
+	chatAgent.SetPendingTutorialBlueprint(cr.SessionID, pending)
+
+	scenePayload := make([]map[string]any, 0, len(scenes))
+	for _, sc := range scenes {
+		scenePayload = append(scenePayload, map[string]any{
+			"id":                 sc.ID,
+			"title":              sc.Title,
+			"voiceover":          sc.Voiceover,
+			"visual_kind":        sc.VisualKind,
+			"visual_description": sc.VisualDesc,
+			"duration_hint_s":    sc.DurationHintS,
+		})
+	}
+	payload := map[string]any{
+		"title":          title,
+		"suite":          suite,
+		"blueprint_yaml": yamlStr,
+		"scenes":         scenePayload,
+	}
+	cr.emitEvent("tutorial_blueprint_preview", payload)
+	persistTutorialBlueprintPreview(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
+	return true
+}
+
+// maybeEmitTutorialSceneSlideshow emits the post-run scene navigator when
+// run_drill produces a tutorial scene_manifest.json.
+func (cr *ChatRunner) maybeEmitTutorialSceneSlideshow(sessionService session.Service, toolName string, resp map[string]any) {
+	if toolName != "run_drill" || resp == nil {
+		return
+	}
+	if status, _ := resp["status"].(string); status == "error" {
+		return
+	}
+	manifestPath, _ := resp["manifest_path"].(string)
+	if manifestPath == "" {
+		return
+	}
+	if !filepath.IsAbs(manifestPath) {
+		if abs, err := filepath.Abs(manifestPath); err == nil {
+			manifestPath = abs
+		}
+	}
+	payload, err := buildTutorialSceneSlideshowPayload(manifestPath)
+	if err != nil {
+		slog.Warn("tutorial scene slideshow: failed to read manifest", "path", manifestPath, "error", err)
+		return
+	}
+	cr.emitEvent("tutorial_scene_slideshow", payload)
+	persistTutorialSceneSlideshow(cr.ctx, sessionService, cr.UserID, cr.SessionID, payload)
+}
+
+func parseBlueprintScenesFromToolResult(raw any) []agent.TutorialBlueprintSceneView {
+	var out []agent.TutorialBlueprintSceneView
+	switch scenes := raw.(type) {
+	case []any:
+		for _, item := range scenes {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			sc := agent.TutorialBlueprintSceneView{
+				ID:        strVal(m["id"]),
+				Title:     strVal(m["title"]),
+				Voiceover: strVal(m["voiceover"]),
+			}
+			if d, ok := m["duration_hint_s"].(float64); ok {
+				sc.DurationHintS = int(d)
+			}
+			if d, ok := m["duration_hint_s"].(int); ok {
+				sc.DurationHintS = d
+			}
+			if vis, ok := m["visual"].(map[string]any); ok {
+				sc.VisualKind = strVal(vis["kind"])
+				sc.VisualDesc = strVal(vis["description"])
+			} else {
+				sc.VisualKind = strVal(m["visual_kind"])
+				sc.VisualDesc = strVal(m["visual_description"])
+			}
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
+func strVal(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 // drainImagesAndFlowOutput drains images, flow output, and file artifacts from the chat agent and emits them as events.

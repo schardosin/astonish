@@ -13,18 +13,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/gorilla/mux"
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/apps"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/provider"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/scheduler"
-	"github.com/SAP/astonish/pkg/skills"
 	persistentsession "github.com/SAP/astonish/pkg/session"
+	"github.com/SAP/astonish/pkg/skills"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
+	"github.com/google/uuid"
+	"github.com/gorilla/mux"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/session"
 	"google.golang.org/genai"
@@ -41,7 +41,7 @@ type ChatAttachment struct {
 type StudioChatRequest struct {
 	SessionID        string           `json:"sessionId,omitempty"`
 	Message          string           `json:"message"`
-	Attachments      []ChatAttachment `json:"attachments,omitempty"`      // file attachments (base64)
+	Attachments      []ChatAttachment `json:"attachments,omitempty"` // file attachments (base64)
 	AutoApprove      bool             `json:"autoApprove,omitempty"`
 	Debug            bool             `json:"debug,omitempty"`            // reserved for future debug streaming
 	SystemContext    string           `json:"systemContext,omitempty"`    // per-turn system instructions (not shown to user)
@@ -138,6 +138,21 @@ type StudioMessage struct {
 	FilePath   string `json:"filePath,omitempty"`   // saved file path
 	RunCommand string `json:"runCommand,omitempty"` // suggested run command
 
+	// tutorial_blueprint_preview / approved fields
+	BlueprintTitle  string `json:"blueprintTitle,omitempty"`
+	BlueprintSuite  string `json:"blueprintSuite,omitempty"`
+	BlueprintYAML   string `json:"blueprintYaml,omitempty"`
+	BlueprintScenes any    `json:"blueprintScenes,omitempty"`
+	DrillYAML       string `json:"drillYaml,omitempty"`
+	DrillName       string `json:"drillName,omitempty"`
+
+	// tutorial_scene_slideshow fields — post-run scene navigator
+	TutorialTitle  string `json:"tutorialTitle,omitempty"`
+	TutorialSuite  string `json:"tutorialSuite,omitempty"`
+	TutorialDrill  string `json:"tutorialDrill,omitempty"`
+	ManifestPath   string `json:"manifestPath,omitempty"`
+	TutorialScenes any    `json:"tutorialScenes,omitempty"`
+
 	// app_preview fields — populated for generative UI app previews
 	AppCode    string `json:"code,omitempty"`    // JSX source code
 	AppTitle   string `json:"title,omitempty"`   // app title (extracted from component name)
@@ -152,8 +167,8 @@ type StudioMessage struct {
 type AttachmentInfo struct {
 	Filename string `json:"filename"`
 	MimeType string `json:"mimeType"`
-	Size     int    `json:"size"`            // byte count of the decoded file
-	Data     string `json:"data,omitempty"`  // base64 data (included for images to render thumbnails)
+	Size     int    `json:"size"`           // byte count of the decoded file
+	Data     string `json:"data,omitempty"` // base64 data (included for images to render thumbnails)
 }
 
 // SubTaskInfoMsg describes a single task in a delegation plan (for history reconstruction).
@@ -526,6 +541,40 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"hint":                 hint,
 			"wizard_system_prompt": tools.GetDrillWizardPrompt(),
+			"pinned_tool_groups":   []string{"drill"},
+		}
+		SendSSE(w, flusher, "drill_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /tutorial-drill-add <suite> (alias: /tutorial-add): add to an existing tutorial suite only.
+	// Match longer prefixes before /tutorial-drill and /tutorial.
+	if suiteName, ok := tutorialDrillAddSuite(msg); ok {
+		suiteName, suiteContext, err := resolveTutorialAddContext(r.Context(), flowStoreFromRequest(r), suiteName)
+		if err != nil {
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		eventData := map[string]interface{}{
+			"suite_name":           suiteName,
+			"wizard_kind":          "tutorial",
+			"wizard_system_prompt": tools.GetTutorialAddPrompt(suiteName, suiteContext),
+			"pinned_tool_groups":   []string{"drill"},
+		}
+		SendSSE(w, flusher, "drill_add_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /tutorial-drill [hint] (alias: /tutorial): start tutorial drill creation.
+	if hint, ok := tutorialDrillHint(msg); ok {
+		eventData := map[string]interface{}{
+			"hint":                 hint,
+			"wizard_kind":          "tutorial",
+			"wizard_system_prompt": tools.GetTutorialWizardPrompt(),
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -544,6 +593,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
 			"wizard_system_prompt": wizardPrompt,
+			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
 		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
@@ -603,6 +653,19 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Intercept tutorial blueprint approval / cancel / revise intents.
+	// Approve emits the approved card then rewrites msg so ChatRunner continues
+	// refine → validate_drill → save_drill in the same SSE stream.
+	if req.SessionID != "" && chatAgent.HasPendingTutorialBlueprint(req.SessionID) {
+		handled, rewrite := handleTutorialBlueprintIntent(r, w, flusher, chatAgent, sessionService, userID, req.SessionID, msg)
+		if handled {
+			return
+		}
+		if rewrite != "" {
+			msg = rewrite
+		}
+	}
+
 	// Intercept messages for pending distill review (interactive modification loop).
 	if req.SessionID != "" && chatAgent.HasPendingDistillReview(req.SessionID) {
 		intent := chatAgent.ClassifyDistillReviewIntent(r.Context(), msg)
@@ -616,12 +679,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			persistSessionMessage(r.Context(), sessionService, userID, req.SessionID, "user", userText)
 
-		// Enrich context with composite FlowStore (personal-first) so
-		// SaveDistillReview persists to the user's personal store.
-		saveCtx := r.Context()
-		if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
-			saveCtx = store.WithFlowStore(saveCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
-		}
+			// Enrich context with composite FlowStore (personal-first) so
+			// SaveDistillReview persists to the user's personal store.
+			saveCtx := r.Context()
+			if svc := store.FromRequest(r); svc != nil && (svc.PersonalFlows != nil || svc.Flows != nil) {
+				saveCtx = store.WithFlowStore(saveCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+			}
 
 			filePath, runCmd, err := chatAgent.SaveDistillReview(saveCtx, req.SessionID)
 			if err != nil {
@@ -1288,6 +1351,8 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
 				"- `/drill [hint]` — Create a drill suite with guided wizard\n" +
 				"- `/drill-add <suite>` — Add new drills to an existing suite\n" +
+				"- `/tutorial-drill [hint]` — Create a tutorial (narrated) drill with guided wizard\n" +
+				"- `/tutorial-drill-add <suite>` — Add tutorial drills to an existing *tutorial* suite\n" +
 				"- `/help` — Show this help message",
 		})
 
@@ -1379,9 +1444,9 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				if svc.PersonalSessions != nil {
 					distillCtx = store.WithSessionService(distillCtx, svc.PersonalSessions)
 				}
-			if svc.PersonalFlows != nil || svc.Flows != nil {
-				distillCtx = store.WithFlowStore(distillCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
-			}
+				if svc.PersonalFlows != nil || svc.Flows != nil {
+					distillCtx = store.WithFlowStore(distillCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+				}
 			}
 
 			ds := agent.DistillSession{

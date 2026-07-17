@@ -16,6 +16,8 @@
  *   const res = await teamFetch('/api/memories/team')
  */
 
+import { refreshToken } from './auth'
+
 let _activeTeam: string | null = null
 let _personalMemoryMode = false
 
@@ -29,6 +31,46 @@ let _onTeamRejected: ((teamSlug: string) => void) | null = null
 /** Register a callback for when the middleware rejects a team selection. */
 export function onTeamRejected(cb: (teamSlug: string) => void) {
   _onTeamRejected = cb
+}
+
+// Callback invoked when a 401 cannot be recovered via token refresh.
+// App.tsx wires this to clear auth state and show the login gate.
+let _onAuthExpired: (() => void) | null = null
+
+/** Register a callback for when the session cannot be silently renewed. */
+export function onAuthExpired(cb: () => void) {
+  _onAuthExpired = cb
+}
+
+// Single-flight access-token refresh so concurrent 401s share one /refresh.
+let _refreshInflight: Promise<boolean> | null = null
+
+function refreshAccessTokenOnce(): Promise<boolean> {
+  if (_refreshInflight) return _refreshInflight
+  _refreshInflight = (async () => {
+    try {
+      await refreshToken()
+      return true
+    } catch {
+      return false
+    }
+  })().finally(() => { _refreshInflight = null })
+  return _refreshInflight
+}
+
+function requestUrl(input: Parameters<typeof fetch>[0]): string {
+  if (typeof input === 'string') return input
+  if (input instanceof URL) return input.href
+  return input.url
+}
+
+function isAuthApiPath(url: string): boolean {
+  try {
+    const path = url.startsWith('http') ? new URL(url).pathname : url.split('?')[0]
+    return path.startsWith('/api/auth/')
+  } catch {
+    return url.includes('/api/auth/')
+  }
 }
 
 // Restore from localStorage on module load
@@ -82,6 +124,9 @@ export function getPersonalMemoryMode(): boolean {
  *
  * If the backend returns 403 due to team membership rejection, the active
  * team is cleared and the rejection callback is fired so the UI can react.
+ *
+ * On 401, silently refreshes the access token once and retries the request.
+ * If refresh fails, the auth-expired callback is fired so the app can show login.
  */
 export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1], explicitTeam?: string | null): Promise<Response> {
   const effectiveTeam = explicitTeam !== undefined ? explicitTeam : _activeTeam
@@ -98,12 +143,8 @@ export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Param
     headers.set('X-Astonish-Memory-Mode', 'personal')
   }
 
-  if (!effectiveTeam) {
-    return fetch(input, { ...init, headers })
-  }
-
   // Only set if not already explicitly provided by the caller
-  if (!headers.has('X-Astonish-Team')) {
+  if (effectiveTeam && !headers.has('X-Astonish-Team')) {
     headers.set('X-Astonish-Team', effectiveTeam)
   }
 
@@ -123,6 +164,16 @@ export async function teamFetch(input: Parameters<typeof fetch>[0], init?: Param
         }
       }
     } catch { /* not JSON or other parse error — ignore */ }
+  }
+
+  if (res.status === 401 && !isAuthApiPath(requestUrl(input))) {
+    const refreshed = await refreshAccessTokenOnce()
+    if (refreshed) {
+      return fetch(input, { ...init, headers })
+    }
+    if (_onAuthExpired) {
+      _onAuthExpired()
+    }
   }
 
   return res

@@ -140,14 +140,27 @@ type ServiceConfig struct {
 
 // ReadyCheck defines how to verify the application under test is ready.
 type ReadyCheck struct {
-	Type         string `yaml:"type" json:"type"`                                         // "http", "port", "output_contains"
-	URL          string `yaml:"url,omitempty" json:"url,omitempty"`                       // For http type: URL to poll
-	Host         string `yaml:"host,omitempty" json:"host,omitempty"`                     // For port type (default: "localhost")
-	Port         int    `yaml:"port,omitempty" json:"port,omitempty"`                     // For port type: TCP port number
-	Pattern      string `yaml:"pattern,omitempty" json:"pattern,omitempty"`               // For output_contains type: string to match
-	Timeout      int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`               // Max wait in seconds (default: 30)
-	Interval     int    `yaml:"interval,omitempty" json:"interval,omitempty"`             // Poll interval in seconds (default: 2)
-	StableCount  int    `yaml:"stable_count,omitempty" json:"stable_count,omitempty"`     // Consecutive successes required (default: 3)
+	Type        string `yaml:"type" json:"type"`                                     // "http", "port", "output_contains"
+	URL         string `yaml:"url,omitempty" json:"url,omitempty"`                   // For http type: URL to poll
+	Host        string `yaml:"host,omitempty" json:"host,omitempty"`                 // For port type (default: "localhost")
+	Port        int    `yaml:"port,omitempty" json:"port,omitempty"`                 // For port type: TCP port number
+	Pattern     string `yaml:"pattern,omitempty" json:"pattern,omitempty"`           // For output_contains type: string to match
+	Timeout     int    `yaml:"timeout,omitempty" json:"timeout,omitempty"`           // Max wait in seconds (default: 30)
+	Interval    int    `yaml:"interval,omitempty" json:"interval,omitempty"`         // Poll interval in seconds (default: 2)
+	StableCount int    `yaml:"stable_count,omitempty" json:"stable_count,omitempty"` // Consecutive successes required (default: 3)
+}
+
+// TutorialSceneSpec is one beat in the full blueprint cut list embedded on a
+// tutorial drill. Non-screen rows (avatar / broll) are metadata only; screen
+// rows match recorded clips via DrillNode (or ID) after run_drill.
+type TutorialSceneSpec struct {
+	ID                string `yaml:"id" json:"id"`
+	Narration         string `yaml:"narration,omitempty" json:"narration,omitempty"`
+	Voiceover         string `yaml:"voiceover,omitempty" json:"voiceover,omitempty"`
+	HoldMs            int    `yaml:"hold_ms,omitempty" json:"hold_ms,omitempty"`
+	VisualKind        string `yaml:"visual_kind,omitempty" json:"visual_kind,omitempty"` // avatar | broll | screen
+	VisualDescription string `yaml:"visual_description,omitempty" json:"visual_description,omitempty"`
+	DrillNode         string `yaml:"drill_node,omitempty" json:"drill_node,omitempty"` // screen: node name used when recording
 }
 
 // DrillConfig holds per-drill configuration (lightweight — infrastructure is in the suite).
@@ -159,6 +172,14 @@ type DrillConfig struct {
 	MaxRetries      int      `yaml:"max_retries,omitempty"`       // Max auto-retries for transient failures (default: 1 when triage is active)
 	AutoWait        bool     `yaml:"auto_wait,omitempty"`         // Auto-wait for elements before browser interaction steps
 	AutoWaitTimeout int      `yaml:"auto_wait_timeout,omitempty"` // Auto-wait timeout in milliseconds (default: 5000)
+	// Mode is ""/"test" for deterministic assertion drills (default), or "tutorial"
+	// for paced training-video scripts (narration, hold_ms, scene recording).
+	Mode string `yaml:"mode,omitempty"`
+	// Blueprint names the companion tutorial_blueprint flow (HeyGen-style cut list).
+	Blueprint string `yaml:"blueprint,omitempty"`
+	// Scenes is the full ordered cut list (avatar / broll / screen) used to write
+	// scene_manifest.json. Executable nodes remain screen-only.
+	Scenes []TutorialSceneSpec `yaml:"scenes,omitempty" json:"scenes,omitempty"`
 }
 
 // AssertConfig defines what to check after a step executes.
@@ -206,6 +227,10 @@ type Node struct {
 	RetryStrategy     string                 `yaml:"retry_strategy,omitempty" json:"retry_strategy,omitempty"` // "intelligent" or "simple" (default: intelligent)
 	Silent            bool                   `yaml:"silent,omitempty" json:"silent,omitempty"`                 // If true, node execution is not shown in UI/CLI
 	Assert            *AssertConfig          `yaml:"assert,omitempty" json:"assert,omitempty"`                 // Assertion for drill flows (Spec 17)
+	// Tutorial / scene fields (used when drill_config.mode is "tutorial")
+	Narration string `yaml:"narration,omitempty" json:"narration,omitempty"` // Spoken script for this beat
+	HoldMs    int    `yaml:"hold_ms,omitempty" json:"hold_ms,omitempty"`     // Pause after the tool succeeds (pacing)
+	Record    string `yaml:"record,omitempty" json:"record,omitempty"`       // "", "start", "stop", or "segment"
 }
 
 // ParallelConfig defines configuration for parallel execution.

@@ -135,3 +135,76 @@ func TestResolveDrillAddWizard_EmptyName(t *testing.T) {
 		t.Fatalf("error = %v, want usage", err)
 	}
 }
+
+func TestResolveTutorialAddContext_RequiresTutorialSuite(t *testing.T) {
+	fs := newDrillAddMemFlowStore()
+	ctx := context.Background()
+	suiteYAML := "description: Juicytrade suite\ntype: drill_suite\nsuite_config:\n  template: juicytrade\n"
+	regularDrill := "type: drill\nsuite: juicytrade\ndescription: health\ndrill_config:\n  tags: [smoke]\nnodes: []\n"
+	if err := fs.SaveFlow(ctx, "juicytrade", suiteYAML); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.SaveFlow(ctx, "health", regularDrill); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := resolveTutorialAddContext(ctx, fs, "juicytrade")
+	if err == nil {
+		t.Fatal("expected error for regular suite")
+	}
+	if !strings.Contains(err.Error(), "regular drill suite") {
+		t.Fatalf("error = %v", err)
+	}
+	if !strings.Contains(err.Error(), "/tutorial-drill") {
+		t.Fatalf("error should guide to /tutorial-drill: %v", err)
+	}
+}
+
+func TestTutorialDrillSlashParsers(t *testing.T) {
+	if _, ok := tutorialDrillHint("/tutorial-drill-add foo"); ok {
+		t.Fatal("hint parser must not match tutorial-drill-add")
+	}
+	if _, ok := tutorialDrillHint("/tutorial-add foo"); ok {
+		t.Fatal("hint parser must not match tutorial-add")
+	}
+	hint, ok := tutorialDrillHint("/tutorial-drill teach login")
+	if !ok || hint != "teach login" {
+		t.Fatalf("tutorial-drill hint = %q ok=%v", hint, ok)
+	}
+	hint, ok = tutorialDrillHint("/tutorial teach login")
+	if !ok || hint != "teach login" {
+		t.Fatalf("alias /tutorial hint = %q ok=%v", hint, ok)
+	}
+	suite, ok := tutorialDrillAddSuite("/tutorial-drill-add my-suite")
+	if !ok || suite != "my-suite" {
+		t.Fatalf("tutorial-drill-add suite = %q ok=%v", suite, ok)
+	}
+	suite, ok = tutorialDrillAddSuite("/tutorial-add my-suite")
+	if !ok || suite != "my-suite" {
+		t.Fatalf("alias /tutorial-add suite = %q ok=%v", suite, ok)
+	}
+}
+
+func TestResolveTutorialAddContext_AllowsTutorialSuite(t *testing.T) {
+	fs := newDrillAddMemFlowStore()
+	ctx := context.Background()
+	suiteYAML := "description: Tutorial suite\ntype: drill_suite\nsuite_config:\n  template: juicytrade\n  setup:\n    - bash start-services.sh\n"
+	tutDrill := "type: drill\nsuite: juicytrade-tutorial\ndescription: overview\ndrill_config:\n  mode: tutorial\n  tags: [tutorial]\nnodes: []\n"
+	if err := fs.SaveFlow(ctx, "juicytrade-tutorial", suiteYAML); err != nil {
+		t.Fatal(err)
+	}
+	if err := fs.SaveFlow(ctx, "overview", tutDrill); err != nil {
+		t.Fatal(err)
+	}
+
+	name, suiteCtx, err := resolveTutorialAddContext(ctx, fs, "juicytrade-tutorial")
+	if err != nil {
+		t.Fatalf("resolveTutorialAddContext: %v", err)
+	}
+	if name != "juicytrade-tutorial" {
+		t.Fatalf("name = %q", name)
+	}
+	if !strings.Contains(suiteCtx, "TutorialSuite: yes") {
+		t.Fatalf("suite context: %s", suiteCtx)
+	}
+}

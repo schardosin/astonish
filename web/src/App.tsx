@@ -17,7 +17,7 @@ import InstallMcpModal from './components/InstallMcpModal'
 import { useTheme } from './hooks/useTheme'
 import { useAuth } from './hooks/useAuth'
 import { useHashRouter, buildPath } from './hooks/useHashRouter'
-import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected, teamFetch, setPersonalMemoryMode as setPersonalMemoryModeContext } from './api/teamContext'
+import { setActiveTeam as setActiveTeamContext, getActiveTeam as getStoredTeam, onTeamRejected, onAuthExpired, teamFetch, setPersonalMemoryMode as setPersonalMemoryModeContext } from './api/teamContext'
 import { yamlToFlowAsync, extractLayout } from './utils/yamlToFlow'
 import { addStandaloneNode, addConnection, removeConnection, updateNode, orderYamlKeys } from './utils/flowToYaml'
 import { fetchAgents, fetchAgent, saveAgent, deleteAgent, fetchTools, checkMcpDependencies, installMcpServer, getMcpStoreServer, installInlineMcpServer, publishFlowToTeam, forkFlowToPersonal } from './api/agents'
@@ -181,6 +181,13 @@ function App() {
       })
     })
   }, [])
+
+  // When silent token refresh fails after a 401, clear auth and show login.
+  useEffect(() => {
+    onAuthExpired(() => {
+      auth.markSessionExpired()
+    })
+  }, [auth.markSessionExpired])
 
   const [agents, setAgents] = useState<Agent[]>([])
   const [isLoadingAgents, setIsLoadingAgents] = useState(true)

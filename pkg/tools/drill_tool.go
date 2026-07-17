@@ -464,7 +464,27 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 		}
 
 		// Validate node schema and assertions
+		tutorial := testCfg.DrillConfig != nil && testCfg.DrillConfig.Mode == "tutorial"
+		if testCfg.DrillConfig != nil {
+			switch testCfg.DrillConfig.Mode {
+			case "", "test", "tutorial":
+				checks = append(checks, ValidationCheck{
+					Name:    label + "_mode",
+					Status:  "passed",
+					Message: fmt.Sprintf("drill_config.mode %q ok", testCfg.DrillConfig.Mode),
+				})
+			default:
+				checks = append(checks, ValidationCheck{
+					Name:    label + "_mode",
+					Status:  "failed",
+					Message: fmt.Sprintf("Unknown drill_config.mode %q (want \"\", \"test\", or \"tutorial\")", testCfg.DrillConfig.Mode),
+				})
+				allPassed = false
+			}
+		}
+
 		nodesWithAssert := 0
+		nodesWithNarration := 0
 		for j, node := range testCfg.Nodes {
 			nodeLabel := fmt.Sprintf("%s_node[%d]", label, j)
 			if node.Name != "" {
@@ -494,12 +514,43 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 				}
 			}
 
+			switch node.Record {
+			case "", "start", "stop", "segment":
+			default:
+				checks = append(checks, ValidationCheck{
+					Name:    nodeLabel + "_record",
+					Status:  "failed",
+					Message: fmt.Sprintf("Node %q has unknown record %q (want \"\", \"start\", \"stop\", or \"segment\")", node.Name, node.Record),
+				})
+				allPassed = false
+			}
+			if node.HoldMs < 0 {
+				checks = append(checks, ValidationCheck{
+					Name:    nodeLabel + "_hold_ms",
+					Status:  "failed",
+					Message: fmt.Sprintf("Node %q has negative hold_ms", node.Name),
+				})
+				allPassed = false
+			}
+			if node.Narration != "" {
+				nodesWithNarration++
+				if tutorial && node.HoldMs == 0 {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_narration_hold",
+						Status:  "failed",
+						Message: fmt.Sprintf("Tutorial node %q has narration but hold_ms is 0 — set hold_ms (~150 wpm) so the scene can be voiced", node.Name),
+					})
+					allPassed = false
+				}
+			}
+
 			// Validate assertion if present
 			if node.Assert != nil {
 				nodesWithAssert++
 				validTypes := map[string]bool{
 					"contains": true, "not_contains": true, "regex": true,
 					"exit_code": true, "element_exists": true, "semantic": true,
+					"visual_match": true,
 				}
 				if !validTypes[node.Assert.Type] {
 					checks = append(checks, ValidationCheck{
@@ -510,17 +561,61 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 					allPassed = false
 				}
 			}
+
+			if tutorial {
+				toolName, _ := node.Args["tool"].(string)
+				if tutorialNodeIsStubTODO(node) {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_todo_stub",
+						Status:  "failed",
+						Message: fmt.Sprintf("Tutorial node %q still has a browser_run_code TODO stub — replace with real UI actions before save_drill", node.Name),
+					})
+					allPassed = false
+				}
+				recorded := node.Record != "" || node.Narration != ""
+				if recorded && toolName == "browser_navigate" && !tutorialWarmupNode(node.Name) {
+					checks = append(checks, ValidationCheck{
+						Name:    nodeLabel + "_navigate_only",
+						Status:  "failed",
+						Message: fmt.Sprintf("Tutorial recorded node %q uses browser_navigate — prefer sidebar/nav clicks (animate_cursor). Only warm-up open_app may navigate", node.Name),
+					})
+					allPassed = false
+				}
+				if recorded && !tutorialWarmupNode(node.Name) {
+					if node.Assert == nil {
+						checks = append(checks, ValidationCheck{
+							Name:    nodeLabel + "_content_assert",
+							Status:  "failed",
+							Message: fmt.Sprintf("Tutorial recorded node %q needs a content assert (e.g. assert: { type: contains, source: snapshot, expected: \"...\" }) so broken/empty pages fail", node.Name),
+						})
+						allPassed = false
+					} else if !tutorialContentAssert(node.Assert) {
+						checks = append(checks, ValidationCheck{
+							Name:    nodeLabel + "_content_assert",
+							Status:  "failed",
+							Message: fmt.Sprintf("Tutorial recorded node %q assert must prove UI content (type contains/element_exists/not_contains/regex, preferably source: snapshot)", node.Name),
+						})
+						allPassed = false
+					}
+				}
+			}
 		}
 
-		// Warn if no nodes have assertions — drills without assertions always
-		// pass regardless of output, which is almost certainly unintended.
-		// Common mistake: using "assertions:" (plural) instead of "assert:" (singular),
-		// or "value:" instead of "expected:" — these YAML keys are silently ignored.
+		// Drills without assertions always pass on tool success alone — unintended
+		// for both test and tutorial (tutorials must prove page content).
 		if len(testCfg.Nodes) > 0 && nodesWithAssert == 0 {
 			checks = append(checks, ValidationCheck{
 				Name:    label + "_no_assertions",
 				Status:  "failed",
 				Message: "No nodes have assertions. Every drill should have at least one node with an 'assert:' block (singular, not 'assertions:'). Use: assert: { type: contains, expected: \"...\" }",
+			})
+			allPassed = false
+		}
+		if tutorial && nodesWithNarration == 0 && len(testCfg.Nodes) > 0 {
+			checks = append(checks, ValidationCheck{
+				Name:    label + "_no_narration",
+				Status:  "failed",
+				Message: "Tutorial drill has no narration fields — add narration (+ hold_ms, record: segment) on each scene beat",
 			})
 			allPassed = false
 		}
@@ -546,6 +641,43 @@ func validateDrill(ctx tool.Context, args ValidateDrillArgs) (ValidateDrillResul
 		Status: status,
 		Checks: checks,
 	}, nil
+}
+
+func tutorialWarmupNode(name string) bool {
+	switch name {
+	case "open_app", "enter_fullscreen":
+		return true
+	default:
+		return false
+	}
+}
+
+func tutorialNodeIsStubTODO(node config.Node) bool {
+	toolName, _ := node.Args["tool"].(string)
+	if toolName != "browser_run_code" {
+		return false
+	}
+	code, _ := node.Args["code"].(string)
+	if code == "" {
+		return false
+	}
+	lower := strings.ToLower(code)
+	return strings.Contains(code, "TODO:") ||
+		strings.Contains(lower, "return 'todo'") ||
+		strings.Contains(lower, `return "todo"`)
+}
+
+func tutorialContentAssert(a *config.AssertConfig) bool {
+	if a == nil {
+		return false
+	}
+	switch a.Type {
+	case "contains", "not_contains", "regex", "element_exists":
+		return true
+	default:
+		// semantic/visual_match also prove content, but prefer snapshot string checks
+		return a.Source == "snapshot" || a.Type == "semantic" || a.Type == "visual_match"
+	}
 }
 
 // DeleteDrillArgs are the arguments for the delete_drill tool.
@@ -988,5 +1120,22 @@ func GetDrillTools() ([]tool.Tool, error) {
 		return nil, fmt.Errorf("create edit_drill tool: %w", err)
 	}
 
-	return []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool, editTool}, nil
+	draftFromLogTool, err := functiontool.New(functiontool.Config{
+		Name: "draft_drill_from_action_log",
+		Description: "Convert a browser DOM action capture log (from browser_get_action_log) into a mode-neutral " +
+			"drill YAML skeleton (steps only). Chat should add assertions for tests or mode/narration/record for " +
+			"tutorials before validate_drill and save_drill.",
+	}, draftDrillFromActionLog)
+	if err != nil {
+		return nil, fmt.Errorf("create draft_drill_from_action_log tool: %w", err)
+	}
+
+	blueprintTools, err := GetTutorialBlueprintTools()
+	if err != nil {
+		return nil, err
+	}
+
+	out := []tool.Tool{saveTool, validateTool, deleteTool, listTool, readTool, editTool, draftFromLogTool}
+	out = append(out, blueprintTools...)
+	return out, nil
 }

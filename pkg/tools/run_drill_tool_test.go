@@ -252,10 +252,11 @@ func TestBrowserToolMap_Completeness(t *testing.T) {
 		"browser_navigate", "browser_navigate_back",
 		"browser_click", "browser_type", "browser_hover",
 		"browser_press_key", "browser_select_option", "browser_fill_form",
+		"browser_highlight", "browser_clear_highlights", "browser_move_cursor",
 		"browser_snapshot", "browser_take_screenshot",
 		"browser_wait_for", "browser_evaluate", "browser_run_code",
 		"browser_console_messages", "browser_network_requests",
-		"browser_tabs", "browser_close", "browser_resize",
+		"browser_tabs", "browser_close", "browser_resize", "browser_fullscreen",
 		"browser_cookies", "browser_storage",
 	}
 	for _, tool := range expected {

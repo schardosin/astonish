@@ -78,7 +78,7 @@ User Message
 6. Execution Loop (with retry):
    - llmAgent.Run() produces streaming events
    - Retryable errors (429, 502, 503) -> exponential backoff, retry up to 3x
-   - Unknown tool errors (hallucinated name) -> synthetic error response, re-run
+   - Tool-not-found (ADK 1.5 FunctionResponse): if the name exists in ToolIndex, OnToolErrorCallbacks auto-injects it for the next LLM round and asks the model to retry; truly unknown names keep ADK's default error
    - Tool call count cap (default 25) -> pause and ask user to continue
    - Approval pause -> yield event and return, resume on next user message
     |
@@ -158,6 +158,8 @@ The `DynamicToolInjectionCallback` is a `BeforeModelCallback` that fires on ever
 4. Adds these tools to the `LLMRequest.Tools` array so the LLM can call them.
 
 This means the LLM's available toolset can grow mid-turn as `search_tools` discovers additional tools.
+
+**Auto-inject on miss:** Under ADK 1.5, calling a tool that is not in the current step's `req.Tools` yields a FunctionResponse error (`tool 'X' not found`), not a hard `Run` abort. ChatAgent (and sub-agents) register an `OnToolErrorCallback` that looks the name up in `ToolIndex`. If the tool exists and is allowed (MCP access + not team-disabled), it is registered via the same path as `search_tools` results so the next LLM round of the same turn can call it. The callback does **not** execute the tool in place — that would skip BeforeTool/AfterTool (credentials, redaction, tracing). The legacy `isUnknownToolError` hard-error retry path targets pre-1.5 ADK (`unknown tool:`) and is retained only as a safety net.
 
 ### Sub-Agent System
 

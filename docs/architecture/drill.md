@@ -12,7 +12,7 @@ Drill suites are stored as YAML flow definitions (type: `drill_suite` and `drill
 
 Most AI testing approaches have the LLM drive the browser in real-time (reasoning about what to click, what to assert). This is slow, non-deterministic, and expensive. Drill separates the two phases:
 
-1. **Composition** (LLM-powered): The agent analyzes the application, identifies test scenarios, and generates YAML test definitions with explicit steps and assertions.
+1. **Composition** (LLM-powered): The agent analyzes the application, identifies test scenarios, and generates YAML test definitions with explicit steps and assertions. For UI navigation flows, `/drill` can offer **human capture**: `browser_request_human(capture_actions: true)` over KasmVNC → `browser_get_action_log` → `draft_drill_from_action_log` (mode-neutral step skeleton) → chat adds asserts / filters noise → `validate_drill` / `save_drill`. Mode (`tutorial` vs test) is chosen by chat, not by the draft tool.
 2. **Execution** (mechanical): The drill runner executes steps exactly as defined, evaluates assertions deterministically, and reports results without any LLM calls.
 
 The only exception is `semantic` assertions and `triage` mode, which use targeted LLM calls for specific judgment tasks.
@@ -96,6 +96,66 @@ Drill includes pixel-level visual comparison:
 3. Anti-aliasing tolerance ignores pixel differences in border regions.
 4. Red-highlighted diff images are generated for visual inspection.
 5. Baselines are stored as artifacts and can be manually updated.
+
+### Tutorial mode vs test mode
+
+`drill_config.mode` selects runner semantics:
+
+| Mode | Purpose | Assertions | Recording / pacing |
+|---|---|---|---|
+| `test` (default / empty) | Deterministic smoke/CI | Required for useful drills; failures fail the test; triage/retries per config | Not auto-managed |
+| `tutorial` | Regenerable UI training scripts | Content asserts **fail** the run (broken/empty pages must not film green); tool errors still fail | `narration`, `hold_ms`, `record` (`start`/`stop`/`segment`); auto-segment when narration is set; writes `scene_manifest.json` |
+
+Tutorial defaults: `on_fail: continue`, no triage/retries unless YAML sets them. Always honor `hold_ms > 0` (sleep after a successful step) in any mode.
+
+**Explore-first authoring:** `/tutorial-drill` must explore the live UI (click nav, `browser_snapshot` + `browser_take_screenshot` each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. Snapshot drives selectors/asserts; screenshot gives the creator a visual of what the agent sees. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat (same snapshot + screenshot pairing) before `run_drill`.
+
+Example:
+
+```yaml
+type: drill
+suite: astonish-product
+drill_config:
+  mode: tutorial
+  tags: [tutorial]
+nodes:
+  - name: open_studio
+    narration: "Open Astonish Studio from the home screen."
+    hold_ms: 4000
+    record: segment
+    type: tool
+    args:
+      tool: browser_click
+      ref: "studio-link"
+```
+
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Studio Chat also renders a **persistent scene slideshow** (`TutorialSceneSlideshowCard`): prev/next navigation through every manifest scene (screen MP4s inline; avatar/b-roll placeholders with narration). The card survives page refresh via the `[tutorial_scene_slideshow]` session marker. Authoring is **blueprint-first**: `/tutorial-drill` interviews the creator (reuse stack vs greenfield), presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step.
+
+**Suite separation:** tutorial drills live only in dedicated tutorial suites. Never append `mode: tutorial` drills into a regular smoke/CI suite. When the product already has a drill suite, `/tutorial-drill` **copies** `suite_config` (template, start script, credentials) into a **new** sibling suite (e.g. `juicytrade-tutorial`) and saves only tutorial drills there. `/tutorial-drill-add <suite>` appends more tutorials **only** if that suite is already a tutorial suite (`IsTutorialSuite`); otherwise it refuses and points back to `/tutorial-drill`. (Aliases `/tutorial` and `/tutorial-add` still work.) **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+
+Example `drill_config.scenes` (written by Approve):
+
+```yaml
+drill_config:
+  mode: tutorial
+  blueprint: juicytrade_overview_blueprint
+  scenes:
+    - id: intro
+      voiceover: "Meet JuicyTrade."
+      visual_kind: avatar
+      visual_description: "Presenter on branded backdrop"
+      hold_ms: 5000
+    - id: dashboard
+      voiceover: "Here's your dashboard."
+      visual_kind: screen
+      visual_description: "Net Liquidation and account badge"
+      drill_node: dashboard_overview
+      hold_ms: 9000
+```
+
+Authoring: `/tutorial-drill` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)` → `draft_drill_from_action_log` (neutral skeleton only; chat adds `mode: tutorial` / narration / `record` after blueprint Approve). Product training videos use `mode: tutorial`; re-run after UI changes.
+
+**Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run with content asserts → `browser_highlight` → `browser_click(animate_cursor: true)` → reveal interaction (e.g. click expiration) → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
 
 ### Why LLM-Powered Triage
 
@@ -248,6 +308,13 @@ The drill runner collects:
 | `pkg/tools/run_drill_tool.go` | Drill execution tool with the 1000-line creation wizard prompt |
 | `pkg/tools/inject_drill_credentials_tool.go` | Prep-time credential injection (before start-services) |
 | `pkg/drill/run_instructions.go` | Studio Run prep text (Go); mirrored by `web/src/utils/generateRunInstructions.ts` |
+| `pkg/drill/scene_manifest.go` | Tutorial `scene_manifest.json` writer |
+| `pkg/tools/tutorial_prompt.go` | `/tutorial-drill` and `/tutorial-drill-add` wizard prompts (blueprint-first) |
+| `pkg/tools/tutorial_blueprint.go` | HeyGen-style tutorial_blueprint schema + drill conversion |
+| `web/src/components/chat/TutorialBlueprintCard.tsx` | In-chat Scene\|Voiceover\|Visual approval table |
+| `web/src/components/chat/TutorialSceneSlideshowCard.tsx` | Post-run scene navigator (screen video + avatar/b-roll placeholders) |
+| `pkg/browser/action_recorder.go` | DOM action capture for human demo → draft YAML |
+| `pkg/tools/draft_drill_from_action_log.go` | Action log → mode-neutral drill YAML skeleton (chat specializes) |
 
 ## Interactions
 

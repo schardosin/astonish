@@ -2066,10 +2066,11 @@ func handleSQLitePlatformSetup(cfg *config.AppConfig) error {
 	}
 	if existingTeam == nil {
 		team := &store.Team{
-			ID:        uuid.New().String(),
-			Name:      teamName,
-			Slug:      teamSlug,
-			CreatedAt: now,
+			ID:         uuid.New().String(),
+			Name:       teamName,
+			Slug:       teamSlug,
+			SchemaName: entstore.TeamSchemaName(teamSlug),
+			CreatedAt:  now,
 		}
 		if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
 			return fmt.Errorf("create team: %w", err)

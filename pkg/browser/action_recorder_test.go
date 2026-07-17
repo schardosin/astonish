@@ -1,8 +1,31 @@
 package browser
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestActionCaptureEvalJSIsFunction(t *testing.T) {
+	// go-rod Page.Eval wraps as `(<js>).apply(...)` — Eval payloads must be functions.
+	for name, js := range map[string]string{
+		"actionRecorderEvalJS":   actionRecorderEvalJS,
+		"actionCaptureDisableJS": actionCaptureDisableJS,
+		"actionCaptureClearJS":   actionCaptureClearJS,
+		"actionCaptureGetLogJS":  actionCaptureGetLogJS,
+	} {
+		trimmed := strings.TrimSpace(js)
+		if !strings.HasPrefix(trimmed, "() =>") && !strings.HasPrefix(trimmed, "function") {
+			t.Errorf("%s must be a function expression for Page.Eval, got prefix %q", name, trimmed[:min(40, len(trimmed))])
+		}
+		if strings.HasSuffix(trimmed, ")();") {
+			t.Errorf("%s must not be a completed IIFE (Page.Eval would call undefined.apply)", name)
+		}
+	}
+	onNew := strings.TrimSpace(actionRecorderOnNewDocJS)
+	if !strings.HasPrefix(onNew, "(function()") || !strings.HasSuffix(onNew, ")();") {
+		t.Errorf("actionRecorderOnNewDocJS must be an IIFE for EvalOnNewDocument, got %q…", onNew[:min(60, len(onNew))])
+	}
+}
 
 func TestPreferStableSelector(t *testing.T) {
 	got := PreferStableSelector("div > span:nth-of-type(2)", "#main", `[data-testid="save"]`, `button[aria-label="Save"]`)

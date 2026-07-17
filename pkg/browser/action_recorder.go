@@ -26,9 +26,10 @@ type actionCaptureState struct {
 	removeScript func() error
 }
 
-// actionRecorderJS installs listeners that append to window.__astonishActionLog.
-// Re-injected via Page.addScriptToEvaluateOnNewDocument for navigations.
-const actionRecorderJS = `(function() {
+// actionRecorderBodyJS installs listeners that append to window.__astonishActionLog.
+// Shared by Eval (function) and EvalOnNewDocument (IIFE) — go-rod Page.Eval wraps
+// JS as `(<js>).apply(...)`, so Eval must receive a function expression, not an IIFE.
+const actionRecorderBodyJS = `
   if (window.__astonishActionRecorderInstalled) {
     window.__astonishActionCaptureEnabled = true;
     return;
@@ -133,13 +134,17 @@ const actionRecorderJS = `(function() {
   window.addEventListener('popstate', function() {
     push({ type: 'navigate', url: location.href });
   });
-})();`
+`
 
-const actionCaptureDisableJS = `window.__astonishActionCaptureEnabled = false;`
+const actionRecorderEvalJS = `() => {` + actionRecorderBodyJS + `}`
 
-const actionCaptureClearJS = `window.__astonishActionLog = []; JSON.stringify({cleared:true});`
+const actionRecorderOnNewDocJS = `(function() {` + actionRecorderBodyJS + `})();`
 
-const actionCaptureGetLogJS = `JSON.stringify(window.__astonishActionLog || []);`
+const actionCaptureDisableJS = `() => { window.__astonishActionCaptureEnabled = false; }`
+
+const actionCaptureClearJS = `() => { window.__astonishActionLog = []; return JSON.stringify({cleared:true}); }`
+
+const actionCaptureGetLogJS = `() => JSON.stringify(window.__astonishActionLog || []);`
 
 // StartActionCapture injects the DOM action recorder on the current page and
 // all future documents in this target.
@@ -156,11 +161,11 @@ func (m *Manager) StartActionCapture(forHandoff bool) error {
 	m.actionCapture.mu.Lock()
 	defer m.actionCapture.mu.Unlock()
 
-	remove, err := pg.EvalOnNewDocument(actionRecorderJS)
+	remove, err := pg.EvalOnNewDocument(actionRecorderOnNewDocJS)
 	if err != nil {
 		return fmt.Errorf("action capture: EvalOnNewDocument: %w", err)
 	}
-	if _, err := pg.Eval(actionRecorderJS); err != nil {
+	if _, err := pg.Eval(actionRecorderEvalJS); err != nil {
 		return fmt.Errorf("action capture: inject: %w", err)
 	}
 	m.actionCapture.active = true

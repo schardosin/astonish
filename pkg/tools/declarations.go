@@ -153,7 +153,7 @@ func browserToolDeclarations() []ToolDeclaration {
 		{Name: "browser_set_locale", Description: "Override browser locale", Category: "browser"},
 		{Name: "browser_set_device", Description: "Emulate a mobile device", Category: "browser"},
 		{Name: "browser_request_human", Description: "Request human-in-the-loop browser interaction", Category: "browser"},
-		{Name: "browser_start_action_capture", Description: "Start DOM action capture for tutorial authoring", Category: "browser"},
+		{Name: "browser_start_action_capture", Description: "Start DOM action capture for drill authoring", Category: "browser"},
 		{Name: "browser_stop_action_capture", Description: "Stop DOM action capture", Category: "browser"},
 		{Name: "browser_get_action_log", Description: "Get captured DOM action log JSON", Category: "browser"},
 		{Name: "browser_clear_action_log", Description: "Clear the DOM action capture log", Category: "browser"},

@@ -34,14 +34,14 @@ describe('Browser Handoff Scenarios', () => {
 
       await result.sendMessage('Check that page')
 
-      // The BrowserView header renders "Browser: {data.reason}"
-      // where reason comes from result.message = "CAPTCHA detected, please solve it"
+      // Placeholder + harness panel host BrowserView
       await waitFor(() => {
         const text = result.container.textContent || ''
         expect(text).toContain('CAPTCHA detected')
+        expect(result.container.querySelector('[data-testid="harness-panel"]')?.getAttribute('data-harness-kind')).toBe('browser_handoff')
+        expect(result.container.querySelector('[data-testid="harness-placeholder"]')).toBeTruthy()
       }, { timeout: 10000 })
 
-      // The BrowserView renders the page URL in the header
       await waitFor(() => {
         const text = result.container.textContent || ''
         expect(text).toContain('example.com/login')

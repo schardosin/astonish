@@ -6,6 +6,8 @@ import type { DistillPreviewMessage } from './chatTypes'
 interface DistillPreviewCardProps {
   data: DistillPreviewMessage
   isActive?: boolean
+  /** When true, use full parent width (harness panel) instead of max-w-2xl. */
+  fillWidth?: boolean
   onSave: () => void
   onRequestChanges: () => void
   onCancel: () => void
@@ -88,7 +90,7 @@ function getTypeStyle(type: string) {
   return nodeTypeColors[lower] || { bg: 'var(--surface-muted)', text: 'var(--text-secondary)', border: 'var(--border-color)' }
 }
 
-export default function DistillPreviewCard({ data, isActive = false, onSave, onRequestChanges, onCancel }: DistillPreviewCardProps) {
+export default function DistillPreviewCard({ data, isActive = false, fillWidth = false, onSave, onRequestChanges, onCancel }: DistillPreviewCardProps) {
   const [showYaml, setShowYaml] = useState(false)
   const [explanationExpanded, setExplanationExpanded] = useState(true)
 
@@ -97,7 +99,7 @@ export default function DistillPreviewCard({ data, isActive = false, onSave, onR
 
   return (
     <div
-      className="my-3 rounded-xl overflow-hidden w-full max-w-2xl"
+      className={fillWidth ? 'rounded-xl overflow-hidden w-full' : 'my-3 rounded-xl overflow-hidden w-full max-w-2xl'}
       style={{
         border: '1px solid var(--border-color)',
         background: 'var(--bg-secondary)',

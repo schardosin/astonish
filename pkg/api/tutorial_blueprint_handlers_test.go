@@ -71,6 +71,9 @@ func TestHandleTutorialBlueprintIntent_ApproveContinues(t *testing.T) {
 	if chatAgent.HasPendingTutorialBlueprint("sess-1") {
 		t.Fatal("pending blueprint should be cleared after approve")
 	}
+	if !chatAgent.HasTutorialBlueprintApproved("sess-1") {
+		t.Fatal("approve should mark session blueprint as approved")
+	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "tutorial_blueprint_approved") {
 		t.Fatalf("expected tutorial_blueprint_approved SSE, got:\n%s", body)
@@ -109,6 +112,7 @@ func TestHandleTutorialBlueprintIntent_Cancel(t *testing.T) {
 		Title: "Open Studio",
 		Suite: "demo-tutorial",
 	})
+	chatAgent.MarkTutorialBlueprintApproved("sess-3")
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/studio/chat", nil)
 
@@ -123,6 +127,9 @@ func TestHandleTutorialBlueprintIntent_Cancel(t *testing.T) {
 	}
 	if chatAgent.HasPendingTutorialBlueprint("sess-3") {
 		t.Fatal("pending should be cleared on cancel")
+	}
+	if chatAgent.HasTutorialBlueprintApproved("sess-3") {
+		t.Fatal("cancel should clear approved blueprint flag")
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "cancelled") {

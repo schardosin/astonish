@@ -40,9 +40,34 @@ func (c *ChatAgent) HasPendingTutorialBlueprint(sessionID string) bool {
 	return c.GetPendingTutorialBlueprint(sessionID) != nil
 }
 
-// CancelPendingTutorialBlueprint clears pending blueprint state.
+// CancelPendingTutorialBlueprint clears pending blueprint state (not the approved flag).
 func (c *ChatAgent) CancelPendingTutorialBlueprint(sessionID string) {
 	c.traceMu.Lock()
 	defer c.traceMu.Unlock()
 	delete(c.pendingTutorialBP, sessionID)
+}
+
+// MarkTutorialBlueprintApproved records that the creator approved a blueprint this session.
+// validate_drill / save_drill for mode:tutorial require this flag.
+func (c *ChatAgent) MarkTutorialBlueprintApproved(sessionID string) {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	if c.approvedTutorialBP == nil {
+		c.approvedTutorialBP = make(map[string]bool)
+	}
+	c.approvedTutorialBP[sessionID] = true
+}
+
+// HasTutorialBlueprintApproved reports whether this session has an approved blueprint.
+func (c *ChatAgent) HasTutorialBlueprintApproved(sessionID string) bool {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	return c.approvedTutorialBP[sessionID]
+}
+
+// ClearTutorialBlueprintApproved clears the approved flag (new present or cancel).
+func (c *ChatAgent) ClearTutorialBlueprintApproved(sessionID string) {
+	c.traceMu.Lock()
+	defer c.traceMu.Unlock()
+	delete(c.approvedTutorialBP, sessionID)
 }

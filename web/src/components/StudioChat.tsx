@@ -18,19 +18,23 @@ import PlanPanel from './chat/PlanPanel'
 import FilePanel from './chat/FilePanel'
 import TodoPanel from './chat/TodoPanel'
 import AppsPanel from './chat/AppsPanel'
+import HarnessPanel from './chat/HarnessPanel'
+import HarnessPlaceholder from './chat/HarnessPlaceholder'
+import {
+  deriveLatestHarness,
+  harnessFocusEquals,
+  resolveHarnessFocus,
+  SIDEBAR_COLLAPSED_WIDTH,
+  SIDEBAR_EXPANDED_WIDTH,
+  type HarnessFocus,
+} from './chat/chatHarness'
 import SessionMemoryPanel from './SessionMemoryPanel'
 import SessionSidebar from './chat/SessionSidebar'
 import { listSessionMemories } from '../api/platform'
 import UsagePopover from './chat/UsagePopover'
 import type { TokenUsage } from './chat/UsagePopover'
-import BrowserView from './chat/BrowserView'
 import ArtifactCard from './chat/ArtifactCard'
-import DistillPreviewCard from './chat/DistillPreviewCard'
-import TutorialBlueprintCard from './chat/TutorialBlueprintCard'
-import TutorialSceneSlideshowCard from './chat/TutorialSceneSlideshowCard'
-import AppPreviewCard from './chat/AppPreviewCard'
 import AppCodeIndicator from './chat/AppCodeIndicator'
-import EmbeddedFileViewer from './chat/EmbeddedFileViewer'
 import NetworkDenialPrompt from './chat/NetworkDenialPrompt'
 import ModelCredentialBanner from './chat/ModelCredentialBanner'
 import SessionModelPicker from './chat/SessionModelPicker'
@@ -287,6 +291,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
   // Apps panel state
   const [appsPanelOpen, setAppsPanelOpen] = useState(false)
 
+  // Right-hand harness panel (Apps / Reports / Flow draft / Tutorial blueprint)
+  const [harnessOpen, setHarnessOpen] = useState(false)
+  const [manualHarnessFocus, setManualHarnessFocus] = useState<HarnessFocus | null>(null)
+  const prevHarnessIndexRef = useRef(-1)
+  const prevSidebarCollapsedRef = useRef(false)
+  const harnessAutoCollapsedRef = useRef(false)
+  const chatLayoutRef = useRef<HTMLDivElement>(null)
+  const [chatLayoutWidth, setChatLayoutWidth] = useState(0)
+
   // Token usage state (from API-reported UsageMetadata)
   const [tokenUsage, setTokenUsage] = useState<TokenUsage>({ inputTokens: 0, outputTokens: 0, totalTokens: 0 })
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null)
@@ -366,6 +379,100 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     }
     return paths
   }, [messages, isStreaming, sessionArtifacts])
+
+  // Markdown reports that belong in the harness panel (same three-signal gate).
+  const reportHarnessPaths = useMemo(() => {
+    const paths = new Set<string>()
+    for (const p of embeddedArtifactPaths) {
+      const a = sessionArtifacts.find(sa => sa.path === p)
+      if (a && a.fileType === 'Markdown' && a.isReport) paths.add(p)
+    }
+    return paths
+  }, [embeddedArtifactPaths, sessionArtifacts])
+
+  // Last-turn videos for the harness (embeddedArtifactPaths already excludes slideshow-owned).
+  const videoHarnessPaths = useMemo(() => {
+    const paths = new Set<string>()
+    for (const p of embeddedArtifactPaths) {
+      const a = sessionArtifacts.find(sa => sa.path === p)
+      if (a && a.fileType === 'Video') paths.add(p)
+    }
+    return paths
+  }, [embeddedArtifactPaths, sessionArtifacts])
+
+  const latestHarness = useMemo(
+    () => deriveLatestHarness(messages, reportHarnessPaths, videoHarnessPaths),
+    [messages, reportHarnessPaths, videoHarnessPaths],
+  )
+
+  const effectiveHarnessFocus = useMemo(
+    () => resolveHarnessFocus(latestHarness, manualHarnessFocus),
+    [latestHarness, manualHarnessFocus],
+  )
+
+  const openHarness = useCallback((focus: HarnessFocus) => {
+    setManualHarnessFocus(focus)
+    setHarnessOpen(true)
+    setFilePanelOpen(false)
+    setTodoPanelOpen(false)
+    setAppsPanelOpen(false)
+    if (!harnessAutoCollapsedRef.current) {
+      prevSidebarCollapsedRef.current = sidebarCollapsed
+      harnessAutoCollapsedRef.current = true
+      setSidebarCollapsed(true)
+    }
+  }, [sidebarCollapsed])
+
+  const closeHarness = useCallback(() => {
+    setHarnessOpen(false)
+    setManualHarnessFocus(null)
+    if (harnessAutoCollapsedRef.current) {
+      setSidebarCollapsed(prevSidebarCollapsedRef.current)
+      harnessAutoCollapsedRef.current = false
+    }
+  }, [])
+
+  // Auto-open harness when a newer harness item is emitted; collapse session sidebar.
+  useEffect(() => {
+    if (!latestHarness) return
+    if (latestHarness.messageIndex <= prevHarnessIndexRef.current) return
+    prevHarnessIndexRef.current = latestHarness.messageIndex
+    setManualHarnessFocus(null)
+    setHarnessOpen(true)
+    setFilePanelOpen(false)
+    setTodoPanelOpen(false)
+    setAppsPanelOpen(false)
+    if (!harnessAutoCollapsedRef.current) {
+      prevSidebarCollapsedRef.current = sidebarCollapsed
+      harnessAutoCollapsedRef.current = true
+      setSidebarCollapsed(true)
+    }
+  // Intentionally omit sidebarCollapsed from deps — we only snapshot it when first opening.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestHarness])
+
+  // Reset harness tracking when the session changes.
+  useEffect(() => {
+    prevHarnessIndexRef.current = -1
+    setHarnessOpen(false)
+    setManualHarnessFocus(null)
+    harnessAutoCollapsedRef.current = false
+  }, [activeSessionId])
+
+  // Measure the StudioChat flex row for harness width clamping.
+  useEffect(() => {
+    const el = chatLayoutRef.current
+    if (!el) return
+    const update = () => setChatLayoutWidth(el.clientWidth)
+    update()
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver(update)
+      ro.observe(el)
+      return () => ro.disconnect()
+    }
+    window.addEventListener('resize', update)
+    return () => window.removeEventListener('resize', update)
+  }, [])
 
   // Latest plan message that actually has steps. The Todo button/panel are
   // shown only when this is non-null. A plan may be persisted without steps
@@ -2515,7 +2622,11 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
   return (
     <>
-    <div className="flex flex-1 overflow-hidden" style={{ background: 'var(--bg-primary)' }}>
+    <div
+      ref={chatLayoutRef}
+      className="flex flex-1 overflow-hidden"
+      style={{ background: 'var(--bg-primary)' }}
+    >
       {/* Session Sidebar */}
       <SessionSidebar
         sessions={filteredSessions}
@@ -2560,7 +2671,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           {/* Todo button — shows plan steps in side panel (only when the latest plan has steps) */}
           {latestPlanWithSteps && (
           <button
-            onClick={() => { setTodoPanelOpen(!todoPanelOpen); if (!todoPanelOpen) { setFilePanelOpen(false); setAppsPanelOpen(false) } }}
+            onClick={() => {
+              const next = !todoPanelOpen
+              setTodoPanelOpen(next)
+              if (next) {
+                setFilePanelOpen(false)
+                setAppsPanelOpen(false)
+                setHarnessOpen(false)
+                setManualHarnessFocus(null)
+              }
+            }}
             className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
             style={{
               background: todoPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -2586,7 +2706,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           {/* Files button — shown when session has artifacts */}
           {sessionArtifacts.length > 0 && (
             <button
-              onClick={() => { setFilePanelOpen(!filePanelOpen); setFilePanelInitialPath(null); if (!filePanelOpen) { setTodoPanelOpen(false); setAppsPanelOpen(false) } }}
+              onClick={() => {
+                const next = !filePanelOpen
+                setFilePanelOpen(next)
+                setFilePanelInitialPath(null)
+                if (next) {
+                  setTodoPanelOpen(false)
+                  setAppsPanelOpen(false)
+                  setHarnessOpen(false)
+                  setManualHarnessFocus(null)
+                }
+              }}
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
               style={{
                 background: filePanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -2609,7 +2739,16 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           {/* Apps button — shown when session has app previews */}
           {messages.some(m => m.type === 'app_preview') && (
             <button
-              onClick={() => { setAppsPanelOpen(!appsPanelOpen); if (!appsPanelOpen) { setTodoPanelOpen(false); setFilePanelOpen(false) } }}
+              onClick={() => {
+                const next = !appsPanelOpen
+                setAppsPanelOpen(next)
+                if (next) {
+                  setTodoPanelOpen(false)
+                  setFilePanelOpen(false)
+                  setHarnessOpen(false)
+                  setManualHarnessFocus(null)
+                }
+              }}
               className="flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors"
               style={{
                 background: appsPanelOpen ? 'var(--accent-bg, rgba(59, 130, 246, 0.15))' : 'transparent',
@@ -2820,20 +2959,49 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                         )
                       })()}
                     </div>
-                    {/* Embedded file viewers for last-turn artifacts (last agent message only) */}
+                    {/* Last-turn report + video placeholders (full UI in harness panel) */}
                     {isLastAgent && (
                       <div className="mt-3 space-y-3">
-                        {sessionArtifacts.filter(a => embeddedArtifactPaths.has(a.path)).map(a => (
-                          <EmbeddedFileViewer
-                            key={a.path}
-                            artifact={a}
-                            sessionId={activeSessionId}
-                            onOpenInPanel={(path) => {
-                              setFilePanelInitialPath(path)
-                              setFilePanelOpen(true)
-                            }}
-                          />
-                        ))}
+                        {sessionArtifacts.filter(a => reportHarnessPaths.has(a.path)).map(a => {
+                          const artifactMsgIdx = messages.findIndex(
+                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
+                          )
+                          const focus: HarnessFocus = {
+                            kind: 'report',
+                            path: a.path,
+                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
+                          }
+                          return (
+                            <HarnessPlaceholder
+                              key={a.path}
+                              focus={focus}
+                              title={a.reportTitle || a.fileName || a.path}
+                              subtitle="Open in side panel"
+                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                              onOpen={openHarness}
+                            />
+                          )
+                        })}
+                        {sessionArtifacts.filter(a => videoHarnessPaths.has(a.path)).map(a => {
+                          const artifactMsgIdx = messages.findIndex(
+                            m => m.type === 'artifact' && (m as ArtifactMessage).path === a.path,
+                          )
+                          const focus: HarnessFocus = {
+                            kind: 'video',
+                            path: a.path,
+                            messageIndex: artifactMsgIdx >= 0 ? artifactMsgIdx : messages.length,
+                          }
+                          return (
+                            <HarnessPlaceholder
+                              key={a.path}
+                              focus={focus}
+                              title={a.fileName || a.path}
+                              subtitle="Open in side panel"
+                              isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                              onOpen={openHarness}
+                            />
+                          )
+                        })}
                       </div>
                     )}
                     {sourceUrls.length > 0 && <SourceCitations urls={sourceUrls} />}
@@ -2847,18 +3015,17 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'browser_handoff') {
                 const handoff = msg as BrowserHandoffMessage
+                const focus: HarnessFocus = { kind: 'browser_handoff', messageIndex: index }
                 return (
-                  <BrowserView
-                    key={index}
-                    data={handoff}
-                    theme={theme}
-                    onDone={() => {
-                      // Replace with a completed marker
-                      setMessages((prev: ChatMsg[]) => prev.map((m, i) =>
-                        i === index ? { ...m, type: 'browser_handoff' } as BrowserHandoffMessage : m
-                      ))
-                    }}
-                  />
+                  <div key={index}>
+                    <HarnessPlaceholder
+                      focus={focus}
+                      title={handoff.reason || handoff.pageTitle || 'Browser session'}
+                      subtitle={handoff.pageUrl || 'Open in side panel'}
+                      isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                      onOpen={openHarness}
+                    />
+                  </div>
                 )
               }
 
@@ -3087,23 +3254,25 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
                       : (m as AppPreviewMessage).title === appMsg.title
                   )
                 )
-                // Only render the card on the LAST version's message to avoid duplicates
+                // Only render the placeholder on the LAST version's message to avoid duplicates
                 const lastVersion = allVersions[allVersions.length - 1]
                 if (lastVersion && lastVersion !== appMsg) {
-                  return null // Skip earlier versions — they'll be shown via version nav
+                  return null
                 }
-                const versionIdx = allVersions.length - 1 // Default to latest
-                // Check if this app is actively being refined
-                const isActive = activeAppId != null && (appMsg.appId === activeAppId)
+                const appId = appMsg.appId || appMsg.title
+                const focus: HarnessFocus = {
+                  kind: 'app',
+                  appId,
+                  messageIndex: index,
+                }
                 return (
                   <div key={index}>
-                    <AppPreviewCard
-                      data={appMsg}
-                      versions={allVersions.length > 1 ? allVersions : undefined}
-                      versionIndex={versionIdx}
-                      isActive={isActive}
-                      onSave={isActive ? (name: string) => sendMessage(`__app_save__:${name}`) : undefined}
-                      sessionId={activeSessionId}
+                    <HarnessPlaceholder
+                      focus={focus}
+                      title={appMsg.title || 'App'}
+                      subtitle={allVersions.length > 1 ? `v${appMsg.version} · ${allVersions.length} versions` : `v${appMsg.version}`}
+                      isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                      onOpen={openHarness}
                     />
                   </div>
                 )
@@ -3111,29 +3280,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'distill_preview') {
                 const previewMsg = msg as DistillPreviewMessage
-                // A preview card is active (shows action buttons) when:
-                // 1. It's the last distill_preview in the message list
-                // 2. There's no distill_saved or cancel after it (review not concluded)
-                const isLastPreview = (() => {
-                  for (let j = index + 1; j < messages.length; j++) {
-                    const m = messages[j]
-                    if (m.type === 'distill_preview' || m.type === 'distill_saved') return false
-                  }
-                  return true
-                })()
+                const focus: HarnessFocus = { kind: 'distill', messageIndex: index }
                 return (
                   <div key={index}>
-                    <DistillPreviewCard
-                      data={previewMsg}
-                      isActive={isLastPreview}
-                      onSave={() => sendMessage('__distill_save__')}
-                      onRequestChanges={() => {
-                        if (inputRef.current) {
-                          inputRef.current.focus()
-                          inputRef.current.placeholder = 'Describe what you want to change in the flow...'
-                        }
-                      }}
-                      onCancel={() => sendMessage('__distill_cancel__')}
+                    <HarnessPlaceholder
+                      focus={focus}
+                      title={previewMsg.flowName || 'Flow draft'}
+                      subtitle={previewMsg.description || undefined}
+                      isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                      onOpen={openHarness}
                     />
                   </div>
                 )
@@ -3141,26 +3296,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'tutorial_blueprint_preview') {
                 const previewMsg = msg as TutorialBlueprintPreviewMessage
-                const isLastPreview = (() => {
-                  for (let j = index + 1; j < messages.length; j++) {
-                    const m = messages[j]
-                    if (m.type === 'tutorial_blueprint_preview' || m.type === 'tutorial_blueprint_approved') return false
-                  }
-                  return true
-                })()
+                const focus: HarnessFocus = { kind: 'tutorial_blueprint', messageIndex: index }
                 return (
                   <div key={index}>
-                    <TutorialBlueprintCard
-                      data={previewMsg}
-                      isActive={isLastPreview}
-                      onApprove={() => sendMessage('__tutorial_blueprint_approve__')}
-                      onRequestChanges={() => {
-                        if (inputRef.current) {
-                          inputRef.current.focus()
-                          inputRef.current.placeholder = 'Describe how to revise the Scene | Voiceover | Visual blueprint...'
-                        }
-                      }}
-                      onCancel={() => sendMessage('__tutorial_blueprint_cancel__')}
+                    <HarnessPlaceholder
+                      focus={focus}
+                      title={previewMsg.title || 'Tutorial blueprint'}
+                      subtitle={previewMsg.suite || undefined}
+                      isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                      onOpen={openHarness}
                     />
                   </div>
                 )
@@ -3186,11 +3330,15 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
 
               if (msg.type === 'tutorial_scene_slideshow') {
                 const slideshowMsg = msg as TutorialSceneSlideshowMessage
+                const focus: HarnessFocus = { kind: 'tutorial_slideshow', messageIndex: index }
                 return (
                   <div key={index}>
-                    <TutorialSceneSlideshowCard
-                      data={slideshowMsg}
-                      sessionId={activeSessionId}
+                    <HarnessPlaceholder
+                      focus={focus}
+                      title={slideshowMsg.title || slideshowMsg.drill || 'Tutorial scenes'}
+                      subtitle={slideshowMsg.suite ? `Suite: ${slideshowMsg.suite}` : 'Open in side panel'}
+                      isFocused={harnessOpen && harnessFocusEquals(effectiveHarnessFocus, focus)}
+                      onOpen={openHarness}
                     />
                   </div>
                 )
@@ -3477,6 +3625,49 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
           </form>
         </div>
       </div>
+
+      {/* Harness panel — ~1080px preferred, resizable; chat keeps a min floor */}
+      {harnessOpen && effectiveHarnessFocus && (
+        <HarnessPanel
+          focus={effectiveHarnessFocus}
+          messages={messages}
+          sessionArtifacts={sessionArtifacts}
+          activeAppId={activeAppId}
+          sessionId={activeSessionId}
+          theme={theme}
+          containerWidth={chatLayoutWidth}
+          sidebarWidth={sidebarCollapsed ? SIDEBAR_COLLAPSED_WIDTH : SIDEBAR_EXPANDED_WIDTH}
+          onClose={closeHarness}
+          onAppSave={(name: string) => sendMessage(`__app_save__:${name}`)}
+          onDistillSave={() => sendMessage('__distill_save__')}
+          onDistillRequestChanges={() => {
+            if (inputRef.current) {
+              inputRef.current.focus()
+              inputRef.current.placeholder = 'Describe what you want to change in the flow...'
+            }
+          }}
+          onDistillCancel={() => sendMessage('__distill_cancel__')}
+          onTutorialApprove={() => sendMessage('__tutorial_blueprint_approve__')}
+          onTutorialRequestChanges={() => {
+            if (inputRef.current) {
+              inputRef.current.focus()
+              inputRef.current.placeholder = 'Describe how to revise the Scene | Voiceover | Visual blueprint...'
+            }
+          }}
+          onTutorialCancel={() => sendMessage('__tutorial_blueprint_cancel__')}
+          onOpenReportInFiles={(path) => {
+            setFilePanelInitialPath(path)
+            setFilePanelOpen(true)
+            setHarnessOpen(false)
+            setManualHarnessFocus(null)
+          }}
+          onBrowserDone={(messageIndex) => {
+            setMessages((prev: ChatMsg[]) => prev.map((m, i) =>
+              i === messageIndex ? { ...m, type: 'browser_handoff' } as BrowserHandoffMessage : m
+            ))
+          }}
+        />
+      )}
 
       {/* File Panel — right side split panel for viewing artifacts */}
       {filePanelOpen && sessionArtifacts.length > 0 && (

@@ -21,7 +21,7 @@ React 19 SPA for Astonish Studio. Mixed **TypeScript (`.ts`/`.tsx`)** and **lega
 ## Non-negotiable invariants
 
 ### StudioChat.tsx (report vs. artifact rendering)
-`StudioChat.tsx` implements the client side of the **three-signal report gate**. A markdown artifact renders inline (`EmbeddedFileViewer`) **only** when all three signals hold:
+`StudioChat.tsx` implements the client side of the **three-signal report gate**. A markdown artifact is promoted into the right-hand **`HarnessPanel`** (via `EmbeddedFileViewer`) **only** when all three signals hold:
 
 1. Emitted in the last turn (after the most recent user message).
 2. `fileType === 'Markdown'`.
@@ -29,7 +29,9 @@ React 19 SPA for Astonish Studio. Mixed **TypeScript (`.ts`/`.tsx`)** and **lega
 
 Anything failing any one of these renders as the compact `ArtifactCard`. **Do not widen the markdown report gate in the SPA.** If the backend regresses the marker, fix it in `pkg/api/chat_runner.go`, not by weakening the client check.
 
-Last-turn **Video** artifacts (e.g. `browser_stop_recording`) also embed via `EmbeddedFileViewer` with a native player — separate from the markdown report contract. FilePanel / EmbeddedFileViewer must not fetch video as text; use `fetchArtifactBlob` + `<video>`.
+The chat stream shows a compact `HarnessPlaceholder` for gated reports, Apps, Flow draft, Tutorial blueprint/slideshow, browser handoff, and last-turn videos. The full UI mounts in `HarnessPanel` (~1080px preferred, user-resizable; chat keeps a ~380px floor), which auto-opens on the latest harness emission and auto-collapses the session sidebar.
+
+Last-turn **Video** artifacts (e.g. `browser_stop_recording`) open in the harness via `EmbeddedFileViewer` with `fillHeight` — separate from the markdown report contract. Slideshow-owned tutorial MP4s stay inside `TutorialSceneSlideshowCard` (also harnessed). FilePanel / EmbeddedFileViewer must not fetch video as text; use `fetchArtifactBlob` + `<video>`.
 
 Authoritative reference: `docs/architecture/chat-rendering-pipeline.md`, "The Report Pipeline" section.
 

@@ -35,14 +35,17 @@ func handleTutorialBlueprintIntent(
 			return true, ""
 		}
 		result, err := tools.BlueprintToTutorialDrillFromYAML(pending.YAML, "")
-		chatAgent.CancelPendingTutorialBlueprint(sessionID)
 		if err != nil {
+			chatAgent.CancelPendingTutorialBlueprint(sessionID)
 			errText := fmt.Sprintf("Failed to convert blueprint: %v", err)
 			SendSSE(w, flusher, "text", map[string]interface{}{"text": errText})
 			persistSessionMessage(r.Context(), sessionService, userID, sessionID, "model", errText)
 			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
 			return true, ""
 		}
+		// Mark approved before clearing pending so validate_drill/save_drill can proceed.
+		chatAgent.MarkTutorialBlueprintApproved(sessionID)
+		chatAgent.CancelPendingTutorialBlueprint(sessionID)
 		payload := map[string]any{
 			"title":          pending.Title,
 			"suite":          pending.Suite,
@@ -85,6 +88,7 @@ func handleTutorialBlueprintIntent(
 
 	case trimmed == "__tutorial_blueprint_cancel__":
 		persistSessionMessage(r.Context(), sessionService, userID, sessionID, "user", "Cancel blueprint")
+		chatAgent.ClearTutorialBlueprintApproved(sessionID)
 		chatAgent.CancelPendingTutorialBlueprint(sessionID)
 		responseText := "Tutorial blueprint review cancelled."
 		SendSSE(w, flusher, "text", map[string]interface{}{"text": responseText})

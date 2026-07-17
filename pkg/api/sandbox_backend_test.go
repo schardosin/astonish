@@ -230,7 +230,7 @@ func slicesEqual(a, b []string) bool {
 
 func TestResolveTemplateImageWith_CustomImage(t *testing.T) {
 	ts := newMockTemplateStore()
-	img := "docker.io/schardosin/astonish-sandbox-general:5de96c7a79eb"
+	img := "ghcr.io/sap/astonish-sandbox-general:5de96c7a79eb"
 	ts.templates["tpl-img-1"] = &store.SandboxTemplate{
 		ID:           "tpl-img-1",
 		Slug:         "team-general",

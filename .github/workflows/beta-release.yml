@@ -159,10 +159,10 @@ jobs:
 
             **Docker:**
             ```
-            docker pull schardosin/astonish:beta
-            docker pull schardosin/astonish-incus:beta
-            docker pull schardosin/astonish-sandbox-base:beta
-            docker pull schardosin/astonish-sandbox-openshell:beta
+            docker pull ghcr.io/sap/astonish:beta
+            docker pull ghcr.io/sap/astonish-incus:beta
+            docker pull ghcr.io/sap/astonish-sandbox-base:beta
+            docker pull ghcr.io/sap/astonish-sandbox-openshell:beta
             ```
           files: ./release/*
           draft: false
@@ -177,6 +177,11 @@ jobs:
     name: Docker astonish (beta)
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -200,31 +205,53 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to Docker Hub
+      - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/sap/astonish
+          tags: |
+            type=raw,value=beta
+            type=raw,value=${{ needs.prepare.outputs.version_tag }}
+
+      - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/astonish/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            schardosin/astonish:beta
-            schardosin/astonish:${{ needs.prepare.outputs.version_tag }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ needs.prepare.outputs.version_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/sap/astonish
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
   docker-incus:
     name: Docker astonish-incus (beta)
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -265,29 +292,51 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to Docker Hub
+      - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/sap/astonish-incus
+          tags: |
+            type=raw,value=beta
+            type=raw,value=${{ needs.prepare.outputs.version_tag }}
+
+      - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/incus/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            schardosin/astonish-incus:beta
-            schardosin/astonish-incus:${{ needs.prepare.outputs.version_tag }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/sap/astonish-incus
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   docker-sandbox-base:
     name: Docker sandbox-base (beta)
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -311,29 +360,51 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to Docker Hub
+      - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/sap/astonish-sandbox-base
+          tags: |
+            type=raw,value=beta
+            type=raw,value=${{ needs.prepare.outputs.version_tag }}
+
+      - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/sandbox-base/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            schardosin/astonish-sandbox-base:beta
-            schardosin/astonish-sandbox-base:${{ needs.prepare.outputs.version_tag }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/sap/astonish-sandbox-base
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   docker-sandbox-openshell:
     name: Docker sandbox-openshell (beta)
     needs: [prepare, release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -354,21 +425,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Login to Docker Hub
+      - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/sap/astonish-sandbox-openshell
+          tags: |
+            type=raw,value=beta
+            type=raw,value=${{ needs.prepare.outputs.version_tag }}
+
+      - name: Build and push Docker image
+        id: push
         uses: docker/build-push-action@v7
         with:
           context: .
           file: docker/sandbox-openshell/Dockerfile
           platforms: linux/amd64
           push: true
-          tags: |
-            schardosin/astonish-sandbox-openshell:beta
-            schardosin/astonish-sandbox-openshell:${{ needs.prepare.outputs.version_tag }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ghcr.io/sap/astonish-sandbox-openshell
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

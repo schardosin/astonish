@@ -47,7 +47,7 @@
 #     layer plus org-wide and template-specific layers on CephFS).
 #
 # Build:
-#   docker build -f docker/sandbox-base/Dockerfile -t schardosin/astonish-sandbox-base:latest .
+#   docker build -f docker/sandbox-base/Dockerfile -t ghcr.io/sap/astonish-sandbox-base:latest .
 #
 # Publish:
 #   The image tag MUST match SandboxKubernetesConfig.SandboxImage's

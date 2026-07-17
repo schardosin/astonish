@@ -939,7 +939,7 @@ sandbox:
     create: true                # creates Role + RoleBinding in sandbox ns
 
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: dev                    # mutable tag → backend auto-uses Always
     pullPolicy: IfNotPresent    # used for runtime pods; seed Job overrides
 
@@ -1341,7 +1341,7 @@ The prebuilt `astonish-sandbox-base` image MUST ship GNU tar with xattr/ACL supp
 ### Astonish ships
 
 - Helm chart at `deploy/helm/astonish` with templates for the sandbox namespace, RBAC, RWX PVCs, base-layer seed Job, and an optional FUSE device plugin DaemonSet — all driven by one per-environment values file (see `deploy/helm/astonish/values-dev-proxmox.yaml` for a complete example).
-- Prebuilt base sandbox image: `schardosin/astonish-sandbox-base:<version>` (Docker Hub). Phase F: image bundles `fuse-overlayfs` and the overlay-mode dispatcher in the entrypoint.
+- Prebuilt base sandbox image: `ghcr.io/sap/astonish-sandbox-base:<version>` (GitHub Container Registry). Phase F: image bundles `fuse-overlayfs` and the overlay-mode dispatcher in the entrypoint.
 - ConfigMap/Secret templates for backend configuration.
 - Pre-rendered ServiceAccount + Role bindings for the API/Worker to manage the sandbox namespace.
 

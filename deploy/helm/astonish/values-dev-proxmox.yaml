@@ -20,7 +20,7 @@
 # Control-plane image
 # ------------------------------------------------------------------
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: dev
   pullPolicy: Always
 
@@ -76,7 +76,7 @@ sandbox:
     fuseDeviceResource: ""     # No device plugin on dev; mknod path.
 
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: dev
     pullPolicy: IfNotPresent
 

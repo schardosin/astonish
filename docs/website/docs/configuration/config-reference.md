@@ -205,14 +205,14 @@ sandbox:
     idle_timeout_minutes: 10
   kubernetes:                  # Only for backend: k8s
     namespace: "astonish-sandboxes"
-    sandbox_image: "schardosin/astonish-sandbox-base:latest"
+    sandbox_image: "ghcr.io/sap/astonish-sandbox-base:latest"
     overlay_mode: "fuse"       # fuse | kernel | auto
     layers_pvc_name: "astonish-layers"
     uppers_pvc_name: "astonish-uppers"
   openshell:                   # Only for backend: openshell
     gateway_addr: ""
     gateway_tls: true
-    sandbox_image: "schardosin/astonish-sandbox-openshell:latest"
+    sandbox_image: "ghcr.io/sap/astonish-sandbox-openshell:latest"
     network_policy:
       presets: ["default"]
       extra_endpoints: []
@@ -251,7 +251,7 @@ sandbox:
     processes: 500
   kubernetes:
     namespace: "astonish-sandbox"
-    sandbox_image: "schardosin/astonish-sandbox-base:latest"
+    sandbox_image: "ghcr.io/sap/astonish-sandbox-base:latest"
     overlay_mode: "fuse"
 ```
 

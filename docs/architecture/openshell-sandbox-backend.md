@@ -494,7 +494,7 @@ sandbox:
   openshell:
     enabled: true
     image:
-      repository: schardosin/astonish-sandbox-openshell
+      repository: ghcr.io/sap/astonish-sandbox-openshell
       tag: dev
 
 # OpenShell subchart pass-through
@@ -502,7 +502,7 @@ openshell:
   server:
     disableTls: true  # Mesh handles encryption
     sandboxNamespace: "astonishdev-sandbox"
-    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    sandboxImage: "ghcr.io/sap/astonish-sandbox-openshell:dev"
 ```
 
 ### Go Config Struct

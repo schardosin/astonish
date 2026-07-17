@@ -347,7 +347,7 @@ func PlatformBaseConfigOptionalToolsHandler(w http.ResponseWriter, r *http.Reque
 // Sets or clears the custom sandbox image on the @base template. This is the
 // platform-wide image override used by the OpenShell backend.
 //
-// Request body: {"image": "ghcr.io/schardosin/custom-sandbox:v2"} or {"image": ""} to clear.
+// Request body: {"image": "ghcr.io/sap/custom-sandbox:v2"} or {"image": ""} to clear.
 func PlatformBaseImageHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Image string `json:"image"`

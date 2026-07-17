@@ -164,7 +164,7 @@ type Config struct {
 	// SandboxImage is the container image used for sandbox pods. It
 	// MUST ship the astonish-sandbox-entrypoint binary and the node
 	// runtime. Defaults to
-	// "schardosin/astonish-sandbox-base:latest" (§10 "Astonish ships").
+	// "ghcr.io/sap/astonish-sandbox-base:latest" (§10 "Astonish ships").
 	SandboxImage string
 
 	// MaxChainDepth caps the overlayfs lowerdir chain (default 20).
@@ -249,7 +249,7 @@ func (c *Config) applyDefaults() {
 		c.UppersPVCName = "astonish-uppers"
 	}
 	if c.SandboxImage == "" {
-		c.SandboxImage = "schardosin/astonish-sandbox-base:latest"
+		c.SandboxImage = "ghcr.io/sap/astonish-sandbox-base:latest"
 	}
 	if c.MaxChainDepth <= 0 {
 		c.MaxChainDepth = 20

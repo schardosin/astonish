@@ -162,7 +162,7 @@ func TestGetClientFromContext_ImageOnly(t *testing.T) {
 	nt := &NodeTool{pool: spy}
 
 	ctx := context.Background()
-	ctx = store.WithSandboxImage(ctx, "ghcr.io/schardosin/custom-sandbox:v2")
+	ctx = store.WithSandboxImage(ctx, "ghcr.io/sap/custom-sandbox:v2")
 
 	client := nt.getClientFromContext(ctx, "session-img")
 	if client == nil {
@@ -171,7 +171,7 @@ func TestGetClientFromContext_ImageOnly(t *testing.T) {
 	if spy.method != "GetOrCreateWithImage" {
 		t.Fatalf("expected GetOrCreateWithImage, got %s", spy.method)
 	}
-	if spy.image != "ghcr.io/schardosin/custom-sandbox:v2" {
+	if spy.image != "ghcr.io/sap/custom-sandbox:v2" {
 		t.Fatalf("expected custom image, got %q", spy.image)
 	}
 	if len(spy.chain) != 0 {

@@ -99,7 +99,7 @@ Create a `values.yaml` file:
 
 ```yaml
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: "latest"
   pullPolicy: IfNotPresent
 
@@ -138,7 +138,7 @@ sandbox:
   enabled: true
   backend: k8s
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: "latest"
   storage:
     storageClassName: "<your-rwx-storage-class>"

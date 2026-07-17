@@ -190,7 +190,7 @@ sandbox:
     control_plane_namespace: %s
     overlay_mode: fuse
     privileged_pods: true
-    sandbox_image: schardosin/astonish-sandbox-base:dev
+    sandbox_image: ghcr.io/sap/astonish-sandbox-base:dev
     layers_pvc_name: astonish-layers
     uppers_pvc_name: astonish-uppers
 `, bifrostURL, dataDir, defaultJWTSecret, kubeconfigPath, sandboxNS, controlPlaneNS)

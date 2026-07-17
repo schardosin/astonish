@@ -4,7 +4,7 @@
 
 # -- Container image settings (control plane: api + worker)
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: dev
   pullPolicy: Always
 
@@ -181,7 +181,7 @@ sandbox:
   # Sandbox base image — MUST ship the Phase F overlay entrypoint
   # (see docker/sandbox-base/Dockerfile).
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: dev
     pullPolicy: IfNotPresent
 
@@ -245,7 +245,7 @@ sandbox:
 
     # Sandbox container image (Astonish agent tooling + OpenShell supervisor).
     image:
-      repository: schardosin/astonish-sandbox-openshell
+      repository: ghcr.io/sap/astonish-sandbox-openshell
       tag: dev
 
     # Container image registry for custom-built sandbox images.
@@ -253,7 +253,7 @@ sandbox:
     registry:
       # OCI registry URL prefix. Images are pushed as:
       #   <url>/astonish-sandbox-<scope>:<content-hash>
-      # Examples: "docker.io/schardosin", "ghcr.io/schardosin", "harbor.internal:5000/astonish"
+      # Examples: "ghcr.io/sap", "ghcr.io/org", "harbor.internal:5000/astonish"
       url: ""
       # Name of the K8s Secret (type kubernetes.io/dockerconfigjson) used by Kaniko.
       # If username/password are provided below, the chart creates this secret automatically.
@@ -417,7 +417,7 @@ openshell:
     sandboxNamespace: "astonish-sandbox"
     # Default sandbox image — Astonish agent tooling.
     # Must match sandbox.openshell.image.repository:tag above.
-    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    sandboxImage: "ghcr.io/sap/astonish-sandbox-openshell:dev"
     # Always pull sandbox image so :dev tag updates are picked up immediately.
     sandboxImagePullPolicy: "Always"
     auth:

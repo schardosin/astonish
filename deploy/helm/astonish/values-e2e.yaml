@@ -32,7 +32,7 @@
 # Kept consistent with dev so the chart renders cleanly.
 # ------------------------------------------------------------------
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: dev
   pullPolicy: IfNotPresent
 
@@ -95,7 +95,7 @@ sandbox:
     fuseDeviceResource: ""
 
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: dev
     pullPolicy: IfNotPresent
 

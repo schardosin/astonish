@@ -23,7 +23,7 @@
 #
 # Configure in OpenShell gateway values:
 #   server:
-#     sandboxImage: schardosin/astonish-sandbox-openshell:latest
+#     sandboxImage: ghcr.io/sap/astonish-sandbox-openshell:latest
 
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 

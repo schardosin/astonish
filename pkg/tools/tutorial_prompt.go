@@ -73,8 +73,11 @@ Ask in order (skip only if the user already answered):
    demos on screen, concepts on b-roll.
 
 Optional Path B (supplement, not a substitute for explore): offer human demo via
-browser_request_human(capture_actions:true) to discover extra clicks — still
-produce a full mixed blueprint afterward from explore notes.
+browser_request_human(capture_actions:true), then browser_get_action_log →
+draft_drill_from_action_log. That draft is a MODE-NEUTRAL step skeleton only —
+do NOT treat it as a finished tutorial. Still complete the explore pass and
+produce a full mixed blueprint; only after Approve (or explicit creator choice)
+add mode: tutorial, narration, record, and hold_ms to screen steps.
 
 ## AUTHORING FLOW
 

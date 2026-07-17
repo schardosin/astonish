@@ -1122,8 +1122,9 @@ func GetDrillTools() ([]tool.Tool, error) {
 
 	draftFromLogTool, err := functiontool.New(functiontool.Config{
 		Name: "draft_drill_from_action_log",
-		Description: "Convert a browser DOM action capture log (from browser_get_action_log) into a draft " +
-			"tutorial drill YAML (mode: tutorial). Fill narration/hold_ms before validate_drill and save_drill.",
+		Description: "Convert a browser DOM action capture log (from browser_get_action_log) into a mode-neutral " +
+			"drill YAML skeleton (steps only). Chat should add assertions for tests or mode/narration/record for " +
+			"tutorials before validate_drill and save_drill.",
 	}, draftDrillFromActionLog)
 	if err != nil {
 		return nil, fmt.Errorf("create draft_drill_from_action_log tool: %w", err)

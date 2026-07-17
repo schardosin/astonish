@@ -7,7 +7,7 @@ import (
 	"github.com/SAP/astonish/pkg/browser"
 )
 
-func TestDraftTutorialYAMLFromActions(t *testing.T) {
+func TestDraftDrillYAMLFromActions(t *testing.T) {
 	events := []browser.ActionEvent{
 		{Type: "navigate", URL: "http://localhost:3000/"},
 		{Type: "click", Selector: `[data-testid="studio-link"]`, Label: "Studio"},
@@ -15,12 +15,14 @@ func TestDraftTutorialYAMLFromActions(t *testing.T) {
 		{Type: "keydown", Key: "Enter"},
 		{Type: "change", Selector: `input[type="password"]`, Value: "***"},
 	}
-	yamlOut, steps, skipped := DraftTutorialYAMLFromActions("demo-suite", "my_tutorial", "Demo tutorial", events)
+	yamlOut, steps, skipped := DraftDrillYAMLFromActions("demo-suite", "my_flow", "Demo capture", events)
 	if steps < 3 {
 		t.Fatalf("expected >=3 steps, got %d\n%s", steps, yamlOut)
 	}
-	if !strings.Contains(yamlOut, "mode: tutorial") {
-		t.Fatalf("missing mode: tutorial\n%s", yamlOut)
+	for _, banned := range []string{"mode: tutorial", "record:", "narration:", "hold_ms:"} {
+		if strings.Contains(yamlOut, banned) {
+			t.Fatalf("skeleton must not contain %q\n%s", banned, yamlOut)
+		}
 	}
 	if !strings.Contains(yamlOut, "browser_navigate") {
 		t.Fatalf("missing navigate\n%s", yamlOut)

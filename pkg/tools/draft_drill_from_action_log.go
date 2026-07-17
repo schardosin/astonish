@@ -12,15 +12,15 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DraftDrillFromActionLogArgs converts a captured action log into draft tutorial YAML.
+// DraftDrillFromActionLogArgs converts a captured action log into draft drill YAML.
 type DraftDrillFromActionLogArgs struct {
 	Suite       string `json:"suite" jsonschema:"required,Suite name for the draft drill."`
-	Name        string `json:"name,omitempty" jsonschema:"Drill file/base name. Default: tutorial_from_capture."`
+	Name        string `json:"name,omitempty" jsonschema:"Drill file/base name. Default: from_capture."`
 	Description string `json:"description,omitempty" jsonschema:"Human-readable description."`
 	ActionsJSON string `json:"actions_json" jsonschema:"required,JSON array from browser_get_action_log (events or .json field)."`
 }
 
-// DraftDrillFromActionLogResult is the drafted tutorial drill YAML.
+// DraftDrillFromActionLogResult is the drafted mode-neutral drill YAML skeleton.
 type DraftDrillFromActionLogResult struct {
 	Status      string `json:"status"`
 	YAML        string `json:"yaml"`
@@ -49,15 +49,18 @@ func draftDrillFromActionLog(_ tool.Context, args DraftDrillFromActionLogArgs) (
 	}
 	name := args.Name
 	if name == "" {
-		name = "tutorial_from_capture"
+		name = "from_capture"
 	}
 	desc := args.Description
 	if desc == "" {
-		desc = "Tutorial draft from browser action capture (fill narration/hold_ms)"
+		desc = "Draft from browser action capture"
 	}
 
-	yamlOut, steps, skipped := DraftTutorialYAMLFromActions(args.Suite, name, desc, events)
-	msg := fmt.Sprintf("Drafted %d tutorial steps. Fill narration and hold_ms, then validate_drill / save_drill.", steps)
+	yamlOut, steps, skipped := DraftDrillYAMLFromActions(args.Suite, name, desc, events)
+	msg := fmt.Sprintf(
+		"Drafted %d steps from capture. Add assertions (test) or mode/narration/record (tutorial), then validate_drill / save_drill.",
+		steps,
+	)
 	return DraftDrillFromActionLogResult{
 		Status:      "ok",
 		YAML:        yamlOut,
@@ -67,15 +70,13 @@ func draftDrillFromActionLog(_ tool.Context, args DraftDrillFromActionLogArgs) (
 	}, nil
 }
 
-// DraftTutorialYAMLFromActions maps capture events to a tutorial drill YAML document.
-func DraftTutorialYAMLFromActions(suite, name, description string, events []browser.ActionEvent) (yamlOut string, stepCount int, skippedHint string) {
+// DraftDrillYAMLFromActions maps capture events to a mode-neutral drill YAML skeleton.
+// Chat specializes the result (assertions for tests, or mode/narration/record for tutorials).
+func DraftDrillYAMLFromActions(suite, name, description string, events []browser.ActionEvent) (yamlOut string, stepCount int, skippedHint string) {
 	type nodeDraft struct {
-		Name      string
-		Narration string
-		HoldMs    int
-		Record    string
-		Tool      string
-		Args      map[string]any
+		Name string
+		Tool string
+		Args map[string]any
 	}
 	var nodes []nodeDraft
 	var skipped []string
@@ -90,12 +91,9 @@ func DraftTutorialYAMLFromActions(suite, name, description string, events []brow
 			}
 			lastURL = url
 			nodes = append(nodes, nodeDraft{
-				Name:      fmt.Sprintf("navigate_%d", len(nodes)+1),
-				Narration: "",
-				HoldMs:    2000,
-				Record:    "segment",
-				Tool:      "browser_navigate",
-				Args:      map[string]any{"tool": "browser_navigate", "url": url},
+				Name: fmt.Sprintf("navigate_%d", len(nodes)+1),
+				Tool: "browser_navigate",
+				Args: map[string]any{"tool": "browser_navigate", "url": url},
 			})
 		case "click":
 			sel := browser.PreferStableSelector(ev.Selector)
@@ -105,12 +103,9 @@ func DraftTutorialYAMLFromActions(suite, name, description string, events []brow
 			}
 			js := fmt.Sprintf(`(() => { const el = document.querySelector(%q); if (!el) return 'missing'; el.click(); return 'clicked'; })()`, sel)
 			nodes = append(nodes, nodeDraft{
-				Name:      sanitizeNodeName(ev.Label, fmt.Sprintf("click_%d", len(nodes)+1)),
-				Narration: "",
-				HoldMs:    3000,
-				Record:    "segment",
-				Tool:      "browser_run_code",
-				Args:      map[string]any{"tool": "browser_run_code", "code": js},
+				Name: sanitizeNodeName(ev.Label, fmt.Sprintf("click_%d", len(nodes)+1)),
+				Tool: "browser_run_code",
+				Args: map[string]any{"tool": "browser_run_code", "code": js},
 			})
 		case "change":
 			sel := browser.PreferStableSelector(ev.Selector)
@@ -128,52 +123,36 @@ func DraftTutorialYAMLFromActions(suite, name, description string, events []brow
 				sel, val,
 			)
 			nodes = append(nodes, nodeDraft{
-				Name:      sanitizeNodeName(ev.Label, fmt.Sprintf("type_%d", len(nodes)+1)),
-				Narration: "",
-				HoldMs:    2500,
-				Record:    "segment",
-				Tool:      "browser_run_code",
-				Args:      map[string]any{"tool": "browser_run_code", "code": js},
+				Name: sanitizeNodeName(ev.Label, fmt.Sprintf("type_%d", len(nodes)+1)),
+				Tool: "browser_run_code",
+				Args: map[string]any{"tool": "browser_run_code", "code": js},
 			})
 		case "keydown":
 			if ev.Key != "Enter" {
 				continue
 			}
 			nodes = append(nodes, nodeDraft{
-				Name:      fmt.Sprintf("press_enter_%d", len(nodes)+1),
-				Narration: "",
-				HoldMs:    2000,
-				Record:    "segment",
-				Tool:      "browser_press_key",
-				Args:      map[string]any{"tool": "browser_press_key", "key": "Enter"},
+				Name: fmt.Sprintf("press_enter_%d", len(nodes)+1),
+				Tool: "browser_press_key",
+				Args: map[string]any{"tool": "browser_press_key", "key": "Enter"},
 			})
 		default:
 			skipped = append(skipped, fmt.Sprintf("%s[%d]: unsupported", ev.Type, i))
 		}
 	}
 
-	// Build YAML manually for stable ordering / comments via description.
 	doc := map[string]any{
 		"description": description,
 		"type":        "drill",
 		"suite":       suite,
-		"drill_config": map[string]any{
-			"mode":         "tutorial",
-			"tags":         []string{"tutorial"},
-			"timeout":      300,
-			"step_timeout": 60,
-		},
 	}
 	nodeMaps := make([]map[string]any, 0, len(nodes))
 	flow := make([]map[string]string, 0)
 	for i, n := range nodes {
 		nm := map[string]any{
-			"name":      n.Name,
-			"narration": n.Narration,
-			"hold_ms":   n.HoldMs,
-			"record":    n.Record,
-			"type":      "tool",
-			"args":      n.Args,
+			"name": n.Name,
+			"type": "tool",
+			"args": n.Args,
 		}
 		nodeMaps = append(nodeMaps, nm)
 		if i+1 < len(nodes) {
@@ -194,7 +173,7 @@ func DraftTutorialYAMLFromActions(suite, name, description string, events []brow
 	if len(skipped) > 0 {
 		hint = strings.Join(skipped, "; ")
 	}
-	header := "# Draft from action capture — fill narration text before save.\n"
+	header := "# Draft from action capture — specialize before save (asserts for tests, or mode/narration/record for tutorials).\n"
 	header += fmt.Sprintf("# Suggested drill name when saving: %s\n", name)
 	return header + string(out), len(nodes), hint
 }

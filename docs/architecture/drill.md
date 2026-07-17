@@ -12,7 +12,7 @@ Drill suites are stored as YAML flow definitions (type: `drill_suite` and `drill
 
 Most AI testing approaches have the LLM drive the browser in real-time (reasoning about what to click, what to assert). This is slow, non-deterministic, and expensive. Drill separates the two phases:
 
-1. **Composition** (LLM-powered): The agent analyzes the application, identifies test scenarios, and generates YAML test definitions with explicit steps and assertions.
+1. **Composition** (LLM-powered): The agent analyzes the application, identifies test scenarios, and generates YAML test definitions with explicit steps and assertions. For UI navigation flows, `/drill` can offer **human capture**: `browser_request_human(capture_actions: true)` over KasmVNC → `browser_get_action_log` → `draft_drill_from_action_log` (mode-neutral step skeleton) → chat adds asserts / filters noise → `validate_drill` / `save_drill`. Mode (`tutorial` vs test) is chosen by chat, not by the draft tool.
 2. **Execution** (mechanical): The drill runner executes steps exactly as defined, evaluates assertions deterministically, and reports results without any LLM calls.
 
 The only exception is `semantic` assertions and `triage` mode, which use targeted LLM calls for specific judgment tasks.
@@ -153,7 +153,7 @@ drill_config:
       hold_ms: 9000
 ```
 
-Authoring: `/tutorial-drill` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)`. Product training videos use `mode: tutorial`; re-run after UI changes.
+Authoring: `/tutorial-drill` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)` → `draft_drill_from_action_log` (neutral skeleton only; chat adds `mode: tutorial` / narration / `record` after blueprint Approve). Product training videos use `mode: tutorial`; re-run after UI changes.
 
 **Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run with content asserts → `browser_highlight` → `browser_click(animate_cursor: true)` → reveal interaction (e.g. click expiration) → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
 
@@ -314,7 +314,7 @@ The drill runner collects:
 | `web/src/components/chat/TutorialBlueprintCard.tsx` | In-chat Scene\|Voiceover\|Visual approval table |
 | `web/src/components/chat/TutorialSceneSlideshowCard.tsx` | Post-run scene navigator (screen video + avatar/b-roll placeholders) |
 | `pkg/browser/action_recorder.go` | DOM action capture for human demo → draft YAML |
-| `pkg/tools/draft_drill_from_action_log.go` | Action log → draft tutorial drill YAML |
+| `pkg/tools/draft_drill_from_action_log.go` | Action log → mode-neutral drill YAML skeleton (chat specializes) |
 
 ## Interactions
 

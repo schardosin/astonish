@@ -354,7 +354,7 @@ func getBrowserToolsWithGuard(mgr *browser.Manager, guard *browser.NavigationGua
 
 	requestHumanTool, err := functiontool.New(functiontool.Config{
 		Name:        "browser_request_human",
-		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms, or demonstrating a tutorial flow). Returns immediately — the chat stays interactive. Set capture_actions=true to record DOM clicks/typing for draft_drill_from_action_log. The user clicks Done when finished (stops capture if started for handoff).",
+		Description: "Share the browser visually with the user for human intervention (CAPTCHAs, MFA, payment forms, or demonstrating a UI flow to capture). Returns immediately — the chat stays interactive. Set capture_actions=true to record DOM clicks/typing for draft_drill_from_action_log. The user clicks Done when finished (stops capture if started for handoff).",
 	}, safeBrowserFunc(BrowserRequestHuman(mgr)))
 	if err != nil {
 		return nil, err

@@ -18,7 +18,7 @@ const defaultKasmVNCPort = 6901
 // BrowserRequestHumanArgs is the input for browser_request_human.
 type BrowserRequestHumanArgs struct {
 	Reason         string `json:"reason" jsonschema:"required,Why you need human help. Shown to the user. Be specific about what they should do (e.g. 'solve the CAPTCHA and click Submit')."`
-	CaptureActions bool   `json:"capture_actions,omitempty" jsonschema:"When true, start DOM action capture for the handoff window so clicks/typing can be turned into a tutorial drill. Capture stops when the user clicks Done."`
+	CaptureActions bool   `json:"capture_actions,omitempty" jsonschema:"When true, start DOM action capture for the handoff window so clicks/typing can be turned into drill steps via draft_drill_from_action_log. Capture stops when the user clicks Done."`
 }
 
 // BrowserRequestHumanResult is the output of browser_request_human.

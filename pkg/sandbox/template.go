@@ -57,6 +57,8 @@ func CoreToolInstallCommands() [][]string {
 			// socat — required for exec-based TCP tunneling to container services
 			// (browser CDP, VNC proxy, sandbox HTTP proxy)
 			"socat",
+			// ffmpeg — standard multimedia tool (browser session recording, media processing)
+			"ffmpeg",
 			// Docker runtime (daemon + CLI + containerd) — required for
 			// containerized MCP servers and Docker-based workflows
 			"docker.io",

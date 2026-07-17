@@ -382,10 +382,11 @@ func SQLitePlatformInitHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	team := &store.Team{
-		ID:        uuid.New().String(),
-		Name:      "General",
-		Slug:      "general",
-		CreatedAt: now,
+		ID:         uuid.New().String(),
+		Name:       "General",
+		Slug:       "general",
+		SchemaName: entstore.TeamSchemaName("general"),
+		CreatedAt:  now,
 	}
 	if err := orgStore.Teams().CreateTeam(ctx, team); err != nil {
 		respondJSON(w, http.StatusInternalServerError, PlatformInitResponse{

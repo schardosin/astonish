@@ -12,6 +12,8 @@ interface BrowserViewProps {
   data: BrowserHandoffData
   theme: string
   onDone: () => void
+  /** When true, fill parent height (harness panel) instead of fixed 500px iframe. */
+  fillHeight?: boolean
 }
 
 /**
@@ -20,7 +22,7 @@ interface BrowserViewProps {
  * (e.g. solve a CAPTCHA) while continuing to chat with the agent.
  * Click "Done" to end the visual sharing session.
  */
-export default function BrowserView({ data, theme, onDone }: BrowserViewProps) {
+export default function BrowserView({ data, theme, onDone, fillHeight = false }: BrowserViewProps) {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [isDone, setIsDone] = useState(false)
   const [iframeLoaded, setIframeLoaded] = useState(false)
@@ -57,7 +59,9 @@ export default function BrowserView({ data, theme, onDone }: BrowserViewProps) {
 
   const containerClasses = isFullscreen
     ? 'fixed inset-0 z-50 flex flex-col'
-    : 'my-3 rounded-lg overflow-hidden flex flex-col'
+    : fillHeight
+      ? 'rounded-lg overflow-hidden flex flex-col h-full min-h-0'
+      : 'my-3 rounded-lg overflow-hidden flex flex-col'
 
   const containerStyle = isFullscreen
     ? {
@@ -67,6 +71,8 @@ export default function BrowserView({ data, theme, onDone }: BrowserViewProps) {
         border: '1px solid rgba(6, 182, 212, 0.3)',
         background: theme === 'dark' ? 'rgba(6, 182, 212, 0.03)' : 'rgba(6, 182, 212, 0.05)',
       }
+
+  const iframeMinHeight = isFullscreen || fillHeight ? 0 : '500px'
 
   return (
     <div className={containerClasses} style={containerStyle}>
@@ -123,7 +129,7 @@ export default function BrowserView({ data, theme, onDone }: BrowserViewProps) {
       </div>
 
       {/* KasmVNC iframe */}
-      <div className="relative flex-1" style={{ minHeight: isFullscreen ? 0 : '500px' }}>
+      <div className="relative flex-1 min-h-0" style={{ minHeight: iframeMinHeight }}>
         {!iframeLoaded && (
           <div className="absolute inset-0 flex items-center justify-center" style={{ color: 'var(--text-muted)' }}>
             <span className="text-sm">Loading browser view...</span>
@@ -133,7 +139,7 @@ export default function BrowserView({ data, theme, onDone }: BrowserViewProps) {
           src={data.vncProxyUrl}
           className="w-full h-full border-0"
           style={{
-            minHeight: isFullscreen ? '100%' : '500px',
+            minHeight: isFullscreen || fillHeight ? '100%' : '500px',
             opacity: iframeLoaded ? 1 : 0,
           }}
           onLoad={() => setIframeLoaded(true)}

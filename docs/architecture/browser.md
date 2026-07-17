@@ -134,7 +134,7 @@ Invariants:
 - Launch geometry stays at the configured viewport: KasmVNC `-geometry`, yaml `desktop.resolution`, Chrome `--window-size`, and CDP `SetViewport` should match. `browser_resize` only changes CDP metrics. The KasmVNC web UI may show a smaller client canvas (e.g. ~960×540 under HiDPI scaling); `xdpyinfo` / recording probe is authoritative.
 - Only one recording at a time; `Cleanup` / reconnect finalize an orphan recording.
 - Sandbox recordings write to `/tmp/astonish-recordings/*.mp4` (downloadable via sandbox PullFile). Local recordings write under `recordings/`.
-- Local Linux requires `ffmpeg` + `xdpyinfo` (`x11-utils`) (+ Xvfb when headed without a physical display). Sandbox images install those with the browser stack.
+- Local Linux requires `ffmpeg` + `xdpyinfo` (`x11-utils`) (+ Xvfb when headed without a physical display). Sandboxes install `ffmpeg` as a core tool (`CoreToolInstallCommands`); `x11-utils` comes with the browser stack.
 
 ### Tutorial recording polish
 

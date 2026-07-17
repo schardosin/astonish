@@ -43,6 +43,22 @@ describe('Distill Flow Scenarios', () => {
       }, { timeout: 10000 })
     })
 
+    it('opens harness panel for distill preview with stream placeholder', async () => {
+      result = renderChat({
+        scenarioEvents: distillPreview.events as FixtureEvent[],
+      })
+
+      await result.sendMessage('Distill this conversation')
+
+      await waitFor(() => {
+        const panel = result.container.querySelector('[data-testid="harness-panel"]')
+        expect(panel).toBeTruthy()
+        expect(panel?.getAttribute('data-harness-kind')).toBe('distill')
+        expect(result.container.querySelector('[data-testid="harness-placeholder"]')).toBeTruthy()
+        expect(result.container.querySelector('[data-testid="flow-preview"]')).toBeTruthy()
+      }, { timeout: 10000 })
+    })
+
     it('shows tags on the preview card', async () => {
       result = renderChat({
         scenarioEvents: distillPreview.events as FixtureEvent[],

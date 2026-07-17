@@ -109,7 +109,8 @@ type ChatAgent struct {
 	pendingDistill       map[string]*distillPreview   // keyed by session ID
 	pendingDistillReview map[string]*DistillReview    // keyed by session ID — interactive review state
 	pendingTutorialBP    map[string]*TutorialBlueprintPending
-	traceMu              sync.Mutex // protects traceHistory, pendingDistill, pendingDistillReview, pendingTutorialBP
+	approvedTutorialBP   map[string]bool // session has creator-approved blueprint (sticky until re-present/cancel)
+	traceMu              sync.Mutex      // protects traceHistory, pendingDistill, pendingDistillReview, pendingTutorialBP, approvedTutorialBP
 
 	// Image side-channel: images stripped from tool results before they
 	// enter session history, available for channels to deliver to users.
@@ -218,6 +219,7 @@ func NewChatAgent(llm model.LLM, internalTools []tool.Tool, toolsets []tool.Tool
 		pendingDistill:       make(map[string]*distillPreview),
 		pendingDistillReview: make(map[string]*DistillReview),
 		pendingTutorialBP:    make(map[string]*TutorialBlueprintPending),
+		approvedTutorialBP:   make(map[string]bool),
 		activeApps:           make(map[string]*ActiveApp),
 	}
 }

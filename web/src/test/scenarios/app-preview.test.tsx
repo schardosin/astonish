@@ -45,6 +45,20 @@ describe('App Preview Scenarios', () => {
       }, { timeout: 10000 })
     })
 
+    it('opens harness panel with app preview and shows placeholder in stream', async () => {
+      result = renderChat({
+        scenarioEvents: appGenerated.events as FixtureEvent[],
+      })
+
+      await result.sendMessage('Generate a dashboard')
+
+      await waitFor(() => {
+        expect(result.container.querySelector('[data-testid="harness-panel"]')).toBeTruthy()
+        expect(result.container.querySelector('[data-testid="harness-placeholder"]')).toBeTruthy()
+        expect(result.container.querySelector('[data-testid="app-preview-iframe"]')).toBeTruthy()
+      }, { timeout: 10000 })
+    })
+
     it('renders agent text before app preview', async () => {
       result = renderChat({
         scenarioEvents: appGenerated.events as FixtureEvent[],

@@ -981,6 +981,8 @@ func (cr *ChatRunner) maybeEmitTutorialBlueprint(chatAgent *agent.ChatAgent, ses
 		Suite:  suite,
 		Scenes: scenes,
 	}
+	// New card requires a fresh Approve — clear any prior session approval.
+	chatAgent.ClearTutorialBlueprintApproved(cr.SessionID)
 	chatAgent.SetPendingTutorialBlueprint(cr.SessionID, pending)
 
 	scenePayload := make([]map[string]any, 0, len(scenes))

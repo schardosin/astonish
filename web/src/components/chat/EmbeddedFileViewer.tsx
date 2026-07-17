@@ -29,10 +29,12 @@ function fileTypeBadgeStyle(fileType: string) {
 // Embedded file viewer for a single artifact — renders the file content inline
 // with a header bar (filename, type badge, download dropdown, fullscreen button).
 // Used inside agent message bubbles for markdown reports and last-turn media.
-export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel }: {
+export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel, fillHeight = false }: {
   artifact: SessionArtifact
   sessionId?: string | null
   onOpenInPanel?: (path: string) => void
+  /** When true, fill the parent height instead of capping content at 500px (harness panel). */
+  fillHeight?: boolean
 }) {
   const [content, setContent] = useState<string>('')
   const [loading, setLoading] = useState(true)
@@ -127,7 +129,7 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
 
   return (
     <div
-      className="rounded-lg overflow-hidden"
+      className={fillHeight ? 'rounded-lg overflow-hidden h-full flex flex-col min-h-0' : 'rounded-lg overflow-hidden'}
       style={{
         border: '1px solid var(--border-color)',
         background: 'var(--bg-primary)',
@@ -247,8 +249,8 @@ export default function EmbeddedFileViewer({ artifact, sessionId, onOpenInPanel 
 
       {/* File content */}
       <div
-        className="overflow-y-auto p-4"
-        style={{ maxHeight: mediaKind === 'video' ? 'none' : '500px' }}
+        className={fillHeight ? 'flex-1 min-h-0 overflow-y-auto p-4' : 'overflow-y-auto p-4'}
+        style={fillHeight || mediaKind === 'video' ? undefined : { maxHeight: '500px' }}
       >
         {mediaKind ? (
           <ArtifactMediaPlayer

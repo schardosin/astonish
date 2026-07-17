@@ -473,6 +473,18 @@ func (c *ChatAgent) Run(ctx agent.InvocationContext) iter.Seq2[*session.Event, e
 			})
 		}
 
+		// Hard-block validate_drill / save_drill / blueprint_to_tutorial_drill for
+		// mode:tutorial until the creator Approves a present_tutorial_blueprint card.
+		beforeToolCallbacks = append(beforeToolCallbacks, func(ctx tool.Context, t tool.Tool, args map[string]any) (map[string]any, error) {
+			blocked, result := CheckTutorialDrillToolGate(
+				t.Name(), args, c.HasTutorialBlueprintApproved(sessionID),
+			)
+			if blocked {
+				return result, nil
+			}
+			return nil, nil
+		})
+
 		// ── Auto-progress plan steps (before tool execution) ──
 		// When a plan is active, mark the first pending step as "running"
 		// when any non-delegate tool starts. This handles the initial

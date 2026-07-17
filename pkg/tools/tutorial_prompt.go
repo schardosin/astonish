@@ -47,6 +47,9 @@ Synthesia) is a later step. Do NOT treat every beat as a screen recording.
 9. After Approve & generate, refine screen steps with real clicks + content
    asserts → validate_drill → save_drill. Do not run_drill until dry-run passes.
 10. Never mix tutorial tags into default fleet smoke without a mode/tag filter.
+11. Tools REJECT validate_drill / save_drill (and blueprint_to_tutorial_drill)
+   for mode: tutorial until the creator clicks Approve — call
+   present_tutorial_blueprint first and wait for the card.
 
 ## INTERVIEW (do these before exploring / drafting)
 
@@ -198,7 +201,9 @@ rebuilding the stack.
    tutorial; mode must be tutorial.
 7. Follow the RECORDING PLAYBOOK: dry-run content first, warm-up unrecorded,
    multi-step reveal clicks (not cold navigates), asserts that fail on empty/error.
-8. Before run_drill, prep in order: use_sandbox_template (if declared) →
+8. Tools REJECT validate_drill / save_drill for mode: tutorial until Approve —
+   present_tutorial_blueprint first and wait for the card.
+9. Before run_drill, prep in order: use_sandbox_template (if declared) →
    inject_drill_credentials (if credentials declared) → run suite start
    script → dry-run green → then run_drill.
 `

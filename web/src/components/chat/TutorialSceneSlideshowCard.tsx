@@ -6,6 +6,8 @@ import type { TutorialSceneSlideshowMessage } from './chatTypes'
 interface TutorialSceneSlideshowCardProps {
   data: TutorialSceneSlideshowMessage
   sessionId?: string | null
+  /** When true, use full parent width (harness panel) instead of max-w-4xl. */
+  fillWidth?: boolean
 }
 
 function kindMeta(kind: string): { label: string; icon: typeof User; color: string } {
@@ -24,6 +26,7 @@ function kindMeta(kind: string): { label: string; icon: typeof User; color: stri
 export default function TutorialSceneSlideshowCard({
   data,
   sessionId,
+  fillWidth = false,
 }: TutorialSceneSlideshowCardProps) {
   const scenes = data.scenes || []
   const [index, setIndex] = useState(0)
@@ -62,7 +65,7 @@ export default function TutorialSceneSlideshowCard({
 
   return (
     <div
-      className="my-3 rounded-xl overflow-hidden w-full max-w-4xl"
+      className={fillWidth ? 'rounded-xl overflow-hidden w-full' : 'my-3 rounded-xl overflow-hidden w-full max-w-4xl'}
       style={{ border: '1px solid var(--border-color)', background: 'var(--bg-secondary)', boxShadow: 'var(--shadow-soft)' }}
     >
       <div className="px-4 py-3 flex items-center gap-2" style={{ borderBottom: '1px solid var(--border-color)' }}>

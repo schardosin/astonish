@@ -51,8 +51,8 @@ sequenceDiagram
     Backend-->>connectChat: SSE: event:text (summary chunks)
     Backend-->>connectChat: SSE: event:done
 
-    StudioChat->>StudioChat: Last agent message has artifacts →<br/>EmbeddedFileViewer inline + Files button
-    StudioChat->>User: Rendered: Agent bubble + EmbeddedFileViewer + Files button
+    StudioChat->>StudioChat: Last agent message has gated report →<br/>HarnessPlaceholder + HarnessPanel + Files button
+    StudioChat->>User: Rendered: Agent bubble + placeholder; report in side panel
 ```
 
 ## SSE Transport Layer
@@ -104,14 +104,14 @@ The backend emits **27 distinct event types** across `chat_runner.go` and `chat_
 | Event | Data Shape | Frontend Action |
 |-------|-----------|----------------|
 | `artifact` | `{path, toolName, fileName, fileType}` | Add to `sessionArtifacts`, show ArtifactCard |
-| `tutorial_scene_slideshow` | `{title, suite, drill, manifest_path, scenes[]}` | Persistent scene navigator card (`TutorialSceneSlideshowCard`); survives page refresh via `[tutorial_scene_slideshow]` session marker |
+| `tutorial_scene_slideshow` | `{title, suite, drill, manifest_path, scenes[]}` | Open HarnessPanel with TutorialSceneSlideshowCard; persists via `[tutorial_scene_slideshow]` session marker |
 | `image` | `{data, mimeType}` | Render inline `<img>` |
 
 ### App Preview Events
 
 | Event | Data Shape | Frontend Action |
 |-------|-----------|----------------|
-| `app_preview` | `{code, title, description, version, appId}` | Finalize streaming text, render AppPreviewCard |
+| `app_preview` | `{code, title, description, version, appId}` | Finalize streaming text, open HarnessPanel with AppPreviewCard |
 | `app_done` / `app_saved` | `{name, path}` | Clear active app, show saved confirmation |
 
 ### Delegation Events
@@ -164,11 +164,11 @@ graph TD
     end
 
     subgraph "Message Types (React State)"
-        M1 --> C1["ReactMarkdown bubble<br/>(+ EmbeddedFileViewer if artifacts)"]
+        M1 --> C1["ReactMarkdown bubble<br/>(+ report/video HarnessPlaceholder)"]
         M2 --> C2[renderToolCard]
         M3 --> C2
         M4 --> C3[ArtifactCard]
-        M5 --> C4[AppPreviewCard]
+        M5 --> C4["HarnessPlaceholder → HarnessPanel(AppPreviewCard)"]
         M6 --> C5[Error div]
         M7 --> C6[Approval card]
         M8 --> C7[TaskPlanPanel]
@@ -180,10 +180,10 @@ graph TD
 | Message Type | Component | Notes |
 |-------------|-----------|-------|
 | `user` | Inline chat bubble | "You" label, plain text |
-| `agent` | `ReactMarkdown` bubble + `EmbeddedFileViewer` | Last agent message renders embedded file viewers when artifacts exist |
+| `agent` | `ReactMarkdown` bubble + report/video `HarnessPlaceholder` | Last agent message: gated reports and last-turn videos open in `HarnessPanel` |
 | `tool_call` | `renderToolCard()` | Collapsible tool invocation card |
 | `tool_result` | `renderToolCard()` | Collapsible tool response card |
-| `browser_handoff` | `BrowserView` | VNC proxy + page info |
+| `browser_handoff` | `HarnessPlaceholder` → `HarnessPanel`/`BrowserView` | VNC proxy fills the right panel |
 | `image` | Inline `<img>` | Base64 data URI |
 | `error` | Red error `<div>` | Plain text |
 | `error_info` | Structured error card | Title, reason, suggestion, raw error |
@@ -196,15 +196,17 @@ graph TD
 | `fleet_message` | Fleet chat bubble | Agent-colored markdown bubble |
 | `system` | System info card | Info icon + markdown |
 | `retry` | Orange retry badge | Attempt counter |
-| `artifact` | `ArtifactCard` | File notification (suppressed when embedded in last agent bubble) |
-| `app_preview` | `AppPreviewCard` | Sandboxed iframe with live React preview |
-| `distill_preview` | `DistillPreviewCard` | Flow YAML preview with save button |
+| `artifact` | `ArtifactCard` | File notification (suppressed when report/video is harnessed or embedded) |
+| `app_preview` | `HarnessPlaceholder` → `HarnessPanel`/`AppPreviewCard` | Compact stream card; full preview in ~1080px (resizable) right panel |
+| `distill_preview` | `HarnessPlaceholder` → `HarnessPanel`/`DistillPreviewCard` | Flow draft approval in right harness panel |
+| `tutorial_blueprint_preview` | `HarnessPlaceholder` → `HarnessPanel`/`TutorialBlueprintCard` | Tutorial blueprint approval in right harness panel |
+| `tutorial_scene_slideshow` | `HarnessPlaceholder` → `HarnessPanel`/`TutorialSceneSlideshowCard` | Post-record scene navigator in right harness panel |
 | `distill_saved` | Saved confirmation card | File path + copy button |
 | `app_saved` | Saved confirmation card | App name + path |
 
 ## The Report Pipeline
 
-Reports are rendered inline inside the last agent message bubble using `EmbeddedFileViewer`. There is no separate "ResultCard" wrapper -- artifacts appear directly below the agent's summary text.
+Gated markdown reports render in the right-hand **`HarnessPanel`** (~1080px preferred, user-resizable; chat keeps a ~380px floor), not as a full-width inline viewer in the chat stream. The chat stream shows a compact **`HarnessPlaceholder`** under the last agent bubble; clicking it re-focuses that report. The three-signal gate is unchanged — only the mount point moved from the agent bubble into `HarnessPanel`.
 
 ### How it works
 
@@ -226,14 +228,12 @@ sequenceDiagram
     Backend->>Frontend: SSE: text (summary chunks)
     Backend->>Frontend: SSE: done
 
-    Frontend->>Frontend: Last agent message + artifacts exist →<br/>Render EmbeddedFileViewer(s) below summary text
+    Frontend->>Frontend: Last agent message + gated report →<br/>HarnessPlaceholder in stream + HarnessPanel(EmbeddedFileViewer)
 ```
 
 ### The `embeddedArtifactPaths` memo
 
-When the session is done streaming and has artifacts, the `embeddedArtifactPaths` set is populated with all session artifact paths. This suppresses the inline `ArtifactCard` for those files, since they're already shown as `EmbeddedFileViewer`s inside the last agent message bubble.
-
-The logic is simple: if `!isStreaming` and `sessionArtifacts.length > 0`, find the last non-streaming agent message and embed all artifact paths.
+When the session is done streaming and has artifacts, the `embeddedArtifactPaths` set is populated for last-turn gated markdown reports and last-turn videos. That set suppresses the inline `ArtifactCard` for those files. Markdown reports and standalone videos mount in `HarnessPanel` via `reportHarnessPaths` / `videoHarnessPaths`. Slideshow-owned tutorial MP4s are excluded from `videoHarnessPaths` and play inside the harnessed `TutorialSceneSlideshowCard`.
 
 ### Export pipeline
 
@@ -264,13 +264,13 @@ graph TD
     F --> I["StudioChat embeddedArtifactPaths gate:<br/>last-turn AND fileType==='Markdown' AND isReport"]
     G --> I
     H --> I
-    I -->|gate passes| J[EmbeddedFileViewer<br/>inline in last agent bubble]
+    I -->|gate passes| J["HarnessPlaceholder in stream<br/>+ HarnessPanel(EmbeddedFileViewer)"]
     I -->|gate fails| K[ArtifactCard<br/>compact download tile]
 ```
 
 ### Gate rules (the contract surface)
 
-A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering **iff all three** conditions hold:
+A markdown artifact is promoted to harness-panel `EmbeddedFileViewer` rendering **iff all three** conditions hold:
 
 1. The artifact event was emitted in the **last turn** (after the most recent user message). Earlier-turn edits never embed.
 2. `fileType === 'Markdown'`. Code, configs, scripts, JSON, etc. always render as `ArtifactCard`.
@@ -278,7 +278,7 @@ A markdown artifact is promoted to inline `EmbeddedFileViewer` rendering **iff a
 
 Any markdown artifact failing any of these conditions falls back to the compact `ArtifactCard` download tile.
 
-**Video (separate from the report gate):** last-turn artifacts with `fileType === 'Video'` (e.g. `browser_stop_recording` MP4s) also embed in `EmbeddedFileViewer` **unless** a `tutorial_scene_slideshow` message owns that path — tutorial `run_drill` MP4s play inside `TutorialSceneSlideshowCard` instead. The viewer loads bytes via `fetchArtifactBlob` (team-auth headers) into a blob URL and plays them with `<video controls>`. FilePanel uses the same player. Download labels use "Download Video" — never "Download as Markdown". Do not classify video as Markdown or set `isReport` for it.
+**Video (separate from the report gate):** last-turn artifacts with `fileType === 'Video'` (e.g. `browser_stop_recording` MP4s) open in `HarnessPanel` via `EmbeddedFileViewer` (`fillHeight`) **unless** a `tutorial_scene_slideshow` message owns that path — tutorial `run_drill` MP4s play inside the harnessed `TutorialSceneSlideshowCard` instead. The viewer loads bytes via `fetchArtifactBlob` (team-auth headers) into a blob URL and plays them with `<video controls>`. FilePanel uses the same player. Download labels use "Download Video" — never "Download as Markdown". Do not classify video as Markdown or set `isReport` for it.
 
 **Tutorial scene slideshow persistence:** after a successful tutorial `run_drill`, the backend reads `scene_manifest.json`, emits `tutorial_scene_slideshow` over SSE, and persists `[tutorial_scene_slideshow]{...}` in the session transcript (same pattern as `tutorial_blueprint_preview`). On reload, `eventsToMessages` reconstructs the card; sessions recorded before the marker shipped are backfilled by `injectTutorialSceneSlideshows` from persisted `run_drill` tool responses.
 
@@ -322,7 +322,7 @@ Visual apps use a different pipeline from reports. The LLM wraps generated React
 graph TD
     A["LLM generates text with<br/>```astonish-app fence"] --> B[Backend: detectAndEmitAppPreviews]
     B --> C["SSE: app_preview event<br/>{code, title, description, version}"]
-    C --> D[Frontend: AppPreviewCard]
+    C --> D[Frontend: HarnessPanel / AppPreviewCard]
     D --> E[Sandboxed iframe<br/>Sucrase + React runtime]
 
     A --> F["During streaming:<br/>AppCodeIndicator shows progress"]
@@ -337,7 +337,7 @@ During streaming, the agent message contains a partial `astonish-app` fence. The
 const appFenceRe = /```astonish-app\s*\n([\s\S]*?)(?:\n```|$)/
 ```
 
-When matched, it renders an `AppCodeIndicator` (pulsing "Generating app..." with expandable code view) instead of the raw fence text. After streaming completes, the `app_preview` event arrives and replaces the indicator with the full `AppPreviewCard`.
+When matched, it renders an `AppCodeIndicator` (pulsing "Generating app..." with expandable code view) instead of the raw fence text. After streaming completes, the `app_preview` event arrives and replaces the indicator with a stream `HarnessPlaceholder` plus the full `AppPreviewCard` in `HarnessPanel`.
 
 **This streaming interceptor is intentionally `astonish-app`-only.** Do not generalize it to other fence types without implementing the full backend event + frontend handler + ResultCard integration for that type.
 
@@ -455,8 +455,8 @@ These rules were established through bugs and fixes. Violating them will break t
 ### Report rendering
 
 1. **Reports must use `write_file`** -- The system prompt instructs the LLM to save reports to disk via `write_file`, then present a concise summary inline. Never use inline fences for reports.
-2. **Artifacts render as `EmbeddedFileViewer`** inside the last agent message bubble when `sessionArtifacts.length > 0` and the session is done streaming.
-3. **`embeddedArtifactPaths` suppresses inline `ArtifactCard`s** for files already shown as embedded viewers in the agent bubble.
+2. **Gated markdown reports and last-turn videos** open in `HarnessPanel` (with a stream `HarnessPlaceholder`) when `sessionArtifacts.length > 0` and the session is done streaming.
+3. **`embeddedArtifactPaths` suppresses inline `ArtifactCard`s** for files already shown via harness placeholders.
 
 ### Event handling
 
@@ -497,7 +497,10 @@ These rules were established through bugs and fixes. Violating them will break t
 | `web/src/components/StudioChat.tsx` | Main component -- SSE handlers, state, render loop |
 | `web/src/components/chat/chatTypes.ts` | Message type interfaces and ChatMsg union type |
 | `web/src/api/studioChat.ts` | `connectChat()`, `connectChatStream()`, artifact APIs |
-| `web/src/components/chat/EmbeddedFileViewer.tsx` | Inline file viewer with markdown rendering, download/export |
+| `web/src/components/chat/EmbeddedFileViewer.tsx` | File viewer with markdown rendering, download/export (harness fillHeight) |
+| `web/src/components/chat/HarnessPanel.tsx` | ~1080px preferred right panel (resizable) hosting Apps / Reports / Videos / Flow draft / Tutorial / Browser |
+| `web/src/components/chat/HarnessPlaceholder.tsx` | Compact clickable stream card that focuses the harness panel |
+| `web/src/components/chat/chatHarness.ts` | Latest-harness derivation and focus override helpers |
 | `web/src/components/chat/AppPreviewCard.tsx` | Sandboxed React preview in iframe |
 | `web/src/components/chat/AppCodeIndicator.tsx` | Streaming progress for app generation |
 | `web/src/components/chat/FilePanel.tsx` | Full-screen file viewer overlay |

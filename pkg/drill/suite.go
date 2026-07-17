@@ -377,7 +377,7 @@ func IsTutorialSuite(suite *LoadedSuite) bool {
 }
 
 // BuildSuiteContext returns a formatted string describing the suite and its
-// existing drills. This is used by the /drill-add and /tutorial-add prompts
+// existing drills. This is used by the /drill-add and /tutorial-drill-add prompts
 // to give the LLM context about what already exists.
 func BuildSuiteContext(suite *LoadedSuite) string {
 	var b strings.Builder

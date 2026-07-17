@@ -548,9 +548,28 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// /tutorial: start a tutorial drill creation conversation
-	if msg == "/tutorial" || strings.HasPrefix(msg, "/tutorial ") {
-		hint := strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial"))
+	// /tutorial-drill-add <suite> (alias: /tutorial-add): add to an existing tutorial suite only.
+	// Match longer prefixes before /tutorial-drill and /tutorial.
+	if suiteName, ok := tutorialDrillAddSuite(msg); ok {
+		suiteName, suiteContext, err := resolveTutorialAddContext(r.Context(), flowStoreFromRequest(r), suiteName)
+		if err != nil {
+			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
+			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+			return
+		}
+		eventData := map[string]interface{}{
+			"suite_name":           suiteName,
+			"wizard_kind":          "tutorial",
+			"wizard_system_prompt": tools.GetTutorialAddPrompt(suiteName, suiteContext),
+			"pinned_tool_groups":   []string{"drill"},
+		}
+		SendSSE(w, flusher, "drill_add_redirect", eventData)
+		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
+		return
+	}
+
+	// /tutorial-drill [hint] (alias: /tutorial): start tutorial drill creation.
+	if hint, ok := tutorialDrillHint(msg); ok {
 		eventData := map[string]interface{}{
 			"hint":                 hint,
 			"wizard_kind":          "tutorial",
@@ -574,26 +593,6 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		eventData := map[string]interface{}{
 			"suite_name":           suiteName,
 			"wizard_system_prompt": wizardPrompt,
-			"pinned_tool_groups":   []string{"drill"},
-		}
-		SendSSE(w, flusher, "drill_add_redirect", eventData)
-		SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-		return
-	}
-
-	// /tutorial-add <suite>: add tutorial drills to an existing tutorial suite only
-	if strings.HasPrefix(msg, "/tutorial-add ") {
-		suiteName := strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial-add"))
-		suiteName, suiteContext, err := resolveTutorialAddContext(r.Context(), flowStoreFromRequest(r), suiteName)
-		if err != nil {
-			SendSSE(w, flusher, "error", map[string]interface{}{"error": err.Error()})
-			SendSSE(w, flusher, "done", map[string]interface{}{"done": true})
-			return
-		}
-		eventData := map[string]interface{}{
-			"suite_name":           suiteName,
-			"wizard_kind":          "tutorial",
-			"wizard_system_prompt": tools.GetTutorialAddPrompt(suiteName, suiteContext),
 			"pinned_tool_groups":   []string{"drill"},
 		}
 		SendSSE(w, flusher, "drill_add_redirect", eventData)
@@ -1352,8 +1351,8 @@ func handleSlashCommand(r *http.Request, w io.Writer, flusher http.Flusher, cm *
 				"- `/fleet-plan [hint]` — Create a reusable fleet plan through guided conversation\n" +
 				"- `/drill [hint]` — Create a drill suite with guided wizard\n" +
 				"- `/drill-add <suite>` — Add new drills to an existing suite\n" +
-				"- `/tutorial [hint]` — Create a tutorial (narrated) drill with guided wizard\n" +
-				"- `/tutorial-add <suite>` — Add tutorial drills to an existing *tutorial* suite\n" +
+				"- `/tutorial-drill [hint]` — Create a tutorial (narrated) drill with guided wizard\n" +
+				"- `/tutorial-drill-add <suite>` — Add tutorial drills to an existing *tutorial* suite\n" +
 				"- `/help` — Show this help message",
 		})
 

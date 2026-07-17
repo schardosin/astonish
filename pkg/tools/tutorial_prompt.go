@@ -3,12 +3,12 @@ package tools
 import "fmt"
 
 // GetTutorialWizardPrompt returns the system prompt for the tutorial video blueprint wizard.
-// Injected as SessionContext when the user triggers /tutorial.
+// Injected as SessionContext when the user triggers /tutorial-drill (alias: /tutorial).
 func GetTutorialWizardPrompt() string {
 	return tutorialWizardPrompt
 }
 
-// GetTutorialAddPrompt returns the system prompt for /tutorial-add.
+// GetTutorialAddPrompt returns the system prompt for /tutorial-drill-add (alias: /tutorial-add).
 func GetTutorialAddPrompt(suiteName, suiteContext string) string {
 	return fmt.Sprintf(tutorialAddPromptTemplate, suiteName, suiteContext)
 }
@@ -166,7 +166,7 @@ tutorial suite %q.
 ## INVARIANT
 
 This command only works on suites that already contain tutorial drills.
-Never use /tutorial-add on a regular smoke/CI suite.
+Never use /tutorial-drill-add on a regular smoke/CI suite.
 
 ## YOUR TASK
 

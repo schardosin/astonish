@@ -317,8 +317,8 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
     { cmd: '/fleet-plan', desc: 'Create a reusable fleet plan' },
     { cmd: '/drill', desc: 'Create a drill suite with guided wizard' },
     { cmd: '/drill-add', desc: 'Add new drills to an existing suite' },
-    { cmd: '/tutorial', desc: 'Create a tutorial (narrated) drill with guided wizard' },
-    { cmd: '/tutorial-add', desc: 'Add tutorial drills to an existing suite' },
+    { cmd: '/tutorial-drill', desc: 'Create a tutorial (narrated) drill with guided wizard' },
+    { cmd: '/tutorial-drill-add', desc: 'Add tutorial drills to an existing tutorial suite' },
   ], [])
 
   // Pre-compute which artifact paths should be rendered as embedded file viewers
@@ -1887,7 +1887,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'drill_redirect':
-            // /drill or /tutorial [hint]: start drill/tutorial suite creation wizard
+            // /drill or /tutorial-drill [hint]: start drill/tutorial suite creation wizard
             setIsStreaming(false)
             {
               const hint = (data.hint as string) || ''
@@ -1918,7 +1918,7 @@ export default function StudioChat({ theme, initialSessionId, pendingChatMessage
             break
 
           case 'drill_add_redirect':
-            // /drill-add or /tutorial-add <suite>: add drills to an existing suite
+            // /drill-add or /tutorial-drill-add <suite>: add drills to an existing suite
             setIsStreaming(false)
             {
               const suiteName = (data.suite_name as string) || ''

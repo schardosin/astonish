@@ -108,7 +108,7 @@ Drill includes pixel-level visual comparison:
 
 Tutorial defaults: `on_fail: continue`, no triage/retries unless YAML sets them. Always honor `hold_ms > 0` (sleep after a successful step) in any mode.
 
-**Explore-first authoring:** `/tutorial` must explore the live UI (click nav, `browser_snapshot` + `browser_take_screenshot` each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. Snapshot drives selectors/asserts; screenshot gives the creator a visual of what the agent sees. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat (same snapshot + screenshot pairing) before `run_drill`.
+**Explore-first authoring:** `/tutorial-drill` must explore the live UI (click nav, `browser_snapshot` + `browser_take_screenshot` each must-show beat, note reveal interactions and failures) **before** drafting voiceovers. Snapshot drives selectors/asserts; screenshot gives the creator a visual of what the agent sees. `validate_drill` rejects TODO stubs, navigate-only recorded scenes (except warm-up `open_app`), and recorded scenes without content asserts (`contains` / `element_exists`, preferably `source: snapshot`). Dry-run in chat (same snapshot + screenshot pairing) before `run_drill`.
 
 Example:
 
@@ -129,9 +129,9 @@ nodes:
       ref: "studio-link"
 ```
 
-After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Studio Chat also renders a **persistent scene slideshow** (`TutorialSceneSlideshowCard`): prev/next navigation through every manifest scene (screen MP4s inline; avatar/b-roll placeholders with narration). The card survives page refresh via the `[tutorial_scene_slideshow]` session marker. Authoring is **blueprint-first**: `/tutorial` interviews the creator (reuse stack vs greenfield), presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step.
+After a tutorial `run_drill`, per-scene MP4s and `scene_manifest.json` are returned in `artifact_paths` and registered as **session artifacts** (Studio Files list / download). Studio Chat also renders a **persistent scene slideshow** (`TutorialSceneSlideshowCard`): prev/next navigation through every manifest scene (screen MP4s inline; avatar/b-roll placeholders with narration). The card survives page refresh via the `[tutorial_scene_slideshow]` session marker. Authoring is **blueprint-first**: `/tutorial-drill` interviews the creator (reuse stack vs greenfield), presents a HeyGen-style Scene|Voiceover|Visual table (avatar / b-roll / screen), and only after Approve converts **screen** rows into executable drill nodes while embedding the **full ordered cut list** under `drill_config.scenes`. After the run, `scene_manifest.json` lists every blueprint scene in order; screen rows carry `path` / `duration_seconds`, while avatar/b-roll stay scripted (empty media path) for a later provider step.
 
-**Suite separation:** tutorial drills live only in dedicated tutorial suites. Never append `mode: tutorial` drills into a regular smoke/CI suite. When the product already has a drill suite, `/tutorial` **copies** `suite_config` (template, start script, credentials) into a **new** sibling suite (e.g. `juicytrade-tutorial`) and saves only tutorial drills there. `/tutorial-add <suite>` appends more tutorials **only** if that suite is already a tutorial suite (`IsTutorialSuite`); otherwise it refuses and points back to `/tutorial`. **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
+**Suite separation:** tutorial drills live only in dedicated tutorial suites. Never append `mode: tutorial` drills into a regular smoke/CI suite. When the product already has a drill suite, `/tutorial-drill` **copies** `suite_config` (template, start script, credentials) into a **new** sibling suite (e.g. `juicytrade-tutorial`) and saves only tutorial drills there. `/tutorial-drill-add <suite>` appends more tutorials **only** if that suite is already a tutorial suite (`IsTutorialSuite`); otherwise it refuses and points back to `/tutorial-drill`. (Aliases `/tutorial` and `/tutorial-add` still work.) **Never** tag tutorial drills into default fleet smoke without filtering `mode != tutorial` (or excluding the `tutorial` tag).
 
 Example `drill_config.scenes` (written by Approve):
 
@@ -153,7 +153,7 @@ drill_config:
       hold_ms: 9000
 ```
 
-Authoring: `/tutorial` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)`. Product training videos use `mode: tutorial`; re-run after UI changes.
+Authoring: `/tutorial-drill` wizard — **required explore pass** (click through must-show beats, snapshot content) before `draft_tutorial_blueprint`; optional Path B human demo via `browser_request_human(capture_actions: true)`. Product training videos use `mode: tutorial`; re-run after UI changes.
 
 **Recording order (authoring invariant):** `applyTutorialRecording` starts a segment **before** the step tool runs. Authors must put unrecorded warm-up first (`browser_navigate` to the live app, `browser_fullscreen`) with no `narration` / `record`. Do **not** start the first `record: segment` on a blank tab. Blueprint conversion prepends `open_app` + `enter_fullscreen` for this. Preferred scene pattern: dry-run with content asserts → `browser_highlight` → `browser_click(animate_cursor: true)` → reveal interaction (e.g. click expiration) → `hold_ms`. Prefer in-app nav clicks over cold `browser_navigate` between scenes. Segment timing semantics are unchanged — polish via authoring, not runner changes.
 
@@ -309,7 +309,7 @@ The drill runner collects:
 | `pkg/tools/inject_drill_credentials_tool.go` | Prep-time credential injection (before start-services) |
 | `pkg/drill/run_instructions.go` | Studio Run prep text (Go); mirrored by `web/src/utils/generateRunInstructions.ts` |
 | `pkg/drill/scene_manifest.go` | Tutorial `scene_manifest.json` writer |
-| `pkg/tools/tutorial_prompt.go` | `/tutorial` and `/tutorial-add` wizard prompts (blueprint-first) |
+| `pkg/tools/tutorial_prompt.go` | `/tutorial-drill` and `/tutorial-drill-add` wizard prompts (blueprint-first) |
 | `pkg/tools/tutorial_blueprint.go` | HeyGen-style tutorial_blueprint schema + drill conversion |
 | `web/src/components/chat/TutorialBlueprintCard.tsx` | In-chat Scene\|Voiceover\|Visual approval table |
 | `web/src/components/chat/TutorialSceneSlideshowCard.tsx` | Post-run scene navigator (screen video + avatar/b-roll placeholders) |

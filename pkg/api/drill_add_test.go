@@ -155,8 +155,33 @@ func TestResolveTutorialAddContext_RequiresTutorialSuite(t *testing.T) {
 	if !strings.Contains(err.Error(), "regular drill suite") {
 		t.Fatalf("error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "/tutorial") {
-		t.Fatalf("error should guide to /tutorial: %v", err)
+	if !strings.Contains(err.Error(), "/tutorial-drill") {
+		t.Fatalf("error should guide to /tutorial-drill: %v", err)
+	}
+}
+
+func TestTutorialDrillSlashParsers(t *testing.T) {
+	if _, ok := tutorialDrillHint("/tutorial-drill-add foo"); ok {
+		t.Fatal("hint parser must not match tutorial-drill-add")
+	}
+	if _, ok := tutorialDrillHint("/tutorial-add foo"); ok {
+		t.Fatal("hint parser must not match tutorial-add")
+	}
+	hint, ok := tutorialDrillHint("/tutorial-drill teach login")
+	if !ok || hint != "teach login" {
+		t.Fatalf("tutorial-drill hint = %q ok=%v", hint, ok)
+	}
+	hint, ok = tutorialDrillHint("/tutorial teach login")
+	if !ok || hint != "teach login" {
+		t.Fatalf("alias /tutorial hint = %q ok=%v", hint, ok)
+	}
+	suite, ok := tutorialDrillAddSuite("/tutorial-drill-add my-suite")
+	if !ok || suite != "my-suite" {
+		t.Fatalf("tutorial-drill-add suite = %q ok=%v", suite, ok)
+	}
+	suite, ok = tutorialDrillAddSuite("/tutorial-add my-suite")
+	if !ok || suite != "my-suite" {
+		t.Fatalf("alias /tutorial-add suite = %q ok=%v", suite, ok)
 	}
 }
 

@@ -29,13 +29,40 @@ func resolveDrillAddWizard(ctx context.Context, fs store.FlowStore, suiteName st
 	return suiteContext, tools.GetDrillAddPrompt(suiteName, suiteContext), nil
 }
 
-// resolveTutorialAddContext loads suite context for /tutorial-add.
+// tutorialDrillAddSuite parses /tutorial-drill-add <suite> (alias: /tutorial-add).
+func tutorialDrillAddSuite(msg string) (suiteName string, ok bool) {
+	for _, prefix := range []string{"/tutorial-drill-add ", "/tutorial-add "} {
+		if strings.HasPrefix(msg, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(msg, prefix)), true
+		}
+	}
+	return "", false
+}
+
+// tutorialDrillHint parses /tutorial-drill [hint] (alias: /tutorial [hint]).
+// Does not match /tutorial-drill-add or /tutorial-add.
+func tutorialDrillHint(msg string) (hint string, ok bool) {
+	switch {
+	case msg == "/tutorial-drill":
+		return "", true
+	case strings.HasPrefix(msg, "/tutorial-drill "):
+		return strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial-drill")), true
+	case msg == "/tutorial":
+		return "", true
+	case strings.HasPrefix(msg, "/tutorial "):
+		return strings.TrimSpace(strings.TrimPrefix(msg, "/tutorial")), true
+	default:
+		return "", false
+	}
+}
+
+// resolveTutorialAddContext loads suite context for /tutorial-drill-add.
 // Only suites that already contain tutorial drills are allowed — never append
 // tutorial drills into a regular smoke/CI suite.
 func resolveTutorialAddContext(ctx context.Context, fs store.FlowStore, suiteName string) (name, suiteContext string, err error) {
 	suiteName = strings.TrimSpace(suiteName)
 	if suiteName == "" {
-		return "", "", fmt.Errorf("Usage: /tutorial-add <suite_name>")
+		return "", "", fmt.Errorf("Usage: /tutorial-drill-add <suite_name>")
 	}
 	if fs == nil {
 		return "", "", fmt.Errorf("drill management requires platform mode (team-scoped store not available)")
@@ -48,8 +75,8 @@ func resolveTutorialAddContext(ctx context.Context, fs store.FlowStore, suiteNam
 		return "", "", fmt.Errorf(
 			"Suite %q is a regular drill suite, not a tutorial suite. "+
 				"Do not mix tutorial drills into smoke/CI suites. "+
-				"Run /tutorial and copy this suite's template/start script/credentials into a new sibling suite (e.g. %s-tutorial), "+
-				"or use /tutorial-add on an existing tutorial suite",
+				"Run /tutorial-drill and copy this suite's template/start script/credentials into a new sibling suite (e.g. %s-tutorial), "+
+				"or use /tutorial-drill-add on an existing tutorial suite",
 			suiteName, suiteName,
 		)
 	}

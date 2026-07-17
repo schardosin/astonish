@@ -1967,6 +1967,10 @@ func handleSQLitePlatformSetup(cfg *config.AppConfig) error {
 	fmt.Println()
 	fmt.Printf("  Initializing SQLite platform in %s...\n", dataDir)
 
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
 	// Bootstrap the platform schema via entstore.
 	ctx := context.Background()
 	entCfg := entstore.Config{

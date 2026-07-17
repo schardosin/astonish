@@ -14,6 +14,14 @@ _When one person solves a problem, everyone benefits. Multi-tenant. Three-tier m
 [![Go Report Card](https://goreportcard.com/badge/github.com/SAP/astonish)](https://goreportcard.com/report/github.com/SAP/astonish)
 [![REUSE status](https://api.reuse.software/badge/github.com/SAP/astonish)](https://api.reuse.software/info/github.com/SAP/astonish)
 
+<br>
+
+_Learn how Astonish works through the fable of "The Village of a Thousand Notebooks":_
+
+<a href="https://www.youtube.com/watch?v=Pirv8271e54" title="Watch: Astonish — The Village of a Thousand Notebooks">
+  <img src="./images/astonish-presentation-video.webp" alt="Astonish — The Village of a Thousand Notebooks" width="720">
+</a>
+
 </div>
 
 ---

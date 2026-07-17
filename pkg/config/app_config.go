@@ -102,7 +102,7 @@ type SandboxOpenShellConfig struct {
 	// SandboxImage is the container image for sandbox pods. This image
 	// should contain Astonish agent tooling. The OpenShell supervisor is
 	// sideloaded by the gateway automatically.
-	// Default: "schardosin/astonish-sandbox-openshell:latest".
+	// Default: "ghcr.io/sap/astonish-sandbox-openshell:latest".
 	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
 
 	// Registry configures the OCI registry for custom-built sandbox images.
@@ -137,7 +137,7 @@ type SandboxOpenShellConfig struct {
 type RegistryConfig struct {
 	// URL is the registry URL prefix. Images are pushed as:
 	//   <URL>/astonish-sandbox-<scope>:<content-hash>
-	// Examples: "docker.io/schardosin", "ghcr.io/org", "harbor.local:5000/proj"
+	// Examples: "ghcr.io/sap", "ghcr.io/org", "harbor.local:5000/proj"
 	URL string `yaml:"url,omitempty" json:"url,omitempty"`
 
 	// SecretName is the name of a K8s Secret (type kubernetes.io/dockerconfigjson)
@@ -262,7 +262,7 @@ type SandboxKubernetesConfig struct {
 
 	// SandboxImage is the container image for sandbox pods. Must ship
 	// the overlay entrypoint and the astonish node binary. Default:
-	// "schardosin/astonish-sandbox-base:latest".
+	// "ghcr.io/sap/astonish-sandbox-base:latest".
 	SandboxImage string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
 
 	// LayersPVCName / UppersPVCName name the RWX PVCs backing the

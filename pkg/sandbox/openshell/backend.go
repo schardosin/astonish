@@ -55,7 +55,7 @@ type Config struct {
 	AuthToken string
 
 	// SandboxImage is the container image for OpenShell sandbox pods.
-	// Default: "schardosin/astonish-sandbox-openshell:latest"
+	// Default: "ghcr.io/sap/astonish-sandbox-openshell:latest"
 	SandboxImage string
 
 	// AppConfig stores the full OpenShell config from app_config.yaml.
@@ -67,7 +67,7 @@ func (c *Config) applyDefaults() {
 		c.GatewayAddr = "openshell.openshell.svc.cluster.local:8080"
 	}
 	if c.SandboxImage == "" {
-		c.SandboxImage = "schardosin/astonish-sandbox-openshell:latest"
+		c.SandboxImage = "ghcr.io/sap/astonish-sandbox-openshell:latest"
 	}
 }
 

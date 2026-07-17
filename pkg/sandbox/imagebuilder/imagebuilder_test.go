@@ -15,11 +15,11 @@ func TestGenerateDockerfile(t *testing.T) {
 	}{
 		{
 			name:         "platform only",
-			baseImage:    "schardosin/astonish-sandbox-openshell:dev",
+			baseImage:    "ghcr.io/sap/astonish-sandbox-openshell:dev",
 			platformBody: "USER root\nRUN apt-get update && apt-get install -y curl\nUSER sandbox",
 			teamBody:     "",
 			wantLines: []string{
-				"FROM schardosin/astonish-sandbox-openshell:dev",
+				"FROM ghcr.io/sap/astonish-sandbox-openshell:dev",
 				"# --- Platform recipe ---",
 				"USER root",
 				"RUN apt-get update && apt-get install -y curl",
@@ -117,11 +117,11 @@ func TestImageRef(t *testing.T) {
 		wantPrefix   string
 	}{
 		{
-			name:         "docker hub base",
-			registryURL:  "docker.io/schardosin",
+			name:         "ghcr base",
+			registryURL:  "ghcr.io/sap",
 			scope:        "base",
 			combinedBody: CombinedBody("RUN apt-get install -y curl git", ""),
-			wantPrefix:   "docker.io/schardosin/astonish-sandbox-base:",
+			wantPrefix:   "ghcr.io/sap/astonish-sandbox-base:",
 		},
 		{
 			name:         "ghcr team",

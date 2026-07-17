@@ -372,7 +372,7 @@ func writeConfigFile(dir, platformDSN, suffix, bifrostURL, jwtSecret string) err
   openshell:
     gateway_addr: %s
     gateway_tls: false
-    sandbox_image: schardosin/astonish-sandbox-openshell:dev
+    sandbox_image: ghcr.io/sap/astonish-sandbox-openshell:dev
     network_policy:
       presets:
         - default
@@ -407,7 +407,7 @@ func writeConfigFile(dir, platformDSN, suffix, bifrostURL, jwtSecret string) err
     control_plane_namespace: %s
     overlay_mode: fuse
     privileged_pods: true
-    sandbox_image: schardosin/astonish-sandbox-base:dev
+    sandbox_image: ghcr.io/sap/astonish-sandbox-base:dev
     layers_pvc_name: astonish-layers
     uppers_pvc_name: astonish-uppers
 `, kubeconfigPath, sandboxNS, controlPlaneNS)

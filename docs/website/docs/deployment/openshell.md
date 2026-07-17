@@ -143,7 +143,7 @@ When your cluster has Istio, the mesh handles encryption between the control pla
 # Control-plane image
 # ------------------------------------------------------------------
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: latest
   pullPolicy: IfNotPresent
 
@@ -207,7 +207,7 @@ sandbox:
       addr: ""
     # Sandbox container image (Astonish agent tooling + OpenShell supervisor)
     image:
-      repository: schardosin/astonish-sandbox-openshell
+      repository: ghcr.io/sap/astonish-sandbox-openshell
       tag: latest
     # Network egress policy for sandboxes
     # Available presets: "default", "code_hosting", "package_registries",
@@ -251,7 +251,7 @@ openshell:
     # Must match the computed sandbox namespace
     sandboxNamespace: "astonish-sandbox"
     # Must match sandbox.openshell.image above
-    sandboxImage: "schardosin/astonish-sandbox-openshell:latest"
+    sandboxImage: "ghcr.io/sap/astonish-sandbox-openshell:latest"
     auth:
       # Istio AuthorizationPolicy handles identity
       allowUnauthenticatedUsers: true
@@ -287,7 +287,7 @@ openshell:
     # Gateway terminates mTLS itself
     disableTls: false
     sandboxNamespace: "astonish-sandbox"
-    sandboxImage: "schardosin/astonish-sandbox-openshell:latest"
+    sandboxImage: "ghcr.io/sap/astonish-sandbox-openshell:latest"
     auth:
       # Without mesh identity, consider restricting access
       allowUnauthenticatedUsers: false

@@ -27,7 +27,7 @@
 # Control-plane image (unused — pods stay at replicas: 0).
 # ------------------------------------------------------------------
 image:
-  repository: schardosin/astonish
+  repository: ghcr.io/sap/astonish
   tag: dev
   pullPolicy: IfNotPresent
 
@@ -79,7 +79,7 @@ sandbox:
     gateway:
       addr: ""  # auto-derived: astonishe2eos-openshell.astonishe2eos.svc.cluster.local:8080
     image:
-      repository: schardosin/astonish-sandbox-openshell
+      repository: ghcr.io/sap/astonish-sandbox-openshell
       tag: dev
     registry:
       url: ""
@@ -99,7 +99,7 @@ sandbox:
 
   # Image settings (K8s-specific, but chart renders them).
   image:
-    repository: schardosin/astonish-sandbox-base
+    repository: ghcr.io/sap/astonish-sandbox-base
     tag: dev
     pullPolicy: IfNotPresent
 
@@ -141,7 +141,7 @@ openshell:
   server:
     disableTls: true
     sandboxNamespace: "astonishe2eos-sandbox"
-    sandboxImage: "schardosin/astonish-sandbox-openshell:dev"
+    sandboxImage: "ghcr.io/sap/astonish-sandbox-openshell:dev"
     auth:
       allowUnauthenticatedUsers: true
     tls:

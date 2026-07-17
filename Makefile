@@ -12,7 +12,7 @@ SHELL := /bin/bash
 BINARY_NAME = astonish
 WEB_DIR = web
 VERSION ?= dev
-DOCKER_REGISTRY ?= schardosin
+DOCKER_REGISTRY ?= ghcr.io/sap
 DEV_TAG ?= dev
 
 # Default target
@@ -631,8 +631,8 @@ helm-deps:
 # Requires: astonish-linux-amd64 binary to exist (run build-linux first)
 docker-incus: build-linux
 	@echo "Building Incus Docker image..."
-	docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:$(VERSION) .
-	@echo "Image built: schardosin/astonish-incus:$(VERSION)"
+	docker build -f docker/incus/Dockerfile -t ghcr.io/sap/astonish-incus:$(VERSION) .
+	@echo "Image built: ghcr.io/sap/astonish-incus:$(VERSION)"
 
 # Build the OpenShell sandbox image (NVIDIA sandbox base + Astonish agent tools)
 docker-sandbox-openshell: build-linux

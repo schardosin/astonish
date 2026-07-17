@@ -734,7 +734,7 @@ func itoa(n int) string {
 // instead of the global default. This bypasses the interactive editor/snapshot
 // flow — teams build their own image with packages pre-installed.
 //
-// Request body: {"image": "ghcr.io/schardosin/custom-sandbox:v2"} or {"image": ""} to clear.
+// Request body: {"image": "ghcr.io/sap/custom-sandbox:v2"} or {"image": ""} to clear.
 // Response: {"status": "ok", "image": "<image>"}
 func TeamTemplateImageHandler(w http.ResponseWriter, r *http.Request) {
 	if !RequireTeamAdmin(w, r) {

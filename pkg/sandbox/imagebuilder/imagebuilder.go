@@ -24,7 +24,7 @@ type Config struct {
 	Namespace string
 
 	// RegistryURL is the OCI registry prefix for pushing images.
-	// Example: "docker.io/schardosin", "ghcr.io/org"
+	// Example: "ghcr.io/sap", "ghcr.io/org"
 	RegistryURL string
 
 	// SecretName is the K8s Secret (dockerconfigjson) with registry creds.

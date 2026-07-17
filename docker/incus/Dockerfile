@@ -6,14 +6,14 @@
 #
 # Build (single-arch, local dev):
 #   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o astonish-linux-amd64 .
-#   docker build -f docker/incus/Dockerfile -t schardosin/astonish-incus:dev .
+#   docker build -f docker/incus/Dockerfile -t ghcr.io/sap/astonish-incus:dev .
 #
 # Build (multi-arch, CI):
 #   # Pre-build both binaries, then:
 #   docker buildx build --platform linux/amd64,linux/arm64 \
-#     -f docker/incus/Dockerfile -t schardosin/astonish-incus:v1.2.3 --push .
+#     -f docker/incus/Dockerfile -t ghcr.io/sap/astonish-incus:v1.2.3 --push .
 #
-# The image is published to Docker Hub by the docker-incus GitHub Action.
+# The image is published to ghcr.io by the docker-images GitHub Action.
 # Users never build this image — astonish pulls it automatically.
 
 FROM ubuntu:24.04

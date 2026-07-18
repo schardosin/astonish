@@ -1,8 +1,12 @@
 package tools
 
 import (
+	"bufio"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"google.golang.org/adk/tool"
@@ -10,9 +14,10 @@ import (
 
 // FindFilesArgs defines arguments for the find_files tool
 type FindFilesArgs struct {
-	Pattern    string `json:"pattern" jsonschema:"Filename pattern to match (supports glob: *.go, test_*.py)"`
+	Pattern    string `json:"pattern" jsonschema:"Filename pattern to match (supports glob: *.go, test_*.py, src/**/*.ts)"`
 	SearchPath string `json:"search_path,omitempty" jsonschema:"Directory to search from (default: current dir)"`
-	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum results to return (default: 50)"`
+	MaxResults int    `json:"max_results,omitempty" jsonschema:"Maximum results to return (default: 100)"`
+	SortBy     string `json:"sort_by,omitempty" jsonschema:"Sort order: 'path' (default) or 'mtime' (newest first)"`
 }
 
 // FoundFile represents a matched file
@@ -36,7 +41,7 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 	// Set defaults
 	maxResults := args.MaxResults
 	if maxResults <= 0 {
-		maxResults = 50
+		maxResults = 100
 	}
 
 	searchPath := args.SearchPath
@@ -59,9 +64,104 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 		return FindFilesResult{}, err
 	}
 
+	// Try ripgrep --files first, fall back to Go implementation
+	files, err := tryRipgrepFiles(args.Pattern, absPath, maxResults)
+	if err != nil {
+		// Fallback to Go implementation
+		files, err = goFindFiles(args.Pattern, absPath, maxResults)
+		if err != nil {
+			return FindFilesResult{}, err
+		}
+	}
+
+	// Sort results
+	if args.SortBy == "mtime" {
+		sortFilesByMtime(files)
+	}
+
+	capped := len(files) >= maxResults
+
+	return FindFilesResult{
+		Files:    files,
+		Total:    len(files),
+		Capped:   capped,
+		SearchIn: absPath,
+	}, nil
+}
+
+// tryRipgrepFiles uses rg --files with glob filtering for fast file finding
+func tryRipgrepFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error) {
+	rgPath, err := exec.LookPath("rg")
+	if err != nil {
+		return nil, fmt.Errorf("ripgrep not found")
+	}
+
+	// Build rg command: rg --files --glob <pattern> <path>
+	args := []string{"--files"}
+
+	// Convert pattern to glob. If it contains path separator or **, use as-is.
+	// Otherwise, wrap as a basename glob: **/<pattern>
+	globPattern := pattern
+	if !strings.Contains(pattern, "/") && !strings.Contains(pattern, "**") {
+		globPattern = "**/" + pattern
+	}
+	args = append(args, "--glob", globPattern)
+
+	// Add explicit exclusions for directories that rg might not exclude
+	// (rg respects .gitignore but our defaultExclusions may go beyond that)
+	for excl := range defaultExclusions {
+		args = append(args, "--glob", "!"+excl+"/")
+	}
+
+	args = append(args, searchPath)
+
+	cmd := exec.Command(rgPath, args...)
+	output, err := cmd.Output()
+	if err != nil {
+		// Exit code 1 = no matches (not an error)
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []FoundFile{}, nil
+		}
+		// Exit code 2 = error (e.g., bad glob)
+		return nil, fmt.Errorf("rg --files failed: %w", err)
+	}
+
+	var files []FoundFile
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		path := scanner.Text()
+		if path == "" {
+			continue
+		}
+
+		relPath, _ := filepath.Rel(searchPath, path)
+
+		// Stat for size
+		var size int64
+		if info, err := os.Stat(path); err == nil {
+			size = info.Size()
+		}
+
+		files = append(files, FoundFile{
+			Path:         path,
+			RelativePath: relPath,
+			Size:         size,
+			IsDir:        false, // rg --files only returns files
+		})
+
+		if len(files) >= maxResults {
+			break
+		}
+	}
+
+	return files, nil
+}
+
+// goFindFiles is the pure Go fallback for file finding
+func goFindFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error) {
 	var files []FoundFile
 
-	err = filepath.Walk(absPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip files we can't access
 		}
@@ -82,14 +182,14 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 
 		// Match the pattern against the filename
 		name := info.Name()
-		matched, err := filepath.Match(args.Pattern, name)
+		matched, err := filepath.Match(pattern, name)
 		if err != nil {
 			// Invalid pattern, try case-insensitive match
-			matched, _ = filepath.Match(strings.ToLower(args.Pattern), strings.ToLower(name))
+			matched, _ = filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
 		}
 
 		if matched {
-			relPath, _ := filepath.Rel(absPath, path)
+			relPath, _ := filepath.Rel(searchPath, path)
 			files = append(files, FoundFile{
 				Path:         path,
 				RelativePath: relPath,
@@ -102,15 +202,33 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 	})
 
 	if err != nil && err != filepath.SkipAll {
-		return FindFilesResult{}, err
+		return nil, err
 	}
 
-	capped := len(files) >= maxResults
+	return files, nil
+}
 
-	return FindFilesResult{
-		Files:    files,
-		Total:    len(files),
-		Capped:   capped,
-		SearchIn: absPath,
-	}, nil
+// sortFilesByMtime sorts files by modification time, newest first
+func sortFilesByMtime(files []FoundFile) {
+	type fileWithMtime struct {
+		file  FoundFile
+		mtime int64
+	}
+
+	fwm := make([]fileWithMtime, len(files))
+	for i, f := range files {
+		var mtime int64
+		if info, err := os.Stat(f.Path); err == nil {
+			mtime = info.ModTime().UnixNano()
+		}
+		fwm[i] = fileWithMtime{file: f, mtime: mtime}
+	}
+
+	sort.Slice(fwm, func(i, j int) bool {
+		return fwm[i].mtime > fwm[j].mtime // newest first
+	})
+
+	for i, f := range fwm {
+		files[i] = f.file
+	}
 }

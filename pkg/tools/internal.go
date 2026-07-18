@@ -659,7 +659,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 	// Search tools
 	fileTreeTool, err := functiontool.New(functiontool.Config{
 		Name:        "file_tree",
-		Description: "Get a structured view of the directory tree. Use this to understand project structure. Returns JSON with paths, names, and file sizes.",
+		Description: "Get a budgeted directory tree for project orientation. Lists immediate children first, then recurses with budget limits. Large subtrees are automatically summarized with extension counts. Use max_depth, max_entries, max_output_chars to control output size. Returns JSON with paths, names, sizes, and optional subtree summaries.",
 	}, FileTree)
 	if err != nil {
 		return nil, err
@@ -667,7 +667,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	grepSearchTool, err := functiontool.New(functiontool.Config{
 		Name:        "grep_search",
-		Description: "Search for text patterns in files. Returns file paths, line numbers, and matching content. Uses ripgrep when available for speed.",
+		Description: "Search for text/regex patterns in files. Default is literal search; set regex=true for regex. Supports context lines (context, before_context, after_context), file type filters (type='go'), glob filters, multiline mode, and case sensitivity. Returns file paths, line numbers, content, and match kind ('match' or 'context'). Uses ripgrep when available.",
 	}, GrepSearch)
 	if err != nil {
 		return nil, err
@@ -675,7 +675,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	findFilesTool, err := functiontool.New(functiontool.Config{
 		Name:        "find_files",
-		Description: "Find files by name pattern using glob matching (e.g., '*.go', 'test_*.py'). Returns matching file paths with sizes.",
+		Description: "Find files by name/path pattern using glob matching (e.g., '*.go', 'src/**/*.ts'). Respects .gitignore when ripgrep is available. Supports sort_by='mtime' for newest-first ordering. Returns matching file paths with sizes.",
 	}, FindFiles)
 	if err != nil {
 		return nil, err

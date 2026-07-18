@@ -7,33 +7,47 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"google.golang.org/adk/tool"
 )
 
 // GrepSearchArgs defines arguments for the grep_search tool
 type GrepSearchArgs struct {
-	Pattern       string   `json:"pattern" jsonschema:"The search pattern (literal string)"`
+	Pattern       string   `json:"pattern" jsonschema:"The search pattern (literal string by default, or regex if regex=true)"`
 	SearchPath    string   `json:"search_path,omitempty" jsonschema:"Directory or file to search (default: current dir)"`
 	IncludeGlobs  []string `json:"include_globs,omitempty" jsonschema:"File patterns to include (e.g., '*.go', '*.js')"`
 	CaseSensitive bool     `json:"case_sensitive,omitempty" jsonschema:"Case-sensitive search (default: false)"`
-	MaxResults    int      `json:"max_results,omitempty" jsonschema:"Maximum results to return (default: 50)"`
+	MaxResults    int      `json:"max_results,omitempty" jsonschema:"Maximum total results to return (default: 50)"`
+	Regex         bool     `json:"regex,omitempty" jsonschema:"Treat pattern as a regular expression (default: false, literal search)"`
+	Glob          string   `json:"glob,omitempty" jsonschema:"Single glob filter for file paths (e.g., '*.ts', 'src/**/*.go')"`
+	Type          string   `json:"type,omitempty" jsonschema:"Ripgrep type filter (e.g., 'go', 'ts', 'py'). Requires ripgrep."`
+	Context       int      `json:"context,omitempty" jsonschema:"Number of context lines before and after each match (symmetric)"`
+	BeforeContext int      `json:"before_context,omitempty" jsonschema:"Number of context lines before each match"`
+	AfterContext  int      `json:"after_context,omitempty" jsonschema:"Number of context lines after each match"`
+	Multiline     bool     `json:"multiline,omitempty" jsonschema:"Enable multiline matching (dot matches newline). Requires ripgrep."`
+	HeadLimit     int      `json:"head_limit,omitempty" jsonschema:"Stop reading output after this many bytes (default: 5MB). Prevents huge outputs."`
 }
 
-// GrepMatch represents a single search match
+// GrepMatch represents a single search match or context line
 type GrepMatch struct {
 	File       string `json:"file"`
 	LineNumber int    `json:"line_number"`
 	Content    string `json:"content"`
+	Kind       string `json:"kind"` // "match" or "context"
 }
 
 // GrepSearchResult is the result returned by the grep_search tool
 type GrepSearchResult struct {
-	Matches  []GrepMatch `json:"matches"`
-	Total    int         `json:"total"`
-	Capped   bool        `json:"capped"`
-	SearchIn string      `json:"search_in"`
+	Matches         []GrepMatch `json:"matches"`
+	Total           int         `json:"total"`
+	Capped          bool        `json:"capped"`
+	SearchIn        string      `json:"search_in"`
+	TruncatedReason string      `json:"truncated_reason,omitempty"`
+	PatternMode     string      `json:"pattern_mode"`
+	DurationMs      int64       `json:"duration_ms"`
 }
 
 // ripgrepMatch represents a match from ripgrep's JSON output
@@ -52,10 +66,17 @@ type ripgrepMatch struct {
 
 // GrepSearch searches for text patterns in files using ripgrep or Go fallback
 func GrepSearch(ctx tool.Context, args GrepSearchArgs) (GrepSearchResult, error) {
+	start := time.Now()
+
 	// Set defaults
 	maxResults := args.MaxResults
 	if maxResults <= 0 {
 		maxResults = 50
+	}
+
+	headLimit := args.HeadLimit
+	if headLimit <= 0 {
+		headLimit = 5 * 1024 * 1024 // 5MB
 	}
 
 	searchPath := args.SearchPath
@@ -73,62 +94,136 @@ func GrepSearch(ctx tool.Context, args GrepSearchArgs) (GrepSearchResult, error)
 		return GrepSearchResult{}, err
 	}
 
-	// Try ripgrep first, fall back to Go implementation
-	matches, err := tryRipgrep(args.Pattern, absPath, args.IncludeGlobs, args.CaseSensitive, maxResults)
-	if err != nil {
-		// Fallback to Go implementation
-		matches, err = goGrep(args.Pattern, absPath, args.IncludeGlobs, args.CaseSensitive, maxResults)
-		if err != nil {
-			return GrepSearchResult{}, err
+	patternMode := "literal"
+	if args.Regex {
+		patternMode = "regex"
+	}
+
+	// Validate regex pattern early
+	if args.Regex {
+		if _, err := regexp.Compile(args.Pattern); err != nil {
+			return GrepSearchResult{}, fmt.Errorf("invalid regex pattern: %w", err)
 		}
 	}
 
+	// Try ripgrep first, fall back to Go implementation
+	matches, truncatedReason, err := tryRipgrep(args, absPath, maxResults, headLimit)
+	if err != nil {
+		// Check if unsupported features were requested
+		if args.Multiline || args.Type != "" {
+			return GrepSearchResult{}, fmt.Errorf("ripgrep required for multiline/type features but unavailable: %w", err)
+		}
+		// Fallback to Go implementation (supports literal, regex, case, globs, cap)
+		matches, err = goGrep(args.Pattern, absPath, mergeGlobs(args), args.CaseSensitive, args.Regex, maxResults)
+		if err != nil {
+			return GrepSearchResult{}, err
+		}
+		truncatedReason = ""
+	}
+
 	capped := len(matches) >= maxResults
+	if capped && truncatedReason == "" {
+		truncatedReason = fmt.Sprintf("result limit reached (%d)", maxResults)
+	}
+
+	elapsed := time.Since(start).Milliseconds()
 
 	return GrepSearchResult{
-		Matches:  matches,
-		Total:    len(matches),
-		Capped:   capped,
-		SearchIn: absPath,
+		Matches:         matches,
+		Total:           len(matches),
+		Capped:          capped,
+		SearchIn:        absPath,
+		TruncatedReason: truncatedReason,
+		PatternMode:     patternMode,
+		DurationMs:      elapsed,
 	}, nil
 }
 
+// mergeGlobs combines IncludeGlobs and the single Glob field into one slice
+func mergeGlobs(args GrepSearchArgs) []string {
+	globs := append([]string{}, args.IncludeGlobs...)
+	if args.Glob != "" {
+		globs = append(globs, args.Glob)
+	}
+	return globs
+}
+
 // tryRipgrep attempts to use ripgrep for searching
-func tryRipgrep(pattern, searchPath string, includeGlobs []string, caseSensitive bool, maxResults int) ([]GrepMatch, error) {
+func tryRipgrep(args GrepSearchArgs, searchPath string, maxResults, headLimit int) ([]GrepMatch, string, error) {
 	// Check if rg is available
 	rgPath, err := exec.LookPath("rg")
 	if err != nil {
-		return nil, fmt.Errorf("ripgrep not found")
+		return nil, "", fmt.Errorf("ripgrep not found")
 	}
 
 	// Build rg command
-	args := []string{
+	rgArgs := []string{
 		"--json",
-		"--max-count", fmt.Sprintf("%d", maxResults),
 		"--no-heading",
+		"--max-filesize", "5M",
 	}
 
-	if !caseSensitive {
-		args = append(args, "--ignore-case")
+	// Case sensitivity
+	if !args.CaseSensitive {
+		rgArgs = append(rgArgs, "--ignore-case")
 	}
 
-	// Add include globs
-	for _, glob := range includeGlobs {
-		args = append(args, "--glob", glob)
+	// Pattern mode: literal (fixed strings) or regex
+	if !args.Regex {
+		rgArgs = append(rgArgs, "--fixed-strings")
+	}
+
+	// Multiline
+	if args.Multiline {
+		rgArgs = append(rgArgs, "--multiline", "--multiline-dotall")
+	}
+
+	// Type filter
+	if args.Type != "" {
+		rgArgs = append(rgArgs, "--type", args.Type)
+	}
+
+	// Context lines
+	if args.Context > 0 {
+		rgArgs = append(rgArgs, fmt.Sprintf("-C%d", args.Context))
+	} else {
+		if args.BeforeContext > 0 {
+			rgArgs = append(rgArgs, fmt.Sprintf("-B%d", args.BeforeContext))
+		}
+		if args.AfterContext > 0 {
+			rgArgs = append(rgArgs, fmt.Sprintf("-A%d", args.AfterContext))
+		}
+	}
+
+	// Include globs (from both IncludeGlobs and Glob field)
+	for _, glob := range args.IncludeGlobs {
+		rgArgs = append(rgArgs, "--glob", glob)
+	}
+	if args.Glob != "" {
+		rgArgs = append(rgArgs, "--glob", args.Glob)
 	}
 
 	// Add pattern and path
-	args = append(args, "--fixed-strings", pattern, searchPath)
+	rgArgs = append(rgArgs, args.Pattern, searchPath)
 
-	cmd := exec.Command(rgPath, args...)
+	cmd := exec.Command(rgPath, rgArgs...)
 	output, _ := cmd.Output() // rg returns exit code 1 if no matches, but output is still valid
 
-	return parseRipgrepOutput(output, maxResults)
+	// Check head limit
+	truncatedReason := ""
+	if len(output) > headLimit {
+		output = output[:headLimit]
+		truncatedReason = fmt.Sprintf("output truncated at %d bytes", headLimit)
+	}
+
+	matches, err := parseRipgrepOutput(output, maxResults)
+	return matches, truncatedReason, err
 }
 
-// parseRipgrepOutput parses ripgrep's JSON output
+// parseRipgrepOutput parses ripgrep's JSON output, returning both match and context lines
 func parseRipgrepOutput(output []byte, maxResults int) ([]GrepMatch, error) {
 	var matches []GrepMatch
+	matchCount := 0
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 
 	for scanner.Scan() {
@@ -142,18 +237,27 @@ func parseRipgrepOutput(output []byte, maxResults int) ([]GrepMatch, error) {
 			continue
 		}
 
-		if rg.Type != "match" {
+		var kind string
+		switch rg.Type {
+		case "match":
+			kind = "match"
+			matchCount++
+		case "context":
+			kind = "context"
+		default:
 			continue
 		}
 
 		match := GrepMatch{
 			File:       rg.Data.Path.Text,
 			LineNumber: rg.Data.LineNumber,
-			Content:    strings.TrimSpace(rg.Data.Lines.Text),
+			Content:    strings.TrimRight(rg.Data.Lines.Text, "\n\r"),
+			Kind:       kind,
 		}
 		matches = append(matches, match)
 
-		if len(matches) >= maxResults {
+		// Cap based on match count (context lines are free)
+		if matchCount >= maxResults {
 			break
 		}
 	}
@@ -162,11 +266,35 @@ func parseRipgrepOutput(output []byte, maxResults int) ([]GrepMatch, error) {
 }
 
 // goGrep is a pure Go fallback for grep functionality
-func goGrep(pattern, searchPath string, includeGlobs []string, caseSensitive bool, maxResults int) ([]GrepMatch, error) {
+func goGrep(pattern, searchPath string, includeGlobs []string, caseSensitive, isRegex bool, maxResults int) ([]GrepMatch, error) {
 	var matches []GrepMatch
-	searchPattern := pattern
-	if !caseSensitive {
-		searchPattern = strings.ToLower(pattern)
+
+	// Prepare the matcher
+	var matcher func(line string) bool
+	if isRegex {
+		flags := ""
+		if !caseSensitive {
+			flags = "(?i)"
+		}
+		re, err := regexp.Compile(flags + pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid regex pattern: %w", err)
+		}
+		matcher = func(line string) bool {
+			return re.MatchString(line)
+		}
+	} else {
+		searchPattern := pattern
+		if !caseSensitive {
+			searchPattern = strings.ToLower(pattern)
+		}
+		matcher = func(line string) bool {
+			searchLine := line
+			if !caseSensitive {
+				searchLine = strings.ToLower(line)
+			}
+			return strings.Contains(searchLine, searchPattern)
+		}
 	}
 
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
@@ -209,7 +337,7 @@ func goGrep(pattern, searchPath string, includeGlobs []string, caseSensitive boo
 		}
 
 		// Search file
-		fileMatches, err := searchFile(path, searchPattern, caseSensitive, maxResults-len(matches))
+		fileMatches, err := searchFileWithMatcher(path, matcher, maxResults-len(matches))
 		if err != nil {
 			return nil // Skip files we can't read
 		}
@@ -225,8 +353,8 @@ func goGrep(pattern, searchPath string, includeGlobs []string, caseSensitive boo
 	return matches, nil
 }
 
-// searchFile searches for a pattern in a single file
-func searchFile(path, pattern string, caseSensitive bool, maxMatches int) ([]GrepMatch, error) {
+// searchFileWithMatcher searches for matches in a single file using a matcher function
+func searchFileWithMatcher(path string, matcher func(string) bool, maxMatches int) ([]GrepMatch, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -241,18 +369,12 @@ func searchFile(path, pattern string, caseSensitive bool, maxMatches int) ([]Gre
 		lineNum++
 		line := scanner.Text()
 
-		var searchLine string
-		if caseSensitive {
-			searchLine = line
-		} else {
-			searchLine = strings.ToLower(line)
-		}
-
-		if strings.Contains(searchLine, pattern) {
+		if matcher(line) {
 			matches = append(matches, GrepMatch{
 				File:       path,
 				LineNumber: lineNum,
 				Content:    strings.TrimSpace(line),
+				Kind:       "match",
 			})
 
 			if len(matches) >= maxMatches {
@@ -263,6 +385,8 @@ func searchFile(path, pattern string, caseSensitive bool, maxMatches int) ([]Gre
 
 	return matches, nil
 }
+
+
 
 // isLikelyTextFile checks if a file is likely a text file based on extension
 func isLikelyTextFile(path string) bool {

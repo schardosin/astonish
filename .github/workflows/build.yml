@@ -56,9 +56,12 @@ jobs:
       - name: Build tree-sitter native library
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential
+          # ripgrep: required by pkg/tools grep_search/find_files integration tests
+          # (context, type filter, .gitignore). Not present on ubuntu-latest by default.
+          sudo apt-get install -y --no-install-recommends build-essential ripgrep
           make -C pkg/codeintel/native
           test -f pkg/codeintel/native/dist/libastonish-treesitter.so
+          command -v rg
 
       - name: Run tests
         env:

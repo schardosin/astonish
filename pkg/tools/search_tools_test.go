@@ -329,7 +329,15 @@ func TestGrepSearch_Regex(t *testing.T) {
 	})
 }
 
+func requireRipgrep(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not installed")
+	}
+}
+
 func TestGrepSearch_Context(t *testing.T) {
+	requireRipgrep(t)
 	tmpDir, err := os.MkdirTemp("", "grep_context_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -682,6 +690,7 @@ func TestFileTree_MaxOutputChars(t *testing.T) {
 }
 
 func TestGrepSearch_TypeFilter(t *testing.T) {
+	requireRipgrep(t)
 	tmpDir, err := os.MkdirTemp("", "grep_type_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -732,6 +741,7 @@ func TestGrepSearch_TypeFilter(t *testing.T) {
 }
 
 func TestFindFiles_GitignoreRespected(t *testing.T) {
+	requireRipgrep(t)
 	tmpDir, err := os.MkdirTemp("", "findfiles_gitignore_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)

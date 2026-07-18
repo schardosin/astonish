@@ -172,10 +172,6 @@ skills:
   extra_dirs: []               # Additional skill directories
   allowlist: []                # Restrict to specific skills
 
-# OpenCode agent
-opencode:
-  model: ""                    # Model override for OpenCode delegate
-
 # Agent identity (for web registrations)
 agent_identity:
   name: ""

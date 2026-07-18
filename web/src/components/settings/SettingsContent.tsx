@@ -15,7 +15,6 @@ import SchedulerSettings from './SchedulerSettings'
 import DaemonSettings from './DaemonSettings'
 import IdentitySettings from './IdentitySettings'
 import CredentialsSettings from './CredentialsSettings'
-import OpenCodeSettings from './OpenCodeSettings'
 import SandboxSettings from './SandboxSettings'
 import GeneralSettings from './GeneralSettings'
 import ProvidersSettings from './ProvidersSettings'
@@ -260,10 +259,6 @@ export default function SettingsContent({
       {activeSection === 'identity' && fullConfig && (
         <IdentitySettings config={fullConfig.agent_identity} onSaved={onSaved} />
       )}
-      {activeSection === 'open_code' && fullConfig && (
-        <OpenCodeSettings config={fullConfig.open_code} onSaved={onSaved} />
-      )}
-
       {activeSection === 'knowledge' && user && (
         <Suspense fallback={<div className="flex items-center justify-center py-12"><Loader2 size={24} className="animate-spin" style={{ color: 'var(--accent)' }} /></div>}>
           <div className="flex-1 overflow-hidden p-6 flex flex-col">

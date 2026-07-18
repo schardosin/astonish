@@ -58,9 +58,6 @@ mcp_servers/
 /astonish
 !/astonish/
 
-# opencode workspace
-.opencode
-
 # Helm secret values (contains credentials, never commit)
 deploy/helm/astonish/values-dev.yaml
 
@@ -86,5 +83,5 @@ deploy/helm/astonish/values-myenv.yaml
 astonish-boot
 webhook
 
-# OpenCode orchestrator state
+# Local agent orchestrator state (not product code)
 .omo/

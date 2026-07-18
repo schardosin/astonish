@@ -27,23 +27,24 @@ func TestValidate_InvalidEngine(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidToolID(t *testing.T) {
+func TestValidate_UnknownToolIDIgnored(t *testing.T) {
 	cfg := BaseConfig{
 		Core:          true,
 		Architecture:  "amd64",
 		OptionalTools: []string{"nonexistent-tool"},
 		Browser:       BrowserConfig{Engine: "none"},
 	}
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for unknown optional tool ID")
+	// Unknown optional tool IDs are skipped at render time, not validation errors.
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("expected unknown optional tools to be ignored, got: %v", err)
 	}
 }
 
-func TestValidate_ValidToolID(t *testing.T) {
+func TestValidate_EmptyOptionalTools(t *testing.T) {
 	cfg := BaseConfig{
 		Core:          true,
 		Architecture:  "amd64",
-		OptionalTools: []string{"opencode"},
+		OptionalTools: nil,
 		Browser:       BrowserConfig{Engine: "none"},
 	}
 	if err := cfg.Validate(); err != nil {

@@ -101,14 +101,6 @@ func commandReferencesProtectedFile(command string) (bool, string) {
 	return false, ""
 }
 
-// truncateString truncates a string to the given max length with ellipsis.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
 // --- Read File Tool ---
 
 type ReadFileArgs struct {
@@ -862,13 +854,6 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, 
 			return nil, fmt.Errorf("invalid args for http_request: %w", err)
 		}
 		return HttpRequest(nil, toolArgs)
-
-	case "opencode":
-		var toolArgs OpenCodeArgs
-		if err := toStruct(args, &toolArgs); err != nil {
-			return nil, fmt.Errorf("invalid args for opencode: %w", err)
-		}
-		return runOpenCode(nil, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

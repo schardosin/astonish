@@ -40,7 +40,7 @@ Fleet today is domain-agnostic in spirit but constrained in practice:
 **Owner decisions locked in the prior interview:**
 
 1. **Backend scope:** Full — schema + durable state + bounded parallel activation + durable task board + durable mailbox (replaces in-memory `Message` envelope for cross-agent handoffs).
-2. **Software-dev fleet:** Sequential Dev → QA → (PO) → E2E with direct-coding agents, mailbox + task board, and `project_context.load_file` (no OpenCode in the bundled flow). Parallel dispatcher remains available for custom templates.
+2. **Software-dev fleet:** Sequential Dev → QA → (PO) → E2E with direct-coding agents, mailbox + task board, and `project_context.load_file`. Parallel dispatcher remains available for custom templates.
 3. **Frontend:** Full editor UI — refactor `TemplateDetail`, `PlanDetail`, `SessionTrace`, `FleetExecutionPanel` (per-agent lanes when parallelism > 1) **and** add a form-based in-Studio editor for templates and per-agent config.
 4. **Domain neutrality:** Free-form `map[string]bool` capabilities plus an optional registry hint (no hardcoded enum).
 5. **High-accuracy review:** Skipped — ship the plan as soon as approved.
@@ -710,7 +710,7 @@ Worker will produce a Figma-parity mock at M9 start and confirm the visual direc
 
 ## 6. `pkg/fleet/bundled/software-dev.yaml` — Current contract
 
-Bundled software-dev is **sequential** (Dev → QA → PO review → E2E). Agents code with native tools (no OpenCode delegate). Project context is **load_file** (AGENTS.md produced during setup with core tools).
+Bundled software-dev is **sequential** (Dev → QA → PO review → E2E). Agents code with native tools. Project context is **load_file** (AGENTS.md produced during setup with core tools).
 
 ```yaml
 settings:

@@ -54,7 +54,7 @@ Tools execute inside containers via `astonish node` -- a headless tool execution
 Template Creation (one-time, during `astonish sandbox init`):
   1. Launch Ubuntu 24.04 container from remote image
   2. Install core tools (git, curl, Node.js 22, Python, uv, Docker, build-essential)
-  3. Install optional tools (OpenCode)
+  3. Install optional tools (from catalog, if any selected)
   4. Push astonish binary into /usr/local/bin/astonish
   5. Shift rootfs UIDs for unprivileged containers (one-time recursive chown)
   6. Snapshot the container (captures the shifted filesystem)

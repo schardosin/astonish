@@ -32,30 +32,6 @@ func TestRender_CoreToolsProducesExpectedCommands(t *testing.T) {
 	}
 }
 
-func TestRender_OptionalToolOpenCode(t *testing.T) {
-	cfg := BaseConfig{
-		Core:          false,
-		OptionalTools: []string{"opencode"},
-		Architecture:  "amd64",
-		Browser:       BrowserConfig{Engine: "none"},
-	}
-	steps, err := cfg.Render()
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
-
-	found := false
-	for _, s := range steps {
-		if strings.Contains(s, "opencode.ai/install") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected opencode install step, got: %v", steps)
-	}
-}
-
 func TestRender_BrowserDefault(t *testing.T) {
 	cfg := BaseConfig{
 		Core:         true,

@@ -54,21 +54,6 @@ func buildFleetSandboxEnv(ctx context.Context, plan *fleet.FleetPlan, cs store.C
 	if key := os.Getenv("BIFROST_API_KEY"); key != "" {
 		env["BIFROST_API_KEY"] = key
 	}
-	if ocConfigPath := tools.GetOpenCodeConfigPath(); ocConfigPath != "" {
-		if data, readErr := os.ReadFile(ocConfigPath); readErr == nil {
-			env["ASTONISH_OC_CONFIG_JSON"] = string(data)
-		}
-	}
-	ocProviderID, ocModelID := tools.GetOpenCodeConfigProviderModel()
-	if ocProviderID != "" {
-		env["ASTONISH_OC_PROVIDER_ID"] = ocProviderID
-	}
-	if ocModelID != "" {
-		env["ASTONISH_OC_MODEL_ID"] = ocModelID
-	}
-	for k, v := range tools.GetOpenCodeConfigExtraEnv() {
-		env[k] = v
-	}
 	return env, resolved, nil
 }
 

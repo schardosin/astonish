@@ -1,6 +1,6 @@
 import {
   Settings, Key, Server, MessageSquare, Globe, Radio, Database,
-  Brain, GitFork, Terminal, Wand2, Clock, Shield, Box,
+  Brain, GitFork, Wand2, Clock, Shield, Box,
   GitBranch, Store, Users, BookOpen, UserCog, FileText, Crown, Building2, KeyRound, Layers, Network
 } from 'lucide-react'
 
@@ -64,7 +64,6 @@ export const PLATFORM_ITEMS: SettingsMenuItem[] = [
   { id: 'platform-memory', label: 'Memory', icon: Brain },
   { id: 'platform-sessions', label: 'Sessions', icon: Database },
   { id: 'platform-sub-agents', label: 'Sub-Agents', icon: GitFork },
-  { id: 'platform-open-code', label: 'OpenCode', icon: Terminal },
   { id: 'platform-browser', label: 'Browser', icon: Globe },
   { id: 'platform-daemon', label: 'Daemon', icon: Shield },
   { id: 'platform-sandbox-settings', label: 'Sandbox', icon: Box },
@@ -78,7 +77,6 @@ export const PLATFORM_SYSTEM_SECTIONS: Record<string, string> = {
   'platform-memory': 'memory',
   'platform-sessions': 'sessions',
   'platform-sub-agents': 'sub_agents',
-  'platform-open-code': 'open_code',
   'platform-browser': 'browser',
   'platform-daemon': 'daemon',
   'platform-sandbox-settings': 'sandbox',
@@ -88,7 +86,7 @@ export const PLATFORM_SYSTEM_SECTIONS: Record<string, string> = {
 export const FULL_CONFIG_SECTIONS = [
   'chat', 'browser', 'channels', 'sessions', 'memory',
   'sub_agents', 'skills', 'scheduler', 'daemon', 'sandbox',
-  'identity', 'open_code'
+  'identity'
 ]
 
 // --- Deprecated exports (kept for backward compatibility) ---
@@ -102,7 +100,6 @@ export const SYSTEM_ITEMS: SettingsMenuItem[] = [
   { id: 'mcp', label: 'MCP Servers', icon: Server },
   { id: 'sessions', label: 'Sessions', icon: Database },
   { id: 'sub_agents', label: 'Sub-Agents', icon: GitFork },
-  { id: 'open_code', label: 'OpenCode', icon: Terminal },
   { id: 'browser', label: 'Browser', icon: Globe },
   { id: 'daemon', label: 'Daemon', icon: Shield },
   { id: 'sandbox', label: 'Sandbox', icon: Box },

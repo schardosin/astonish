@@ -44,10 +44,6 @@ Provider API keys can come from three sources (in priority order):
 
 The `provider_env.go` module resolves credentials from the store and sets them as environment variables before any provider adapter is initialized. This means provider adapters don't need to know about the credential store -- they just read their standard env vars.
 
-### Why OpenCode Managed Config
-
-When sandbox is enabled, Astonish generates an OpenCode configuration file that matches the current provider settings. This ensures the `opencode` tool (running inside containers) uses the same LLM provider and model as the parent agent, without requiring manual configuration inside each container.
-
 ## Architecture
 
 ### Application Config Structure
@@ -142,7 +138,6 @@ LoadAppConfig(configDir):
 Provider setup:
   1. Resolve API keys from credential store
   2. Set environment variables (ANTHROPIC_API_KEY, etc.)
-  3. Generate OpenCode config if sandbox enabled
     |
     v
 Config available to all subsystems
@@ -197,7 +192,6 @@ See the [Flow System](flows.md) document for full details.
 | `pkg/config/mcp_config.go` | MCP server configuration parsing |
 | `pkg/config/standard_servers.go` | Well-known MCP server definitions |
 | `pkg/config/provider_env.go` | Provider credential resolution and env var setup |
-| `pkg/config/opencode_config.go` | OpenCode managed config generation |
 
 ## Interactions
 

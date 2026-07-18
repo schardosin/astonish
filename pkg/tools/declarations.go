@@ -47,13 +47,6 @@ func GetAllFlowToolDeclarations() []ToolDeclaration {
 	// Memory tools (3)
 	decls = append(decls, memoryToolDeclarations()...)
 
-	// OpenCode tool (1)
-	decls = append(decls, ToolDeclaration{
-		Name:        "opencode",
-		Description: "Delegate a coding task to the OpenCode AI coding agent. OpenCode operates in its own isolated session with full filesystem and shell access.",
-		Category:    "opencode",
-	})
-
 	// Skill lookup tool (1)
 	decls = append(decls, ToolDeclaration{
 		Name:        "skill_lookup",

@@ -1032,8 +1032,8 @@ func (fs *FleetSession) activateAgent(ctx context.Context, agentKey string) (Mes
 	// Determine timeout. Fleet agents do multi-step work (multiple LLM calls,
 	// tool executions, file reads/writes) within a single activation. The
 	// timeout covers the entire activation, not individual LLM calls.
-	// OpenCode tasks can take 30-45 minutes for complex multi-step work,
-	// so the fleet agent timeout must exceed that to allow completion.
+	// Complex multi-step agent work can take a long time, so the fleet
+	// agent timeout must be generous enough to allow completion.
 	timeoutOverride := 60 * time.Minute
 	if agentCfg.Execution != nil && agentCfg.Execution.TimeoutMinutes > 0 {
 		timeoutOverride = time.Duration(agentCfg.Execution.TimeoutMinutes) * time.Minute

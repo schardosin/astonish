@@ -2,15 +2,12 @@ package api
 
 import (
 	"encoding/json"
-	"log/slog"
 	"net/http"
 
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/credentials"
-	"github.com/SAP/astonish/pkg/fleet"
 	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/store"
-	"github.com/SAP/astonish/pkg/tools"
 )
 
 // --- Full Config API types ---
@@ -27,7 +24,6 @@ type FullConfigResponse struct {
 	SubAgents     SubAgentsResponse          `json:"sub_agents"`
 	Skills        SkillsResponse             `json:"skills"`
 	AgentIdentity config.AgentIdentityConfig `json:"agent_identity"`
-	OpenCode      OpenCodeResponse           `json:"open_code"`
 	Sandbox       SandboxResponse            `json:"sandbox"`
 }
 
@@ -127,11 +123,6 @@ type SkillsResponse struct {
 	Allowlist []string `json:"allowlist"`
 }
 
-// OpenCodeResponse wraps OpenCodeConfig for the UI.
-type OpenCodeResponse struct {
-	Model string `json:"model"`
-}
-
 // SandboxResponse wraps SandboxConfig with resolved defaults for the UI.
 type SandboxResponse struct {
 	Enabled   bool   `json:"enabled"`
@@ -155,7 +146,6 @@ type FullConfigUpdateRequest struct {
 	SubAgents     *SubAgentsUpdateRequest `json:"sub_agents,omitempty"`
 	Skills        *SkillsUpdateRequest    `json:"skills,omitempty"`
 	AgentIdentity *IdentityUpdateRequest  `json:"agent_identity,omitempty"`
-	OpenCode      *OpenCodeUpdateRequest  `json:"open_code,omitempty"`
 	Sandbox       *SandboxUpdateRequest   `json:"sandbox,omitempty"`
 }
 
@@ -306,11 +296,6 @@ type IdentityUpdateRequest struct {
 	Timezone string `json:"timezone"`
 }
 
-// OpenCodeUpdateRequest for updating OpenCode delegate settings.
-type OpenCodeUpdateRequest struct {
-	Model string `json:"model"`
-}
-
 // SandboxUpdateRequest for updating sandbox settings.
 type SandboxUpdateRequest struct {
 	Enabled   bool   `json:"enabled"`
@@ -398,10 +383,7 @@ func GetFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 			Allowlist: cfg.Skills.Allowlist,
 		},
 		AgentIdentity: cfg.AgentIdentity,
-		OpenCode: OpenCodeResponse{
-			Model: cfg.OpenCode.Model,
-		},
-		Sandbox: buildSandboxResponse(cfg),
+		Sandbox:       buildSandboxResponse(cfg),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -577,12 +559,6 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.OpenCode != nil {
-		cfg.OpenCode = config.OpenCodeConfig{
-			Model: req.OpenCode.Model,
-		}
-	}
-
 	if req.Sandbox != nil {
 		enabled := req.Sandbox.Enabled
 		cfg.Sandbox.Enabled = &enabled
@@ -607,11 +583,6 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Regenerate OpenCode config if the OpenCode section was changed.
-	if req.OpenCode != nil {
-		regenerateOpenCodeConfig(cfg)
-	}
-
 	// Reset the Studio chat agent so the next request picks up fresh config.
 	GetChatManager().Reset()
 
@@ -625,30 +596,6 @@ func UpdateFullConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
-}
-
-// --- OpenCode config regeneration ---
-
-// regenerateOpenCodeConfig regenerates the managed OpenCode config file and
-// updates in-memory state so the OpenCode tool and fleet context generator
-// pick up changes immediately. This should be called whenever settings that
-// affect the OpenCode config are saved (provider, model, or OpenCode section).
-func regenerateOpenCodeConfig(cfg *config.AppConfig) {
-	store := getAPICredentialStore()
-	var getSecret config.SecretGetter
-	if store != nil {
-		getSecret = store.GetSecret
-	}
-	ocResult, err := config.GenerateOpenCodeConfig(cfg, getSecret)
-	if err != nil {
-		slog.Warn("failed to regenerate OpenCode config", "error", err)
-		return
-	}
-	tools.SetOpenCodeConfig(ocResult.ConfigPath, ocResult.ProviderID, ocResult.ModelID, ocResult.ExtraEnv)
-	fleet.OpenCodeConfigPath = ocResult.ConfigPath
-	fleet.OpenCodeExtraEnv = ocResult.ExtraEnv
-	fleet.OpenCodeModelFlag = ocResult.FullModelID()
-	slog.Info("OpenCode config regenerated", "provider", ocResult.ProviderID, "model", ocResult.ModelID)
 }
 
 // --- Helper functions ---

@@ -20,7 +20,6 @@ vi.mock('../settings/SkillsSettings', () => ({ default: () => <div data-testid="
 vi.mock('../settings/SchedulerSettings', () => ({ default: () => <div data-testid="scheduler-settings">SchedulerSettings</div> }))
 vi.mock('../settings/DaemonSettings', () => ({ default: () => <div data-testid="daemon-settings">DaemonSettings</div> }))
 vi.mock('../settings/IdentitySettings', () => ({ default: () => <div data-testid="identity-settings">IdentitySettings</div> }))
-vi.mock('../settings/OpenCodeSettings', () => ({ default: () => <div data-testid="opencode-settings">OpenCodeSettings</div> }))
 vi.mock('../settings/SandboxSettings', () => ({ default: () => <div data-testid="sandbox-settings">SandboxSettings</div> }))
 
 // Mock the settings API

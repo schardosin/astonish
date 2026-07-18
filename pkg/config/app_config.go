@@ -28,7 +28,6 @@ type AppConfig struct {
 	SubAgents     SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
 	Skills        SkillsConfig               `yaml:"skills,omitempty"`
 	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
-	OpenCode      OpenCodeConfig             `yaml:"opencode,omitempty"`
 	Sandbox       SandboxConfig              `yaml:"sandbox,omitempty"`
 	Security      SecurityConfig             `yaml:"security,omitempty"`
 }
@@ -738,17 +737,6 @@ type SandboxRequests struct {
 type SandboxPruneConfig struct {
 	OrphanCheckHours   int `yaml:"orphan_check_hours,omitempty" json:"orphan_check_hours,omitempty"`
 	IdleTimeoutMinutes int `yaml:"idle_timeout_minutes,omitempty" json:"idle_timeout_minutes,omitempty"` // Stop idle containers after this many minutes (default: 10, 0 = disabled)
-}
-
-// OpenCodeConfig controls the managed OpenCode delegate tool.
-// Astonish generates an OpenCode config file from these settings and its
-// own provider configuration, so users do not need to configure OpenCode
-// independently.
-type OpenCodeConfig struct {
-	// Model overrides the model used by OpenCode. Empty means "use the same
-	// model as Astonish" (general.default_model). Format: plain model name
-	// (e.g., "claude-4.6-opus") — the provider prefix is added automatically.
-	Model string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 // MemoryConfig controls the semantic memory / RAG system.

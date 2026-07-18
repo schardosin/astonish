@@ -2,9 +2,6 @@ package baseconfig
 
 import (
 	"fmt"
-	"strings"
-
-	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // validEngines is the set of allowed browser engine values.
@@ -43,25 +40,8 @@ func (c *BaseConfig) Validate() error {
 		}
 	}
 
-	// Validate optional tool IDs against the live catalog.
-	catalog := sandbox.OptionalTools()
-	catalogMap := make(map[string]bool, len(catalog))
-	for _, t := range catalog {
-		catalogMap[t.ID] = true
-	}
-	for _, id := range c.OptionalTools {
-		id = strings.TrimSpace(id)
-		if id == "" {
-			continue
-		}
-		if !catalogMap[id] {
-			known := make([]string, 0, len(catalog))
-			for _, t := range catalog {
-				known = append(known, t.ID)
-			}
-			return fmt.Errorf("baseconfig: unknown optional tool %q (known: %s)", id, strings.Join(known, ", "))
-		}
-	}
+	// Unknown optional tool IDs are ignored at render time (removed catalog
+	// entries, e.g. after a tool was deleted). No validation error here.
 
 	return nil
 }

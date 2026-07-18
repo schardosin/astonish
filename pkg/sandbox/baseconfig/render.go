@@ -13,7 +13,7 @@ import (
 //
 // The order mirrors the personal-mode wizard:
 //   1. Core tools (apt packages, node, python, uv, docker)
-//   2. Optional tools (OpenCode, etc.)
+//   2. Optional tools (from sandbox.OptionalTools catalog)
 //   3. Browser install (Chromium/CloakBrowser + KasmVNC + X11 deps)
 //   4. Extra steps (raw shell, operator escape hatch)
 func (c *BaseConfig) Render() ([]string, error) {
@@ -43,8 +43,9 @@ func (c *BaseConfig) Render() ([]string, error) {
 		}
 		tool, ok := catalogMap[id]
 		if !ok {
-			// Validate() should have caught this, but be safe.
-			return nil, fmt.Errorf("baseconfig: unknown optional tool %q", id)
+			// Skip removed/unknown catalog entries so persisted configs that
+			// still list deleted tools (e.g. former optional installs) can build.
+			continue
 		}
 		for _, argv := range tool.InstallCommands() {
 			steps = append(steps, shellJoin(argv))

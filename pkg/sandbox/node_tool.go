@@ -261,7 +261,6 @@ var containerTools = map[string]bool{
 	"read_pdf":                  true,
 	"filter_json":               true,
 	"git_diff_add_line_numbers": true,
-	"opencode":                  true,
 }
 
 // WrapToolsWithNode wraps tools with NodeTool proxies using a concrete

@@ -733,7 +733,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 	// Split coreTools into main-thread essentials and the full "core" group
 	// for sub-agents. Main thread tools: read_file, write_file, edit_file,
 	// shell_command, grep_search, find_files, memory_save, memory_search,
-	// delegate_tasks, opencode, resolve_credential, skill_lookup.
+	// delegate_tasks, resolve_credential, skill_lookup.
 	mainThreadToolNames := map[string]bool{
 		"read_file":          true,
 		"write_file":         true,
@@ -745,7 +745,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		"memory_search":      true,
 		"delegate_tasks":     true,
 		"announce_plan":      true,
-		"opencode":           true,
 		"resolve_credential": true,
 		"skill_lookup":       true,
 	}
@@ -1052,22 +1051,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			Name:        "fleet",
 			Description: "Create and validate fleet plans",
 			Tools:       fleetToolsSlice,
-		}
-	}
-
-	// opencode tool → add to main thread tools (available in both modes)
-	if cfg.AppConfig.SubAgents.IsSubAgentsEnabled() {
-		ocTool, ocErr := tools.NewOpenCodeTool()
-		if ocErr != nil {
-			if cfg.DebugMode {
-				slog.Warn("failed to create opencode tool for wizard", "error", ocErr)
-			}
-		} else {
-			mainThreadTools = append(mainThreadTools, ocTool)
-			// Also add to core group for sub-agents
-			if g, ok := toolGroups["core"]; ok {
-				g.Tools = append(g.Tools, ocTool)
-			}
 		}
 	}
 
@@ -1678,13 +1661,6 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 			slog.Debug("context compaction enabled", "window_tokens", contextWindow, "threshold_pct", compactor.Threshold*100)
 		}
 	}
-
-	// --- 6e-bis. Wire OpenCode response summarizer ---
-	// Uses the same LLM function as the compactor. When set, verbose OpenCode
-	// outputs (>4KB) are replaced with concise summaries before they enter the
-	// calling agent's ADK session, keeping context lean. OpenCode retains full
-	// context internally via session_id continuation.
-	tools.SetOpenCodeSummarizer(makeLLMFunc(llm))
 
 	// --- 6d. Wire memory and flow context ---
 	// Use PlatformReflector which writes to team memory store via context

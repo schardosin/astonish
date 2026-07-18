@@ -66,10 +66,6 @@ const platforms = [
     darkLogo: '/platforms/macos-dark.svg'
   },
   {
-    name: 'Windows',
-    logo: '/platforms/windows.svg'
-  },
-  {
     name: 'Kubernetes',
     logo: '/platforms/kubernetes.svg'
   },

@@ -1,7 +1,10 @@
 package vertex
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -363,6 +366,57 @@ func TestParseResponse_FunctionCall(t *testing.T) {
 	}
 }
 
+func TestParseResponse_InlineData(t *testing.T) {
+	t.Parallel()
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	body := fmt.Sprintf(`{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{"inlineData": {"mimeType": "image/png", "data": %q}}]
+			}
+		}]
+	}`, b64)
+
+	resp, err := ParseResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content == nil || len(resp.Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %+v", resp.Content)
+	}
+	id := resp.Content.Parts[0].InlineData
+	if id == nil {
+		t.Fatal("expected InlineData")
+	}
+	if id.MIMEType != "image/png" {
+		t.Errorf("MIMEType=%q, want image/png", id.MIMEType)
+	}
+	if !bytes.Equal(id.Data, pngBytes) {
+		t.Errorf("data mismatch: got %v", id.Data)
+	}
+}
+
+func TestParseResponse_SkipsEmptyParts(t *testing.T) {
+	t.Parallel()
+	body := `{
+		"candidates": [{
+			"content": {
+				"role": "model",
+				"parts": [{}, {"text": "hi"}]
+			}
+		}]
+	}`
+	resp, err := ParseResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Content.Parts) != 1 || resp.Content.Parts[0].Text != "hi" {
+		t.Fatalf("expected only text part, got %+v", resp.Content.Parts)
+	}
+}
+
 func TestParseResponse_EmptyCandidates(t *testing.T) {
 	t.Parallel()
 	body := `{"candidates": []}`
@@ -495,6 +549,35 @@ data: {"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]}}]}
 	}
 	if responses[3].Content.Parts[0].Text != "Hello World!" {
 		t.Errorf("expected 'Hello World!', got %q", responses[3].Content.Parts[0].Text)
+	}
+}
+
+func TestParseStream_InlineDataOnly(t *testing.T) {
+	t.Parallel()
+	pngBytes := []byte{0x89, 0x50, 0x4e, 0x47}
+	b64 := base64.StdEncoding.EncodeToString(pngBytes)
+	input := fmt.Sprintf("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":%q}}]}}]}\n\n", b64)
+	reader := strings.NewReader(input)
+
+	var responses []*model.LLMResponse
+	for resp, err := range ParseStream(reader) {
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		responses = append(responses, resp)
+	}
+	if len(responses) != 1 {
+		t.Fatalf("expected 1 response for image-only chunk, got %d", len(responses))
+	}
+	if responses[0].Partial {
+		t.Error("image-only response should not be Partial")
+	}
+	if responses[0].Content == nil || len(responses[0].Content.Parts) != 1 {
+		t.Fatalf("expected 1 part, got %+v", responses[0].Content)
+	}
+	id := responses[0].Content.Parts[0].InlineData
+	if id == nil || !bytes.Equal(id.Data, pngBytes) {
+		t.Fatalf("expected inline image bytes, got %+v", id)
 	}
 }
 

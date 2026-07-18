@@ -474,6 +474,10 @@ func (cr *ChatRunner) Run(
 					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 				}
 			}
+			if !event.LLMResponse.Partial {
+				chatAgent.EnqueueImagesFromContent(event.LLMResponse.Content)
+				cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+			}
 			return
 		}
 
@@ -504,6 +508,10 @@ func (cr *ChatRunner) Run(
 				cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp)
 				cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 			}
+		}
+		if !event.LLMResponse.Partial {
+			chatAgent.EnqueueImagesFromContent(event.LLMResponse.Content)
+			cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 		}
 	}
 	defer func() { chatAgent.UIEventCallback = nil }()
@@ -695,7 +703,9 @@ runLoop:
 						"name":   part.FunctionResponse.Name,
 						"result": summarizeToolResult(resp),
 					})
-					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
+					if cr.drainImagesAndFlowOutput(chatAgent, sessionService) > 0 {
+						hasContent = true
+					}
 					if cr.maybeEmitTutorialBlueprint(chatAgent, sessionService, part.FunctionResponse.Name, resp) {
 						// Blueprint card is up; wait for Approve / Request changes / Cancel
 						// (same hard-stop pattern as network_denial_hint).
@@ -769,6 +779,15 @@ runLoop:
 							}
 						}
 					}
+				}
+			}
+
+			// Model-returned images (e.g. Gemini image generation) arrive as
+			// InlineData parts — enqueue and emit SSE image events.
+			if !event.LLMResponse.Partial {
+				chatAgent.EnqueueImagesFromContent(event.LLMResponse.Content)
+				if cr.drainImagesAndFlowOutput(chatAgent, sessionService) > 0 {
+					hasContent = true
 				}
 			}
 		}
@@ -867,6 +886,10 @@ runLoop:
 						}
 						cr.maybeEmitTutorialSceneSlideshow(sessionService, part.FunctionResponse.Name, resp)
 					}
+				}
+				if !event.LLMResponse.Partial {
+					chatAgent.EnqueueImagesFromContent(event.LLMResponse.Content)
+					cr.drainImagesAndFlowOutput(chatAgent, sessionService)
 				}
 			}
 
@@ -1072,9 +1095,11 @@ func strVal(v any) string {
 	return s
 }
 
-// drainImagesAndFlowOutput drains images, flow output, and file artifacts from the chat agent and emits them as events.
-func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent, sessionService session.Service) {
-	for _, img := range chatAgent.DrainImages() {
+// drainImagesAndFlowOutput drains images, flow output, and file artifacts from
+// the chat agent and emits them as events. Returns the number of images emitted.
+func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent, sessionService session.Service) int {
+	images := chatAgent.DrainImages()
+	for _, img := range images {
 		mimeType := "image/png"
 		if img.Format == "jpeg" || img.Format == "jpg" {
 			mimeType = "image/jpeg"
@@ -1094,6 +1119,7 @@ func (cr *ChatRunner) drainImagesAndFlowOutput(chatAgent *agent.ChatAgent, sessi
 			"tool_name": file.ToolName,
 		})
 	}
+	return len(images)
 }
 
 // appPreviewFenceRe matches ```astonish-app code fences. It captures the code content

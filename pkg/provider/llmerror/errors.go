@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -21,10 +22,34 @@ type LLMError struct {
 }
 
 func (e *LLMError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("%s: %d %s", e.Provider, e.StatusCode, e.Message)
+	msg := e.Message
+	if msg == "" {
+		msg = http.StatusText(e.StatusCode)
 	}
-	return fmt.Sprintf("%s: %d %s", e.Provider, e.StatusCode, http.StatusText(e.StatusCode))
+	// resp.Status is often "400 Bad Request" — avoid "400 400 Bad Request".
+	msg = strings.TrimPrefix(msg, strconv.Itoa(e.StatusCode)+" ")
+	base := fmt.Sprintf("%s: %d %s", e.Provider, e.StatusCode, msg)
+	if detail := truncateErrorBody(e.Body); detail != "" {
+		return base + ": " + detail
+	}
+	return base
+}
+
+// truncateErrorBody returns a short, single-line snippet of the provider
+// response body so callers see the real rejection reason (e.g. Gemini
+// INVALID_ARGUMENT details) instead of only the HTTP status text.
+func truncateErrorBody(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" || strings.HasPrefix(body, "<unreadable:") {
+		return ""
+	}
+	body = strings.ReplaceAll(body, "\n", " ")
+	body = strings.Join(strings.Fields(body), " ")
+	const maxLen = 400
+	if len(body) > maxLen {
+		return body[:maxLen] + "..."
+	}
+	return body
 }
 
 // NewLLMError creates an LLMError with automatic retryable classification.
@@ -84,14 +109,31 @@ func IsServerError(err error) bool {
 	return false
 }
 
-// IsContextOverflow returns true if the error is a 400 Bad Request that likely
-// indicates the request exceeded the model's context window. Providers return
-// 400 for various reasons, but when the compactor estimates token usage is high,
-// a 400 is almost certainly a context overflow.
+// IsContextOverflow returns true if the error looks like a context-window
+// overflow. Providers return 400 for many reasons (invalid schema, bad
+// arguments, etc.), so we require overflow-related keywords in the body or
+// message — a bare 400 is not enough.
 func IsContextOverflow(err error) bool {
 	var llmErr *LLMError
-	if errors.As(err, &llmErr) {
-		return llmErr.StatusCode == http.StatusBadRequest
+	if !errors.As(err, &llmErr) || llmErr.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	haystack := strings.ToLower(llmErr.Message + " " + llmErr.Body)
+	for _, kw := range []string{
+		"context length",
+		"context window",
+		"maximum context",
+		"too many tokens",
+		"token limit",
+		"prompt is too long",
+		"input is too long",
+		"exceeds the maximum",
+		"max_tokens",
+		"context_length_exceeded",
+	} {
+		if strings.Contains(haystack, kw) {
+			return true
+		}
 	}
 	return false
 }

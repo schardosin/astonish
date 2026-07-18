@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"iter"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,8 +22,82 @@ import (
 	"github.com/SAP/astonish/pkg/provider/llmerror"
 	"github.com/SAP/astonish/pkg/provider/openai"
 	"github.com/SAP/astonish/pkg/provider/vertex"
+	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
 )
+
+const sapAICoreProviderType = "sap_ai_core"
+
+// modelLimitsStore is the optional durable store for learned per-model token
+// limits (e.g. maxOutputTokens from Vertex 400 responses). Set at daemon boot.
+var (
+	modelLimitsStore   store.ModelLimitsStore
+	modelLimitsStoreMu sync.RWMutex
+)
+
+// SetModelLimitsStore registers the platform store used to persist learned
+// model token limits. Nil clears the store (tests / miswired daemon).
+func SetModelLimitsStore(s store.ModelLimitsStore) {
+	modelLimitsStoreMu.Lock()
+	defer modelLimitsStoreMu.Unlock()
+	modelLimitsStore = s
+}
+
+func getModelLimitsStore() store.ModelLimitsStore {
+	modelLimitsStoreMu.RLock()
+	defer modelLimitsStoreMu.RUnlock()
+	return modelLimitsStore
+}
+
+// resolveMaxOutputTokens returns the effective maxOutputTokens for a model:
+// learned override if present, otherwise GetModelConfig static/fallback.
+func resolveMaxOutputTokens(ctx context.Context, modelName string) int {
+	cfg := GetModelConfig(modelName)
+	maxTokens := cfg.MaxTokens
+	if s := getModelLimitsStore(); s != nil {
+		if entry, err := s.Get(ctx, sapAICoreProviderType, modelName); err == nil && entry != nil && entry.MaxOutputTokens > 0 {
+			return entry.MaxOutputTokens
+		}
+	}
+	return maxTokens
+}
+
+// resolveOmitTools reports whether tools/toolConfig should be stripped from
+// Vertex requests for this model (learned SupportsTools == false).
+func resolveOmitTools(ctx context.Context, modelName string) bool {
+	if s := getModelLimitsStore(); s != nil {
+		if entry, err := s.Get(ctx, sapAICoreProviderType, modelName); err == nil && entry != nil &&
+			entry.SupportsTools != nil && !*entry.SupportsTools {
+			return true
+		}
+	}
+	return false
+}
+
+// requestWithoutTools returns a shallow copy of req with Tools and ToolConfig
+// cleared on Config. Contents and other fields are shared.
+func requestWithoutTools(req *model.LLMRequest) *model.LLMRequest {
+	if req == nil {
+		return nil
+	}
+	cp := *req
+	if req.Config != nil {
+		cfg := *req.Config
+		cfg.Tools = nil
+		cfg.ToolConfig = nil
+		cp.Config = &cfg
+	}
+	return &cp
+}
+
+// invalidateModelCache clears the in-memory ListModelsWithMetadata cache so
+// the next UI fetch picks up newly learned limits.
+func invalidateModelCache() {
+	sapModelCacheMu.Lock()
+	sapModelCache = nil
+	sapModelCacheTime = time.Time{}
+	sapModelCacheMu.Unlock()
+}
 
 // Provider implements the model.LLM interface for SAP AI Core.
 type Provider struct {
@@ -515,6 +590,7 @@ type ModelInfo struct {
 	Name            string `json:"name"`
 	ContextLength   int    `json:"context_length,omitempty"`
 	MaxOutputTokens int    `json:"max_completion_tokens,omitempty"`
+	SupportsTools   *bool  `json:"supports_tools,omitempty"`
 }
 
 // Model cache for SAP AI Core
@@ -543,15 +619,30 @@ func ListModelsWithMetadata(ctx context.Context, clientID, clientSecret, authURL
 		return nil, err
 	}
 
-	// Enrich with ModelConfigs metadata
+	// Enrich with ModelConfigs metadata; learned limits override MaxOutputTokens
+	// and SupportsTools when known.
 	var models []ModelInfo
+	limits := getModelLimitsStore()
 	for _, id := range modelIDs {
 		config := GetModelConfig(id)
+		maxOut := config.MaxTokens
+		var supportsTools *bool
+		if limits != nil {
+			if entry, err := limits.Get(ctx, sapAICoreProviderType, id); err == nil && entry != nil {
+				if entry.MaxOutputTokens > 0 {
+					maxOut = entry.MaxOutputTokens
+				}
+				if entry.SupportsTools != nil {
+					supportsTools = entry.SupportsTools
+				}
+			}
+		}
 		models = append(models, ModelInfo{
 			ID:              id,
 			Name:            id,
 			ContextLength:   config.ContextWindow,
-			MaxOutputTokens: config.MaxTokens,
+			MaxOutputTokens: maxOut,
+			SupportsTools:   supportsTools,
 		})
 	}
 
@@ -639,75 +730,134 @@ func (p *Provider) generateBedrockContent(ctx context.Context, req *model.LLMReq
 
 func (p *Provider) generateVertexContent(ctx context.Context, req *model.LLMRequest, streaming bool) iter.Seq2[*model.LLMResponse, error] {
 	return func(yield func(*model.LLMResponse, error) bool) {
-		// Get model-specific config
-		config := GetModelConfig(p.modelName)
+		maxTokens := resolveMaxOutputTokens(ctx, p.modelName)
+		omitTools := resolveOmitTools(ctx, p.modelName)
+		retriedMaxOut := false
+		retriedNoTools := false
 
-		// Convert request using vertex protocol with model-specific maxOutputTokens
-		vertexReq, err := vertex.ConvertRequest(req, config.MaxTokens)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		payload, err := json.Marshal(vertexReq)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-
-		var url string
-		if streaming {
-			// Vertex AI streaming endpoint: /models/{model}:streamGenerateContent?alt=sse
-			url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:streamGenerateContent?alt=sse", p.baseURL, p.deploymentID, p.modelName)
-		} else {
-			// Vertex AI non-streaming endpoint: /models/{model}:generateContent
-			url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:generateContent", p.baseURL, p.deploymentID, p.modelName)
-		}
-
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("AI-Resource-Group", p.authConfig.resourceGroup)
-		// Token is added by transport
-
-		resp, err := p.httpClient.Do(httpReq)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
-			}
-			yield(nil, llmerror.NewFromResponse("sap-vertex", resp, body))
-			return
-		}
-
-		if streaming {
-			// Handle streaming response using vertex protocol
-			for resp, err := range vertex.ParseStream(resp.Body) {
-				if !yield(resp, err) {
-					return
-				}
-			}
-		} else {
-			// Non-streaming response
-			body, readErr := io.ReadAll(resp.Body)
-			if readErr != nil {
-				body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
-			}
-			llmResp, err := vertex.ParseResponse(body)
+		for {
+			resp, body, err := p.doVertexRequest(ctx, req, streaming, maxTokens, omitTools)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			yield(llmResp, nil)
+
+			if resp.StatusCode == http.StatusOK {
+				if streaming {
+					for llmResp, parseErr := range vertex.ParseStream(resp.Body) {
+						if !yield(llmResp, parseErr) {
+							resp.Body.Close()
+							return
+						}
+					}
+					resp.Body.Close()
+					return
+				}
+				llmResp, parseErr := vertex.ParseResponse(body)
+				resp.Body.Close()
+				if parseErr != nil {
+					yield(nil, parseErr)
+					return
+				}
+				yield(llmResp, nil)
+				return
+			}
+
+			resp.Body.Close()
+			llmErr := llmerror.NewFromResponse("sap-vertex", resp, body)
+			bodyStr := string(body)
+
+			if resp.StatusCode == http.StatusBadRequest {
+				// Learn maxOutputTokens from the error and retry once.
+				if !retriedMaxOut {
+					if learned, ok := llmerror.ParseMaxOutputTokensLimit(bodyStr); ok && learned > 0 && learned < maxTokens {
+						if s := getModelLimitsStore(); s != nil {
+							if upsertErr := s.UpsertMaxOutput(ctx, sapAICoreProviderType, p.modelName, learned, "learned_400"); upsertErr != nil {
+								slog.Warn("failed to persist learned maxOutputTokens",
+									"component", "sap-vertex", "model", p.modelName, "max", learned, "error", upsertErr)
+							} else {
+								invalidateModelCache()
+								slog.Info("learned maxOutputTokens from provider 400",
+									"component", "sap-vertex", "model", p.modelName, "max", learned)
+							}
+						}
+						maxTokens = learned
+						retriedMaxOut = true
+						continue
+					}
+				}
+
+				// Learn that the model rejects function calling and retry once without tools.
+				if !retriedNoTools && !omitTools && llmerror.IsNoFunctionCalling(bodyStr) && requestHasTools(req) {
+					if s := getModelLimitsStore(); s != nil {
+						if upsertErr := s.UpsertSupportsTools(ctx, sapAICoreProviderType, p.modelName, false, "learned_400"); upsertErr != nil {
+							slog.Warn("failed to persist learned supports_tools=false",
+								"component", "sap-vertex", "model", p.modelName, "error", upsertErr)
+						} else {
+							invalidateModelCache()
+							slog.Info("learned model does not support function calling",
+								"component", "sap-vertex", "model", p.modelName)
+						}
+					}
+					omitTools = true
+					retriedNoTools = true
+					continue
+				}
+			}
+
+			yield(nil, llmErr)
+			return
 		}
 	}
+}
+
+func requestHasTools(req *model.LLMRequest) bool {
+	return req != nil && req.Config != nil && (len(req.Config.Tools) > 0 || req.Config.ToolConfig != nil)
+}
+
+// doVertexRequest builds and executes one Vertex generateContent call.
+// On HTTP 200 with streaming, the caller owns resp.Body.
+// On HTTP 200 with non-streaming (or any error status), body is fully read
+// and resp.Body is still open for the caller to Close.
+func (p *Provider) doVertexRequest(ctx context.Context, req *model.LLMRequest, streaming bool, maxTokens int, omitTools bool) (*http.Response, []byte, error) {
+	if omitTools {
+		req = requestWithoutTools(req)
+	}
+	vertexReq, err := vertex.ConvertRequest(req, maxTokens)
+	if err != nil {
+		return nil, nil, err
+	}
+	payload, err := json.Marshal(vertexReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var url string
+	if streaming {
+		url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:streamGenerateContent?alt=sse", p.baseURL, p.deploymentID, p.modelName)
+	} else {
+		url = fmt.Sprintf("%s/inference/deployments/%s/models/%s:generateContent", p.baseURL, p.deploymentID, p.modelName)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("AI-Resource-Group", p.authConfig.resourceGroup)
+
+	resp, err := p.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if resp.StatusCode == http.StatusOK && streaming {
+		return resp, nil, nil
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		body = []byte(fmt.Sprintf("<unreadable: %v>", readErr))
+	}
+	return resp, body, nil
 }

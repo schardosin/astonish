@@ -481,9 +481,47 @@ func (c *ChatAgent) ForwardSubTaskEvent(event *session.Event) {
 	}
 }
 
+// EnqueueImagesFromContent extracts image/* InlineData parts from model (or
+// tool) content into the pending image queue for Studio SSE and channel delivery.
+// Parts are left intact so session history can reconstruct images on reload.
+// Thread-safe.
+func (c *ChatAgent) EnqueueImagesFromContent(content *genai.Content) {
+	if content == nil {
+		return
+	}
+	var imgs []ImageFromTool
+	for _, part := range content.Parts {
+		if part == nil || part.InlineData == nil || len(part.InlineData.Data) == 0 {
+			continue
+		}
+		mime := part.InlineData.MIMEType
+		if !strings.HasPrefix(mime, "image/") {
+			continue
+		}
+		format := strings.TrimPrefix(mime, "image/")
+		if format == "jpg" {
+			format = "jpeg"
+		}
+		if format == "" {
+			format = "png"
+		}
+		imgs = append(imgs, ImageFromTool{
+			Data:   part.InlineData.Data,
+			Format: format,
+		})
+	}
+	if len(imgs) == 0 {
+		return
+	}
+	c.imageMu.Lock()
+	c.pendingImages = append(c.pendingImages, imgs...)
+	c.imageMu.Unlock()
+}
+
 // DrainImages returns and clears all pending images that were extracted from
-// tool results during the current agent run. Thread-safe. The channel manager
-// calls this to retrieve images for delivery without relying on session events.
+// tool results or model InlineData during the current agent run. Thread-safe.
+// The channel manager calls this to retrieve images for delivery without
+// relying on session events.
 func (c *ChatAgent) DrainImages() []ImageFromTool {
 	c.imageMu.Lock()
 	defer c.imageMu.Unlock()

@@ -793,9 +793,9 @@ func (m *ChannelManager) handleInbound(ctx context.Context, msg InboundMessage) 
 			continue
 		}
 
-		// Scan for images in tool (function) responses. Images are stripped
-		// from tool results by the AfterToolCallback (to keep session history
-		// clean) and stashed in the ChatAgent's image queue. Drain them here.
+		// Collect images from tool results (stashed by AfterToolCallback) and
+		// from model InlineData parts (e.g. Gemini image generation).
+		m.agent.EnqueueImagesFromContent(event.LLMResponse.Content)
 		for _, img := range m.agent.DrainImages() {
 			pendingImages = append(pendingImages, ImageAttachment{
 				Data:   img.Data,

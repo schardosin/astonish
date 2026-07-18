@@ -168,6 +168,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 #       overlay mount itself — only /dev/fuse access.
 # We remove apt lists after install to keep the image small; users who
 # need additional packages should compose them into higher layers.
+#
+# Do NOT install ripgrep (or other agent tool userland) here. Tools run
+# after chroot into the composed overlay, so packages on this pod image
+# are invisible to grep_search/find_files. Ripgrep is installed into
+# @base overlay layers via CoreToolInstallCommands() / baseconfig.Render
+# (and apt-installed in docker/sandbox-openshell for the OpenShell image).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \

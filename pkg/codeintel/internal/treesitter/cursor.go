@@ -8,14 +8,23 @@ type QueryCursor struct {
 }
 
 func NewQueryCursor(lib *library) *QueryCursor {
+	if lib == nil {
+		return &QueryCursor{}
+	}
 	return &QueryCursor{lib: lib, ptr: lib.tsQueryCursorNew()}
 }
 
 func (c *QueryCursor) Exec(query *Query, node Node) {
+	if c == nil || c.ptr == 0 || c.lib == nil || query == nil || query.ptr == 0 {
+		return
+	}
 	c.lib.tsQueryCursorExec(c.ptr, query.ptr, node)
 }
 
 func (c *QueryCursor) SetByteRange(start, end uint32) bool {
+	if c == nil || c.ptr == 0 || c.lib == nil {
+		return false
+	}
 	return c.lib.tsQueryCursorSetByteRange(c.ptr, start, end)
 }
 
@@ -37,6 +46,9 @@ func (c *QueryCursor) NextCapture() (QueryMatch, uint32, bool) {
 	return match, captureIndex, ok
 }
 
+// CaptureSlice returns the captures for this match. The backing buffer is
+// owned by tree-sitter and is only valid until the next NextMatch or
+// NextCapture call on the same cursor — do not retain the slice.
 func (m QueryMatch) CaptureSlice() []QueryCapture {
 	if m.CaptureCount == 0 || m.Captures == nil {
 		return nil

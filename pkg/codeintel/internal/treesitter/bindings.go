@@ -99,6 +99,16 @@ func DefaultLibrary() (*library, error) {
 	return defaultLib, nil
 }
 
+// ResetDefaultLibraryForTest clears the cached default library so tests can
+// exercise load failures or alternate ASTONISH_TREESITTER_LIB paths.
+func ResetDefaultLibraryForTest() {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	defaultLib = nil
+	defaultLibErr = nil
+	defaultLibPath = ""
+}
+
 func Open(path string) (*library, error) {
 	if path == "" {
 		path = DefaultLibraryPath

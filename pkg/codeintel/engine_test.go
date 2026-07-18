@@ -6,7 +6,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SAP/astonish/pkg/codeintel/internal/treesitter"
 )
+
+func TestDefaultLibraryPathMatchesSandboxContract(t *testing.T) {
+	const want = "/usr/lib/astonish/libastonish-treesitter.so"
+	if treesitter.DefaultLibraryPath != want {
+		t.Fatalf("DefaultLibraryPath = %q, want %q", treesitter.DefaultLibraryPath, want)
+	}
+}
 
 func TestComputeRanks_Empty(t *testing.T) {
 	if ranks := computeRanks(nil); ranks != nil {

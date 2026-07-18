@@ -313,8 +313,12 @@ agents:
       `find_files` to packages/paths from that index and the requirements doc.
       Deepen with `read_file` only on hit files; batch related reads.
       Use tools as needed:
-      - `grep_search` for relevant patterns, interfaces, and implementations
-      - `find_files` for specific file types or naming conventions
+      - `grep_search` for relevant patterns, interfaces, and implementations.
+        Use `regex=true` for structural patterns (e.g., `type\s+\w+\s+interface`).
+        Use `context=2` to see surrounding code without a separate `read_file`.
+        Use `type` or `glob` to limit to relevant file types.
+      - `find_files` for specific file types or naming conventions.
+        Use `sort_by="mtime"` to see recently-modified files first.
       - `read_file` to study key modules, interfaces, and data models
       - `shell_command` for git log, dependencies, or build configs when needed
 
@@ -431,8 +435,11 @@ agents:
       `find_files` to UI packages/paths from that index and the requirements.
       Deepen with `read_file` only on hit files; batch related reads.
       Use tools as needed:
-      - `grep_search` for UI patterns, styling conventions, component usage
-      - `find_files` for stylesheets, component files, layout modules
+      - `grep_search` for UI patterns, styling conventions, component usage.
+        Use `regex=true` for structural patterns (e.g., `className=.*theme`).
+        Use `glob="*.tsx"` or `type="ts"` to limit to UI files.
+      - `find_files` for stylesheets, component files, layout modules.
+        Use `sort_by="mtime"` when checking recently-modified UI files.
       - `read_file` to study specific components that will be affected
       - `shell_command` to check package.json for UI framework/library versions
 
@@ -569,10 +576,17 @@ agents:
       You work directly with files using your tools. This is how you operate:
 
       **Discovery — understand the codebase first:**
-      - Use `file_tree` for project structure overview
-      - Use `grep_search` to find relevant code patterns, imports, interfaces
-      - Use `find_files` to locate files by pattern (e.g., "*.go", "*_test.go")
-      - Use `read_file` to study key files before editing them
+      - Use `file_tree` for scoped project orientation (it auto-summarizes large
+        subtrees with extension counts). Do NOT `file_tree` the entire repo —
+        scope to the relevant package or directory.
+      - Use `grep_search` to find relevant code patterns, imports, interfaces.
+        Set `regex=true` for code patterns (e.g., `func\s+\w+`, `import.*pkg`).
+        Use `context=2` when you need surrounding lines to understand usage.
+        Use `glob` or `type` to narrow results (e.g., `type="go"`, `glob="*.ts"`).
+      - Use `find_files` to locate files by pattern (e.g., "*.go", "src/**/*.ts").
+        Use `sort_by="mtime"` when you need recently-changed files first.
+      - Use `read_file` to study key files before editing them.
+        Use `grep_search` line numbers + `read_file(offset, limit)` for large files.
       - Batch parallel searches: when you need to understand a feature, run
         multiple grep_search calls for different patterns simultaneously.
         Don't search one thing, wait, then search another.

@@ -16,6 +16,8 @@ interface AppPreviewCardProps {
   isActive?: boolean
   /** Session ID for scoping persistent state of unsaved in-chat apps */
   sessionId?: string | null
+  /** Fill parent height (harness panel) instead of a 500px content-sized preview. */
+  fillHeight?: boolean
 }
 
 export default function AppPreviewCard({
@@ -26,6 +28,7 @@ export default function AppPreviewCard({
   onSave,
   isActive = false,
   sessionId,
+  fillHeight = false,
 }: AppPreviewCardProps) {
   const [showCode, setShowCode] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
@@ -86,9 +89,17 @@ export default function AppPreviewCard({
     navigator.clipboard.writeText(displayedData.code)
   }, [displayedData.code])
 
-  const renderCard = (fullscreen: boolean) => (
+  const renderCard = (fullscreen: boolean) => {
+    const stretchPreview = fullscreen || fillHeight
+    return (
     <div
-      className={fullscreen ? 'flex flex-col h-full' : 'my-3 rounded-xl overflow-hidden w-full'}
+      className={
+        fullscreen
+          ? 'flex flex-col h-full'
+          : fillHeight
+            ? 'flex flex-col h-full min-h-0 rounded-xl overflow-hidden w-full'
+            : 'my-3 rounded-xl overflow-hidden w-full'
+      }
       style={fullscreen ? {} : {
         border: `1px solid ${isActive ? 'var(--accent)' : 'var(--border-color)'}`,
         background: 'var(--bg-secondary)',
@@ -262,7 +273,7 @@ export default function AppPreviewCard({
           <pre
             className="px-4 pb-3 text-[11px] overflow-x-auto font-mono leading-relaxed"
             style={{
-              maxHeight: fullscreen ? '40vh' : '200px',
+              maxHeight: fullscreen ? '40vh' : fillHeight ? '25vh' : '200px',
               overflowY: 'auto',
               color: 'var(--text-secondary)',
             }}
@@ -273,15 +284,17 @@ export default function AppPreviewCard({
       )}
 
       {/* Preview */}
-      <div className={fullscreen ? 'flex-1 overflow-auto p-2' : 'px-3 py-2'}>
+      <div className={stretchPreview ? 'flex-1 min-h-0 overflow-hidden p-2' : 'px-3 py-2'}>
         <AppPreview
           code={displayedData.code}
-          maxHeight={fullscreen ? 9999 : 500}
+          maxHeight={stretchPreview ? 9999 : 500}
+          fillHeight={stretchPreview}
           stateId={sessionId ? `session:${sessionId}:${displayedData.title || displayedData.appId || ''}` : (displayedData.title || displayedData.appId || '')}
         />
       </div>
     </div>
-  )
+    )
+  }
 
   return (
     <>

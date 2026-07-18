@@ -16,13 +16,15 @@ interface AppPreviewProps {
   appName?: string
   /** App identifier for persistent state (appName takes precedence, falls back to this) */
   stateId?: string
+  /** Stretch the iframe to fill the parent instead of auto-sizing to content (capped by maxHeight). */
+  fillHeight?: boolean
 }
 
 function detectTheme(): 'dark' | 'light' {
   return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
 }
 
-export default function AppPreview({ code, maxHeight = 500, appName = '', stateId = '' }: AppPreviewProps) {
+export default function AppPreview({ code, maxHeight = 500, appName = '', stateId = '', fillHeight = false }: AppPreviewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [height, setHeight] = useState(200)
   const [error, setError] = useState<string | null>(null)
@@ -79,7 +81,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
           break
         case 'render_success':
           setError(null)
-          if (msg.height && typeof msg.height === 'number') {
+          if (!fillHeight && msg.height && typeof msg.height === 'number') {
             setHeight(Math.min(msg.height + 2, maxHeight))
           }
           break
@@ -300,7 +302,7 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [maxHeight, sendCode, sendTheme, sendToIframe, appName, stateId])
+  }, [maxHeight, fillHeight, sendCode, sendTheme, sendToIframe, appName, stateId])
 
   // Watch for theme changes on the document element and forward to sandbox
   useEffect(() => {
@@ -321,19 +323,19 @@ export default function AppPreview({ code, maxHeight = 500, appName = '', stateI
   }, [code, ready, sendCode])
 
   return (
-    <div className="relative w-full">
+    <div className={fillHeight ? 'relative w-full h-full min-h-0' : 'relative w-full'}>
       <iframe
         ref={iframeRef}
         src={SANDBOX_URL}
         sandbox="allow-scripts allow-forms"
         style={{
           width: '100%',
-          height: `${height}px`,
+          height: fillHeight ? '100%' : `${height}px`,
           border: 'none',
           borderRadius: '8px',
           overflow: 'hidden',
           background: 'var(--bg-primary)',
-          transition: 'height 0.2s ease',
+          transition: fillHeight ? undefined : 'height 0.2s ease',
         }}
         title="App Preview"
       />

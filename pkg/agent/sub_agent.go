@@ -245,7 +245,6 @@ var excludedChildTools = map[string]bool{
 	"schedule_job":      true, // Children can't schedule jobs
 	"save_credential":   true, // Children can't modify credentials
 	"remove_credential": true, // Children can't remove credentials
-	"opencode":          true, // OpenCode delegation is fleet-agent-only (via FleetTools)
 }
 
 // IsExcludedChildTool returns true if the named tool is in the exclusion list.

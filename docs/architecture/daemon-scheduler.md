@@ -61,19 +61,18 @@ astonish daemon start
 2. Open credential store (AES-256-GCM encrypted)
 3. Run credential migration (plaintext config -> encrypted store)
 4. Set provider environment variables from credential store
-5. Generate OpenCode managed config (if sandbox enabled)
-6. Initialize session store (FileStore)
-7. Run device authorization check
-8. Initialize memory system (indexer, vector store, embeddings)
-9. Create ChatAgent (SystemPromptBuilder, tools, callbacks)
-10. Initialize channels (Telegram, email) with hot-reload
-11. Initialize scheduler with job registry
-12. Initialize fleet PlanActivator with GitHub monitoring
-13. Setup sandbox runtime (detect platform, connect to Incus)
-14. Prune stale containers from previous runs
-15. Start idle watchdog for sandbox containers
-16. Start Studio HTTP server
-17. Register signal handlers (SIGINT, SIGTERM)
+5. Initialize session store (FileStore)
+6. Run device authorization check
+7. Initialize memory system (indexer, vector store, embeddings)
+8. Create ChatAgent (SystemPromptBuilder, tools, callbacks)
+9. Initialize channels (Telegram, email) with hot-reload
+10. Initialize scheduler with job registry
+11. Initialize fleet PlanActivator with GitHub monitoring
+12. Setup sandbox runtime (detect platform, connect to Incus)
+13. Prune stale containers from previous runs
+14. Start idle watchdog for sandbox containers
+15. Start Studio HTTP server
+16. Register signal handlers (SIGINT, SIGTERM)
     |
     v
 Running: serving API, processing channels, executing schedules

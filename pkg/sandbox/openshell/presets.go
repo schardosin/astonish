@@ -53,8 +53,6 @@ var networkPresets = map[string][]presetEndpoint{
 		{Host: "api.cohere.ai", Port: 443},
 	},
 	"tools": {
-		{Host: "opencode.ai", Port: 443},
-		{Host: "*.opencode.ai", Port: 443},
 		{Host: "api.brave.com", Port: 443},
 		{Host: "google.serper.dev", Port: 443},
 		{Host: "api.tavily.com", Port: 443},

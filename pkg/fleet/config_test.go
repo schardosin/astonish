@@ -70,11 +70,11 @@ agents:
     task_policy:
       claims: [code.write]
     delegate:
-      tool: opencode
+      tool: external_coder
       params:
         agent: build
         format: json
-      description: OpenCode is a coding agent.
+      description: External coder is a coding agent.
     behaviors: |
       Formulate tasks for the delegate tool.
 `
@@ -155,8 +155,8 @@ func TestLoadFleet_WithDelegate(t *testing.T) {
 		t.Fatal("expected delegate to be non-nil")
 		return
 	}
-	if dev.Delegate.Tool != "opencode" {
-		t.Errorf("expected delegate tool %q, got %q", "opencode", dev.Delegate.Tool)
+	if dev.Delegate.Tool != "external_coder" {
+		t.Errorf("expected delegate tool %q, got %q", "external_coder", dev.Delegate.Tool)
 	}
 	if dev.Delegate.Params["agent"] != "build" {
 		t.Errorf("expected delegate param agent=%q, got %q", "build", dev.Delegate.Params["agent"])
@@ -563,9 +563,9 @@ func TestBuildAgentPrompt(t *testing.T) {
 		Identity:  "You are a developer.",
 		Behaviors: "When receiving a task, implement it carefully.",
 		Delegate: &DelegateConfig{
-			Tool:        "opencode",
+			Tool:        "external_coder",
 			Params:      map[string]any{"agent": "build", "format": "json"},
-			Description: "OpenCode is a coding agent.",
+			Description: "External coder is a coding agent.",
 		},
 	}
 
@@ -608,13 +608,13 @@ func TestBuildAgentPrompt(t *testing.T) {
 	if !strings.Contains(prompt, "Delegate Tool") {
 		t.Error("expected prompt to contain delegate execution section")
 	}
-	if !strings.Contains(prompt, "`opencode` tool") {
-		t.Error("expected prompt to instruct use of opencode tool")
+	if !strings.Contains(prompt, "`external_coder` tool") {
+		t.Error("expected prompt to instruct use of external_coder tool")
 	}
 	if !strings.Contains(prompt, "How to Use") {
 		t.Error("expected prompt to contain usage section")
 	}
-	if !strings.Contains(prompt, "OpenCode is a coding agent.") {
+	if !strings.Contains(prompt, "External coder is a coding agent.") {
 		t.Error("expected prompt to contain delegate description")
 	}
 }
@@ -650,8 +650,8 @@ func TestBuildAgentPrompt_NoDelegate(t *testing.T) {
 	if strings.Contains(prompt, "Delegate Tool") {
 		t.Error("expected prompt to NOT contain delegate execution section")
 	}
-	if strings.Contains(prompt, "`opencode` tool") {
-		t.Error("expected prompt to NOT contain opencode tool instructions")
+	if strings.Contains(prompt, "`external_coder` tool") {
+		t.Error("expected prompt to NOT contain external_coder tool instructions")
 	}
 }
 
@@ -682,7 +682,7 @@ func TestBuildSystemPromptSection_WithCommunication(t *testing.T) {
 			},
 			Agents: map[string]FleetAgentConfig{
 				"po":  {Name: "Product Owner", Identity: "You are a PO.", Tools: ToolsConfig{All: true}, Behaviors: "requirements"},
-				"dev": {Name: "Developer", Identity: "You are a dev.", Delegate: &DelegateConfig{Tool: "opencode"}, Behaviors: "code"},
+				"dev": {Name: "Developer", Identity: "You are a dev.", Delegate: &DelegateConfig{Tool: "external_coder"}, Behaviors: "code"},
 				"qa":  {Name: "QA Engineer", Identity: "You are a QA.", Tools: ToolsConfig{All: true}, Behaviors: "test"},
 			},
 		},
@@ -762,7 +762,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 						"dev": {
 							Name:      "Developer",
 							Identity:  "You are a dev.",
-							Delegate:  &DelegateConfig{Tool: "opencode"},
+							Delegate:  &DelegateConfig{Tool: "external_coder"},
 							Behaviors: "code",
 						},
 					},
@@ -779,7 +779,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 						"dev": {
 							Name:      "Developer",
 							Identity:  "You are a dev.",
-							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY"}},
+							Delegate:  &DelegateConfig{Tool: "external_coder", Env: []string{"BIFROST_API_KEY"}},
 							Behaviors: "code",
 						},
 					},
@@ -796,13 +796,13 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 						"dev": {
 							Name:      "Developer",
 							Identity:  "You are a dev.",
-							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY", "CUSTOM_KEY"}},
+							Delegate:  &DelegateConfig{Tool: "external_coder", Env: []string{"BIFROST_API_KEY", "CUSTOM_KEY"}},
 							Behaviors: "code",
 						},
 						"qa": {
 							Name:      "QA",
 							Identity:  "You are QA.",
-							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY"}},
+							Delegate:  &DelegateConfig{Tool: "external_coder", Env: []string{"BIFROST_API_KEY"}},
 							Behaviors: "test",
 						},
 					},
@@ -813,7 +813,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 						"arch": {
 							Name:      "Architect",
 							Identity:  "You are an architect.",
-							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"BIFROST_API_KEY", "OTHER_KEY"}},
+							Delegate:  &DelegateConfig{Tool: "external_coder", Env: []string{"BIFROST_API_KEY", "OTHER_KEY"}},
 							Behaviors: "design",
 						},
 					},
@@ -830,7 +830,7 @@ func TestCollectDelegateEnvVars(t *testing.T) {
 						"dev": {
 							Name:      "Developer",
 							Identity:  "You are a dev.",
-							Delegate:  &DelegateConfig{Tool: "opencode", Env: []string{"  BIFROST_API_KEY  ", "", "  "}},
+							Delegate:  &DelegateConfig{Tool: "external_coder", Env: []string{"  BIFROST_API_KEY  ", "", "  "}},
 							Behaviors: "code",
 						},
 					},

@@ -281,7 +281,7 @@ func (b *SystemPromptBuilder) Build() string {
 		sb.WriteString("4. If tasks have dependencies, run them in separate `delegate_tasks` calls (first batch completes before the second starts).\n")
 		sb.WriteString("5. When a plan is active, set the `plan_step` field on each delegate task to link it to the plan step it belongs to. Multiple tasks can share the same `plan_step` — the step completes only when all its tasks finish.\n")
 		sb.WriteString("6. After all sub-tasks complete, **synthesize** the results yourself — don't just concatenate sub-agent output.\n")
-		sb.WriteString("7. For research, analysis, or comparison tasks, save the final deliverable as a markdown file with `write_file` (not `opencode`). Present a summary inline.\n")
+		sb.WriteString("7. For research, analysis, or comparison tasks, save the final deliverable as a markdown file with `write_file`. Present a summary inline.\n")
 		sb.WriteString("8. Plan steps are updated automatically as tools complete — do NOT try to update them manually.\n\n")
 
 		sb.WriteString("**Available tool groups (for delegation):**\n")

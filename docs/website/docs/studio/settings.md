@@ -38,7 +38,6 @@ Admin-level configuration for the platform:
 | **MCP Servers** | Model Context Protocol server management |
 | **Sessions** | Session management and history |
 | **Sub-Agents** | Configure delegated sub-agent behavior |
-| **OpenCode** | OpenCode agent settings |
 | **Browser** | Browser automation configuration |
 | **Daemon** | Background service monitoring |
 | **Sandbox** | Container sandbox settings |

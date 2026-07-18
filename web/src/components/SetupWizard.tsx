@@ -1003,36 +1003,40 @@ export default function SetupWizard({ onComplete }: { onComplete: () => void }) 
                 {/* Tool selection */}
                 {!sandboxInitializing && !sandboxDone && (
                   <>
-                    <p className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>Optional tools to install in the sandbox:</p>
-                    <div className="space-y-3 mb-6">
-                      {optionalTools.map(tool => (
-                        <button
-                          key={tool.id}
-                          onClick={() => setSelectedTools(prev => ({ ...prev, [tool.id]: !prev[tool.id] }))}
-                          className={`w-full p-4 rounded-xl border-2 text-left transition-all ${selectedTools[tool.id] ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
-                          style={{ background: selectedTools[tool.id] ? undefined : 'var(--bg-tertiary)' }}
-                        >
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${selectedTools[tool.id] ? 'bg-purple-500 border-purple-500' : 'border-gray-500'}`}>
-                                {selectedTools[tool.id] && <Check size={12} className="text-white" />}
+                    {optionalTools.length > 0 && (
+                      <>
+                        <p className="text-sm font-medium mb-3" style={{ color: 'var(--text-secondary)' }}>Optional tools to install in the sandbox:</p>
+                        <div className="space-y-3 mb-6">
+                          {optionalTools.map(tool => (
+                            <button
+                              key={tool.id}
+                              onClick={() => setSelectedTools(prev => ({ ...prev, [tool.id]: !prev[tool.id] }))}
+                              className={`w-full p-4 rounded-xl border-2 text-left transition-all ${selectedTools[tool.id] ? 'border-purple-500 bg-purple-500/10' : 'border-transparent hover:border-gray-600'}`}
+                              style={{ background: selectedTools[tool.id] ? undefined : 'var(--bg-tertiary)' }}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${selectedTools[tool.id] ? 'bg-purple-500 border-purple-500' : 'border-gray-500'}`}>
+                                    {selectedTools[tool.id] && <Check size={12} className="text-white" />}
+                                  </div>
+                                  <div>
+                                    <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{tool.name}</span>
+                                    {(tool as any).recommended && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400">recommended</span>}
+                                    {(tool as any).requiresNesting && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">needs nesting</span>}
+                                  </div>
+                                </div>
+                                {(tool as any).url && (
+                                  <a href={(tool as any).url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-purple-400 hover:text-purple-300">
+                                    <ExternalLink size={14} />
+                                  </a>
+                                )}
                               </div>
-                              <div>
-                                <span className="font-semibold text-sm" style={{ color: 'var(--text-primary)' }}>{tool.name}</span>
-                                {(tool as any).recommended && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-purple-500/20 text-purple-400">recommended</span>}
-                                {(tool as any).requiresNesting && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400">needs nesting</span>}
-                              </div>
-                            </div>
-                            {(tool as any).url && (
-                              <a href={(tool as any).url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()} className="text-purple-400 hover:text-purple-300">
-                                <ExternalLink size={14} />
-                              </a>
-                            )}
-                          </div>
-                          <p className="text-xs mt-1 ml-8" style={{ color: 'var(--text-muted)' }}>{tool.description}</p>
-                        </button>
-                      ))}
-                    </div>
+                              <p className="text-xs mt-1 ml-8" style={{ color: 'var(--text-muted)' }}>{tool.description}</p>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
 
                     <button
                       onClick={handleSandboxInit}

@@ -8,7 +8,6 @@
 .claude
 .vscode
 .idea
-.opencode
 
 # Dependencies / build outputs not needed in most images
 **/node_modules

@@ -4,7 +4,6 @@
 # backend. Includes all standard tools baked in:
 #   - Core dev tools (docker.io, jq, unzip, socat, etc.)
 #   - CloakBrowser (anti-detection stealth Chromium) + KasmVNC (VNC/web access)
-#   - OpenCode (AI coding agent) — pre-installed in the NVIDIA base
 #
 # The OpenShell gateway handles:
 #   - Supervisor sideloading (via init-container or ImageVolume)
@@ -47,7 +46,7 @@ RUN chmod +x /usr/local/bin/astonish
 # The NVIDIA OpenShell base already provides:
 #   Python 3.12 (system) + 3.14 (uv venv at /sandbox/.venv), Node.js 22,
 #   git, gh, vim, nano, build-essential, curl, ca-certificates, gnupg,
-#   openssl, uv, opencode, passwd
+#   openssl, uv, passwd
 #
 # We install only what's missing for full Astonish parity + CloakBrowser/KasmVNC.
 

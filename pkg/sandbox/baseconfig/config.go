@@ -60,11 +60,11 @@ type BrowserConfig struct {
 }
 
 // DefaultBaseConfig returns a sensible starting point for platform admins.
-// Core tools + OpenCode + CloakBrowser with linux/auto fingerprint.
+// Core tools + CloakBrowser with linux/auto fingerprint.
 func DefaultBaseConfig() BaseConfig {
 	return BaseConfig{
 		Core:          true,
-		OptionalTools: []string{"opencode"},
+		OptionalTools: nil,
 		Browser: BrowserConfig{
 			Engine:              "cloakbrowser",
 			FingerprintPlatform: "linux",

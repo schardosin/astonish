@@ -26,8 +26,7 @@ A whitelist (`containerTools`) determines which tools are proxied:
 ```
 read_file, write_file, edit_file, file_tree, grep_search, find_files,
 shell_command, process_read, process_write, process_list, process_kill,
-http_request, web_fetch, read_pdf, filter_json, git_diff_add_line_numbers,
-opencode
+http_request, web_fetch, read_pdf, filter_json, git_diff_add_line_numbers
 ```
 
 Host-side tools (memory, credentials, scheduler, email) are NOT proxied -- they need access to host resources. Browser tools also stay on the host process, but when sandbox is enabled they drive **in-container** Chromium via CDP (not host Chrome).
@@ -74,7 +73,7 @@ Both `http_request` and `web_fetch` check resolved DNS addresses against private
 | **Browser** (35+ tools) | `browser_navigate`, `browser_click`, `browser_type`, `browser_snapshot`, `browser_take_screenshot`, etc. | `pkg/tools/browser_*.go` |
 | **Email** | `email_list`, `email_read`, `email_search`, `email_send`, `email_reply`, `email_mark_read`, `email_delete`, `email_wait` | `pkg/tools/email_*.go` |
 | **Drills** | `save_drill`, `validate_drill`, `delete_drill`, `list_drills`, `read_drill`, `edit_drill`, `inject_drill_credentials`, `run_drill` | `pkg/tools/drill_tool.go`, `inject_drill_credentials_tool.go`, `run_drill_tool.go` |
-| **Fleet** | Fleet plan tools, OpenCode delegation | `pkg/tools/fleet_*.go`, `opencode_tool.go` |
+| **Fleet** | Fleet plan and task tools | `pkg/tools/fleet_*.go` |
 | **Templates** | `save_sandbox_template`, `list_sandbox_templates`, `use_sandbox_template` | `pkg/tools/` |
 | **Discovery** | `search_tools`, `skill_lookup` | `pkg/tools/` |
 
@@ -133,7 +132,6 @@ The `search_tools` tool and the `ToolIndex` provide dynamic tool discovery:
 | `pkg/tools/email_*.go` | 5 files for email operations |
 | `pkg/tools/drill_tool.go` | Drill suite management tools |
 | `pkg/tools/run_drill_tool.go` | Drill execution with composite executor |
-| `pkg/tools/opencode_tool.go` | OpenCode AI coding agent delegation |
 | `pkg/tools/scheduler_tool.go` | Cron job management |
 | `pkg/tools/fleet_tool.go` | Fleet management tools |
 | `pkg/sandbox/node_tool.go` | NodeTool: sandbox proxy wrapper |

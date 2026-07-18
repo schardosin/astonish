@@ -232,8 +232,8 @@ steps:
     First, check if AGENTS.md already exists in the project:\n```\nshell_command(command: \"test -f /root/<repo-name>/AGENTS.md\
     \ && echo EXISTS || echo MISSING\")\n```\n\n**If EXISTS:** Read it directly — no need to regenerate:\n```\nread_file(path:\
     \ \"/root/<repo-name>/AGENTS.md\")\n```\nPresent a brief summary to the user:\n\"Found an existing AGENTS.md. Here's what\
-    \ it says:\n[summarize key points: stack, structure, build commands].\"\n\n**If MISSING:** Generate AGENTS.md yourself using core tools (do NOT use OpenCode\
-    \ or any delegate tool):\n1. Survey structure with `file_tree` (shallow) and `find_files` / `shell_command`\
+    \ it says:\n[summarize key points: stack, structure, build commands].\"\n\n**If MISSING:** Generate AGENTS.md yourself using core tools (do NOT use\
+    \ any delegate tool):\n1. Survey structure with `file_tree` (shallow) and `find_files` / `shell_command`\
     \ for markers (`go.mod`, `package.json`, `Makefile`, `Cargo.toml`, CI configs).\n2. Use `read_file` and `grep_search`\
     \ on README, Makefile/scripts, and CI to extract build/test/lint/run commands and conventions.\n3. Write a concise AGENTS.md\
     \ (keep under ~10KB) with `write_file` covering: stack, layout, build/test/lint/run commands,\

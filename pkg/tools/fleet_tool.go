@@ -19,19 +19,10 @@ func SetFleetRegistry(fleetReg *fleet.Registry) {
 	fleetRegistryVar = fleetReg
 }
 
-// GetFleetTools returns fleet-related tools that sub-agents can use (e.g., opencode).
-// In fleet v2, the orchestrator/phase tools are gone. The only fleet-specific tool
-// that sub-agents need is the opencode delegate tool.
+// GetFleetTools returns fleet-related tools that sub-agents can use.
+// In fleet v2, the orchestrator/phase tools are gone; sub-agents get task tools.
 func GetFleetTools() ([]tool.Tool, error) {
-	ocT, err := NewOpenCodeTool()
-	if err != nil {
-		return nil, err
-	}
-	taskTools, err := GetFleetTaskTools()
-	if err != nil {
-		return nil, err
-	}
-	return append([]tool.Tool{ocT}, taskTools...), nil
+	return GetFleetTaskTools()
 }
 
 // getEffectiveFleetTemplateStore returns the FleetTemplateStore from context (platform mode)

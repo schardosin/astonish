@@ -253,8 +253,7 @@ type DelegateConfig struct {
 // different generation strategies.
 type ProjectContextConfig struct {
 	// Generator is the strategy for producing the context file.
-	// Supported values: "opencode_init" (runs OpenCode /init to analyze the
-	// codebase), "load_file" (reads an existing file without generating).
+	// Supported value: "load_file" (reads an existing file without generating).
 	// Empty or omitted means no project context.
 	Generator string `yaml:"generator,omitempty" json:"generator,omitempty"`
 
@@ -737,8 +736,8 @@ func SaveFleet(dir string, key string, fleet *FleetConfig) error {
 
 // CollectDelegateEnvVars returns the unique set of environment variable names
 // declared across all delegate configs in the given fleets. This is used by
-// the daemon installer and runtime to ensure delegate tools (e.g. OpenCode)
-// have the env vars they need.
+// the daemon installer and runtime to ensure delegate tools have the env
+// vars they need.
 func CollectDelegateEnvVars(fleets map[string]*FleetConfig) []string {
 	seen := make(map[string]bool)
 	for _, f := range fleets {

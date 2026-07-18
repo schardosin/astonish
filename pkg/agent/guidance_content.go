@@ -220,7 +220,7 @@ When the user's request involves research, analysis, or comparison work — or w
 **Reports are produced via a TWO-STEP contract. Both steps are required.**
 
 **Step 1 — Write the file with ` + "`write_file`" + `:**
-- Use ` + "`write_file`" + ` directly — do NOT delegate file writing to ` + "`opencode`" + ` or sub-agents.
+- Use ` + "`write_file`" + ` directly — do NOT delegate file writing to sub-agents.
 - Use a descriptive filename in the working directory (e.g., ` + "`comparison-report.md`" + `, ` + "`pricing-analysis.md`" + `, ` + "`architecture-review.md`" + `).
 - The file extension must be ` + "`.md`" + ` — only markdown reports are eligible for inline rendering.
 

@@ -171,22 +171,20 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
   }
 
   const renderFleetToolCard = (evt: FleetEvent, eventKey: string) => {
-    const isCall = evt.type === 'worker_tool_call' || evt.type === 'tool_call' || evt.type === 'opencode_tool_call'
+    const isCall = evt.type === 'worker_tool_call' || evt.type === 'tool_call'
     const name = evt.detail || 'unknown'
-    const isOpenCode = evt.type.startsWith('opencode_')
     const cardData = isCall ? (evt.args || evt.text || null) : (evt.result || evt.text || null)
 
     return (
       <div
         key={eventKey}
         className="my-1.5 rounded-lg overflow-hidden"
-        style={{ border: `1px solid ${isOpenCode ? 'rgba(6,182,212,0.3)' : 'var(--border-color)'}`, background: isOpenCode ? 'rgba(6,182,212,0.03)' : 'rgba(255,255,255,0.03)' }}
+        style={{ border: '1px solid var(--border-color)', background: 'rgba(255,255,255,0.03)' }}
       >
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <Wrench size={12} className={isOpenCode ? 'text-cyan-400' : isCall ? 'text-purple-400' : 'text-green-400'} />
+          <Wrench size={12} className={isCall ? 'text-purple-400' : 'text-green-400'} />
           <span className="text-xs font-medium" style={{ color: 'var(--text-primary)' }}>
-            {isOpenCode && <span className="text-cyan-400 mr-1">OpenCode</span>}
-            {isCall ? 'Tool Call' : 'Tool Result'}: <code className={`${isOpenCode ? 'bg-cyan-500/15 text-cyan-300' : 'bg-purple-500/15 text-purple-300'} px-1 py-0.5 rounded text-[11px]`}>{name}</code>
+            {isCall ? 'Tool Call' : 'Tool Result'}: <code className="bg-purple-500/15 text-purple-300 px-1 py-0.5 rounded text-[11px]">{name}</code>
           </span>
         </div>
         {renderCardContent(cardData, eventKey)}
@@ -197,20 +195,16 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
   const renderFleetText = (evt: FleetEvent, eventKey: string) => {
     const textContent = evt.text || evt.message || ''
     if (!textContent) return null
-    const isOpenCode = evt.type === 'opencode_text'
 
     return (
       <div key={eventKey} className="my-1.5">
         <div
           className="p-3 rounded-lg text-sm"
           style={{
-            background: isOpenCode ? 'rgba(6,182,212,0.05)' : 'rgba(255,255,255,0.05)',
-            border: `1px solid ${isOpenCode ? 'rgba(6,182,212,0.2)' : 'var(--border-color)'}`,
+            background: 'rgba(255,255,255,0.05)',
+            border: '1px solid var(--border-color)',
           }}
         >
-          {isOpenCode && (
-            <div className="text-[10px] font-medium text-cyan-400 mb-1">OpenCode</div>
-          )}
           <div className="markdown-body text-xs" style={{ color: 'var(--text-primary)' }}>
             <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{textContent}</ReactMarkdown>
           </div>
@@ -257,27 +251,14 @@ export default function FleetExecutionPanel({ data }: { data: FleetExecutionMess
     if (evt.type === 'conversation_turn' || evt.type === 'conversation_turn_complete' || evt.type === 'conversation_turn_failed') {
       return renderConversationTurn(evt, eventKey)
     }
-    if (evt.type === 'worker_tool_call' || evt.type === 'tool_call' || evt.type === 'opencode_tool_call') {
+    if (evt.type === 'worker_tool_call' || evt.type === 'tool_call') {
       return renderFleetToolCard(evt, eventKey)
     }
-    if (evt.type === 'worker_tool_result' || evt.type === 'tool_result' || evt.type === 'opencode_tool_result') {
+    if (evt.type === 'worker_tool_result' || evt.type === 'tool_result') {
       return renderFleetToolCard(evt, eventKey)
     }
-    if (evt.type === 'worker_text' || evt.type === 'text' || evt.type === 'opencode_text') {
+    if (evt.type === 'worker_text' || evt.type === 'text') {
       return renderFleetText(evt, eventKey)
-    }
-    if (evt.type === 'opencode_step_start' || evt.type === 'opencode_step_finish') {
-      const isStart = evt.type === 'opencode_step_start'
-      return (
-        <div key={eventKey} className="my-1 flex items-center gap-2 px-2 py-1 text-[10px]" style={{ color: 'var(--text-muted)' }}>
-          {isStart ? (
-            <Loader size={10} className="animate-spin text-cyan-400" />
-          ) : (
-            <Check size={10} className="text-cyan-400" />
-          )}
-          <span className="text-cyan-400/70">{evt.message || (isStart ? 'OpenCode step started' : 'OpenCode step finished')}</span>
-        </div>
-      )
     }
     return null
   }

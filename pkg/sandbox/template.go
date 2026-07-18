@@ -106,21 +106,9 @@ type OptionalTool struct {
 // into the base template. The order here is the order they are presented.
 // Note: Docker is NOT optional — it's installed as a core tool because it's
 // required for containerized MCP servers (stdio transport).
+// Currently empty; the catalog remains so install UX can grow without rewiring.
 func OptionalTools() []OptionalTool {
-	return []OptionalTool{
-		{
-			ID:          "opencode",
-			Name:        "OpenCode",
-			Description: "AI coding agent used as a delegate tool by fleet sub-agents.\nEnables autonomous code generation, editing, and analysis inside containers.",
-			URL:         "https://opencode.ai",
-			Recommended: true,
-			InstallCommands: func() [][]string {
-				return [][]string{
-					{"sh", "-c", "curl -fsSL https://opencode.ai/install | bash"},
-				}
-			},
-		},
-	}
+	return nil
 }
 
 // BaseTemplateOptions configures which optional tools to install in the base template.

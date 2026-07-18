@@ -169,7 +169,11 @@ export default function HarnessPanel({
     }
   })()
 
-  const fillBody = focus.kind === 'report' || focus.kind === 'video' || focus.kind === 'browser_handoff'
+  const fillBody =
+    focus.kind === 'report' ||
+    focus.kind === 'video' ||
+    focus.kind === 'browser_handoff' ||
+    focus.kind === 'app'
 
   return (
     <div
@@ -254,15 +258,18 @@ export default function HarnessPanel({
           const data = appVersions[Math.min(appVersionIndex, appVersions.length - 1)] as AppPreviewMessage
           const isActive = activeAppId != null && (data.appId === activeAppId || (!data.appId && data.title === activeAppId))
           return (
-            <AppPreviewCard
-              data={data}
-              versions={appVersions.length > 1 ? appVersions : undefined}
-              versionIndex={appVersionIndex}
-              onNavigateVersion={setAppVersionIndex}
-              isActive={isActive}
-              onSave={isActive && onAppSave ? onAppSave : undefined}
-              sessionId={sessionId}
-            />
+            <div className="flex-1 min-h-0 h-full">
+              <AppPreviewCard
+                data={data}
+                versions={appVersions.length > 1 ? appVersions : undefined}
+                versionIndex={appVersionIndex}
+                onNavigateVersion={setAppVersionIndex}
+                isActive={isActive}
+                onSave={isActive && onAppSave ? onAppSave : undefined}
+                sessionId={sessionId}
+                fillHeight
+              />
+            </div>
           )
         })()}
 

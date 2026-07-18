@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/SAP/astonish/pkg/codeintel"
 	"google.golang.org/adk/tool"
 )
 
@@ -103,6 +104,9 @@ func EditFile(ctx tool.Context, args EditFileArgs) (EditFileResult, error) {
 			})
 			cache.Save()
 		}
+	}
+	if root, err := os.Getwd(); err == nil {
+		codeintel.Invalidate(root)
 	}
 
 	msg := fmt.Sprintf("Replaced %d occurrence(s) in %s", replacements, args.Path)

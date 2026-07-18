@@ -28,8 +28,37 @@ type AppConfig struct {
 	SubAgents     SubAgentAppConfig          `yaml:"sub_agents,omitempty"`
 	Skills        SkillsConfig               `yaml:"skills,omitempty"`
 	AgentIdentity AgentIdentityConfig        `yaml:"agent_identity,omitempty"`
+	CodeIntel     CodeIntelConfig            `yaml:"codeintel,omitempty" json:"codeintel,omitempty"`
 	Sandbox       SandboxConfig              `yaml:"sandbox,omitempty"`
 	Security      SecurityConfig             `yaml:"security,omitempty"`
+}
+
+type CodeIntelConfig struct {
+	Enabled          *bool  `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	AutoInject       *bool  `yaml:"auto_inject,omitempty" json:"auto_inject,omitempty"`
+	AutoInjectTokens int    `yaml:"auto_inject_tokens,omitempty" json:"auto_inject_tokens,omitempty"`
+	LibraryPath      string `yaml:"library_path,omitempty" json:"library_path,omitempty"`
+}
+
+func (c CodeIntelConfig) IsEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
+}
+
+func (c CodeIntelConfig) IsAutoInjectEnabled() bool {
+	if c.AutoInject == nil {
+		return false
+	}
+	return *c.AutoInject
+}
+
+func (c CodeIntelConfig) GetAutoInjectTokens() int {
+	if c.AutoInjectTokens <= 0 {
+		return 1024
+	}
+	return c.AutoInjectTokens
 }
 
 // SandboxConfig controls the session container isolation system.

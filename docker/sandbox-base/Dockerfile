@@ -118,7 +118,26 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
       .
 
 # ---------------------------------------------------------------------------
-# Stage 2 — final runtime image.
+# Stage 2 — native tree-sitter shared library.
+# ---------------------------------------------------------------------------
+FROM --platform=$TARGETPLATFORM debian:bookworm-slim AS treesitter-builder
+
+WORKDIR /src
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        gcc \
+        make \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pkg/codeintel/native ./pkg/codeintel/native
+RUN make -C pkg/codeintel/native OUT=/tmp/libastonish-treesitter.so
+
+# ---------------------------------------------------------------------------
+# Stage 3 — final runtime image.
 #
 # Debian slim is chosen over Alpine because fuse-overlayfs binds more
 # predictably against glibc in the wild, and the resume path uses zstd
@@ -162,6 +181,9 @@ RUN apt-get update && \
         fuse3 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /usr/lib/astonish
+COPY --from=treesitter-builder /tmp/libastonish-treesitter.so /usr/lib/astonish/libastonish-treesitter.so
 
 # Disable apt's privilege-drop sandbox. In the Astonish sandbox chroot,
 # everything runs as root under squash_to_root semantics, so the _apt

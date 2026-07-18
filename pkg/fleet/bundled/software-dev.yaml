@@ -285,6 +285,9 @@ agents:
       - grep_search
       - find_files
       - file_tree
+      - repo_map
+      - code_definition
+      - code_references
       - fleet_task_complete
       - fleet_task_fail
     behaviors: |
@@ -313,6 +316,11 @@ agents:
       `find_files` to packages/paths from that index and the requirements doc.
       Deepen with `read_file` only on hit files; batch related reads.
       Use tools as needed:
+      - `repo_map` for structural overview of unfamiliar packages before broad
+        design or refactoring work.
+      - `code_definition` and `code_references` for precise symbol navigation
+        in Go, TS/TSX, JS/JSX, and Python. Prefer them over `grep_search` for
+        declarations and call-site enumeration.
       - `grep_search` for relevant patterns, interfaces, and implementations.
         Use `regex=true` for structural patterns (e.g., `type\s+\w+\s+interface`).
         Use `context=2` to see surrounding code without a separate `read_file`.
@@ -401,6 +409,9 @@ agents:
       - grep_search
       - find_files
       - file_tree
+      - repo_map
+      - code_definition
+      - code_references
       - fleet_task_complete
       - fleet_task_fail
     behaviors: |
@@ -437,6 +448,10 @@ agents:
       `find_files` to UI packages/paths from that index and the requirements.
       Deepen with `read_file` only on hit files; batch related reads.
       Use tools as needed:
+      - `repo_map` for structural overview of unfamiliar UI packages.
+      - `code_definition` and `code_references` for component, hook, or helper
+        symbols in TS/TSX and JS/JSX. Prefer them over `grep_search` for
+        declarations and usage enumeration.
       - `grep_search` for UI patterns, styling conventions, component usage.
         Use `regex=true` for structural patterns (e.g., `className=.*theme`).
         Use `glob="*.tsx"` or `type="ts"` to limit to UI files.
@@ -531,6 +546,9 @@ agents:
       - grep_search
       - find_files
       - file_tree
+      - repo_map
+      - code_definition
+      - code_references
       - fleet_task_complete
       - fleet_task_fail
     behaviors: |
@@ -580,6 +598,12 @@ agents:
       You work directly with files using your tools. This is how you operate:
 
       **Discovery — understand the codebase first:**
+      - Use `repo_map` for structural orientation when entering an unfamiliar
+        module; it ranks files by definitions and references.
+      - Use `code_definition` to jump to symbol declarations and
+        `code_references` to find call sites before refactoring. Prefer them
+        over `grep_search` for specific symbols in Go, TS/TSX, JS/JSX, and
+        Python.
       - Use `file_tree` for scoped project orientation (it auto-summarizes large
         subtrees with extension counts). Do NOT `file_tree` the entire repo —
         scope to the relevant package or directory.
@@ -737,6 +761,9 @@ agents:
       - grep_search
       - find_files
       - file_tree
+      - repo_map
+      - code_definition
+      - code_references
       - fleet_task_complete
       - fleet_task_fail
     behaviors: |
@@ -780,6 +807,8 @@ agents:
       **Step 1: Understand what was built.**
       - Read the requirements document (especially acceptance criteria)
       - Read the architecture document (if it exists)
+      - Use `code_references` to inspect call sites and integration points for
+        changed symbols before reviewing behavior.
       - Read the developer's code: use `grep_search` to find new/modified files,
         then `read_file` to study them
       - Read the developer's existing tests to understand what IS already covered

@@ -62,7 +62,7 @@ func maximalBuilder() *SystemPromptBuilder {
 			"save_credential", "schedule_job", "process_read",
 			"http_request", "delegate_tasks", "email_list",
 			"browser_navigate", "browser_request_human",
-			"search_tools", "search_flows", "memory_search",
+			"search_tools", "search_flows", "memory_search", "repo_map",
 		),
 	}
 }
@@ -335,6 +335,7 @@ func TestSystemPromptContracts_Capabilities(t *testing.T) {
 		"HTTP API requests",
 		"task delegation",
 		"flow execution",
+		"code intelligence",
 		"persistent memory",
 		"email",
 		"fleet agents",

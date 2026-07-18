@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SAP/astonish/pkg/codeintel"
 	"github.com/SAP/astonish/pkg/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -333,6 +334,9 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 			})
 			cache.Save()
 		}
+	}
+	if root, err := os.Getwd(); err == nil {
+		codeintel.Invalidate(root)
 	}
 
 	return WriteFileResult{Message: fmt.Sprintf("Content successfully written to %s", args.FilePath)}, nil
@@ -689,6 +693,30 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
+	repoMapTool, err := functiontool.New(functiontool.Config{
+		Name:        "repo_map",
+		Description: "Build a structural map of supported source files using tree-sitter definitions and a reference graph. Use for orientation in unfamiliar repositories before broad edits. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+	}, codeintel.RepoMap)
+	if err != nil {
+		return nil, err
+	}
+
+	codeDefinitionTool, err := functiontool.New(functiontool.Config{
+		Name:        "code_definition",
+		Description: "Find structural definitions of a symbol in supported languages using tree-sitter. Prefer this over grep_search when locating a symbol declaration. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+	}, codeintel.CodeDefinition)
+	if err != nil {
+		return nil, err
+	}
+
+	codeReferencesTool, err := functiontool.New(functiontool.Config{
+		Name:        "code_references",
+		Description: "Find structural references to a symbol in supported languages using tree-sitter. Prefer this over grep_search before refactoring a symbol. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+	}, codeintel.CodeReferences)
+	if err != nil {
+		return nil, err
+	}
+
 	webFetchTool, err := functiontool.New(functiontool.Config{
 		Name:        "web_fetch",
 		Description: "Fetch a URL and extract content as markdown, text, or HTML. Preferred tool for fetching specific URLs — try this first. Fast, free, no API key. If it returns empty content (JS-heavy pages), retry with browser tools or the configured MCP extract tool.",
@@ -715,7 +743,8 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	return []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool, readPDFTool,
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, repoMapTool, codeDefinitionTool,
+		codeReferencesTool, webFetchTool, readPDFTool,
 		httpRequestTool,
 	}, nil
 }
@@ -805,6 +834,27 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, 
 			return nil, fmt.Errorf("invalid args for edit_file: %w", err)
 		}
 		return EditFile(nil, toolArgs)
+
+	case "repo_map":
+		var toolArgs codeintel.RepoMapArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for repo_map: %w", err)
+		}
+		return codeintel.RepoMap(nil, toolArgs)
+
+	case "code_definition":
+		var toolArgs codeintel.CodeDefinitionArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for code_definition: %w", err)
+		}
+		return codeintel.CodeDefinition(nil, toolArgs)
+
+	case "code_references":
+		var toolArgs codeintel.CodeReferencesArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for code_references: %w", err)
+		}
+		return codeintel.CodeReferences(nil, toolArgs)
 
 	case "web_fetch":
 		var toolArgs WebFetchArgs

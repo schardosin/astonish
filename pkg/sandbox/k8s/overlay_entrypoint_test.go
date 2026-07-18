@@ -215,6 +215,9 @@ func TestEntrypointScript_ApplyDefaults(t *testing.T) {
 	if o.HostBinaryPath != "/usr/local/bin/astonish-host" {
 		t.Errorf("HostBinaryPath default = %q, want /usr/local/bin/astonish-host", o.HostBinaryPath)
 	}
+	if o.HostTreeSitterLibPath != "/usr/lib/astonish/libastonish-treesitter.so" {
+		t.Errorf("HostTreeSitterLibPath default = %q, want /usr/lib/astonish/libastonish-treesitter.so", o.HostTreeSitterLibPath)
+	}
 	if o.Mode != OverlayModeFuse {
 		t.Errorf("Mode default = %q, want %q", o.Mode, OverlayModeFuse)
 	}
@@ -357,6 +360,70 @@ func TestEntrypointScript_HostBinaryBindMount(t *testing.T) {
 			t.Errorf("missing executability guard; got:\n%s", s)
 		}
 		if !strings.Contains(s, `"skipping bind-mount`) {
+			t.Errorf("missing fallback warning; got:\n%s", s)
+		}
+	})
+}
+
+// TestEntrypointScript_HostTreeSitterLibBindMount exercises the
+// bind-mount of the base-image tree-sitter library into the overlay
+// so codeintel tools can dlopen it after chroot.
+func TestEntrypointScript_HostTreeSitterLibBindMount(t *testing.T) {
+	t.Run("default enables bind-mount", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, "HOST_TS_LIB='/usr/lib/astonish/libastonish-treesitter.so'") {
+			t.Errorf("default HOST_TS_LIB assignment missing; got:\n%s", s)
+		}
+		if !strings.Contains(s, `mount --bind "$HOST_TS_LIB" "$OVERLAY_TS_LIB"`) {
+			t.Errorf("tree-sitter bind-mount command missing; got:\n%s", s)
+		}
+
+		binBindIdx := strings.Index(s, `mount --bind "$HOST_BIN"`)
+		tsBindIdx := strings.Index(s, `mount --bind "$HOST_TS_LIB"`)
+		handoffIdx := strings.Index(s, "exec chroot ")
+		if binBindIdx < 0 || tsBindIdx < 0 || handoffIdx < 0 {
+			t.Fatalf("missing markers: binBind=%d tsBind=%d handoff=%d", binBindIdx, tsBindIdx, handoffIdx)
+		}
+		if !(binBindIdx < tsBindIdx && tsBindIdx < handoffIdx) {
+			t.Errorf("ordering wrong: binBind=%d tsBind=%d handoff=%d; want binBind < tsBind < handoff",
+				binBindIdx, tsBindIdx, handoffIdx)
+		}
+	})
+
+	t.Run("custom library path", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{
+			HostTreeSitterLibPath: "/opt/lib/libastonish-treesitter.so",
+		})
+		if !strings.Contains(s, "HOST_TS_LIB='/opt/lib/libastonish-treesitter.so'") {
+			t.Errorf("custom HOST_TS_LIB missing; got:\n%s", s)
+		}
+		if strings.Contains(s, "HOST_TS_LIB='/usr/lib/astonish/libastonish-treesitter.so'") {
+			t.Errorf("default HOST_TS_LIB leaked despite override; got:\n%s", s)
+		}
+	})
+
+	t.Run("sentinel suppresses bind-mount", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{
+			HostTreeSitterLibPath: "-",
+		})
+		if strings.Contains(s, "HOST_TS_LIB=") {
+			t.Errorf("HOST_TS_LIB assignment should be absent with sentinel; got:\n%s", s)
+		}
+		if strings.Contains(s, `mount --bind "$HOST_TS_LIB"`) {
+			t.Errorf("tree-sitter bind-mount should be absent with sentinel; got:\n%s", s)
+		}
+		// Binary bind-mount should still be present by default.
+		if !strings.Contains(s, `mount --bind "$HOST_BIN"`) {
+			t.Errorf("host-binary bind-mount unexpectedly absent; got:\n%s", s)
+		}
+	})
+
+	t.Run("fallback when host library missing", func(t *testing.T) {
+		s := EntrypointScript(EntrypointScriptOptions{})
+		if !strings.Contains(s, `if [ -f "$HOST_TS_LIB" ]; then`) {
+			t.Errorf("missing file-existence guard; got:\n%s", s)
+		}
+		if !strings.Contains(s, `"skipping tree-sitter library bind-mount`) {
 			t.Errorf("missing fallback warning; got:\n%s", s)
 		}
 	})

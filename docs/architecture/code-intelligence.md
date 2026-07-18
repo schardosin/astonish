@@ -1,12 +1,12 @@
 # Code Intelligence (Tree-sitter)
 
-> **Status: Design / Not yet implemented.**
+> **Status: Implemented.**
 > This document specifies the code intelligence system for Astonish
 > Fleet agents. It is based on analysis of Grok (xAI), OpenClaude, and
 > OpenClaw's production implementations. The primary system is
 > **tree-sitter** - zero-config, low-memory, always-on
-> structural code understanding. LSP is documented as a future
-> evaluation target, gated on observed failure patterns.
+> structural code understanding (`pkg/codeintel`). LSP is documented as a
+> future evaluation target, gated on observed failure patterns.
 
 ## 1. Motivation
 
@@ -160,8 +160,10 @@ TSX support). Rust can be added later if demand appears.
 **Location:** `pkg/codeintel/` (new package)
 
 **Dependencies:**
-- `github.com/tree-sitter/go-tree-sitter` - native Go bindings (not WASM)
-- Language grammars compiled as shared objects, bundled in sandbox base image
+- `github.com/ebitengine/purego` — runtime `dlopen` of a bundled shared library
+  (keeps `CGO_ENABLED=0` for the astonish binary)
+- Language grammars compiled into one shared object at
+  `/usr/lib/astonish/libastonish-treesitter.so`, packaged per sandbox backend
 
 ```
 pkg/codeintel/
@@ -373,15 +375,28 @@ type ReferenceLocation struct {
 
 ### 5.7. Sandbox Integration
 
-- **Grammar files:** Compiled `.so` files (~500KB each, <2MB total for 4
-  languages) bundled in the sandbox base image at `/usr/lib/tree-sitter/`.
+- **Grammar library:** Single shared object
+  `/usr/lib/astonish/libastonish-treesitter.so` (Go/TS/TSX/JS/Python
+  grammars). Path must be visible **inside the filesystem where
+  `astonish node` runs** (after overlay chroot on K8s).
 - **Query files:** Embedded in the `astonish` Go binary via `//go:embed`
-  (tiny: 4 files totaling ~2KB).
+  (`pkg/codeintel/queries/*.scm`).
 - **Tool registration:** `repo_map`, `code_definition`, `code_references`
   are registered in `pkg/tools/internal.go` and added to the
   `containerTools` whitelist (proxied to sandbox like `grep_search`).
 - **No new processes:** Everything runs in-process within `astonish node`.
   No servers to manage, no lifecycle complexity.
+
+#### Packaging by backend
+
+| Backend | Tree-sitter `.so` | Ripgrep (`rg`) |
+|---------|-------------------|----------------|
+| **Incus (Linux native)** | `InitBaseTemplate` / `RefreshTemplate` / `BuildTemplate` build in a temp container and push to `/usr/lib/astonish/...` inside the template | `CoreToolInstallCommands()` apt-installs `ripgrep` into `@base` |
+| **Incus (macOS Docker+Incus)** | Copied from `astonish-incus` image (`docker/incus/Dockerfile`) via `pushTreeSitterLibraryFromDocker` | Same `CoreToolInstallCommands()` into Incus templates (not the Docker host image) |
+| **K8s** | Baked into `sandbox-base` **and** bind-mounted into the overlay by the entrypoint (`HostTreeSitterLibPath`). Dockerfile `COPY` alone is insufficient after chroot. | Installed into `@base` overlay layers via `baseconfig.Render()` → `CoreToolInstallCommands()` when `Core: true`. Do **not** rely on packaging `rg` only in the pod image. |
+| **OpenShell** | Baked into `docker/sandbox-openshell` image rootfs (no Astonish overlay chroot) | apt `ripgrep` in `docker/sandbox-openshell/Dockerfile` |
+
+Ripgrep and the tree-sitter library must live where tools execute (template/overlay/image rootfs), not only on a helper host image.
 
 ## 6. Performance Targets
 
@@ -428,18 +443,26 @@ type ReferenceLocation struct {
    `code_references` for precise symbol navigation; prefer these over
    grep when you need structural usages of a specific symbol."
 
-### Step 3: Sandbox Image
+### Step 3: Sandbox Image (implemented)
 
-1. Cross-compile tree-sitter grammar `.so` files for Linux.
-2. Add to `docker/sandbox-base/Dockerfile` for the direct Kubernetes backend.
-3. Add to `docker/sandbox-openshell/Dockerfile` for the OpenShell backend.
-4. Add to `docker/incus/Dockerfile` for Docker-backed Incus; template setup
-   copies the library from the helper image during `InitBaseTemplate` /
+1. Build `libastonish-treesitter.so` via `pkg/codeintel/native/Makefile`
+   (used by Docker multi-stage builds).
+2. **K8s:** `COPY` into `docker/sandbox-base/Dockerfile` at
+   `/usr/lib/astonish/libastonish-treesitter.so`, **and** bind-mount that
+   path into the composed overlay in `pkg/sandbox/k8s/overlay_entrypoint.go`
+   (`HostTreeSitterLibPath`). Without the bind-mount, `astonish node`
+   cannot `dlopen` the library after chroot.
+3. **OpenShell:** `COPY` into `docker/sandbox-openshell/Dockerfile` image
+   rootfs (sufficient; no overlay chroot).
+4. **Docker+Incus (macOS):** bake into `docker/incus/Dockerfile`; template
+   setup copies from the helper image during `InitBaseTemplate` /
    `RefreshTemplate`.
-5. For native-Linux Incus, `InitBaseTemplate` / `RefreshTemplate` creates a
-   temporary `ubuntu/24.04` builder container, installs build dependencies
-   there, compiles the library, pulls out only the `.so`, and pushes it into
-   the template. The final sandbox template does not retain compilers.
+5. **Native-Linux Incus:** `InitBaseTemplate` / `RefreshTemplate` /
+   `BuildTemplate` create a temporary `ubuntu/24.04` builder container,
+   compile the library, pull out only the `.so`, and push it into the
+   template. The final sandbox template does not retain compilers.
+6. **Ripgrep:** install via `CoreToolInstallCommands()` for Incus + K8s
+   `@base`, and via apt in the OpenShell Dockerfile. See §5.7 table.
 
 ### Step 4: Fleet Integration
 
@@ -579,6 +602,6 @@ cost and density.
 - OpenClaude RepoMap: `/root/openclaude/src/context/repoMap/`
 - OpenClaw LSP integration: `/root/openclaw/src/agents/agent-bundle-lsp-runtime.ts`
 - Aider tree-sitter queries: MIT licensed, basis for `.scm` query files
-- Tree-sitter Go bindings: `github.com/tree-sitter/go-tree-sitter`
+- Runtime FFI: `github.com/ebitengine/purego` (`pkg/codeintel/internal/treesitter`)
 - Tree-sitter grammars: `github.com/tree-sitter/tree-sitter-{go,typescript,javascript,python}`
 - PageRank algorithm: Brin & Page, 1998 (damping factor 0.85)

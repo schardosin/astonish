@@ -35,6 +35,7 @@ var CoreTools = []string{
 	"unzip",
 	"build-essential",
 	"socat",
+	"ripgrep",
 	"docker.io",
 }
 

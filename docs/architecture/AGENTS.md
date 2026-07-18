@@ -21,7 +21,7 @@ This directory is the **authoritative reference** for cross-cutting design decis
 - `generative-ui.md` — App preview pipeline, iframe sandbox, `useAppData` / `useAppAI` / `useAppState`, SSRF-protected proxy.
 
 ### Code Intelligence
-- `code-intelligence.md` - Tree-sitter-first structural code intelligence plan. Scope graphs, reference graph, PageRank, sandbox-native execution. LSP is deferred pending observed need. **Status: design, not yet implemented.**
+- `code-intelligence.md` - Tree-sitter-first structural code intelligence. Scope graphs, reference graph, PageRank, sandbox-native execution. LSP is deferred pending observed need. **Status: implemented** (`pkg/codeintel`, sandbox packaging per backend).
 
 ### Session behavior
 - `smart-compaction.md` — session compaction algorithm.

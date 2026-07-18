@@ -142,6 +142,21 @@ type EntrypointScriptOptions struct {
 	// explicitly suppress the bind-mount.
 	HostBinaryPath string
 
+	// HostTreeSitterLibPath, when non-empty, is the absolute path of the
+	// BASE-IMAGE tree-sitter shared library that the entrypoint will
+	// bind-mount into the overlay at
+	// /usr/lib/astonish/libastonish-treesitter.so before the chroot
+	// handoff. Code intelligence tools (repo_map, code_definition,
+	// code_references) dlopen this path inside astonish node after
+	// chroot; baking the library into the pod image alone is not
+	// enough because the overlay rootfs does not include the pod
+	// base-image filesystem.
+	//
+	// Default: /usr/lib/astonish/libastonish-treesitter.so (the path
+	// used by docker/sandbox-base/Dockerfile and pkg/codeintel).
+	// Value "-" suppresses the bind-mount entirely.
+	HostTreeSitterLibPath string
+
 	// Mode selects the overlay mount strategy; see OverlayMode.
 	// Default: OverlayModeFuse — the most portable option.
 	Mode OverlayMode
@@ -203,6 +218,9 @@ func (o *EntrypointScriptOptions) applyDefaults() {
 	}
 	if o.HostBinaryPath == "" {
 		o.HostBinaryPath = "/usr/local/bin/astonish-host"
+	}
+	if o.HostTreeSitterLibPath == "" {
+		o.HostTreeSitterLibPath = "/usr/lib/astonish/libastonish-treesitter.so"
 	}
 	if o.Mode == "" {
 		o.Mode = OverlayModeFuse
@@ -523,6 +541,35 @@ if [ -x "$HOST_BIN" ]; then
 else
   echo "astonish-entrypoint: HOST_BIN=$HOST_BIN missing or not executable; " \
        "skipping bind-mount (PID-1 handoff will use overlay's binary)" 1>&2
+fi
+
+`)
+	}
+
+	// Optional tree-sitter library bind-mount. Code intelligence tools
+	// run inside the chrooted overlay and dlopen this path; the library
+	// is shipped on the sandbox-base image but is invisible after
+	// chroot unless we inject it here (same contract as HostBinaryPath).
+	if opts.HostTreeSitterLibPath != "" && opts.HostTreeSitterLibPath != "-" {
+		b.WriteString(`# --- 2a2. Overlay tree-sitter library from the base image ------------
+# Bind-mount the native tree-sitter shared library so codeintel tools
+# (repo_map / code_definition / code_references) can dlopen it after
+# chroot into the overlay.
+`)
+		b.WriteString("HOST_TS_LIB=")
+		writeSingleQuoted(&b, opts.HostTreeSitterLibPath)
+		b.WriteByte('\n')
+		b.WriteString(`OVERLAY_TS_LIB="$MOUNT_POINT/usr/lib/astonish/libastonish-treesitter.so"
+if [ -f "$HOST_TS_LIB" ]; then
+  mkdir -p "$MOUNT_POINT/usr/lib/astonish"
+  if [ ! -e "$OVERLAY_TS_LIB" ]; then
+    : > "$OVERLAY_TS_LIB"
+    chmod 0644 "$OVERLAY_TS_LIB"
+  fi
+  mount --bind "$HOST_TS_LIB" "$OVERLAY_TS_LIB"
+else
+  echo "astonish-entrypoint: HOST_TS_LIB=$HOST_TS_LIB missing; " \
+       "skipping tree-sitter library bind-mount (codeintel tools will degrade)" 1>&2
 fi
 
 `)

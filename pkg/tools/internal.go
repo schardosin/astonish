@@ -693,28 +693,42 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	repoMapTool, err := functiontool.New(functiontool.Config{
-		Name:        "repo_map",
-		Description: "Build a structural map of supported source files using tree-sitter definitions and a reference graph. Use for orientation in unfamiliar repositories before broad edits. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
-	}, codeintel.RepoMap)
-	if err != nil {
-		return nil, err
+	codeIntelEnabled := true
+	if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
+		codeIntelEnabled = appCfg.CodeIntel.IsEnabled()
+		if appCfg.CodeIntel.LibraryPath != "" {
+			// Prefer configured path over the hard-coded default; the loader
+			// in pkg/codeintel reads ASTONISH_TREESITTER_LIB.
+			_ = os.Setenv("ASTONISH_TREESITTER_LIB", appCfg.CodeIntel.LibraryPath)
+		}
 	}
 
-	codeDefinitionTool, err := functiontool.New(functiontool.Config{
-		Name:        "code_definition",
-		Description: "Find structural definitions of a symbol in supported languages using tree-sitter. Prefer this over grep_search when locating a symbol declaration. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
-	}, codeintel.CodeDefinition)
-	if err != nil {
-		return nil, err
-	}
+	var codeIntelTools []tool.Tool
+	if codeIntelEnabled {
+		repoMapTool, err := functiontool.New(functiontool.Config{
+			Name:        "repo_map",
+			Description: "Build a structural map of supported source files using tree-sitter definitions and a reference graph. Use for orientation in unfamiliar repositories before broad edits. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.RepoMap)
+		if err != nil {
+			return nil, err
+		}
 
-	codeReferencesTool, err := functiontool.New(functiontool.Config{
-		Name:        "code_references",
-		Description: "Find structural references to a symbol in supported languages using tree-sitter. Prefer this over grep_search before refactoring a symbol. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
-	}, codeintel.CodeReferences)
-	if err != nil {
-		return nil, err
+		codeDefinitionTool, err := functiontool.New(functiontool.Config{
+			Name:        "code_definition",
+			Description: "Find structural definitions of a symbol in supported languages using tree-sitter. Prefer this over grep_search when locating a symbol declaration. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.CodeDefinition)
+		if err != nil {
+			return nil, err
+		}
+
+		codeReferencesTool, err := functiontool.New(functiontool.Config{
+			Name:        "code_references",
+			Description: "Find structural references to a symbol in supported languages using tree-sitter. Prefer this over grep_search before refactoring a symbol. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.CodeReferences)
+		if err != nil {
+			return nil, err
+		}
+		codeIntelTools = []tool.Tool{repoMapTool, codeDefinitionTool, codeReferencesTool}
 	}
 
 	webFetchTool, err := functiontool.New(functiontool.Config{
@@ -741,12 +755,13 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{
+	out := []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, repoMapTool, codeDefinitionTool,
-		codeReferencesTool, webFetchTool, readPDFTool,
-		httpRequestTool,
-	}, nil
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool,
+	}
+	out = append(out, codeIntelTools...)
+	out = append(out, webFetchTool, readPDFTool, httpRequestTool)
+	return out, nil
 }
 
 func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, caller string) (any, error) {

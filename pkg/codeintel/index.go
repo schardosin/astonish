@@ -161,6 +161,12 @@ func Build(ctx context.Context, root string) (*BuildResult, error) {
 		}
 		parsed++
 	}
+	// Do not persist or return a partial index when the build was cancelled.
+	// Disk-cache validation only checks the full file set's mtime/size, so a
+	// truncated Graphs map would be reloaded as if complete (cache poisoning).
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if parsed == 0 && len(parseErrs) > 0 {
 		return nil, errors.Join(parseErrs...)
 	}

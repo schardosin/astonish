@@ -417,9 +417,10 @@ Ripgrep and the tree-sitter library must live where tools execute (template/over
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `codeintel.enabled` | `true` | Enables tree-sitter tools (repo_map, code_definition, code_references) |
-| `codeintel.auto_inject` | `false` | Auto-inject RepoMap into system prompt at session start |
-| `codeintel.auto_inject_tokens` | `1024` | Token budget for auto-injected map |
+| `codeintel.enabled` | `true` | When false, `GetInternalTools` omits `repo_map`, `code_definition`, and `code_references` |
+| `codeintel.library_path` | _(empty)_ | If set, exported as `ASTONISH_TREESITTER_LIB` before tool registration (overrides the default `/usr/lib/astonish/libastonish-treesitter.so`) |
+
+Auto-inject of a repo map into the system prompt at session start is not implemented yet; those knobs are intentionally omitted until that feature lands.
 
 ## 8. Rollout Plan
 

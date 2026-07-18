@@ -53,7 +53,16 @@ jobs:
           go clean -cache
           go build -v -o astonish .
 
+      - name: Build tree-sitter native library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential
+          make -C pkg/codeintel/native
+          test -f pkg/codeintel/native/dist/libastonish-treesitter.so
+
       - name: Run tests
+        env:
+          ASTONISH_TREESITTER_LIB: ${{ github.workspace }}/pkg/codeintel/native/dist/libastonish-treesitter.so
         run: go test -v -coverprofile=coverage.out ./...
 
       - name: Display coverage summary

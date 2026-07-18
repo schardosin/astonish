@@ -8,9 +8,11 @@ import (
 )
 
 func TestBuildSmallGoRepo(t *testing.T) {
-	if os.Getenv("ASTONISH_TREESITTER_LIB") == "" {
-		t.Skip("ASTONISH_TREESITTER_LIB not set")
+	libPath := resolveTestLibraryPath()
+	if libPath == "" {
+		t.Skip("tree-sitter library not available")
 	}
+	t.Setenv("ASTONISH_TREESITTER_LIB", libPath)
 
 	root := t.TempDir()
 	source := `package sample

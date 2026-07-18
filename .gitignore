@@ -85,3 +85,6 @@ webhook
 
 # Local agent orchestrator state (not product code)
 .omo/
+
+# Code intelligence disk cache (may contain source snippets)
+.codeintel/

@@ -634,7 +634,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
 		Name:        "shell_command",
-		Description: `Execute a shell command with PTY support. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
+		Description: `Execute a shell command with PTY support. Use for builds, tests, linters, git, package managers, CLIs, servers, and scripts. Do NOT use for browsing or searching source code — use file_tree, find_files, grep_search, or read_file instead. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err

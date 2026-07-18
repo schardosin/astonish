@@ -320,7 +320,9 @@ agents:
       - `find_files` for specific file types or naming conventions.
         Use `sort_by="mtime"` to see recently-modified files first.
       - `read_file` to study key modules, interfaces, and data models
-      - `shell_command` for git log, dependencies, or build configs when needed
+      - `shell_command` ONLY for executing behavior: git log/status/diff, package
+        manager commands, build/test output. Do NOT use shell with ls/find/grep/cat
+        to browse or search code — use the tools above instead.
 
       **When you receive requirements from the PO:**
       1. Read the requirements document carefully using read_file.
@@ -441,7 +443,9 @@ agents:
       - `find_files` for stylesheets, component files, layout modules.
         Use `sort_by="mtime"` when checking recently-modified UI files.
       - `read_file` to study specific components that will be affected
-      - `shell_command` to check package.json for UI framework/library versions
+      - `shell_command` ONLY for executing behavior: git log/status/diff, package
+        manager commands (e.g., `npm ls`), build output. Do NOT use shell with
+        ls/find/grep/cat to browse or search code — use the tools above instead.
 
       **When you receive a request from the PO:**
       1. Read the requirements and any existing technical design documents.
@@ -590,6 +594,9 @@ agents:
       - Batch parallel searches: when you need to understand a feature, run
         multiple grep_search calls for different patterns simultaneously.
         Don't search one thing, wait, then search another.
+      - Do NOT use `shell_command` with ls/find/grep/rg/cat/head/tail to browse
+        or search source code. Use `shell_command` only for executing behavior:
+        git log/status/diff, builds, tests, linters, package managers, CLIs.
 
       **Editing — surgical, precise changes:**
       - Use `edit_file` for modifying existing files. It performs find-and-replace:

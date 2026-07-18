@@ -267,6 +267,10 @@ func TestSystemPromptContracts_ToolUse(t *testing.T) {
 	assertContains(t, prompt, "## Tool Use", "Tool Use section header")
 	assertContains(t, prompt, "read_file/edit_file/write_file", "file tool preference — prefer dedicated tools over shell sed/awk")
 	assertContains(t, prompt, "shell_command", "shell_command mentioned — for private network fallback and general use")
+
+	// Contract: repo navigation tools preferred over shell for source inspection
+	assertContains(t, prompt, "file_tree (structure), find_files (glob/discovery), grep_search (text/regex search), read_file (contents)", "repo navigation tool preference — dedicated tools over shell ls/find/grep")
+	assertContains(t, prompt, "Do NOT use shell_command with ls/find/grep/rg/cat/head/tail", "negative rule — no shell for browsing/searching files")
 }
 
 func TestSystemPromptContracts_Identity(t *testing.T) {

@@ -162,6 +162,7 @@ func (b *SystemPromptBuilder) Build() string {
 	sb.WriteString("- When multiple approaches exist, briefly present options and ask the user which they prefer.\n")
 	sb.WriteString("- If a tool fails, try a different approach before giving up.\n")
 	sb.WriteString("- Prefer read_file/edit_file/write_file over shell sed/awk/echo/cat for file operations.\n")
+	sb.WriteString("- For repository navigation and source inspection, use dedicated tools: file_tree (structure), find_files (glob/discovery), grep_search (text/regex search), read_file (contents). Do NOT use shell_command with ls/find/grep/rg/cat/head/tail just to browse or search files. Reserve shell_command for executing project behavior: git, builds, tests, linters, package managers, CLIs, servers, and scripts.\n")
 	sb.WriteString("- http_request CANNOT reach private/RFC1918 IPs (192.168.x.x, 10.x.x.x, 172.16-31.x.x) or localhost. Use curl via shell_command for private network endpoints.\n")
 	sb.WriteString("- For multi-step tasks, execute sequentially, report progress, and search memory first for prior solutions.\n")
 	sb.WriteString("- After completing a task where you overcame obstacles or discovered non-obvious solutions, save the knowledge using memory_save. Search memory_search(\"memory usage\") first to retrieve the full saving guidelines.\n")

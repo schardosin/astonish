@@ -63,6 +63,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wget jq unzip socat \
       docker.io \
       python3-pip python3-venv \
+      # ripgrep — fast code search used by grep_search and find_files tools
+      ripgrep \
       # --- CloakBrowser shared library dependencies ---
       # CloakBrowser is a standalone binary (not apt-installed), so all shared
       # libraries it links against must be explicitly listed.

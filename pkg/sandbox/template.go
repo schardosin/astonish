@@ -59,6 +59,8 @@ func CoreToolInstallCommands() [][]string {
 			"socat",
 			// ffmpeg — standard multimedia tool (browser session recording, media processing)
 			"ffmpeg",
+			// ripgrep — fast code search used by grep_search and find_files tools
+			"ripgrep",
 			// Docker runtime (daemon + CLI + containerd) — required for
 			// containerized MCP servers and Docker-based workflows
 			"docker.io",

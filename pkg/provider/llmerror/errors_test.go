@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -58,6 +59,28 @@ func TestLLMErrorString(t *testing.T) {
 	want2 := "openai: 500 Internal Server Error"
 	if got2 != want2 {
 		t.Errorf("Error() = %q, want %q", got2, want2)
+	}
+
+	// NewFromResponse uses resp.Status ("400 Bad Request") — don't double the code.
+	e3 := NewLLMError("sap-vertex", 400, "400 Bad Request", `{"error":{"message":"Unknown name \"additionalProperties\""}}`)
+	got3 := e3.Error()
+	if strings.Contains(got3, "400 400") {
+		t.Errorf("Error() duplicated status code: %q", got3)
+	}
+	if !strings.Contains(got3, "additionalProperties") {
+		t.Errorf("Error() should include body detail, got %q", got3)
+	}
+}
+
+func TestIsContextOverflow(t *testing.T) {
+	if IsContextOverflow(NewLLMError("sap-vertex", 400, "400 Bad Request", `{"error":"Unknown name additionalProperties"}`)) {
+		t.Error("schema 400 should not be treated as context overflow")
+	}
+	if !IsContextOverflow(NewLLMError("openai", 400, "Bad Request", `{"error":{"code":"context_length_exceeded"}}`)) {
+		t.Error("context_length_exceeded should be treated as overflow")
+	}
+	if IsContextOverflow(NewLLMError("openai", 429, "rate limited", "too many tokens")) {
+		t.Error("non-400 should not be overflow even with keywords")
 	}
 }
 

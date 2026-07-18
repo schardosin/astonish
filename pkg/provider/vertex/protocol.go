@@ -127,7 +127,14 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 					Response: p.FunctionResponse.Response,
 				}
 			}
+			// Skip empty parts — Vertex/Gemini 400s on `{}` parts.
+			if part.Text == "" && part.InlineData == nil && part.FunctionCall == nil && part.FunctionResponse == nil {
+				continue
+			}
 			parts = append(parts, part)
+		}
+		if len(parts) == 0 {
+			continue
 		}
 		vertexReq.Contents = append(vertexReq.Contents, Content{
 			Role:  c.Role,
@@ -139,10 +146,15 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 	if req.Config != nil && req.Config.SystemInstruction != nil {
 		parts := make([]Part, 0)
 		for _, p := range req.Config.SystemInstruction.Parts {
+			if p.Text == "" {
+				continue
+			}
 			parts = append(parts, Part{Text: p.Text})
 		}
-		vertexReq.SystemInstruction = &Content{
-			Parts: parts,
+		if len(parts) > 0 {
+			vertexReq.SystemInstruction = &Content{
+				Parts: parts,
+			}
 		}
 	}
 
@@ -151,31 +163,15 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 		for _, t := range req.Config.Tools {
 			fds := make([]FunctionDeclaration, 0)
 			for _, fd := range t.FunctionDeclarations {
-				// Sanitize parameters schema - Vertex AI rejects $schema
-				params := fd.ParametersJsonSchema
-
-				// Ensure params is a map so we can sanitize it
-				// The schema can be various types (struct, map, etc.) from ADK
-				schemaBytes, err := json.Marshal(params)
-				if err == nil {
-					var paramsMap map[string]interface{}
-					if err := json.Unmarshal(schemaBytes, &paramsMap); err == nil {
-						// Create a copy to avoid modifying the original
-						newParams := make(map[string]interface{})
-						for k, v := range paramsMap {
-							if k != "$schema" && k != "additionalProperties" {
-								newParams[k] = v
-							}
-						}
-						params = newParams
-					}
-				}
-
+				params := sanitizeToolParameters(fd)
 				fds = append(fds, FunctionDeclaration{
 					Name:        fd.Name,
 					Description: fd.Description,
 					Parameters:  params,
 				})
+			}
+			if len(fds) == 0 {
+				continue
 			}
 			vertexReq.Tools = append(vertexReq.Tools, Tool{
 				FunctionDeclarations: fds,
@@ -198,6 +194,115 @@ func ConvertRequest(req *model.LLMRequest, maxOutputTokens int) (*Request, error
 	}
 
 	return vertexReq, nil
+}
+
+// sanitizeToolParameters converts an ADK function declaration's parameter
+// schema into a Vertex/Gemini-compatible JSON Schema. Gemini's REST API
+// rejects several JSON Schema keywords that ADK/jsonschema-go emit
+// (notably nested additionalProperties and $schema).
+func sanitizeToolParameters(fd *genai.FunctionDeclaration) any {
+	raw := fd.ParametersJsonSchema
+	if raw == nil && fd.Parameters != nil {
+		raw = fd.Parameters
+	}
+	if raw == nil {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+
+	schemaBytes, err := json.Marshal(raw)
+	if err != nil {
+		return raw
+	}
+	var paramsMap map[string]any
+	if err := json.Unmarshal(schemaBytes, &paramsMap); err != nil {
+		return raw
+	}
+	sanitizeSchema(paramsMap)
+	if len(paramsMap) == 0 {
+		return map[string]any{"type": "object", "properties": map[string]any{}}
+	}
+	return paramsMap
+}
+
+// unsupportedSchemaKeys are JSON Schema keywords Gemini/Vertex reject in
+// functionDeclarations.parameters (and nested object schemas).
+var unsupportedSchemaKeys = map[string]bool{
+	"$schema":               true,
+	"$id":                   true,
+	"$defs":                 true,
+	"$ref":                  true,
+	"definitions":           true,
+	"additionalProperties":  true,
+	"unevaluatedProperties": true,
+	"patternProperties":     true,
+}
+
+// sanitizeSchema recursively strips Gemini-unsupported JSON Schema keywords
+// and normalizes nullable type unions produced by jsonschema-go for pointer
+// fields (e.g. ["null","integer"] → "integer").
+func sanitizeSchema(schema map[string]any) {
+	for k := range unsupportedSchemaKeys {
+		delete(schema, k)
+	}
+
+	if t, ok := schema["type"]; ok {
+		schema["type"] = normalizeSchemaType(t)
+	}
+
+	if props, ok := schema["properties"].(map[string]any); ok {
+		for _, prop := range props {
+			if propMap, ok := prop.(map[string]any); ok {
+				sanitizeSchema(propMap)
+			}
+		}
+	}
+
+	switch items := schema["items"].(type) {
+	case map[string]any:
+		sanitizeSchema(items)
+	case []any:
+		for _, item := range items {
+			if itemMap, ok := item.(map[string]any); ok {
+				sanitizeSchema(itemMap)
+			}
+		}
+	}
+
+	for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+		if arr, ok := schema[key].([]any); ok {
+			for _, item := range arr {
+				if itemMap, ok := item.(map[string]any); ok {
+					sanitizeSchema(itemMap)
+				}
+			}
+		}
+	}
+}
+
+// normalizeSchemaType converts JSON Schema type unions that include null
+// (from Go pointer fields) into a single non-null type. Gemini rejects
+// type arrays in function parameter schemas.
+func normalizeSchemaType(t any) any {
+	arr, ok := t.([]any)
+	if !ok {
+		return t
+	}
+	var nonNull any
+	for _, v := range arr {
+		s, ok := v.(string)
+		if !ok || s == "null" {
+			continue
+		}
+		if nonNull != nil {
+			// Multiple non-null types — keep the original union.
+			return t
+		}
+		nonNull = s
+	}
+	if nonNull != nil {
+		return nonNull
+	}
+	return t
 }
 
 // ParseResponse converts a Vertex AI Response body to an ADK LLMResponse.

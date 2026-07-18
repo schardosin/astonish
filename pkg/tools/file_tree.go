@@ -322,7 +322,10 @@ func buildExtensionSummary(fileCount, dirCount int, extCounts map[string]int) st
 		sorted = append(sorted, extEntry{ext, count})
 	}
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].count > sorted[j].count
+		if sorted[i].count != sorted[j].count {
+			return sorted[i].count > sorted[j].count
+		}
+		return sorted[i].ext < sorted[j].ext // stable tie-breaker: alphabetical
 	})
 
 	// Take top 5 extensions

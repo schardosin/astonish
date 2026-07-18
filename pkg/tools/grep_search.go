@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -109,9 +110,26 @@ func GrepSearch(ctx tool.Context, args GrepSearchArgs) (GrepSearchResult, error)
 	// Try ripgrep first, fall back to Go implementation
 	matches, truncatedReason, err := tryRipgrep(args, absPath, maxResults, headLimit)
 	if err != nil {
-		// Check if unsupported features were requested
-		if args.Multiline || args.Type != "" {
-			return GrepSearchResult{}, fmt.Errorf("ripgrep required for multiline/type features but unavailable: %w", err)
+		// Check if unsupported features were requested without ripgrep
+		unsupported := []string{}
+		if args.Multiline {
+			unsupported = append(unsupported, "multiline")
+		}
+		if args.Type != "" {
+			unsupported = append(unsupported, "type")
+		}
+		if args.Context > 0 {
+			unsupported = append(unsupported, "context")
+		}
+		if args.BeforeContext > 0 {
+			unsupported = append(unsupported, "before_context")
+		}
+		if args.AfterContext > 0 {
+			unsupported = append(unsupported, "after_context")
+		}
+		if len(unsupported) > 0 {
+			return GrepSearchResult{}, fmt.Errorf("ripgrep required for %s but unavailable: %w",
+				strings.Join(unsupported, ", "), err)
 		}
 		// Fallback to Go implementation (supports literal, regex, case, globs, cap)
 		matches, err = goGrep(args.Pattern, absPath, mergeGlobs(args), args.CaseSensitive, args.Regex, maxResults)
@@ -207,13 +225,41 @@ func tryRipgrep(args GrepSearchArgs, searchPath string, maxResults, headLimit in
 	rgArgs = append(rgArgs, args.Pattern, searchPath)
 
 	cmd := exec.Command(rgPath, rgArgs...)
-	output, _ := cmd.Output() // rg returns exit code 1 if no matches, but output is still valid
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, "", fmt.Errorf("ripgrep pipe setup failed: %w", err)
+	}
+	cmd.Stderr = nil // we'll check exit code instead
 
-	// Check head limit
+	if err := cmd.Start(); err != nil {
+		return nil, "", fmt.Errorf("ripgrep start failed: %w", err)
+	}
+
+	// Read up to headLimit bytes from stdout
 	truncatedReason := ""
+	limitedReader := &io.LimitedReader{R: stdout, N: int64(headLimit) + 1}
+	output, _ := io.ReadAll(limitedReader)
 	if len(output) > headLimit {
 		output = output[:headLimit]
 		truncatedReason = fmt.Sprintf("output truncated at %d bytes", headLimit)
+	}
+
+	// We must wait for the command to finish, but we can ignore errors
+	// caused by the broken pipe from our early close
+	waitErr := cmd.Wait()
+	if waitErr != nil && truncatedReason == "" {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			switch exitErr.ExitCode() {
+			case 1:
+				// Exit code 1 = no matches found (not an error)
+				return []GrepMatch{}, "", nil
+			case 2:
+				// Exit code 2 = error (invalid type, bad pattern, etc.)
+				return nil, "", fmt.Errorf("ripgrep error (exit 2): check type/pattern validity")
+			}
+		}
+		// If we truncated, the broken pipe is expected — don't error
+		return nil, "", fmt.Errorf("ripgrep execution failed: %w", waitErr)
 	}
 
 	matches, err := parseRipgrepOutput(output, maxResults)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -677,6 +678,280 @@ func TestFileTree_MaxOutputChars(t *testing.T) {
 	}
 	if result.TruncatedReason == "" {
 		t.Error("Expected TruncatedReason to be set when budget is exceeded")
+	}
+}
+
+func TestGrepSearch_TypeFilter(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "grep_type_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("hello from go"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "app.py"), []byte("hello from python"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "style.css"), []byte("hello from css"), 0644)
+
+	t.Run("TypeGoOnlyReturnsGoFiles", func(t *testing.T) {
+		result, err := GrepSearch(nil, GrepSearchArgs{
+			Pattern:    "hello",
+			SearchPath: tmpDir,
+			Type:       "go",
+		})
+		if err != nil {
+			t.Fatalf("GrepSearch type filter failed: %v", err)
+		}
+		for _, m := range result.Matches {
+			if m.Kind == "match" && filepath.Ext(m.File) != ".go" {
+				t.Errorf("Type filter 'go' should only return .go files, got %s", m.File)
+			}
+		}
+		if result.Total == 0 {
+			t.Error("Expected at least one match with type=go")
+		}
+	})
+
+	t.Run("TypePyOnlyReturnsPyFiles", func(t *testing.T) {
+		result, err := GrepSearch(nil, GrepSearchArgs{
+			Pattern:    "hello",
+			SearchPath: tmpDir,
+			Type:       "py",
+		})
+		if err != nil {
+			t.Fatalf("GrepSearch type filter failed: %v", err)
+		}
+		for _, m := range result.Matches {
+			if m.Kind == "match" && filepath.Ext(m.File) != ".py" {
+				t.Errorf("Type filter 'py' should only return .py files, got %s", m.File)
+			}
+		}
+		if result.Total == 0 {
+			t.Error("Expected at least one match with type=py")
+		}
+	})
+}
+
+func TestFindFiles_GitignoreRespected(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "findfiles_gitignore_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Initialize a real git repo so rg activates gitignore
+	exec.Command("git", "init", tmpDir).Run()
+	os.WriteFile(filepath.Join(tmpDir, ".gitignore"), []byte("ignored_dir/\nbuild_output/\n"), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "ignored_dir"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "build_output"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "ignored_dir", "secret.go"), []byte("package secret"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "build_output", "bundle.go"), []byte("package bundle"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "app.go"), []byte("package main"), 0644)
+	os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "src", "lib.go"), []byte("package src"), 0644)
+
+	t.Run("GitignoredDirsExcluded", func(t *testing.T) {
+		result, err := FindFiles(nil, FindFilesArgs{
+			Pattern:    "*.go",
+			SearchPath: tmpDir,
+		})
+		if err != nil {
+			t.Fatalf("FindFiles failed: %v", err)
+		}
+		// Should find app.go and src/lib.go but NOT ignored_dir/secret.go or build_output/bundle.go
+		for _, f := range result.Files {
+			if strings.Contains(f.Path, "ignored_dir") {
+				t.Errorf("File in .gitignored directory should not appear: %s", f.Path)
+			}
+			if strings.Contains(f.Path, "build_output") {
+				t.Errorf("File in .gitignored directory should not appear: %s", f.Path)
+			}
+		}
+		if result.Total < 2 {
+			t.Errorf("Expected at least app.go and src/lib.go, got %d files", result.Total)
+		}
+	})
+}
+
+func TestFindFiles_NestedGlob(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "findfiles_nested_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	os.MkdirAll(filepath.Join(tmpDir, "src", "components"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "lib"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "src", "app.ts"), []byte("export default {}"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "components", "Button.tsx"), []byte("export const Button = ()=>{}"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "lib", "util.ts"), []byte("export function f(){}"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# Project"), 0644)
+
+	t.Run("DoubleStarPattern", func(t *testing.T) {
+		result, err := FindFiles(nil, FindFilesArgs{
+			Pattern:    "src/**/*.ts",
+			SearchPath: tmpDir,
+		})
+		if err != nil {
+			t.Fatalf("FindFiles failed: %v", err)
+		}
+		// Should find src/app.ts (*.ts matches .ts but not .tsx with this glob)
+		found := false
+		for _, f := range result.Files {
+			if strings.Contains(f.RelativePath, "src") && strings.HasSuffix(f.Path, ".ts") {
+				found = true
+			}
+			if strings.Contains(f.Path, "lib") {
+				t.Errorf("Pattern src/**/*.ts should not match lib/: %s", f.Path)
+			}
+		}
+		if !found {
+			t.Error("Expected to find src/app.ts with pattern src/**/*.ts")
+		}
+	})
+}
+
+func TestFindFiles_DefaultPathSort(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "findfiles_sort_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create files with names that sort differently than creation order
+	os.WriteFile(filepath.Join(tmpDir, "z_last.go"), []byte("package z"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "a_first.go"), []byte("package a"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "m_middle.go"), []byte("package m"), 0644)
+
+	result, err := FindFiles(nil, FindFilesArgs{
+		Pattern:    "*.go",
+		SearchPath: tmpDir,
+	})
+	if err != nil {
+		t.Fatalf("FindFiles failed: %v", err)
+	}
+	if result.Total != 3 {
+		t.Fatalf("Expected 3 files, got %d", result.Total)
+	}
+	// Default sort should be by path (alphabetical)
+	if !strings.Contains(result.Files[0].Path, "a_first") {
+		t.Errorf("Expected a_first.go first in default path sort, got %s", result.Files[0].Path)
+	}
+	if !strings.Contains(result.Files[2].Path, "z_last") {
+		t.Errorf("Expected z_last.go last in default path sort, got %s", result.Files[2].Path)
+	}
+}
+
+func TestFindFiles_CappedAccurate(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "findfiles_capped_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create exactly 3 files
+	os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("a"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("b"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "c.go"), []byte("c"), 0644)
+
+	t.Run("NotCappedWhenExact", func(t *testing.T) {
+		// MaxResults=3, exactly 3 files — should NOT be capped
+		result, err := FindFiles(nil, FindFilesArgs{
+			Pattern:    "*.go",
+			SearchPath: tmpDir,
+			MaxResults: 3,
+		})
+		if err != nil {
+			t.Fatalf("FindFiles failed: %v", err)
+		}
+		if result.Capped {
+			t.Error("Should not be capped when total equals max (no more results exist)")
+		}
+	})
+
+	t.Run("CappedWhenMore", func(t *testing.T) {
+		// MaxResults=2, 3 files exist — should be capped
+		result, err := FindFiles(nil, FindFilesArgs{
+			Pattern:    "*.go",
+			SearchPath: tmpDir,
+			MaxResults: 2,
+		})
+		if err != nil {
+			t.Fatalf("FindFiles failed: %v", err)
+		}
+		if !result.Capped {
+			t.Error("Should be capped when more results exist than max")
+		}
+		if result.Total != 2 {
+			t.Errorf("Expected 2 results when capped, got %d", result.Total)
+		}
+	})
+}
+
+func TestFileTree_SummaryFormat(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "filetree_summary_fmt_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create a subtree with mixed extensions
+	bigDir := filepath.Join(tmpDir, "mixed")
+	os.MkdirAll(bigDir, 0755)
+	for i := 0; i < 40; i++ {
+		os.WriteFile(filepath.Join(bigDir, fmt.Sprintf("f%03d.go", i)), []byte("go"), 0644)
+	}
+	for i := 0; i < 20; i++ {
+		os.WriteFile(filepath.Join(bigDir, fmt.Sprintf("f%03d.ts", i)), []byte("ts"), 0644)
+	}
+	for i := 0; i < 5; i++ {
+		os.WriteFile(filepath.Join(bigDir, fmt.Sprintf("f%03d.md", i)), []byte("md"), 0644)
+	}
+
+	result, err := FileTree(nil, FileTreeArgs{
+		Path:     tmpDir,
+		MaxDepth: 3,
+	})
+	if err != nil {
+		t.Fatalf("FileTree failed: %v", err)
+	}
+
+	// Find the summary for the "mixed" dir
+	var summary string
+	for _, e := range result.Entries {
+		if e.Name == "mixed" && e.Truncated {
+			summary = e.Summary
+			break
+		}
+	}
+	if summary == "" {
+		t.Fatal("Expected 'mixed' directory to have a summary")
+	}
+
+	// Check format: should contain file/dir counts and extension breakdown
+	if !strings.HasPrefix(summary, "[") || !strings.HasSuffix(summary, "]") {
+		t.Errorf("Summary should be bracketed, got %q", summary)
+	}
+	if !strings.Contains(summary, "65 files") {
+		t.Errorf("Summary should mention '65 files', got %q", summary)
+	}
+	if !strings.Contains(summary, ".go") {
+		t.Errorf("Summary should mention .go extension, got %q", summary)
+	}
+	if !strings.Contains(summary, ".ts") {
+		t.Errorf("Summary should mention .ts extension, got %q", summary)
+	}
+
+	// Test determinism: run twice, same result
+	result2, _ := FileTree(nil, FileTreeArgs{Path: tmpDir, MaxDepth: 3})
+	var summary2 string
+	for _, e := range result2.Entries {
+		if e.Name == "mixed" && e.Truncated {
+			summary2 = e.Summary
+			break
+		}
+	}
+	if summary != summary2 {
+		t.Errorf("Summary should be deterministic across runs:\n  run1: %q\n  run2: %q", summary, summary2)
 	}
 }
 

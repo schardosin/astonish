@@ -65,10 +65,10 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 	}
 
 	// Try ripgrep --files first, fall back to Go implementation
-	files, err := tryRipgrepFiles(args.Pattern, absPath, maxResults)
+	files, err := tryRipgrepFiles(args.Pattern, absPath, maxResults+1)
 	if err != nil {
 		// Fallback to Go implementation
-		files, err = goFindFiles(args.Pattern, absPath, maxResults)
+		files, err = goFindFiles(args.Pattern, absPath, maxResults+1)
 		if err != nil {
 			return FindFilesResult{}, err
 		}
@@ -77,9 +77,18 @@ func FindFiles(ctx tool.Context, args FindFilesArgs) (FindFilesResult, error) {
 	// Sort results
 	if args.SortBy == "mtime" {
 		sortFilesByMtime(files)
+	} else {
+		// Default: deterministic path sort
+		sort.Slice(files, func(i, j int) bool {
+			return files[i].Path < files[j].Path
+		})
 	}
 
-	capped := len(files) >= maxResults
+	// Detect capping: we fetched max+1 to know if there are more
+	capped := len(files) > maxResults
+	if capped {
+		files = files[:maxResults]
+	}
 
 	return FindFilesResult{
 		Files:    files,
@@ -99,10 +108,13 @@ func tryRipgrepFiles(pattern, searchPath string, maxResults int) ([]FoundFile, e
 	// Build rg command: rg --files --glob <pattern> <path>
 	args := []string{"--files"}
 
-	// Convert pattern to glob. If it contains path separator or **, use as-is.
-	// Otherwise, wrap as a basename glob: **/<pattern>
+	// Convert pattern to glob.
+	// - If it contains no path separators or **, wrap as **/<pattern> for basename matching
+	// - If it contains a path separator (e.g., src/**/*.ts), use as-is but run from searchPath
+	//   (ripgrep globs are relative to the working directory, not the path argument)
 	globPattern := pattern
-	if !strings.Contains(pattern, "/") && !strings.Contains(pattern, "**") {
+	hasPathSep := strings.Contains(pattern, "/")
+	if !hasPathSep && !strings.Contains(pattern, "**") {
 		globPattern = "**/" + pattern
 	}
 	args = append(args, "--glob", globPattern)
@@ -113,9 +125,18 @@ func tryRipgrepFiles(pattern, searchPath string, maxResults int) ([]FoundFile, e
 		args = append(args, "--glob", "!"+excl+"/")
 	}
 
-	args = append(args, searchPath)
+	// If pattern contains path separators, run from the search directory
+	// so ripgrep's relative glob matching works correctly
+	var cmd *exec.Cmd
+	if hasPathSep {
+		args = append(args, ".")
+		cmd = exec.Command(rgPath, args...)
+		cmd.Dir = searchPath
+	} else {
+		args = append(args, searchPath)
+		cmd = exec.Command(rgPath, args...)
+	}
 
-	cmd := exec.Command(rgPath, args...)
 	output, err := cmd.Output()
 	if err != nil {
 		// Exit code 1 = no matches (not an error)
@@ -129,21 +150,26 @@ func tryRipgrepFiles(pattern, searchPath string, maxResults int) ([]FoundFile, e
 	var files []FoundFile
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
 	for scanner.Scan() {
-		path := scanner.Text()
-		if path == "" {
+		p := scanner.Text()
+		if p == "" {
 			continue
 		}
 
-		relPath, _ := filepath.Rel(searchPath, path)
+		// If we ran from searchPath with ".", paths are relative — make absolute
+		if hasPathSep {
+			p = filepath.Join(searchPath, p)
+		}
+
+		relPath, _ := filepath.Rel(searchPath, p)
 
 		// Stat for size
 		var size int64
-		if info, err := os.Stat(path); err == nil {
+		if info, err := os.Stat(p); err == nil {
 			size = info.Size()
 		}
 
 		files = append(files, FoundFile{
-			Path:         path,
+			Path:         p,
 			RelativePath: relPath,
 			Size:         size,
 			IsDir:        false, // rg --files only returns files

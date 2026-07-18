@@ -16,6 +16,46 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+func TestEnqueueImagesFromContent(t *testing.T) {
+	t.Parallel()
+	ca := &ChatAgent{}
+	ca.EnqueueImagesFromContent(&genai.Content{
+		Role: "model",
+		Parts: []*genai.Part{
+			{Text: "caption"},
+			{InlineData: &genai.Blob{MIMEType: "image/png", Data: []byte{1, 2, 3}}},
+			{InlineData: &genai.Blob{MIMEType: "application/pdf", Data: []byte{4, 5}}},
+			{InlineData: &genai.Blob{MIMEType: "image/jpeg", Data: []byte{6, 7}}},
+			{InlineData: &genai.Blob{MIMEType: "image/jpg", Data: []byte{8}}},
+		},
+	})
+	imgs := ca.DrainImages()
+	if len(imgs) != 3 {
+		t.Fatalf("expected 3 images, got %d", len(imgs))
+	}
+	if imgs[0].Format != "png" || string(imgs[0].Data) != "\x01\x02\x03" {
+		t.Errorf("first image: %+v", imgs[0])
+	}
+	if imgs[1].Format != "jpeg" {
+		t.Errorf("second format=%q, want jpeg", imgs[1].Format)
+	}
+	if imgs[2].Format != "jpeg" {
+		t.Errorf("jpg should normalize to jpeg, got %q", imgs[2].Format)
+	}
+	if len(ca.DrainImages()) != 0 {
+		t.Error("second drain should be empty")
+	}
+}
+
+func TestEnqueueImagesFromContent_Nil(t *testing.T) {
+	t.Parallel()
+	ca := &ChatAgent{}
+	ca.EnqueueImagesFromContent(nil)
+	if len(ca.DrainImages()) != 0 {
+		t.Error("expected no images from nil content")
+	}
+}
+
 func TestExtractInputParams_NilTrace(t *testing.T) {
 	ca := &ChatAgent{}
 	params := ca.extractInputParams(context.Background(), "nodes: []", nil)

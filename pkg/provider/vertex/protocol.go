@@ -305,6 +305,38 @@ func normalizeSchemaType(t any) any {
 	return t
 }
 
+// mapPart converts a Vertex Part into a genai.Part. Returns nil when the part
+// has no usable fields (empty after dropping unknown content).
+func mapPart(p Part) *genai.Part {
+	part := &genai.Part{}
+	if p.Text != "" {
+		part.Text = p.Text
+	}
+	if p.FunctionCall != nil {
+		part.FunctionCall = &genai.FunctionCall{
+			Name: p.FunctionCall.Name,
+			Args: p.FunctionCall.Args,
+		}
+	}
+	if p.InlineData != nil && p.InlineData.Data != "" {
+		raw, err := base64.StdEncoding.DecodeString(p.InlineData.Data)
+		if err != nil {
+			// Some providers omit padding; try raw encoding as a fallback.
+			raw, err = base64.RawStdEncoding.DecodeString(p.InlineData.Data)
+		}
+		if err == nil && len(raw) > 0 {
+			part.InlineData = &genai.Blob{
+				MIMEType: p.InlineData.MimeType,
+				Data:     raw,
+			}
+		}
+	}
+	if part.Text == "" && part.FunctionCall == nil && part.InlineData == nil {
+		return nil
+	}
+	return part
+}
+
 // ParseResponse converts a Vertex AI Response body to an ADK LLMResponse.
 func ParseResponse(body []byte) (*model.LLMResponse, error) {
 	var vertexResp Response
@@ -323,17 +355,9 @@ func ParseResponse(body []byte) (*model.LLMResponse, error) {
 
 	var parts []*genai.Part
 	for _, p := range candidate.Content.Parts {
-		part := &genai.Part{}
-		if p.Text != "" {
-			part.Text = p.Text
+		if part := mapPart(p); part != nil {
+			parts = append(parts, part)
 		}
-		if p.FunctionCall != nil {
-			part.FunctionCall = &genai.FunctionCall{
-				Name: p.FunctionCall.Name,
-				Args: p.FunctionCall.Args,
-			}
-		}
-		parts = append(parts, part)
 	}
 
 	return &model.LLMResponse{
@@ -386,18 +410,20 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 						var parts []*genai.Part
 						hasText := false
 						hasFunctionCall := false
+						hasInlineData := false
 						for _, p := range candidate.Content.Parts {
-							part := &genai.Part{}
-							if p.Text != "" {
-								part.Text = p.Text
+							part := mapPart(p)
+							if part == nil {
+								continue
+							}
+							if part.Text != "" {
 								hasText = true
 							}
-							if p.FunctionCall != nil {
-								part.FunctionCall = &genai.FunctionCall{
-									Name: p.FunctionCall.Name,
-									Args: p.FunctionCall.Args,
-								}
+							if part.FunctionCall != nil {
 								hasFunctionCall = true
+							}
+							if part.InlineData != nil {
+								hasInlineData = true
 							}
 							parts = append(parts, part)
 						}
@@ -410,7 +436,7 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 								},
 							}
 
-							if hasText && !hasFunctionCall {
+							if hasText && !hasFunctionCall && !hasInlineData {
 								// Pure text chunk — accumulate and mark partial
 								for _, p := range parts {
 									if p.Text != "" {
@@ -418,8 +444,8 @@ func ParseStream(reader io.Reader) iter.Seq2[*model.LLMResponse, error] {
 									}
 								}
 								resp.Partial = true
-							} else if hasFunctionCall && textAccum.Len() > 0 {
-								// Function call after text — emit aggregated text first
+							} else if (hasFunctionCall || hasInlineData) && textAccum.Len() > 0 {
+								// Non-text content after text — emit aggregated text first
 								if !yield(&model.LLMResponse{
 									Content: &genai.Content{
 										Role:  candidate.Content.Role,

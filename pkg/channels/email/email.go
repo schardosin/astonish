@@ -256,6 +256,26 @@ func (e *EmailChannel) Send(ctx context.Context, target channels.Target, msg cha
 		})
 	}
 
+	// Model-returned / tool screenshot images.
+	for _, img := range msg.Images {
+		if len(img.Data) == 0 {
+			continue
+		}
+		ext := img.Format
+		if ext == "" {
+			ext = "png"
+		}
+		if ext == "jpg" {
+			ext = "jpeg"
+		}
+		contentType := "image/" + ext
+		outgoing.Attachments = append(outgoing.Attachments, emailpkg.Attachment{
+			Filename:    fmt.Sprintf("image.%s", ext),
+			Data:        img.Data,
+			ContentType: contentType,
+		})
+	}
+
 	var outboundMessageID string
 	var err error
 

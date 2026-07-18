@@ -160,24 +160,33 @@ func eventsToMessages(events session.Events, redactor *credentials.Redactor) []S
 				})
 				lastInvocationID = eventInvID
 			}
-			// Handle InlineData parts (file attachments) — attach to the most
-			// recent user message in this event.
-			if part.InlineData != nil && role == "user" {
-				att := AttachmentInfo{
-					Filename: part.InlineData.DisplayName,
-					MimeType: part.InlineData.MIMEType,
-					Size:     len(part.InlineData.Data),
-				}
-				// Include base64 data for images (enables inline thumbnail display)
-				if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
-					att.Data = base64.StdEncoding.EncodeToString(part.InlineData.Data)
-				}
-				// Attach to the most recent user message
-				for i := len(messages) - 1; i >= 0; i-- {
-					if messages[i].Type == "user" {
-						messages[i].Attachments = append(messages[i].Attachments, att)
-						break
+			// Handle InlineData parts.
+			// User: file attachments on the most recent user message.
+			// Model: standalone image messages (e.g. Gemini image generation).
+			if part.InlineData != nil {
+				if role == "user" {
+					att := AttachmentInfo{
+						Filename: part.InlineData.DisplayName,
+						MimeType: part.InlineData.MIMEType,
+						Size:     len(part.InlineData.Data),
 					}
+					// Include base64 data for images (enables inline thumbnail display)
+					if strings.HasPrefix(part.InlineData.MIMEType, "image/") {
+						att.Data = base64.StdEncoding.EncodeToString(part.InlineData.Data)
+					}
+					// Attach to the most recent user message
+					for i := len(messages) - 1; i >= 0; i-- {
+						if messages[i].Type == "user" {
+							messages[i].Attachments = append(messages[i].Attachments, att)
+							break
+						}
+					}
+				} else if strings.HasPrefix(part.InlineData.MIMEType, "image/") && len(part.InlineData.Data) > 0 {
+					messages = append(messages, StudioMessage{
+						Type:     "image",
+						Data:     base64.StdEncoding.EncodeToString(part.InlineData.Data),
+						MimeType: part.InlineData.MIMEType,
+					})
 				}
 			}
 			if part.FunctionCall != nil {

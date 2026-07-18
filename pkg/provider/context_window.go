@@ -11,7 +11,14 @@ import (
 	"github.com/SAP/astonish/pkg/provider/groq"
 	"github.com/SAP/astonish/pkg/provider/openrouter"
 	"github.com/SAP/astonish/pkg/provider/sap"
+	"github.com/SAP/astonish/pkg/store"
 )
+
+// SetSAPModelLimitsStore wires the durable learned-limits store into the SAP
+// AI Core provider (used to persist maxOutputTokens from Vertex 400s).
+func SetSAPModelLimitsStore(s store.ModelLimitsStore) {
+	sap.SetModelLimitsStore(s)
+}
 
 const DefaultContextWindow = 200_000
 

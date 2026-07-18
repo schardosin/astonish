@@ -112,11 +112,15 @@ type FleetMessageSummary struct {
 
 // StudioMessage is a simplified message for the frontend.
 type StudioMessage struct {
-	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, subtask_execution, plan, distill_preview, distill_saved, app_preview, system
+	Type       string      `json:"type"`                 // user, agent, tool_call, tool_result, image, subtask_execution, plan, distill_preview, distill_saved, app_preview, system
 	Content    string      `json:"content,omitempty"`    // text content
 	ToolName   string      `json:"toolName,omitempty"`   // for tool_call/tool_result
 	ToolArgs   interface{} `json:"toolArgs,omitempty"`   // for tool_call
 	ToolResult interface{} `json:"toolResult,omitempty"` // for tool_result
+
+	// image fields — model-returned or reconstructed InlineData images
+	Data     string `json:"data,omitempty"`     // base64-encoded image bytes
+	MimeType string `json:"mimeType,omitempty"` // e.g. image/png
 
 	// subtask_execution fields — populated for delegate_tasks history reconstruction
 	Events []SubTaskEventMsg `json:"events,omitempty"` // lifecycle + activity events

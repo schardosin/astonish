@@ -46,6 +46,37 @@ func textEvent(invocationID, role, text string) *session.Event {
 	}
 }
 
+func TestEventsToMessages_ModelInlineImage(t *testing.T) {
+	t.Parallel()
+	png := []byte{0x89, 0x50, 0x4e, 0x47}
+	events := testEvents{
+		{
+			InvocationID: "inv-img",
+			LLMResponse: model.LLMResponse{
+				Content: &genai.Content{
+					Role: "model",
+					Parts: []*genai.Part{{
+						InlineData: &genai.Blob{MIMEType: "image/png", Data: png},
+					}},
+				},
+			},
+		},
+	}
+	msgs := eventsToMessages(events, nil)
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(msgs))
+	}
+	if msgs[0].Type != "image" {
+		t.Fatalf("type=%q, want image", msgs[0].Type)
+	}
+	if msgs[0].MimeType != "image/png" {
+		t.Errorf("mimeType=%q", msgs[0].MimeType)
+	}
+	if msgs[0].Data == "" {
+		t.Error("expected base64 data")
+	}
+}
+
 func TestEventsToMessages_CoalescesSameInvocation(t *testing.T) {
 	// Two model text parts in the same invocation should be coalesced.
 	events := testEvents{

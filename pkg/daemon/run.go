@@ -196,6 +196,8 @@ func Run(cfg RunConfig) error {
 	}
 	defer entStore.Close()
 	backend = entStore
+	// Persist/learn per-model token limits from provider 400 responses (SAP Vertex).
+	provider.SetSAPModelLimitsStore(entStore.ModelLimits())
 	logger.Printf("Storage backend: %s (platform mode)", appCfg.Storage.Backend)
 
 	// Run migrations

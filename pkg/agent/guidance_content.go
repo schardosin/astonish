@@ -482,6 +482,31 @@ For tasks requiring **live, current data from specific websites** — real-time 
 5. **Synthesize**: After sub-tasks complete, structure the final output around the user's original question. Save as a markdown file for substantial research output.
 `
 
+const guidanceCodeIntelligence = `# Guidance: Code Intelligence
+
+Use code intelligence tools for structural symbol navigation in supported source languages: Go, TypeScript/TSX, JavaScript/JSX, and Python.
+
+## When to use these tools
+
+- Use ` + "`repo_map`" + ` when entering an unfamiliar repository, package, or module. It gives a ranked structural overview of important files and definitions before broad edits.
+- Use ` + "`code_definition`" + ` to find where a function, method, type, class, or variable is declared. Prefer it over ` + "`grep_search`" + ` when you need the declaration of a specific symbol.
+- Use ` + "`code_references`" + ` before refactoring, changing a signature, renaming, or deleting a symbol. It finds structural usages and call sites so you do not miss capped or noisy grep results.
+
+## When to use grep_search instead
+
+- Text patterns, literals, comments, config files, docs, generated files, or unsupported languages.
+- Regex searches that are not tied to a specific symbol.
+- Any fallback case where a code intelligence tool reports that the tree-sitter runtime library is unavailable.
+
+## Recommended workflow
+
+1. For unfamiliar code, call ` + "`repo_map`" + ` scoped to the relevant root.
+2. Before editing a symbol, call ` + "`code_definition`" + ` to inspect the declaration.
+3. Before a refactor, call ` + "`code_references`" + ` to enumerate affected sites.
+4. Use ` + "`read_file`" + ` on the returned locations before editing.
+5. After editing, run the project's tests or build with ` + "`shell_command`" + `.
+`
+
 // guidanceGenerativeUI has been moved to pkg/skills/builtin_content.go
 // and is now delivered as a built-in skill via skill_lookup("generative-ui")
 // instead of through the vector store.

@@ -20,6 +20,7 @@ func TestRender_CoreToolsProducesExpectedCommands(t *testing.T) {
 		"apt-get update",
 		"apt-get install -y git",
 		"ffmpeg",
+		"ripgrep",
 		"nodejs",
 		"curl -LsSf https://astral.sh/uv/install.sh | sh",
 		"apt-get clean",

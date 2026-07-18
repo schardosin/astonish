@@ -17,7 +17,7 @@ type ToolDeclaration struct {
 func GetAllFlowToolDeclarations() []ToolDeclaration {
 	var decls []ToolDeclaration
 
-	// Internal tools (12)
+	// Internal tools (15)
 	decls = append(decls, internalToolDeclarations()...)
 
 	// Process tools (4)
@@ -67,10 +67,13 @@ func internalToolDeclarations() []ToolDeclaration {
 		{Name: "shell_command", Description: "Execute a shell command with PTY support", Category: "internal"},
 		{Name: "filter_json", Description: "Filter and transform JSON data using jq-like expressions", Category: "internal"},
 		{Name: "git_diff_add_line_numbers", Description: "Add line numbers to git diff output for precise editing", Category: "internal"},
-		{Name: "file_tree", Description: "Display directory tree structure", Category: "internal"},
-		{Name: "grep_search", Description: "Search for text patterns in files using regex", Category: "internal"},
-		{Name: "find_files", Description: "Find files matching a glob pattern", Category: "internal"},
+		{Name: "file_tree", Description: "Budgeted directory tree with subtree summaries for project orientation", Category: "internal"},
+		{Name: "grep_search", Description: "Search for text/regex patterns with context lines, type filters, and glob support", Category: "internal"},
+		{Name: "find_files", Description: "Find files by glob pattern with .gitignore respect and mtime sorting", Category: "internal"},
 		{Name: "edit_file", Description: "Edit a file by finding and replacing text", Category: "internal"},
+		{Name: "repo_map", Description: "Build a structural source map using tree-sitter definitions and references", Category: "internal"},
+		{Name: "code_definition", Description: "Find structural definitions of a symbol using tree-sitter", Category: "internal"},
+		{Name: "code_references", Description: "Find structural references to a symbol using tree-sitter", Category: "internal"},
 		{Name: "web_fetch", Description: "Fetch and extract content from a URL", Category: "internal"},
 		{Name: "read_pdf", Description: "Extract text content from a PDF file", Category: "internal"},
 		{Name: "http_request", Description: "Make an HTTP request with full control over method, headers, and body", Category: "internal"},

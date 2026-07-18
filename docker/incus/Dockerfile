@@ -16,6 +16,27 @@
 # The image is published to ghcr.io by the docker-images GitHub Action.
 # Users never build this image — astonish pulls it automatically.
 
+# ---------------------------------------------------------------------------
+# Native tree-sitter shared library used by pkg/codeintel. Docker-backed Incus
+# copies this into template containers alongside the astonish binary.
+# ---------------------------------------------------------------------------
+FROM ubuntu:24.04 AS treesitter-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /src
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        build-essential \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pkg/codeintel/native ./pkg/codeintel/native
+RUN make -C pkg/codeintel/native OUT=/tmp/libastonish-treesitter.so
+
 FROM ubuntu:24.04
 
 # Avoid interactive prompts during package installation
@@ -56,6 +77,9 @@ RUN test -x /opt/incus/bin/incusd || { echo "ERROR: incusd not found"; exit 1; }
 ARG TARGETARCH=amd64
 COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
+
+RUN mkdir -p /usr/lib/astonish
+COPY --from=treesitter-builder /tmp/libastonish-treesitter.so /usr/lib/astonish/libastonish-treesitter.so
 
 # Copy the entrypoint script
 COPY docker/incus/entrypoint-incus.sh /usr/local/bin/entrypoint-incus.sh

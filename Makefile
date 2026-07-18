@@ -22,6 +22,7 @@ all: build-all
 help:
 	@echo "Usage:"
 	@echo "  make build           - Build the Go binary only"
+	@echo "  make build-treesitter-lib - Build native tree-sitter shared library"
 	@echo "  make build-ui        - Build the React UI (web/dist)"
 	@echo "  make build-all       - Build UI first, then Go binary"
 	@echo "  make run             - Run the Go application"
@@ -85,6 +86,9 @@ build:
 	@echo "Building Go binary..."
 	go build -o $(BINARY_NAME) .
 	@echo "Go binary built successfully: $(BINARY_NAME)"
+
+build-treesitter-lib:
+	$(MAKE) -C pkg/codeintel/native
 
 # Build the React UI
 build-ui:
@@ -746,5 +750,3 @@ ent-generate:
 	@cd ent/team && go run generate.go
 	@cd ent/personal && go run generate.go
 	@echo "Done."
-
-

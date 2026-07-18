@@ -13,6 +13,7 @@ import (
 // into the vector store by the existing memory file watcher.
 var GuidanceDocs = map[string]string{
 	"browser-automation":    guidanceBrowserAutomation,
+	"code-intelligence":     guidanceCodeIntelligence,
 	"credential-management": guidanceCredentialManagement,
 	"job-scheduling":        guidanceJobScheduling,
 	"task-delegation":       guidanceTaskDelegation,

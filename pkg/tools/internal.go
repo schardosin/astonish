@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SAP/astonish/pkg/codeintel"
 	"github.com/SAP/astonish/pkg/config"
 	"google.golang.org/adk/tool"
 	"google.golang.org/adk/tool/functiontool"
@@ -334,6 +335,9 @@ func WriteFile(ctx tool.Context, args WriteFileArgs) (WriteFileResult, error) {
 			cache.Save()
 		}
 	}
+	if root, err := os.Getwd(); err == nil {
+		codeintel.Invalidate(root)
+	}
 
 	return WriteFileResult{Message: fmt.Sprintf("Content successfully written to %s", args.FilePath)}, nil
 }
@@ -634,7 +638,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	shellCommandTool, err := functiontool.New(functiontool.Config{
 		Name:        "shell_command",
-		Description: `Execute a shell command with PTY support. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
+		Description: `Execute a shell command with PTY support. Use for builds, tests, linters, git, package managers, CLIs, servers, and scripts. Do NOT use for browsing or searching source code — use file_tree, find_files, grep_search, or read_file instead. Returns stdout, exit_code. If the command waits for input, returns waiting_for_input=true with a session_id — use process_write to respond. Set background=true to start without waiting.`,
 	}, ShellCommand)
 	if err != nil {
 		return nil, err
@@ -659,7 +663,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 	// Search tools
 	fileTreeTool, err := functiontool.New(functiontool.Config{
 		Name:        "file_tree",
-		Description: "Get a structured view of the directory tree. Use this to understand project structure. Returns JSON with paths, names, and file sizes.",
+		Description: "Get a budgeted directory tree for project orientation. Lists immediate children first, then recurses with budget limits. Large subtrees are automatically summarized with extension counts. Use max_depth, max_entries, max_output_chars to control output size. Returns JSON with paths, names, sizes, and optional subtree summaries.",
 	}, FileTree)
 	if err != nil {
 		return nil, err
@@ -667,7 +671,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	grepSearchTool, err := functiontool.New(functiontool.Config{
 		Name:        "grep_search",
-		Description: "Search for text patterns in files. Returns file paths, line numbers, and matching content. Uses ripgrep when available for speed.",
+		Description: "Search for text/regex patterns in files. Default is literal search; set regex=true for regex. Supports context lines (context, before_context, after_context), file type filters (type='go'), glob filters, multiline mode, and case sensitivity. Returns file paths, line numbers, content, and match kind ('match' or 'context'). Uses ripgrep when available.",
 	}, GrepSearch)
 	if err != nil {
 		return nil, err
@@ -675,7 +679,7 @@ func GetInternalTools() ([]tool.Tool, error) {
 
 	findFilesTool, err := functiontool.New(functiontool.Config{
 		Name:        "find_files",
-		Description: "Find files by name pattern using glob matching (e.g., '*.go', 'test_*.py'). Returns matching file paths with sizes.",
+		Description: "Find files by name/path pattern using glob matching (e.g., '*.go', 'src/**/*.ts'). Respects .gitignore when ripgrep is available. Supports sort_by='mtime' for newest-first ordering. Returns matching file paths with sizes.",
 	}, FindFiles)
 	if err != nil {
 		return nil, err
@@ -687,6 +691,44 @@ func GetInternalTools() ([]tool.Tool, error) {
 	}, EditFile)
 	if err != nil {
 		return nil, err
+	}
+
+	codeIntelEnabled := true
+	if appCfg, cfgErr := config.LoadAppConfig(); cfgErr == nil && appCfg != nil {
+		codeIntelEnabled = appCfg.CodeIntel.IsEnabled()
+		if appCfg.CodeIntel.LibraryPath != "" {
+			// Prefer configured path over the hard-coded default; the loader
+			// in pkg/codeintel reads ASTONISH_TREESITTER_LIB.
+			_ = os.Setenv("ASTONISH_TREESITTER_LIB", appCfg.CodeIntel.LibraryPath)
+		}
+	}
+
+	var codeIntelTools []tool.Tool
+	if codeIntelEnabled {
+		repoMapTool, err := functiontool.New(functiontool.Config{
+			Name:        "repo_map",
+			Description: "Build a structural map of supported source files using tree-sitter definitions and a reference graph. Use for orientation in unfamiliar repositories before broad edits. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.RepoMap)
+		if err != nil {
+			return nil, err
+		}
+
+		codeDefinitionTool, err := functiontool.New(functiontool.Config{
+			Name:        "code_definition",
+			Description: "Find structural definitions of a symbol in supported languages using tree-sitter. Prefer this over grep_search when locating a symbol declaration. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.CodeDefinition)
+		if err != nil {
+			return nil, err
+		}
+
+		codeReferencesTool, err := functiontool.New(functiontool.Config{
+			Name:        "code_references",
+			Description: "Find structural references to a symbol in supported languages using tree-sitter. Prefer this over grep_search before refactoring a symbol. Supports Go, TypeScript/TSX, JavaScript/JSX, and Python.",
+		}, codeintel.CodeReferences)
+		if err != nil {
+			return nil, err
+		}
+		codeIntelTools = []tool.Tool{repoMapTool, codeDefinitionTool, codeReferencesTool}
 	}
 
 	webFetchTool, err := functiontool.New(functiontool.Config{
@@ -713,11 +755,13 @@ func GetInternalTools() ([]tool.Tool, error) {
 		return nil, err
 	}
 
-	return []tool.Tool{
+	out := []tool.Tool{
 		readFileTool, writeFileTool, shellCommandTool, filterJsonTool, gitDiffAddLineNumbersTool,
-		fileTreeTool, grepSearchTool, findFilesTool, editFileTool, webFetchTool, readPDFTool,
-		httpRequestTool,
-	}, nil
+		fileTreeTool, grepSearchTool, findFilesTool, editFileTool,
+	}
+	out = append(out, codeIntelTools...)
+	out = append(out, webFetchTool, readPDFTool, httpRequestTool)
+	return out, nil
 }
 
 func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, caller string) (any, error) {
@@ -805,6 +849,27 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, 
 			return nil, fmt.Errorf("invalid args for edit_file: %w", err)
 		}
 		return EditFile(nil, toolArgs)
+
+	case "repo_map":
+		var toolArgs codeintel.RepoMapArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for repo_map: %w", err)
+		}
+		return codeintel.RepoMap(nil, toolArgs)
+
+	case "code_definition":
+		var toolArgs codeintel.CodeDefinitionArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for code_definition: %w", err)
+		}
+		return codeintel.CodeDefinition(nil, toolArgs)
+
+	case "code_references":
+		var toolArgs codeintel.CodeReferencesArgs
+		if err := toStruct(args, &toolArgs); err != nil {
+			return nil, fmt.Errorf("invalid args for code_references: %w", err)
+		}
+		return codeintel.CodeReferences(nil, toolArgs)
 
 	case "web_fetch":
 		var toolArgs WebFetchArgs

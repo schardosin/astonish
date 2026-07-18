@@ -35,6 +35,7 @@ var CoreTools = []string{
 	"unzip",
 	"build-essential",
 	"socat",
+	"ripgrep",
 	"docker.io",
 }
 
@@ -59,6 +60,8 @@ func CoreToolInstallCommands() [][]string {
 			"socat",
 			// ffmpeg — standard multimedia tool (browser session recording, media processing)
 			"ffmpeg",
+			// ripgrep — fast code search used by grep_search and find_files tools
+			"ripgrep",
 			// Docker runtime (daemon + CLI + containerd) — required for
 			// containerized MCP servers and Docker-based workflows
 			"docker.io",
@@ -292,6 +295,11 @@ func InitBaseTemplate(client *IncusClient, registry *TemplateRegistry, opts Base
 	if err := pushAstonishBinary(client, containerName); err != nil {
 		client.StopAndDeleteInstance(containerName)
 		return fmt.Errorf("failed to push astonish binary: %w", err)
+	}
+	progress("Pushing tree-sitter library into template...\n")
+	if err := pushTreeSitterLibrary(client, containerName); err != nil {
+		client.StopAndDeleteInstance(containerName)
+		return fmt.Errorf("failed to push tree-sitter library: %w", err)
 	}
 
 	// Stop before snapshotting (for consistency)
@@ -885,6 +893,11 @@ func RefreshTemplate(client *IncusClient, registry *TemplateRegistry, name strin
 		return fmt.Errorf("failed to push astonish binary: %w", err)
 	}
 
+	fmt.Printf("Pushing tree-sitter library into template %q...\n", name)
+	if err := pushTreeSitterLibrary(client, containerName); err != nil {
+		return fmt.Errorf("failed to push tree-sitter library: %w", err)
+	}
+
 	// Ensure the overlay sentinel file exists. This file is checked by
 	// verifyContainerHealth to detect stale overlays. Templates created before
 	// this code was added won't have it, so we write it on every refresh.
@@ -1305,6 +1318,19 @@ func waitForReady(client *IncusClient, containerName string, timeout time.Durati
 // BinaryDestPath is where the astonish binary is placed inside templates/containers.
 const BinaryDestPath = "/usr/local/bin/astonish"
 
+// TreeSitterLibraryDestPath is where code intelligence loads its native parser
+// library inside templates/containers.
+const TreeSitterLibraryDestPath = "/usr/lib/astonish/libastonish-treesitter.so"
+
+const (
+	treeSitterBuildContainerName = "astn-builder-treesitter"
+	treeSitterVersion            = "v0.25.10"
+	treeSitterGoVersion          = "v0.23.4"
+	treeSitterTypescriptVersion  = "v0.23.2"
+	treeSitterJavascriptVersion  = "v0.23.1"
+	treeSitterPythonVersion      = "v0.23.6"
+)
+
 // pushAstonishBinary copies the astonish binary into a container.
 // The container must be running. The binary is placed at /usr/local/bin/astonish
 // with executable permissions (0755).
@@ -1384,6 +1410,192 @@ func pushAstonishBinaryFromDocker(client *IncusClient, containerName string) err
 	}
 
 	return verifyBinaryInContainer(client, containerName, int64(len(binaryData)))
+}
+
+// pushTreeSitterLibrary copies the native tree-sitter shared library into a
+// template container so code intelligence tools work inside Incus sandboxes.
+func pushTreeSitterLibrary(client *IncusClient, containerName string) error {
+	if libPath := os.Getenv("ASTONISH_TREESITTER_LIB"); libPath != "" {
+		return pushTreeSitterLibraryFromPath(client, containerName, libPath)
+	}
+	if GetActivePlatform() == PlatformDockerIncus {
+		return pushTreeSitterLibraryFromDocker(client, containerName)
+	}
+	return buildAndPushTreeSitterLibrary(client, containerName)
+}
+
+func pushTreeSitterLibraryFromPath(client *IncusClient, containerName, libPath string) error {
+	absPath, err := filepath.Abs(libPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve tree-sitter library path %q: %w", libPath, err)
+	}
+
+	f, err := os.Open(absPath)
+	if err != nil {
+		return fmt.Errorf("failed to open tree-sitter library %s: %w", absPath, err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat tree-sitter library: %w", err)
+	}
+
+	fmt.Printf("  Tree-sitter library: %s (%.1f MB)\n", absPath, float64(info.Size())/(1024*1024))
+	if err := ensureTreeSitterLibraryDir(client, containerName); err != nil {
+		return err
+	}
+	if err := client.PushFile(containerName, TreeSitterLibraryDestPath, f, 0644); err != nil {
+		return fmt.Errorf("failed to push tree-sitter library to container: %w", err)
+	}
+	return verifyTreeSitterLibraryInContainer(client, containerName, info.Size())
+}
+
+func buildAndPushTreeSitterLibrary(client *IncusClient, containerName string) error {
+	fmt.Println("  Tree-sitter library: building in temporary Incus container")
+
+	if client.InstanceExists(treeSitterBuildContainerName) {
+		if err := client.StopAndDeleteInstance(treeSitterBuildContainerName); err != nil {
+			return fmt.Errorf("failed to remove stale tree-sitter build container: %w", err)
+		}
+	}
+	if err := client.LaunchFromImage(treeSitterBuildContainerName, DefaultBaseImage, nil); err != nil {
+		return fmt.Errorf("failed to create tree-sitter build container: %w", err)
+	}
+	defer func() {
+		if err := client.StopAndDeleteInstance(treeSitterBuildContainerName); err != nil {
+			slog.Warn("failed to clean up tree-sitter build container", "component", "sandbox", "container", treeSitterBuildContainerName, "error", err)
+		}
+	}()
+
+	if err := client.StartInstance(treeSitterBuildContainerName); err != nil {
+		return fmt.Errorf("failed to start tree-sitter build container: %w", err)
+	}
+	if err := waitForReady(client, treeSitterBuildContainerName, 60*time.Second); err != nil {
+		return fmt.Errorf("tree-sitter build container did not become ready: %w", err)
+	}
+
+	for _, cmd := range treeSitterBuildCommands() {
+		fmt.Printf("  Running in tree-sitter builder: %v\n", cmd)
+		exitCode, err := client.ExecSimple(treeSitterBuildContainerName, cmd)
+		if err != nil {
+			return fmt.Errorf("tree-sitter build command %v failed: %w", cmd, err)
+		}
+		if exitCode != 0 {
+			return fmt.Errorf("tree-sitter build command %v exited with code %d", cmd, exitCode)
+		}
+	}
+
+	rc, _, err := client.PullFile(treeSitterBuildContainerName, "/tmp/libastonish-treesitter.so")
+	if err != nil {
+		return fmt.Errorf("failed to pull tree-sitter library from build container: %w", err)
+	}
+	defer rc.Close()
+
+	libData, err := io.ReadAll(rc)
+	if err != nil {
+		return fmt.Errorf("failed to read tree-sitter library from build container: %w", err)
+	}
+	if len(libData) == 0 {
+		return fmt.Errorf("tree-sitter library built in Incus container is empty")
+	}
+
+	fmt.Printf("  Size: %.1f MB\n", float64(len(libData))/(1024*1024))
+	if err := ensureTreeSitterLibraryDir(client, containerName); err != nil {
+		return err
+	}
+	reader := bytes.NewReader(libData)
+	if err := client.PushFile(containerName, TreeSitterLibraryDestPath, reader, 0644); err != nil {
+		return fmt.Errorf("failed to push tree-sitter library to container: %w", err)
+	}
+	return verifyTreeSitterLibraryInContainer(client, containerName, int64(len(libData)))
+}
+
+func treeSitterBuildCommands() [][]string {
+	compileCmd := strings.Join([]string{
+		"cc -O2 -fPIC -shared",
+		"-I/build/tree-sitter/lib/include",
+		"-I/build/tree-sitter/lib/src",
+		"-I/build/tree-sitter-go/src",
+		"-I/build/tree-sitter-typescript/typescript/src",
+		"-I/build/tree-sitter-typescript/tsx/src",
+		"-I/build/tree-sitter-javascript/src",
+		"-I/build/tree-sitter-python/src",
+		"/build/tree-sitter/lib/src/lib.c",
+		"/build/tree-sitter-go/src/parser.c",
+		"/build/tree-sitter-typescript/typescript/src/parser.c",
+		"/build/tree-sitter-typescript/typescript/src/scanner.c",
+		"/build/tree-sitter-typescript/tsx/src/parser.c",
+		"/build/tree-sitter-typescript/tsx/src/scanner.c",
+		"/build/tree-sitter-javascript/src/parser.c",
+		"/build/tree-sitter-javascript/src/scanner.c",
+		"/build/tree-sitter-python/src/parser.c",
+		"/build/tree-sitter-python/src/scanner.c",
+		"-o /tmp/libastonish-treesitter.so",
+	}, " ")
+
+	return [][]string{
+		{"sh", "-c", "grep -q 'Components:.*universe' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || sed -i '/^Components:/ s/$/ universe/' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true"},
+		{"apt-get", "update"},
+		{"apt-get", "install", "-y", "--no-install-recommends", "ca-certificates", "git", "build-essential"},
+		{"mkdir", "-p", "/build"},
+		{"git", "clone", "--depth", "1", "--branch", treeSitterVersion, "https://github.com/tree-sitter/tree-sitter", "/build/tree-sitter"},
+		{"git", "clone", "--depth", "1", "--branch", treeSitterGoVersion, "https://github.com/tree-sitter/tree-sitter-go", "/build/tree-sitter-go"},
+		{"git", "clone", "--depth", "1", "--branch", treeSitterTypescriptVersion, "https://github.com/tree-sitter/tree-sitter-typescript", "/build/tree-sitter-typescript"},
+		{"git", "clone", "--depth", "1", "--branch", treeSitterJavascriptVersion, "https://github.com/tree-sitter/tree-sitter-javascript", "/build/tree-sitter-javascript"},
+		{"git", "clone", "--depth", "1", "--branch", treeSitterPythonVersion, "https://github.com/tree-sitter/tree-sitter-python", "/build/tree-sitter-python"},
+		{"sh", "-c", compileCmd},
+	}
+}
+
+func pushTreeSitterLibraryFromDocker(client *IncusClient, containerName string) error {
+	fmt.Println("  Tree-sitter library: from Docker image")
+
+	libData, err := ExecInDockerHost([]string{"cat", TreeSitterLibraryDestPath})
+	if err != nil {
+		return fmt.Errorf("failed to read tree-sitter library from Docker container: %w", err)
+	}
+	if len(libData) == 0 {
+		return fmt.Errorf("tree-sitter library in Docker container is empty (image may be corrupted)")
+	}
+
+	fmt.Printf("  Size: %.1f MB\n", float64(len(libData))/(1024*1024))
+	if err := ensureTreeSitterLibraryDir(client, containerName); err != nil {
+		return err
+	}
+	reader := bytes.NewReader(libData)
+	if err := client.PushFile(containerName, TreeSitterLibraryDestPath, reader, 0644); err != nil {
+		return fmt.Errorf("failed to push tree-sitter library to container: %w", err)
+	}
+	return verifyTreeSitterLibraryInContainer(client, containerName, int64(len(libData)))
+}
+
+func ensureTreeSitterLibraryDir(client *IncusClient, containerName string) error {
+	if exitCode, err := client.ExecSimple(containerName, []string{"mkdir", "-p", filepath.Dir(TreeSitterLibraryDestPath)}); err != nil {
+		return fmt.Errorf("failed to create tree-sitter library directory: %w", err)
+	} else if exitCode != 0 {
+		return fmt.Errorf("create tree-sitter library directory exited with code %d", exitCode)
+	}
+	return nil
+}
+
+func verifyTreeSitterLibraryInContainer(client *IncusClient, containerName string, expectedSize int64) error {
+	if expectedSize <= 0 {
+		return nil
+	}
+	sizeOutput, err := ExecSimpleWithEnv(client, containerName, []string{"stat", "-c", "%s", TreeSitterLibraryDestPath}, nil)
+	if err != nil {
+		return fmt.Errorf("failed to stat tree-sitter library in container: %w", err)
+	}
+	sizeOutput = strings.TrimSpace(sizeOutput)
+	actualSize, parseErr := strconv.ParseInt(sizeOutput, 10, 64)
+	if parseErr != nil {
+		return fmt.Errorf("failed to parse tree-sitter library size in container (got %q): %w", sizeOutput, parseErr)
+	}
+	if actualSize != expectedSize {
+		return fmt.Errorf("tree-sitter library size mismatch: expected %d bytes, got %d bytes (truncated during push?)", expectedSize, actualSize)
+	}
+	return nil
 }
 
 // verifyBinaryInContainer checks that the pushed binary is correct inside the container.

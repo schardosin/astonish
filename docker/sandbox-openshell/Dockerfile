@@ -24,6 +24,25 @@
 #   server:
 #     sandboxImage: ghcr.io/sap/astonish-sandbox-openshell:latest
 
+# ---------------------------------------------------------------------------
+# Native tree-sitter shared library used by pkg/codeintel.
+# ---------------------------------------------------------------------------
+FROM debian:bookworm-slim AS treesitter-builder
+
+WORKDIR /src
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        gcc \
+        make \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pkg/codeintel/native ./pkg/codeintel/native
+RUN make -C pkg/codeintel/native OUT=/tmp/libastonish-treesitter.so
+
 FROM ghcr.io/nvidia/openshell-community/sandboxes/base:latest
 
 LABEL org.opencontainers.image.title="astonish-sandbox-openshell" \
@@ -39,6 +58,9 @@ USER root
 ARG TARGETARCH=amd64
 COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
+
+RUN mkdir -p /usr/lib/astonish
+COPY --from=treesitter-builder /tmp/libastonish-treesitter.so /usr/lib/astonish/libastonish-treesitter.so
 
 # ===========================================================================
 # System Packages (single layer)
@@ -63,6 +85,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       wget jq unzip socat \
       docker.io \
       python3-pip python3-venv \
+      # ripgrep — fast code search used by grep_search and find_files tools
+      ripgrep \
       # --- CloakBrowser shared library dependencies ---
       # CloakBrowser is a standalone binary (not apt-installed), so all shared
       # libraries it links against must be explicitly listed.

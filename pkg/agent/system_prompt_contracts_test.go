@@ -62,7 +62,7 @@ func maximalBuilder() *SystemPromptBuilder {
 			"save_credential", "schedule_job", "process_read",
 			"http_request", "delegate_tasks", "email_list",
 			"browser_navigate", "browser_request_human",
-			"search_tools", "search_flows", "memory_search",
+			"search_tools", "search_flows", "memory_search", "repo_map",
 		),
 	}
 }
@@ -267,6 +267,10 @@ func TestSystemPromptContracts_ToolUse(t *testing.T) {
 	assertContains(t, prompt, "## Tool Use", "Tool Use section header")
 	assertContains(t, prompt, "read_file/edit_file/write_file", "file tool preference — prefer dedicated tools over shell sed/awk")
 	assertContains(t, prompt, "shell_command", "shell_command mentioned — for private network fallback and general use")
+
+	// Contract: repo navigation tools preferred over shell for source inspection
+	assertContains(t, prompt, "file_tree (structure), find_files (glob/discovery), grep_search (text/regex search), read_file (contents)", "repo navigation tool preference — dedicated tools over shell ls/find/grep")
+	assertContains(t, prompt, "Do NOT use shell_command with ls/find/grep/rg/cat/head/tail", "negative rule — no shell for browsing/searching files")
 }
 
 func TestSystemPromptContracts_Identity(t *testing.T) {
@@ -331,6 +335,7 @@ func TestSystemPromptContracts_Capabilities(t *testing.T) {
 		"HTTP API requests",
 		"task delegation",
 		"flow execution",
+		"code intelligence",
 		"persistent memory",
 		"email",
 		"fleet agents",

@@ -519,6 +519,16 @@ func (b *IncusBackend) BuildTemplate(ctx context.Context, spec TemplateBuildSpec
 		}
 	}
 
+	// Base configuration builds are additive and operate directly on @base.
+	// Re-push the code intelligence runtime artifact before snapshotting so this
+	// path has the same sandbox contract as InitBaseTemplate/RefreshTemplate.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err := pushTreeSitterLibrary(b.client, baseName); err != nil {
+		return nil, fmt.Errorf("BuildTemplate: push tree-sitter library: %w", err)
+	}
+
 	// Stop @base and re-snapshot (SnapshotTemplate handles stop, shift, snapshot).
 	if err := SnapshotTemplate(b.client, b.templates, BaseTemplate); err != nil {
 		return nil, fmt.Errorf("BuildTemplate: re-snapshot @base: %w", err)

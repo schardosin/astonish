@@ -53,7 +53,19 @@ jobs:
           go clean -cache
           go build -v -o astonish .
 
+      - name: Build tree-sitter native library
+        run: |
+          sudo apt-get update
+          # ripgrep: required by pkg/tools grep_search/find_files integration tests
+          # (context, type filter, .gitignore). Not present on ubuntu-latest by default.
+          sudo apt-get install -y --no-install-recommends build-essential ripgrep
+          make -C pkg/codeintel/native
+          test -f pkg/codeintel/native/dist/libastonish-treesitter.so
+          command -v rg
+
       - name: Run tests
+        env:
+          ASTONISH_TREESITTER_LIB: ${{ github.workspace }}/pkg/codeintel/native/dist/libastonish-treesitter.so
         run: go test -v -coverprofile=coverage.out ./...
 
       - name: Display coverage summary

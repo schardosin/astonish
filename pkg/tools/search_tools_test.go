@@ -907,6 +907,53 @@ func TestFindFiles_GoFallbackDoublestar(t *testing.T) {
 	}
 }
 
+func TestGoGrep_PathAndDoublestarGlobs(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.MkdirAll(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "foo.go"), []byte("package src\nfunc UniqueGoGrepMarker() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "other.go"), []byte("package main\nfunc UniqueGoGrepMarker() {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("nested doublestar glob", func(t *testing.T) {
+		matches, err := goGrep("UniqueGoGrepMarker", tmpDir, []string{"src/**/*.go"}, true, false, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("expected 1 match under src/**/*.go, got %d: %#v", len(matches), matches)
+		}
+		if !strings.Contains(matches[0].File, "src"+string(filepath.Separator)+"foo.go") {
+			t.Fatalf("unexpected file: %s", matches[0].File)
+		}
+	})
+
+	t.Run("basename glob", func(t *testing.T) {
+		matches, err := goGrep("UniqueGoGrepMarker", tmpDir, []string{"*.go"}, true, false, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 2 {
+			t.Fatalf("expected 2 matches for *.go, got %d", len(matches))
+		}
+	})
+
+	t.Run("non matching path glob", func(t *testing.T) {
+		matches, err := goGrep("UniqueGoGrepMarker", tmpDir, []string{"lib/**/*.go"}, true, false, 50)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(matches) != 0 {
+			t.Fatalf("expected 0 matches for lib/**/*.go, got %d", len(matches))
+		}
+	})
+}
+
 func TestMatchDoublestar(t *testing.T) {
 	tests := []struct {
 		pattern string

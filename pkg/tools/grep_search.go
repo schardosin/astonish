@@ -363,10 +363,19 @@ func goGrep(pattern, searchPath string, includeGlobs []string, caseSensitive, is
 			return filepath.SkipAll
 		}
 
-		// Check include globs
+		// Check include globs (basename Match for simple patterns;
+		// doublestar against relative path when pattern has ** or /).
 		if len(includeGlobs) > 0 {
 			matched := false
+			relPath, _ := filepath.Rel(searchPath, path)
 			for _, glob := range includeGlobs {
+				if strings.Contains(glob, "**") || strings.Contains(glob, "/") {
+					if matchDoublestar(glob, relPath) {
+						matched = true
+						break
+					}
+					continue
+				}
 				if m, _ := filepath.Match(glob, info.Name()); m {
 					matched = true
 					break

@@ -71,6 +71,34 @@ func TestComputeRanks_SelfLoopIgnored(t *testing.T) {
 	}
 }
 
+func TestPageRank_DanglingMassConserved(t *testing.T) {
+	// All-leaf graph: no resolvable cross-file edges. Without dangling-mass
+	// redistribution, total rank collapses below 1.0.
+	graphs := map[string]*ScopeGraph{
+		"a.go": {File: "a.go", Defs: []Definition{{Name: "A", File: "a.go"}}},
+		"b.go": {File: "b.go", Defs: []Definition{{Name: "B", File: "b.go"}}},
+		"c.go": {File: "c.go", Defs: []Definition{{Name: "C", File: "c.go"}}},
+	}
+	ranks := pageRank(graphs, nil)
+	var sum float64
+	for _, r := range ranks {
+		sum += r
+	}
+	if sum < 0.99 || sum > 1.01 {
+		t.Fatalf("expected rank mass ≈ 1.0 for edgeless graph, got %v (ranks=%v)", sum, ranks)
+	}
+
+	// Cross-file refs should still prefer the referenced file.
+	cross := map[string]*ScopeGraph{
+		"a.go": {File: "a.go", Defs: []Definition{{Name: "Helper", File: "a.go"}}},
+		"b.go": {File: "b.go", Defs: []Definition{{Name: "Use", File: "b.go"}}, Refs: []Reference{{Name: "Helper", File: "b.go"}}},
+	}
+	crossRanks := computeRanks(cross)
+	if crossRanks["a.go"] <= crossRanks["b.go"] {
+		t.Fatalf("expected a.go > b.go after dangling fix, got %v", crossRanks)
+	}
+}
+
 func TestFilterDefinitionsAndReferences(t *testing.T) {
 	defs := []Definition{
 		{Name: "A", File: "pkg/a.go", Line: 1},

@@ -32,3 +32,7 @@ func resolveTestLibraryPath() string {
 	}
 	return ""
 }
+
+func treesitterResetForSmoke() {
+	treesitter.ResetDefaultLibraryForTest()
+}

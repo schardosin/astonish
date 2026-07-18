@@ -1,10 +1,12 @@
 package codeintel
 
 type ScopeGraph struct {
-	File    string       `json:"file"`
-	Defs    []Definition `json:"defs"`
-	Refs    []Reference  `json:"refs"`
-	Imports []Import     `json:"imports,omitempty"`
+	File string       `json:"file"`
+	Defs []Definition `json:"defs"`
+	Refs []Reference  `json:"refs"`
+	// Imports is reserved for a future import-extraction query pass; nothing
+	// populates it yet and tools must not rely on it.
+	Imports []Import `json:"imports,omitempty"`
 }
 
 type Definition struct {
@@ -24,6 +26,8 @@ type Reference struct {
 	ContextLine string `json:"context_line"`
 }
 
+// Import describes a file-level import. Not populated until import-capture
+// queries are added; kept for forward-compatible JSON cache shape.
 type Import struct {
 	Path  string `json:"path"`
 	Alias string `json:"alias,omitempty"`

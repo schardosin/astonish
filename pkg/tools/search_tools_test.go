@@ -810,6 +810,141 @@ func TestFindFiles_NestedGlob(t *testing.T) {
 	})
 }
 
+func TestFindFiles_GoFallbackDoublestar(t *testing.T) {
+	// Tests the Go fallback (goFindFiles) directly with ** patterns.
+	// This is the code path hit when rg is unavailable in the sandbox.
+	tmpDir, err := os.MkdirTemp("", "findfiles_doublestar_test")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Create nested structure
+	os.MkdirAll(filepath.Join(tmpDir, "pkg", "tools"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "pkg", "agent"), 0755)
+	os.MkdirAll(filepath.Join(tmpDir, "cmd"), 0755)
+	os.WriteFile(filepath.Join(tmpDir, "pkg", "tools", "grep_search.go"), []byte("package tools"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "pkg", "tools", "find_files.go"), []byte("package tools"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "pkg", "tools", "file_tree.go"), []byte("package tools"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "pkg", "agent", "agent.go"), []byte("package agent"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "cmd", "main.go"), []byte("package main"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "README.md"), []byte("# test"), 0644)
+
+	tests := []struct {
+		name      string
+		pattern   string
+		wantMin   int
+		wantMatch string // at least one result must contain this substring
+		wantNo    string // no result should contain this substring (empty = no check)
+	}{
+		{
+			name:      "DoubleStarPrefix_SpecificFile",
+			pattern:   "**/grep_search*.go",
+			wantMin:   1,
+			wantMatch: "grep_search.go",
+		},
+		{
+			name:      "DoubleStarPrefix_AllGo",
+			pattern:   "**/*.go",
+			wantMin:   5, // all 5 .go files
+			wantMatch: ".go",
+		},
+		{
+			name:      "PathWithDoubleStar",
+			pattern:   "pkg/**/*.go",
+			wantMin:   4, // 3 in tools + 1 in agent
+			wantMatch: "pkg/",
+			wantNo:    "cmd/",
+		},
+		{
+			name:      "PathSegmentGlob",
+			pattern:   "pkg/tools/*.go",
+			wantMin:   3,
+			wantMatch: "pkg/tools/",
+			wantNo:    "agent",
+		},
+		{
+			name:      "DoubleStarPrefix_GlobSuffix",
+			pattern:   "**/tools/*.go",
+			wantMin:   3,
+			wantMatch: "tools/",
+			wantNo:    "agent",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := goFindFiles(tt.pattern, tmpDir, 100)
+			if err != nil {
+				t.Fatalf("goFindFiles(%q) error: %v", tt.pattern, err)
+			}
+			if len(result) < tt.wantMin {
+				t.Errorf("goFindFiles(%q) returned %d results, want >= %d", tt.pattern, len(result), tt.wantMin)
+				for _, f := range result {
+					t.Logf("  got: %s", f.RelativePath)
+				}
+			}
+			if tt.wantMatch != "" {
+				found := false
+				for _, f := range result {
+					if strings.Contains(f.RelativePath, tt.wantMatch) || strings.Contains(f.Path, tt.wantMatch) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("goFindFiles(%q): no result contains %q", tt.pattern, tt.wantMatch)
+				}
+			}
+			if tt.wantNo != "" {
+				for _, f := range result {
+					if strings.Contains(f.RelativePath, tt.wantNo) {
+						t.Errorf("goFindFiles(%q): result %q should not contain %q", tt.pattern, f.RelativePath, tt.wantNo)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestMatchDoublestar(t *testing.T) {
+	tests := []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{"**/*.go", "pkg/tools/grep.go", true},
+		{"**/*.go", "main.go", true},
+		{"**/*.go", "deep/nested/path/file.go", true},
+		{"**/*.go", "file.txt", false},
+		{"**/grep*.go", "pkg/tools/grep_search.go", true},
+		{"**/grep*.go", "grep.go", true},
+		{"**/grep*.go", "pkg/tools/find_files.go", false},
+		{"pkg/**/*.go", "pkg/tools/grep.go", true},
+		{"pkg/**/*.go", "pkg/agent/agent.go", true},
+		{"pkg/**/*.go", "cmd/main.go", false},
+		{"pkg/tools/*.go", "pkg/tools/grep.go", true},
+		{"pkg/tools/*.go", "pkg/agent/agent.go", false},
+		{"**/tools/*.go", "pkg/tools/grep.go", true},
+		{"**/tools/*.go", "a/b/tools/x.go", true},
+		{"**/tools/*.go", "pkg/agent/agent.go", false},
+		{"src/**/*.ts", "src/app.ts", true},
+		{"src/**/*.ts", "src/components/Button.ts", true},
+		{"src/**/*.ts", "lib/util.ts", false},
+		{"**", "anything/at/all.txt", true},
+		{"**", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.pattern+"_"+tt.path, func(t *testing.T) {
+			got := matchDoublestar(tt.pattern, tt.path)
+			if got != tt.want {
+				t.Errorf("matchDoublestar(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFindFiles_DefaultPathSort(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "findfiles_sort_test")
 	if err != nil {

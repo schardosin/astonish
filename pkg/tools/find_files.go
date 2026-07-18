@@ -187,6 +187,11 @@ func tryRipgrepFiles(pattern, searchPath string, maxResults int) ([]FoundFile, e
 func goFindFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error) {
 	var files []FoundFile
 
+	// Determine match strategy:
+	// - Patterns with "**" or "/" need to match against relative paths
+	// - Simple patterns (e.g., "*.go") match against basenames
+	matchRelPath := strings.Contains(pattern, "/") || strings.Contains(pattern, "**")
+
 	err := filepath.Walk(searchPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip files we can't access
@@ -198,7 +203,7 @@ func goFindFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error
 			if defaultExclusions[name] {
 				return filepath.SkipDir
 			}
-			// Don't add directories to results unless they match
+			return nil
 		}
 
 		// Check if we've hit max results
@@ -206,12 +211,20 @@ func goFindFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error
 			return filepath.SkipAll
 		}
 
-		// Match the pattern against the filename
-		name := info.Name()
-		matched, err := filepath.Match(pattern, name)
-		if err != nil {
-			// Invalid pattern, try case-insensitive match
-			matched, _ = filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
+		var matched bool
+		if matchRelPath {
+			// Match against the relative path for patterns with ** or /
+			relPath, _ := filepath.Rel(searchPath, path)
+			matched = matchDoublestar(pattern, relPath)
+		} else {
+			// Match the pattern against the filename only
+			name := info.Name()
+			m, err := filepath.Match(pattern, name)
+			if err != nil {
+				// Invalid pattern, try case-insensitive match
+				m, _ = filepath.Match(strings.ToLower(pattern), strings.ToLower(name))
+			}
+			matched = m
 		}
 
 		if matched {
@@ -232,6 +245,74 @@ func goFindFiles(pattern, searchPath string, maxResults int) ([]FoundFile, error
 	}
 
 	return files, nil
+}
+
+// matchDoublestar matches a pattern containing ** against a path.
+// ** matches zero or more path segments. Each non-** segment is matched
+// with filepath.Match semantics against the corresponding path segment.
+func matchDoublestar(pattern, path string) bool {
+	// Normalize separators
+	pattern = filepath.ToSlash(pattern)
+	path = filepath.ToSlash(path)
+	return doMatchDoublestar(pattern, path)
+}
+
+func doMatchDoublestar(pattern, path string) bool {
+	for {
+		if pattern == "" {
+			return path == ""
+		}
+		if pattern == "**" || pattern == "**/" {
+			// ** at end matches everything remaining
+			return true
+		}
+
+		if strings.HasPrefix(pattern, "**/") {
+			// ** matches zero or more path segments
+			rest := pattern[3:]
+			// Try matching rest against path at every segment boundary
+			if doMatchDoublestar(rest, path) {
+				return true
+			}
+			// Consume one path segment and retry
+			slashIdx := strings.Index(path, "/")
+			if slashIdx < 0 {
+				// No more segments — try matching rest against the remaining path
+				return doMatchDoublestar(rest, path)
+			}
+			path = path[slashIdx+1:]
+			continue
+		}
+
+		// Extract the next pattern segment (up to next "/")
+		var patSeg string
+		nextSlash := strings.Index(pattern, "/")
+		if nextSlash < 0 {
+			// Last segment in pattern
+			patSeg = pattern
+			pattern = ""
+		} else {
+			patSeg = pattern[:nextSlash]
+			pattern = pattern[nextSlash+1:]
+		}
+
+		// Extract the corresponding path segment
+		pathSlash := strings.Index(path, "/")
+		var pathSeg string
+		if pathSlash < 0 {
+			pathSeg = path
+			path = ""
+		} else {
+			pathSeg = path[:pathSlash]
+			path = path[pathSlash+1:]
+		}
+
+		// Match segments using filepath.Match (supports *, ?, [])
+		m, err := filepath.Match(patSeg, pathSeg)
+		if err != nil || !m {
+			return false
+		}
+	}
 }
 
 // sortFilesByMtime sorts files by modification time, newest first

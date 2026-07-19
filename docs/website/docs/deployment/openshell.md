@@ -430,13 +430,17 @@ sandbox:
 
 ### Corporate CA / Trust Bundles (`driver_config`)
 
+Requires the OpenShell gateway **≥ 0.0.81** (Astonish chart pins **0.0.86**).
+Older gateways reject `containers.agent.volume_mounts` in `driver_config`.
+
 To trust internal HTTPS endpoints without rebuilding the sandbox image,
 mount a combined CA bundle (system CAs + corporate roots) via OpenShell
-`driver_config` PVC mounts:
+`driver_config` PVC mounts. Configure only through Helm values — leave
+`certBundles` empty (default) for no mounts.
 
-1. Create a PVC in the **sandbox** namespace that contains the combined PEM
-   (for example at path `ca-bundle.crt` inside the volume).
-2. Reference it from Helm values:
+**Chart-managed bootstrap** (recommended): Helm creates the PVC and a
+post-install/upgrade Job that downloads your org CA URL, appends it to
+the Debian system trust store, and writes the combined PEM onto the PVC.
 
 ```yaml
 sandbox:
@@ -446,7 +450,12 @@ sandbox:
         claimName: astonish-corp-ca
         mountPath: /etc/astonish-ca/ca-bundle.crt
         subPath: ca-bundle.crt
+        bootstrap:
+          enabled: true
+          url: "https://pki.example.com/corp-root-ca.crt"
 ```
+
+Or pre-provision the PVC yourself and omit `bootstrap`.
 
 Astonish mounts the PVC read-only into every sandbox, sets trust env vars
 (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`,
@@ -457,6 +466,9 @@ Mount paths must not be under `/sandbox` (workspace) or
 `/etc/openshell` / `/etc/openshell-tls` (OpenShell-managed). Use a
 *combined* bundle — `SSL_CERT_FILE` replaces the system store, so a
 corp-only PEM would break public HTTPS.
+
+On RWO StorageClasses (e.g. Cinder), the cert PVC can attach to only one
+node; use RWX/ROX or pin sandboxes when scheduling across multiple nodes.
 
 **Landlock enforcement mode:**
 

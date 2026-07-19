@@ -69,9 +69,9 @@ graph TB
 
 | Component | Image / Artifact | Purpose |
 |-----------|-----------------|---------|
-| **Gateway** | `ghcr.io/nvidia/openshell/gateway:0.0.63` | Sandbox lifecycle, exec relay, policy distribution |
-| **Supervisor** | `ghcr.io/nvidia/openshell/supervisor:0.0.63` | PID 1 inside sandboxes, Landlock/seccomp enforcement (≥0.0.70 recommended for kernel 6.10+ PTY fix) |
-| **Helm Chart** | `oci://ghcr.io/nvidia/openshell/helm-chart:0.0.63` | Deploys gateway + RBAC (subchart of Astonish) |
+| **Gateway** | `ghcr.io/nvidia/openshell/gateway:0.0.86` | Sandbox lifecycle, exec relay, policy distribution |
+| **Supervisor** | `ghcr.io/nvidia/openshell/supervisor:0.0.86` | PID 1 inside sandboxes, Landlock/seccomp enforcement |
+| **Helm Chart** | `oci://ghcr.io/nvidia/openshell/helm-chart:0.0.86` | Deploys gateway + RBAC (subchart of Astonish); ≥0.0.81 required for cert-bundle PVC mounts via `driver_config` |
 
 #### Astonish Provides
 

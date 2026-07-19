@@ -1,0 +1,72 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
+{{- range $i, $bundle := .Values.sandbox.openshell.certBundles }}
+{{- if and $bundle.bootstrap $bundle.bootstrap.enabled $bundle.bootstrap.url $bundle.claimName }}
+{{- $subPath := default "ca-bundle.crt" $bundle.subPath }}
+{{- $image := default "debian:bookworm-slim" $bundle.bootstrap.image }}
+---
+# One-shot Helm hook: download a corporate CA and write a combined PEM
+# (system CAs + downloaded cert) onto the cert-bundle PVC.
+#
+# hook-delete-policy matches sandbox seed-job: replace on each upgrade,
+# clean up after success.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "astonish.fullname" $ }}-cert-bundle-{{ $bundle.name }}
+  namespace: {{ include "astonish.namespace.sandbox" $ }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle-bootstrap
+    astonish.io/cert-bundle: {{ $bundle.name | quote }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  completions: 1
+  parallelism: 1
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "astonish.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: cert-bundle-bootstrap
+        astonish.io/cert-bundle: {{ $bundle.name | quote }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: bootstrap
+          image: {{ $image | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              export DEBIAN_FRONTEND=noninteractive
+              apt-get update
+              apt-get install -y --no-install-recommends ca-certificates curl
+              DEST="/bundle/{{ $subPath }}"
+              echo "astonish-cert-bundle: downloading CA from configured URL"
+              curl -fsSL -o /tmp/org-ca.crt "{{ $bundle.bootstrap.url }}"
+              # Combined bundle: system trust store + org CA (SSL_CERT_FILE replaces
+              # the system store — a corp-only PEM would break public HTTPS).
+              cat /etc/ssl/certs/ca-certificates.crt /tmp/org-ca.crt > "$DEST"
+              chmod 644 "$DEST"
+              echo "astonish-cert-bundle: wrote $DEST ($(wc -c < "$DEST") bytes)"
+          volumeMounts:
+            - name: bundle
+              mountPath: /bundle
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: bundle
+          persistentVolumeClaim:
+            claimName: {{ $bundle.claimName | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

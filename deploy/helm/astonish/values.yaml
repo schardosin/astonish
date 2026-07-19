@@ -329,22 +329,33 @@ sandbox:
       #   - /dev/fuse
 
     # Corporate CA / trust bundles mounted into every sandbox via OpenShell
-    # driver_config (Kubernetes PVC mounts). Each entry references an existing
-    # PVC in the sandbox namespace that holds a *combined* PEM (system CAs +
-    # corporate roots). Mount paths must not be under /sandbox or
-    # /etc/openshell{,-tls}. Trust env vars default to SSL_CERT_FILE,
-    # CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, GIT_SSL_CAINFO.
+    # driver_config (Kubernetes PVC mounts). Empty = no mounts (default).
+    # Each entry's PVC holds a *combined* PEM (system CAs + corporate roots).
+    # Mount paths must not be under /sandbox or /etc/openshell{,-tls}.
+    # Trust env vars default to SSL_CERT_FILE, CURL_CA_BUNDLE,
+    # REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, GIT_SSL_CAINFO.
+    #
+    # Optional per-entry bootstrap: chart creates the PVC and a post-install
+    # Job that downloads bootstrap.url, appends it to the system CA bundle,
+    # and writes subPath (default ca-bundle.crt) onto the PVC. Orgs can also
+    # pre-provision the PVC and omit bootstrap.
+    #
+    # NOTE: RWO PVCs can only attach to one node. Prefer RWX/ROX when sandboxes
+    # schedule across multiple nodes, or pin sandboxes to a single node.
     certBundles: []
-    # Example:
+    # Example (chart-managed bootstrap):
     # certBundles:
     #   - name: corp-root-ca
     #     claimName: astonish-corp-ca
     #     mountPath: /etc/astonish-ca/ca-bundle.crt
     #     subPath: ca-bundle.crt
-    #     # trustEnv: []  # use defaults, or override:
-    #     # trustEnv:
-    #     #   - SSL_CERT_FILE
-    #     #   - NODE_EXTRA_CA_CERTS
+    #     # trustEnv: []  # use defaults, or override
+    #     bootstrap:
+    #       enabled: true
+    #       url: "https://pki.example.com/corp-root-ca.crt"
+    #       size: 64Mi
+    #       storageClassName: ""  # empty = sandbox.storage.storageClassName
+    #       image: "debian:bookworm-slim"
 
     # Idle timeout (minutes) before the watchdog evicts an unused sandbox pod.
     # 0 = disable idle eviction (pods run indefinitely).

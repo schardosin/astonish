@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // GRPCClientConfig configures the gRPC gateway client connection.
@@ -162,6 +163,13 @@ func (c *grpcGatewayClient) CreateSandbox(ctx context.Context, req CreateSandbox
 		Image:       req.Image,
 		Environment: req.Env,
 		Labels:      req.Labels,
+	}
+	if len(req.DriverConfig) > 0 {
+		ds, err := structpb.NewStruct(req.DriverConfig)
+		if err != nil {
+			return nil, fmt.Errorf("gateway CreateSandbox: encode driver_config: %w", err)
+		}
+		template.DriverConfig = ds
 	}
 
 	pbReq := &pb.CreateSandboxRequest{

@@ -50,7 +50,7 @@ If you add a backend, run the contract suite against it in CI. If you change the
 
 ## Session provisioning (per backend)
 - **Incus**: `EnsureOrgSessionContainer` composes overlay layers, ensures a `@base` snapshot, creates a per-session container. `WaitForSessionReady` polls `IsRunning`. Templates are content-addressed via `hashSnapshotRootfs`.
-- **OpenShell**: `Gateway.CreateSandbox` provisions a pod; the in-pod supervisor opens `ConnectSupervisor`; exec/push/pull go through `ExecSandbox` / `ExecSandboxInteractive`. Evicted sandboxes are auto-resumed by `ensureSessionRunning`.
+- **OpenShell**: `Gateway.CreateSandbox` provisions a pod; the in-pod supervisor opens `ConnectSupervisor`; exec/push/pull go through `ExecSandbox` / `ExecSandboxInteractive`. Evicted sandboxes are auto-resumed by `ensureSessionRunning`. Platform `cert_bundles` render into `SandboxTemplate.driver_config` (K8s PVC mounts) plus trust env vars — see `pkg/sandbox/openshell/driver_config.go`.
 - **K8s (direct, without OpenShell)**: `pkg/sandbox/k8s` — image pull policy is `Always` for mutable tags (`latest`, `dev`) and `IfNotPresent` for pinned digests. Enforces per-org/team labels and `NetworkPolicy`.
 - **Mock**: in-memory, used by unit tests; supports injection hooks.
 

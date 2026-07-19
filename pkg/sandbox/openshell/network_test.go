@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/store"
 )
@@ -199,6 +200,49 @@ func TestEnsureFleetContainer_Success(t *testing.T) {
 	}
 	if sess.OrgSlug != "acme" {
 		t.Errorf("OrgSlug = %q, want %q", sess.OrgSlug, "acme")
+	}
+}
+
+func TestEnsureFleetContainer_WithCertBundles(t *testing.T) {
+	var captured CreateSandboxRequest
+	gw := &mockGateway{
+		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+			captured = req
+			return &CreateSandboxResponse{SandboxID: "sb-fleet-ca", GatewayID: "gw-fleet-ca", PodName: "pod-fleet-ca"}, nil
+		},
+	}
+	sr, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		t.Fatalf("NewSessionRegistry: %v", err)
+	}
+	b, err := New(Config{
+		Sessions: sr,
+		Gateway:  gw,
+		AppConfig: config.SandboxOpenShellConfig{
+			CertBundles: []config.CertBundleConfig{{
+				Name:      "corp-root-ca",
+				ClaimName: "astonish-corp-ca",
+				MountPath: "/etc/astonish-ca/ca-bundle.crt",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	key := fmt.Sprintf("fleet-certs-%d", time.Now().UnixNano())
+	_, err = b.EnsureFleetContainer(context.Background(), sandbox.FleetSpec{
+		FleetKey:   key,
+		TemplateID: "@base",
+	})
+	if err != nil {
+		t.Fatalf("EnsureFleetContainer: %v", err)
+	}
+	if captured.DriverConfig == nil {
+		t.Fatal("expected DriverConfig")
+	}
+	if captured.Env["SSL_CERT_FILE"] != "/etc/astonish-ca/ca-bundle.crt" {
+		t.Errorf("SSL_CERT_FILE = %q", captured.Env["SSL_CERT_FILE"])
 	}
 }
 

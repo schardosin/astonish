@@ -1,0 +1,25 @@
+{{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
+{{- range .Values.sandbox.openshell.certBundles }}
+{{- if and .bootstrap .bootstrap.enabled .claimName }}
+---
+# Cert-bundle PVC for OpenShell sandbox trust mounts (driver_config).
+# Populated by the matching cert-bundle-bootstrap Job when bootstrap.enabled.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .claimName | quote }}
+  namespace: {{ include "astonish.namespace.sandbox" $ }}
+  labels:
+    {{- include "astonish.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cert-bundle
+    astonish.io/cert-bundle: {{ .name | quote }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ default $.Values.sandbox.storage.storageClassName .bootstrap.storageClassName | quote }}
+  resources:
+    requests:
+      storage: {{ default "64Mi" .bootstrap.size | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

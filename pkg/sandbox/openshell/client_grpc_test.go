@@ -253,6 +253,81 @@ func TestGRPCClient_CreateSandbox_NilPolicy(t *testing.T) {
 	}
 }
 
+func TestGRPCClient_CreateSandbox_WithDriverConfig(t *testing.T) {
+	var capturedReq *pb.CreateSandboxRequest
+	srv := &fakeOpenShellServer{
+		createSandboxFn: func(req *pb.CreateSandboxRequest) (*pb.SandboxResponse, error) {
+			capturedReq = req
+			return &pb.SandboxResponse{
+				Sandbox: &pb.Sandbox{
+					Metadata: &pb.ObjectMeta{Id: "sb-dc", Name: req.GetName()},
+					Status:   &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, AgentPod: "pod-dc"},
+				},
+			}, nil
+		},
+	}
+	client, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	_, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Name:  "driver-config-sandbox",
+		Image: "ubuntu:24.04",
+		DriverConfig: map[string]any{
+			"kubernetes": map[string]any{
+				"volumes": []any{
+					map[string]any{
+						"name": "corp-root-ca",
+						"persistent_volume_claim": map[string]any{
+							"claim_name": "astonish-corp-ca",
+							"read_only":  true,
+						},
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox error: %v", err)
+	}
+	dc := capturedReq.GetSpec().GetTemplate().GetDriverConfig()
+	if dc == nil {
+		t.Fatal("expected DriverConfig on SandboxTemplate")
+	}
+	fields := dc.GetFields()
+	k8s, ok := fields["kubernetes"]
+	if !ok || k8s.GetStructValue() == nil {
+		t.Fatalf("kubernetes block missing: %#v", fields)
+	}
+}
+
+func TestGRPCClient_CreateSandbox_EmptyDriverConfigUnset(t *testing.T) {
+	var capturedReq *pb.CreateSandboxRequest
+	srv := &fakeOpenShellServer{
+		createSandboxFn: func(req *pb.CreateSandboxRequest) (*pb.SandboxResponse, error) {
+			capturedReq = req
+			return &pb.SandboxResponse{
+				Sandbox: &pb.Sandbox{
+					Metadata: &pb.ObjectMeta{Id: "sb-nodc", Name: req.GetName()},
+					Status:   &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, AgentPod: "pod-nodc"},
+				},
+			}, nil
+		},
+	}
+	client, cleanup := startFakeServer(t, srv)
+	defer cleanup()
+
+	_, err := client.CreateSandbox(context.Background(), CreateSandboxRequest{
+		Name:  "no-driver-config",
+		Image: "ubuntu:24.04",
+	})
+	if err != nil {
+		t.Fatalf("CreateSandbox error: %v", err)
+	}
+	if capturedReq.GetSpec().GetTemplate().GetDriverConfig() != nil {
+		t.Error("expected DriverConfig unset when empty")
+	}
+}
+
 func TestGRPCClient_CreateSandbox_WithNetworkPolicy(t *testing.T) {
 	var capturedReq *pb.CreateSandboxRequest
 	srv := &fakeOpenShellServer{

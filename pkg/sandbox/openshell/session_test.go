@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/sandbox"
 	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/grpc/codes"
@@ -148,6 +149,67 @@ func TestCreateSession_Success(t *testing.T) {
 	// BackendRef stores the sandbox ID (via ContainerName).
 	if sess.BackendRef == "" {
 		t.Error("BackendRef should not be empty")
+	}
+}
+
+func TestCreateSession_WithCertBundles(t *testing.T) {
+	var captured CreateSandboxRequest
+	gw := &mockGateway{
+		createFn: func(ctx context.Context, req CreateSandboxRequest) (*CreateSandboxResponse, error) {
+			captured = req
+			return &CreateSandboxResponse{SandboxID: "sb-certs", GatewayID: "gw-certs", PodName: "pod-certs"}, nil
+		},
+	}
+	sr, err := sandbox.NewSessionRegistry()
+	if err != nil {
+		t.Fatalf("NewSessionRegistry: %v", err)
+	}
+	b, err := New(Config{
+		Sessions: sr,
+		Gateway:  gw,
+		AppConfig: config.SandboxOpenShellConfig{
+			CertBundles: []config.CertBundleConfig{{
+				Name:      "corp-root-ca",
+				ClaimName: "astonish-corp-ca",
+				MountPath: "/etc/astonish-ca/ca-bundle.crt",
+				SubPath:   "ca-bundle.crt",
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	id := fmt.Sprintf("sess-certs-%d", time.Now().UnixNano())
+	_, err = b.CreateSession(context.Background(), sandbox.SessionSpec{
+		SessionID:  id,
+		TemplateID: "@base",
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if captured.DriverConfig == nil {
+		t.Fatal("expected DriverConfig on CreateSandboxRequest")
+	}
+	k8s, ok := captured.DriverConfig["kubernetes"].(map[string]any)
+	if !ok {
+		t.Fatalf("kubernetes block missing: %#v", captured.DriverConfig)
+	}
+	if _, ok := k8s["volumes"].([]any); !ok {
+		t.Errorf("volumes missing: %#v", k8s)
+	}
+	if captured.Env["SSL_CERT_FILE"] != "/etc/astonish-ca/ca-bundle.crt" {
+		t.Errorf("SSL_CERT_FILE = %q", captured.Env["SSL_CERT_FILE"])
+	}
+	foundRO := false
+	for _, p := range captured.Policy.Filesystem.ReadOnly {
+		if p == "/etc/astonish-ca/ca-bundle.crt" {
+			foundRO = true
+			break
+		}
+	}
+	if !foundRO {
+		t.Error("expected cert mount path in policy ReadOnly")
 	}
 }
 

@@ -53,6 +53,10 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 	env := map[string]string{
 		"ASTONISH_SESSION_ID": spec.FleetKey,
 	}
+	driverCfg, err := applyCertBundles(b.cfg.AppConfig, env)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox/openshell: EnsureFleetContainer(%s): cert_bundles: %w", spec.FleetKey, err)
+	}
 
 	labels := map[string]string{
 		"astonish.io/type":       "fleet",
@@ -80,11 +84,12 @@ func (b *OpenShellBackend) EnsureFleetContainer(ctx context.Context, spec sandbo
 	}
 
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
-		Name:   name,
-		Image:  image,
-		Env:    env,
-		Labels: labels,
-		Policy: defaultSandboxPolicy(b.cfg.AppConfig),
+		Name:         name,
+		Image:        image,
+		Env:          env,
+		Labels:       labels,
+		Policy:       defaultSandboxPolicy(b.cfg.AppConfig),
+		DriverConfig: driverCfg,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sandbox/openshell: EnsureFleetContainer(%s): create: %w", spec.FleetKey, err)

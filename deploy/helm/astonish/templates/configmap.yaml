@@ -127,6 +127,23 @@ data:
             {{- end }}
           {{- end }}
         {{- end }}
+        {{- with .Values.sandbox.openshell.certBundles }}
+        cert_bundles:
+          {{- range . }}
+          - name: {{ .name | quote }}
+            claim_name: {{ .claimName | quote }}
+            mount_path: {{ .mountPath | quote }}
+            {{- if .subPath }}
+            sub_path: {{ .subPath | quote }}
+            {{- end }}
+            {{- with .trustEnv }}
+            trust_env:
+              {{- range . }}
+              - {{ . | quote }}
+              {{- end }}
+            {{- end }}
+          {{- end }}
+        {{- end }}
         {{- if .Values.sandbox.openshell.idleTimeoutMinutes }}
         idle_timeout_minutes: {{ .Values.sandbox.openshell.idleTimeoutMinutes }}
         {{- end }}

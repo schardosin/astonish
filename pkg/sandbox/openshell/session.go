@@ -91,6 +91,10 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 	for k, v := range spec.Env {
 		env[k] = v
 	}
+	driverCfg, err := applyCertBundles(b.cfg.AppConfig, env)
+	if err != nil {
+		return nil, fmt.Errorf("openshell: cert_bundles: %w", err)
+	}
 
 	// Build labels. Sanitize session ID for K8s label compliance (values
 	// allow only [a-zA-Z0-9._-]). The primary fix is at session-key creation
@@ -118,11 +122,12 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 
 	// Create the sandbox via the gateway.
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
-		Name:   name,
-		Image:  image,
-		Env:    env,
-		Labels: labels,
-		Policy: defaultSandboxPolicy(b.cfg.AppConfig),
+		Name:         name,
+		Image:        image,
+		Env:          env,
+		Labels:       labels,
+		Policy:       defaultSandboxPolicy(b.cfg.AppConfig),
+		DriverConfig: driverCfg,
 	})
 	if err != nil {
 		if !isAlreadyExists(err) {
@@ -190,6 +195,10 @@ func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) e
 	env := map[string]string{
 		"ASTONISH_SESSION_ID": sessionID,
 	}
+	driverCfg, err := applyCertBundles(b.cfg.AppConfig, env)
+	if err != nil {
+		return fmt.Errorf("openshell: cert_bundles: %w", err)
+	}
 
 	labels := map[string]string{
 		"astonish.io/type":       "session",
@@ -204,11 +213,12 @@ func (b *OpenShellBackend) StartSession(ctx context.Context, sessionID string) e
 	}
 
 	resp, err := b.gateway.CreateSandbox(ctx, CreateSandboxRequest{
-		Name:   sandboxName(sessionID),
-		Image:  image,
-		Env:    env,
-		Labels: labels,
-		Policy: defaultSandboxPolicy(b.cfg.AppConfig),
+		Name:         sandboxName(sessionID),
+		Image:        image,
+		Env:          env,
+		Labels:       labels,
+		Policy:       defaultSandboxPolicy(b.cfg.AppConfig),
+		DriverConfig: driverCfg,
 	})
 	if err != nil {
 		if !isAlreadyExists(err) {

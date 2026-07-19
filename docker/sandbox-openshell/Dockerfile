@@ -56,7 +56,9 @@ LABEL org.opencontainers.image.title="astonish-sandbox-openshell" \
 USER root
 
 # --- Astonish agent binary (cross-compiled on host, see Makefile build-linux) ---
-ARG TARGETARCH=amd64
+# Do not give TARGETARCH a default — BuildKit ignores platform injection when
+# a default is set, which ships the wrong-arch binary in multi-arch images.
+ARG TARGETARCH
 COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
 

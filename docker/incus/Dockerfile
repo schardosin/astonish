@@ -73,8 +73,9 @@ RUN test -x /opt/incus/bin/incusd || { echo "ERROR: incusd not found"; exit 1; }
 
 # Copy the pre-built Linux astonish binary for the target architecture.
 # TARGETARCH is set automatically by docker buildx (amd64 or arm64).
-# For local single-arch builds, default to amd64.
-ARG TARGETARCH=amd64
+# Do not give TARGETARCH a default — BuildKit ignores platform injection when
+# a default is set, which ships the wrong-arch binary in multi-arch images.
+ARG TARGETARCH
 COPY astonish-linux-${TARGETARCH} /usr/local/bin/astonish
 RUN chmod +x /usr/local/bin/astonish
 

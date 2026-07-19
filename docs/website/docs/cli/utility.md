@@ -60,15 +60,33 @@ Disconnect from the remote platform:
 astonish logout
 ```
 
-## `astonish studio`
+## `astonish daemon`
 
-Open the Studio web UI in your default browser:
+Manage the background daemon service and Studio web UI (local-only):
 
 ```bash
-astonish studio
+# Install as a system service (auto-starts on login)
+astonish daemon install
+
+# Start / stop / restart the service
+astonish daemon start
+astonish daemon stop
+astonish daemon restart
+
+# Check service status
+astonish daemon status
+
+# Run in the foreground (starts the Studio HTTP server on :9393)
+astonish daemon run
+
+# View logs
+astonish daemon logs
+
+# Uninstall the service
+astonish daemon uninstall
 ```
 
-This is a convenience shortcut that ensures the daemon is running and opens the browser to `http://localhost:9393`. Local-only (cannot be used with remote servers).
+`astonish daemon run` starts the Studio web interface at `http://localhost:9393`. The installed service runs this automatically in the background on login.
 
 ## `astonish config`
 

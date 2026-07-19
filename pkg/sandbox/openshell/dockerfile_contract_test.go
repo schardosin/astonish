@@ -27,4 +27,8 @@ func TestOpenShellDockerfileIncludesRipgrep(t *testing.T) {
 	if !strings.Contains(content, "ripgrep") {
 		t.Fatalf("%s must install ripgrep for grep_search/find_files", dockerfile)
 	}
+	// treesitter-builder needs libc headers; gcc alone on Debian slim is insufficient.
+	if !strings.Contains(content, "libc6-dev") {
+		t.Fatalf("%s treesitter-builder must apt-install libc6-dev", dockerfile)
+	}
 }

@@ -28,6 +28,10 @@ func TestTreeSitterLibraryPathContract(t *testing.T) {
 	if !strings.Contains(dockerfile, wantCopy) {
 		t.Fatalf("sandbox-base Dockerfile must COPY library to %s; missing:\n%s", treeSitterLibPath, wantCopy)
 	}
+	// treesitter-builder needs libc headers; gcc alone on Debian slim is insufficient.
+	if !strings.Contains(dockerfile, "libc6-dev") {
+		t.Fatal("sandbox-base Dockerfile treesitter-builder must apt-install libc6-dev")
+	}
 	// Guard against accidental apt install of ripgrep in the pod image
 	// (invisible after overlay chroot; belongs in @base / OpenShell).
 	if strings.Contains(dockerfile, "\tripgrep") || strings.Contains(dockerfile, " ripgrep \\\n") || strings.Contains(dockerfile, " ripgrep\n") {

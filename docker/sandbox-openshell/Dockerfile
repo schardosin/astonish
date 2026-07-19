@@ -36,6 +36,7 @@ RUN apt-get update && \
         ca-certificates \
         git \
         gcc \
+        libc6-dev \
         make \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

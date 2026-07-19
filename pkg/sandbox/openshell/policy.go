@@ -1,6 +1,10 @@
 package openshell
 
-import "github.com/SAP/astonish/pkg/config"
+import (
+	"strings"
+
+	"github.com/SAP/astonish/pkg/config"
+)
 
 // defaultSandboxPolicy returns the SandboxPolicySpec applied to every sandbox
 // created by the Astonish backend.
@@ -80,6 +84,14 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
 	}
 	if len(cfg.FilesystemPolicy.ExtraReadWrite) > 0 {
 		policy.Filesystem.ReadWrite = append(policy.Filesystem.ReadWrite, cfg.FilesystemPolicy.ExtraReadWrite...)
+	}
+	// Cert-bundle mount paths are also added in applyCertBundles at create
+	// time; listing them here keeps defaultSandboxPolicy self-contained for
+	// callers that only use the policy helper.
+	for _, b := range cfg.CertBundles {
+		if p := strings.TrimSpace(b.MountPath); p != "" {
+			policy.Filesystem.ReadOnly = append(policy.Filesystem.ReadOnly, p)
+		}
 	}
 
 	// Always populate NetworkPolicies — empty = deny-all in OpenShell.

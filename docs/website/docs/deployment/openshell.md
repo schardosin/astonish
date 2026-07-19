@@ -428,6 +428,36 @@ sandbox:
         - /mnt/scratch
 ```
 
+### Corporate CA / Trust Bundles (`driver_config`)
+
+To trust internal HTTPS endpoints without rebuilding the sandbox image,
+mount a combined CA bundle (system CAs + corporate roots) via OpenShell
+`driver_config` PVC mounts:
+
+1. Create a PVC in the **sandbox** namespace that contains the combined PEM
+   (for example at path `ca-bundle.crt` inside the volume).
+2. Reference it from Helm values:
+
+```yaml
+sandbox:
+  openshell:
+    certBundles:
+      - name: corp-root-ca
+        claimName: astonish-corp-ca
+        mountPath: /etc/astonish-ca/ca-bundle.crt
+        subPath: ca-bundle.crt
+```
+
+Astonish mounts the PVC read-only into every sandbox, sets trust env vars
+(`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`,
+`NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`) to the mount path, and adds the
+path to the Landlock read-only set.
+
+Mount paths must not be under `/sandbox` (workspace) or
+`/etc/openshell` / `/etc/openshell-tls` (OpenShell-managed). Use a
+*combined* bundle — `SSL_CERT_FILE` replaces the system store, so a
+corp-only PEM would break public HTTPS.
+
 **Landlock enforcement mode:**
 
 ```yaml

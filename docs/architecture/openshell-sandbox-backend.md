@@ -509,13 +509,14 @@ openshell:
 
 ```go
 type SandboxOpenShellConfig struct {
-    GatewayAddr    string `yaml:"gateway_addr" json:"gateway_addr"`
-    GatewayTLS     bool   `yaml:"gateway_tls" json:"gateway_tls"`
-    ClientCertPath string `yaml:"client_cert_path,omitempty" json:"client_cert_path,omitempty"`
-    ClientKeyPath  string `yaml:"client_key_path,omitempty" json:"client_key_path,omitempty"`
-    CACertPath     string `yaml:"ca_cert_path,omitempty" json:"ca_cert_path,omitempty"`
-    AuthToken      string `yaml:"auth_token,omitempty" json:"auth_token,omitempty"`
-    SandboxImage   string `yaml:"sandbox_image,omitempty" json:"sandbox_image,omitempty"`
+    GatewayAddr    string             `yaml:"gateway_addr" json:"gateway_addr"`
+    GatewayTLS     bool               `yaml:"gateway_tls" json:"gateway_tls"`
+    ClientCertPath string             `yaml:"client_cert_path,omitempty"`
+    ClientKeyPath  string             `yaml:"client_key_path,omitempty"`
+    CACertPath     string             `yaml:"ca_cert_path,omitempty"`
+    AuthToken      string             `yaml:"auth_token,omitempty"`
+    SandboxImage   string             `yaml:"sandbox_image,omitempty"`
+    CertBundles    []CertBundleConfig `yaml:"cert_bundles,omitempty"` // PVC mounts via driver_config
 }
 ```
 
@@ -624,17 +625,21 @@ type FilesystemSpec struct {
 }
 
 type CreateSandboxRequest struct {
-    Name   string
-    Image  string
-    Env    map[string]string
-    Labels map[string]string
-    Policy *SandboxPolicySpec
+    Name         string
+    Image        string
+    Env          map[string]string
+    Labels       map[string]string
+    Policy       *SandboxPolicySpec
+    DriverConfig map[string]any // OpenShell driver-keyed envelope
 }
 ```
 
 The `mapPolicyToProto()` helper in `client_grpc.go` converts these
 domain types to the protobuf `SandboxPolicy` message before sending
-to the gateway.
+to the gateway. When `DriverConfig` is set, it is encoded as
+`SandboxTemplate.driver_config` (`google.protobuf.Struct`). Platform
+`cert_bundles` config renders into the Kubernetes driver's PVC mount
+schema and trust env vars — see `pkg/sandbox/openshell/driver_config.go`.
 
 ---
 
@@ -647,6 +652,7 @@ to the gateway.
 | `pkg/sandbox/openshell/exec.go` | Exec with `wrapCommand()` for WorkDir/Env |
 | `pkg/sandbox/openshell/fleet.go` | Fleet/pool management, CreateSandbox with policy |
 | `pkg/sandbox/openshell/policy.go` | `defaultSandboxPolicy()` — Landlock filesystem rules |
+| `pkg/sandbox/openshell/driver_config.go` | CertBundles → K8s `driver_config` PVC mounts + trust env |
 | `pkg/sandbox/openshell/gateway_client.go` | GatewayClient interface, domain types (SandboxPolicySpec, etc.) |
 | `pkg/sandbox/openshell/client_grpc.go` | Real gRPC implementation, `mapPolicyToProto()` |
 | `pkg/sandbox/openshell/client_grpc_test.go` | Policy mapping tests |

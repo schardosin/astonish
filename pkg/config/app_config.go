@@ -137,11 +137,40 @@ type SandboxOpenShellConfig struct {
 	// nodes or operator-specific mount points without modifying code.
 	FilesystemPolicy FilesystemPolicyConfig `yaml:"filesystem_policy,omitempty" json:"filesystem_policy,omitempty"`
 
+	// CertBundles mounts operator-provided CA trust material into every
+	// OpenShell sandbox via driver_config PVC mounts, and sets standard
+	// trust env vars (SSL_CERT_FILE, etc.) to the mounted bundle path.
+	// Each bundle must already exist as a PVC in the sandbox namespace and
+	// should contain a combined PEM (system CAs + corporate roots).
+	CertBundles []CertBundleConfig `yaml:"cert_bundles,omitempty" json:"cert_bundles,omitempty"`
+
 	// IdleTimeoutMinutes evicts sandbox pods that have had no exec activity
 	// for this duration. The pod is deleted (state → evicted) and recreated
 	// transparently on the next tool call. Default: 240 (4 hours). Set to
 	// -1 to disable idle eviction entirely.
 	IdleTimeoutMinutes *int `yaml:"idle_timeout_minutes,omitempty" json:"idle_timeout_minutes,omitempty"`
+}
+
+// CertBundleConfig describes a read-only CA bundle mounted into OpenShell
+// sandboxes via the Kubernetes driver's driver_config PVC mount schema.
+type CertBundleConfig struct {
+	// Name is the Kubernetes volume name (DNS-1123 label), e.g. "corp-root-ca".
+	Name string `yaml:"name" json:"name"`
+
+	// ClaimName is the existing PVC name in the sandbox namespace.
+	ClaimName string `yaml:"claim_name" json:"claim_name"`
+
+	// MountPath is the absolute path inside the sandbox where the bundle
+	// is mounted, e.g. "/etc/astonish-ca/ca-bundle.crt".
+	MountPath string `yaml:"mount_path" json:"mount_path"`
+
+	// SubPath is an optional PVC subpath (relative file within the claim).
+	SubPath string `yaml:"sub_path,omitempty" json:"sub_path,omitempty"`
+
+	// TrustEnv lists env var names set to MountPath. When empty, defaults to
+	// SSL_CERT_FILE, CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS,
+	// and GIT_SSL_CAINFO.
+	TrustEnv []string `yaml:"trust_env,omitempty" json:"trust_env,omitempty"`
 }
 
 // RegistryConfig holds OCI registry connection details for pushing

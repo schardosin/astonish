@@ -224,6 +224,12 @@ type CreateSandboxRequest struct {
 	// When nil, the gateway applies its default policy.
 	Policy *SandboxPolicySpec
 
+	// DriverConfig is the OpenShell driver-keyed config envelope (top-level
+	// keys are compute-driver names such as "kubernetes"). The gateway
+	// forwards only the block matching the active driver. Used for PVC
+	// mounts (cert bundles) and other driver-owned create-time knobs.
+	DriverConfig map[string]any
+
 	// NodeSelector constrains where the pod is scheduled.
 	NodeSelector map[string]string
 

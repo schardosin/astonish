@@ -328,6 +328,24 @@ sandbox:
       #   - /mnt/scratch
       #   - /dev/fuse
 
+    # Corporate CA / trust bundles mounted into every sandbox via OpenShell
+    # driver_config (Kubernetes PVC mounts). Each entry references an existing
+    # PVC in the sandbox namespace that holds a *combined* PEM (system CAs +
+    # corporate roots). Mount paths must not be under /sandbox or
+    # /etc/openshell{,-tls}. Trust env vars default to SSL_CERT_FILE,
+    # CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, GIT_SSL_CAINFO.
+    certBundles: []
+    # Example:
+    # certBundles:
+    #   - name: corp-root-ca
+    #     claimName: astonish-corp-ca
+    #     mountPath: /etc/astonish-ca/ca-bundle.crt
+    #     subPath: ca-bundle.crt
+    #     # trustEnv: []  # use defaults, or override:
+    #     # trustEnv:
+    #     #   - SSL_CERT_FILE
+    #     #   - NODE_EXTRA_CA_CERTS
+
     # Idle timeout (minutes) before the watchdog evicts an unused sandbox pod.
     # 0 = disable idle eviction (pods run indefinitely).
     # Evicted sessions are transparently recreated on next tool call (~5-10s).

@@ -88,3 +88,6 @@ webhook
 
 # Code intelligence disk cache (may contain source snippets)
 .codeintel/
+
+.opencode/
+graphify-out/

@@ -138,10 +138,11 @@ type SandboxOpenShellConfig struct {
 	FilesystemPolicy FilesystemPolicyConfig `yaml:"filesystem_policy,omitempty" json:"filesystem_policy,omitempty"`
 
 	// CertBundles mounts operator-provided CA trust material into every
-	// OpenShell sandbox via driver_config PVC mounts, and sets standard
-	// trust env vars (SSL_CERT_FILE, etc.) to the mounted bundle path.
-	// Each bundle must already exist as a PVC in the sandbox namespace and
-	// should contain a combined PEM (system CAs + corporate roots).
+	// OpenShell sandbox via driver_config PVC mounts. Each PVC should hold a
+	// combined PEM (system CAs + corporate roots). By default the bundle is
+	// also installed over the system CA path so the OpenShell MITM proxy can
+	// verify corporate upstream TLS (trust env alone is insufficient — the
+	// supervisor overwrites SSL_CERT_FILE to /etc/openshell-tls/...).
 	CertBundles []CertBundleConfig `yaml:"cert_bundles,omitempty" json:"cert_bundles,omitempty"`
 
 	// IdleTimeoutMinutes evicts sandbox pods that have had no exec activity
@@ -169,8 +170,16 @@ type CertBundleConfig struct {
 
 	// TrustEnv lists env var names set to MountPath. When empty, defaults to
 	// SSL_CERT_FILE, CURL_CA_BUNDLE, REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS,
-	// and GIT_SSL_CAINFO.
+	// and GIT_SSL_CAINFO. OpenShell typically overwrites these to its
+	// openshell-tls bundle; InstallSystemTrust is what makes corporate
+	// upstream TLS work under MITM.
 	TrustEnv []string `yaml:"trust_env,omitempty" json:"trust_env,omitempty"`
+
+	// InstallSystemTrust, when true (default if nil), also bind-mounts this
+	// bundle over /etc/ssl/certs/ca-certificates.crt so the OpenShell
+	// supervisor loads corporate roots for upstream TLS verification.
+	// At most one cert_bundle may enable this.
+	InstallSystemTrust *bool `yaml:"install_system_trust,omitempty" json:"install_system_trust,omitempty"`
 }
 
 // RegistryConfig holds OCI registry connection details for pushing

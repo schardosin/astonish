@@ -136,6 +136,9 @@ data:
             {{- if .subPath }}
             sub_path: {{ .subPath | quote }}
             {{- end }}
+            {{- if hasKey . "installSystemTrust" }}
+            install_system_trust: {{ .installSystemTrust }}
+            {{- end }}
             {{- with .trustEnv }}
             trust_env:
               {{- range . }}

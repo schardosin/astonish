@@ -8,9 +8,16 @@ import (
 	"github.com/SAP/astonish/pkg/config"
 )
 
+// systemCABundlePath is where OpenShell's supervisor loads system CA roots
+// for upstream TLS after MITM CONNECT. Corporate CAs must appear here
+// (volume mount before PID 1); agent SSL_CERT_FILE alone is not enough.
+const systemCABundlePath = "/etc/ssl/certs/ca-certificates.crt"
+
 // defaultTrustEnvVars are set to each cert bundle MountPath when TrustEnv
-// is empty. SSL_CERT_FILE (and peers) replace the system store — operators
-// must place a *combined* PEM (system CAs + corporate roots) in the PVC.
+// is empty. OpenShell typically overwrites these to /etc/openshell-tls/...;
+// InstallSystemTrust is the contract that makes corporate upstream TLS work.
+// Operators must place a *combined* PEM (system CAs + corporate roots) in
+// the PVC so replacing the system store does not break public HTTPS.
 var defaultTrustEnvVars = []string{
 	"SSL_CERT_FILE",
 	"CURL_CA_BUNDLE",
@@ -46,10 +53,11 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 	}
 
 	volumes := make([]any, 0, len(bundles))
-	mounts := make([]any, 0, len(bundles))
+	mounts := make([]any, 0, len(bundles)*2)
 	trustEnv := make(map[string]string)
-	extraRO := make([]string, 0, len(bundles))
+	extraRO := make([]string, 0, len(bundles)*2)
 	seenNames := make(map[string]struct{}, len(bundles))
+	systemTrustCount := 0
 
 	for i, b := range bundles {
 		if err := validateCertBundle(b, i); err != nil {
@@ -68,28 +76,49 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 			},
 		})
 
-		mount := map[string]any{
-			"name":       b.Name,
-			"mount_path": b.MountPath,
-			"read_only":  true,
-		}
-		if b.SubPath != "" {
-			mount["sub_path"] = b.SubPath
-		}
-		mounts = append(mounts, mount)
+		cleanedMount := path.Clean(b.MountPath)
+		mountsAtSystemPath := cleanedMount == systemCABundlePath
+		installSystem := certBundleInstallSystemTrust(b)
+		// Mounting at the system path counts as a system-trust install even
+		// when install_system_trust is false — only one such mount is allowed.
+		usesSystemPath := installSystem || mountsAtSystemPath
 
-		extraRO = append(extraRO, b.MountPath)
+		if usesSystemPath {
+			systemTrustCount++
+			if systemTrustCount > 1 {
+				return driverConfigResult{}, fmt.Errorf(
+					"cert_bundles[%d]: at most one cert_bundle may install into %s",
+					i, systemCABundlePath)
+			}
+		}
+
+		// Primary operator mount (skipped when it would duplicate the system mount).
+		if !mountsAtSystemPath {
+			mounts = append(mounts, certBundleVolumeMount(b.Name, b.MountPath, b.SubPath))
+			extraRO = append(extraRO, b.MountPath)
+		}
+
+		// System-store install for OpenShell upstream MITM trust.
+		// If MountPath is already the system path, a single mount covers both.
+		if usesSystemPath {
+			mounts = append(mounts, certBundleVolumeMount(b.Name, systemCABundlePath, b.SubPath))
+			extraRO = append(extraRO, systemCABundlePath)
+		}
 
 		envKeys := b.TrustEnv
 		if len(envKeys) == 0 {
 			envKeys = defaultTrustEnvVars
+		}
+		trustPath := b.MountPath
+		if mountsAtSystemPath {
+			trustPath = systemCABundlePath
 		}
 		for _, k := range envKeys {
 			k = strings.TrimSpace(k)
 			if k == "" {
 				continue
 			}
-			trustEnv[k] = b.MountPath
+			trustEnv[k] = trustPath
 		}
 	}
 
@@ -107,6 +136,27 @@ func renderDriverConfig(bundles []config.CertBundleConfig) (driverConfigResult, 
 		TrustEnv:      trustEnv,
 		ExtraReadOnly: extraRO,
 	}, nil
+}
+
+func certBundleVolumeMount(name, mountPath, subPath string) map[string]any {
+	mount := map[string]any{
+		"name":       name,
+		"mount_path": mountPath,
+		"read_only":  true,
+	}
+	if subPath != "" {
+		mount["sub_path"] = subPath
+	}
+	return mount
+}
+
+// certBundleInstallSystemTrust returns whether the bundle should be installed
+// over the system CA path. Nil means default true.
+func certBundleInstallSystemTrust(b config.CertBundleConfig) bool {
+	if b.InstallSystemTrust == nil {
+		return true
+	}
+	return *b.InstallSystemTrust
 }
 
 func validateCertBundle(b config.CertBundleConfig, idx int) error {

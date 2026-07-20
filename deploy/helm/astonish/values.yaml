@@ -332,8 +332,12 @@ sandbox:
     # driver_config (Kubernetes PVC mounts). Empty = no mounts (default).
     # Each entry's PVC holds a *combined* PEM (system CAs + corporate roots).
     # Mount paths must not be under /sandbox or /etc/openshell{,-tls}.
-    # Trust env vars default to SSL_CERT_FILE, CURL_CA_BUNDLE,
-    # REQUESTS_CA_BUNDLE, NODE_EXTRA_CA_CERTS, GIT_SSL_CAINFO.
+    #
+    # installSystemTrust (default true): also bind-mounts the bundle over
+    # /etc/ssl/certs/ca-certificates.crt so the OpenShell MITM proxy trusts
+    # corporate upstream TLS. Trust env vars alone are insufficient — the
+    # supervisor overwrites SSL_CERT_FILE to /etc/openshell-tls/.... At most
+    # one certBundles entry may install into the system store.
     #
     # Optional per-entry bootstrap: chart creates the PVC and a post-install
     # Job that downloads bootstrap.url, appends it to the system CA bundle,
@@ -349,6 +353,7 @@ sandbox:
     #     claimName: astonish-corp-ca
     #     mountPath: /etc/astonish-ca/ca-bundle.crt
     #     subPath: ca-bundle.crt
+    #     # installSystemTrust: true  # default; dual-mount onto system CA path
     #     # trustEnv: []  # use defaults, or override
     #     bootstrap:
     #       enabled: true

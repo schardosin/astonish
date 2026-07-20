@@ -55,18 +55,28 @@ func TestRenderDriverConfig_PVCShape(t *testing.T) {
 	containers := k8s["containers"].(map[string]any)
 	agent := containers["agent"].(map[string]any)
 	mounts := agent["volume_mounts"].([]any)
-	if len(mounts) != 1 {
-		t.Fatalf("volume_mounts len = %d", len(mounts))
+	if len(mounts) != 2 {
+		t.Fatalf("volume_mounts len = %d, want 2 (operator + system)", len(mounts))
 	}
-	m := mounts[0].(map[string]any)
-	if m["mount_path"] != "/etc/astonish-ca/ca-bundle.crt" {
-		t.Errorf("mount_path = %v", m["mount_path"])
+	m0 := mounts[0].(map[string]any)
+	if m0["mount_path"] != "/etc/astonish-ca/ca-bundle.crt" {
+		t.Errorf("mount_path[0] = %v", m0["mount_path"])
 	}
-	if m["sub_path"] != "ca-bundle.crt" {
-		t.Errorf("sub_path = %v", m["sub_path"])
+	if m0["sub_path"] != "ca-bundle.crt" {
+		t.Errorf("sub_path[0] = %v", m0["sub_path"])
 	}
-	if m["read_only"] != true {
-		t.Errorf("mount read_only = %v", m["read_only"])
+	if m0["read_only"] != true {
+		t.Errorf("mount[0] read_only = %v", m0["read_only"])
+	}
+	m1 := mounts[1].(map[string]any)
+	if m1["mount_path"] != systemCABundlePath {
+		t.Errorf("mount_path[1] = %v, want %s", m1["mount_path"], systemCABundlePath)
+	}
+	if m1["sub_path"] != "ca-bundle.crt" {
+		t.Errorf("sub_path[1] = %v", m1["sub_path"])
+	}
+	if m1["name"] != "corp-root-ca" {
+		t.Errorf("system mount volume name = %v", m1["name"])
 	}
 
 	for _, k := range defaultTrustEnvVars {
@@ -74,7 +84,10 @@ func TestRenderDriverConfig_PVCShape(t *testing.T) {
 			t.Errorf("TrustEnv[%s] = %q", k, result.TrustEnv[k])
 		}
 	}
-	if len(result.ExtraReadOnly) != 1 || result.ExtraReadOnly[0] != "/etc/astonish-ca/ca-bundle.crt" {
+	if len(result.ExtraReadOnly) != 2 {
+		t.Fatalf("ExtraReadOnly = %v, want 2 paths", result.ExtraReadOnly)
+	}
+	if result.ExtraReadOnly[0] != "/etc/astonish-ca/ca-bundle.crt" || result.ExtraReadOnly[1] != systemCABundlePath {
 		t.Errorf("ExtraReadOnly = %v", result.ExtraReadOnly)
 	}
 }
@@ -137,6 +150,87 @@ func TestRenderDriverConfig_RejectDuplicateName(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected duplicate name error")
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+func TestRenderDriverConfig_InstallSystemTrustFalse(t *testing.T) {
+	result, err := renderDriverConfig([]config.CertBundleConfig{{
+		Name:               "corp",
+		ClaimName:          "pvc-ca",
+		MountPath:          "/etc/astonish-ca/ca.pem",
+		InstallSystemTrust: boolPtr(false),
+	}})
+	if err != nil {
+		t.Fatalf("renderDriverConfig: %v", err)
+	}
+	mounts := result.DriverConfig["kubernetes"].(map[string]any)["containers"].(map[string]any)["agent"].(map[string]any)["volume_mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("volume_mounts len = %d, want 1", len(mounts))
+	}
+	if mounts[0].(map[string]any)["mount_path"] != "/etc/astonish-ca/ca.pem" {
+		t.Errorf("unexpected mounts: %#v", mounts)
+	}
+}
+
+func TestRenderDriverConfig_RejectTwoSystemTrustInstalls(t *testing.T) {
+	_, err := renderDriverConfig([]config.CertBundleConfig{
+		{Name: "a", ClaimName: "pvc-a", MountPath: "/etc/astonish-ca/a.crt"},
+		{Name: "b", ClaimName: "pvc-b", MountPath: "/etc/astonish-ca/b.crt"},
+	})
+	if err == nil {
+		t.Fatal("expected error for two default install_system_trust bundles")
+	}
+}
+
+func TestRenderDriverConfig_SecondBundleWithoutSystemTrust(t *testing.T) {
+	result, err := renderDriverConfig([]config.CertBundleConfig{
+		{Name: "a", ClaimName: "pvc-a", MountPath: "/etc/astonish-ca/a.crt"},
+		{Name: "b", ClaimName: "pvc-b", MountPath: "/etc/astonish-ca/b.crt", InstallSystemTrust: boolPtr(false)},
+	})
+	if err != nil {
+		t.Fatalf("renderDriverConfig: %v", err)
+	}
+	mounts := result.DriverConfig["kubernetes"].(map[string]any)["containers"].(map[string]any)["agent"].(map[string]any)["volume_mounts"].([]any)
+	// a: operator + system; b: operator only
+	if len(mounts) != 3 {
+		t.Fatalf("volume_mounts len = %d, want 3", len(mounts))
+	}
+	systemCount := 0
+	for _, m := range mounts {
+		if m.(map[string]any)["mount_path"] == systemCABundlePath {
+			systemCount++
+		}
+	}
+	if systemCount != 1 {
+		t.Errorf("system CA mounts = %d, want 1", systemCount)
+	}
+}
+
+func TestRenderDriverConfig_MountPathIsSystemCA(t *testing.T) {
+	result, err := renderDriverConfig([]config.CertBundleConfig{{
+		Name:      "corp",
+		ClaimName: "pvc-ca",
+		MountPath: systemCABundlePath,
+		SubPath:   "ca-bundle.crt",
+	}})
+	if err != nil {
+		t.Fatalf("renderDriverConfig: %v", err)
+	}
+	mounts := result.DriverConfig["kubernetes"].(map[string]any)["containers"].(map[string]any)["agent"].(map[string]any)["volume_mounts"].([]any)
+	if len(mounts) != 1 {
+		t.Fatalf("volume_mounts len = %d, want 1 (no duplicate)", len(mounts))
+	}
+	m := mounts[0].(map[string]any)
+	if m["mount_path"] != systemCABundlePath {
+		t.Errorf("mount_path = %v", m["mount_path"])
+	}
+	if m["sub_path"] != "ca-bundle.crt" {
+		t.Errorf("sub_path = %v", m["sub_path"])
+	}
+	if result.TrustEnv["SSL_CERT_FILE"] != systemCABundlePath {
+		t.Errorf("SSL_CERT_FILE = %q", result.TrustEnv["SSL_CERT_FILE"])
 	}
 }
 

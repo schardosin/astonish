@@ -1,11 +1,13 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/sandbox/sessioncreds"
 	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
@@ -198,6 +200,12 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		}
 	}
 
+	// Provision session credential vault into the sandbox so in-node
+	// http_request(credential=…) can Resolve (Keystone/OAuth stay in-sandbox).
+	if err := SyncSessionCredentialVault(ctx, nt.backendForPush(client), client.EnsureReady, sessionID); err != nil {
+		return nil, err
+	}
+
 	// Send to node (lazy init on first call)
 	rawResult, err := client.Call(sessionID, nt.Name(), argsMap)
 	if err != nil {
@@ -214,6 +222,50 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	}
 
 	return result, nil
+}
+
+// SyncSessionCredentialVault materializes the host CredentialStore into the
+// sandbox at sessioncreds.VaultPath. Host only provisions bytes — it does not
+// Resolve or perform Keystone/HTTP. No-op when no store or no PushFile backend.
+func SyncSessionCredentialVault(ctx context.Context, backend Backend, ensureReady func(sessionID string) error, sessionID string) error {
+	if ctx == nil {
+		return nil
+	}
+	cs := store.CredentialStoreFromContext(ctx)
+	if cs == nil {
+		return nil
+	}
+	if backend == nil {
+		return nil
+	}
+	if ensureReady != nil {
+		if err := ensureReady(sessionID); err != nil {
+			return fmt.Errorf("session credential vault: ensure ready: %w", err)
+		}
+	}
+	data, err := sessioncreds.Serialize(ctx, cs)
+	if err != nil {
+		return fmt.Errorf("session credential vault: serialize: %w", err)
+	}
+	if err := backend.PushFile(ctx, sessionID, sessioncreds.VaultPath, bytes.NewReader(data), sessioncreds.VaultFileMode); err != nil {
+		return fmt.Errorf("session credential vault: push %s: %w", sessioncreds.VaultPath, err)
+	}
+	return nil
+}
+
+func (nt *NodeTool) backendForPush(client ToolNodeClient) Backend {
+	if nt.pool != nil {
+		if b := nt.pool.GetBackend(); b != nil {
+			return b
+		}
+	}
+	type backendGetter interface {
+		GetBackend() Backend
+	}
+	if g, ok := client.(backendGetter); ok {
+		return g.GetBackend()
+	}
+	return nil
 }
 
 // getClientFromContext returns the ToolNodeClient for the given session.

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"mime"
@@ -71,6 +72,15 @@ type HttpRequestResult struct {
 
 // HttpRequest makes an HTTP request with optional credential injection.
 func HttpRequest(ctx tool.Context, args HttpRequestArgs) (HttpRequestResult, error) {
+	var c context.Context = context.Background()
+	if ctx != nil {
+		c = ctx
+	}
+	return httpRequest(c, args)
+}
+
+// httpRequest is the shared implementation used by ADK tools and astonish node.
+func httpRequest(ctx context.Context, args HttpRequestArgs) (HttpRequestResult, error) {
 	if args.URL == "" {
 		return HttpRequestResult{}, fmt.Errorf("url is required")
 	}

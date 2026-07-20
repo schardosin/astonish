@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/sandbox/sessioncreds"
+	storepkg "github.com/SAP/astonish/pkg/store"
 )
 
 // --- URL validation tests ---
@@ -238,6 +241,23 @@ func TestHttpRequest_CredentialResolution(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "credential store is not available") {
 			t.Errorf("error %q should contain 'credential store is not available'", err.Error())
+		}
+	})
+
+	t.Run("context credential store", func(t *testing.T) {
+		credentialStoreVar = nil
+		defer func() { credentialStoreVar = store }()
+
+		vault := sessioncreds.NewStore(map[string]*storepkg.Credential{
+			"from-vault": {Type: storepkg.CredBearer, Token: "vault-token"},
+		})
+		ctx := storepkg.WithCredentialStore(context.Background(), vault)
+		_, err := httpRequest(ctx, HttpRequestArgs{URL: srv.URL, Credential: "from-vault"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if receivedAuthKey != "Authorization" || receivedAuthValue != "Bearer vault-token" {
+			t.Errorf("expected Authorization: Bearer vault-token, got %s: %s", receivedAuthKey, receivedAuthValue)
 		}
 	})
 }

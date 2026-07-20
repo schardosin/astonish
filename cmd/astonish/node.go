@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 
+	"github.com/SAP/astonish/pkg/sandbox/sessioncreds"
+	"github.com/SAP/astonish/pkg/store"
 	"github.com/SAP/astonish/pkg/tools"
 )
 
@@ -29,6 +32,44 @@ type NodeReadyMessage struct {
 	Ready bool `json:"ready"`
 }
 
+// sessionVault holds the loaded in-sandbox credential store, refreshed when
+// the vault file mtime changes (host re-pushes before each http_request Call).
+type sessionVault struct {
+	mu       sync.Mutex
+	store    store.CredentialStore
+	modTime  int64
+	loadedOK bool
+}
+
+func (v *sessionVault) credentialStore() store.CredentialStore {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
+	info, err := os.Stat(sessioncreds.VaultPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			v.store = nil
+			v.loadedOK = false
+			v.modTime = 0
+			return nil
+		}
+		// Keep last good store if stat fails transiently.
+		return v.store
+	}
+	mtime := info.ModTime().UnixNano()
+	if v.loadedOK && mtime == v.modTime {
+		return v.store
+	}
+	loaded, err := sessioncreds.Load(sessioncreds.VaultPath)
+	if err != nil {
+		return v.store
+	}
+	v.store = loaded
+	v.modTime = mtime
+	v.loadedOK = true
+	return v.store
+}
+
 // handleNodeCommand runs the headless tool execution server.
 // It reads NDJSON tool requests from stdin, dispatches via tools.ExecuteTool(),
 // and writes NDJSON results to stdout. Sequential: one request at a time.
@@ -41,6 +82,7 @@ type NodeReadyMessage struct {
 //	Error:    {"id":"1","error":"file not found"}\n
 func handleNodeCommand(args []string) error {
 	ctx := context.Background()
+	vault := &sessionVault{}
 	encoder := json.NewEncoder(os.Stdout)
 	scanner := bufio.NewScanner(os.Stdin)
 
@@ -81,8 +123,13 @@ func handleNodeCommand(args []string) error {
 			delete(req.Args, "_caller")
 		}
 
+		toolCtx := ctx
+		if cs := vault.credentialStore(); cs != nil {
+			toolCtx = store.WithCredentialStore(ctx, cs)
+		}
+
 		// Dispatch tool execution
-		result, err := tools.ExecuteTool(ctx, req.Tool, req.Args, caller)
+		result, err := tools.ExecuteTool(toolCtx, req.Tool, req.Args, caller)
 
 		resp := NodeResponse{ID: req.ID}
 		if err != nil {

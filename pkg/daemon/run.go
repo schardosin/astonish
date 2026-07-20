@@ -996,6 +996,12 @@ func Run(cfg RunConfig) error {
 
 		// Create and start the multi-tenant scheduler
 		mtSched = NewMultiTenantScheduler(backend, schedExec, deliver, log.Default())
+		if appCfg.Sandbox.OpenShell.GatewayAddr != "" {
+			mtSched.SetGatewayConfig(openshell.GRPCClientConfig{
+				Addr: appCfg.Sandbox.OpenShell.GatewayAddr,
+				TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
+			})
+		}
 		mtSched.Start(ctx)
 
 		// Register executor for API RunNow handler

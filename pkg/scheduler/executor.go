@@ -11,6 +11,8 @@ import (
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
@@ -79,6 +81,9 @@ type Executor struct {
 	// When set (platform mode), routine jobs use this instead of filesystem resolution.
 	// When nil (personal mode), resolveFlowPath() is used as the fallback.
 	FlowResolver FlowResolverFunc
+	// GatewayConfig enables OpenShell network-policy pre-seed and PolicyAllow
+	// auto-approve during adaptive runs (parity with Studio ChatRunner).
+	GatewayConfig *openshell.GRPCClientConfig
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -231,6 +236,15 @@ CRITICAL RULES:
 	userContent := agent.NewTimestampedUserContent(job.Payload.Instructions)
 	var responseText strings.Builder
 
+	// Headless network-policy bridge: pre-seed allow rules and auto-approve
+	// PolicyAllow denials (Studio chat does this in ChatRunner).
+	netBridge := &netpolicy.SessionBridge{
+		GatewayCfg: e.GatewayConfig,
+		SessionID:  sess.ID(),
+		Stores:     store.NetworkPolicyStoresFromContext(ctx),
+	}
+	pendingToolURLs := map[string]string{}
+
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
 		if err != nil {
 			return responseText.String(), fmt.Errorf("agent error: %w", err)
@@ -241,6 +255,24 @@ CRITICAL RULES:
 		}
 
 		for _, part := range event.LLMResponse.Content.Parts {
+			if part.FunctionCall != nil {
+				if urlArg, ok := part.FunctionCall.Args["url"].(string); ok && urlArg != "" {
+					if part.FunctionCall.ID != "" {
+						pendingToolURLs[part.FunctionCall.ID] = urlArg
+					}
+					pendingToolURLs[part.FunctionCall.Name] = urlArg
+				}
+			}
+			if part.FunctionResponse != nil {
+				fallbackURL := ""
+				if part.FunctionResponse.ID != "" {
+					fallbackURL = pendingToolURLs[part.FunctionResponse.ID]
+				}
+				if fallbackURL == "" {
+					fallbackURL = pendingToolURLs[part.FunctionResponse.Name]
+				}
+				netBridge.OnToolResult(ctx, part.FunctionResponse.Name, part.FunctionResponse.Response, fallbackURL)
+			}
 			if part.Text != "" {
 				responseText.WriteString(part.Text)
 			}

@@ -67,6 +67,12 @@ Scope transfer (team admin only), same shape as credentials:
 
 Personal jobs store `team_slug` (captured from the active team at create time) so team credential/flow/MCP fallback still works.
 
+### Why Adaptive Scheduler Needs Network Policy Parity
+
+Studio chat applies platform/org/team network allow rules via `ChatRunner` (pre-seed + PolicyAllow auto-approve). Adaptive scheduler jobs use a separate sandbox (`scheduler-adaptive-{jobID}`) and previously skipped that path, so hosts allowed in chat (e.g. `**.cloud.sap`) stayed CONNECT-403 on cron.
+
+The scheduler now injects `NetworkPolicyStores` into the exec context and uses `pkg/sandbox/netpolicy.SessionBridge` during adaptive runs. Chat “Approve broader” also persists an allow rule to the team/org store so future scheduler sandboxes inherit it.
+
 ### Why Exponential Backoff on Failures
 
 When a scheduled job fails, the scheduler applies exponential backoff before retrying. This prevents:

@@ -6,9 +6,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/scheduler"
 	"github.com/SAP/astonish/pkg/store"
 )
+
+// platformNetworkPolicyProvider is implemented by entstore.Store.
+type platformNetworkPolicyProvider interface {
+	PlatformNetworkPolicies() store.NetworkPolicyStore
+}
 
 // MultiTenantScheduler manages scheduled job execution across all organizations
 // and teams in platform mode. It replaces the single-instance scheduler.Scheduler
@@ -20,10 +26,11 @@ import (
 //   - Personal jobs: personal schema, MergedCredentialStore(personal, team),
 //     run as OwnerID. TeamSlug on the job selects team fallback context.
 type MultiTenantScheduler struct {
-	backend  store.PlatformBackend
-	executor *scheduler.Executor
-	deliver  scheduler.DeliverFunc
-	logger   *log.Logger
+	backend    store.PlatformBackend
+	executor   *scheduler.Executor
+	deliver    scheduler.DeliverFunc
+	logger     *log.Logger
+	gatewayCfg *openshell.GRPCClientConfig
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -52,6 +59,15 @@ func NewMultiTenantScheduler(
 		deliver:  deliver,
 		logger:   logger,
 		running:  make(map[string]struct{}),
+	}
+}
+
+// SetGatewayConfig sets the OpenShell gateway config used to pre-seed and
+// auto-approve PolicyAllow network endpoints during adaptive job runs.
+func (mts *MultiTenantScheduler) SetGatewayConfig(cfg openshell.GRPCClientConfig) {
+	mts.gatewayCfg = &cfg
+	if mts.executor != nil {
+		mts.executor.GatewayConfig = &cfg
 	}
 }
 
@@ -316,6 +332,7 @@ func (mts *MultiTenantScheduler) buildTeamExecContext(
 	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
 	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
+	execCtx = mts.withNetworkPolicyStores(execCtx, orgStore, teamStore)
 
 	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
 		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
@@ -369,11 +386,29 @@ func (mts *MultiTenantScheduler) buildPersonalExecContext(
 	// Same as Studio chat: personal-first, team fallback; writes go personal.
 	execCtx = store.WithCredentialStore(execCtx, store.NewMergedCredentialStore(personalStore.Credentials(), teamCreds))
 	execCtx = store.WithFlowStore(execCtx, store.NewCompositeFlowStore(personalStore.Flows(), teamFlows))
+	execCtx = mts.withNetworkPolicyStores(execCtx, orgStore, teamStore)
 
 	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
 		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
 	}
 	return execCtx
+}
+
+func (mts *MultiTenantScheduler) withNetworkPolicyStores(
+	ctx context.Context,
+	orgStore store.OrgDataStore,
+	teamStore store.TeamDataStore,
+) context.Context {
+	nps := &store.NetworkPolicyStores{
+		Org: orgStore.OrgNetworkPolicies(),
+	}
+	if p, ok := mts.backend.(platformNetworkPolicyProvider); ok {
+		nps.Platform = p.PlatformNetworkPolicies()
+	}
+	if teamStore != nil {
+		nps.Team = teamStore.NetworkPolicies()
+	}
+	return store.WithNetworkPolicyStores(ctx, nps)
 }
 
 func (mts *MultiTenantScheduler) updateJobState(

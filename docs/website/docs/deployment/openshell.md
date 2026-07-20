@@ -433,10 +433,19 @@ sandbox:
 Requires the OpenShell gateway **≥ 0.0.81** (Astonish chart pins **0.0.86**).
 Older gateways reject `containers.agent.volume_mounts` in `driver_config`.
 
-To trust internal HTTPS endpoints without rebuilding the sandbox image,
-mount a combined CA bundle (system CAs + corporate roots) via OpenShell
-`driver_config` PVC mounts. Configure only through Helm values — leave
-`certBundles` empty (default) for no mounts.
+OpenShell’s egress proxy **MITMs** HTTPS (`CONNECT`), then opens a second
+TLS session to the real upstream. Upstream verification uses Mozilla roots
+plus the container system store at `/etc/ssl/certs/ca-certificates.crt` —
+not the agent’s `SSL_CERT_FILE` (the supervisor overwrites that to
+`/etc/openshell-tls/ca-bundle.pem`). Mounting a corp CA only under
+`/etc/astonish-ca/...` is therefore **not enough** for internal HTTPS.
+
+To trust corporate endpoints without rebuilding the sandbox image, mount a
+**combined** PEM (system CAs + corporate roots) via `certBundles`. By
+default (`installSystemTrust: true`) Astonish dual-mounts that file at the
+operator path **and** over `/etc/ssl/certs/ca-certificates.crt` so the
+supervisor loads corp roots before PID 1 starts. At most one entry may
+install into the system store.
 
 **Chart-managed bootstrap** (recommended): Helm creates the PVC and a
 post-install/upgrade Job that downloads your org CA URL, appends it to
@@ -450,6 +459,7 @@ sandbox:
         claimName: astonish-corp-ca
         mountPath: /etc/astonish-ca/ca-bundle.crt
         subPath: ca-bundle.crt
+        # installSystemTrust: true  # default — required for MITM upstream
         bootstrap:
           enabled: true
           url: "https://pki.example.com/corp-root-ca.crt"
@@ -457,18 +467,21 @@ sandbox:
 
 Or pre-provision the PVC yourself and omit `bootstrap`.
 
-Astonish mounts the PVC read-only into every sandbox, sets trust env vars
-(`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE`,
-`NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`) to the mount path, and adds the
-path to the Landlock read-only set.
+Astonish also sets trust env vars (`SSL_CERT_FILE`, etc.) to the operator
+mount path for tools that honor them before OpenShell rewrites env, and
+adds mount paths to the Landlock read-only set. Browser sessions still
+inject the OpenShell MITM CA into the NSS DB via the browser launch script.
 
 Mount paths must not be under `/sandbox` (workspace) or
 `/etc/openshell` / `/etc/openshell-tls` (OpenShell-managed). Use a
-*combined* bundle — `SSL_CERT_FILE` replaces the system store, so a
-corp-only PEM would break public HTTPS.
+*combined* bundle — replacing the system store with a corp-only PEM would
+break public HTTPS.
 
 On RWO StorageClasses (e.g. Cinder), the cert PVC can attach to only one
 node; use RWX/ROX or pin sandboxes when scheduling across multiple nodes.
+
+Recycle existing sandboxes after enabling or changing `certBundles`
+(idle eviction or new chat) so pods pick up the new mounts.
 
 **Landlock enforcement mode:**
 

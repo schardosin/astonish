@@ -71,7 +71,7 @@ Personal jobs store `team_slug` (captured from the active team at create time) s
 
 Studio chat applies platform/org/team network allow rules via `ChatRunner` (pre-seed + PolicyAllow auto-approve). Adaptive scheduler jobs use a separate sandbox (`scheduler-adaptive-{jobID}`) and previously skipped that path, so hosts allowed in chat (e.g. `**.cloud.sap`) stayed CONNECT-403 on cron.
 
-The scheduler now injects `NetworkPolicyStores` into the exec context and uses `pkg/sandbox/netpolicy.SessionBridge` during adaptive runs. Chat “Approve broader” also persists an allow rule to the team/org store so future scheduler sandboxes inherit it.
+The scheduler injects `NetworkPolicyStores` and OpenShell gateway config into the exec context. **Persisted allow rules must be active before the first in-sandbox egress**: `NodeTool` PreSeeds (and waits for policy load) after `EnsureReady` and before the first tool `Call`, and OpenShell `CreateSession` also merges DB allow endpoints into the create-time policy when known. Post-result PreSeed in `SessionBridge` / `ChatRunner` is a no-op once that has run. Chat “Approve broader” persists an allow rule to the team/org store so future scheduler sandboxes inherit it — without that rule, headless jobs still cannot reach the host.
 
 ### Why Exponential Backoff on Failures
 

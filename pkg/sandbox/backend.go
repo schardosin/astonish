@@ -308,6 +308,17 @@ type SessionSpec struct {
 	// Env is injected into the sandbox container at create time (OpenShell/K8s).
 	// Incus fleet sessions inject via LazyNodeClient.Env instead.
 	Env          map[string]string `json:"env,omitempty"`
+	// NetworkAllowEndpoints are extra OpenShell L7 allow rules merged into the
+	// create-time sandbox policy (in addition to YAML presets). Populated from
+	// platform/org/team NetworkPolicyAllow stores so the first CONNECT to
+	// approved hosts (e.g. **.cloud.sap) succeeds without a fail-then-PreSeed cycle.
+	NetworkAllowEndpoints []NetworkAllowEndpoint `json:"network_allow_endpoints,omitempty"`
+}
+
+// NetworkAllowEndpoint is a host:port pair allowed for sandbox egress at create time.
+type NetworkAllowEndpoint struct {
+	Host string `json:"host"`
+	Port uint32 `json:"port"`
 }
 
 // SessionFilter narrows ListSessions queries. Zero-value fields are ignored.

@@ -12,18 +12,28 @@ type SessionBridge struct {
 	GatewayCfg *openshell.GRPCClientConfig
 	SessionID  string
 	Stores     *store.NetworkPolicyStores
-	seeded     bool
 }
 
-// OnToolResult pre-seeds allow rules on first tool result and auto-approves
-// PolicyAllow denials. Safe to call for every tool response.
+// OnToolResult auto-approves PolicyAllow denials. PreSeed is primarily done
+// before the first tool Call (EnsurePreSeedFromContext); this path is a
+// no-op when already seeded.
 func (b *SessionBridge) OnToolResult(ctx context.Context, toolName string, resp map[string]any, fallbackURL string) {
 	if b == nil || b.SessionID == "" {
 		return
 	}
-	if !b.seeded {
-		b.seeded = true
-		PreSeedFromStores(ctx, b.GatewayCfg, b.SessionID, b.Stores)
+	if !SessionIsSeeded(b.SessionID) {
+		// Prefer gateway/stores from the bridge; also stash gateway on ctx
+		// so EnsurePreSeedFromContext can find it if Stores were injected elsewhere.
+		seedCtx := ctx
+		if b.GatewayCfg != nil {
+			seedCtx = WithGatewayConfig(seedCtx, b.GatewayCfg)
+		}
+		if b.Stores != nil {
+			PreSeedFromStores(seedCtx, b.GatewayCfg, b.SessionID, b.Stores)
+			MarkSessionSeeded(b.SessionID)
+		} else {
+			EnsurePreSeedFromContext(seedCtx, b.SessionID)
+		}
 	}
 	if resp == nil {
 		return

@@ -138,6 +138,10 @@ func (cr *ChatRunner) filterDenialsByPolicy(denials []map[string]any) []map[stri
 }
 
 func (cr *ChatRunner) preSeedNetworkPolicy() {
+	if netpolicy.SessionIsSeeded(cr.SessionID) {
+		return
+	}
 	nps := store.NetworkPolicyStoresFromContext(cr.ctx)
 	netpolicy.PreSeedFromStores(cr.ctx, cr.gatewayConfig, cr.SessionID, nps)
+	netpolicy.MarkSessionSeeded(cr.SessionID)
 }

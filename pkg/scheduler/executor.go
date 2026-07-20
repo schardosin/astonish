@@ -220,6 +220,10 @@ CRITICAL RULES:
 	if e.ChatAgent.Redactor != nil {
 		ctx = credentials.WithRedactor(ctx, e.ChatAgent.Redactor)
 	}
+	// Gateway on ctx so NodeTool PreSeeds DB allow rules before first Call.
+	if e.GatewayConfig != nil {
+		ctx = netpolicy.WithGatewayConfig(ctx, e.GatewayConfig)
+	}
 
 	// Create runner
 	r, err := runner.New(runner.Config{
@@ -236,8 +240,8 @@ CRITICAL RULES:
 	userContent := agent.NewTimestampedUserContent(job.Payload.Instructions)
 	var responseText strings.Builder
 
-	// Headless network-policy bridge: pre-seed allow rules and auto-approve
-	// PolicyAllow denials (Studio chat does this in ChatRunner).
+	// Headless network-policy bridge: auto-approve PolicyAllow denials.
+	// Primary PreSeed runs in NodeTool before the first Call.
 	netBridge := &netpolicy.SessionBridge{
 		GatewayCfg: e.GatewayConfig,
 		SessionID:  sess.ID(),

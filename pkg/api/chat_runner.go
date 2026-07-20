@@ -13,6 +13,8 @@ import (
 
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/sandbox"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
 	"github.com/google/uuid"
@@ -268,10 +270,12 @@ func (cr *ChatRunner) InjectNetworkPolicyStores(platform, org, team store.Networ
 }
 
 // InjectGatewayConfig stores the OpenShell gateway gRPC config so that the
-// runner can auto-approve endpoints when the effective policy says "allow".
+// runner can auto-approve endpoints when the effective policy says "allow",
+// and so NodeTool can PreSeed allow rules before the first in-sandbox Call.
 // Must be called before Run().
 func (cr *ChatRunner) InjectGatewayConfig(cfg openshell.GRPCClientConfig) {
 	cr.gatewayConfig = &cfg
+	cr.ctx = netpolicy.WithGatewayConfig(cr.ctx, cr.gatewayConfig)
 }
 
 // InjectFleetStores adds tenant-scoped fleet template and plan stores to the
@@ -1665,6 +1669,10 @@ func (r *chatRunnerRegistry) startCleanupLoop() {
 }
 
 func init() {
+	// Wire NodeTool → netpolicy PreSeed without an import cycle
+	// (sandbox cannot import netpolicy → openshell → sandbox).
+	sandbox.NetworkPolicyPreSeeder = netpolicy.EnsurePreSeedFromContext
+
 	// Start the cleanup loop when the package is loaded
 	registry := getChatRunnerRegistry()
 	registry.startCleanupLoop()

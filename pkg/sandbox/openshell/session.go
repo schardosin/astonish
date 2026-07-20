@@ -126,7 +126,7 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		Image:        image,
 		Env:          env,
 		Labels:       labels,
-		Policy:       defaultSandboxPolicy(b.cfg.AppConfig),
+		Policy:       mergeSessionNetworkAllows(defaultSandboxPolicy(b.cfg.AppConfig), spec.NetworkAllowEndpoints),
 		DriverConfig: driverCfg,
 	})
 	if err != nil {

@@ -9,6 +9,10 @@ import (
 	"github.com/SAP/astonish/pkg/store"
 )
 
+// newGRPCGatewayClient is the factory used by PreSeed/AutoApprove. Tests
+// replace it to inject a mock gateway without dialing gRPC.
+var newGRPCGatewayClient = openshell.NewGRPCGatewayClient
+
 // WaitForPolicyLoad polls the gateway until the sandbox proxy confirms it has
 // loaded the specified policy version (or a newer one).
 func WaitForPolicyLoad(ctx context.Context, gateway openshell.GatewayClient, sandboxName string, targetVersion uint32) {
@@ -60,7 +64,7 @@ func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, s
 	}
 
 	sandboxName := openshell.SandboxName(sessionID)
-	gateway, err := openshell.NewGRPCGatewayClient(*gatewayCfg)
+	gateway, err := newGRPCGatewayClient(*gatewayCfg)
 	if err != nil {
 		slog.Warn("pre-seed network policy: failed to create gateway client",
 			"session", sessionID, "error", err)
@@ -77,14 +81,17 @@ func PreSeedAllow(ctx context.Context, gatewayCfg *openshell.GRPCClientConfig, s
 		})
 	}
 
-	if _, err := gateway.UpdateConfig(ctx, sandboxName, ops); err != nil {
+	resp, err := gateway.UpdateConfig(ctx, sandboxName, ops)
+	if err != nil {
 		slog.Warn("pre-seed network policy: UpdateConfig failed",
 			"sandbox", sandboxName, "session", sessionID, "endpoints", len(endpoints), "error", err)
 		return
 	}
 
+	WaitForPolicyLoad(ctx, gateway, sandboxName, resp.PolicyVersion)
 	slog.Info("pre-seeded network policy with allow-list endpoints",
-		"sandbox", sandboxName, "session", sessionID, "count", len(endpoints))
+		"sandbox", sandboxName, "session", sessionID, "count", len(endpoints),
+		"policyVersion", resp.PolicyVersion)
 }
 
 // PreSeedFromStores collects allow endpoints from stores and pre-seeds the sandbox.
@@ -102,7 +109,7 @@ func AutoApproveEndpoint(ctx context.Context, gatewayCfg *openshell.GRPCClientCo
 	}
 
 	sandboxName := openshell.SandboxName(sessionID)
-	gateway, err := openshell.NewGRPCGatewayClient(*gatewayCfg)
+	gateway, err := newGRPCGatewayClient(*gatewayCfg)
 	if err != nil {
 		slog.Warn("auto-approve: failed to create gateway client",
 			"host", host, "port", port, "error", err)

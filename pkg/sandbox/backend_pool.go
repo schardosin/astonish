@@ -83,6 +83,9 @@ type backendNodeClient struct {
 	bindDone   chan struct{} // closed once the create/start round-trip finishes
 	bindErr    error         // captured on bindDone close
 	closed     bool          // Cleanup has run
+	// networkAllowEndpoints are baked into OpenShell CreateSession when set
+	// before BindSession completes provisioning (see SetNetworkAllowEndpoints).
+	networkAllowEndpoints []NetworkAllowEndpoint
 }
 
 // newBackendNodeClient constructs a client. The session is NOT created until
@@ -147,6 +150,23 @@ func (c *backendNodeClient) EnsureReady(sessionID string) error {
 	return c.bindErr
 }
 
+// SetNetworkAllowEndpoints stashes DB allow rules for CreateSession. Must be
+// called before BindSession's provision goroutine reads the spec (typically
+// from NodeTool.ProcessRequest before BindSession). Ignored after bind starts
+// if create already used an empty list — PreSeed-before-Call covers that case.
+func (c *backendNodeClient) SetNetworkAllowEndpoints(endpoints []NetworkAllowEndpoint) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bound {
+		// Provision may already be running; still store for a late CreateSession
+		// that has not yet copied the slice (provision reads under lock below).
+		if len(c.networkAllowEndpoints) > 0 {
+			return
+		}
+	}
+	c.networkAllowEndpoints = append([]NetworkAllowEndpoint(nil), endpoints...)
+}
+
 // GetBackend exposes the underlying Backend for credential file PushFile and similar.
 func (c *backendNodeClient) GetBackend() Backend {
 	return c.backend
@@ -171,6 +191,11 @@ func (c *backendNodeClient) provision(sessionID string) {
 		Limits:     c.limits,
 		Env:        c.sessionEnv,
 	}
+	c.mu.Lock()
+	if len(c.networkAllowEndpoints) > 0 {
+		spec.NetworkAllowEndpoints = append([]NetworkAllowEndpoint(nil), c.networkAllowEndpoints...)
+	}
+	c.mu.Unlock()
 	if _, err := c.backend.CreateSession(ctx, spec); err != nil {
 		c.mu.Lock()
 		c.bindErr = fmt.Errorf("backend create session: %w", err)

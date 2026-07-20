@@ -416,3 +416,37 @@ func TestBackendPool_BindSessionIdempotent(t *testing.T) {
 		t.Errorf("CreateSessionCalls = %d after 5 BindSession, want 1", n)
 	}
 }
+
+// TestBackendPool_NetworkAllowEndpointsBakedIntoCreateSession pins that
+// SetNetworkAllowEndpoints before BindSession flows into SessionSpec so
+// OpenShell CreateSession can merge DB allows into create-time policy.
+func TestBackendPool_NetworkAllowEndpointsBakedIntoCreateSession(t *testing.T) {
+	m := mock.New()
+	pool := sandbox.NewBackendPool(m, sandbox.ResourceLimits{})
+	defer pool.Cleanup()
+
+	c := pool.GetOrCreateWithTemplate("sess-nps", "default")
+	setter, ok := c.(interface {
+		SetNetworkAllowEndpoints([]sandbox.NetworkAllowEndpoint)
+	})
+	if !ok {
+		t.Fatal("client does not implement SetNetworkAllowEndpoints")
+	}
+	setter.SetNetworkAllowEndpoints([]sandbox.NetworkAllowEndpoint{
+		{Host: "**.cloud.sap", Port: 443},
+	})
+	c.BindSession("sess-nps")
+	if err := c.EnsureReady("sess-nps"); err != nil {
+		t.Fatalf("EnsureReady: %v", err)
+	}
+
+	calls := m.CreateSessionCalls()
+	if len(calls) != 1 {
+		t.Fatalf("CreateSessionCalls = %d, want 1", len(calls))
+	}
+	eps := calls[0].Spec.NetworkAllowEndpoints
+	if len(eps) != 1 || eps[0].Host != "**.cloud.sap" || eps[0].Port != 443 {
+		t.Fatalf("NetworkAllowEndpoints = %+v, want **.cloud.sap:443", eps)
+	}
+}
+

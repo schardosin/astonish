@@ -200,10 +200,12 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		}
 	}
 
-	// Provision session credential vault into the sandbox so in-node
-	// http_request(credential=…) can Resolve (Keystone/OAuth stay in-sandbox).
-	if err := SyncSessionCredentialVault(ctx, nt.backendForPush(client), client.EnsureReady, sessionID); err != nil {
-		return nil, err
+	// Provision session credential vault only for http_request so a PushFile
+	// failure cannot brick shell/file tools. Keystone/OAuth stay in-sandbox.
+	if nt.Name() == "http_request" {
+		if err := SyncSessionCredentialVault(ctx, nt.backendForPush(client), client.EnsureReady, sessionID); err != nil {
+			return nil, err
+		}
 	}
 
 	// Send to node (lazy init on first call)

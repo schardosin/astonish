@@ -17,7 +17,8 @@ import (
 )
 
 // VaultPath is the fixed path inside the sandbox for the session credential vault.
-const VaultPath = "/run/astonish/session-credentials.json"
+// Under /tmp so OpenShell's sandbox user can mkdir/write (unlike /run).
+const VaultPath = "/tmp/astonish/session-credentials.json"
 
 // VaultFileMode is the permission applied when pushing the vault into a sandbox.
 const VaultFileMode = 0o600

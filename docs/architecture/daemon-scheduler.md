@@ -41,6 +41,32 @@ Different use cases need different execution models:
 - **Adaptive**: Sends instructions as a chat message to the shared ChatAgent. The agent decides how to handle it, can use any tool, and adapts to the current situation. Best for tasks that need judgment.
 - **Fleet poll**: Delegates to the PlanActivator for GitHub Issues monitoring. Not a direct execution mode but a scheduling trigger for fleet activation.
 
+### Why Dual-Scope Jobs (Personal vs Team)
+
+Platform mode has **two scheduler lanes**, mirroring credentials:
+
+| | Personal job | Team job |
+|---|---|---|
+| Storage | `personal_{uid}.scheduled_jobs` | `team_{slug}.scheduled_jobs` |
+| Who manages | Owner only | Team admin |
+| Credentials at tick | `MergedCredentialStore(personal, team)` — same as Studio chat | Team credentials only |
+| Identity | Runs as `OwnerID` | Headless (`SystemUserID`) |
+| Delivery | `owner` only | `owner` / `team` / `members` / `target` |
+| Use case | User OAuth / personal API keys | Shared service accounts |
+
+**Do not** inject an owner's personal vault into a team job. That would let shared team automation silently use private secrets and fan results out to other members. Users who need personal credentials should create a **personal** job (or **fork** a team job to personal) instead of publishing the secret to the team.
+
+Scope transfer (team admin only), same shape as credentials:
+
+| Action | Direction | Semantics | Endpoint |
+|---|---|---|---|
+| Promote | personal → team | **Move** (personal removed) | `POST /api/scheduler/jobs/publish` |
+| Fork | team → personal | **Copy** (both remain); delivery forced to `owner` | `POST /api/scheduler/jobs/fork` |
+
+`test_first` / `RunNow` use the same credential injection as cron for that job's scope, so a dry-run cannot succeed with personal creds then fail on a team-only tick.
+
+Personal jobs store `team_slug` (captured from the active team at create time) so team credential/flow/MCP fallback still works.
+
 ### Why Exponential Backoff on Failures
 
 When a scheduled job fails, the scheduler applies exponential backoff before retrying. This prevents:
@@ -90,31 +116,27 @@ Shutdown signal:
 ### Scheduler Architecture
 
 ```
-Job Definition (config or API):
-  - Name, description
-  - Cron expression (standard 5-field or predefined: @hourly, @daily)
-  - Mode: routine | adaptive | fleet_poll
-  - For routine: flow file path
-  - For adaptive: instruction text
-  - For fleet_poll: fleet plan reference
+Job Definition (API / schedule_job tool):
+  - Scope: personal (default) | team
+  - Name, cron, mode: routine | adaptive | fleet_poll
+  - OwnerID + team_slug (personal jobs)
     |
     v
-Scheduler.Start():
-  - Parse cron expressions
-  - Create goroutine per job with next-fire calculation
-  - Main loop: sleep until next fire, execute, calculate next
+MultiTenantScheduler.tick() every 30s:
+  - orgs → teams → due team jobs (team creds only)
+  - orgs → members → due personal jobs (merged creds)
     |
     v
 Execution:
-  - Routine: load flow YAML, run AstonishAgent headlessly
-  - Adaptive: send instruction as user message to ChatAgent
-  - Fleet poll: trigger PlanActivator.CheckForWork()
+  - Routine: load flow YAML, run headless
+  - Adaptive: ChatAgent turn (personal = OwnerID session; team = SystemUserID)
+  - Fleet poll: PlanActivator.CheckForWork()
     |
     v
 Result delivery:
-  - Channel-based: results sent to configured channel targets
-  - Logging: all results logged to daemon log
-  - On failure: exponential backoff for next retry
+  - Personal: forced to owner channels
+  - Team: owner / team / members / target
+  - On failure: exponential backoff
 ```
 
 ### PID File Management
@@ -137,12 +159,17 @@ The daemon runs periodic maintenance:
 
 | File | Purpose |
 |---|---|
-| `pkg/daemon/daemon.go` | Main daemon Run() orchestration, startup/shutdown sequence |
+| `pkg/daemon/run.go` | Main daemon Run() orchestration, startup/shutdown sequence |
+| `pkg/daemon/multi_tenant_scheduler.go` | Platform tick loop: team + personal lanes, credential injection |
 | `pkg/daemon/service.go` | Platform-native service installation (systemd/launchd/Windows) |
 | `pkg/daemon/config_reload.go` | Hot-reload for channel configuration |
-| `pkg/scheduler/scheduler.go` | Cron-based job scheduler, execution modes |
-| `pkg/scheduler/job.go` | Job definition, cron parsing |
+| `pkg/scheduler/scheduler.go` | Cron-based job scheduler (legacy single-instance path) |
+| `pkg/scheduler/store.go` | Job definition, delivery modes |
 | `pkg/scheduler/executor.go` | Job execution: routine, adaptive, fleet poll |
+| `pkg/api/scheduler_handlers.go` | REST CRUD + RunNow with scope-aware stores |
+| `pkg/tools/schedule_tool.go` | LLM tools (`schedule_job`, etc.) with personal default |
+| `ent/personal/schema/scheduled_job.go` | Personal job schema |
+| `ent/team/schema/scheduled_job.go` | Team job schema |
 
 ## Interactions
 

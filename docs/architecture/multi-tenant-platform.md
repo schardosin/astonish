@@ -77,6 +77,8 @@ Personal mode is 100% backward compatible. Platform mode activates when `storage
 │   apps              │ │   apps              │ │   apps              │
 │   sessions          │ │   sessions          │ │   sessions          │
 │   app_state         │ │   app_state         │ │   app_state         │
+│   credentials       │ │   credentials       │ │   credentials       │
+│   scheduled_jobs    │ │   scheduled_jobs    │ │   scheduled_jobs    │
 │   session_events    │ │   session_events    │ │   session_events    │
 └─────────────────────┘ └─────────────────────┘ └─────────────────────┘
 ```
@@ -103,7 +105,7 @@ Within an organization, teams share a trust boundary (they're in the same compan
 
 ### Why Personal Schemas
 
-User-private data (personal memories, personal apps, personal sessions) lives in `personal_{user_id}` schemas. This ensures that even within a team, one user's private data is inaccessible to other team members at the structural level.
+User-private data (personal memories, personal apps, personal sessions, personal credentials, personal scheduled jobs) lives in `personal_{user_id}` schemas. This ensures that even within a team, one user's private data is inaccessible to other team members at the structural level. Personal scheduled jobs use the owner's personal credentials at cron time; team jobs remain in the team schema with team credentials only (see `daemon-scheduler.md`).
 
 ### Isolation Guarantees
 
@@ -553,6 +555,12 @@ CREATE TABLE session_events (
     event_data  JSONB NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Personal credentials and scheduled_jobs mirror the team-schema tables
+-- (same columns). Personal jobs capture team_slug in payload for
+-- credential/flow fallback at tick time; see daemon-scheduler.md.
+CREATE TABLE credentials ( /* same as team.credentials */ );
+CREATE TABLE scheduled_jobs ( /* same as team.scheduled_jobs */ );
 ```
 
 ---

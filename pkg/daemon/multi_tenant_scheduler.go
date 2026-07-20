@@ -12,9 +12,13 @@ import (
 
 // MultiTenantScheduler manages scheduled job execution across all organizations
 // and teams in platform mode. It replaces the single-instance scheduler.Scheduler
-// for platform deployments, iterating all orgs → all teams on every tick.
+// for platform deployments, iterating all orgs → all teams on every tick, and
+// also ticking each org member's personal jobs.
 //
-// In personal mode, the legacy single-instance scheduler.Scheduler is used instead.
+// Two lanes:
+//   - Team jobs: team schema, team credentials only, headless identity.
+//   - Personal jobs: personal schema, MergedCredentialStore(personal, team),
+//     run as OwnerID. TeamSlug on the job selects team fallback context.
 type MultiTenantScheduler struct {
 	backend  store.PlatformBackend
 	executor *scheduler.Executor
@@ -26,7 +30,8 @@ type MultiTenantScheduler struct {
 	wg     sync.WaitGroup
 
 	// running tracks in-flight job IDs globally to prevent double dispatch.
-	// Key format: "orgSlug/teamSlug/jobID" to ensure uniqueness across tenants.
+	// Key format: "orgSlug/teamSlug/jobID" for team jobs,
+	// "orgSlug/personal/userID/jobID" for personal jobs.
 	running map[string]struct{}
 	runMu   sync.Mutex
 }
@@ -89,11 +94,10 @@ func (mts *MultiTenantScheduler) loop() {
 	}
 }
 
-// tick iterates all orgs → all teams → all due jobs, dispatching execution.
+// tick iterates all orgs → team jobs + personal jobs per org member.
 func (mts *MultiTenantScheduler) tick() {
 	ctx := mts.ctx
 
-	// List all organizations
 	orgs, err := mts.backend.Organizations().List(ctx)
 	if err != nil {
 		mts.logger.Printf("[scheduler] Failed to list organizations: %v", err)
@@ -104,59 +108,95 @@ func (mts *MultiTenantScheduler) tick() {
 		if org.Status != "active" {
 			continue
 		}
-		mts.tickOrg(ctx, org.Slug)
+		mts.tickOrg(ctx, org)
 	}
 }
 
-// tickOrg processes all teams in a single organization.
-func (mts *MultiTenantScheduler) tickOrg(ctx context.Context, orgSlug string) {
-	orgStore, err := mts.backend.ForOrg(orgSlug)
+// tickOrg processes all teams and personal jobs in a single organization.
+func (mts *MultiTenantScheduler) tickOrg(ctx context.Context, org *store.Organization) {
+	orgStore, err := mts.backend.ForOrg(org.Slug)
 	if err != nil {
-		mts.logger.Printf("[scheduler] Failed to resolve org %q: %v", orgSlug, err)
+		mts.logger.Printf("[scheduler] Failed to resolve org %q: %v", org.Slug, err)
 		return
 	}
 
 	teams, err := orgStore.Teams().ListTeams(ctx)
 	if err != nil {
-		mts.logger.Printf("[scheduler] Failed to list teams for org %q: %v", orgSlug, err)
+		mts.logger.Printf("[scheduler] Failed to list teams for org %q: %v", org.Slug, err)
 		return
 	}
 
 	for _, team := range teams {
-		mts.tickTeam(ctx, orgSlug, orgStore, team.Slug)
+		mts.tickTeam(ctx, org.Slug, orgStore, team.Slug)
+	}
+
+	// Personal lane: one pass per org member (deduped across teams).
+	members, err := mts.backend.Organizations().ListMembers(ctx, org.ID)
+	if err != nil {
+		mts.logger.Printf("[scheduler] Failed to list members for org %q: %v", org.Slug, err)
+		return
+	}
+	for _, member := range members {
+		mts.tickPersonal(ctx, org.Slug, orgStore, member.ID)
 	}
 }
 
-// tickTeam processes all due jobs for a single team.
+// tickTeam processes all due team-scoped jobs for a single team.
 func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, orgStore store.OrgDataStore, teamSlug string) {
 	teamStore := orgStore.ForTeam(teamSlug)
+	if teamStore == nil {
+		return
+	}
 	schedulerStore := teamStore.ScheduledJobs()
-	jobs := schedulerStore.List(ctx)
+	mts.dispatchDueJobs(ctx, schedulerStore.List(ctx), func(job *store.ScheduledJob) string {
+		return orgSlug + "/" + teamSlug + "/" + job.ID
+	}, func(job *store.ScheduledJob, runKey string) {
+		mts.wg.Add(1)
+		go func(sj *store.ScheduledJob, key string) {
+			defer mts.wg.Done()
+			defer mts.clearRunning(key)
+			mts.executeTeamJob(ctx, sj, orgSlug, teamSlug, orgStore, teamStore, schedulerStore)
+		}(job, runKey)
+	})
+}
+
+// tickPersonal processes all due personal jobs for a single user.
+func (mts *MultiTenantScheduler) tickPersonal(ctx context.Context, orgSlug string, orgStore store.OrgDataStore, userID string) {
+	personalStore := orgStore.ForUser(userID)
+	if personalStore == nil {
+		return
+	}
+	schedulerStore := personalStore.ScheduledJobs()
+	mts.dispatchDueJobs(ctx, schedulerStore.List(ctx), func(job *store.ScheduledJob) string {
+		return orgSlug + "/personal/" + userID + "/" + job.ID
+	}, func(job *store.ScheduledJob, runKey string) {
+		mts.wg.Add(1)
+		go func(sj *store.ScheduledJob, key string) {
+			defer mts.wg.Done()
+			defer mts.clearRunning(key)
+			mts.executePersonalJob(ctx, sj, orgSlug, orgStore, personalStore, schedulerStore, userID)
+		}(job, runKey)
+	})
+}
+
+func (mts *MultiTenantScheduler) dispatchDueJobs(
+	ctx context.Context,
+	jobs []*store.ScheduledJob,
+	runKeyFn func(*store.ScheduledJob) string,
+	dispatch func(*store.ScheduledJob, string),
+) {
 	now := time.Now()
-
 	for _, job := range jobs {
-		if !job.Enabled {
+		if !job.Enabled || job.NextRun == nil || now.Before(*job.NextRun) {
 			continue
 		}
-		if job.NextRun == nil {
-			continue
-		}
-		if now.Before(*job.NextRun) {
-			continue
-		}
-
-		// Check backoff
 		if job.ConsecutiveFailures > 0 && job.LastRun != nil {
-			backoff := backoffDuration(job.ConsecutiveFailures)
-			if now.Before(job.LastRun.Add(backoff)) {
-				continue // Still in backoff
+			if now.Before(job.LastRun.Add(backoffDuration(job.ConsecutiveFailures))) {
+				continue
 			}
 		}
 
-		// Build running key: orgSlug/teamSlug/jobID
-		runKey := orgSlug + "/" + teamSlug + "/" + job.ID
-
-		// Skip if already running
+		runKey := runKeyFn(job)
 		mts.runMu.Lock()
 		if _, alreadyRunning := mts.running[runKey]; alreadyRunning {
 			mts.runMu.Unlock()
@@ -165,23 +205,18 @@ func (mts *MultiTenantScheduler) tickTeam(ctx context.Context, orgSlug string, o
 		mts.running[runKey] = struct{}{}
 		mts.runMu.Unlock()
 
-		// Dispatch execution in a goroutine
-		mts.wg.Add(1)
-		go func(sj *store.ScheduledJob, key, org, team string, os store.OrgDataStore, ts store.TeamDataStore, ss store.SchedulerStore) {
-			defer mts.wg.Done()
-			defer func() {
-				mts.runMu.Lock()
-				delete(mts.running, key)
-				mts.runMu.Unlock()
-			}()
-
-			mts.executeJob(ctx, sj, org, team, os, ts, ss)
-		}(job, runKey, orgSlug, teamSlug, orgStore, teamStore, schedulerStore)
+		dispatch(job, runKey)
 	}
 }
 
-// executeJob runs a single job with full team context and updates state.
-func (mts *MultiTenantScheduler) executeJob(
+func (mts *MultiTenantScheduler) clearRunning(key string) {
+	mts.runMu.Lock()
+	delete(mts.running, key)
+	mts.runMu.Unlock()
+}
+
+// executeTeamJob runs a team-scoped job with team credentials only.
+func (mts *MultiTenantScheduler) executeTeamJob(
 	ctx context.Context,
 	storeJob *store.ScheduledJob,
 	orgSlug, teamSlug string,
@@ -189,9 +224,78 @@ func (mts *MultiTenantScheduler) executeJob(
 	teamStore store.TeamDataStore,
 	schedulerStore store.SchedulerStore,
 ) {
-	mts.logger.Printf("[scheduler] Executing job %q (mode: %s)", storeJob.Name, storeJob.Mode)
+	mts.logger.Printf("[scheduler] Executing team job %q (mode: %s)", storeJob.Name, storeJob.Mode)
 
-	// Build team-scoped execution context with all relevant stores
+	execCtx := mts.buildTeamExecContext(ctx, orgStore, teamStore)
+	job := storeJobToSchedulerJob(storeJob)
+	job.Scope = store.JobScopeTeam
+
+	result, execErr := mts.executor.Execute(execCtx, job)
+	mts.updateJobState(ctx, schedulerStore, storeJob, result, execErr)
+
+	if mts.deliver != nil && storeJob.Mode != "fleet_poll" {
+		deliverCtx := scheduler.WithDeliveryContext(ctx, &scheduler.DeliveryContext{
+			OrgSlug:  orgSlug,
+			TeamSlug: teamSlug,
+		})
+		if deliverErr := mts.deliver(deliverCtx, job, result, execErr); deliverErr != nil {
+			mts.logger.Printf("[scheduler] Delivery failed for job %q: %v", storeJob.Name, deliverErr)
+		}
+	}
+}
+
+// executePersonalJob runs a personal job with merged credentials as the owner.
+func (mts *MultiTenantScheduler) executePersonalJob(
+	ctx context.Context,
+	storeJob *store.ScheduledJob,
+	orgSlug string,
+	orgStore store.OrgDataStore,
+	personalStore store.PersonalDataStore,
+	schedulerStore store.SchedulerStore,
+	userID string,
+) {
+	mts.logger.Printf("[scheduler] Executing personal job %q (mode: %s, owner: %s)", storeJob.Name, storeJob.Mode, userID)
+
+	teamSlug := storeJob.TeamSlug
+	var teamStore store.TeamDataStore
+	if teamSlug != "" {
+		teamStore = orgStore.ForTeam(teamSlug)
+	}
+
+	execCtx := mts.buildPersonalExecContext(ctx, orgStore, teamStore, personalStore, userID)
+	job := storeJobToSchedulerJob(storeJob)
+	job.Scope = store.JobScopePersonal
+	if job.OwnerID == "" {
+		job.OwnerID = userID
+	}
+
+	result, execErr := mts.executor.Execute(execCtx, job)
+	mts.updateJobState(ctx, schedulerStore, storeJob, result, execErr)
+
+	if mts.deliver != nil && storeJob.Mode != "fleet_poll" {
+		// Personal jobs only deliver to the owner.
+		deliverJob := *job
+		if deliverJob.Delivery.Mode == "" ||
+			deliverJob.Delivery.Mode == scheduler.DeliveryModeTeam ||
+			deliverJob.Delivery.Mode == scheduler.DeliveryModeMembers {
+			deliverJob.Delivery.Mode = scheduler.DeliveryModeOwner
+			deliverJob.Delivery.MemberIDs = nil
+		}
+		deliverCtx := scheduler.WithDeliveryContext(ctx, &scheduler.DeliveryContext{
+			OrgSlug:  orgSlug,
+			TeamSlug: teamSlug,
+		})
+		if deliverErr := mts.deliver(deliverCtx, &deliverJob, result, execErr); deliverErr != nil {
+			mts.logger.Printf("[scheduler] Delivery failed for personal job %q: %v", storeJob.Name, deliverErr)
+		}
+	}
+}
+
+func (mts *MultiTenantScheduler) buildTeamExecContext(
+	ctx context.Context,
+	orgStore store.OrgDataStore,
+	teamStore store.TeamDataStore,
+) context.Context {
 	execCtx := ctx
 	execCtx = store.WithCredentialStore(execCtx, teamStore.Credentials())
 	execCtx = store.WithFlowStore(execCtx, teamStore.Flows())
@@ -208,27 +312,73 @@ func (mts *MultiTenantScheduler) executeJob(
 	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
 	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
 
-	// Inject cross-session memory merge function so that memory_save tool
-	// performs dedup/merge instead of blind inserts during scheduled execution.
 	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
 		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
 	}
-
-	// Inject per-team disabled tool list so the agent filters them out.
 	if ts := teamStore.Settings(); ts != nil {
 		if settings, err := ts.Get(ctx); err == nil && len(settings.DisabledTools) > 0 {
 			execCtx = store.WithDisabledTools(execCtx, settings.DisabledTools)
 		}
 	}
+	return execCtx
+}
 
-	// Convert to scheduler.Job for the executor
-	job := storeJobToSchedulerJob(storeJob)
+func (mts *MultiTenantScheduler) buildPersonalExecContext(
+	ctx context.Context,
+	orgStore store.OrgDataStore,
+	teamStore store.TeamDataStore,
+	personalStore store.PersonalDataStore,
+	userID string,
+) context.Context {
+	execCtx := store.WithUserID(ctx, userID)
 
-	// Execute
+	var teamCreds store.CredentialStore
+	var teamFlows store.FlowStore
+	if teamStore != nil {
+		teamCreds = teamStore.Credentials()
+		teamFlows = teamStore.Flows()
+		execCtx = store.WithDrillReportStore(execCtx, teamStore.DrillReports())
+		execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
+			Team: teamStore.Skills(),
+		})
+		execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
+			Platform: mts.backend.PlatformMCPServers(),
+			Org:      orgStore.OrgMCPServers(),
+			Team:     teamStore.MCPServers(),
+		})
+		execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
+		execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
+		execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
+		if ts := teamStore.Settings(); ts != nil {
+			if settings, err := ts.Get(ctx); err == nil && len(settings.DisabledTools) > 0 {
+				execCtx = store.WithDisabledTools(execCtx, settings.DisabledTools)
+			}
+		}
+	} else {
+		execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
+			Platform: mts.backend.PlatformMCPServers(),
+			Org:      orgStore.OrgMCPServers(),
+		})
+	}
+
+	// Same as Studio chat: personal-first, team fallback; writes go personal.
+	execCtx = store.WithCredentialStore(execCtx, store.NewMergedCredentialStore(personalStore.Credentials(), teamCreds))
+	execCtx = store.WithFlowStore(execCtx, store.NewCompositeFlowStore(personalStore.Flows(), teamFlows))
+
+	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
+		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+	}
+	return execCtx
+}
+
+func (mts *MultiTenantScheduler) updateJobState(
+	ctx context.Context,
+	schedulerStore store.SchedulerStore,
+	storeJob *store.ScheduledJob,
+	result string,
+	execErr error,
+) {
 	now := time.Now()
-	result, execErr := mts.executor.Execute(execCtx, job)
-
-	// Update runtime state in the team's store
 	stored := schedulerStore.Get(ctx, storeJob.ID)
 	if stored == nil {
 		return
@@ -249,23 +399,9 @@ func (mts *MultiTenantScheduler) executeJob(
 			stored.Name, len(result))
 	}
 
-	// Compute next run
 	stored.NextRun = scheduler.ComputeNextRun(stored.Schedule.Cron, stored.Schedule.Timezone)
-
 	if err := schedulerStore.Update(ctx, stored); err != nil {
 		mts.logger.Printf("[scheduler] Failed to update job state for %q: %v", stored.Name, err)
-	}
-
-	// Deliver results (skip fleet_poll — those handle their own delivery)
-	if mts.deliver != nil && storeJob.Mode != "fleet_poll" {
-		// Inject delivery context so the resolver knows which org/team this job belongs to
-		deliverCtx := scheduler.WithDeliveryContext(ctx, &scheduler.DeliveryContext{
-			OrgSlug:  orgSlug,
-			TeamSlug: teamSlug,
-		})
-		if deliverErr := mts.deliver(deliverCtx, job, result, execErr); deliverErr != nil {
-			mts.logger.Printf("[scheduler] Delivery failed for job %q: %v", storeJob.Name, deliverErr)
-		}
 	}
 }
 
@@ -294,19 +430,22 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 		}
 		for _, team := range teams {
 			teamStore := orgStore.ForTeam(team.Slug)
-			ss := teamStore.ScheduledJobs()
-			jobs := ss.List(ctx)
-			for _, job := range jobs {
-				if !job.Enabled {
-					continue
-				}
-				nextRun := scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
-				if nextRun != nil && (job.NextRun == nil || !nextRun.Equal(*job.NextRun)) {
-					job.NextRun = nextRun
-					_ = ss.Update(ctx, job)
-					totalJobs++
-				}
+			if teamStore == nil {
+				continue
 			}
+			totalJobs += mts.refreshStoreNextRuns(ctx, teamStore.ScheduledJobs())
+		}
+
+		members, err := mts.backend.Organizations().ListMembers(ctx, org.ID)
+		if err != nil {
+			continue
+		}
+		for _, member := range members {
+			personalStore := orgStore.ForUser(member.ID)
+			if personalStore == nil {
+				continue
+			}
+			totalJobs += mts.refreshStoreNextRuns(ctx, personalStore.ScheduledJobs())
 		}
 	}
 
@@ -315,41 +454,43 @@ func (mts *MultiTenantScheduler) refreshAllNextRuns() {
 	}
 }
 
-// RunNow executes a job immediately with team-scoped context.
-// Used by the LLM tool bridge and API handlers when they need the daemon's
-// multi-tenant scheduler to perform execution.
+func (mts *MultiTenantScheduler) refreshStoreNextRuns(ctx context.Context, ss store.SchedulerStore) int {
+	var n int
+	for _, job := range ss.List(ctx) {
+		if !job.Enabled {
+			continue
+		}
+		nextRun := scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
+		if nextRun != nil && (job.NextRun == nil || !nextRun.Equal(*job.NextRun)) {
+			job.NextRun = nextRun
+			_ = ss.Update(ctx, job)
+			n++
+		}
+	}
+	return n
+}
+
+// RunNow executes a team job immediately with team-scoped context.
 func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore store.SchedulerStore, teamStore store.TeamDataStore, jobID string) (string, error) {
 	storeJob := schedulerStore.Get(ctx, jobID)
 	if storeJob == nil {
 		return "", nil
 	}
 
-	// Build team-scoped execution context
-	execCtx := ctx
-	execCtx = store.WithCredentialStore(execCtx, teamStore.Credentials())
-	execCtx = store.WithFlowStore(execCtx, teamStore.Flows())
-	execCtx = store.WithDrillReportStore(execCtx, teamStore.DrillReports())
-	execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
-		Team: teamStore.Skills(),
-	})
-	execCtx = store.WithMCPServerStores(execCtx, &store.MCPServerStores{
-		Platform: mts.backend.PlatformMCPServers(),
-		Team:     teamStore.MCPServers(),
-	})
-	execCtx = store.WithMemoryStore(execCtx, teamStore.Memories())
-	execCtx = store.WithFleetTemplateStore(execCtx, teamStore.FleetTemplates())
-	execCtx = store.WithFleetPlanStore(execCtx, teamStore.FleetPlans())
-
-	// Inject cross-session memory merge function for fleet plan execution.
-	if mts.executor.ChatAgent != nil && mts.executor.ChatAgent.PlatformReflector != nil {
-		execCtx = store.WithMemorySaveOrMerge(execCtx, mts.executor.ChatAgent.PlatformReflector.MemorySaveOrMergeFunc())
+	orgStore, _ := mts.orgStoreFromTeam(ctx, teamStore)
+	var execCtx context.Context
+	if orgStore != nil {
+		execCtx = mts.buildTeamExecContext(ctx, orgStore, teamStore)
+	} else {
+		execCtx = ctx
+		execCtx = store.WithCredentialStore(execCtx, teamStore.Credentials())
+		execCtx = store.WithFlowStore(execCtx, teamStore.Flows())
 	}
 
-	// Convert and execute
 	job := storeJobToSchedulerJob(storeJob)
+	job.Scope = store.JobScopeTeam
 	result, execErr := mts.executor.Execute(execCtx, job)
 
-	// Update runtime state
 	now := time.Now()
 	storeJob.LastRun = &now
 	if execErr != nil {
@@ -365,6 +506,53 @@ func (mts *MultiTenantScheduler) RunNow(ctx context.Context, schedulerStore stor
 	_ = schedulerStore.Update(ctx, storeJob)
 
 	return result, execErr
+}
+
+// RunNowPersonal executes a personal job immediately with merged credentials.
+func (mts *MultiTenantScheduler) RunNowPersonal(
+	ctx context.Context,
+	schedulerStore store.SchedulerStore,
+	orgStore store.OrgDataStore,
+	teamStore store.TeamDataStore,
+	personalStore store.PersonalDataStore,
+	userID, jobID string,
+) (string, error) {
+	storeJob := schedulerStore.Get(ctx, jobID)
+	if storeJob == nil {
+		return "", nil
+	}
+
+	execCtx := mts.buildPersonalExecContext(ctx, orgStore, teamStore, personalStore, userID)
+	job := storeJobToSchedulerJob(storeJob)
+	job.Scope = store.JobScopePersonal
+	if job.OwnerID == "" {
+		job.OwnerID = userID
+	}
+	result, execErr := mts.executor.Execute(execCtx, job)
+
+	now := time.Now()
+	storeJob.LastRun = &now
+	if execErr != nil {
+		storeJob.LastStatus = "failed"
+		storeJob.LastError = execErr.Error()
+		storeJob.ConsecutiveFailures++
+	} else {
+		storeJob.LastStatus = "success"
+		storeJob.LastError = ""
+		storeJob.ConsecutiveFailures = 0
+	}
+	storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
+	_ = schedulerStore.Update(ctx, storeJob)
+
+	return result, execErr
+}
+
+// orgStoreFromTeam is a best-effort lookup; RunNow often already has stores in ctx.
+func (mts *MultiTenantScheduler) orgStoreFromTeam(ctx context.Context, _ store.TeamDataStore) (store.OrgDataStore, error) {
+	if tc := store.TenantContextFrom(ctx); tc != nil && tc.OrgSlug != "" {
+		return mts.backend.ForOrg(tc.OrgSlug)
+	}
+	return nil, nil
 }
 
 // backoffSteps defines the error backoff delays for consecutive failures.

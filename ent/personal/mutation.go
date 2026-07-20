@@ -18,6 +18,7 @@ import (
 	"github.com/SAP/astonish/ent/personal/memory"
 	"github.com/SAP/astonish/ent/personal/personalsettings"
 	"github.com/SAP/astonish/ent/personal/predicate"
+	"github.com/SAP/astonish/ent/personal/scheduledjob"
 	"github.com/SAP/astonish/ent/personal/session"
 	"github.com/SAP/astonish/ent/personal/sessionevent"
 	"github.com/google/uuid"
@@ -38,6 +39,7 @@ const (
 	TypeFlow             = "Flow"
 	TypeMemory           = "Memory"
 	TypePersonalSettings = "PersonalSettings"
+	TypeScheduledJob     = "ScheduledJob"
 	TypeSession          = "Session"
 	TypeSessionEvent     = "SessionEvent"
 )
@@ -4307,6 +4309,1082 @@ func (m *PersonalSettingsMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *PersonalSettingsMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown PersonalSettings edge %s", name)
+}
+
+// ScheduledJobMutation represents an operation that mutates the ScheduledJob nodes in the graph.
+type ScheduledJobMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *uuid.UUID
+	name                    *string
+	schedule                *string
+	mode                    *scheduledjob.Mode
+	payload                 *map[string]interface{}
+	status                  *scheduledjob.Status
+	last_run_at             *time.Time
+	next_run_at             *time.Time
+	last_status             *string
+	last_error              *string
+	consecutive_failures    *int
+	addconsecutive_failures *int
+	created_by              *uuid.UUID
+	created_at              *time.Time
+	updated_at              *time.Time
+	clearedFields           map[string]struct{}
+	done                    bool
+	oldValue                func(context.Context) (*ScheduledJob, error)
+	predicates              []predicate.ScheduledJob
+}
+
+var _ ent.Mutation = (*ScheduledJobMutation)(nil)
+
+// scheduledjobOption allows management of the mutation configuration using functional options.
+type scheduledjobOption func(*ScheduledJobMutation)
+
+// newScheduledJobMutation creates new mutation for the ScheduledJob entity.
+func newScheduledJobMutation(c config, op Op, opts ...scheduledjobOption) *ScheduledJobMutation {
+	m := &ScheduledJobMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeScheduledJob,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withScheduledJobID sets the ID field of the mutation.
+func withScheduledJobID(id uuid.UUID) scheduledjobOption {
+	return func(m *ScheduledJobMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ScheduledJob
+		)
+		m.oldValue = func(ctx context.Context) (*ScheduledJob, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ScheduledJob.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withScheduledJob sets the old ScheduledJob of the mutation.
+func withScheduledJob(node *ScheduledJob) scheduledjobOption {
+	return func(m *ScheduledJobMutation) {
+		m.oldValue = func(context.Context) (*ScheduledJob, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ScheduledJobMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ScheduledJobMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("personal: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of ScheduledJob entities.
+func (m *ScheduledJobMutation) SetID(id uuid.UUID) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ScheduledJobMutation) ID() (id uuid.UUID, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ScheduledJobMutation) IDs(ctx context.Context) ([]uuid.UUID, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []uuid.UUID{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ScheduledJob.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetName sets the "name" field.
+func (m *ScheduledJobMutation) SetName(s string) {
+	m.name = &s
+}
+
+// Name returns the value of the "name" field in the mutation.
+func (m *ScheduledJobMutation) Name() (r string, exists bool) {
+	v := m.name
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldName returns the old "name" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldName(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldName is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldName requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldName: %w", err)
+	}
+	return oldValue.Name, nil
+}
+
+// ResetName resets all changes to the "name" field.
+func (m *ScheduledJobMutation) ResetName() {
+	m.name = nil
+}
+
+// SetSchedule sets the "schedule" field.
+func (m *ScheduledJobMutation) SetSchedule(s string) {
+	m.schedule = &s
+}
+
+// Schedule returns the value of the "schedule" field in the mutation.
+func (m *ScheduledJobMutation) Schedule() (r string, exists bool) {
+	v := m.schedule
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSchedule returns the old "schedule" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldSchedule(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSchedule is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSchedule requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSchedule: %w", err)
+	}
+	return oldValue.Schedule, nil
+}
+
+// ResetSchedule resets all changes to the "schedule" field.
+func (m *ScheduledJobMutation) ResetSchedule() {
+	m.schedule = nil
+}
+
+// SetMode sets the "mode" field.
+func (m *ScheduledJobMutation) SetMode(s scheduledjob.Mode) {
+	m.mode = &s
+}
+
+// Mode returns the value of the "mode" field in the mutation.
+func (m *ScheduledJobMutation) Mode() (r scheduledjob.Mode, exists bool) {
+	v := m.mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMode returns the old "mode" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldMode(ctx context.Context) (v scheduledjob.Mode, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMode: %w", err)
+	}
+	return oldValue.Mode, nil
+}
+
+// ResetMode resets all changes to the "mode" field.
+func (m *ScheduledJobMutation) ResetMode() {
+	m.mode = nil
+}
+
+// SetPayload sets the "payload" field.
+func (m *ScheduledJobMutation) SetPayload(value map[string]interface{}) {
+	m.payload = &value
+}
+
+// Payload returns the value of the "payload" field in the mutation.
+func (m *ScheduledJobMutation) Payload() (r map[string]interface{}, exists bool) {
+	v := m.payload
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPayload returns the old "payload" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldPayload(ctx context.Context) (v map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPayload is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPayload requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPayload: %w", err)
+	}
+	return oldValue.Payload, nil
+}
+
+// ResetPayload resets all changes to the "payload" field.
+func (m *ScheduledJobMutation) ResetPayload() {
+	m.payload = nil
+}
+
+// SetStatus sets the "status" field.
+func (m *ScheduledJobMutation) SetStatus(s scheduledjob.Status) {
+	m.status = &s
+}
+
+// Status returns the value of the "status" field in the mutation.
+func (m *ScheduledJobMutation) Status() (r scheduledjob.Status, exists bool) {
+	v := m.status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStatus returns the old "status" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldStatus(ctx context.Context) (v scheduledjob.Status, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStatus: %w", err)
+	}
+	return oldValue.Status, nil
+}
+
+// ResetStatus resets all changes to the "status" field.
+func (m *ScheduledJobMutation) ResetStatus() {
+	m.status = nil
+}
+
+// SetLastRunAt sets the "last_run_at" field.
+func (m *ScheduledJobMutation) SetLastRunAt(t time.Time) {
+	m.last_run_at = &t
+}
+
+// LastRunAt returns the value of the "last_run_at" field in the mutation.
+func (m *ScheduledJobMutation) LastRunAt() (r time.Time, exists bool) {
+	v := m.last_run_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastRunAt returns the old "last_run_at" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldLastRunAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastRunAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastRunAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastRunAt: %w", err)
+	}
+	return oldValue.LastRunAt, nil
+}
+
+// ClearLastRunAt clears the value of the "last_run_at" field.
+func (m *ScheduledJobMutation) ClearLastRunAt() {
+	m.last_run_at = nil
+	m.clearedFields[scheduledjob.FieldLastRunAt] = struct{}{}
+}
+
+// LastRunAtCleared returns if the "last_run_at" field was cleared in this mutation.
+func (m *ScheduledJobMutation) LastRunAtCleared() bool {
+	_, ok := m.clearedFields[scheduledjob.FieldLastRunAt]
+	return ok
+}
+
+// ResetLastRunAt resets all changes to the "last_run_at" field.
+func (m *ScheduledJobMutation) ResetLastRunAt() {
+	m.last_run_at = nil
+	delete(m.clearedFields, scheduledjob.FieldLastRunAt)
+}
+
+// SetNextRunAt sets the "next_run_at" field.
+func (m *ScheduledJobMutation) SetNextRunAt(t time.Time) {
+	m.next_run_at = &t
+}
+
+// NextRunAt returns the value of the "next_run_at" field in the mutation.
+func (m *ScheduledJobMutation) NextRunAt() (r time.Time, exists bool) {
+	v := m.next_run_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldNextRunAt returns the old "next_run_at" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldNextRunAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldNextRunAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldNextRunAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldNextRunAt: %w", err)
+	}
+	return oldValue.NextRunAt, nil
+}
+
+// ClearNextRunAt clears the value of the "next_run_at" field.
+func (m *ScheduledJobMutation) ClearNextRunAt() {
+	m.next_run_at = nil
+	m.clearedFields[scheduledjob.FieldNextRunAt] = struct{}{}
+}
+
+// NextRunAtCleared returns if the "next_run_at" field was cleared in this mutation.
+func (m *ScheduledJobMutation) NextRunAtCleared() bool {
+	_, ok := m.clearedFields[scheduledjob.FieldNextRunAt]
+	return ok
+}
+
+// ResetNextRunAt resets all changes to the "next_run_at" field.
+func (m *ScheduledJobMutation) ResetNextRunAt() {
+	m.next_run_at = nil
+	delete(m.clearedFields, scheduledjob.FieldNextRunAt)
+}
+
+// SetLastStatus sets the "last_status" field.
+func (m *ScheduledJobMutation) SetLastStatus(s string) {
+	m.last_status = &s
+}
+
+// LastStatus returns the value of the "last_status" field in the mutation.
+func (m *ScheduledJobMutation) LastStatus() (r string, exists bool) {
+	v := m.last_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastStatus returns the old "last_status" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldLastStatus(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastStatus: %w", err)
+	}
+	return oldValue.LastStatus, nil
+}
+
+// ResetLastStatus resets all changes to the "last_status" field.
+func (m *ScheduledJobMutation) ResetLastStatus() {
+	m.last_status = nil
+}
+
+// SetLastError sets the "last_error" field.
+func (m *ScheduledJobMutation) SetLastError(s string) {
+	m.last_error = &s
+}
+
+// LastError returns the value of the "last_error" field in the mutation.
+func (m *ScheduledJobMutation) LastError() (r string, exists bool) {
+	v := m.last_error
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastError returns the old "last_error" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldLastError(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastError is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastError requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastError: %w", err)
+	}
+	return oldValue.LastError, nil
+}
+
+// ResetLastError resets all changes to the "last_error" field.
+func (m *ScheduledJobMutation) ResetLastError() {
+	m.last_error = nil
+}
+
+// SetConsecutiveFailures sets the "consecutive_failures" field.
+func (m *ScheduledJobMutation) SetConsecutiveFailures(i int) {
+	m.consecutive_failures = &i
+	m.addconsecutive_failures = nil
+}
+
+// ConsecutiveFailures returns the value of the "consecutive_failures" field in the mutation.
+func (m *ScheduledJobMutation) ConsecutiveFailures() (r int, exists bool) {
+	v := m.consecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldConsecutiveFailures returns the old "consecutive_failures" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldConsecutiveFailures(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldConsecutiveFailures is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldConsecutiveFailures requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldConsecutiveFailures: %w", err)
+	}
+	return oldValue.ConsecutiveFailures, nil
+}
+
+// AddConsecutiveFailures adds i to the "consecutive_failures" field.
+func (m *ScheduledJobMutation) AddConsecutiveFailures(i int) {
+	if m.addconsecutive_failures != nil {
+		*m.addconsecutive_failures += i
+	} else {
+		m.addconsecutive_failures = &i
+	}
+}
+
+// AddedConsecutiveFailures returns the value that was added to the "consecutive_failures" field in this mutation.
+func (m *ScheduledJobMutation) AddedConsecutiveFailures() (r int, exists bool) {
+	v := m.addconsecutive_failures
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetConsecutiveFailures resets all changes to the "consecutive_failures" field.
+func (m *ScheduledJobMutation) ResetConsecutiveFailures() {
+	m.consecutive_failures = nil
+	m.addconsecutive_failures = nil
+}
+
+// SetCreatedBy sets the "created_by" field.
+func (m *ScheduledJobMutation) SetCreatedBy(u uuid.UUID) {
+	m.created_by = &u
+}
+
+// CreatedBy returns the value of the "created_by" field in the mutation.
+func (m *ScheduledJobMutation) CreatedBy() (r uuid.UUID, exists bool) {
+	v := m.created_by
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedBy returns the old "created_by" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldCreatedBy(ctx context.Context) (v *uuid.UUID, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedBy is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedBy requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedBy: %w", err)
+	}
+	return oldValue.CreatedBy, nil
+}
+
+// ClearCreatedBy clears the value of the "created_by" field.
+func (m *ScheduledJobMutation) ClearCreatedBy() {
+	m.created_by = nil
+	m.clearedFields[scheduledjob.FieldCreatedBy] = struct{}{}
+}
+
+// CreatedByCleared returns if the "created_by" field was cleared in this mutation.
+func (m *ScheduledJobMutation) CreatedByCleared() bool {
+	_, ok := m.clearedFields[scheduledjob.FieldCreatedBy]
+	return ok
+}
+
+// ResetCreatedBy resets all changes to the "created_by" field.
+func (m *ScheduledJobMutation) ResetCreatedBy() {
+	m.created_by = nil
+	delete(m.clearedFields, scheduledjob.FieldCreatedBy)
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (m *ScheduledJobMutation) SetCreatedAt(t time.Time) {
+	m.created_at = &t
+}
+
+// CreatedAt returns the value of the "created_at" field in the mutation.
+func (m *ScheduledJobMutation) CreatedAt() (r time.Time, exists bool) {
+	v := m.created_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCreatedAt returns the old "created_at" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldCreatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCreatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCreatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCreatedAt: %w", err)
+	}
+	return oldValue.CreatedAt, nil
+}
+
+// ResetCreatedAt resets all changes to the "created_at" field.
+func (m *ScheduledJobMutation) ResetCreatedAt() {
+	m.created_at = nil
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (m *ScheduledJobMutation) SetUpdatedAt(t time.Time) {
+	m.updated_at = &t
+}
+
+// UpdatedAt returns the value of the "updated_at" field in the mutation.
+func (m *ScheduledJobMutation) UpdatedAt() (r time.Time, exists bool) {
+	v := m.updated_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpdatedAt returns the old "updated_at" field's value of the ScheduledJob entity.
+// If the ScheduledJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ScheduledJobMutation) OldUpdatedAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpdatedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpdatedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpdatedAt: %w", err)
+	}
+	return oldValue.UpdatedAt, nil
+}
+
+// ResetUpdatedAt resets all changes to the "updated_at" field.
+func (m *ScheduledJobMutation) ResetUpdatedAt() {
+	m.updated_at = nil
+}
+
+// Where appends a list predicates to the ScheduledJobMutation builder.
+func (m *ScheduledJobMutation) Where(ps ...predicate.ScheduledJob) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ScheduledJobMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ScheduledJobMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ScheduledJob, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ScheduledJobMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ScheduledJobMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ScheduledJob).
+func (m *ScheduledJobMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ScheduledJobMutation) Fields() []string {
+	fields := make([]string, 0, 13)
+	if m.name != nil {
+		fields = append(fields, scheduledjob.FieldName)
+	}
+	if m.schedule != nil {
+		fields = append(fields, scheduledjob.FieldSchedule)
+	}
+	if m.mode != nil {
+		fields = append(fields, scheduledjob.FieldMode)
+	}
+	if m.payload != nil {
+		fields = append(fields, scheduledjob.FieldPayload)
+	}
+	if m.status != nil {
+		fields = append(fields, scheduledjob.FieldStatus)
+	}
+	if m.last_run_at != nil {
+		fields = append(fields, scheduledjob.FieldLastRunAt)
+	}
+	if m.next_run_at != nil {
+		fields = append(fields, scheduledjob.FieldNextRunAt)
+	}
+	if m.last_status != nil {
+		fields = append(fields, scheduledjob.FieldLastStatus)
+	}
+	if m.last_error != nil {
+		fields = append(fields, scheduledjob.FieldLastError)
+	}
+	if m.consecutive_failures != nil {
+		fields = append(fields, scheduledjob.FieldConsecutiveFailures)
+	}
+	if m.created_by != nil {
+		fields = append(fields, scheduledjob.FieldCreatedBy)
+	}
+	if m.created_at != nil {
+		fields = append(fields, scheduledjob.FieldCreatedAt)
+	}
+	if m.updated_at != nil {
+		fields = append(fields, scheduledjob.FieldUpdatedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ScheduledJobMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case scheduledjob.FieldName:
+		return m.Name()
+	case scheduledjob.FieldSchedule:
+		return m.Schedule()
+	case scheduledjob.FieldMode:
+		return m.Mode()
+	case scheduledjob.FieldPayload:
+		return m.Payload()
+	case scheduledjob.FieldStatus:
+		return m.Status()
+	case scheduledjob.FieldLastRunAt:
+		return m.LastRunAt()
+	case scheduledjob.FieldNextRunAt:
+		return m.NextRunAt()
+	case scheduledjob.FieldLastStatus:
+		return m.LastStatus()
+	case scheduledjob.FieldLastError:
+		return m.LastError()
+	case scheduledjob.FieldConsecutiveFailures:
+		return m.ConsecutiveFailures()
+	case scheduledjob.FieldCreatedBy:
+		return m.CreatedBy()
+	case scheduledjob.FieldCreatedAt:
+		return m.CreatedAt()
+	case scheduledjob.FieldUpdatedAt:
+		return m.UpdatedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ScheduledJobMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case scheduledjob.FieldName:
+		return m.OldName(ctx)
+	case scheduledjob.FieldSchedule:
+		return m.OldSchedule(ctx)
+	case scheduledjob.FieldMode:
+		return m.OldMode(ctx)
+	case scheduledjob.FieldPayload:
+		return m.OldPayload(ctx)
+	case scheduledjob.FieldStatus:
+		return m.OldStatus(ctx)
+	case scheduledjob.FieldLastRunAt:
+		return m.OldLastRunAt(ctx)
+	case scheduledjob.FieldNextRunAt:
+		return m.OldNextRunAt(ctx)
+	case scheduledjob.FieldLastStatus:
+		return m.OldLastStatus(ctx)
+	case scheduledjob.FieldLastError:
+		return m.OldLastError(ctx)
+	case scheduledjob.FieldConsecutiveFailures:
+		return m.OldConsecutiveFailures(ctx)
+	case scheduledjob.FieldCreatedBy:
+		return m.OldCreatedBy(ctx)
+	case scheduledjob.FieldCreatedAt:
+		return m.OldCreatedAt(ctx)
+	case scheduledjob.FieldUpdatedAt:
+		return m.OldUpdatedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown ScheduledJob field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ScheduledJobMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case scheduledjob.FieldName:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetName(v)
+		return nil
+	case scheduledjob.FieldSchedule:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSchedule(v)
+		return nil
+	case scheduledjob.FieldMode:
+		v, ok := value.(scheduledjob.Mode)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMode(v)
+		return nil
+	case scheduledjob.FieldPayload:
+		v, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPayload(v)
+		return nil
+	case scheduledjob.FieldStatus:
+		v, ok := value.(scheduledjob.Status)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStatus(v)
+		return nil
+	case scheduledjob.FieldLastRunAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastRunAt(v)
+		return nil
+	case scheduledjob.FieldNextRunAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetNextRunAt(v)
+		return nil
+	case scheduledjob.FieldLastStatus:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastStatus(v)
+		return nil
+	case scheduledjob.FieldLastError:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastError(v)
+		return nil
+	case scheduledjob.FieldConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetConsecutiveFailures(v)
+		return nil
+	case scheduledjob.FieldCreatedBy:
+		v, ok := value.(uuid.UUID)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedBy(v)
+		return nil
+	case scheduledjob.FieldCreatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCreatedAt(v)
+		return nil
+	case scheduledjob.FieldUpdatedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpdatedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ScheduledJob field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ScheduledJobMutation) AddedFields() []string {
+	var fields []string
+	if m.addconsecutive_failures != nil {
+		fields = append(fields, scheduledjob.FieldConsecutiveFailures)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ScheduledJobMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case scheduledjob.FieldConsecutiveFailures:
+		return m.AddedConsecutiveFailures()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ScheduledJobMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case scheduledjob.FieldConsecutiveFailures:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddConsecutiveFailures(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ScheduledJob numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ScheduledJobMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(scheduledjob.FieldLastRunAt) {
+		fields = append(fields, scheduledjob.FieldLastRunAt)
+	}
+	if m.FieldCleared(scheduledjob.FieldNextRunAt) {
+		fields = append(fields, scheduledjob.FieldNextRunAt)
+	}
+	if m.FieldCleared(scheduledjob.FieldCreatedBy) {
+		fields = append(fields, scheduledjob.FieldCreatedBy)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ScheduledJobMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ScheduledJobMutation) ClearField(name string) error {
+	switch name {
+	case scheduledjob.FieldLastRunAt:
+		m.ClearLastRunAt()
+		return nil
+	case scheduledjob.FieldNextRunAt:
+		m.ClearNextRunAt()
+		return nil
+	case scheduledjob.FieldCreatedBy:
+		m.ClearCreatedBy()
+		return nil
+	}
+	return fmt.Errorf("unknown ScheduledJob nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ScheduledJobMutation) ResetField(name string) error {
+	switch name {
+	case scheduledjob.FieldName:
+		m.ResetName()
+		return nil
+	case scheduledjob.FieldSchedule:
+		m.ResetSchedule()
+		return nil
+	case scheduledjob.FieldMode:
+		m.ResetMode()
+		return nil
+	case scheduledjob.FieldPayload:
+		m.ResetPayload()
+		return nil
+	case scheduledjob.FieldStatus:
+		m.ResetStatus()
+		return nil
+	case scheduledjob.FieldLastRunAt:
+		m.ResetLastRunAt()
+		return nil
+	case scheduledjob.FieldNextRunAt:
+		m.ResetNextRunAt()
+		return nil
+	case scheduledjob.FieldLastStatus:
+		m.ResetLastStatus()
+		return nil
+	case scheduledjob.FieldLastError:
+		m.ResetLastError()
+		return nil
+	case scheduledjob.FieldConsecutiveFailures:
+		m.ResetConsecutiveFailures()
+		return nil
+	case scheduledjob.FieldCreatedBy:
+		m.ResetCreatedBy()
+		return nil
+	case scheduledjob.FieldCreatedAt:
+		m.ResetCreatedAt()
+		return nil
+	case scheduledjob.FieldUpdatedAt:
+		m.ResetUpdatedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ScheduledJob field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ScheduledJobMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ScheduledJobMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ScheduledJobMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ScheduledJobMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ScheduledJobMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ScheduledJobMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ScheduledJobMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown ScheduledJob unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ScheduledJobMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown ScheduledJob edge %s", name)
 }
 
 // SessionMutation represents an operation that mutates the Session nodes in the graph.

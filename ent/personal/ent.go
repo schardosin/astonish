@@ -18,6 +18,7 @@ import (
 	"github.com/SAP/astonish/ent/personal/flow"
 	"github.com/SAP/astonish/ent/personal/memory"
 	"github.com/SAP/astonish/ent/personal/personalsettings"
+	"github.com/SAP/astonish/ent/personal/scheduledjob"
 	"github.com/SAP/astonish/ent/personal/session"
 	"github.com/SAP/astonish/ent/personal/sessionevent"
 )
@@ -86,6 +87,7 @@ func checkColumn(t, c string) error {
 			flow.Table:             flow.ValidColumn,
 			memory.Table:           memory.ValidColumn,
 			personalsettings.Table: personalsettings.ValidColumn,
+			scheduledjob.Table:     scheduledjob.ValidColumn,
 			session.Table:          session.ValidColumn,
 			sessionevent.Table:     sessionevent.ValidColumn,
 		})

@@ -1058,10 +1058,15 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Inject tenant-scoped scheduler store into the runner context so that
-	// the schedule_job and list_scheduled_jobs tools operate on the correct team.
-	if svc := store.FromRequest(r); svc != nil && svc.Scheduler != nil {
-		runner.InjectSchedulerStore(svc.Scheduler)
+	// Inject team + personal scheduler stores so schedule_job can create
+	// personal jobs (default) or team jobs, and list/update across both lanes.
+	if svc := store.FromRequest(r); svc != nil {
+		if svc.Scheduler != nil {
+			runner.InjectSchedulerStore(svc.Scheduler)
+		}
+		if svc.PersonalScheduler != nil {
+			runner.InjectPersonalSchedulerStore(svc.PersonalScheduler)
+		}
 	}
 
 	// Inject tenant-scoped fleet stores into the runner context so that
@@ -1127,23 +1132,22 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Inject RunJobFunc so schedule_job test execution works in platform mode.
-	// In decoupled deployments (ASTONISH_MODE=api), the global executor lives on
-	// the worker pod, so we construct a lightweight local executor from the
-	// ChatManager components that are already available on the API pod.
-	if reqSvc := store.FromRequest(r); reqSvc != nil && reqSvc.Scheduler != nil {
+	// Uses the same credential injection as cron for the job's scope so
+	// test_first cannot succeed with personal creds then fail on team-only cron.
+	if reqSvc := store.FromRequest(r); reqSvc != nil && (reqSvc.Scheduler != nil || reqSvc.PersonalScheduler != nil) {
 		runner.InjectRunJobFunc(func(ctx context.Context, jobID string) (string, error) {
-			storeJob := reqSvc.Scheduler.Get(ctx, jobID)
+			storeJob, _, jobScope := findSchedulerJob(ctx, reqSvc, jobID)
 			if storeJob == nil {
 				return "", fmt.Errorf("job %q not found", jobID)
 			}
+			storeJob.Scope = jobScope
 			job := storeJobToSchedulerJob(storeJob)
+			execCtx := buildSchedulerExecContext(ctx, reqSvc, jobScope, storeJob)
 
-			// Prefer the global executor (available on worker/default mode pods).
 			if exec := GetExecutor(); exec != nil {
-				return exec.Execute(ctx, job)
+				return exec.Execute(execCtx, job)
 			}
 
-			// API mode: construct a local executor from ChatManager components.
 			cm := GetChatManager()
 			if cm.components == nil || cm.components.ChatAgent == nil {
 				return "", fmt.Errorf("chat agent not initialized — cannot test-execute job")
@@ -1155,7 +1159,7 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				ModelName:      cm.components.ModelName,
 				RunHeadless:    GetRunHeadlessFunc(),
 			}
-			return localExec.Execute(ctx, job)
+			return localExec.Execute(execCtx, job)
 		})
 	}
 

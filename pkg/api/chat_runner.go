@@ -220,11 +220,17 @@ func (cr *ChatRunner) InjectSkillIndex(index string) {
 	}
 }
 
-// InjectSchedulerStore adds a tenant-scoped scheduler store to the runner's context
-// so that the schedule_job and list_scheduled_jobs tools can operate on the
-// correct team's jobs in platform mode. Must be called before Run().
+// InjectSchedulerStore adds a team-scoped scheduler store to the runner's context
+// so that the schedule_job and list_scheduled_jobs tools can operate on team jobs.
+// Must be called before Run().
 func (cr *ChatRunner) InjectSchedulerStore(ss store.SchedulerStore) {
 	cr.ctx = store.WithSchedulerStore(cr.ctx, ss)
+}
+
+// InjectPersonalSchedulerStore adds the user's personal scheduler store so
+// schedule_job defaults to personal-scope jobs with personal credentials.
+func (cr *ChatRunner) InjectPersonalSchedulerStore(ss store.SchedulerStore) {
+	cr.ctx = store.WithPersonalSchedulerStore(cr.ctx, ss)
 }
 
 // InjectDrillReportStore adds a tenant-scoped drill report store to the runner's

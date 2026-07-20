@@ -61,6 +61,12 @@ type FlowTap struct {
 	Branch string `json:"branch"`
 }
 
+// JobScope identifies whether a scheduled job is personal or team-owned.
+const (
+	JobScopePersonal = "personal"
+	JobScopeTeam     = "team"
+)
+
 // ScheduledJob represents a scheduled automation job.
 type ScheduledJob struct {
 	ID                  string       `json:"id"`
@@ -72,6 +78,8 @@ type ScheduledJob struct {
 	Enabled             bool         `json:"enabled"`
 	CreatedAt           time.Time    `json:"created_at"`
 	OwnerID             string       `json:"owner_id,omitempty"` // platform user ID who created the job
+	Scope               string       `json:"scope,omitempty"`    // personal | team (runtime; which store owns the job)
+	TeamSlug            string       `json:"team_slug,omitempty"` // team context for personal jobs (credential/flow fallback)
 	LastRun             *time.Time   `json:"last_run,omitempty"`
 	LastStatus          string       `json:"last_status"`
 	LastError           string       `json:"last_error,omitempty"`
@@ -104,8 +112,9 @@ type JobDelivery struct {
 
 // SchedulerStore manages scheduled job persistence.
 //
-// In personal mode, this wraps the existing scheduler.Store.
-// In platform mode, jobs are stored in the team's schema.
+// Platform mode has two lanes:
+//   - Team jobs live in the team schema (shared automation, team credentials).
+//   - Personal jobs live in the personal schema (owner-only, personal+team credentials).
 type SchedulerStore interface {
 	List(ctx context.Context) []*ScheduledJob
 	Get(ctx context.Context, id string) *ScheduledJob

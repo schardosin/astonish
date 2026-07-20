@@ -68,8 +68,14 @@ type Services struct {
 	// Nil in personal mode when no user context has been established.
 	PersonalSettings PersonalSettingsStore
 
-	// Scheduler provides access to scheduled job persistence.
+	// Scheduler provides access to team-scoped scheduled job persistence.
+	// Shared team automation; runs with team credentials only.
 	Scheduler SchedulerStore
+
+	// PersonalScheduler provides access to the user's private scheduled jobs.
+	// Personal automation; runs with MergedCredentialStore(personal, team).
+	// Nil when no user context is established.
+	PersonalScheduler SchedulerStore
 
 	// FleetTemplates provides access to fleet template definitions.
 	FleetTemplates FleetTemplateStore

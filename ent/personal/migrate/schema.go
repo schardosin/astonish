@@ -164,6 +164,41 @@ var (
 			},
 		},
 	}
+	// ScheduledJobsColumns holds the columns for the "scheduled_jobs" table.
+	ScheduledJobsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "name", Type: field.TypeString},
+		{Name: "schedule", Type: field.TypeString},
+		{Name: "mode", Type: field.TypeEnum, Enums: []string{"routine", "adaptive", "fleet_poll"}, Default: "routine"},
+		{Name: "payload", Type: field.TypeJSON},
+		{Name: "status", Type: field.TypeEnum, Enums: []string{"active", "paused", "completed", "failed"}, Default: "active"},
+		{Name: "last_run_at", Type: field.TypeTime, Nullable: true},
+		{Name: "next_run_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_status", Type: field.TypeString, Default: "pending"},
+		{Name: "last_error", Type: field.TypeString, Default: ""},
+		{Name: "consecutive_failures", Type: field.TypeInt, Default: 0},
+		{Name: "created_by", Type: field.TypeUUID, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+		{Name: "updated_at", Type: field.TypeTime, Default: map[string]schema.Expr{"postgres": "now()", "sqlite3": "(datetime('now'))"}},
+	}
+	// ScheduledJobsTable holds the schema information for the "scheduled_jobs" table.
+	ScheduledJobsTable = &schema.Table{
+		Name:       "scheduled_jobs",
+		Columns:    ScheduledJobsColumns,
+		PrimaryKey: []*schema.Column{ScheduledJobsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "scheduledjob_status",
+				Unique:  false,
+				Columns: []*schema.Column{ScheduledJobsColumns[5]},
+			},
+			{
+				Name:    "scheduledjob_next_run_at",
+				Unique:  false,
+				Columns: []*schema.Column{ScheduledJobsColumns[7]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeString},
@@ -231,6 +266,7 @@ var (
 		FlowsTable,
 		MemoriesTable,
 		PersonalSettingsTable,
+		ScheduledJobsTable,
 		SessionsTable,
 		SessionEventsTable,
 	}
@@ -255,6 +291,9 @@ func init() {
 	}
 	PersonalSettingsTable.Annotation = &entsql.Annotation{
 		Table: "personal_settings",
+	}
+	ScheduledJobsTable.Annotation = &entsql.Annotation{
+		Table: "scheduled_jobs",
 	}
 	SessionsTable.Annotation = &entsql.Annotation{
 		Table: "sessions",

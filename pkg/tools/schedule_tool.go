@@ -48,6 +48,10 @@ type SchedulerJob struct {
 	ChannelFilter  []string            `json:"channel_filter,omitempty"`  // restrict to these channel types
 	MemberChannels map[string][]string `json:"member_channels,omitempty"` // per-member channel overrides
 
+	// Scope is "personal" (default) or "team".
+	Scope    string `json:"scope,omitempty"`
+	TeamSlug string `json:"team_slug,omitempty"`
+
 	// Runtime state (populated on list)
 	LastRun    *time.Time `json:"last_run,omitempty"`
 	LastStatus string     `json:"last_status,omitempty"`
@@ -66,13 +70,68 @@ func SetSchedulerAccess(sa SchedulerAccess) {
 	schedulerAccessVar = sa
 }
 
-// getEffectiveSchedulerStore returns the tenant-scoped SchedulerStore from the
-// context (platform mode) or nil (personal mode uses schedulerAccessVar instead).
+// getEffectiveSchedulerStore returns the team-scoped SchedulerStore from the
+// context (platform mode) or nil (legacy personal mode uses schedulerAccessVar).
 func getEffectiveSchedulerStore(ctx context.Context) store.SchedulerStore {
 	if ctx == nil {
 		return nil
 	}
 	return store.SchedulerStoreFromContext(ctx)
+}
+
+// getPersonalSchedulerStore returns the user's personal SchedulerStore from context.
+func getPersonalSchedulerStore(ctx context.Context) store.SchedulerStore {
+	if ctx == nil {
+		return nil
+	}
+	return store.PersonalSchedulerStoreFromContext(ctx)
+}
+
+// resolveSchedulerStore picks the store for the given scope.
+// Empty scope defaults to personal when a personal store is available, else team.
+func resolveSchedulerStore(ctx context.Context, scope string) (store.SchedulerStore, string) {
+	personal := getPersonalSchedulerStore(ctx)
+	team := getEffectiveSchedulerStore(ctx)
+	switch scope {
+	case store.JobScopeTeam:
+		return team, store.JobScopeTeam
+	case store.JobScopePersonal:
+		if personal != nil {
+			return personal, store.JobScopePersonal
+		}
+		return team, store.JobScopeTeam
+	default:
+		if personal != nil {
+			return personal, store.JobScopePersonal
+		}
+		return team, store.JobScopeTeam
+	}
+}
+
+// findJobAcrossScopes looks up a job by ID/name in personal then team stores.
+func findJobAcrossScopes(ctx context.Context, idOrName string) (*store.ScheduledJob, store.SchedulerStore, string) {
+	personal := getPersonalSchedulerStore(ctx)
+	team := getEffectiveSchedulerStore(ctx)
+	for _, pair := range []struct {
+		ss    store.SchedulerStore
+		scope string
+	}{
+		{personal, store.JobScopePersonal},
+		{team, store.JobScopeTeam},
+	} {
+		if pair.ss == nil {
+			continue
+		}
+		if j := pair.ss.Get(ctx, idOrName); j != nil {
+			j.Scope = pair.scope
+			return j, pair.ss, pair.scope
+		}
+		if j := pair.ss.GetByName(ctx, idOrName); j != nil {
+			j.Scope = pair.scope
+			return j, pair.ss, pair.scope
+		}
+	}
+	return nil, nil, ""
 }
 
 // storeJobToToolJob converts a store.ScheduledJob to a tools.SchedulerJob.
@@ -98,6 +157,8 @@ func storeJobToToolJob(sj *store.ScheduledJob) *SchedulerJob {
 		NextRun:        sj.NextRun,
 		Failures:       sj.ConsecutiveFailures,
 		CreatedAt:      sj.CreatedAt,
+		Scope:          sj.Scope,
+		TeamSlug:       sj.TeamSlug,
 	}
 }
 
@@ -130,6 +191,8 @@ func toolJobToStoreJob(tj *SchedulerJob) *store.ScheduledJob {
 		LastStatus:          tj.LastStatus,
 		NextRun:             tj.NextRun,
 		ConsecutiveFailures: tj.Failures,
+		Scope:               tj.Scope,
+		TeamSlug:            tj.TeamSlug,
 	}
 }
 
@@ -144,11 +207,12 @@ type ScheduleJobArgs struct {
 	Params       map[string]string `json:"params,omitempty" jsonschema:"Flow parameters as key-value pairs (for routine mode)"`
 	Instructions string            `json:"instructions,omitempty" jsonschema:"Task instructions for the AI agent (required for adaptive mode). Be specific and detailed. MUST include the exact output format the user last saw, with a concrete example copied from the conversation."`
 	TestFirst    bool              `json:"test_first,omitempty" jsonschema:"If true, execute immediately to test, then ask user to confirm before enabling. Only set this AFTER the user has approved the test plan."`
+	Scope        string            `json:"scope,omitempty" jsonschema:"Job ownership: 'personal' (default — uses your personal credentials, only you can manage it) or 'team' (shared team job using team credentials; requires team admin). Prefer 'personal' when the job needs a personal OAuth/API credential."`
 
 	// Delivery configuration — ASK the user about these before scheduling
-	DeliveryMode     string   `json:"delivery_mode,omitempty" jsonschema:"Who receives the results: 'owner' (only you), 'team' (all team members), 'members' (specific people). Default is 'owner'. ALWAYS ask the user who should receive the scheduled results before creating the job."`
+	DeliveryMode     string   `json:"delivery_mode,omitempty" jsonschema:"Who receives the results: 'owner' (only you), 'team' (all team members), 'members' (specific people). Default is 'owner'. Personal-scope jobs only support 'owner'. ALWAYS ask the user who should receive the scheduled results before creating the job."`
 	DeliveryChannels []string `json:"delivery_channels,omitempty" jsonschema:"Which channels to deliver through (e.g. ['telegram', 'email', 'slack']). If empty, all linked channels are used. Ask the user which channel(s) they prefer for delivery."`
-	DeliveryMembers  []string `json:"delivery_members,omitempty" jsonschema:"User IDs for 'members' delivery mode. Use list_team_members first to get available members and their linked channels, then ask the user which members should receive results."`
+	DeliveryMembers  []string `json:"delivery_members,omitempty" jsonschema:"User IDs for 'members' delivery mode. Use list_team_members first to get available members and their linked channels, then ask the user which members should receive results. Not allowed for personal-scope jobs."`
 
 	// Legacy fields (prefer delivery_mode instead)
 	Channel string `json:"channel,omitempty" jsonschema:"DEPRECATED: Use delivery_mode instead. Legacy label for delivery channel."`
@@ -163,10 +227,15 @@ type ScheduleJobResult struct {
 }
 
 func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, error) {
-	// Try context-injected store first (platform multi-tenant), then global (personal mode)
-	ss := getEffectiveSchedulerStore(ctx)
+	ss, jobScope := resolveSchedulerStore(ctx, args.Scope)
 	if ss == nil && schedulerAccessVar == nil {
 		return ScheduleJobResult{}, fmt.Errorf("scheduler is not available — the daemon must be running with scheduler enabled")
+	}
+	if args.Scope == store.JobScopeTeam && ss == nil {
+		return ScheduleJobResult{
+			Status:  "error",
+			Message: "Team scheduler is not available in this context",
+		}, nil
 	}
 
 	// Validate mode
@@ -209,7 +278,23 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		}
 	}
 
-	// Reject duplicate names
+	// Personal jobs may only deliver to the owner.
+	if jobScope == store.JobScopePersonal {
+		if args.DeliveryMode == "team" || args.DeliveryMode == "members" {
+			return ScheduleJobResult{
+				Status:  "error",
+				Message: "Personal-scope jobs can only deliver to 'owner'. Use scope='team' for team/members delivery.",
+			}, nil
+		}
+		if len(args.DeliveryMembers) > 0 {
+			return ScheduleJobResult{
+				Status:  "error",
+				Message: "Personal-scope jobs cannot target delivery members. Use scope='team' instead.",
+			}, nil
+		}
+	}
+
+	// Reject duplicate names within the chosen scope
 	if args.Name != "" {
 		var existing *SchedulerJob
 		if ss != nil {
@@ -243,22 +328,34 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		DeliveryMode:   args.DeliveryMode,
 		MemberIDs:      args.DeliveryMembers,
 		ChannelFilter:  args.DeliveryChannels,
+		Scope:          jobScope,
 	}
 
 	// Default delivery mode to "owner" if not specified
 	if job.DeliveryMode == "" && job.Channel == "" && job.Target == "" {
 		job.DeliveryMode = "owner"
 	}
+	if jobScope == store.JobScopePersonal {
+		job.DeliveryMode = "owner"
+		job.MemberIDs = nil
+	}
 
 	// Add job to store
 	if ss != nil {
-		// Platform mode: use context-injected store
 		storeJob := toolJobToStoreJob(job)
 		storeJob.CreatedAt = time.Now()
 		storeJob.LastStatus = "pending"
-		// Set owner from context so delivery mode "owner" knows who to deliver to
+		storeJob.Scope = jobScope
 		if uid := store.UserIDFromContext(ctx); uid != "" {
 			storeJob.OwnerID = uid
+		}
+		// Capture active team for personal-job credential/flow fallback.
+		if jobScope == store.JobScopePersonal {
+			if tc := store.TenantContextFrom(ctx); tc != nil && tc.TeamSlug != "" {
+				storeJob.TeamSlug = tc.TeamSlug
+			} else if slug := store.TeamSlugFromContext(ctx); slug != "" {
+				storeJob.TeamSlug = slug
+			}
 		}
 		if err := ss.Add(ctx, storeJob); err != nil {
 			return ScheduleJobResult{
@@ -267,13 +364,11 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 			}, nil
 		}
 		job.ID = storeJob.ID
-		// Compute initial NextRun
 		if job.Enabled {
 			storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
 			_ = ss.Update(ctx, storeJob)
 		}
 	} else {
-		// Personal mode: use global scheduler access
 		if err := schedulerAccessVar.AddJob(job); err != nil {
 			return ScheduleJobResult{
 				Status:  "error",
@@ -282,21 +377,19 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 		}
 	}
 
-	// If test_first, execute immediately and return result
+	// If test_first, execute immediately with the same credential context cron will use.
 	if args.TestFirst {
 		var result string
 		var execErr error
-		// Platform mode: use context-injected executor (bypasses auth)
 		if runJob := store.RunJobFuncFromContext(ctx); runJob != nil {
 			result, execErr = runJob(ctx, job.ID)
 		} else if schedulerAccessVar != nil {
-			// Personal mode: use HTTP bridge
 			result, execErr = schedulerAccessVar.RunNow(ctx, job.ID)
 		} else {
 			execErr = fmt.Errorf("no execution path available (scheduler not configured)")
 		}
 		status := "test_complete"
-		msg := fmt.Sprintf("Job %q created and tested. The job is currently DISABLED — ask the user if the test result looks good, and if so, call update_scheduled_job to enable it.", args.Name)
+		msg := fmt.Sprintf("Job %q created and tested (scope=%s). The job is currently DISABLED — ask the user if the test result looks good, and if so, call update_scheduled_job to enable it.", args.Name, jobScope)
 		if execErr != nil {
 			status = "test_failed"
 			msg = fmt.Sprintf("Job %q created but test execution failed: %v. The job is DISABLED. Ask the user if they want to fix the issue or remove the job.", args.Name, execErr)
@@ -313,7 +406,7 @@ func scheduleJob(ctx tool.Context, args ScheduleJobArgs) (ScheduleJobResult, err
 	return ScheduleJobResult{
 		Status:  "created",
 		JobID:   job.ID,
-		Message: fmt.Sprintf("Job %q created and enabled. Schedule: %s (%s)", args.Name, args.Schedule, timezoneLabel(args.Timezone)),
+		Message: fmt.Sprintf("Job %q created and enabled (scope=%s). Schedule: %s (%s)", args.Name, jobScope, args.Schedule, timezoneLabel(args.Timezone)),
 	}, nil
 }
 
@@ -333,6 +426,7 @@ type JobSummary struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Mode     string `json:"mode"`
+	Scope    string `json:"scope,omitempty"`
 	Schedule string `json:"schedule"`
 	Timezone string `json:"timezone,omitempty"`
 	PlanKey  string `json:"plan_key,omitempty"` // fleet plan key for fleet_poll jobs
@@ -343,34 +437,43 @@ type JobSummary struct {
 }
 
 func listScheduledJobs(ctx tool.Context, args ListScheduledJobsArgs) (ListScheduledJobsResult, error) {
-	ss := getEffectiveSchedulerStore(ctx)
-	if ss == nil && schedulerAccessVar == nil {
+	personal := getPersonalSchedulerStore(ctx)
+	team := getEffectiveSchedulerStore(ctx)
+	if personal == nil && team == nil && schedulerAccessVar == nil {
 		return ListScheduledJobsResult{
 			Message: "Scheduler is not available — the daemon must be running with scheduler enabled",
 		}, nil
 	}
 
 	var jobs []*SchedulerJob
-	if ss != nil {
-		// Platform mode: read from context-injected team store
-		storeJobs := ss.List(ctx)
-		jobs = make([]*SchedulerJob, len(storeJobs))
-		for i, sj := range storeJobs {
-			jobs[i] = storeJobToToolJob(sj)
+	if personal != nil || team != nil {
+		if personal != nil {
+			for _, sj := range personal.List(ctx) {
+				tj := storeJobToToolJob(sj)
+				tj.Scope = store.JobScopePersonal
+				jobs = append(jobs, tj)
+			}
+		}
+		if team != nil {
+			for _, sj := range team.List(ctx) {
+				tj := storeJobToToolJob(sj)
+				tj.Scope = store.JobScopeTeam
+				jobs = append(jobs, tj)
+			}
 		}
 	} else {
-		// Personal mode: use global scheduler access
 		jobs = schedulerAccessVar.ListJobs()
 	}
 	summaries := make([]JobSummary, 0, len(jobs))
 	for _, j := range jobs {
-		if args.Filter != "" && !strings.Contains(j.Name, args.Filter) && !strings.Contains(j.Mode, args.Filter) {
+		if args.Filter != "" && !strings.Contains(j.Name, args.Filter) && !strings.Contains(j.Mode, args.Filter) && !strings.Contains(j.Scope, args.Filter) {
 			continue
 		}
 		summary := JobSummary{
 			ID:       j.ID,
 			Name:     j.Name,
 			Mode:     j.Mode,
+			Scope:    j.Scope,
 			Schedule: j.Cron,
 			Timezone: j.Timezone,
 			Enabled:  j.Enabled,
@@ -415,24 +518,45 @@ type RemoveScheduledJobResult struct {
 }
 
 func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveScheduledJobResult, error) {
-	ss := getEffectiveSchedulerStore(ctx)
-	if ss == nil && schedulerAccessVar == nil {
+	personal := getPersonalSchedulerStore(ctx)
+	team := getEffectiveSchedulerStore(ctx)
+	if personal == nil && team == nil && schedulerAccessVar == nil {
 		return RemoveScheduledJobResult{
 			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
 	jobID := args.JobID
+	lookup := jobID
+	if lookup == "" {
+		lookup = args.JobName
+	}
+	if lookup == "" {
+		return RemoveScheduledJobResult{
+			ToolResult: toolError("Either job_id or job_name is required"),
+		}, nil
+	}
+
+	if personal != nil || team != nil {
+		job, ss, _ := findJobAcrossScopes(ctx, lookup)
+		if job == nil || ss == nil {
+			return RemoveScheduledJobResult{
+				ToolResult: toolError("No job found with id/name %q", lookup),
+			}, nil
+		}
+		if err := ss.Remove(ctx, job.ID); err != nil {
+			return RemoveScheduledJobResult{
+				ToolResult: toolError("Failed to remove job: %v", err),
+			}, nil
+		}
+		return RemoveScheduledJobResult{
+			ToolResult: ToolResult{Status: "removed", Message: "Job removed successfully"},
+		}, nil
+	}
+
 	if jobID == "" && args.JobName != "" {
-		// Look up by name
-		if ss != nil {
-			if sj := ss.GetByName(ctx, args.JobName); sj != nil {
-				jobID = sj.ID
-			}
-		} else {
-			if job := schedulerAccessVar.GetJobByName(args.JobName); job != nil {
-				jobID = job.ID
-			}
+		if job := schedulerAccessVar.GetJobByName(args.JobName); job != nil {
+			jobID = job.ID
 		}
 		if jobID == "" {
 			return RemoveScheduledJobResult{
@@ -440,20 +564,7 @@ func removeScheduledJob(ctx tool.Context, args RemoveScheduledJobArgs) (RemoveSc
 			}, nil
 		}
 	}
-
-	if jobID == "" {
-		return RemoveScheduledJobResult{
-			ToolResult: toolError("Either job_id or job_name is required"),
-		}, nil
-	}
-
-	var err error
-	if ss != nil {
-		err = ss.Remove(ctx, jobID)
-	} else {
-		err = schedulerAccessVar.RemoveJob(jobID)
-	}
-	if err != nil {
+	if err := schedulerAccessVar.RemoveJob(jobID); err != nil {
 		return RemoveScheduledJobResult{
 			ToolResult: toolError("Failed to remove job: %v", err),
 		}, nil
@@ -479,27 +590,27 @@ type UpdateScheduledJobResult struct {
 }
 
 func updateScheduledJob(ctx tool.Context, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
-	ss := getEffectiveSchedulerStore(ctx)
-	if ss == nil && schedulerAccessVar == nil {
+	personal := getPersonalSchedulerStore(ctx)
+	team := getEffectiveSchedulerStore(ctx)
+	if personal == nil && team == nil && schedulerAccessVar == nil {
 		return UpdateScheduledJobResult{
 			ToolResult: toolError("Scheduler is not available"),
 		}, nil
 	}
 
-	if ss != nil {
-		// Platform mode: use context-injected store
-		return updateScheduledJobFromStore(ctx, ss, args)
+	if personal != nil || team != nil {
+		job, ss, _ := findJobAcrossScopes(ctx, args.JobID)
+		if job == nil || ss == nil {
+			return UpdateScheduledJobResult{
+				ToolResult: toolError("Job %q not found", args.JobID),
+			}, nil
+		}
+		return updateScheduledJobFromStore(ctx, ss, job, args)
 	}
-	// Personal mode: use global scheduler access
 	return updateScheduledJobFromAccess(args)
 }
 
-func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
-	// Try by ID first, then by name
-	job := ss.Get(ctx, args.JobID)
-	if job == nil {
-		job = ss.GetByName(ctx, args.JobID)
-	}
+func updateScheduledJobFromStore(ctx context.Context, ss store.SchedulerStore, job *store.ScheduledJob, args UpdateScheduledJobArgs) (UpdateScheduledJobResult, error) {
 	if job == nil {
 		return UpdateScheduledJobResult{
 			ToolResult: toolError("Job %q not found", args.JobID),
@@ -642,6 +753,7 @@ CRITICAL RULES:
 - NEVER change the mode from what the user requested. If user says "routine", use "routine". If the flow doesn't exist yet, use distill_flow to create it FIRST, then come back to scheduling.
 - NEVER silently switch from "routine" to "adaptive" or vice versa. If there's a problem with the chosen mode, EXPLAIN the issue to the user and ask how to proceed.
 - NEVER call this tool without completing ALL workflow steps below.
+- Default scope is "personal" (uses the user's personal credentials). Use scope="team" only for shared team automation that should use team/service credentials. Do NOT ask the user to publish personal credentials to the team just to schedule a job — use personal scope instead.
 
 WORKFLOW — Follow these steps IN ORDER, one at a time:
 
@@ -654,6 +766,7 @@ WORKFLOW — Follow these steps IN ORDER, one at a time:
 
 3. DELIVERY — You MUST ask about delivery preferences:
    - "Who should receive the results?" → delivery_mode: "owner" (just you), "team" (everyone), or "members" (specific people)
+   - Personal-scope jobs only support delivery_mode "owner".
    - "Via which channel(s)?" → delivery_channels: ["telegram"], ["email"], etc. If not specified, all linked channels are used.
    - If "members" mode: call list_team_members first to show available members, then ask which should receive results.
    Do NOT skip this step. Do NOT assume "owner" without asking.

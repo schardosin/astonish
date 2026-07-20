@@ -136,6 +136,7 @@ func DrillReportStoreFromContext(ctx context.Context) DrillReportStore {
 
 const skillStoresKey contextKey = "astonish_skill_stores"
 const schedulerStoreKey contextKey = "astonish_scheduler_store"
+const personalSchedulerStoreKey contextKey = "astonish_personal_scheduler_store"
 const mcpServerStoresKey contextKey = "astonish_mcp_server_stores"
 
 // SkillStores holds references to platform, org, and team skill stores
@@ -170,13 +171,28 @@ func WithSchedulerStore(ctx context.Context, ss SchedulerStore) context.Context 
 	return context.WithValue(ctx, schedulerStoreKey, ss)
 }
 
-// SchedulerStoreFromContext retrieves the SchedulerStore from a context.
+// SchedulerStoreFromContext retrieves the team SchedulerStore from a context.
 // Returns nil if no SchedulerStore is present (personal mode or tests).
 func SchedulerStoreFromContext(ctx context.Context) SchedulerStore {
 	if ctx == nil {
 		return nil
 	}
 	ss, _ := ctx.Value(schedulerStoreKey).(SchedulerStore)
+	return ss
+}
+
+// WithPersonalSchedulerStore returns a new context containing the user's personal SchedulerStore.
+func WithPersonalSchedulerStore(ctx context.Context, ss SchedulerStore) context.Context {
+	return context.WithValue(ctx, personalSchedulerStoreKey, ss)
+}
+
+// PersonalSchedulerStoreFromContext retrieves the personal SchedulerStore from a context.
+// Returns nil if no personal scheduler store is present.
+func PersonalSchedulerStoreFromContext(ctx context.Context) SchedulerStore {
+	if ctx == nil {
+		return nil
+	}
+	ss, _ := ctx.Value(personalSchedulerStoreKey).(SchedulerStore)
 	return ss
 }
 

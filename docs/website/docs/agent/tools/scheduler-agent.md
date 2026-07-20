@@ -20,12 +20,19 @@ schedule_job:
   name: "daily-backup"
   mode: "adaptive"
   schedule: "0 2 * * *"
+  scope: "personal"   # default — uses your personal credentials
   instructions: "Run database backup and upload to S3"
 ```
 
 Modes:
 - **routine** — Runs a saved flow with fixed parameters (deterministic)
 - **adaptive** — An AI agent executes free-form instructions each run (flexible)
+
+Scope (platform mode):
+- **personal** (default) — Private to you; runs with your personal credentials (plus team fallback). Delivery is limited to you (`owner`). Prefer this when the job needs a personal OAuth token or API key.
+- **team** — Shared team job; runs with team credentials only. Requires team admin. Use for service accounts and shared automation.
+
+Do not publish a personal credential to the team just to schedule a job — use `scope: personal` instead.
 
 The daemon must be running for scheduled jobs to execute.
 

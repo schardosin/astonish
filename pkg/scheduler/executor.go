@@ -164,7 +164,14 @@ CRITICAL RULES:
 	// Use dashes (not colons) — session IDs flow into Kubernetes label values
 	// which only allow [a-z0-9A-Z._-].
 	sessionKey := fmt.Sprintf("scheduler-adaptive-%s", job.ID)
+	// Personal jobs run as the owning user so personal sessions/credentials apply.
+	// Team/headless jobs use SystemUserID.
 	userID := store.SystemUserID
+	if uid := store.UserIDFromContext(ctx); uid != "" {
+		userID = uid
+	} else if job.Scope == "personal" && job.OwnerID != "" {
+		userID = job.OwnerID
+	}
 	appName := "astonish"
 
 	// Get or create session

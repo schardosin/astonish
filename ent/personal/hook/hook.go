@@ -81,6 +81,18 @@ func (f PersonalSettingsFunc) Mutate(ctx context.Context, m personal.Mutation) (
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *personal.PersonalSettingsMutation", m)
 }
 
+// The ScheduledJobFunc type is an adapter to allow the use of ordinary
+// function as ScheduledJob mutator.
+type ScheduledJobFunc func(context.Context, *personal.ScheduledJobMutation) (personal.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ScheduledJobFunc) Mutate(ctx context.Context, m personal.Mutation) (personal.Value, error) {
+	if mv, ok := m.(*personal.ScheduledJobMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *personal.ScheduledJobMutation", m)
+}
+
 // The SessionFunc type is an adapter to allow the use of ordinary
 // function as Session mutator.
 type SessionFunc func(context.Context, *personal.SessionMutation) (personal.Value, error)

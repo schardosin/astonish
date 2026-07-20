@@ -159,10 +159,14 @@ func entScheduledJobToStore(j *teament.ScheduledJob) *store.ScheduledJob {
 	if tz, ok := j.Payload["timezone"].(string); ok {
 		job.Schedule.Timezone = tz
 	}
+	if teamSlug, ok := j.Payload["team_slug"].(string); ok {
+		job.TeamSlug = teamSlug
+	}
 
 	// Extract payload fields.
 	job.Payload = payloadMapToJobPayload(j.Payload)
 	job.Delivery = payloadMapToJobDelivery(j.Payload)
+	job.Scope = store.JobScopeTeam
 
 	return job
 }
@@ -173,6 +177,10 @@ func jobToPayloadMap(job *store.ScheduledJob) map[string]any {
 	// Store schedule timezone in payload.
 	if job.Schedule.Timezone != "" {
 		payload["timezone"] = job.Schedule.Timezone
+	}
+	// Team context for personal jobs (credential/flow/MCP fallback at tick time).
+	if job.TeamSlug != "" {
+		payload["team_slug"] = job.TeamSlug
 	}
 
 	// Payload fields.

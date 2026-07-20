@@ -1188,6 +1188,8 @@ func RegisterRoutes(router *mux.Router, svc *store.Services, backend store.Platf
 
 	// Scheduler endpoints
 	router.HandleFunc("/api/scheduler/jobs", SchedulerJobsHandler).Methods("GET", "POST")
+	router.HandleFunc("/api/scheduler/jobs/publish", SchedulerJobPublishHandler).Methods("POST")
+	router.HandleFunc("/api/scheduler/jobs/fork", SchedulerJobForkHandler).Methods("POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}/run", SchedulerJobRunHandler).Methods("POST")
 	router.HandleFunc("/api/scheduler/jobs/{id}", SchedulerJobHandler).Methods("GET", "PUT", "DELETE")
 

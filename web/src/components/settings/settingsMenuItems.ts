@@ -16,6 +16,7 @@ export const PERSONAL_ITEMS: SettingsMenuItem[] = [
   { id: 'channels', label: 'Channels', icon: Radio },
   { id: 'knowledge', label: 'Knowledge', icon: BookOpen },
   { id: 'credentials', label: 'Credentials', icon: KeyRound },
+  { id: 'scheduler', label: 'Scheduler', icon: Clock },
 ]
 
 // Legacy alias for backward compatibility
@@ -28,7 +29,6 @@ export const TEAM_ITEMS: SettingsMenuItem[] = [
   { id: 'team-skills', label: 'Skills', icon: Wand2 },
   { id: 'team-mcp', label: 'MCP Servers', icon: Server },
   { id: 'team-network', label: 'Network Policy', icon: Network },
-  { id: 'team-scheduler', label: 'Scheduler', icon: Clock },
   { id: 'team-taps', label: 'Repositories', icon: GitBranch },
   { id: 'team-flows', label: 'Flow Store', icon: Store },
   { id: 'team-container', label: 'Container', icon: Box },
@@ -111,7 +111,6 @@ export const ADMIN_ITEMS = SYSTEM_ITEMS
 // @deprecated Personal mode no longer exists
 export const RESOURCE_ITEMS: SettingsMenuItem[] = [
   { id: 'skills', label: 'Skills', icon: Wand2 },
-  { id: 'scheduler', label: 'Scheduler', icon: Clock },
   { id: 'taps', label: 'Repositories', icon: GitBranch },
   { id: 'flows', label: 'Flow Store', icon: Store },
 ]

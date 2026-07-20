@@ -1159,6 +1159,14 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				ModelName:      cm.components.ModelName,
 				RunHeadless:    GetRunHeadlessFunc(),
 			}
+			// Match daemon SetGatewayConfig so SessionBridge can PreSeed/AutoApprove.
+			if appCfg := effectiveAppConfig(r); appCfg != nil && appCfg.Sandbox.OpenShell.GatewayAddr != "" {
+				cfg := openshell.GRPCClientConfig{
+					Addr: appCfg.Sandbox.OpenShell.GatewayAddr,
+					TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
+				}
+				localExec.GatewayConfig = &cfg
+			}
 			return localExec.Execute(execCtx, job)
 		})
 	}

@@ -448,6 +448,35 @@ func TestBuildSchedulerExecContext_TeamUsesTeamOnly(t *testing.T) {
 	}
 }
 
+func TestBuildSchedulerExecContext_InjectsNetworkPolicyStores(t *testing.T) {
+	platform := &stubNetPolicyStore{label: "platform"}
+	org := &stubNetPolicyStore{label: "org"}
+	team := &stubNetPolicyStore{label: "team"}
+	svc := &store.Services{
+		PlatformNetworkPolicies: platform,
+		NetworkPolicies:         org,
+		TeamNetworkPolicies:     team,
+	}
+	job := &store.ScheduledJob{Scope: store.JobScopeTeam}
+	ctx := buildSchedulerExecContext(context.Background(), svc, store.JobScopeTeam, job)
+	nps := store.NetworkPolicyStoresFromContext(ctx)
+	if nps == nil {
+		t.Fatal("expected NetworkPolicyStores in context")
+	}
+	if nps.Platform != platform || nps.Org != org || nps.Team != team {
+		t.Fatalf("stores = %+v, want platform/org/team stubs", nps)
+	}
+}
+
+func TestBuildSchedulerExecContext_NoNetworkPolicyStoresWhenNil(t *testing.T) {
+	svc := &store.Services{}
+	job := &store.ScheduledJob{Scope: store.JobScopeTeam}
+	ctx := buildSchedulerExecContext(context.Background(), svc, store.JobScopeTeam, job)
+	if nps := store.NetworkPolicyStoresFromContext(ctx); nps != nil {
+		t.Fatalf("expected nil NetworkPolicyStores, got %+v", nps)
+	}
+}
+
 // stubCredStore is a minimal CredentialStore for injection tests.
 type stubCredStore struct{ name string }
 
@@ -476,3 +505,14 @@ func (s *stubCredStore) ListSecrets(context.Context) []string {
 	return nil
 }
 func (s *stubCredStore) Reload(context.Context) error { return nil }
+
+type stubNetPolicyStore struct{ label string }
+
+func (s *stubNetPolicyStore) List(context.Context) ([]store.NetworkPolicyRule, error) {
+	return nil, nil
+}
+func (s *stubNetPolicyStore) Get(context.Context, string) (*store.NetworkPolicyRule, error) {
+	return nil, nil
+}
+func (s *stubNetPolicyStore) Save(context.Context, *store.NetworkPolicyRule) error { return nil }
+func (s *stubNetPolicyStore) Delete(context.Context, string) error                 { return nil }

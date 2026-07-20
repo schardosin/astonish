@@ -650,7 +650,8 @@ func authorizeSchedulerMutate(w http.ResponseWriter, r *http.Request, scope stri
 	return true
 }
 
-// buildSchedulerExecContext mirrors cron credential injection for RunNow/test_first.
+// buildSchedulerExecContext mirrors cron credential and network-policy injection
+// for RunNow/test_first so adaptive jobs get the same OpenShell PolicyAllow path.
 func buildSchedulerExecContext(ctx context.Context, svc *store.Services, scope string, job *store.ScheduledJob) context.Context {
 	execCtx := ctx
 	if scope == store.JobScopePersonal {
@@ -682,6 +683,13 @@ func buildSchedulerExecContext(ctx context.Context, svc *store.Services, scope s
 	}
 	if svc.Memory != nil {
 		execCtx = store.WithMemoryStore(execCtx, svc.Memory)
+	}
+	if svc.PlatformNetworkPolicies != nil || svc.NetworkPolicies != nil || svc.TeamNetworkPolicies != nil {
+		execCtx = store.WithNetworkPolicyStores(execCtx, &store.NetworkPolicyStores{
+			Platform: svc.PlatformNetworkPolicies,
+			Org:      svc.NetworkPolicies,
+			Team:     svc.TeamNetworkPolicies,
+		})
 	}
 	return execCtx
 }

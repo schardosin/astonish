@@ -200,6 +200,7 @@ func (mts *MultiTenantScheduler) dispatchDueJobs(
 		mts.runMu.Lock()
 		if _, alreadyRunning := mts.running[runKey]; alreadyRunning {
 			mts.runMu.Unlock()
+			mts.logger.Printf("[scheduler] Job %q still running, skipping tick", job.Name)
 			continue
 		}
 		mts.running[runKey] = struct{}{}
@@ -240,6 +241,8 @@ func (mts *MultiTenantScheduler) executeTeamJob(
 		})
 		if deliverErr := mts.deliver(deliverCtx, job, result, execErr); deliverErr != nil {
 			mts.logger.Printf("[scheduler] Delivery failed for job %q: %v", storeJob.Name, deliverErr)
+		} else {
+			mts.logger.Printf("[scheduler] Delivered job %q", storeJob.Name)
 		}
 	}
 }
@@ -287,6 +290,8 @@ func (mts *MultiTenantScheduler) executePersonalJob(
 		})
 		if deliverErr := mts.deliver(deliverCtx, &deliverJob, result, execErr); deliverErr != nil {
 			mts.logger.Printf("[scheduler] Delivery failed for personal job %q: %v", storeJob.Name, deliverErr)
+		} else {
+			mts.logger.Printf("[scheduler] Delivered personal job %q", storeJob.Name)
 		}
 	}
 }

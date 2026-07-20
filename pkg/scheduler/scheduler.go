@@ -145,6 +145,7 @@ func (s *Scheduler) tick() {
 		s.runMu.Lock()
 		if _, alreadyRunning := s.running[job.ID]; alreadyRunning {
 			s.runMu.Unlock()
+			s.logger.Printf("[scheduler] Job %q still running, skipping tick", job.Name)
 			continue
 		}
 		s.running[job.ID] = struct{}{}
@@ -170,6 +171,8 @@ func (s *Scheduler) tick() {
 			if s.deliver != nil && j.Mode != ModeFleetPoll {
 				if deliverErr := s.deliver(s.ctx, j, result, err); deliverErr != nil {
 					s.logger.Printf("[scheduler] Delivery failed for job %q: %v", j.Name, deliverErr)
+				} else {
+					s.logger.Printf("[scheduler] Delivered job %q", j.Name)
 				}
 			}
 		}(job)

@@ -3,6 +3,7 @@ package entstore
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -23,6 +24,7 @@ func (s *personalSchedulerStore) List(ctx context.Context) []*store.ScheduledJob
 		Order(scheduledjob.ByName()).
 		All(ctx)
 	if err != nil {
+		slog.Error("list personal scheduled jobs failed", "error", err)
 		return nil
 	}
 

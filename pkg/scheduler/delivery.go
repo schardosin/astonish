@@ -96,7 +96,7 @@ func NewDeliverFunc(getManager ChannelManagerGetter) DeliverFunc {
 		}
 
 		// Fallback: broadcast to all targets across all channels.
-		return mgr.Broadcast(ctx, outMsg)
+		return broadcastOrError(ctx, mgr, outMsg)
 	}
 }
 
@@ -124,7 +124,7 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 					job.Name, job.Delivery.Mode, err)
 			}
 			// Fallback to broadcast on resolution failure
-			return mgr.Broadcast(ctx, outMsg)
+			return broadcastOrError(ctx, mgr, outMsg)
 		}
 
 		// If resolution returned explicit targets, send to each
@@ -143,12 +143,23 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 				return fmt.Errorf("partial delivery failure (%d/%d): %s",
 					len(errs), len(targets), strings.Join(errs, "; "))
 			}
+			if logger != nil {
+				logger.Printf("[delivery] Delivered job %q to %d target(s)", job.Name, len(targets))
+			}
 			return nil
 		}
 
 		// No targets resolved and no error — broadcast (legacy personal mode)
-		return mgr.Broadcast(ctx, outMsg)
+		return broadcastOrError(ctx, mgr, outMsg)
 	}
+}
+
+// broadcastOrError broadcasts and fails if no channel targets exist (silent no-op).
+func broadcastOrError(ctx context.Context, mgr *channels.ChannelManager, msg channels.OutboundMessage) error {
+	if mgr.CountBroadcastTargets() == 0 {
+		return fmt.Errorf("no delivery targets available")
+	}
+	return mgr.Broadcast(ctx, msg)
 }
 
 // resolveTargets determines concrete delivery targets for a job based on its

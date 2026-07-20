@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/config"
@@ -15,6 +16,13 @@ import (
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 )
+
+// DefaultJobTimeout caps a single scheduled job execution so a hung adaptive
+// run cannot pin the in-memory "running" lock forever and block re-fires.
+const DefaultJobTimeout = 15 * time.Minute
+
+// jobTimeout is the active execution timeout (overridable in tests).
+var jobTimeout = DefaultJobTimeout
 
 // RunHeadlessFunc is a function type for running a flow headlessly.
 // It is injected by the daemon to avoid import cycles (scheduler -> launcher -> api).
@@ -74,17 +82,30 @@ type Executor struct {
 }
 
 // Execute runs a job based on its mode and returns the result text.
+// A DefaultJobTimeout is applied so hung LLM/tool loops cancel cleanly.
 func (e *Executor) Execute(ctx context.Context, job *Job) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
+	defer cancel()
+
+	var result string
+	var err error
 	switch job.Mode {
 	case ModeRoutine:
-		return e.executeRoutine(ctx, job)
+		result, err = e.executeRoutine(ctx, job)
 	case ModeAdaptive:
-		return e.executeAdaptive(ctx, job)
+		result, err = e.executeAdaptive(ctx, job)
 	case ModeFleetPoll:
-		return e.executeFleetPoll(ctx, job)
+		result, err = e.executeFleetPoll(ctx, job)
 	default:
 		return "", fmt.Errorf("unknown job mode: %s", job.Mode)
 	}
+	if ctx.Err() == context.DeadlineExceeded {
+		if err != nil {
+			return result, fmt.Errorf("job %q timed out after %s: %w", job.Name, jobTimeout, err)
+		}
+		return result, fmt.Errorf("job %q timed out after %s", job.Name, jobTimeout)
+	}
+	return result, err
 }
 
 // executeRoutine runs a flow through the headless flow engine.

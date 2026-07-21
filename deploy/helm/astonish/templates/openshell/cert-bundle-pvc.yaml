@@ -1,21 +1,39 @@
 {{- if and .Values.sandbox.enabled .Values.sandbox.openshell.enabled .Values.sandbox.openshell.certBundles }}
 {{- range .Values.sandbox.openshell.certBundles }}
 {{- if and .bootstrap .bootstrap.enabled .claimName }}
+{{- $ns := include "astonish.namespace.sandbox" $ }}
+{{- $accessMode := "ReadWriteMany" }}
+{{- if and .bootstrap.accessMode (ne .bootstrap.accessMode "") }}
+{{- $accessMode = .bootstrap.accessMode }}
+{{- else if and $.Values.sandbox.openshell.certBundleDefaults $.Values.sandbox.openshell.certBundleDefaults.accessMode }}
+{{- $accessMode = $.Values.sandbox.openshell.certBundleDefaults.accessMode }}
+{{- end }}
+{{- /* Bound PVC accessModes are immutable. If the claim already exists (live
+     upgrade), keep its current mode so Helm does not patch RWO→RWX and fail.
+     helm template / no-cluster dry-run: lookup is empty → desired mode (RWX). */}}
+{{- $existing := lookup "v1" "PersistentVolumeClaim" $ns .claimName }}
+{{- if and $existing $existing.spec $existing.spec.accessModes }}
+{{- $accessMode = index $existing.spec.accessModes 0 }}
+{{- end }}
 ---
 # Cert-bundle PVC for OpenShell sandbox trust mounts (driver_config).
 # Populated by the matching cert-bundle-bootstrap Job when bootstrap.enabled.
+# Default accessMode for *new* claims is ReadWriteMany so concurrent sandbox
+# pods can attach across nodes. Existing claims keep their accessMode on
+# upgrade (immutable). Migrate RWO→RWX by deleting the PVC after draining
+# sandboxes, then upgrading so the chart recreates it.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ .claimName | quote }}
-  namespace: {{ include "astonish.namespace.sandbox" $ }}
+  namespace: {{ $ns | quote }}
   labels:
     {{- include "astonish.labels" $ | nindent 4 }}
     app.kubernetes.io/component: cert-bundle
     astonish.io/cert-bundle: {{ .name | quote }}
 spec:
   accessModes:
-    - ReadWriteOnce
+    - {{ $accessMode | quote }}
   storageClassName: {{ default $.Values.sandbox.storage.storageClassName .bootstrap.storageClassName | quote }}
   resources:
     requests:

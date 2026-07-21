@@ -181,7 +181,7 @@ func TestValidateHTTPURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateHTTPURL(tt.url)
+			err := validateHTTPURL(tt.url, nil)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
@@ -218,6 +218,187 @@ func TestResolveHTTPSource_SSRFBlocked(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIsHardBlockedIP(t *testing.T) {
+	tests := []struct {
+		ip   string
+		hard bool
+	}{
+		{"127.0.0.1", true},
+		{"169.254.169.254", true},
+		{"0.0.0.0", true},
+		{"::1", true},
+		{"fe80::1", true},
+		{"10.0.0.1", false},
+		{"192.168.1.1", false},
+		{"8.8.8.8", false},
+		{"fd00::1", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ip, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			if ip == nil {
+				t.Fatalf("invalid IP %q", tt.ip)
+			}
+			if got := isHardBlockedIP(ip); got != tt.hard {
+				t.Errorf("isHardBlockedIP(%s) = %v, want %v", tt.ip, got, tt.hard)
+			}
+		})
+	}
+}
+
+func TestCheckAppHTTPDial(t *testing.T) {
+	tests := []struct {
+		name     string
+		ip       string
+		decision PolicyDecision
+		wantErr  string
+	}{
+		{"public unknown", "8.8.8.8", PolicyUnknown, ""},
+		{"public allow", "8.8.8.8", PolicyAllow, ""},
+		{"public deny", "8.8.8.8", PolicyDeny, "denied by network policy"},
+		{"private unknown", "10.0.0.1", PolicyUnknown, "private/internal"},
+		{"private allow", "10.0.0.1", PolicyAllow, ""},
+		{"private deny", "10.0.0.1", PolicyDeny, "denied by network policy"},
+		{"loopback allow still blocked", "127.0.0.1", PolicyAllow, "private/internal"},
+		{"metadata allow still blocked", "169.254.169.254", PolicyAllow, "private/internal"},
+		{"cgnat allow", "100.64.0.1", PolicyAllow, ""},
+		{"ula allow", "fd00::1", PolicyAllow, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ip := net.ParseIP(tt.ip)
+			if ip == nil {
+				t.Fatalf("invalid IP %q", tt.ip)
+			}
+			err := checkAppHTTPDial("example.internal", 443, ip, tt.decision)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %q", tt.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+func TestValidateHTTPURL_AllowlistedPrivateIP(t *testing.T) {
+	allow := func(host string, port uint32) PolicyDecision {
+		if host == "10.0.0.1" && port == 80 {
+			return PolicyAllow
+		}
+		return PolicyUnknown
+	}
+	if err := validateHTTPURL("http://10.0.0.1/secret", allow); err != nil {
+		t.Fatalf("expected allowlisted private IP to pass, got %v", err)
+	}
+	if err := validateHTTPURL("http://10.0.0.1/secret", nil); err == nil {
+		t.Fatal("expected private IP without allow to fail")
+	}
+	allowLoopback := func(host string, port uint32) PolicyDecision {
+		return PolicyAllow
+	}
+	if err := validateHTTPURL("http://127.0.0.1/admin", allowLoopback); err == nil {
+		t.Fatal("expected loopback to stay blocked even when allowlisted")
+	}
+	if err := validateHTTPURL("http://169.254.169.254/latest/meta-data/", allowLoopback); err == nil {
+		t.Fatal("expected metadata to stay blocked even when allowlisted")
+	}
+}
+
+func TestResolveHTTPSource_NetworkPolicyDeny(t *testing.T) {
+	orig := appHTTPPolicyLoader
+	defer func() { appHTTPPolicyLoader = orig }()
+	appHTTPPolicyLoader = func(*http.Request) *EffectivePolicy {
+		return &EffectivePolicy{
+			Team: []store.NetworkPolicyRule{{
+				Host:   "api.example.com",
+				Port:   443,
+				Action: store.NetworkPolicyDeny,
+			}},
+		}
+	}
+
+	_, err := resolveHTTPSource(nil, "GET:https://api.example.com/data", nil)
+	if err == nil {
+		t.Fatal("expected deny error, got nil")
+	}
+	if !strings.Contains(err.Error(), "denied by network policy") {
+		t.Fatalf("expected denied by network policy, got: %v", err)
+	}
+}
+
+func TestResolveHTTPSource_NetworkPolicyAllowPrivate(t *testing.T) {
+	origPolicy := appHTTPPolicyLoader
+	origTransport := httpTransportFactory
+	defer func() {
+		appHTTPPolicyLoader = origPolicy
+		httpTransportFactory = origTransport
+	}()
+
+	appHTTPPolicyLoader = func(*http.Request) *EffectivePolicy {
+		return &EffectivePolicy{
+			Team: []store.NetworkPolicyRule{{
+				Host:   "github.wdf.sap.corp",
+				Port:   443,
+				Action: store.NetworkPolicyAllow,
+			}},
+		}
+	}
+
+	// Capture the policy decision seen by the transport without dialing.
+	var seenDecision PolicyDecision
+	var seenHost string
+	var seenPort uint32
+	httpTransportFactory = func(check appHTTPPolicyCheck) http.RoundTripper {
+		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			host := req.URL.Hostname()
+			port := urlPort(req.URL)
+			seenHost = host
+			seenPort = port
+			seenDecision = check(host, port)
+			// Soft-private dial would be allowed; simulate success without network I/O.
+			if err := checkAppHTTPDial(host, port, net.ParseIP("10.239.45.169"), seenDecision); err != nil {
+				return nil, err
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       http.NoBody,
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})
+	}
+
+	data, err := resolveHTTPSource(nil, "POST:https://github.wdf.sap.corp/api/graphql", map[string]any{
+		"body": map[string]any{"query": "{ viewer { login } }"},
+	})
+	if err != nil {
+		t.Fatalf("expected allowlisted private host to succeed, got: %v", err)
+	}
+	if seenHost != "github.wdf.sap.corp" || seenPort != 443 {
+		t.Fatalf("unexpected dial target %s:%d", seenHost, seenPort)
+	}
+	if seenDecision != PolicyAllow {
+		t.Fatalf("expected PolicyAllow, got %v", seenDecision)
+	}
+	if data != "" && data != nil {
+		// Empty body parses as empty string via json failure path, or nil JSON — either fine.
+		_ = data
+	}
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 // ── HTTP body unwrapping tests ───────────────────────────────────────
@@ -366,8 +547,8 @@ func TestExtractHTTPBodyAndHeaders(t *testing.T) {
 func disableSSRF() func() {
 	origTransport := httpTransportFactory
 	origValidator := httpURLValidator
-	httpTransportFactory = func() http.RoundTripper { return http.DefaultTransport }
-	httpURLValidator = func(_ string) error { return nil }
+	httpTransportFactory = func(_ appHTTPPolicyCheck) http.RoundTripper { return http.DefaultTransport }
+	httpURLValidator = func(_ string, _ appHTTPPolicyCheck) error { return nil }
 	return func() {
 		httpTransportFactory = origTransport
 		httpURLValidator = origValidator

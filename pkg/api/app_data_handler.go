@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,26 +74,42 @@ func loadAppFromStore(r *http.Request, name string) (*apps.VisualApp, error) {
 // a sandboxed app (accidentally or maliciously) points to a huge resource.
 const maxResponseBodySize = 10 << 20 // 10 MB
 
-// privateIPNets lists CIDR ranges that the HTTP data proxy must never contact.
-// This prevents SSRF attacks where a sandboxed app could probe internal
-// services, cloud metadata endpoints, or other private infrastructure.
+// hardBlockedIPNets are never dialable from the Apps HTTP proxy, even when
+// Network Policy allowlists the hostname (matches OpenShell allowed_ips
+// semantics for loopback / link-local / metadata).
+var hardBlockedIPNets []*net.IPNet
+
+// privateIPNets lists CIDR ranges treated as non-public. Soft-private ranges
+// (RFC1918, CGNAT, ULA, …) may be dialed when Network Policy says Allow;
+// hard-blocked ranges never may.
 var privateIPNets []*net.IPNet
 
 func init() {
-	for _, cidr := range []string{
-		"0.0.0.0/8",          // "this" network (RFC 1122)
-		"10.0.0.0/8",         // RFC 1918
-		"100.64.0.0/10",      // shared address space (RFC 6598, e.g. CGNAT)
-		"127.0.0.0/8",        // loopback
-		"169.254.0.0/16",     // link-local / cloud metadata (AWS, GCP, Azure)
-		"172.16.0.0/12",      // RFC 1918
-		"192.0.0.0/24",       // IETF protocol assignments (RFC 6890)
-		"192.168.0.0/16",     // RFC 1918
-		"198.18.0.0/15",      // benchmarking (RFC 2544)
-		"::1/128",            // IPv6 loopback
-		"fc00::/7",           // IPv6 unique local (RFC 4193)
-		"fe80::/10",          // IPv6 link-local
-	} {
+	hardBlockedCIDRs := []string{
+		"0.0.0.0/8",      // "this" network (RFC 1122)
+		"127.0.0.0/8",    // loopback
+		"169.254.0.0/16", // link-local / cloud metadata (AWS, GCP, Azure)
+		"::1/128",       // IPv6 loopback
+		"fe80::/10",     // IPv6 link-local
+	}
+	softPrivateCIDRs := []string{
+		"10.0.0.0/8",     // RFC 1918
+		"100.64.0.0/10",  // shared address space (RFC 6598, e.g. CGNAT)
+		"172.16.0.0/12",  // RFC 1918
+		"192.0.0.0/24",   // IETF protocol assignments (RFC 6890)
+		"192.168.0.0/16", // RFC 1918
+		"198.18.0.0/15",  // benchmarking (RFC 2544)
+		"fc00::/7",       // IPv6 unique local (RFC 4193)
+	}
+	for _, cidr := range hardBlockedCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("bad CIDR in hardBlockedIPNets: %s: %v", cidr, err))
+		}
+		hardBlockedIPNets = append(hardBlockedIPNets, ipNet)
+		privateIPNets = append(privateIPNets, ipNet)
+	}
+	for _, cidr := range softPrivateCIDRs {
 		_, ipNet, err := net.ParseCIDR(cidr)
 		if err != nil {
 			panic(fmt.Sprintf("bad CIDR in privateIPNets: %s: %v", cidr, err))
@@ -101,13 +118,29 @@ func init() {
 	}
 }
 
+func normalizeIP(ip net.IP) net.IP {
+	if v4 := ip.To4(); v4 != nil {
+		return v4
+	}
+	return ip
+}
+
+// isHardBlockedIP reports whether the IP is loopback, link-local, metadata,
+// or otherwise never escapable via Network Policy.
+func isHardBlockedIP(ip net.IP) bool {
+	ip = normalizeIP(ip)
+	for _, ipNet := range hardBlockedIPNets {
+		if ipNet.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 // isPrivateIP reports whether the given IP falls within a private,
 // loopback, link-local, or otherwise non-public address range.
 func isPrivateIP(ip net.IP) bool {
-	// Normalize IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) to plain IPv4
-	if v4 := ip.To4(); v4 != nil {
-		ip = v4
-	}
+	ip = normalizeIP(ip)
 	for _, ipNet := range privateIPNets {
 		if ipNet.Contains(ip) {
 			return true
@@ -116,40 +149,111 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
+// appHTTPPolicyCheck evaluates Network Policy for an Apps HTTP dial target.
+type appHTTPPolicyCheck func(host string, port uint32) PolicyDecision
+
+// checkAppHTTPDial decides whether dialing ip for host:port is allowed given
+// the Network Policy decision. Hard-blocked IPs are always rejected.
+func checkAppHTTPDial(host string, port uint32, ip net.IP, decision PolicyDecision) error {
+	if isHardBlockedIP(ip) {
+		return fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ip)
+	}
+	if decision == PolicyDeny {
+		return fmt.Errorf("requests to %s:%d are denied by network policy", host, port)
+	}
+	if isPrivateIP(ip) && decision != PolicyAllow {
+		return fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ip)
+	}
+	return nil
+}
+
 // httpTransportFactory creates the HTTP transport for resolveHTTPSource requests.
 // Overridable in tests to bypass SSRF checks for localhost test servers.
-var httpTransportFactory = func() http.RoundTripper { return ssrfSafeTransport() }
+var httpTransportFactory = func(check appHTTPPolicyCheck) http.RoundTripper {
+	return ssrfSafeTransport(check)
+}
 
 // httpURLValidator validates a URL before making a request.
 // Overridable in tests to allow localhost test servers.
 var httpURLValidator = validateHTTPURL
 
+// appHTTPPolicyLoader loads the effective Network Policy for an Apps HTTP
+// request. Overridable in tests.
+var appHTTPPolicyLoader = loadAppHTTPPolicy
+
+func loadAppHTTPPolicy(r *http.Request) *EffectivePolicy {
+	if r == nil {
+		return &EffectivePolicy{}
+	}
+	svc := store.FromRequest(r)
+	if svc == nil {
+		return &EffectivePolicy{}
+	}
+	ep, err := LoadEffectivePolicy(r.Context(), svc)
+	if err != nil || ep == nil {
+		return &EffectivePolicy{}
+	}
+	return ep
+}
+
+func urlPort(u *url.URL) uint32 {
+	if p := u.Port(); p != "" {
+		n, err := strconv.ParseUint(p, 10, 32)
+		if err == nil {
+			return uint32(n)
+		}
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return 443
+	}
+	return 80
+}
+
 // ssrfSafeTransport returns an *http.Transport that validates resolved IPs
-// before connecting, blocking requests to private/internal networks.
-// Checking at the dial level prevents DNS-rebinding attacks where a public
-// hostname resolves to 127.0.0.1 or another private address.
-func ssrfSafeTransport() *http.Transport {
+// before connecting. Soft-private IPs are allowed only when Network Policy
+// says Allow for the hostname:port. Hard-blocked ranges are never dialable.
+// Checking at the dial level prevents DNS-rebinding attacks.
+func ssrfSafeTransport(check appHTTPPolicyCheck) *http.Transport {
+	if check == nil {
+		check = func(string, uint32) PolicyDecision { return PolicyUnknown }
+	}
 	return &http.Transport{
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
+			host, portStr, err := net.SplitHostPort(addr)
 			if err != nil {
 				return nil, fmt.Errorf("invalid address %q: %w", addr, err)
 			}
+			portNum, err := strconv.ParseUint(portStr, 10, 32)
+			if err != nil {
+				return nil, fmt.Errorf("invalid port %q: %w", portStr, err)
+			}
+			port := uint32(portNum)
+			decision := check(host, port)
 
 			ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
 			if err != nil {
 				return nil, fmt.Errorf("DNS lookup failed for %q: %w", host, err)
 			}
 
+			var lastErr error
+			var dialIP net.IP
 			for _, ipAddr := range ips {
-				if isPrivateIP(ipAddr.IP) {
-					return nil, fmt.Errorf("requests to private/internal networks are not allowed (host %q resolved to %s)", host, ipAddr.IP)
+				if err := checkAppHTTPDial(host, port, ipAddr.IP, decision); err != nil {
+					lastErr = err
+					continue
 				}
+				dialIP = ipAddr.IP
+				break
+			}
+			if dialIP == nil {
+				if lastErr != nil {
+					return nil, lastErr
+				}
+				return nil, fmt.Errorf("no usable addresses for %q", host)
 			}
 
-			// All IPs are public — connect to the first one.
 			dialer := &net.Dialer{Timeout: 10 * time.Second}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+			return dialer.DialContext(ctx, network, net.JoinHostPort(dialIP.String(), portStr))
 		},
 		TLSHandshakeTimeout: 10 * time.Second,
 		MaxIdleConnsPerHost: 4,
@@ -730,9 +834,10 @@ func (c *appMCPToolContext) ToolConfirmation() *toolconfirmation.ToolConfirmatio
 var credentialSuffixRe = regexp.MustCompile(`@([a-zA-Z][a-zA-Z0-9_-]*)$`)
 
 // validateHTTPURL performs a fast, pre-flight check on the URL before any
-// network I/O. It rejects non-http(s) schemes and IP-literal hosts that
-// resolve to private ranges. Hostnames are checked later at dial time.
-func validateHTTPURL(rawURL string) error {
+// network I/O. It rejects non-http(s) schemes and IP-literal hosts that are
+// not permitted by SSRF / Network Policy. Hostnames are checked later at dial
+// time (and Deny is pre-checked in resolveHTTPSource).
+func validateHTTPURL(rawURL string, check appHTTPPolicyCheck) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return fmt.Errorf("invalid URL: %w", err)
@@ -746,8 +851,17 @@ func validateHTTPURL(rawURL string) error {
 	// If the host is an IP literal, check it immediately.
 	host := parsed.Hostname()
 	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return fmt.Errorf("requests to private/internal networks are not allowed (%s)", ip)
+		port := urlPort(parsed)
+		decision := PolicyUnknown
+		if check != nil {
+			decision = check(host, port)
+		}
+		if err := checkAppHTTPDial(host, port, ip, decision); err != nil {
+			// Keep the shorter IP-literal error shape for the common deny case.
+			if isHardBlockedIP(ip) || (isPrivateIP(ip) && decision != PolicyAllow) {
+				return fmt.Errorf("requests to private/internal networks are not allowed (%s)", ip)
+			}
+			return err
 		}
 	}
 
@@ -813,24 +927,42 @@ func extractHTTPBodyAndHeaders(method string, args map[string]any) (bodyData any
 // from the credential store and its auth header is injected into the request.
 // If the remote API responds with 401 Unauthorized, the cached OAuth token is
 // invalidated and the request is retried once with a fresh token.
+//
+// Soft-private destinations require an Allow rule in Studio Network Policy;
+// Deny rules block even public hosts. Loopback/link-local/metadata stay blocked.
 func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, error) {
 	parts := strings.SplitN(spec, ":", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 		return nil, fmt.Errorf("invalid HTTP source format: expected 'METHOD:url', got %q", spec)
 	}
 	method := strings.ToUpper(parts[0])
-	url := parts[1]
+	rawURL := parts[1]
 
 	// Extract @credential-name suffix from URL if present
 	var credentialName string
-	if m := credentialSuffixRe.FindStringSubmatchIndex(url); m != nil {
-		credentialName = url[m[2]:m[3]]
-		url = url[:m[0]]
+	if m := credentialSuffixRe.FindStringSubmatchIndex(rawURL); m != nil {
+		credentialName = rawURL[m[2]:m[3]]
+		rawURL = rawURL[:m[0]]
+	}
+
+	ep := appHTTPPolicyLoader(r)
+	check := func(host string, port uint32) PolicyDecision {
+		return ep.Check(host, port)
+	}
+
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL: %w", err)
+	}
+	host := parsedURL.Hostname()
+	port := urlPort(parsedURL)
+	if check(host, port) == PolicyDeny {
+		return nil, fmt.Errorf("requests to %s:%d are denied by network policy", host, port)
 	}
 
 	// Validate the URL scheme and host before making the request.
 	// The Transport's DialContext also checks resolved IPs (DNS-rebinding defence).
-	if err := httpURLValidator(url); err != nil {
+	if err := httpURLValidator(rawURL, check); err != nil {
 		return nil, err
 	}
 
@@ -859,7 +991,7 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 			body = strings.NewReader(string(jsonBytes))
 		}
 
-		httpReq, err := http.NewRequest(method, url, body)
+		httpReq, err := http.NewRequest(method, rawURL, body)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to create HTTP request: %w", err)
 		}
@@ -885,7 +1017,7 @@ func resolveHTTPSource(r *http.Request, spec string, args map[string]any) (any, 
 
 		client := &http.Client{
 			Timeout:   30 * time.Second,
-			Transport: httpTransportFactory(),
+			Transport: httpTransportFactory(check),
 			// Do not follow redirects to private IPs — each hop is checked
 			// by the Transport's DialContext, but we also cap redirects.
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {

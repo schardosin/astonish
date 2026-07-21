@@ -172,9 +172,10 @@ func (c *backendNodeClient) sessionStillReady(sessionID string) bool {
 // BindSession) and blocks until the sandbox session is fully running.
 // Returns nil on success or the provisioning error.
 //
-// If this client was already bound but the sandbox is gone (destroyed
-// externally or by an ephemeral adaptive run), EnsureReady resets the bind
-// and provisions a fresh session.
+// If a prior bind completed but the sandbox is gone (destroyed externally
+// or by an ephemeral adaptive run), EnsureReady resets the bind and
+// provisions a fresh session. An in-flight first bind is not treated as
+// "gone" — SessionState would still be absent until CreateSession finishes.
 func (c *backendNodeClient) EnsureReady(sessionID string) error {
 	if sessionID == "" {
 		return fmt.Errorf("backend node client: no session bound (empty session ID)")
@@ -182,17 +183,30 @@ func (c *backendNodeClient) EnsureReady(sessionID string) error {
 
 	c.mu.Lock()
 	alreadyBound := c.bound && !c.closed
+	done := c.bindDone
 	c.mu.Unlock()
-	if alreadyBound && !c.sessionStillReady(sessionID) {
-		slog.Info("backend node client: re-binding after sandbox gone",
-			"component", "sandbox", "session", shortSession(sessionID))
-		c.resetBind()
+
+	if alreadyBound && done != nil {
+		select {
+		case <-done:
+			// Prior bind finished — re-provision if the sandbox disappeared.
+			c.mu.Lock()
+			priorErr := c.bindErr
+			c.mu.Unlock()
+			if priorErr != nil || !c.sessionStillReady(sessionID) {
+				slog.Info("backend node client: re-binding after sandbox gone",
+					"component", "sandbox", "session", shortSession(sessionID))
+				c.resetBind()
+			}
+		default:
+			// First provision still running — wait below, do not reset.
+		}
 	}
 
 	c.BindSession(sessionID)
 
 	c.mu.Lock()
-	done := c.bindDone
+	done = c.bindDone
 	closed := c.closed
 	c.mu.Unlock()
 

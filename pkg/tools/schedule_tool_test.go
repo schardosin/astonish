@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // mockSchedulerAccess is a minimal mock for testing schedule tool functions.
@@ -207,5 +209,84 @@ func TestScheduleJob_RejectsDuplicateName(t *testing.T) {
 	}
 	if len(mock.jobs) != 1 {
 		t.Errorf("expected 1 job, got %d (duplicate was created)", len(mock.jobs))
+	}
+}
+
+type memSchedulerStore struct {
+	jobs map[string]*store.ScheduledJob
+}
+
+func newMemSchedulerStore() *memSchedulerStore {
+	return &memSchedulerStore{jobs: make(map[string]*store.ScheduledJob)}
+}
+
+func (m *memSchedulerStore) List(context.Context) []*store.ScheduledJob {
+	out := make([]*store.ScheduledJob, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		out = append(out, j)
+	}
+	return out
+}
+func (m *memSchedulerStore) Get(_ context.Context, id string) *store.ScheduledJob {
+	return m.jobs[id]
+}
+func (m *memSchedulerStore) GetByName(_ context.Context, name string) *store.ScheduledJob {
+	for _, j := range m.jobs {
+		if j.Name == name {
+			return j
+		}
+	}
+	return nil
+}
+func (m *memSchedulerStore) Add(_ context.Context, job *store.ScheduledJob) error {
+	if job.ID == "" {
+		job.ID = fmt.Sprintf("job-%d", len(m.jobs)+1)
+	}
+	cp := *job
+	m.jobs[job.ID] = &cp
+	return nil
+}
+func (m *memSchedulerStore) Update(_ context.Context, job *store.ScheduledJob) error {
+	cp := *job
+	m.jobs[job.ID] = &cp
+	return nil
+}
+func (m *memSchedulerStore) Remove(_ context.Context, id string) error {
+	delete(m.jobs, id)
+	return nil
+}
+
+func TestResolveSchedulerStore_DefaultsToPersonal(t *testing.T) {
+	personal := newMemSchedulerStore()
+	team := newMemSchedulerStore()
+	ctx := store.WithPersonalSchedulerStore(context.Background(), personal)
+	ctx = store.WithSchedulerStore(ctx, team)
+
+	ss, scope := resolveSchedulerStore(ctx, "")
+	if scope != store.JobScopePersonal {
+		t.Errorf("scope = %q, want personal", scope)
+	}
+	if ss != personal {
+		t.Error("expected personal store")
+	}
+
+	ss, scope = resolveSchedulerStore(ctx, store.JobScopeTeam)
+	if scope != store.JobScopeTeam || ss != team {
+		t.Error("expected team store for scope=team")
+	}
+}
+
+func TestFindJobAcrossScopes_PrefersPersonal(t *testing.T) {
+	personal := newMemSchedulerStore()
+	team := newMemSchedulerStore()
+	_ = personal.Add(context.Background(), &store.ScheduledJob{ID: "p1", Name: "same"})
+	_ = team.Add(context.Background(), &store.ScheduledJob{ID: "t1", Name: "same"})
+
+	ctx := store.WithPersonalSchedulerStore(context.Background(), personal)
+	ctx = store.WithSchedulerStore(ctx, team)
+
+	job, ss, scope := findJobAcrossScopes(ctx, "same")
+	if job == nil || scope != store.JobScopePersonal || ss != personal {
+		t.Fatalf("expected personal job, got scope=%q job=%v", scope, job)
 	}
 }

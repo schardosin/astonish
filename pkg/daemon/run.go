@@ -986,6 +986,21 @@ func Run(cfg RunConfig) error {
 			schedExec.ChatAgent = factoryResult.ChatAgent
 			schedExec.SessionService = factoryResult.SessionService
 		}
+		// Host fallback only — report bodies normally come from write_file args
+		// captured during the adaptive run (sandbox paths are not on the host).
+		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
+			return os.ReadFile(path)
+		}
+		// Adaptive jobs: ephemeral OpenShell sandbox per run (destroy → create → destroy).
+		schedExec.DestroySandbox = func(ctx context.Context, sessionID string) error {
+			return sandbox.DestroySessionEverywhere(ctx, appCfg, sessionID, nil)
+		}
+		if factoryResult != nil && factoryResult.SandboxPool != nil {
+			pool := factoryResult.SandboxPool
+			schedExec.InvalidateSandboxClient = func(sessionID string) {
+				pool.Remove(sessionID)
+			}
+		}
 
 		// Create delivery function — uses a getter to always resolve the
 		// current channelMgr, surviving channel reloads without stale closures.
@@ -996,6 +1011,12 @@ func Run(cfg RunConfig) error {
 
 		// Create and start the multi-tenant scheduler
 		mtSched = NewMultiTenantScheduler(backend, schedExec, deliver, log.Default())
+		if appCfg.Sandbox.OpenShell.GatewayAddr != "" {
+			mtSched.SetGatewayConfig(openshell.GRPCClientConfig{
+				Addr: appCfg.Sandbox.OpenShell.GatewayAddr,
+				TLS:  appCfg.Sandbox.OpenShell.OpenShellGatewayTLS(),
+			})
+		}
 		mtSched.Start(ctx)
 
 		// Register executor for API RunNow handler

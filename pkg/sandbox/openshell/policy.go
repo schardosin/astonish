@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/SAP/astonish/pkg/config"
+	"github.com/SAP/astonish/pkg/sandbox"
 )
 
 // defaultSandboxPolicy returns the SandboxPolicySpec applied to every sandbox
@@ -108,5 +109,36 @@ func defaultSandboxPolicy(cfg config.SandboxOpenShellConfig) *SandboxPolicySpec 
 		}
 	}
 
+	return policy
+}
+
+// mergeSessionNetworkAllows appends SessionSpec allow endpoints into the
+// astonish-egress rule (creating the rule if presets produced none).
+func mergeSessionNetworkAllows(policy *SandboxPolicySpec, extra []sandbox.NetworkAllowEndpoint) *SandboxPolicySpec {
+	if policy == nil || len(extra) == 0 {
+		return policy
+	}
+	converted := make([]EndpointSpec, 0, len(extra))
+	for _, ep := range extra {
+		if ep.Host == "" {
+			continue
+		}
+		converted = append(converted, EndpointSpec{Host: ep.Host, Port: ep.Port})
+	}
+	if len(converted) == 0 {
+		return policy
+	}
+	if policy.NetworkPolicies == nil {
+		policy.NetworkPolicies = map[string]*NetworkPolicySpec{}
+	}
+	egress, ok := policy.NetworkPolicies["egress"]
+	if !ok || egress == nil {
+		egress = &NetworkPolicySpec{
+			Name:     "astonish-egress",
+			Binaries: []string{"/**"},
+		}
+		policy.NetworkPolicies["egress"] = egress
+	}
+	egress.Endpoints = append(egress.Endpoints, converted...)
 	return policy
 }

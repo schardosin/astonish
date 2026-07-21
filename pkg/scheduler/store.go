@@ -117,6 +117,13 @@ type Job struct {
 	// "owner" delivery mode routing and job visibility.
 	OwnerID string `json:"owner_id,omitempty"`
 
+	// Scope is "personal" or "team". Personal jobs run as OwnerID with
+	// MergedCredentialStore; team jobs run headless with team credentials.
+	Scope string `json:"scope,omitempty"`
+
+	// TeamSlug is the team context for personal jobs (credential/flow fallback).
+	TeamSlug string `json:"team_slug,omitempty"`
+
 	// Runtime state (updated by the scheduler after each run)
 	LastRun             *time.Time `json:"last_run,omitempty"`
 	LastStatus          JobStatus  `json:"last_status"`

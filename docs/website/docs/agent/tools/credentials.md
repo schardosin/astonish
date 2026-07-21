@@ -88,4 +88,6 @@ Studio Settings provides a credential management interface:
 - Delete credentials
 - Publish credentials to team (team-scoped, inject-only access)
 
+**Scheduled jobs:** Personal credentials work with **personal-scope** scheduled jobs (the default when scheduling from chat). Only publish a credential to the team when you need shared team automation, fleet, or other members to use it — not merely to schedule your own recurring task.
+
 See [Web & HTTP Tools](./web-http.md) for credential injection in API calls and [Browser Automation](./browser.md) for form-filling with secrets.

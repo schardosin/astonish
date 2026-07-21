@@ -5,16 +5,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"time"
 
 	"github.com/SAP/astonish/pkg/agent"
 	"github.com/SAP/astonish/pkg/config"
 	"github.com/SAP/astonish/pkg/credentials"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
+	"github.com/SAP/astonish/pkg/sandbox/openshell"
 	"github.com/SAP/astonish/pkg/store"
 	adkagent "google.golang.org/adk/agent"
 	"google.golang.org/adk/runner"
 	"google.golang.org/adk/session"
 )
+
+// DefaultJobTimeout caps a single scheduled job execution so a hung adaptive
+// run cannot pin the in-memory "running" lock forever and block re-fires.
+const DefaultJobTimeout = 15 * time.Minute
+
+// jobTimeout is the active execution timeout (overridable in tests).
+var jobTimeout = DefaultJobTimeout
 
 // RunHeadlessFunc is a function type for running a flow headlessly.
 // It is injected by the daemon to avoid import cycles (scheduler -> launcher -> api).
@@ -71,20 +80,50 @@ type Executor struct {
 	// When set (platform mode), routine jobs use this instead of filesystem resolution.
 	// When nil (personal mode), resolveFlowPath() is used as the fallback.
 	FlowResolver FlowResolverFunc
+	// GatewayConfig enables OpenShell network-policy pre-seed and PolicyAllow
+	// auto-approve during adaptive runs (parity with Studio ChatRunner).
+	GatewayConfig *openshell.GRPCClientConfig
+	// ReadSessionFile reads a path from the adaptive sandbox (or host). Used
+	// when write_file content was not captured from tool args but a report
+	// fence references a file. Optional; delivery still works via last-wins
+	// text and in-loop write_file content capture.
+	ReadSessionFile func(sessionID, path string) ([]byte, error)
+	// DestroySandbox tears down the OpenShell/K8s sandbox for a session ID.
+	// Adaptive jobs call this at the start and end of each run so sandboxes
+	// are ephemeral (create → work → destroy) and never reuse a stale pod.
+	// Optional; when nil, adaptive runs keep legacy long-lived sandboxes.
+	DestroySandbox func(ctx context.Context, sessionID string) error
+	// InvalidateSandboxClient drops the ToolNodePool client for sessionID
+	// so the next EnsureReady provisions a fresh bind after DestroySandbox.
+	// Optional but required for OpenShell backendPool (bound=true sticks otherwise).
+	InvalidateSandboxClient func(sessionID string)
 }
 
 // Execute runs a job based on its mode and returns the result text.
+// A DefaultJobTimeout is applied so hung LLM/tool loops cancel cleanly.
 func (e *Executor) Execute(ctx context.Context, job *Job) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, jobTimeout)
+	defer cancel()
+
+	var result string
+	var err error
 	switch job.Mode {
 	case ModeRoutine:
-		return e.executeRoutine(ctx, job)
+		result, err = e.executeRoutine(ctx, job)
 	case ModeAdaptive:
-		return e.executeAdaptive(ctx, job)
+		result, err = e.executeAdaptive(ctx, job)
 	case ModeFleetPoll:
-		return e.executeFleetPoll(ctx, job)
+		result, err = e.executeFleetPoll(ctx, job)
 	default:
 		return "", fmt.Errorf("unknown job mode: %s", job.Mode)
 	}
+	if ctx.Err() == context.DeadlineExceeded {
+		if err != nil {
+			return result, fmt.Errorf("job %q timed out after %s: %w", job.Name, jobTimeout, err)
+		}
+		return result, fmt.Errorf("job %q timed out after %s", job.Name, jobTimeout)
+	}
+	return result, err
 }
 
 // executeRoutine runs a flow through the headless flow engine.
@@ -164,14 +203,26 @@ CRITICAL RULES:
 	// Use dashes (not colons) — session IDs flow into Kubernetes label values
 	// which only allow [a-z0-9A-Z._-].
 	sessionKey := fmt.Sprintf("scheduler-adaptive-%s", job.ID)
+	// Personal jobs run as the owning user so personal sessions/credentials apply.
+	// Team/headless jobs use SystemUserID.
 	userID := store.SystemUserID
+	if uid := store.UserIDFromContext(ctx); uid != "" {
+		userID = uid
+	} else if job.Scope == "personal" && job.OwnerID != "" {
+		userID = job.OwnerID
+	}
 	appName := "astonish"
 
-	// Get or create session
+	// Get or create ADK session (stable per job for transcript continuity).
 	sess, err := getOrCreateSession(ctx, e.SessionService, appName, userID, sessionKey)
 	if err != nil {
 		return "", fmt.Errorf("session error: %w", err)
 	}
+
+	// Ephemeral OpenShell sandbox: clear any stale pod/registry row, then
+	// destroy again when the run finishes so the next tick starts clean.
+	cleanupSandbox := e.ensureEphemeralAdaptiveSandbox(ctx, sess.ID())
+	defer cleanupSandbox()
 
 	// Create ADK agent wrapper for this execution
 	adkAgent, err := adkagent.New(adkagent.Config{
@@ -187,6 +238,10 @@ CRITICAL RULES:
 	if e.ChatAgent.Redactor != nil {
 		ctx = credentials.WithRedactor(ctx, e.ChatAgent.Redactor)
 	}
+	// Gateway on ctx so NodeTool PreSeeds DB allow rules before first Call.
+	if e.GatewayConfig != nil {
+		ctx = netpolicy.WithGatewayConfig(ctx, e.GatewayConfig)
+	}
 
 	// Create runner
 	r, err := runner.New(runner.Config{
@@ -201,25 +256,75 @@ CRITICAL RULES:
 	// Send instructions as user message (with absolute timestamp for temporal
 	// context; see agent.NewTimestampedUserContent for cache-stability rationale).
 	userContent := agent.NewTimestampedUserContent(job.Payload.Instructions)
-	var responseText strings.Builder
+
+	// Headless network-policy bridge: auto-approve PolicyAllow denials.
+	// Primary PreSeed runs in NodeTool before the first Call.
+	netBridge := &netpolicy.SessionBridge{
+		GatewayCfg: e.GatewayConfig,
+		SessionID:  sess.ID(),
+		Stores:     store.NetworkPolicyStoresFromContext(ctx),
+	}
+	pendingToolURLs := map[string]string{}
+	writtenFiles := map[string]string{}
+	var lastWins string
 
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
 		if err != nil {
-			return responseText.String(), fmt.Errorf("agent error: %w", err)
+			return finalizeAdaptiveResult(e, sess.ID(), lastWins, writtenFiles), fmt.Errorf("agent error: %w", err)
 		}
 
 		if event.LLMResponse.Content == nil {
 			continue
 		}
+		// Skip streaming partials — wait for complete turns (email batch semantics).
+		if event.LLMResponse.Partial {
+			continue
+		}
 
 		for _, part := range event.LLMResponse.Content.Parts {
-			if part.Text != "" {
-				responseText.WriteString(part.Text)
+			if part.FunctionCall != nil {
+				if part.FunctionCall.Name == "write_file" {
+					captureWriteFileContent(writtenFiles, part.FunctionCall.Args)
+				}
+				if urlArg, ok := part.FunctionCall.Args["url"].(string); ok && urlArg != "" {
+					if part.FunctionCall.ID != "" {
+						pendingToolURLs[part.FunctionCall.ID] = urlArg
+					}
+					pendingToolURLs[part.FunctionCall.Name] = urlArg
+				}
+			}
+			if part.FunctionResponse != nil {
+				fallbackURL := ""
+				if part.FunctionResponse.ID != "" {
+					fallbackURL = pendingToolURLs[part.FunctionResponse.ID]
+				}
+				if fallbackURL == "" {
+					fallbackURL = pendingToolURLs[part.FunctionResponse.Name]
+				}
+				netBridge.OnToolResult(ctx, part.FunctionResponse.Name, part.FunctionResponse.Response, fallbackURL)
 			}
 		}
+
+		turnText := extractUserFacingText(event.LLMResponse.Content.Parts)
+		lastWins = applyLastWinsTurn(lastWins, turnText)
 	}
 
-	return strings.TrimSpace(responseText.String()), nil
+	return finalizeAdaptiveResult(e, sess.ID(), lastWins, writtenFiles), nil
+}
+
+// finalizeAdaptiveResult picks report file body over mid-run narration / bare fences.
+func finalizeAdaptiveResult(e *Executor, sessionID, lastWins string, written map[string]string) string {
+	var drained []agent.FileArtifact
+	if e != nil && e.ChatAgent != nil {
+		drained = e.ChatAgent.DrainFiles()
+	}
+	var readFile func(path string) ([]byte, error)
+	if e != nil && e.ReadSessionFile != nil && sessionID != "" {
+		readFile = func(path string) ([]byte, error) {
+			return e.ReadSessionFile(sessionID, path)
+		}
+	}
+	return preferDeliveryBody(lastWins, written, drained, readFile)
 }
 
 // getOrCreateSession retrieves or creates a session by key.
@@ -242,6 +347,35 @@ func getOrCreateSession(ctx context.Context, sessSvc session.Service, appName, u
 		return nil, err
 	}
 	return createResp.Session, nil
+}
+
+// ensureEphemeralAdaptiveSandbox destroys any prior sandbox for sessionID and
+// returns a cleanup that destroys again after the adaptive run. Best-effort:
+// destroy errors are ignored so a missing sandbox does not block the run.
+// Also invalidates the ToolNodePool client so the next EnsureReady rebinds.
+func (e *Executor) ensureEphemeralAdaptiveSandbox(ctx context.Context, sessionID string) (cleanup func()) {
+	noop := func() {}
+	if e == nil || sessionID == "" {
+		return noop
+	}
+	if e.DestroySandbox == nil && e.InvalidateSandboxClient == nil {
+		return noop
+	}
+	e.destroyAndInvalidateAdaptiveSandbox(ctx, sessionID)
+	return func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		e.destroyAndInvalidateAdaptiveSandbox(cleanupCtx, sessionID)
+	}
+}
+
+func (e *Executor) destroyAndInvalidateAdaptiveSandbox(ctx context.Context, sessionID string) {
+	if e.DestroySandbox != nil {
+		_ = e.DestroySandbox(ctx, sessionID)
+	}
+	if e.InvalidateSandboxClient != nil {
+		e.InvalidateSandboxClient(sessionID)
+	}
 }
 
 // resolveFlowPath resolves a flow name to its filesystem path using the same

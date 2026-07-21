@@ -96,7 +96,7 @@ func NewDeliverFunc(getManager ChannelManagerGetter) DeliverFunc {
 		}
 
 		// Fallback: broadcast to all targets across all channels.
-		return mgr.Broadcast(ctx, outMsg)
+		return broadcastOrError(ctx, mgr, outMsg)
 	}
 }
 
@@ -124,7 +124,7 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 					job.Name, job.Delivery.Mode, err)
 			}
 			// Fallback to broadcast on resolution failure
-			return mgr.Broadcast(ctx, outMsg)
+			return broadcastOrError(ctx, mgr, outMsg)
 		}
 
 		// If resolution returned explicit targets, send to each
@@ -143,12 +143,23 @@ func NewPlatformDeliverFunc(getManager ChannelManagerGetter, resolver DeliveryRe
 				return fmt.Errorf("partial delivery failure (%d/%d): %s",
 					len(errs), len(targets), strings.Join(errs, "; "))
 			}
+			if logger != nil {
+				logger.Printf("[delivery] Delivered job %q to %d target(s)", job.Name, len(targets))
+			}
 			return nil
 		}
 
 		// No targets resolved and no error — broadcast (legacy personal mode)
-		return mgr.Broadcast(ctx, outMsg)
+		return broadcastOrError(ctx, mgr, outMsg)
 	}
+}
+
+// broadcastOrError broadcasts and fails if no channel targets exist (silent no-op).
+func broadcastOrError(ctx context.Context, mgr *channels.ChannelManager, msg channels.OutboundMessage) error {
+	if mgr.CountBroadcastTargets() == 0 {
+		return fmt.Errorf("no delivery targets available")
+	}
+	return mgr.Broadcast(ctx, msg)
 }
 
 // resolveTargets determines concrete delivery targets for a job based on its
@@ -337,9 +348,16 @@ func formatDeliveryMessage(job *Job, result string, execErr error) string {
 }
 
 // truncateResult shortens a result string if it exceeds maxDeliveryLen.
+// Keeps the suffix so scheduled emails preserve the conclusion / report end
+// rather than mid-run narration at the start of a concatenated blob.
 func truncateResult(s string) string {
 	if len(s) <= maxDeliveryLen {
 		return s
 	}
-	return s[:maxDeliveryLen] + "\n\n... (truncated)"
+	// Prefer cutting at a newline near the keep window when possible.
+	keep := s[len(s)-maxDeliveryLen:]
+	if i := strings.Index(keep, "\n"); i >= 0 && i < len(keep)/4 {
+		keep = keep[i+1:]
+	}
+	return "... (truncated)\n\n" + keep
 }

@@ -76,9 +76,24 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		spec.TemplateID = sandbox.BaseTemplateID
 	}
 
-	// Check idempotency: if session already exists, return it.
+	// Check idempotency: if session already exists *and* the gateway still
+	// has the sandbox, return it. If the registry row is stale (pod gone /
+	// idle-evicted), drop the row and create a fresh sandbox — otherwise
+	// EnsureReady succeeds while PushFile/vault fail with "sandbox not found".
 	if existing, err := b.sessions.GetSession(spec.SessionID); err == nil && existing != nil {
-		return sessionFromStore(existing), nil
+		probeName := existing.ContainerName
+		if probeName == "" {
+			probeName = sandboxName(spec.SessionID)
+		}
+		st, getErr := b.gateway.GetSandboxStatus(ctx, probeName)
+		if getErr == nil && st != nil && st.State != SandboxStateGone && st.State != SandboxStateFailed {
+			return sessionFromStore(existing), nil
+		}
+		if getErr != nil && !isNotFound(getErr) {
+			// Transient gateway error — keep the record rather than racing a recreate.
+			return sessionFromStore(existing), nil
+		}
+		_ = b.sessions.Remove(spec.SessionID)
 	}
 
 	// Build the sandbox name.
@@ -126,7 +141,7 @@ func (b *OpenShellBackend) CreateSession(ctx context.Context, spec sandbox.Sessi
 		Image:        image,
 		Env:          env,
 		Labels:       labels,
-		Policy:       defaultSandboxPolicy(b.cfg.AppConfig),
+		Policy:       mergeSessionNetworkAllows(defaultSandboxPolicy(b.cfg.AppConfig), spec.NetworkAllowEndpoints),
 		DriverConfig: driverCfg,
 	})
 	if err != nil {

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Save, AlertCircle, Check, Play, Trash2, Clock, Loader2, CheckCircle, XCircle, Pause, ChevronRight, ChevronDown, X, AlertTriangle, Users, Mail, MessageSquare, Hash } from 'lucide-react'
+import { Save, AlertCircle, Check, Play, Trash2, Clock, Loader2, CheckCircle, XCircle, Pause, ChevronRight, ChevronDown, X, AlertTriangle, Users, Mail, MessageSquare, Hash, Upload, Download } from 'lucide-react'
 import { saveFullConfigSection, hintStyle, sectionBorderStyle, saveButtonStyle } from './settingsApi'
 import { teamFetch } from '../../api/teamContext'
 
@@ -10,6 +10,8 @@ interface SchedulerJob {
   name: string
   enabled: boolean
   mode: string
+  /** personal = owner credentials; team = shared team credentials */
+  scope?: 'personal' | 'team' | string
   schedule?: {
     cron?: string
     timezone?: string
@@ -54,12 +56,40 @@ interface SchedulerSettingsProps {
   onSaved?: () => void
   /** Explicit team slug — overrides global active team for API calls */
   teamSlug?: string
+  /** Platform mode shows Personal + Team sections like Credentials */
+  isPlatform?: boolean
 }
 
 // API helpers
-const fetchJobs = async (teamSlug?: string): Promise<{ jobs?: SchedulerJob[] }> => {
+const fetchJobs = async (teamSlug?: string): Promise<{ jobs?: SchedulerJob[]; is_team_admin?: boolean }> => {
   const res = await teamFetch('/api/scheduler/jobs', undefined, teamSlug)
   if (!res.ok) throw new Error('Failed to fetch jobs')
+  return res.json()
+}
+
+const publishJob = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch('/api/scheduler/jobs/publish', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id })
+  }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to promote job')
+  }
+  return res.json()
+}
+
+const forkJob = async (id: string, teamSlug?: string): Promise<Record<string, unknown>> => {
+  const res = await teamFetch('/api/scheduler/jobs/fork', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id })
+  }, teamSlug)
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || 'Failed to fork job')
+  }
   return res.json()
 }
 
@@ -152,6 +182,24 @@ function ModeBadge({ mode }: { mode: string }) {
   )
 }
 
+const SCOPE_COLORS: Record<string, string> = {
+  personal: '#8b5cf6',
+  team: '#3b82f6',
+}
+
+function ScopeBadge({ scope }: { scope: string }) {
+  const color = SCOPE_COLORS[scope] || '#6b7280'
+  return (
+    <span className="text-[10px] px-1.5 py-0.5 rounded capitalize" style={{
+      background: `${color}22`,
+      color,
+      border: `1px solid ${color}44`,
+    }} title={scope === 'personal' ? 'Personal credentials (+ team fallback)' : 'Team credentials only'}>
+      {scope}
+    </span>
+  )
+}
+
 const deliveryModeLabels: Record<string, string> = {
   owner: 'Owner Only',
   team: 'All Team Members',
@@ -179,13 +227,16 @@ function DeliveryModeBadge({ mode }: { mode: string }) {
   )
 }
 
-export default function SchedulerSettings({ config, onSaved, teamSlug }: SchedulerSettingsProps) {
+export default function SchedulerSettings({ config, onSaved, teamSlug, isPlatform = false }: SchedulerSettingsProps) {
   const [enabled, setEnabled] = useState(true)
   const [jobs, setJobs] = useState<SchedulerJob[]>([])
+  const [isTeamAdmin, setIsTeamAdmin] = useState(false)
   const [jobsLoading, setJobsLoading] = useState(false)
   const [jobsError, setJobsError] = useState<string | null>(null)
   const [expandedJob, setExpandedJob] = useState<string | null>(null)
   const [runningJob, setRunningJob] = useState<string | null>(null)
+  const [publishingJob, setPublishingJob] = useState<string | null>(null)
+  const [forkingJob, setForkingJob] = useState<string | null>(null)
   const [deleteConfirm, setDeleteConfirm] = useState<SchedulerJob | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([])
@@ -208,6 +259,7 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
     try {
       const data = await fetchJobs(teamSlug)
       setJobs(data.jobs || [])
+      setIsTeamAdmin(!!data.is_team_admin)
     } catch (err: any) {
       setJobsError(err.message)
     } finally {
@@ -294,7 +346,38 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
     }
   }
 
+  const handlePromoteJob = async (job: SchedulerJob) => {
+    setPublishingJob(job.id)
+    setActionError(null)
+    try {
+      await publishJob(job.id, teamSlug)
+      if (expandedJob === job.id) setExpandedJob(null)
+      await loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    } finally {
+      setPublishingJob(null)
+    }
+  }
+
+  const handleForkJob = async (job: SchedulerJob) => {
+    setForkingJob(job.id)
+    setActionError(null)
+    try {
+      await forkJob(job.id, teamSlug)
+      await loadJobs()
+    } catch (err: any) {
+      setActionError(err.message)
+    } finally {
+      setForkingJob(null)
+    }
+  }
+
   const handleChangeDeliveryMode = async (job: SchedulerJob, newMode: string) => {
+    if (job.scope === 'personal' && newMode !== 'owner') {
+      setActionError('Personal jobs can only deliver to the owner. Promote to team for shared delivery.')
+      return
+    }
     setActionError(null)
     try {
       const updatedDelivery = { ...(job.delivery || {}), mode: newMode }
@@ -365,112 +448,41 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
     }
   }
 
-  const enabledJobs = jobs.filter(j => j.enabled)
+  const personalJobs = isPlatform
+    ? jobs.filter(j => j.scope === 'personal' || !j.scope)
+    : jobs
+  const teamJobs = isPlatform ? jobs.filter(j => j.scope === 'team') : []
 
-  return (
-    <div className="max-w-2xl space-y-6">
-      {/* Master Toggle */}
-      <div className="flex items-center justify-between">
-        <div>
-          <label className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            Enable Scheduler
-          </label>
-          <p className="text-xs mt-0.5" style={hintStyle}>
-            Run scheduled jobs automatically via cron expressions. Default: enabled.
+  const renderJobCards = (sectionJobs: SchedulerJob[], sectionScope?: string) => {
+    if (!jobsLoading && sectionJobs.length === 0 && !jobsError) {
+      return (
+        <div className="py-6 text-center rounded-lg" style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)' }}>
+          <Clock size={28} className="mx-auto mb-2" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
+          <p className="text-sm" style={hintStyle}>
+            No {sectionScope ? `${sectionScope} ` : ''}scheduled jobs yet.
+          </p>
+          <p className="text-xs mt-1" style={hintStyle}>
+            {sectionScope === 'personal'
+              ? 'Ask the AI to schedule a task — new jobs default to personal scope.'
+              : sectionScope === 'team'
+                ? 'Promote a personal job, fork a team job to personal, or create a team job as a team admin.'
+                : 'Jobs are created through chat. Ask the AI to schedule a task for you.'}
           </p>
         </div>
-        <button
-          onClick={() => setEnabled(!enabled)}
-          className="relative w-11 h-6 rounded-full transition-colors"
-          style={{
-            background: enabled ? '#a855f7' : 'var(--bg-tertiary)',
-            border: `1px solid ${enabled ? '#a855f7' : 'var(--border-color)'}`
-          }}
-        >
-          <span
-            className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform bg-white"
-            style={{ transform: enabled ? 'translateX(20px)' : 'translateX(0)' }}
-          />
-        </button>
-      </div>
+      )
+    }
+    return (
+      <div className="space-y-2">
+        {sectionJobs.map(job => {
+          const isExpanded = expandedJob === job.id
+          const isRunning = runningJob === job.id
+          const isPublishing = publishingJob === job.id
+          const isForking = forkingJob === job.id
+          const isPersonalJob = (job.scope === 'personal') || (!!sectionScope && sectionScope === 'personal' && !job.scope)
+          const isTeamJob = job.scope === 'team' || sectionScope === 'team'
+          const deliveryModes = isPersonalJob ? ['owner'] : ['owner', 'team', 'members', 'target']
 
-      {/* Save Config */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={handleSaveConfig}
-          disabled={saving}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
-          style={saveButtonStyle}
-        >
-          <Save size={16} />
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-        {saveSuccess && (
-          <span className="flex items-center gap-1 text-green-400 text-sm">
-            <Check size={16} /> Saved
-          </span>
-        )}
-        {error && (
-          <span className="flex items-center gap-1 text-sm" style={{ color: 'var(--danger)' }}>
-            <AlertCircle size={16} /> {error}
-          </span>
-        )}
-      </div>
-
-      {/* Jobs List */}
-      <div className="pt-4 border-t" style={sectionBorderStyle}>
-        <div className="flex items-center justify-between mb-3">
-          <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            Scheduled Jobs
-            {!jobsLoading && jobs.length > 0 && (
-              <span className="ml-2 text-xs font-normal" style={hintStyle}>
-                {enabledJobs.length} active, {jobs.length} total
-              </span>
-            )}
-          </h4>
-        </div>
-
-        {actionError && (
-          <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-3"
-            style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
-            <AlertCircle size={14} /> {actionError}
-            <button onClick={() => setActionError(null)} className="ml-auto p-0.5"><X size={14} /></button>
-          </div>
-        )}
-
-        {jobsLoading && (
-          <div className="flex items-center gap-2 py-4">
-            <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
-            <span className="text-sm" style={hintStyle}>Loading jobs...</span>
-          </div>
-        )}
-
-        {jobsError && (
-          <div className="flex items-center gap-2 p-3 rounded-lg text-sm mb-3"
-            style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
-            <AlertCircle size={14} /> {jobsError}
-          </div>
-        )}
-
-        {!jobsLoading && jobs.length === 0 && !jobsError && (
-          <div className="py-6 text-center">
-            <Clock size={32} className="mx-auto mb-2" style={{ color: 'var(--text-muted)', opacity: 0.5 }} />
-            <p className="text-sm" style={hintStyle}>
-              No scheduled jobs yet.
-            </p>
-            <p className="text-xs mt-1" style={hintStyle}>
-              Jobs are created through chat. Ask the AI to schedule a task for you, or use <code>astonish scheduler</code> from the CLI.
-            </p>
-          </div>
-        )}
-
-        {/* Job Cards */}
-        <div className="space-y-2">
-          {jobs.map(job => {
-            const isExpanded = expandedJob === job.id
-            const isRunning = runningJob === job.id
-
-            return (
+          return (
               <div
                 key={job.id}
                 className="rounded-lg border transition-all"
@@ -505,6 +517,7 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                         {job.name}
                       </span>
                       <ModeBadge mode={job.mode} />
+                      {job.scope && <ScopeBadge scope={job.scope} />}
                       <StatusBadge status={job.last_status} />
                     </div>
                     <div className="text-xs flex items-center gap-3 mt-0.5" style={hintStyle}>
@@ -537,6 +550,31 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                     >
                       {isRunning ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
                     </button>
+
+                    {isPersonalJob && isTeamAdmin && (
+                      <button
+                        onClick={() => handlePromoteJob(job)}
+                        disabled={isPublishing}
+                        className="p-1.5 rounded-lg transition-colors hover:bg-gray-600/30 disabled:opacity-50"
+                        style={{ color: 'var(--text-muted)' }}
+                        title="Promote to Team"
+                      >
+                        {isPublishing ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                      </button>
+                    )}
+
+                    {isPlatform && isTeamJob && isTeamAdmin && (
+                      <button
+                        onClick={() => handleForkJob(job)}
+                        disabled={isForking}
+                        className="p-1.5 rounded-lg transition-colors hover:bg-gray-600/30 disabled:opacity-50"
+                        style={{ color: 'var(--text-muted)' }}
+                        title="Fork to Personal"
+                      >
+                        {isForking ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+                      </button>
+                    )}
+
                     <button
                       onClick={() => setDeleteConfirm(job)}
                       className="p-1.5 rounded-lg transition-colors hover:bg-red-600/20"
@@ -648,7 +686,7 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                       <div>
                         <div className="text-xs font-medium mb-2" style={hintStyle}>Delivery Mode</div>
                         <div className="flex flex-wrap gap-1.5">
-                          {['owner', 'team', 'members', 'target'].map(mode => (
+                          {deliveryModes.map(mode => (
                             <button
                               key={mode}
                               onClick={() => handleChangeDeliveryMode(job, mode)}
@@ -803,12 +841,129 @@ export default function SchedulerSettings({ config, onSaved, teamSlug }: Schedul
                   </div>
                 )}
               </div>
-            )
-          })}
+          )
+        })}
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-2xl space-y-6">
+      {/* Master Toggle */}
+      <div className="flex items-center justify-between">
+        <div>
+          <label className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+            Enable Scheduler
+          </label>
+          <p className="text-xs mt-0.5" style={hintStyle}>
+            Run scheduled jobs automatically via cron expressions. Default: enabled.
+          </p>
         </div>
+        <button
+          onClick={() => setEnabled(!enabled)}
+          className="relative w-11 h-6 rounded-full transition-colors"
+          style={{
+            background: enabled ? '#a855f7' : 'var(--bg-tertiary)',
+            border: `1px solid ${enabled ? '#a855f7' : 'var(--border-color)'}`
+          }}
+        >
+          <span
+            className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full transition-transform bg-white"
+            style={{ transform: enabled ? 'translateX(20px)' : 'translateX(0)' }}
+          />
+        </button>
       </div>
 
-      {/* Delete Confirmation */}
+      {/* Save Config */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={handleSaveConfig}
+          disabled={saving}
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-white font-medium transition-all shadow-md hover:shadow-lg hover:scale-[1.02] active:scale-95 disabled:opacity-50"
+          style={saveButtonStyle}
+        >
+          <Save size={16} />
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        {saveSuccess && (
+          <span className="flex items-center gap-1 text-green-400 text-sm">
+            <Check size={16} /> Saved
+          </span>
+        )}
+        {error && (
+          <span className="flex items-center gap-1 text-sm" style={{ color: 'var(--danger)' }}>
+            <AlertCircle size={16} /> {error}
+          </span>
+        )}
+      </div>
+
+      {actionError && (
+        <div className="flex items-center gap-2 p-3 rounded-lg text-sm"
+          style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
+          <AlertCircle size={14} /> {actionError}
+          <button onClick={() => setActionError(null)} className="ml-auto p-0.5"><X size={14} /></button>
+        </div>
+      )}
+
+      {jobsLoading && (
+        <div className="flex items-center gap-2 py-4">
+          <Loader2 size={16} className="animate-spin" style={{ color: 'var(--accent)' }} />
+          <span className="text-sm" style={hintStyle}>Loading jobs...</span>
+        </div>
+      )}
+
+      {jobsError && (
+        <div className="flex items-center gap-2 p-3 rounded-lg text-sm"
+          style={{ background: 'rgba(239, 68, 68, 0.1)', color: 'var(--danger)' }}>
+          <AlertCircle size={14} /> {jobsError}
+        </div>
+      )}
+
+      {/* Jobs — Credentials-style Personal / Team sections in platform mode */}
+      <div className="pt-4 border-t space-y-4" style={sectionBorderStyle}>
+        {isPlatform ? (
+          <>
+            <div className="rounded-xl p-4" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
+              <div className="mb-3">
+                <h3 className="text-sm font-medium flex items-center gap-2 mb-1" style={{ color: 'var(--text-primary)' }}>
+                  <ScopeBadge scope="personal" />
+                  Personal Jobs ({personalJobs.length})
+                </h3>
+                <p className="text-xs" style={hintStyle}>
+                  Your private schedules. Run with personal credentials (team credentials as fallback). Delivery is limited to you.
+                </p>
+              </div>
+              {!jobsLoading && renderJobCards(personalJobs, 'personal')}
+            </div>
+            <div className="rounded-xl p-4" style={{ background: 'var(--bg-primary)', border: '1px solid var(--border-color)' }}>
+              <div className="mb-3">
+                <h3 className="text-sm font-medium flex items-center gap-2 mb-1" style={{ color: 'var(--text-primary)' }}>
+                  <ScopeBadge scope="team" />
+                  Team Jobs ({teamJobs.length})
+                </h3>
+                <p className="text-xs" style={hintStyle}>
+                  Shared team schedules. Use team credentials only. Team admins manage these jobs.
+                </p>
+              </div>
+              {!jobsLoading && renderJobCards(teamJobs, 'team')}
+            </div>
+          </>
+        ) : (
+          <>
+            <h4 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Scheduled Jobs
+              {!jobsLoading && jobs.length > 0 && (
+                <span className="ml-2 text-xs font-normal" style={hintStyle}>
+                  {jobs.filter(j => j.enabled).length} active, {jobs.length} total
+                </span>
+              )}
+            </h4>
+            {!jobsLoading && renderJobCards(jobs)}
+          </>
+        )}
+      </div>
+
+      {/* Delete Confirmation */}      {/* Delete Confirmation */}
       {deleteConfirm && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.7)' }}>
           <div className="rounded-xl w-full max-w-sm p-6 shadow-2xl"

@@ -19,10 +19,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/SAP/astonish/pkg/sandbox/netpolicy"
 	"github.com/SAP/astonish/pkg/sandbox/openshell"
+	"github.com/SAP/astonish/pkg/store"
 )
 
 // networkGrantApproveRequest is the body for approving a specific draft chunk.
@@ -159,7 +160,11 @@ func NetworkGrantApproveBroaderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Wait for the sandbox proxy to actually load the new policy.
-	waitForPolicyLoad(r.Context(), gateway, req.SandboxName, resp.PolicyVersion)
+	netpolicy.WaitForPolicyLoad(r.Context(), gateway, req.SandboxName, resp.PolicyVersion)
+
+	// Persist to durable team/org network policy so scheduler sandboxes
+	// inherit this grant via pre-seed (live UpdateConfig alone does not).
+	persistNetworkAllowRule(r, req.Host, port)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -237,56 +242,41 @@ func gatewayClientForRequest(r *http.Request) (openshell.GatewayClient, func(), 
 	return client, cleanup, nil
 }
 
-// waitForPolicyLoad polls the gateway until the sandbox proxy confirms it has
-// loaded the specified policy version (or a newer one). This prevents the race
-// condition where the agent retries a request before the proxy has applied the
-// newly-approved endpoint.
-//
-// The function polls every 100ms for up to maxWait. If the gateway doesn't
-// support GetPolicyStatus or the call fails, it falls back to a fixed sleep.
-// Best-effort: errors are logged but never propagated — the agent will retry
-// and hit the reactive detection path if the policy still isn't loaded.
+// waitForPolicyLoad polls until the sandbox proxy has loaded the policy version.
 func waitForPolicyLoad(ctx context.Context, gateway openshell.GatewayClient, sandboxName string, targetVersion uint32) {
-	const (
-		pollInterval = 100 * time.Millisecond
-		maxWait      = 5 * time.Second
-		fallbackWait = 500 * time.Millisecond
-	)
+	netpolicy.WaitForPolicyLoad(ctx, gateway, sandboxName, targetVersion)
+}
 
-	deadline := time.Now().Add(maxWait)
-	for time.Now().Before(deadline) {
-		status, err := gateway.GetPolicyStatus(ctx, sandboxName, targetVersion)
-		if err != nil {
-			// Gateway may not support this RPC (older versions). Fall back to
-			// a fixed delay and return.
-			slog.Debug("waitForPolicyLoad: GetPolicyStatus failed, using fallback delay",
-				"sandbox", sandboxName, "version", targetVersion, "error", err)
-			time.Sleep(fallbackWait)
-			return
-		}
-
-		// Policy is loaded if active version >= target, or status is "loaded".
-		if status.ActiveVersion >= targetVersion || status.Status == "loaded" {
-			slog.Debug("waitForPolicyLoad: policy loaded",
-				"sandbox", sandboxName, "version", targetVersion,
-				"activeVersion", status.ActiveVersion, "status", status.Status)
-			return
-		}
-
-		// Policy failed to load — no point waiting further.
-		if status.Status == "failed" {
-			slog.Warn("waitForPolicyLoad: policy failed to load",
-				"sandbox", sandboxName, "version", targetVersion, "status", status.Status)
-			return
-		}
-
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(pollInterval):
-		}
+// persistNetworkAllowRule saves an allow rule to the team (preferred) or org
+// NetworkPolicyStore so future sandboxes (including scheduler) pre-seed it.
+func persistNetworkAllowRule(r *http.Request, host string, port uint32) {
+	svc := store.FromRequest(r)
+	if svc == nil {
+		return
 	}
-
-	slog.Warn("waitForPolicyLoad: timed out waiting for policy",
-		"sandbox", sandboxName, "version", targetVersion, "maxWait", maxWait)
+	target := svc.TeamNetworkPolicies
+	scope := "team"
+	if target == nil {
+		target = svc.NetworkPolicies
+		scope = "org"
+	}
+	if target == nil {
+		slog.Debug("persist network allow: no team/org policy store available", "host", host)
+		return
+	}
+	rule := &store.NetworkPolicyRule{
+		Host:   host,
+		Port:   port,
+		Action: store.NetworkPolicyAllow,
+	}
+	if user := GetPlatformUser(r); user != nil {
+		rule.CreatedBy = user.ID
+	}
+	if err := target.Save(r.Context(), rule); err != nil {
+		slog.Warn("persist network allow rule failed",
+			"host", host, "port", port, "scope", scope, "error", err)
+		return
+	}
+	slog.Info("persisted network allow rule",
+		"host", host, "port", port, "scope", scope)
 }

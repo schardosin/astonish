@@ -115,6 +115,12 @@ type ToolNodePool interface {
 	// sub-agents (delegate_task) share the same sandbox instead of each
 	// creating a new one. No-op if the parent has no client yet.
 	Alias(childSessionID, parentSessionID string)
+
+	// Remove drops the cached client for sessionID without necessarily
+	// destroying the backend sandbox (callers that own lifecycle destroy
+	// first). Next GetOrCreate returns a fresh unbound client. Used by
+	// ephemeral adaptive scheduler runs after DestroySandbox.
+	Remove(sessionID string)
 }
 
 // Compile-time assertions that the concrete Incus-bound types satisfy
@@ -185,4 +191,8 @@ func (a *nodePoolAdapter) GetBackend() Backend { return a.p.GetBackend() }
 
 func (a *nodePoolAdapter) Alias(childSessionID, parentSessionID string) {
 	a.p.Alias(childSessionID, parentSessionID)
+}
+
+func (a *nodePoolAdapter) Remove(sessionID string) {
+	a.p.Remove(sessionID)
 }

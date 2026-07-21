@@ -83,6 +83,9 @@ type backendNodeClient struct {
 	bindDone   chan struct{} // closed once the create/start round-trip finishes
 	bindErr    error         // captured on bindDone close
 	closed     bool          // Cleanup has run
+	// networkAllowEndpoints are baked into OpenShell CreateSession when set
+	// before BindSession completes provisioning (see SetNetworkAllowEndpoints).
+	networkAllowEndpoints []NetworkAllowEndpoint
 }
 
 // newBackendNodeClient constructs a client. The session is NOT created until
@@ -123,14 +126,87 @@ func (c *backendNodeClient) BindSession(sessionID string) {
 	go c.provision(sessionID)
 }
 
+// resetBind clears a completed bind so BindSession can provision again.
+// Used when the underlying sandbox was destroyed (e.g. ephemeral adaptive
+// scheduler runs) but this client is still cached in the pool.
+func (c *backendNodeClient) resetBind() {
+	c.mu.Lock()
+	done := c.bindDone
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
+	if done != nil {
+		<-done // wait for in-flight provision before flipping bound
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.bound = false
+	c.bindDone = nil
+	c.bindErr = nil
+	c.sessionID = ""
+}
+
+// sessionStillReady reports whether the backend still has a usable sandbox
+// for sessionID after a prior successful bind.
+func (c *backendNodeClient) sessionStillReady(sessionID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	state, err := c.backend.SessionState(ctx, sessionID)
+	if err != nil {
+		return false
+	}
+	switch state {
+	case SessionStateRunning, SessionStateCreating, SessionStateResuming:
+		return true
+	default:
+		return false
+	}
+}
+
 // EnsureReady satisfies ToolNodeClient. It triggers provisioning (via
 // BindSession) and blocks until the sandbox session is fully running.
 // Returns nil on success or the provisioning error.
+//
+// If a prior bind completed but the sandbox is gone (destroyed externally
+// or by an ephemeral adaptive run), EnsureReady resets the bind and
+// provisions a fresh session. An in-flight first bind is not treated as
+// "gone" — SessionState would still be absent until CreateSession finishes.
 func (c *backendNodeClient) EnsureReady(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("backend node client: no session bound (empty session ID)")
+	}
+
+	c.mu.Lock()
+	alreadyBound := c.bound && !c.closed
+	done := c.bindDone
+	c.mu.Unlock()
+
+	if alreadyBound && done != nil {
+		select {
+		case <-done:
+			// Prior bind finished — re-provision if the sandbox disappeared.
+			c.mu.Lock()
+			priorErr := c.bindErr
+			c.mu.Unlock()
+			if priorErr != nil || !c.sessionStillReady(sessionID) {
+				slog.Info("backend node client: re-binding after sandbox gone",
+					"component", "sandbox", "session", shortSession(sessionID))
+				c.resetBind()
+			}
+		default:
+			// First provision still running — wait below, do not reset.
+		}
+	}
+
 	c.BindSession(sessionID)
 
 	c.mu.Lock()
-	done := c.bindDone
+	done = c.bindDone
 	closed := c.closed
 	c.mu.Unlock()
 
@@ -145,6 +221,23 @@ func (c *backendNodeClient) EnsureReady(sessionID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.bindErr
+}
+
+// SetNetworkAllowEndpoints stashes DB allow rules for CreateSession. Must be
+// called before BindSession's provision goroutine reads the spec (typically
+// from NodeTool.ProcessRequest before BindSession). Ignored after bind starts
+// if create already used an empty list — PreSeed-before-Call covers that case.
+func (c *backendNodeClient) SetNetworkAllowEndpoints(endpoints []NetworkAllowEndpoint) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bound {
+		// Provision may already be running; still store for a late CreateSession
+		// that has not yet copied the slice (provision reads under lock below).
+		if len(c.networkAllowEndpoints) > 0 {
+			return
+		}
+	}
+	c.networkAllowEndpoints = append([]NetworkAllowEndpoint(nil), endpoints...)
 }
 
 // GetBackend exposes the underlying Backend for credential file PushFile and similar.
@@ -171,6 +264,11 @@ func (c *backendNodeClient) provision(sessionID string) {
 		Limits:     c.limits,
 		Env:        c.sessionEnv,
 	}
+	c.mu.Lock()
+	if len(c.networkAllowEndpoints) > 0 {
+		spec.NetworkAllowEndpoints = append([]NetworkAllowEndpoint(nil), c.networkAllowEndpoints...)
+	}
+	c.mu.Unlock()
 	if _, err := c.backend.CreateSession(ctx, spec); err != nil {
 		c.mu.Lock()
 		c.bindErr = fmt.Errorf("backend create session: %w", err)
@@ -307,6 +405,15 @@ func (c *backendNodeClient) close() {
 		slog.Warn("backend destroy session failed", "component", "sandbox",
 			"session", shortSession(sessionID), "error", err)
 	}
+}
+
+// discard marks the client unusable without calling Backend.DestroySession.
+// Used by pool.Remove after the caller already destroyed the sandbox
+// (ephemeral adaptive runs) so we do not race a second destroy.
+func (c *backendNodeClient) discard() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
 }
 
 // parseNodeResponse scans NDJSON stdout for the first response line with an
@@ -459,6 +566,28 @@ func (p *backendPool) getOrCreate(sessionID, template string, chain []string, im
 	return c
 }
 
+// Remove drops the cached client for sessionID (and any Alias entries that
+// share the same client). Does NOT destroy the backend session — callers
+// that own lifecycle (adaptive DestroySandbox) destroy first, then Remove.
+func (p *backendPool) Remove(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	c, ok := p.clients[sessionID]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	for id, other := range p.clients {
+		if other == c {
+			delete(p.clients, id)
+		}
+	}
+	p.mu.Unlock()
+	c.discard()
+}
+
 // Cleanup destroys every client the pool vended, then marks the pool
 // closed. After Cleanup, GetOrCreate returns nil. The pool's Backend is
 // NOT closed (it is not owned).
@@ -567,3 +696,6 @@ func (p *singleClientPool) Cleanup() {
 }
 
 func (p *singleClientPool) Alias(_, _ string) {}
+
+// Remove is a no-op for fleet single-client pools (the client is pinned).
+func (p *singleClientPool) Remove(_ string) {}

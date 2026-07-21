@@ -11,6 +11,7 @@ import (
 	"github.com/SAP/astonish/ent/personal/flow"
 	"github.com/SAP/astonish/ent/personal/memory"
 	"github.com/SAP/astonish/ent/personal/personalsettings"
+	"github.com/SAP/astonish/ent/personal/scheduledjob"
 	"github.com/SAP/astonish/ent/personal/schema"
 	"github.com/SAP/astonish/ent/personal/session"
 	"github.com/SAP/astonish/ent/personal/sessionevent"
@@ -163,6 +164,46 @@ func init() {
 	personalsettings.DefaultUpdatedAt = personalsettingsDescUpdatedAt.Default.(func() time.Time)
 	// personalsettings.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	personalsettings.UpdateDefaultUpdatedAt = personalsettingsDescUpdatedAt.UpdateDefault.(func() time.Time)
+	scheduledjobFields := schema.ScheduledJob{}.Fields()
+	_ = scheduledjobFields
+	// scheduledjobDescName is the schema descriptor for name field.
+	scheduledjobDescName := scheduledjobFields[1].Descriptor()
+	// scheduledjob.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	scheduledjob.NameValidator = scheduledjobDescName.Validators[0].(func(string) error)
+	// scheduledjobDescSchedule is the schema descriptor for schedule field.
+	scheduledjobDescSchedule := scheduledjobFields[2].Descriptor()
+	// scheduledjob.ScheduleValidator is a validator for the "schedule" field. It is called by the builders before save.
+	scheduledjob.ScheduleValidator = scheduledjobDescSchedule.Validators[0].(func(string) error)
+	// scheduledjobDescPayload is the schema descriptor for payload field.
+	scheduledjobDescPayload := scheduledjobFields[4].Descriptor()
+	// scheduledjob.DefaultPayload holds the default value on creation for the payload field.
+	scheduledjob.DefaultPayload = scheduledjobDescPayload.Default.(map[string]interface{})
+	// scheduledjobDescLastStatus is the schema descriptor for last_status field.
+	scheduledjobDescLastStatus := scheduledjobFields[8].Descriptor()
+	// scheduledjob.DefaultLastStatus holds the default value on creation for the last_status field.
+	scheduledjob.DefaultLastStatus = scheduledjobDescLastStatus.Default.(string)
+	// scheduledjobDescLastError is the schema descriptor for last_error field.
+	scheduledjobDescLastError := scheduledjobFields[9].Descriptor()
+	// scheduledjob.DefaultLastError holds the default value on creation for the last_error field.
+	scheduledjob.DefaultLastError = scheduledjobDescLastError.Default.(string)
+	// scheduledjobDescConsecutiveFailures is the schema descriptor for consecutive_failures field.
+	scheduledjobDescConsecutiveFailures := scheduledjobFields[10].Descriptor()
+	// scheduledjob.DefaultConsecutiveFailures holds the default value on creation for the consecutive_failures field.
+	scheduledjob.DefaultConsecutiveFailures = scheduledjobDescConsecutiveFailures.Default.(int)
+	// scheduledjobDescCreatedAt is the schema descriptor for created_at field.
+	scheduledjobDescCreatedAt := scheduledjobFields[12].Descriptor()
+	// scheduledjob.DefaultCreatedAt holds the default value on creation for the created_at field.
+	scheduledjob.DefaultCreatedAt = scheduledjobDescCreatedAt.Default.(func() time.Time)
+	// scheduledjobDescUpdatedAt is the schema descriptor for updated_at field.
+	scheduledjobDescUpdatedAt := scheduledjobFields[13].Descriptor()
+	// scheduledjob.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	scheduledjob.DefaultUpdatedAt = scheduledjobDescUpdatedAt.Default.(func() time.Time)
+	// scheduledjob.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	scheduledjob.UpdateDefaultUpdatedAt = scheduledjobDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// scheduledjobDescID is the schema descriptor for id field.
+	scheduledjobDescID := scheduledjobFields[0].Descriptor()
+	// scheduledjob.DefaultID holds the default value on creation for the id field.
+	scheduledjob.DefaultID = scheduledjobDescID.Default.(func() uuid.UUID)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescTitle is the schema descriptor for title field.

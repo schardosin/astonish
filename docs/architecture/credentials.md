@@ -168,6 +168,21 @@ Legacy installations may have provider API keys in `config.yaml`. The credential
 3. Sets `migrated: true` in the store data to prevent re-migration.
 4. The original config values can then be removed.
 
+### Personal vs Team Credentials (Platform Mode)
+
+Interactive Studio chat injects `MergedCredentialStore(personal, team)` — personal-first reads, personal writes, team fallback.
+
+Headless paths diverge by design:
+
+| Path | Credential store |
+|------|------------------|
+| Studio chat | Merged (personal → team) |
+| **Personal scheduled job** | Merged (personal → team), same as chat |
+| **Team scheduled job** | Team only |
+| Fleet / channel enrichment | Team only |
+
+Do **not** publish a personal OAuth/API credential to the team just to schedule automation — create a personal-scope job instead. Publish to team only for shared service credentials used by team jobs, fleet, or other members. See `docs/architecture/daemon-scheduler.md` ("Why Dual-Scope Jobs").
+
 ## Key Files
 
 | File | Purpose |
@@ -176,6 +191,7 @@ Legacy installations may have provider API keys in `config.yaml`. The credential
 | `pkg/credentials/substitute.go` | Placeholder substitution: SubstituteAndRestore, FormatPlaceholder |
 | `pkg/credentials/redact.go` | Multi-encoding redaction: AddSecret, Redact, RedactMap |
 | `pkg/credentials/pending_secrets.go` | PendingVault: Extract, Resolve, SubstituteAndRestore for <<<SECRET_N>>> |
+| `pkg/store/merged_credential_store.go` | Personal-first / team-fallback CredentialStore |
 | `pkg/tools/credential_tool.go` | resolve_credential tool (returns placeholders), save_credential tool |
 | `pkg/agent/chat_agent_run.go` | BeforeToolCallback/AfterToolCallback wiring for credential flow |
 | `pkg/session/file_store.go` | RedactSession() for retroactive transcript redaction |
@@ -188,3 +204,4 @@ Legacy installations may have provider API keys in `config.yaml`. The credential
 - **API/SSE**: The SSE streaming handler applies Redactor to all text events before sending to the browser.
 - **Channels**: Telegram and email adapters receive already-redacted text.
 - **Sandbox**: Credential resolution happens on the host side (in callbacks), before tool args reach the container. Raw secrets are never stored in container state.
+- **Scheduler**: Personal jobs use merged credentials; team jobs and fleet use team-only. See daemon-scheduler.md.

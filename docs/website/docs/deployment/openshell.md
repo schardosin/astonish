@@ -454,6 +454,9 @@ the Debian system trust store, and writes the combined PEM onto the PVC.
 ```yaml
 sandbox:
   openshell:
+    # Default for chart-managed cert PVCs (every sandbox mounts the same claim).
+    certBundleDefaults:
+      accessMode: ReadWriteMany
     certBundles:
       - name: corp-root-ca
         claimName: astonish-corp-ca
@@ -463,6 +466,7 @@ sandbox:
         bootstrap:
           enabled: true
           url: "https://pki.example.com/corp-root-ca.crt"
+          # accessMode: ReadWriteMany  # optional per-bundle override
 ```
 
 Or pre-provision the PVC yourself and omit `bootstrap`.
@@ -477,8 +481,37 @@ Mount paths must not be under `/sandbox` (workspace) or
 *combined* bundle — replacing the system store with a corp-only PEM would
 break public HTTPS.
 
-On RWO StorageClasses (e.g. Cinder), the cert PVC can attach to only one
-node; use RWX/ROX or pin sandboxes when scheduling across multiple nodes.
+**Multi-attach / upgrades:** Every sandbox pod mounts the same cert PVC
+(read-only). Chart-managed claims default to **ReadWriteMany** so concurrent
+sandboxes across nodes do not hit `FailedAttachVolume` / Multi-Attach. The
+StorageClass must support multi-attach (Manila, NFS, CephFS, EFS) — not
+Cinder/EBS RWO. If you must use RWO, set `bootstrap.accessMode: ReadWriteOnce`
+(or `certBundleDefaults.accessMode`) and pin sandboxes to a single node.
+
+**Existing claims on upgrade:** Bound PVC `accessModes` are immutable. The
+chart uses Helm `lookup` to keep an existing claim’s access mode so upgrades
+do not fail with `Forbidden: spec is immutable` when the desired default is
+RWX but the live PVC is still RWO. Fresh installs still get RWX.
+
+**Immediate unblock (keep RWO):** After the lookup fix, re-run `helm upgrade`
+with no values change — the existing RWO claim is left alone. Multi-Attach can
+still occur until you migrate; delete leftover sandbox pods as a short-term
+workaround.
+
+**Migrate RWO → RWX (fix Multi-Attach):**
+
+1. Confirm the StorageClass supports RWX (Manila/NFS/CephFS — not Cinder).
+2. Drain or delete sandbox pods that mount the claim (e.g. `astonish-corp-ca`).
+3. Delete the PVC (bundle data is re-bootstrapable from `bootstrap.url`).
+4. Keep desired `accessMode: ReadWriteMany` (chart default).
+5. `helm upgrade` — the chart recreates the PVC as RWX; the bootstrap Job
+   repopulates the bundle.
+
+Optional alternate: change `claimName` to a new name (e.g. `astonish-corp-ca-rwx`),
+upgrade (new PVC), then remove the old claim after sandboxes recycle.
+
+During Helm upgrades on an RWO claim, avoid leaving stale sandbox pods
+attached while the bootstrap Job runs.
 
 Recycle existing sandboxes after enabling or changing `certBundles`
 (idle eviction or new chat) so pods pick up the new mounts.

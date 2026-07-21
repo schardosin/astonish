@@ -367,3 +367,84 @@ func TestChart_PVCsAreRWX(t *testing.T) {
 		t.Errorf("expected 2 PVCs (layers, uppers), got %d", count)
 	}
 }
+
+// TestChart_CertBundlePVCAccessMode pins that chart-managed OpenShell
+// cert-bundle PVCs default to ReadWriteMany (shared across sandbox pods)
+// and honor bootstrap.accessMode overrides. RWO defaults caused Multi-Attach
+// when concurrent sandboxes (or upgrade + leftover pods) shared the claim.
+//
+// helm template has no live cluster, so lookup returns empty and the desired
+// mode is rendered. Preserving an existing RWO claim’s accessMode on upgrade
+// is live-cluster only (see cert-bundle-pvc.yaml).
+func TestChart_CertBundlePVCAccessMode(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skipf("helm not on PATH: %v", err)
+	}
+	root := chartDir(t)
+	ensureHelmDeps(t, root)
+	valuesFile := filepath.Join(root, "values-e2e-openshell.yaml")
+	ns := helmNamespaceFromValues(t, valuesFile)
+
+	t.Run("defaultRWX", func(t *testing.T) {
+		// No cluster lookup → desired default ReadWriteMany.
+		rendered := mustHelmTemplate(t, root, ns, valuesFile,
+			"--set", "sandbox.openshell.certBundles[0].name=corp-root-ca",
+			"--set", "sandbox.openshell.certBundles[0].claimName=astonish-corp-ca",
+			"--set", "sandbox.openshell.certBundles[0].mountPath=/etc/astonish-ca/ca-bundle.crt",
+			"--set", "sandbox.openshell.certBundles[0].bootstrap.enabled=true",
+			"--set", "sandbox.openshell.certBundles[0].bootstrap.url=https://example.com/ca.crt",
+		)
+		pvc := findPVCByName(t, rendered, "astonish-corp-ca")
+		if got := pvc.Spec.AccessModes; len(got) != 1 || got[0] != corev1.ReadWriteMany {
+			t.Fatalf("default accessModes = %v, want [ReadWriteMany]", got)
+		}
+	})
+
+	t.Run("bootstrapOverrideRWO", func(t *testing.T) {
+		rendered := mustHelmTemplate(t, root, ns, valuesFile,
+			"--set", "sandbox.openshell.certBundles[0].name=corp-root-ca",
+			"--set", "sandbox.openshell.certBundles[0].claimName=astonish-corp-ca-rwo",
+			"--set", "sandbox.openshell.certBundles[0].mountPath=/etc/astonish-ca/ca-bundle.crt",
+			"--set", "sandbox.openshell.certBundles[0].bootstrap.enabled=true",
+			"--set", "sandbox.openshell.certBundles[0].bootstrap.url=https://example.com/ca.crt",
+			"--set", "sandbox.openshell.certBundles[0].bootstrap.accessMode=ReadWriteOnce",
+		)
+		pvc := findPVCByName(t, rendered, "astonish-corp-ca-rwo")
+		if got := pvc.Spec.AccessModes; len(got) != 1 || got[0] != corev1.ReadWriteOnce {
+			t.Fatalf("override accessModes = %v, want [ReadWriteOnce]", got)
+		}
+	})
+}
+
+func mustHelmTemplate(t *testing.T, chartRoot, ns, valuesFile string, extraArgs ...string) []byte {
+	t.Helper()
+	args := []string{"template", "astonish", chartRoot, "-n", ns, "-f", valuesFile}
+	args = append(args, extraArgs...)
+	cmd := exec.Command("helm", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("helm template failed: %v\nstderr:\n%s", err, stderr.String())
+	}
+	return stdout.Bytes()
+}
+
+func findPVCByName(t *testing.T, rendered []byte, name string) corev1.PersistentVolumeClaim {
+	t.Helper()
+	for _, d := range splitYAMLDocs(rendered) {
+		pk := peekKind(t, d)
+		if pk.Kind != "PersistentVolumeClaim" {
+			continue
+		}
+		var pvc corev1.PersistentVolumeClaim
+		if err := yaml.Unmarshal(d, &pvc); err != nil {
+			t.Fatalf("decode pvc: %v", err)
+		}
+		if pvc.Name == name {
+			return pvc
+		}
+	}
+	t.Fatalf("PVC %q not found in rendered chart", name)
+	return corev1.PersistentVolumeClaim{}
+}

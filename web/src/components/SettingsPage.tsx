@@ -21,7 +21,6 @@ const AuditViewer = lazy(() => import('./AuditViewer'))
 const SkillsSettings = lazy(() => import('./settings/SkillsSettings'))
 const MCPServersSettings = lazy(() => import('./settings/MCPServersSettings'))
 const ProvidersSettings = lazy(() => import('./settings/ProvidersSettings'))
-const SchedulerSettings = lazy(() => import('./settings/SchedulerSettings'))
 const TapsSettings = lazy(() => import('./settings/TapsSettings'))
 const FlowStorePanel = lazy(() => import('./FlowStorePanel'))
 const TeamContainerTab = lazy(() => import('./TeamContainerTab'))
@@ -1450,7 +1449,7 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
   const [fullConfig, setFullConfig] = useState<any>(null)
   const [fullConfigLoading, setFullConfigLoading] = useState(false)
 
-  const needsFullConfig = ['skills', 'scheduler'].includes(tabId)
+  const needsFullConfig = ['skills'].includes(tabId)
 
   useEffect(() => {
     if (!needsFullConfig || fullConfig) return
@@ -1523,7 +1522,6 @@ function TeamContent({ tabId, teamSlug, theme, user, canManageTeam, team }: Team
         {tabId === 'providers' && <TeamProvidersTab teamSlug={teamSlug} />}
         {tabId === 'mcp' && <TeamMCPServersTab teamSlug={teamSlug} theme={theme} />}
         {tabId === 'network' && <TeamNetworkPolicyTab teamSlug={teamSlug} />}
-        {tabId === 'scheduler' && fullConfig && <SchedulerSettings config={fullConfig.scheduler} onSaved={handleSaved} teamSlug={teamSlug} />}
         {tabId === 'taps' && <TapsSettings teamSlug={teamSlug} />}
         {tabId === 'flows' && <FlowStorePanel teamSlug={teamSlug} canManage={canManageTeam} />}
       </Suspense>
@@ -1603,7 +1601,7 @@ export default function SettingsPage({
 
   // --- Build sidebar categories ---
   // Admin-only team items (hidden from regular members)
-  const adminOnlyTeamItems = new Set(['team-providers', 'team-mcp', 'team-scheduler', 'team-taps', 'team-container'])
+  const adminOnlyTeamItems = new Set(['team-providers', 'team-mcp', 'team-taps', 'team-container'])
   const memberTeamItems = canManageTeam ? TEAM_ITEMS : TEAM_ITEMS.filter(item => !adminOnlyTeamItems.has(item.id))
 
   // Platform section (superadmin only) — merges former "System" items.

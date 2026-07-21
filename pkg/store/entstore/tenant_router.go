@@ -1199,6 +1199,9 @@ func (p *personalDataStore) Flows() store.FlowStore { return &personalFlowStore{
 func (p *personalDataStore) Credentials() store.CredentialStore {
 	return &personalCredentialStore{client: p.client, credKey: p.credKey}
 }
+func (p *personalDataStore) ScheduledJobs() store.SchedulerStore {
+	return &personalSchedulerStore{client: p.client}
+}
 
 func (p *personalDataStore) PersonalSettings() store.PersonalSettingsStore {
 	return &personalSettingsStore{client: p.client, userID: p.userID}

@@ -344,8 +344,24 @@ sandbox:
     # and writes subPath (default ca-bundle.crt) onto the PVC. Orgs can also
     # pre-provision the PVC and omit bootstrap.
     #
-    # NOTE: RWO PVCs can only attach to one node. Prefer RWX/ROX when sandboxes
-    # schedule across multiple nodes, or pin sandboxes to a single node.
+    # Shared PVC: every sandbox pod mounts the same claim (read-only). Default
+    # accessMode for *new* claims is ReadWriteMany so concurrent sandboxes
+    # across nodes (and the bootstrap Job) do not hit Multi-Attach /
+    # FailedAttachVolume. StorageClass MUST support multi-attach
+    # (Manila/NFS/CephFS/EFS) — not Cinder/EBS RWO. Override
+    # bootstrap.accessMode (or certBundleDefaults) to ReadWriteOnce only when
+    # sandboxes are pinned to a single node.
+    #
+    # Upgrades: bound PVC accessModes are immutable. The chart looks up an
+    # existing claim and preserves its accessMode so helm upgrade does not
+    # fail patching RWO→RWX. Fresh installs still get RWX.
+    #
+    # Migrate RWO→RWX: drain/delete sandbox pods that mount the claim, delete
+    # the PVC (re-bootstrapable from bootstrap.url), then helm upgrade so the
+    # chart recreates RWX and the bootstrap Job repopulates. Or use a new
+    # claimName and retire the old PVC after sandboxes recycle.
+    certBundleDefaults:
+      accessMode: ReadWriteMany
     certBundles: []
     # Example (chart-managed bootstrap):
     # certBundles:
@@ -360,6 +376,7 @@ sandbox:
     #       url: "https://pki.example.com/corp-root-ca.crt"
     #       size: 64Mi
     #       storageClassName: ""  # empty = sandbox.storage.storageClassName
+    #       # accessMode: ReadWriteMany  # override certBundleDefaults
     #       image: "debian:bookworm-slim"
 
     # Idle timeout (minutes) before the watchdog evicts an unused sandbox pod.

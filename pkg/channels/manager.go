@@ -1208,6 +1208,17 @@ func (m *ChannelManager) Broadcast(ctx context.Context, msg OutboundMessage) err
 	return firstErr
 }
 
+// CountBroadcastTargets returns how many broadcast recipients are currently registered.
+func (m *ChannelManager) CountBroadcastTargets() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	n := 0
+	for _, ch := range m.channels {
+		n += len(ch.BroadcastTargets())
+	}
+	return n
+}
+
 // channelHints returns LLM output guidance for a given channel.
 // These hints are injected into the system prompt so the model produces
 // output suited to the channel's formatting capabilities.

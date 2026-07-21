@@ -248,7 +248,7 @@ export default function SettingsContent({
         </div>
       )}
       {activeSection === 'scheduler' && fullConfig && (
-        <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} />
+        <SchedulerSettings config={fullConfig.scheduler} onSaved={onSaved} isPlatform={isPlatformMode} />
       )}
       {activeSection === 'daemon' && fullConfig && (
         <DaemonSettings config={fullConfig.daemon} onSaved={onSaved} />

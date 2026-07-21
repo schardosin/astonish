@@ -1,11 +1,13 @@
 package sandbox
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/SAP/astonish/pkg/common"
+	"github.com/SAP/astonish/pkg/sandbox/sessioncreds"
 	"github.com/SAP/astonish/pkg/store"
 	"google.golang.org/adk/model"
 	"google.golang.org/adk/tool"
@@ -102,6 +104,8 @@ func (nt *NodeTool) Declaration() *genai.FunctionDeclaration {
 // ProcessRequest is called before the LLM call, so the container starts
 // cloning in the background while the LLM generates its response. By the
 // time the first tool call arrives, the container is likely already running.
+// When NetworkPolicyStores are on the context, allow endpoints are stashed
+// on the client before BindSession so OpenShell CreateSandbox can bake them in.
 func (nt *NodeTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) error {
 	// Eagerly bind the session — starts container creation in background.
 	// Idempotent: only the first call per session triggers init.
@@ -109,6 +113,7 @@ func (nt *NodeTool) ProcessRequest(ctx tool.Context, req *model.LLMRequest) erro
 		if sessionID := ctx.SessionID(); sessionID != "" {
 			client := nt.getClientFromContext(ctx, sessionID)
 			if client != nil {
+				nt.applyNetworkAllowEndpoints(ctx, client)
 				client.BindSession(sessionID)
 			}
 		}
@@ -198,6 +203,23 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 		}
 	}
 
+	nt.applyNetworkAllowEndpoints(ctx, client)
+
+	// Ensure sandbox is up, then PreSeed DB allow rules BEFORE any tool Exec
+	// so the first Keystone/HTTP CONNECT is not CONNECT-403.
+	if err := client.EnsureReady(sessionID); err != nil {
+		return nil, err
+	}
+	ensureNetworkPolicyPreSeed(ctx, sessionID)
+
+	// Provision session credential vault only for http_request so a PushFile
+	// failure cannot brick shell/file tools. Keystone/OAuth stay in-sandbox.
+	if nt.Name() == "http_request" {
+		if err := SyncSessionCredentialVault(ctx, nt.backendForPush(client), nil, sessionID); err != nil {
+			return nil, err
+		}
+	}
+
 	// Send to node (lazy init on first call)
 	rawResult, err := client.Call(sessionID, nt.Name(), argsMap)
 	if err != nil {
@@ -214,6 +236,96 @@ func (nt *NodeTool) Run(ctx tool.Context, args any) (map[string]any, error) {
 	}
 
 	return result, nil
+}
+
+// networkAllowEndpointSetter is implemented by backendNodeClient so OpenShell
+// CreateSession can bake DB allow rules into the initial sandbox policy.
+type networkAllowEndpointSetter interface {
+	SetNetworkAllowEndpoints(endpoints []NetworkAllowEndpoint)
+}
+
+func (nt *NodeTool) applyNetworkAllowEndpoints(ctx context.Context, client ToolNodeClient) {
+	if ctx == nil || client == nil {
+		return
+	}
+	setter, ok := client.(networkAllowEndpointSetter)
+	if !ok {
+		return
+	}
+	eps := collectAllowEndpointsFromContext(ctx)
+	if len(eps) == 0 {
+		return
+	}
+	setter.SetNetworkAllowEndpoints(eps)
+}
+
+// collectAllowEndpointsFromContext mirrors netpolicy.CollectAllowEndpoints
+// without importing netpolicy (avoids sandbox ↔ openshell import cycle).
+func collectAllowEndpointsFromContext(ctx context.Context) []NetworkAllowEndpoint {
+	nps := store.NetworkPolicyStoresFromContext(ctx)
+	if nps == nil {
+		return nil
+	}
+	var out []NetworkAllowEndpoint
+	for _, s := range []store.NetworkPolicyStore{nps.Platform, nps.Org, nps.Team} {
+		if s == nil {
+			continue
+		}
+		rules, err := s.List(ctx)
+		if err != nil {
+			continue
+		}
+		for _, r := range rules {
+			if r.Action == store.NetworkPolicyAllow {
+				out = append(out, NetworkAllowEndpoint{Host: r.Host, Port: r.Port})
+			}
+		}
+	}
+	return out
+}
+
+// SyncSessionCredentialVault materializes the host CredentialStore into the
+// sandbox at sessioncreds.VaultPath. Host only provisions bytes — it does not
+// Resolve or perform Keystone/HTTP. No-op when no store or no PushFile backend.
+func SyncSessionCredentialVault(ctx context.Context, backend Backend, ensureReady func(sessionID string) error, sessionID string) error {
+	if ctx == nil {
+		return nil
+	}
+	cs := store.CredentialStoreFromContext(ctx)
+	if cs == nil {
+		return nil
+	}
+	if backend == nil {
+		return nil
+	}
+	if ensureReady != nil {
+		if err := ensureReady(sessionID); err != nil {
+			return fmt.Errorf("session credential vault: ensure ready: %w", err)
+		}
+	}
+	data, err := sessioncreds.Serialize(ctx, cs)
+	if err != nil {
+		return fmt.Errorf("session credential vault: serialize: %w", err)
+	}
+	if err := backend.PushFile(ctx, sessionID, sessioncreds.VaultPath, bytes.NewReader(data), sessioncreds.VaultFileMode); err != nil {
+		return fmt.Errorf("session credential vault: push %s: %w", sessioncreds.VaultPath, err)
+	}
+	return nil
+}
+
+func (nt *NodeTool) backendForPush(client ToolNodeClient) Backend {
+	if nt.pool != nil {
+		if b := nt.pool.GetBackend(); b != nil {
+			return b
+		}
+	}
+	type backendGetter interface {
+		GetBackend() Backend
+	}
+	if g, ok := client.(backendGetter); ok {
+		return g.GetBackend()
+	}
+	return nil
 }
 
 // getClientFromContext returns the ToolNodeClient for the given session.

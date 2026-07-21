@@ -82,23 +82,20 @@ func GetScheduler() *scheduler.Scheduler {
 
 // SchedulerJobsHandler handles listing and creating scheduled jobs.
 //
-// GET  /api/scheduler/jobs — list all jobs
-// POST /api/scheduler/jobs — create a new job
+// GET  /api/scheduler/jobs[?scope=personal|team] — list jobs (default: both)
+// POST /api/scheduler/jobs[?scope=personal|team] — create a job (default: personal)
 func SchedulerJobsHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
-	if svc == nil || svc.Scheduler == nil {
+	if svc == nil || (svc.Scheduler == nil && svc.PersonalScheduler == nil) {
 		respondError(w, http.StatusServiceUnavailable, "scheduler not available")
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		handleListJobs(w, svc.Scheduler)
+		handleListJobs(w, r, svc)
 	case http.MethodPost:
-		if !RequireTeamAdmin(w, r) {
-			return
-		}
-		handleCreateJob(w, r, svc.Scheduler)
+		handleCreateJob(w, r, svc)
 	default:
 		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -111,13 +108,11 @@ func SchedulerJobsHandler(w http.ResponseWriter, r *http.Request) {
 // DELETE /api/scheduler/jobs/{id} — remove job
 func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 	svc := store.FromRequest(r)
-	if svc == nil || svc.Scheduler == nil {
+	if svc == nil || (svc.Scheduler == nil && svc.PersonalScheduler == nil) {
 		respondError(w, http.StatusServiceUnavailable, "scheduler not available")
 		return
 	}
 
-	// Extract job ID from URL path
-	// Expected: /api/scheduler/jobs/{id}
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 4 {
 		respondError(w, http.StatusBadRequest, "missing job ID")
@@ -125,18 +120,20 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	jobID := parts[len(parts)-1]
 
+	existing, ss, jobScope := findSchedulerJob(r.Context(), svc, jobID)
+	if existing == nil || ss == nil {
+		respondError(w, http.StatusNotFound, "job not found")
+		return
+	}
+
 	switch r.Method {
 	case http.MethodGet:
-		job := svc.Scheduler.Get(r.Context(), jobID)
-		if job == nil {
-			respondError(w, http.StatusNotFound, "job not found")
-			return
-		}
+		existing.Scope = jobScope
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(storeJobToAPIJob(job))
+		json.NewEncoder(w).Encode(storeJobToAPIJob(existing))
 
 	case http.MethodPut:
-		if !RequireTeamAdmin(w, r) {
+		if !authorizeSchedulerMutate(w, r, jobScope, existing) {
 			return
 		}
 		var update struct {
@@ -159,13 +156,6 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		existing := svc.Scheduler.Get(r.Context(), jobID)
-		if existing == nil {
-			respondError(w, http.StatusNotFound, "job not found")
-			return
-		}
-
-		// Apply non-zero fields from the update
 		if update.Name != "" {
 			existing.Name = update.Name
 		}
@@ -196,38 +186,42 @@ func SchedulerJobHandler(w http.ResponseWriter, r *http.Request) {
 		if update.Enabled != nil {
 			existing.Enabled = *update.Enabled
 		}
-		// Apply delivery object if provided (full replace)
 		if update.Delivery != nil {
+			if jobScope == store.JobScopePersonal {
+				if update.Delivery.Mode == "team" || update.Delivery.Mode == "members" {
+					respondError(w, http.StatusBadRequest, "personal jobs only support owner delivery")
+					return
+				}
+				update.Delivery.Mode = "owner"
+				update.Delivery.MemberIDs = nil
+			}
 			existing.Delivery = *update.Delivery
 		}
-		// Apply channel filter (can be set to empty to clear)
 		if update.ChannelFilter != nil {
 			existing.Delivery.ChannelFilter = update.ChannelFilter
 		}
-		// Apply per-member channel overrides (can be set to empty map to clear)
 		if update.MemberChannels != nil {
 			existing.Delivery.MemberChannels = update.MemberChannels
 		}
 
-		if err := svc.Scheduler.Update(r.Context(), existing); err != nil {
+		if err := ss.Update(r.Context(), existing); err != nil {
 			respondError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		// Recompute NextRun so schedule changes take effect immediately
 		if existing.Enabled {
 			existing.NextRun = scheduler.ComputeNextRun(existing.Schedule.Cron, existing.Schedule.Timezone)
-			_ = svc.Scheduler.Update(r.Context(), existing)
+			_ = ss.Update(r.Context(), existing)
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "updated"})
 
 	case http.MethodDelete:
-		if !RequireTeamAdmin(w, r) {
+		if !authorizeSchedulerMutate(w, r, jobScope, existing) {
 			return
 		}
-		if err := svc.Scheduler.Remove(r.Context(), jobID); err != nil {
+		if err := ss.Remove(r.Context(), jobID); err != nil {
 			respondError(w, http.StatusNotFound, err.Error())
 			return
 		}
@@ -249,7 +243,7 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	svc := store.FromRequest(r)
-	if svc == nil || svc.Scheduler == nil {
+	if svc == nil || (svc.Scheduler == nil && svc.PersonalScheduler == nil) {
 		respondError(w, http.StatusServiceUnavailable, "scheduler not available")
 		return
 	}
@@ -260,51 +254,28 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract job ID: /api/scheduler/jobs/{id}/run
 	parts := splitPath(r.URL.Path)
 	if len(parts) < 5 {
 		respondError(w, http.StatusBadRequest, "missing job ID")
 		return
 	}
-	jobID := parts[len(parts)-2] // {id} is second to last, "run" is last
+	jobID := parts[len(parts)-2]
 
-	// Load job from team-scoped store
-	storeJob := svc.Scheduler.Get(r.Context(), jobID)
-	if storeJob == nil {
+	storeJob, ss, jobScope := findSchedulerJob(r.Context(), svc, jobID)
+	if storeJob == nil || ss == nil {
 		respondError(w, http.StatusNotFound, "job not found")
 		return
 	}
+	if !authorizeSchedulerMutate(w, r, jobScope, storeJob) {
+		return
+	}
 
-	// Convert to scheduler.Job for the executor
+	storeJob.Scope = jobScope
 	job := storeJobToSchedulerJob(storeJob)
+	execCtx := buildSchedulerExecContext(r.Context(), svc, jobScope, storeJob)
 
-	// Build team-scoped execution context.
-	// Inject stores so tools (credential_tool, skill_lookup, etc.) can read
-	// from the correct team during execution.
-	execCtx := r.Context()
-	if svc.Credentials != nil {
-		execCtx = store.WithCredentialStore(execCtx, svc.Credentials)
-	}
-	if svc.Flows != nil {
-		execCtx = store.WithFlowStore(execCtx, svc.Flows)
-	}
-	if svc.DrillReports != nil {
-		execCtx = store.WithDrillReportStore(execCtx, svc.DrillReports)
-	}
-	if svc.Skills != nil || svc.TeamSkills != nil {
-		execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
-			Org:  svc.Skills,
-			Team: svc.TeamSkills,
-		})
-	}
-	if svc.Memory != nil {
-		execCtx = store.WithMemoryStore(execCtx, svc.Memory)
-	}
-
-	// Execute the job
 	result, err := exec.Execute(execCtx, job)
 
-	// Update runtime state in team store
 	now := time.Now()
 	storeJob.LastRun = &now
 	if err != nil {
@@ -317,10 +288,11 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 		storeJob.ConsecutiveFailures = 0
 	}
 	storeJob.NextRun = scheduler.ComputeNextRun(storeJob.Schedule.Cron, storeJob.Schedule.Timezone)
-	_ = svc.Scheduler.Update(r.Context(), storeJob)
+	_ = ss.Update(r.Context(), storeJob)
 
 	resp := map[string]any{
 		"job_id": jobID,
+		"scope":  jobScope,
 		"result": result,
 	}
 	if err != nil {
@@ -331,26 +303,212 @@ func SchedulerJobRunHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// handleListJobs returns all scheduled jobs from the team-scoped store.
-func handleListJobs(w http.ResponseWriter, ss store.SchedulerStore) {
-	storeJobs := ss.List(context.TODO())
-	jobs := make([]apiJob, 0, len(storeJobs))
-	for _, sj := range storeJobs {
-		jobs = append(jobs, storeJobToAPIJob(sj))
+// handleListJobs returns scheduled jobs for the requested scope (or both).
+func handleListJobs(w http.ResponseWriter, r *http.Request, svc *store.Services) {
+	scope := r.URL.Query().Get("scope")
+	jobs := make([]apiJob, 0)
+	ctx := r.Context()
+
+	includePersonal := scope == "" || scope == store.JobScopePersonal
+	includeTeam := scope == "" || scope == store.JobScopeTeam
+
+	if includePersonal && svc.PersonalScheduler != nil {
+		for _, sj := range svc.PersonalScheduler.List(ctx) {
+			sj.Scope = store.JobScopePersonal
+			jobs = append(jobs, storeJobToAPIJob(sj))
+		}
+	}
+	if includeTeam && svc.Scheduler != nil {
+		for _, sj := range svc.Scheduler.List(ctx) {
+			sj.Scope = store.JobScopeTeam
+			jobs = append(jobs, storeJobToAPIJob(sj))
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
+	json.NewEncoder(w).Encode(map[string]any{
+		"jobs":          jobs,
+		"is_team_admin": IsTeamAdmin(r),
+	})
 }
 
-// handleCreateJob creates a new scheduled job in the team-scoped store.
-func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerStore) {
-	if ss == nil {
+// SchedulerJobPublishHandler moves a personal scheduled job into the team store.
+// POST /api/scheduler/jobs/publish
+//
+// Requires team admin. Move semantics (not copy) so the job only cron-fires once.
+func SchedulerJobPublishHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Publish is only available in platform mode")
+		return
+	}
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil || svc.PersonalScheduler == nil || svc.Scheduler == nil {
 		respondError(w, http.StatusServiceUnavailable, "scheduler not available")
 		return
 	}
 
-	// Decode the flat format that SchedulerHTTPAccess sends.
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ID == "" && req.Name == "" {
+		respondError(w, http.StatusBadRequest, "job id or name is required")
+		return
+	}
+
+	ctx := r.Context()
+	var personalJob *store.ScheduledJob
+	if req.ID != "" {
+		personalJob = svc.PersonalScheduler.Get(ctx, req.ID)
+	}
+	if personalJob == nil && req.Name != "" {
+		personalJob = svc.PersonalScheduler.GetByName(ctx, req.Name)
+	}
+	if personalJob == nil {
+		respondError(w, http.StatusNotFound, "personal job not found")
+		return
+	}
+
+	if existing := svc.Scheduler.GetByName(ctx, personalJob.Name); existing != nil {
+		respondError(w, http.StatusConflict, "a team job with this name already exists")
+		return
+	}
+
+	// Move: new team row (fresh ID), then remove personal.
+	teamJob := *personalJob
+	teamJob.ID = ""
+	teamJob.Scope = store.JobScopeTeam
+	teamJob.TeamSlug = "" // implicit for team-store jobs
+
+	if err := svc.Scheduler.Add(ctx, &teamJob); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to publish job: "+err.Error())
+		return
+	}
+	if teamJob.Enabled {
+		teamJob.NextRun = scheduler.ComputeNextRun(teamJob.Schedule.Cron, teamJob.Schedule.Timezone)
+		_ = svc.Scheduler.Update(ctx, &teamJob)
+	}
+
+	if err := svc.PersonalScheduler.Remove(ctx, personalJob.ID); err != nil {
+		respondError(w, http.StatusInternalServerError, "job published but failed to remove personal copy: "+err.Error())
+		return
+	}
+
+	teamJob.Scope = store.JobScopeTeam
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":    "ok",
+		"published": teamJob.Name,
+		"job":       storeJobToAPIJob(&teamJob),
+	})
+}
+
+// SchedulerJobForkHandler copies a team scheduled job into the user's personal store.
+// POST /api/scheduler/jobs/fork
+//
+// Requires team admin (same gate as credentials fork). Copy semantics — both jobs remain.
+func SchedulerJobForkHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if !isPlatformMode(r) {
+		respondError(w, http.StatusNotFound, "Fork is only available in platform mode")
+		return
+	}
+	if !RequireTeamAdmin(w, r) {
+		return
+	}
+
+	svc := store.FromRequest(r)
+	if svc == nil || svc.PersonalScheduler == nil || svc.Scheduler == nil {
+		respondError(w, http.StatusServiceUnavailable, "scheduler not available")
+		return
+	}
+
+	var req struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.ID == "" && req.Name == "" {
+		respondError(w, http.StatusBadRequest, "job id or name is required")
+		return
+	}
+
+	ctx := r.Context()
+	var teamJob *store.ScheduledJob
+	if req.ID != "" {
+		teamJob = svc.Scheduler.Get(ctx, req.ID)
+	}
+	if teamJob == nil && req.Name != "" {
+		teamJob = svc.Scheduler.GetByName(ctx, req.Name)
+	}
+	if teamJob == nil {
+		respondError(w, http.StatusNotFound, "team job not found")
+		return
+	}
+
+	if existing := svc.PersonalScheduler.GetByName(ctx, teamJob.Name); existing != nil {
+		respondError(w, http.StatusConflict, "a personal job with this name already exists")
+		return
+	}
+
+	personalJob := *teamJob
+	personalJob.ID = ""
+	personalJob.Scope = store.JobScopePersonal
+	personalJob.Delivery.Mode = "owner"
+	personalJob.Delivery.MemberIDs = nil
+	if uid := store.UserIDFromContext(ctx); uid != "" {
+		personalJob.OwnerID = uid
+	} else if user := GetPlatformUser(r); user != nil {
+		personalJob.OwnerID = user.ID
+	}
+	if tc := store.TenantContextFrom(ctx); tc != nil {
+		personalJob.TeamSlug = tc.TeamSlug
+	}
+
+	if err := svc.PersonalScheduler.Add(ctx, &personalJob); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to fork job: "+err.Error())
+		return
+	}
+	if personalJob.Enabled {
+		personalJob.NextRun = scheduler.ComputeNextRun(personalJob.Schedule.Cron, personalJob.Schedule.Timezone)
+		_ = svc.PersonalScheduler.Update(ctx, &personalJob)
+	}
+
+	personalJob.Scope = store.JobScopePersonal
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"forked": personalJob.Name,
+		"job":    storeJobToAPIJob(&personalJob),
+	})
+}
+
+// handleCreateJob creates a scheduled job in the personal or team store.
+func handleCreateJob(w http.ResponseWriter, r *http.Request, svc *store.Services) {
+	scope := r.URL.Query().Get("scope")
+	if scope == "" {
+		// Body may also carry scope; decode into a peek buffer via flat struct below.
+		scope = store.JobScopePersonal
+	}
+
 	var flat struct {
 		ID           string            `json:"id"`
 		Name         string            `json:"name"`
@@ -363,13 +521,48 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 		Channel      string            `json:"channel"`
 		Target       string            `json:"target"`
 		Enabled      bool              `json:"enabled"`
+		Scope        string            `json:"scope"`
+		DeliveryMode string            `json:"delivery_mode"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&flat); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if flat.Scope != "" {
+		scope = flat.Scope
+	}
+	if scope != store.JobScopePersonal && scope != store.JobScopeTeam {
+		respondError(w, http.StatusBadRequest, "scope must be 'personal' or 'team'")
+		return
+	}
 
-	// Convert flat fields to the store.ScheduledJob structure.
+	if scope == store.JobScopeTeam {
+		if !RequireTeamAdmin(w, r) {
+			return
+		}
+	}
+
+	ss := svc.PersonalScheduler
+	if scope == store.JobScopeTeam {
+		ss = svc.Scheduler
+	}
+	if ss == nil {
+		respondError(w, http.StatusServiceUnavailable, "scheduler not available for scope "+scope)
+		return
+	}
+
+	deliveryMode := flat.DeliveryMode
+	if deliveryMode == "" {
+		deliveryMode = "owner"
+	}
+	if scope == store.JobScopePersonal {
+		if deliveryMode == "team" || deliveryMode == "members" {
+			respondError(w, http.StatusBadRequest, "personal jobs only support owner delivery")
+			return
+		}
+		deliveryMode = "owner"
+	}
+
 	job := &store.ScheduledJob{
 		ID:   flat.ID,
 		Name: flat.Name,
@@ -386,10 +579,23 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 		Delivery: store.JobDelivery{
 			Channel: flat.Channel,
 			Target:  flat.Target,
+			Mode:    deliveryMode,
 		},
 		Enabled:    flat.Enabled,
 		CreatedAt:  time.Now(),
 		LastStatus: "pending",
+		Scope:      scope,
+	}
+
+	if uid := store.UserIDFromContext(r.Context()); uid != "" {
+		job.OwnerID = uid
+	} else if user := GetPlatformUser(r); user != nil {
+		job.OwnerID = user.ID
+	}
+	if scope == store.JobScopePersonal {
+		if tc := store.TenantContextFrom(r.Context()); tc != nil {
+			job.TeamSlug = tc.TeamSlug
+		}
 	}
 
 	if err := ss.Add(r.Context(), job); err != nil {
@@ -397,7 +603,6 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 		return
 	}
 
-	// Compute initial NextRun
 	if job.Enabled {
 		job.NextRun = scheduler.ComputeNextRun(job.Schedule.Cron, job.Schedule.Timezone)
 		_ = ss.Update(r.Context(), job)
@@ -408,6 +613,87 @@ func handleCreateJob(w http.ResponseWriter, r *http.Request, ss store.SchedulerS
 	json.NewEncoder(w).Encode(storeJobToAPIJob(job))
 }
 
+// findSchedulerJob looks up a job in personal then team stores.
+func findSchedulerJob(ctx context.Context, svc *store.Services, jobID string) (*store.ScheduledJob, store.SchedulerStore, string) {
+	if svc.PersonalScheduler != nil {
+		if j := svc.PersonalScheduler.Get(ctx, jobID); j != nil {
+			return j, svc.PersonalScheduler, store.JobScopePersonal
+		}
+	}
+	if svc.Scheduler != nil {
+		if j := svc.Scheduler.Get(ctx, jobID); j != nil {
+			return j, svc.Scheduler, store.JobScopeTeam
+		}
+	}
+	return nil, nil, ""
+}
+
+// authorizeSchedulerMutate enforces personal-owner or team-admin for mutations.
+func authorizeSchedulerMutate(w http.ResponseWriter, r *http.Request, scope string, job *store.ScheduledJob) bool {
+	if scope == store.JobScopeTeam {
+		return RequireTeamAdmin(w, r)
+	}
+	// Personal jobs: owner only (or team admin acting on behalf is NOT allowed —
+	// personal vault isolation).
+	user := GetPlatformUser(r)
+	if user == nil {
+		if !isPlatformMode(r) {
+			return true
+		}
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return false
+	}
+	if job.OwnerID != "" && job.OwnerID != user.ID {
+		respondError(w, http.StatusForbidden, "only the job owner can manage this personal job")
+		return false
+	}
+	return true
+}
+
+// buildSchedulerExecContext mirrors cron credential and network-policy injection
+// for RunNow/test_first so adaptive jobs get the same OpenShell PolicyAllow path.
+func buildSchedulerExecContext(ctx context.Context, svc *store.Services, scope string, job *store.ScheduledJob) context.Context {
+	execCtx := ctx
+	if scope == store.JobScopePersonal {
+		ownerID := job.OwnerID
+		if ownerID == "" {
+			ownerID = store.UserIDFromContext(ctx)
+		}
+		if ownerID != "" {
+			execCtx = store.WithUserID(execCtx, ownerID)
+		}
+		execCtx = store.WithCredentialStore(execCtx, store.NewMergedCredentialStore(svc.PersonalCredentials, svc.Credentials))
+		execCtx = store.WithFlowStore(execCtx, store.NewCompositeFlowStore(svc.PersonalFlows, svc.Flows))
+	} else {
+		if svc.Credentials != nil {
+			execCtx = store.WithCredentialStore(execCtx, svc.Credentials)
+		}
+		if svc.Flows != nil {
+			execCtx = store.WithFlowStore(execCtx, svc.Flows)
+		}
+	}
+	if svc.DrillReports != nil {
+		execCtx = store.WithDrillReportStore(execCtx, svc.DrillReports)
+	}
+	if svc.Skills != nil || svc.TeamSkills != nil {
+		execCtx = store.WithSkillStores(execCtx, &store.SkillStores{
+			Org:  svc.Skills,
+			Team: svc.TeamSkills,
+		})
+	}
+	if svc.Memory != nil {
+		execCtx = store.WithMemoryStore(execCtx, svc.Memory)
+	}
+	if svc.PlatformNetworkPolicies != nil || svc.NetworkPolicies != nil || svc.TeamNetworkPolicies != nil {
+		execCtx = store.WithNetworkPolicyStores(execCtx, &store.NetworkPolicyStores{
+			Platform: svc.PlatformNetworkPolicies,
+			Org:      svc.NetworkPolicies,
+			Team:     svc.TeamNetworkPolicies,
+		})
+	}
+	return execCtx
+}
+
 // --- Type conversion helpers ---
 
 // apiJob is the JSON representation returned to the frontend.
@@ -416,6 +702,9 @@ type apiJob struct {
 	ID                  string            `json:"id"`
 	Name                string            `json:"name"`
 	Mode                string            `json:"mode"`
+	Scope               string            `json:"scope,omitempty"`
+	TeamSlug            string            `json:"team_slug,omitempty"`
+	OwnerID             string            `json:"owner_id,omitempty"`
 	Schedule            store.JobSchedule `json:"schedule"`
 	Payload             store.JobPayload  `json:"payload"`
 	Delivery            store.JobDelivery `json:"delivery"`
@@ -433,6 +722,9 @@ func storeJobToAPIJob(sj *store.ScheduledJob) apiJob {
 		ID:                  sj.ID,
 		Name:                sj.Name,
 		Mode:                sj.Mode,
+		Scope:               sj.Scope,
+		TeamSlug:            sj.TeamSlug,
+		OwnerID:             sj.OwnerID,
 		Schedule:            sj.Schedule,
 		Payload:             sj.Payload,
 		Delivery:            sj.Delivery,
@@ -472,6 +764,8 @@ func storeJobToSchedulerJob(sj *store.ScheduledJob) *scheduler.Job {
 		},
 		Enabled:             sj.Enabled,
 		OwnerID:             sj.OwnerID,
+		Scope:               sj.Scope,
+		TeamSlug:            sj.TeamSlug,
 		CreatedAt:           sj.CreatedAt,
 		LastRun:             sj.LastRun,
 		LastStatus:          scheduler.JobStatus(sj.LastStatus),

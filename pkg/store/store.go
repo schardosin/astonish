@@ -150,6 +150,7 @@ type PersonalDataStore interface {
 	AppState() AppStateStore
 	Flows() FlowStore
 	Credentials() CredentialStore
+	ScheduledJobs() SchedulerStore
 
 	PersonalSettings() PersonalSettingsStore
 	SessionPin(ctx context.Context, sessionID string) (*SessionPin, error)

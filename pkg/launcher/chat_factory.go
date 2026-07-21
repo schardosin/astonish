@@ -83,6 +83,11 @@ type ChatFactoryResult struct {
 	// Used during graceful daemon shutdown to preserve containers across restarts.
 	// Nil when sandbox is not enabled.
 	ShutdownSandbox func()
+
+	// SandboxPool is the ToolNodePool used for OpenShell/K8s/Incus tool
+	// wrapping (nil when sandbox is disabled). Adaptive scheduler uses
+	// SandboxPool.Remove after DestroySandbox so the next tick rebinds.
+	SandboxPool sandbox.ToolNodePool
 }
 
 // NewWiredChatAgent creates a fully-wired ChatAgent ready for use by any caller
@@ -1680,6 +1685,13 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		}
 	}
 
+	var resultPool sandbox.ToolNodePool
+	if backendSandboxPool != nil {
+		resultPool = backendSandboxPool
+	} else if sandboxNodePool != nil {
+		resultPool = sandbox.AsNodePool(sandboxNodePool)
+	}
+
 	return &ChatFactoryResult{
 		ChatAgent:             chatAgent,
 		LLM:                   llm,
@@ -1697,6 +1709,7 @@ func NewWiredChatAgent(ctx context.Context, cfg *ChatFactoryConfig) (*ChatFactor
 		CredentialStore:       credStore,
 		Cleanup:               cleanup,
 		ShutdownSandbox:       shutdownSandbox,
+		SandboxPool:           resultPool,
 	}, nil
 }
 

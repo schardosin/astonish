@@ -41,6 +41,46 @@ Different use cases need different execution models:
 - **Adaptive**: Sends instructions as a chat message to the shared ChatAgent. The agent decides how to handle it, can use any tool, and adapts to the current situation. Best for tasks that need judgment.
 - **Fleet poll**: Delegates to the PlanActivator for GitHub Issues monitoring. Not a direct execution mode but a scheduling trigger for fleet activation.
 
+### Why Dual-Scope Jobs (Personal vs Team)
+
+Platform mode has **two scheduler lanes**, mirroring credentials:
+
+| | Personal job | Team job |
+|---|---|---|
+| Storage | `personal_{uid}.scheduled_jobs` | `team_{slug}.scheduled_jobs` |
+| Who manages | Owner only | Team admin |
+| Credentials at tick | `MergedCredentialStore(personal, team)` — same as Studio chat | Team credentials only |
+| Identity | Runs as `OwnerID` | Headless (`SystemUserID`) |
+| Delivery | `owner` only | `owner` / `team` / `members` / `target` |
+| Use case | User OAuth / personal API keys | Shared service accounts |
+
+**Do not** inject an owner's personal vault into a team job. That would let shared team automation silently use private secrets and fan results out to other members. Users who need personal credentials should create a **personal** job (or **fork** a team job to personal) instead of publishing the secret to the team.
+
+Scope transfer (team admin only), same shape as credentials:
+
+| Action | Direction | Semantics | Endpoint |
+|---|---|---|---|
+| Promote | personal → team | **Move** (personal removed) | `POST /api/scheduler/jobs/publish` |
+| Fork | team → personal | **Copy** (both remain); delivery forced to `owner` | `POST /api/scheduler/jobs/fork` |
+
+`test_first` / `RunNow` use the same credential injection as cron for that job's scope, so a dry-run cannot succeed with personal creds then fail on a team-only tick.
+
+Personal jobs store `team_slug` (captured from the active team at create time) so team credential/flow/MCP fallback still works.
+
+### Why Adaptive Scheduler Needs Network Policy Parity
+
+Studio chat applies platform/org/team network allow rules via `ChatRunner` (pre-seed + PolicyAllow auto-approve). Adaptive scheduler jobs use a separate sandbox (`scheduler-adaptive-{jobID}`) and previously skipped that path, so hosts allowed in chat (e.g. `**.cloud.sap`) stayed CONNECT-403 on cron.
+
+The scheduler injects `NetworkPolicyStores` and OpenShell gateway config into the exec context. **Persisted allow rules must be active before the first in-sandbox egress**: `NodeTool` PreSeeds (and waits for policy load) after `EnsureReady` and before the first tool `Call`, and OpenShell `CreateSession` also merges DB allow endpoints into the create-time policy when known. Post-result PreSeed in `SessionBridge` / `ChatRunner` is a no-op once that has run. Chat “Approve broader” persists an allow rule to the team/org store so future scheduler sandboxes inherit it — without that rule, headless jobs still cannot reach the host.
+
+### Adaptive Sandboxes Are Ephemeral Per Run
+
+The ADK session id stays stable (`scheduler-adaptive-{jobID}`) for transcript continuity, but the **OpenShell sandbox is destroyed at the start and end of each adaptive run**. That avoids reusing a registry row whose gateway pod was idle-evicted or deleted (which previously caused `EnsureReady` to no-op and credential vault `PushFile` to fail with “sandbox not found”). OpenShell `CreateSession` also heals stale registry rows when `GetSandbox` returns NotFound/Gone. After destroy, the ToolNodePool client for that session id is **Remove**d so the next tick’s `EnsureReady` rebinds instead of treating a gone pod as still ready.
+
+### Adaptive Delivery Is Last-Wins (Not Full Transcript)
+
+Adaptive job email/channel delivery must not concatenate every model turn. Mid-run narration (“I need to paginate…”) is dropped: only the **final** complete text turn is kept (same batch semantics as interactive email). When the job uses the report contract (`write_file` + `` ```astonish-report ``), delivery prefers the **written report markdown body** over a bare fence. Oversized messages truncate from the **end** (suffix kept) so the conclusion is preserved.
+
 ### Why Exponential Backoff on Failures
 
 When a scheduled job fails, the scheduler applies exponential backoff before retrying. This prevents:
@@ -90,31 +130,27 @@ Shutdown signal:
 ### Scheduler Architecture
 
 ```
-Job Definition (config or API):
-  - Name, description
-  - Cron expression (standard 5-field or predefined: @hourly, @daily)
-  - Mode: routine | adaptive | fleet_poll
-  - For routine: flow file path
-  - For adaptive: instruction text
-  - For fleet_poll: fleet plan reference
+Job Definition (API / schedule_job tool):
+  - Scope: personal (default) | team
+  - Name, cron, mode: routine | adaptive | fleet_poll
+  - OwnerID + team_slug (personal jobs)
     |
     v
-Scheduler.Start():
-  - Parse cron expressions
-  - Create goroutine per job with next-fire calculation
-  - Main loop: sleep until next fire, execute, calculate next
+MultiTenantScheduler.tick() every 30s:
+  - orgs → teams → due team jobs (team creds only)
+  - orgs → members → due personal jobs (merged creds)
     |
     v
 Execution:
-  - Routine: load flow YAML, run AstonishAgent headlessly
-  - Adaptive: send instruction as user message to ChatAgent
-  - Fleet poll: trigger PlanActivator.CheckForWork()
+  - Routine: load flow YAML, run headless
+  - Adaptive: ChatAgent turn (personal = OwnerID session; team = SystemUserID)
+  - Fleet poll: PlanActivator.CheckForWork()
     |
     v
 Result delivery:
-  - Channel-based: results sent to configured channel targets
-  - Logging: all results logged to daemon log
-  - On failure: exponential backoff for next retry
+  - Personal: forced to owner channels
+  - Team: owner / team / members / target
+  - On failure: exponential backoff
 ```
 
 ### PID File Management
@@ -137,12 +173,17 @@ The daemon runs periodic maintenance:
 
 | File | Purpose |
 |---|---|
-| `pkg/daemon/daemon.go` | Main daemon Run() orchestration, startup/shutdown sequence |
+| `pkg/daemon/run.go` | Main daemon Run() orchestration, startup/shutdown sequence |
+| `pkg/daemon/multi_tenant_scheduler.go` | Platform tick loop: team + personal lanes, credential injection |
 | `pkg/daemon/service.go` | Platform-native service installation (systemd/launchd/Windows) |
 | `pkg/daemon/config_reload.go` | Hot-reload for channel configuration |
-| `pkg/scheduler/scheduler.go` | Cron-based job scheduler, execution modes |
-| `pkg/scheduler/job.go` | Job definition, cron parsing |
+| `pkg/scheduler/scheduler.go` | Cron-based job scheduler (legacy single-instance path) |
+| `pkg/scheduler/store.go` | Job definition, delivery modes |
 | `pkg/scheduler/executor.go` | Job execution: routine, adaptive, fleet poll |
+| `pkg/api/scheduler_handlers.go` | REST CRUD + RunNow with scope-aware stores |
+| `pkg/tools/schedule_tool.go` | LLM tools (`schedule_job`, etc.) with personal default |
+| `ent/personal/schema/scheduled_job.go` | Personal job schema |
+| `ent/team/schema/scheduled_job.go` | Team job schema |
 
 ## Interactions
 

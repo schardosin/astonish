@@ -918,7 +918,7 @@ func ExecuteTool(ctx context.Context, name string, args map[string]interface{}, 
 		if err := toStruct(args, &toolArgs); err != nil {
 			return nil, fmt.Errorf("invalid args for http_request: %w", err)
 		}
-		return HttpRequest(nil, toolArgs)
+		return httpRequest(ctx, toolArgs)
 
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)

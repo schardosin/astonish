@@ -35,6 +35,7 @@ package backendpool_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"strings"
@@ -447,6 +448,65 @@ func TestBackendPool_NetworkAllowEndpointsBakedIntoCreateSession(t *testing.T) {
 	eps := calls[0].Spec.NetworkAllowEndpoints
 	if len(eps) != 1 || eps[0].Host != "**.cloud.sap" || eps[0].Port != 443 {
 		t.Fatalf("NetworkAllowEndpoints = %+v, want **.cloud.sap:443", eps)
+	}
+}
+
+// TestBackendPool_EnsureReadyRebindsAfterDestroy pins that a cached client
+// whose sandbox was destroyed (ephemeral adaptive runs) re-provisions on
+// the next EnsureReady instead of returning success against a gone pod.
+func TestBackendPool_EnsureReadyRebindsAfterDestroy(t *testing.T) {
+	m := mock.New()
+	pool := sandbox.NewBackendPool(m, sandbox.ResourceLimits{})
+	defer pool.Cleanup()
+
+	c := pool.GetOrCreateWithTemplate("sess-rebind", "default")
+	if err := c.EnsureReady("sess-rebind"); err != nil {
+		t.Fatalf("first EnsureReady: %v", err)
+	}
+	if n := len(m.CreateSessionCalls()); n != 1 {
+		t.Fatalf("CreateSessionCalls after first EnsureReady = %d, want 1", n)
+	}
+
+	if err := m.DestroySession(context.Background(), "sess-rebind"); err != nil {
+		t.Fatalf("DestroySession: %v", err)
+	}
+
+	if err := c.EnsureReady("sess-rebind"); err != nil {
+		t.Fatalf("second EnsureReady: %v", err)
+	}
+	if n := len(m.CreateSessionCalls()); n != 2 {
+		t.Fatalf("CreateSessionCalls after rebind = %d, want 2", n)
+	}
+}
+
+// TestBackendPool_RemoveDropsClientWithoutDestroy verifies Remove discards
+// the cached client so GetOrCreate returns a fresh unbound client, without
+// an extra DestroySession (caller already destroyed).
+func TestBackendPool_RemoveDropsClientWithoutDestroy(t *testing.T) {
+	m := mock.New()
+	pool := sandbox.NewBackendPool(m, sandbox.ResourceLimits{})
+	defer pool.Cleanup()
+
+	a := pool.GetOrCreateWithTemplate("sess-rm", "default")
+	if err := a.EnsureReady("sess-rm"); err != nil {
+		t.Fatalf("EnsureReady: %v", err)
+	}
+	destroyBefore := len(m.DestroySessionCalls())
+
+	pool.Remove("sess-rm")
+	if n := len(m.DestroySessionCalls()); n != destroyBefore {
+		t.Fatalf("Remove must not DestroySession; calls %d → %d", destroyBefore, n)
+	}
+
+	b := pool.GetOrCreateWithTemplate("sess-rm", "default")
+	if a == b {
+		t.Fatal("GetOrCreate after Remove returned the same discarded client")
+	}
+	if err := b.EnsureReady("sess-rm"); err != nil {
+		t.Fatalf("EnsureReady on fresh client: %v", err)
+	}
+	if n := len(m.CreateSessionCalls()); n != 2 {
+		t.Fatalf("CreateSessionCalls = %d, want 2 (second client provisions)", n)
 	}
 }
 

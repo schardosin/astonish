@@ -147,6 +147,7 @@ func NewStudioServer(port int, opts ...StudioOption) (*StudioServer, error) {
 			StartupNotices:    result.StartupNotices,
 			ShutdownSandbox:   result.ShutdownSandbox,
 			Cleanup:           result.Cleanup,
+			SandboxPool:       result.SandboxPool,
 		}, nil
 	})
 

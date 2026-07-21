@@ -75,7 +75,7 @@ The scheduler injects `NetworkPolicyStores` and OpenShell gateway config into th
 
 ### Adaptive Sandboxes Are Ephemeral Per Run
 
-The ADK session id stays stable (`scheduler-adaptive-{jobID}`) for transcript continuity, but the **OpenShell sandbox is destroyed at the start and end of each adaptive run**. That avoids reusing a registry row whose gateway pod was idle-evicted or deleted (which previously caused `EnsureReady` to no-op and credential vault `PushFile` to fail with “sandbox not found”). OpenShell `CreateSession` also heals stale registry rows when `GetSandbox` returns NotFound/Gone.
+The ADK session id stays stable (`scheduler-adaptive-{jobID}`) for transcript continuity, but the **OpenShell sandbox is destroyed at the start and end of each adaptive run**. That avoids reusing a registry row whose gateway pod was idle-evicted or deleted (which previously caused `EnsureReady` to no-op and credential vault `PushFile` to fail with “sandbox not found”). OpenShell `CreateSession` also heals stale registry rows when `GetSandbox` returns NotFound/Gone. After destroy, the ToolNodePool client for that session id is **Remove**d so the next tick’s `EnsureReady` rebinds instead of treating a gone pod as still ready.
 
 ### Adaptive Delivery Is Last-Wins (Not Full Transcript)
 

@@ -53,6 +53,8 @@ func (s *spyPool) GetBackend() Backend { return nil }
 
 func (s *spyPool) Alias(_, _ string) {}
 
+func (s *spyPool) Remove(_ string) {}
+
 // stubClient satisfies ToolNodeClient for test purposes.
 type stubClient struct{}
 

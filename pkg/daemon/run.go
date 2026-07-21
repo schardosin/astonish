@@ -995,6 +995,12 @@ func Run(cfg RunConfig) error {
 		schedExec.DestroySandbox = func(ctx context.Context, sessionID string) error {
 			return sandbox.DestroySessionEverywhere(ctx, appCfg, sessionID, nil)
 		}
+		if factoryResult != nil && factoryResult.SandboxPool != nil {
+			pool := factoryResult.SandboxPool
+			schedExec.InvalidateSandboxClient = func(sessionID string) {
+				pool.Remove(sessionID)
+			}
+		}
 
 		// Create delivery function — uses a getter to always resolve the
 		// current channelMgr, surviving channel reloads without stale closures.

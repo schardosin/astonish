@@ -126,10 +126,69 @@ func (c *backendNodeClient) BindSession(sessionID string) {
 	go c.provision(sessionID)
 }
 
+// resetBind clears a completed bind so BindSession can provision again.
+// Used when the underlying sandbox was destroyed (e.g. ephemeral adaptive
+// scheduler runs) but this client is still cached in the pool.
+func (c *backendNodeClient) resetBind() {
+	c.mu.Lock()
+	done := c.bindDone
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return
+	}
+	if done != nil {
+		<-done // wait for in-flight provision before flipping bound
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return
+	}
+	c.bound = false
+	c.bindDone = nil
+	c.bindErr = nil
+	c.sessionID = ""
+}
+
+// sessionStillReady reports whether the backend still has a usable sandbox
+// for sessionID after a prior successful bind.
+func (c *backendNodeClient) sessionStillReady(sessionID string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	state, err := c.backend.SessionState(ctx, sessionID)
+	if err != nil {
+		return false
+	}
+	switch state {
+	case SessionStateRunning, SessionStateCreating, SessionStateResuming:
+		return true
+	default:
+		return false
+	}
+}
+
 // EnsureReady satisfies ToolNodeClient. It triggers provisioning (via
 // BindSession) and blocks until the sandbox session is fully running.
 // Returns nil on success or the provisioning error.
+//
+// If this client was already bound but the sandbox is gone (destroyed
+// externally or by an ephemeral adaptive run), EnsureReady resets the bind
+// and provisions a fresh session.
 func (c *backendNodeClient) EnsureReady(sessionID string) error {
+	if sessionID == "" {
+		return fmt.Errorf("backend node client: no session bound (empty session ID)")
+	}
+
+	c.mu.Lock()
+	alreadyBound := c.bound && !c.closed
+	c.mu.Unlock()
+	if alreadyBound && !c.sessionStillReady(sessionID) {
+		slog.Info("backend node client: re-binding after sandbox gone",
+			"component", "sandbox", "session", shortSession(sessionID))
+		c.resetBind()
+	}
+
 	c.BindSession(sessionID)
 
 	c.mu.Lock()
@@ -334,6 +393,15 @@ func (c *backendNodeClient) close() {
 	}
 }
 
+// discard marks the client unusable without calling Backend.DestroySession.
+// Used by pool.Remove after the caller already destroyed the sandbox
+// (ephemeral adaptive runs) so we do not race a second destroy.
+func (c *backendNodeClient) discard() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+}
+
 // parseNodeResponse scans NDJSON stdout for the first response line with an
 // "id" field and returns its Result / Error. The ready message is ignored
 // (it has no id). exitCode is included in the error when there is no parsable
@@ -484,6 +552,28 @@ func (p *backendPool) getOrCreate(sessionID, template string, chain []string, im
 	return c
 }
 
+// Remove drops the cached client for sessionID (and any Alias entries that
+// share the same client). Does NOT destroy the backend session — callers
+// that own lifecycle (adaptive DestroySandbox) destroy first, then Remove.
+func (p *backendPool) Remove(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	p.mu.Lock()
+	c, ok := p.clients[sessionID]
+	if !ok {
+		p.mu.Unlock()
+		return
+	}
+	for id, other := range p.clients {
+		if other == c {
+			delete(p.clients, id)
+		}
+	}
+	p.mu.Unlock()
+	c.discard()
+}
+
 // Cleanup destroys every client the pool vended, then marks the pool
 // closed. After Cleanup, GetOrCreate returns nil. The pool's Backend is
 // NOT closed (it is not owned).
@@ -592,3 +682,6 @@ func (p *singleClientPool) Cleanup() {
 }
 
 func (p *singleClientPool) Alias(_, _ string) {}
+
+// Remove is a no-op for fleet single-client pools (the client is pinned).
+func (p *singleClientPool) Remove(_ string) {}

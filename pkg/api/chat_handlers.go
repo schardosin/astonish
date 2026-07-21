@@ -229,6 +229,7 @@ type StudioChatComponents struct {
 	StartupNotices    []string
 	ShutdownSandbox   func() // stops containers without destroying (for daemon shutdown)
 	Cleanup           func()
+	SandboxPool       sandbox.ToolNodePool // for adaptive InvalidateSandboxClient
 }
 
 // ChatManager manages a singleton chat agent for Studio chat.
@@ -1176,6 +1177,12 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				cfg := appCfg
 				localExec.DestroySandbox = func(ctx context.Context, sessionID string) error {
 					return sandbox.DestroySessionEverywhere(ctx, cfg, sessionID, nil)
+				}
+			}
+			if cm.components != nil && cm.components.SandboxPool != nil {
+				pool := cm.components.SandboxPool
+				localExec.InvalidateSandboxClient = func(sessionID string) {
+					pool.Remove(sessionID)
 				}
 			}
 			return localExec.Execute(execCtx, job)

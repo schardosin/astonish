@@ -93,6 +93,10 @@ type Executor struct {
 	// are ephemeral (create → work → destroy) and never reuse a stale pod.
 	// Optional; when nil, adaptive runs keep legacy long-lived sandboxes.
 	DestroySandbox func(ctx context.Context, sessionID string) error
+	// InvalidateSandboxClient drops the ToolNodePool client for sessionID
+	// so the next EnsureReady provisions a fresh bind after DestroySandbox.
+	// Optional but required for OpenShell backendPool (bound=true sticks otherwise).
+	InvalidateSandboxClient func(sessionID string)
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -348,17 +352,29 @@ func getOrCreateSession(ctx context.Context, sessSvc session.Service, appName, u
 // ensureEphemeralAdaptiveSandbox destroys any prior sandbox for sessionID and
 // returns a cleanup that destroys again after the adaptive run. Best-effort:
 // destroy errors are ignored so a missing sandbox does not block the run.
+// Also invalidates the ToolNodePool client so the next EnsureReady rebinds.
 func (e *Executor) ensureEphemeralAdaptiveSandbox(ctx context.Context, sessionID string) (cleanup func()) {
 	noop := func() {}
-	if e == nil || e.DestroySandbox == nil || sessionID == "" {
+	if e == nil || sessionID == "" {
 		return noop
 	}
-	_ = e.DestroySandbox(ctx, sessionID)
+	if e.DestroySandbox == nil && e.InvalidateSandboxClient == nil {
+		return noop
+	}
+	e.destroyAndInvalidateAdaptiveSandbox(ctx, sessionID)
 	return func() {
-		// Use a detached context: the run ctx may already be cancelled.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		_ = e.DestroySandbox(cleanupCtx, sessionID)
+		e.destroyAndInvalidateAdaptiveSandbox(cleanupCtx, sessionID)
+	}
+}
+
+func (e *Executor) destroyAndInvalidateAdaptiveSandbox(ctx context.Context, sessionID string) {
+	if e.DestroySandbox != nil {
+		_ = e.DestroySandbox(ctx, sessionID)
+	}
+	if e.InvalidateSandboxClient != nil {
+		e.InvalidateSandboxClient(sessionID)
 	}
 }
 

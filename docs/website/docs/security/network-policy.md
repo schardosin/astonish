@@ -95,12 +95,9 @@ When a chat message is processed, all allow-list rules from the effective policy
 - No fail-then-retry cycle is needed for configured endpoints
 - The agent can reach allowed hosts immediately without any visible delay or error
 
-The same admin-managed allow/deny rules also gate **Apps** `http:` data sources. The Apps HTTP proxy runs in the Studio backend (not inside an OpenShell sandbox). By default it blocks destinations that resolve to private/internal IPs (SSRF protection). Soft-private ranges (RFC1918, CGNAT, ULA, etc.) are allowed when either:
+The same admin-managed allow/deny rules also apply to **Apps** `http:` data sources. Apps fetch outbound HTTP **inside the App sandbox session** (shared with Apps MCP: `app-mcp-{userID}`), after Network Policy PreSeed — the same path as agent tools. Studio does not dial the target URL itself; OpenShell L7 and `cert_bundles` provide TLS trust for corp MITM.
 
-1. An **Allow** rule exists in Studio Network Policy (platform / org / team), or
-2. The host:port is listed under OpenShell config `sandbox.openshell.network_policy.extra_endpoints` (same list used for sandbox PreSeed)
-
-**Deny** blocks the request even for public hosts. Loopback, link-local, and cloud-metadata addresses stay blocked even when allowlisted. Policy tiers load fail-soft (one store error does not wipe other tiers). In-chat network grants do **not** apply to Apps — only persistent admin rules and config `extra_endpoints`.
+Studio still rejects non-`http(s)` schemes and hard-blocked IP literals (loopback, link-local, cloud metadata) before Exec. Soft-private destinations are gated by sandbox Network Policy (and config `extra_endpoints` PreSeed), not by a separate Studio SSRF allow list. In-chat network grants do **not** apply to Apps — only persistent admin rules and config `extra_endpoints`. Apps HTTP requires a sandbox backend.
 
 ## In-Chat Network Approval
 

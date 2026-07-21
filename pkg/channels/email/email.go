@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/SAP/astonish/pkg/channels"
-	"github.com/SAP/astonish/pkg/channels/telegram"
 	emailpkg "github.com/SAP/astonish/pkg/email"
 	"github.com/SAP/astonish/pkg/session"
 )
@@ -590,43 +589,16 @@ func extractName(from string) string {
 	return from
 }
 
-// markdownToEmailHTML converts markdown text to HTML suitable for email clients.
-// It uses the shared MarkdownToHTML converter for the core transformation, then
-// post-processes the result for email: converting \n to <br> outside <pre> blocks
-// and wrapping in a minimal HTML document structure.
+// markdownToEmailHTML converts markdown text to a full HTML email document
+// using the email-specific MarkdownToHTML formatter (real tables, headings,
+// lists). Telegram's converter is intentionally not shared — it flattens
+// tables to bullets for Telegram's limited HTML subset.
 func markdownToEmailHTML(text string) string {
-	html := telegram.MarkdownToHTML(text)
-
-	// Convert newlines to <br> outside of <pre>...</pre> blocks.
-	// Inside <pre>, browsers/email clients already preserve whitespace.
-	var result strings.Builder
-	for {
-		preStart := strings.Index(html, "<pre")
-		if preStart == -1 {
-			// No more <pre> blocks — convert remaining text.
-			result.WriteString(strings.ReplaceAll(html, "\n", "<br>\n"))
-			break
-		}
-		// Convert newlines before the <pre> block.
-		result.WriteString(strings.ReplaceAll(html[:preStart], "\n", "<br>\n"))
-
-		// Find the closing </pre> tag.
-		preEnd := strings.Index(html[preStart:], "</pre>")
-		if preEnd == -1 {
-			// Unclosed <pre> — write the rest as-is.
-			result.WriteString(html[preStart:])
-			break
-		}
-		preEnd += preStart + len("</pre>")
-		// Write the <pre>...</pre> block unchanged (newlines preserved by <pre>).
-		result.WriteString(html[preStart:preEnd])
-		html = html[preEnd:]
-	}
-
+	body := MarkdownToHTML(text)
 	return `<!DOCTYPE html>
 <html>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.6; color: #333;">
-` + result.String() + `
+` + body + `
 </body>
 </html>`
 }

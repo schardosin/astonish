@@ -680,7 +680,7 @@ var (
 // MarkdownToHTML converts standard markdown to Telegram-supported HTML.
 // Telegram supports: <b>, <i>, <code>, <pre>, <a href="...">.
 // Unsupported constructs (tables, images) are converted to plain text.
-// This function is also reused by the email channel for HTML rendering.
+// Email uses its own formatter in pkg/channels/email (real HTML tables).
 func MarkdownToHTML(text string) string {
 	// Step 1: Extract fenced code blocks and replace with placeholders.
 	// This prevents HTML-escaping and formatting inside code.

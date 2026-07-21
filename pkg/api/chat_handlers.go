@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -1158,6 +1159,9 @@ func StudioChatHandler(w http.ResponseWriter, r *http.Request) {
 				ProviderName:   cm.components.ProviderName,
 				ModelName:      cm.components.ModelName,
 				RunHeadless:    GetRunHeadlessFunc(),
+				ReadSessionFile: func(_, path string) ([]byte, error) {
+					return os.ReadFile(path)
+				},
 			}
 			// Match daemon SetGatewayConfig so SessionBridge can PreSeed/AutoApprove.
 			if appCfg := effectiveAppConfig(r); appCfg != nil && appCfg.Sandbox.OpenShell.GatewayAddr != "" {

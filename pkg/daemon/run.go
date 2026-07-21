@@ -986,6 +986,11 @@ func Run(cfg RunConfig) error {
 			schedExec.ChatAgent = factoryResult.ChatAgent
 			schedExec.SessionService = factoryResult.SessionService
 		}
+		// Host fallback only — report bodies normally come from write_file args
+		// captured during the adaptive run (sandbox paths are not on the host).
+		schedExec.ReadSessionFile = func(_, path string) ([]byte, error) {
+			return os.ReadFile(path)
+		}
 
 		// Create delivery function — uses a getter to always resolve the
 		// current channelMgr, surviving channel reloads without stale closures.

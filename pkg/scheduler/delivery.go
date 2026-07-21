@@ -348,9 +348,16 @@ func formatDeliveryMessage(job *Job, result string, execErr error) string {
 }
 
 // truncateResult shortens a result string if it exceeds maxDeliveryLen.
+// Keeps the suffix so scheduled emails preserve the conclusion / report end
+// rather than mid-run narration at the start of a concatenated blob.
 func truncateResult(s string) string {
 	if len(s) <= maxDeliveryLen {
 		return s
 	}
-	return s[:maxDeliveryLen] + "\n\n... (truncated)"
+	// Prefer cutting at a newline near the keep window when possible.
+	keep := s[len(s)-maxDeliveryLen:]
+	if i := strings.Index(keep, "\n"); i >= 0 && i < len(keep)/4 {
+		keep = keep[i+1:]
+	}
+	return "... (truncated)\n\n" + keep
 }

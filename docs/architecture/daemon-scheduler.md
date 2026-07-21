@@ -73,6 +73,10 @@ Studio chat applies platform/org/team network allow rules via `ChatRunner` (pre-
 
 The scheduler injects `NetworkPolicyStores` and OpenShell gateway config into the exec context. **Persisted allow rules must be active before the first in-sandbox egress**: `NodeTool` PreSeeds (and waits for policy load) after `EnsureReady` and before the first tool `Call`, and OpenShell `CreateSession` also merges DB allow endpoints into the create-time policy when known. Post-result PreSeed in `SessionBridge` / `ChatRunner` is a no-op once that has run. Chat “Approve broader” persists an allow rule to the team/org store so future scheduler sandboxes inherit it — without that rule, headless jobs still cannot reach the host.
 
+### Adaptive Delivery Is Last-Wins (Not Full Transcript)
+
+Adaptive job email/channel delivery must not concatenate every model turn. Mid-run narration (“I need to paginate…”) is dropped: only the **final** complete text turn is kept (same batch semantics as interactive email). When the job uses the report contract (`write_file` + `` ```astonish-report ``), delivery prefers the **written report markdown body** over a bare fence. Oversized messages truncate from the **end** (suffix kept) so the conclusion is preserved.
+
 ### Why Exponential Backoff on Failures
 
 When a scheduled job fails, the scheduler applies exponential backoff before retrying. This prevents:

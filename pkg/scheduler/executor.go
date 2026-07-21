@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/SAP/astonish/pkg/agent"
@@ -84,6 +83,11 @@ type Executor struct {
 	// GatewayConfig enables OpenShell network-policy pre-seed and PolicyAllow
 	// auto-approve during adaptive runs (parity with Studio ChatRunner).
 	GatewayConfig *openshell.GRPCClientConfig
+	// ReadSessionFile reads a path from the adaptive sandbox (or host). Used
+	// when write_file content was not captured from tool args but a report
+	// fence references a file. Optional; delivery still works via last-wins
+	// text and in-loop write_file content capture.
+	ReadSessionFile func(sessionID, path string) ([]byte, error)
 }
 
 // Execute runs a job based on its mode and returns the result text.
@@ -238,7 +242,6 @@ CRITICAL RULES:
 	// Send instructions as user message (with absolute timestamp for temporal
 	// context; see agent.NewTimestampedUserContent for cache-stability rationale).
 	userContent := agent.NewTimestampedUserContent(job.Payload.Instructions)
-	var responseText strings.Builder
 
 	// Headless network-policy bridge: auto-approve PolicyAllow denials.
 	// Primary PreSeed runs in NodeTool before the first Call.
@@ -248,18 +251,27 @@ CRITICAL RULES:
 		Stores:     store.NetworkPolicyStoresFromContext(ctx),
 	}
 	pendingToolURLs := map[string]string{}
+	writtenFiles := map[string]string{}
+	var lastWins string
 
 	for event, err := range r.Run(ctx, userID, sess.ID(), userContent, adkagent.RunConfig{}) {
 		if err != nil {
-			return responseText.String(), fmt.Errorf("agent error: %w", err)
+			return finalizeAdaptiveResult(e, sess.ID(), lastWins, writtenFiles), fmt.Errorf("agent error: %w", err)
 		}
 
 		if event.LLMResponse.Content == nil {
 			continue
 		}
+		// Skip streaming partials — wait for complete turns (email batch semantics).
+		if event.LLMResponse.Partial {
+			continue
+		}
 
 		for _, part := range event.LLMResponse.Content.Parts {
 			if part.FunctionCall != nil {
+				if part.FunctionCall.Name == "write_file" {
+					captureWriteFileContent(writtenFiles, part.FunctionCall.Args)
+				}
 				if urlArg, ok := part.FunctionCall.Args["url"].(string); ok && urlArg != "" {
 					if part.FunctionCall.ID != "" {
 						pendingToolURLs[part.FunctionCall.ID] = urlArg
@@ -277,13 +289,28 @@ CRITICAL RULES:
 				}
 				netBridge.OnToolResult(ctx, part.FunctionResponse.Name, part.FunctionResponse.Response, fallbackURL)
 			}
-			if part.Text != "" {
-				responseText.WriteString(part.Text)
-			}
 		}
+
+		turnText := extractUserFacingText(event.LLMResponse.Content.Parts)
+		lastWins = applyLastWinsTurn(lastWins, turnText)
 	}
 
-	return strings.TrimSpace(responseText.String()), nil
+	return finalizeAdaptiveResult(e, sess.ID(), lastWins, writtenFiles), nil
+}
+
+// finalizeAdaptiveResult picks report file body over mid-run narration / bare fences.
+func finalizeAdaptiveResult(e *Executor, sessionID, lastWins string, written map[string]string) string {
+	var drained []agent.FileArtifact
+	if e != nil && e.ChatAgent != nil {
+		drained = e.ChatAgent.DrainFiles()
+	}
+	var readFile func(path string) ([]byte, error)
+	if e != nil && e.ReadSessionFile != nil && sessionID != "" {
+		readFile = func(path string) ([]byte, error) {
+			return e.ReadSessionFile(sessionID, path)
+		}
+	}
+	return preferDeliveryBody(lastWins, written, drained, readFile)
 }
 
 // getOrCreateSession retrieves or creates a session by key.
